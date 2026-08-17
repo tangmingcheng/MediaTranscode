@@ -420,8 +420,11 @@ Demand exceeding peak, burst, backlog, residence, or deadline terminates; it
 never raises the service envelope or catches up by bursting. RTP timestamp and
 MPEG PTS, DTS, and PCR wrap are extended into monotonic internal domains and
 do not reset scheduling state or create a generation. Only independently
-detected source discontinuity may use a planner-authorized transition with
-explicit decoder, PCR, RTP, and RTCP rules.
+detected source discontinuity or an authoritatively signaled session/timing
+epoch admitted by the transition table may use a discontinuity transition. A
+rate-generation transition alone is neither trigger. The executable plan
+records the trigger kind and permits only its compatible persistent-state
+actions and decoder, mux, RTP, RTCP, PCR, shaper, and controller rules.
 
 The sender validates generation and non-overlapping reservations, waits for
 `enqueueNotBefore`, and performs nonblocking atomic datagram enqueue. On
@@ -480,6 +483,10 @@ extended monotonic timeline and current generation. A separately signaled or
 authoritatively detected discontinuity must follow its planner-authored decoder,
 mux, RTP, and RTCP transition; it cannot be inferred from wrap or silently reset
 the schedule.
+
+Discontinuity gates separately cover detected source discontinuity and
+authoritatively signaled session/timing-epoch transition. A rate-only
+transition that attempts to authorize either trigger must fail.
 
 Adaptive step-down and recovery gates for either generation mechanism verify
 SSRC, RTP sequence and timestamp extension, RTCP sender counters and mapping,
