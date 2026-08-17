@@ -105,6 +105,11 @@ std::size_t MediaRtpIngressStorage::descriptorCapacity() const noexcept
     return m_state ? m_state->descriptorCapacity : 0;
 }
 
+std::size_t MediaRtpIngressStorage::committedEntries() const noexcept
+{
+    return m_state ? m_state->committedEntries : 0;
+}
+
 ::media::Result<std::span<std::byte>>
 MediaRtpIngressStorage::writableSlot(std::size_t index)
 {

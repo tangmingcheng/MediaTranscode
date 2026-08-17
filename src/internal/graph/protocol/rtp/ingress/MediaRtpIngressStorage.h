@@ -49,6 +49,7 @@ public:
     std::size_t byteCapacity() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
     std::size_t descriptorCapacity() const noexcept;
+    std::size_t committedEntries() const noexcept;
     ::media::Result<std::span<std::byte>> writableSlot(std::size_t index);
     ::media::Status commit(
         std::size_t index,
