@@ -85,13 +85,16 @@ planSeparateRtp(
 {
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
-    if (!layout || outer.videoPlan.outputCodecName != "h264" ||
-        output.muxedOutput.url.empty()) {
+    if (!layout) {
         return ::media::Result<
             MediaProjectMpegTsRuntimeOutputPlan>::failure(
-            layout ? ::media::ErrorInfo::unsupported(
-                         "VideoOnly Project MPEG-TS requires planner-selected H.264 transcode output")
-                   : layout.error());
+            layout.error());
+    }
+    if (output.muxedOutput.url.empty()) {
+        return ::media::Result<
+            MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly Project MPEG-TS requires a planned output URL"));
     }
     std::uint8_t maximumPacketsPerDatagram = 7;
     if (outer.outputTransport == MediaOutputTransportKind::RtpAvp) {
