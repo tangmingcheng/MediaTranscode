@@ -48,7 +48,7 @@ MediaRtpIngressBatch::entries() const noexcept
 
 void MediaRtpIngressBatch::release() noexcept
 {
-    if (m_storage) m_storage->leased = false;
+    if (m_storage) m_storage->releaseBatch();
     m_storage.reset();
     m_entries = {};
 }

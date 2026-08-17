@@ -77,6 +77,15 @@ capacity. RTP and RTCP readiness are serviced without assuming an ordering
 between two UDP sockets. No per-datagram heap allocation is permitted on the
 steady-state receive path after storage initialization.
 
+Descriptor order is independent of physical receive-slot order. Every fixed
+arena slot has one explicit ownership state: free, platform-receive-owned, or
+batch-owned. Completion moves an arbitrary receive-owned slot into the next
+batch descriptor; destroying the batch returns only its completed slots while
+outstanding RIO or `recvmmsg` slots remain receive-owned. This permits Windows
+completion queues and Linux message batches to share one storage contract
+without copying, cancelling pending receives at every batch boundary, or
+waiting for an entire arena to fill.
+
 ## DAG Node Behaviour
 
 `RawRtpInputNode` consumes one typed ingress batch per `process()` invocation
