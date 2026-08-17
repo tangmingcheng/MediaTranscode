@@ -10,27 +10,26 @@ namespace media::ffmpeg::graph {
 class MediaTsMaterializedVideoConfig final {
 public:
     static ::media::Result<MediaTsMaterializedVideoConfig> create(
-        MediaTsNalLayout layout,
-        std::uint8_t nalLengthBytes,
-        std::vector<std::uint8_t> spsAnnexB,
-        std::vector<std::uint8_t> ppsAnnexB);
+        MediaTsVideoElementaryStreamContract contract,
+        std::vector<std::vector<std::uint8_t>> parameterSetsAnnexB);
 
-    MediaTsNalLayout layout() const noexcept { return m_layout; }
-    std::uint8_t nalLengthBytes() const noexcept { return m_nalLengthBytes; }
-    const std::vector<std::uint8_t>& spsAnnexB() const noexcept { return m_spsAnnexB; }
-    const std::vector<std::uint8_t>& ppsAnnexB() const noexcept { return m_ppsAnnexB; }
+    const MediaTsVideoElementaryStreamContract& contract() const noexcept
+    {
+        return m_contract;
+    }
+    const std::vector<std::vector<std::uint8_t>>&
+    parameterSetsAnnexB() const noexcept
+    {
+        return m_parameterSetsAnnexB;
+    }
 
 private:
     MediaTsMaterializedVideoConfig(
-        MediaTsNalLayout layout,
-        std::uint8_t nalLengthBytes,
-        std::vector<std::uint8_t> spsAnnexB,
-        std::vector<std::uint8_t> ppsAnnexB) noexcept;
+        MediaTsVideoElementaryStreamContract contract,
+        std::vector<std::vector<std::uint8_t>> parameterSetsAnnexB) noexcept;
 
-    MediaTsNalLayout m_layout;
-    std::uint8_t m_nalLengthBytes;
-    std::vector<std::uint8_t> m_spsAnnexB;
-    std::vector<std::uint8_t> m_ppsAnnexB;
+    MediaTsVideoElementaryStreamContract m_contract;
+    std::vector<std::vector<std::uint8_t>> m_parameterSetsAnnexB;
 };
 
 class MediaTsMaterializedAudioConfig final {

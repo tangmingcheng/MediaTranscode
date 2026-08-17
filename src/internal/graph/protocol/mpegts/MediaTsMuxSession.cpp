@@ -25,17 +25,13 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
     if (const auto* video = std::get_if<
             MediaTsMuxSession::VideoOnlyStreams>(&binding.streams)) {
         return binding.plan.videoOnlyProgram() &&
-            video->video.layout() == parameters.video.layout() &&
-            video->video.nalLengthBytes() ==
-                parameters.video.nalLengthBytes();
+            video->video.contract() == parameters.video;
     }
     const auto* streams = std::get_if<
         MediaTsMuxSession::AudioVideoStreams>(&binding.streams);
     const auto* program = binding.plan.audioVideoProgram();
     return streams && program &&
-        streams->video.layout() == parameters.video.layout() &&
-        streams->video.nalLengthBytes() ==
-            parameters.video.nalLengthBytes() &&
+        streams->video.contract() == parameters.video &&
         streams->audio.audioObjectType() == program->aac.audioObjectType &&
         streams->audio.samplingFrequencyIndex() ==
             program->aac.samplingFrequencyIndex &&

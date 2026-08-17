@@ -97,8 +97,8 @@ MediaTsH264AccessUnitFramer::frame(
     std::vector<std::uint8_t>& workspace)
 {
     const auto& parameters = plan.parameters();
-    if (config.layout() != parameters.video.layout() ||
-        config.nalLengthBytes() != parameters.video.nalLengthBytes()) {
+    if (config.contract() != parameters.video ||
+        config.contract().codec() != MediaTsVideoCodec::H264) {
         return invalid("MPEG-TS H.264 materialized config mismatches the plan");
     }
     if (payload.empty()) return invalid("MPEG-TS H.264 access unit is empty");
@@ -108,9 +108,11 @@ MediaTsH264AccessUnitFramer::frame(
             MediaTsParameterSetPolicy::BeforeRandomAccess;
     std::size_t injectionSize = 0;
     if (inject) {
-        if (!checkedAdd(config.spsAnnexB().size(), config.ppsAnnexB().size(),
-                        injectionSize)) {
-            return invalid("MPEG-TS H.264 parameter-set size overflows");
+        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
+            if (!checkedAdd(
+                    injectionSize, parameterSet.size(), injectionSize)) {
+                return invalid("MPEG-TS H.264 parameter-set size overflows");
+            }
         }
     }
 
@@ -127,9 +129,11 @@ MediaTsH264AccessUnitFramer::frame(
             return invalid("MPEG-TS H.264 framed size overflows");
         }
         workspace.resize(totalSize);
-        auto iterator = std::copy(config.spsAnnexB().begin(), config.spsAnnexB().end(),
-                                  workspace.begin());
-        iterator = std::copy(config.ppsAnnexB().begin(), config.ppsAnnexB().end(), iterator);
+        auto iterator = workspace.begin();
+        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
+            iterator = std::copy(
+                parameterSet.begin(), parameterSet.end(), iterator);
+        }
         std::copy(payload.begin(), payload.end(), iterator);
         return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
     }
@@ -147,8 +151,10 @@ MediaTsH264AccessUnitFramer::frame(
     workspace.resize(totalSize);
     auto iterator = workspace.begin();
     if (inject) {
-        iterator = std::copy(config.spsAnnexB().begin(), config.spsAnnexB().end(), iterator);
-        iterator = std::copy(config.ppsAnnexB().begin(), config.ppsAnnexB().end(), iterator);
+        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
+            iterator = std::copy(
+                parameterSet.begin(), parameterSet.end(), iterator);
+        }
     }
     writeConverted(payload, parameters.video.nalLengthBytes(),
                    std::span<std::uint8_t>(workspace).subspan(injectionSize));
