@@ -1,37 +1,53 @@
 # Industrial Realtime Resource and Transport Shaping Design
 
-## Scope
+## Scope and Authority
 
-Realtime CLI callers shall provide only facts they can obtain directly from
-the media request, protocol session, device, or deployment. DAG edge counts,
-byte capacities, startup access-unit bounds, handoff capacities, and pacing
-internals are not caller inputs.
+Realtime callers provide only facts obtained directly from the media request,
+protocol session, device, or deployment. DAG queue counts, retained-byte
+capacities, startup access-unit limits, prepared-handoff capacities, and
+pacing internals are not per-stream caller inputs.
 
-This design removes those internal controls from the public realtime CLI and
-replaces the current pass-through queue policy with planner-owned, typed
-resource and transport products. Windows and Linux/RKMPP use the same planner,
-topology, mux, scheduler, sender, and failure semantics. Only capability and
-platform I/O adapters may differ.
+The planner owns admission, topology resource contracts, mux policy, RTP
+session policy, and the finite set of legal rate generations. Builders bind
+complete products. Runtime modules execute or validate those products without
+defaults, reconstruction, fallback, silent drop, or local policy selection.
+
+This design amends the canonical MPEG-TS datagram pacing design. Observed AU
+size and cadence measure demand only; they never authorize a service rate
+above the planner-owned envelope. The earlier rule that accepts any
+representable AU applies only inside the admitted rate, burst, backlog, and
+residence envelope.
+
+Windows and Linux/RKMPP use the same planner, topology composition, mux, RTP
+session scheduler, transport shaper, sender, ownership, and failure semantics.
+Only operating-system I/O, timer, socket, driver, and hardware adapters may
+differ.
 
 ## External Facts
 
 The media request retains directly known facts such as codecs, stream set,
 output dimensions and frame rate, GOP, CBR/VBR rate-control values, encoder
 buffer size, RTP endpoint, address family, payload type, clock rate, and
-maximum datagram payload.
+maximum RTP payload.
 
-Resource and latency facts come from a deployment envelope supplied by the
-embedding application, not from per-stream CLI arithmetic. The envelope
-contains an application memory budget, maximum pipeline residence, transport
-service kind, and over-budget disposition. A strict provisioned transport may
-also provide an independently established service capacity. An adaptive
-transport must provide the feedback and circuit-breaker capabilities required
-by its selected controller. A best-effort UDP product may guarantee only
-application pacing and userspace-to-kernel enqueue evidence; it must not claim
-path capacity or wire completion.
+Resource, latency, and network-service facts come from a deployment envelope
+supplied by the embedding application rather than per-stream CLI arithmetic.
+It contains an application memory budget, maximum pipeline residence, maximum
+network jitter, and one transport service contract. Admission excess fails
+before graph creation; runtime contract excess terminates. Drop, clamp,
+degrade, resize, or retry policy is not caller-selectable.
 
-The following realtime CLI options are removed rather than hidden behind
-defaults:
+A provisioned transport contract carries an authoritative service curve,
+scope, validity, maximum outage or burst residence, MTU, and independently
+established aggregate capacity. A closed-domain, application-paced UDP
+contract without feedback is permitted only when the deployment supplies
+equivalent managed-network evidence. It proves bounded application resources
+and pacing, not delivery or finite path residence. Any other long-lived UDP or
+RTP contract requires negotiated feedback, congestion control, bounded
+reaction, and a circuit breaker.
+
+The following realtime CLI resource controls are removed rather than hidden
+behind defaults:
 
 - `--metadata-queue`;
 - `--packet-queue`;
@@ -39,13 +55,17 @@ defaults:
 - `--mux-queue`;
 - `--startup-max-video-unit-bytes`;
 - `--startup-max-audio-unit-bytes`;
-- prepared-handoff packet and byte capacities;
-- startup gap and other internal residence controls.
+- startup gap and prepared-handoff packet or byte capacities;
+- `--probe-size` as a retained-memory or handoff-capacity input.
 
-## Evidence Model
+Any remaining observation-work limit has a distinct typed meaning and comes
+from the deployment observation budget. It cannot be reused as retained-byte,
+runtime-edge, socket, or handoff capacity.
+
+## Capacity Evidence
 
 Observed startup maxima are telemetry, not proof of future live-stream bounds.
-Each hard capacity carries an evidence kind:
+Every hard capacity records one evidence kind:
 
 - protocol maximum;
 - negotiated sender contract;
@@ -53,115 +73,216 @@ Each hard capacity carries an evidence kind:
 - planner-controlled encoder capability;
 - deployment acceptance limit.
 
-When an arbitrary H.264 or HEVC RTP source exposes no authoritative future AU
-bound, the planner may use a deployment acceptance limit only with that exact
-semantics. A later AU exceeding the limit terminates with a source-contract or
-resource-envelope error. The planner must never relabel a finite observation,
-encoder buffer size, resolution, GOP, or sample maximum as a proven source
-maximum.
+H.264 and HEVC RTP packetization or fragmentation do not provide a protocol
+maximum for future NAL or AU size. HRD evidence is admissible only after
+complete parameter-set and conformance validation proves its coded-buffer
+semantics. A parameter-set or HRD change starts a planner-authorized generation
+or terminates.
 
-## Planner Products
+Every live source product covers raw RTP video and audio, generic or RTSP
+input, MPEG-TS input, packet copy, and transcoded branches with an arrival and
+maximum-item envelope. If negotiation or protocol facts cannot prove a future
+bound, the planner may use only a typed deployment acceptance limit. Runtime
+enforces that limit incrementally during packet, FU, NAL, PES, and AU assembly
+before retained bytes exceed it, including missing-marker, loss, and
+incomplete-unit cases. An excess reports a source-contract or resource-envelope
+failure; it never grows storage or relabels an observation as source capacity.
 
-`EncoderEmissionEnvelope` describes the selected encoder's verified output:
+## Prepared Encoder Session
 
-- cadence and reorder/async depth;
+A planner-owned `PreparedEncoderSession` opens the selected encoder before
+resource admission, verifies all public and backend-private rate-control
+readback, and owns the exact opened codec context through RAII. It produces an
+`EncoderEmissionEnvelope` containing:
+
+- cadence, reorder depth, async depth, lookahead, and hardware surface needs;
 - sustained and maximum encoded rates;
 - burst or coded-buffer envelope;
-- maximum AU evidence when the backend can prove one;
-- post-open readback evidence.
+- maximum AU evidence when the backend can prove it;
+- the complete post-open readback evidence.
 
-The encoder buffer is an encoder VBV/CPB fact. Its size divided by a rate may
-describe a coded-buffer time scale only when the opened encoder proves the
-corresponding contract. It is never used directly as network delay, socket
-capacity, path capacity, or end-to-end latency.
+The resource planner consumes that envelope. The builder move-binds the same
+prepared session into the encoder node. Reopening or independently rebuilding
+the encoder context is forbidden. Failure to retain or bind the prepared
+session fails before DAG startup.
 
-`MuxTrafficEnvelope` describes the complete multiplexed output:
+Encoder buffer size is a VBV/CPB fact. Dividing it by a rate may describe a
+coded-buffer time scale only when the prepared encoder proves that contract.
+It never directly becomes network delay, socket capacity, path capacity,
+transport backlog, or end-to-end latency.
+
+## Independent Rate Products
+
+`EncoderRateControlMode`, `TsMuxRateMode`, and
+`TransportPacingPolicy` are independent typed products.
+
+CBR encoder mode does not imply constant MPEG-TS transport. Constant TS uses a
+planner-selected aggregate mux rate, consumes fixed TS packet slots, and
+inserts null packets. Variable TS uses its complete arrival envelope for
+admission. For VBR encoding, target bitrate is an average objective; the
+verified maximum rate and burst envelope constrain admission and pacing.
+Missing maximum-rate or burst evidence fails before DAG startup when required
+by the selected mux or transport service.
+
+## Mux and RTP Session Products
+
+`MuxTrafficEnvelope` describes only the MPEG-TS program and contains:
 
 - video and optional audio arrival envelopes;
-- PES and TS geometry;
-- PAT, PMT, PCR and RTCP maintenance traffic;
-- RTP, UDP, and IP overhead known to the application;
-- constant or variable multiplex policy;
-- aggregate service and burst requirements.
+- PES header and fragmentation geometry;
+- TS packet and adaptation-field geometry;
+- PAT and PMT section sizes, repetition deadlines, versions, and change rules;
+- PCR PID, insertion form, repetition deadline, and jitter limit;
+- continuity-counter, discontinuity, and null-stuffing policy;
+- exact TS packet cost of all program maintenance.
 
-CBR encoder mode and constant MPEG-TS transport are distinct products. A
-constant transport stream uses a planner-selected aggregate mux rate and null
-stuffing. VBR uses the verified maximum rate and burst envelope; target bitrate
-alone is not a hard capacity. Missing maximum-rate or burst evidence fails
-before DAG startup when the selected transport contract requires it.
+`RtpSessionEnvelope` is separate from the mux product and contains:
 
-`TransportServiceEnvelope` describes one of:
+- RTP profile, SSRC lifecycle, timestamp and sequence contracts;
+- RTP and RTCP endpoint relationships;
+- sender-report, receiver-report, CNAME, feedback, BYE, and generation rules;
+- RTCP bandwidth, randomization, interval, and control-packet envelope;
+- packetization and transport overhead contract.
 
-- provisioned service with independently established capacity and residence;
-- adaptive service with feedback, rate adaptation, and circuit breaker;
-- application-paced best-effort UDP with no path-capacity guarantee.
+The packetization contract includes IP version and maximum IP-header length,
+UDP overhead, RTP base, CSRC, extension, padding and security overhead, path
+MTU or authoritative maximum IP packet size, and integral TS packets per RTP
+payload. Output requiring IP fragmentation is rejected. Byte-rate, packet-rate,
+and burst envelopes are calculated after all header, ceiling, and alignment
+effects. Inclusion or exclusion of link-layer overhead is explicit.
 
-`MediaRealtimeResourcePlan` maps every non-direct edge to a complete
-`MediaEdgeCapacityContract` containing maximum items, maximum retained bytes,
-maximum residence, overflow policy, ownership cost, and evidence. It also
-contains shared pool and total-budget accounting. Product types have no
-business defaults and cannot be partially constructed.
+RTP media and RTCP control retain their protocol-specific scheduling
+authorities. The mux exclusively orders TS packets. The RTP session scheduler
+packetizes ordered TS data and schedules RTCP. Both feed one destination-scoped
+aggregate transport shaper, which accounts for all application-visible UDP/IP
+traffic without reordering TS payload.
 
-## Capacity Planning
+## Adaptive Rate Generations
+
+An `AdaptiveTransportServiceEnvelope` identifies the negotiated feedback
+format, controller, control interval, admitted minimum and maximum rates,
+reaction deadline, feedback-loss timeout, circuit breaker, and a post-open
+proven encoder and mux actuator.
+
+The planner owns the finite set and transition rules of legal rate
+generations. A controller transition quiesces the old generation, drains or
+terminates its bounded reservations according to the existing contract,
+applies and reads back encoder rate/CPB and mux policy, then atomically publishes
+the new generation. Unsupported transitions, actuator failure, readback
+mismatch, missing feedback, or reaction expiry are terminal. The transport
+shaper and sender remain execution-only and cannot choose an encoder rate.
+
+## Complete Resource Ledger
+
+`MediaRealtimeResourcePlan` covers every executable edge and every runtime
+retention locus. A direct edge has an explicit zero-retention synchronous
+ownership contract; it is not omitted. Other ledger entries include:
+
+- producer-held incoming items and atomic reservations;
+- node-private pending input or output;
+- prepared input and handoff state;
+- decoder, filter, encoder, and hardware surface pools;
+- mux cursors, PSI/PCR state, RTP/RTCP state, and scheduled batches;
+- fan-out references, allocator and alignment slack;
+- capped userspace and kernel socket buffers.
+
+Admission reserves item, physical-byte, and residence budgets before
+materialization or ownership transfer. Shared physical allocations are charged
+once to the graph allocation ledger while every lease is tracked until release.
+Residence begins at the first planner-defined retention. An interruptible
+deadline executor expires retained state even when no producer or consumer is
+otherwise runnable.
+
+Each `MediaEdgeCapacityContract` and runtime-owner contract contains maximum
+items, maximum physical bytes, maximum residence, overflow behavior, ownership
+cost, release rule, and evidence. Every product is created through a validating
+factory, cannot be partially or default constructed, and has no policy-valued
+member initializer.
 
 The resource planner consumes the executable topology, prepared source
-contract, encoder envelope, mux envelope, transport envelope, platform
-capabilities, and deployment envelope. It first reserves backend and protocol
-minimums, then proves that every edge fits the global memory and residence
-budgets.
+contracts, prepared encoder session, mux envelope, RTP session envelope,
+transport service envelope, platform capabilities, and deployment envelope.
+For an arrival envelope `A(t) <= r*t + b`, it accounts for maximum item size,
+item and byte rates, atomic burst, codec reorder, encoder async depth, mux
+interleave, ownership fan-out, hardware alignment, and the selected residence.
+The global byte budget constrains the sum but does not invent edge ratios or
+latency. Missing facts, arithmetic overflow, or an infeasible service curve
+fail before graph creation.
 
-For an arrival envelope `A(t) <= r*t + b`, an edge capacity is derived from
-the selected residence and service contract. Item and byte capacities account
-for maximum item size, rate, atomic burst, codec reorder, encoder async depth,
-mux interleave, fan-out ownership, and hardware alignment. A global byte
-budget constrains the sum but does not invent edge ratios or latency. Missing
-facts, arithmetic overflow, or an infeasible plan fail before graph creation.
+## Exact Plan Projection
 
-Builders bind contracts by edge identity. Runtime channels enforce item,
-byte, residence, and overflow contracts without growth, fallback, silent drop,
-or local policy selection. Existing generic queue and memory defaults are
-removed or made structurally unreachable for realtime graphs.
+`MediaRealtimeResourcePlan` is serialized once as a complete typed runtime-plan
+member keyed by stable edge and runtime-owner identities. Decoding reproduces
+every field exactly and rejects unknown, missing, duplicate, extra,
+stale-topology, or overflowing entries. Builders bind decoded contracts only;
+string defaults, enum ordinals, edge-class lookup, and local reconstruction are
+forbidden.
 
-## Global MPEG-TS/RTP Scheduling
+Realtime plan and product types are not default constructible. A completeness
+validator rejects legacy generic queue and memory defaults. Raw RTP retains the
+exact prepared RTP/RTCP sockets, shared replay clock, and one aggregate A/V
+byte ledger. VideoOnly creates no audio transport, budget participant, node,
+edge, mux stream, or diagnostic entry. AudioVideo and VideoOnly use the same
+planner, builders, nodes, and topology composition on Windows and RKMPP.
 
-The planner produces scheduling policy and proven envelopes, not a future list
-of unknown live AU deadlines. At runtime the mux is the only sequencing
-authority. It materializes actual video, audio, PAT, PMT, and PCR data into one
-monotonic cross-AU reservation timeline.
+## Global Scheduling and Sender Contract
 
-Large keyframes are paced across the admitted buffering window instead of
-being compressed into one frame interval. For constant MPEG-TS, null packets
-maintain the planned aggregate mux rate. For VBR, the runtime timeline remains
-inside the planned peak, burst, backlog, and residence envelope. The sender
-only validates generation and reservations, waits for `enqueueNotBefore`,
-performs nonblocking enqueue, and records actual evidence. It cannot change
-rate, reorder, catch up by bursting, or derive a second timeline.
+The planner produces service envelopes and scheduling policy, not a list of
+unknown future AU deadlines. Runtime uses one continuous destination aggregate
+token-bucket or constant-rate state across media AUs and RTP/RTCP control data.
+
+Every packet reservation carries `enqueueNotBefore` and `enqueueNotAfter`,
+derived from one monotonic startup anchor, media and PCR timing, CPB/decoder
+deadline, maximum residence, batching allowance, and verified timer error.
+A large AU may be smoothed only when every fragment remains inside its
+latest-send, PCR, coded-buffer, decoder, and end-to-end latency constraints.
+Demand exceeding peak, burst, backlog, residence, or deadline terminates; it
+never raises the service envelope or catches up by bursting. Timestamp wrap or
+discontinuity starts only a planner-authorized generation.
+
+The sender validates generation and non-overlapping reservations, waits for
+`enqueueNotBefore`, and performs nonblocking atomic datagram enqueue. On
+`EAGAIN` or `WSAEWOULDBLOCK` it may retry only until `enqueueNotAfter`; short
+or late writes are terminal. It cannot change rate, reorder, rebase deadlines,
+or create another timeline. A successful userspace enqueue is not wire
+completion evidence.
 
 ## Failure and Diagnostics
 
 All violations are explicit and terminal: source-envelope excess, encoder
-readback mismatch, resource-budget excess, residence expiry, timestamp or
-reservation regression, socket pressure, short write, feedback loss, and
-circuit-breaker activation. Strict service requested without matching platform
-or network evidence fails before DAG startup.
+readback mismatch, resource-budget excess, residence expiry, generation
+conflict, timestamp or reservation regression, late packet, socket pressure,
+short write, feedback loss, and circuit-breaker activation. Strict or adaptive
+service requested without matching platform, actuator, session, or network
+evidence fails before DAG startup.
 
-Diagnostics report planned and observed item/byte occupancy, residence,
-maximum AU, encoder envelope, mux rate, application pacing rate, burst,
-enqueue timing, socket pressure, receiver feedback when available, packet
-loss, PCR jitter, CPU, RSS, drops, A/V drift, and final exit reason. Userspace
-enqueue is never reported as wire completion.
+Diagnostics report planned and observed item and physical-byte occupancy,
+residence, maximum AU, encoder envelope and readback, mux rate and maintenance,
+RTP/RTCP aggregate pacing, burst, deadlines, enqueue timing, socket pressure,
+receiver feedback, packet loss, PCR interval and jitter, CPU, RSS, drops, A/V
+drift, and final exit reason. Observations never become runtime authority.
 
 ## Acceptance
 
 Temporary TDD may prove product construction, capacity mathematics, exact
-serialization, channel enforcement, and global timeline behavior. Every
-temporary test source, target, and binary is deleted before delivery.
+serialization, generation transitions, channel enforcement, and scheduling.
+All temporary test source, targets, and binaries are deleted before delivery.
 
 Final acceptance uses Release builds and the unchanged 2K continuous
 120-second source. It covers H.264 and HEVC in both directions, resolution and
-codec conversion, CBR and VBR, Windows and RKMPP, and the production DAG.
-Machine evidence includes sender and receiver sequence/loss statistics,
-application pacing distribution, maximum queue bytes and residence, CPU/RSS,
-zero-copy telemetry, PCR timing, output decode, and truthful termination. A
-1 Mbps diagnostic cannot replace the 4 Mbps gate, and receiver-buffer changes
-cannot substitute for correcting application-generated bursts.
+codec conversion, CBR and VBR encoder modes, constant and variable TS where
+selected, VideoOnly and AudioVideo, Windows and RKMPP, and the production DAG.
+
+Production-DAG failure gates cover provisioned under-capacity rejection,
+best-effort pressure, feedback step-down and recovery, feedback loss,
+circuit-breaking, failed generation readback, oversized fragmented RTP AU,
+late reservations, and resource/residence excess. Protocol gates verify
+PAT/PMT/PCR periods, continuity, no IP fragmentation, RTP/RTCP aggregate
+pacing, cross-AU burst bounds, and receiver sequence/loss evidence.
+
+Each gate records exact source, CLI, receiver and cleanup commands, precise
+PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
+PCR jitter, zero-copy telemetry, full output decode, and truthful termination.
+A 1 Mbps diagnostic cannot replace the 4 Mbps gate, receiver-buffer changes
+cannot substitute for correcting application-generated bursts, and no source
+or acceptance parameter may be reduced to obtain a pass.
