@@ -28,21 +28,23 @@ bool canonicalParameterSet(const std::vector<std::uint8_t>& bytes,
 
 ::media::Result<MediaTsMaterializedVideoConfig>
 MediaTsMaterializedVideoConfig::create(
-    MediaTsH264InputLayout layout,
+    MediaTsNalLayout layout,
     std::uint8_t nalLengthBytes,
     std::vector<std::uint8_t> spsAnnexB,
     std::vector<std::uint8_t> ppsAnnexB)
 {
     switch (layout) {
-    case MediaTsH264InputLayout::AnnexB:
-    case MediaTsH264InputLayout::LengthPrefixed:
+    case MediaTsNalLayout::AnnexB:
+    case MediaTsNalLayout::LengthPrefixed:
         break;
     default:
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS materialized H.264 layout is invalid"));
     }
-    if (nalLengthBytes < 1 || nalLengthBytes > 4 ||
+    if ((layout == MediaTsNalLayout::AnnexB && nalLengthBytes != 0) ||
+        (layout == MediaTsNalLayout::LengthPrefixed &&
+         (nalLengthBytes < 1 || nalLengthBytes > 4)) ||
         !canonicalParameterSet(spsAnnexB, 7) ||
         !canonicalParameterSet(ppsAnnexB, 8)) {
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
@@ -55,7 +57,7 @@ MediaTsMaterializedVideoConfig::create(
 }
 
 MediaTsMaterializedVideoConfig::MediaTsMaterializedVideoConfig(
-    MediaTsH264InputLayout layout,
+    MediaTsNalLayout layout,
     std::uint8_t nalLengthBytes,
     std::vector<std::uint8_t> spsAnnexB,
     std::vector<std::uint8_t> ppsAnnexB) noexcept

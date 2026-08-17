@@ -25,15 +25,17 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
     if (const auto* video = std::get_if<
             MediaTsMuxSession::VideoOnlyStreams>(&binding.streams)) {
         return binding.plan.videoOnlyProgram() &&
-            video->video.layout() == parameters.h264InputLayout &&
-            video->video.nalLengthBytes() == parameters.h264NalLengthBytes;
+            video->video.layout() == parameters.video.layout() &&
+            video->video.nalLengthBytes() ==
+                parameters.video.nalLengthBytes();
     }
     const auto* streams = std::get_if<
         MediaTsMuxSession::AudioVideoStreams>(&binding.streams);
     const auto* program = binding.plan.audioVideoProgram();
     return streams && program &&
-        streams->video.layout() == parameters.h264InputLayout &&
-        streams->video.nalLengthBytes() == parameters.h264NalLengthBytes &&
+        streams->video.layout() == parameters.video.layout() &&
+        streams->video.nalLengthBytes() ==
+            parameters.video.nalLengthBytes() &&
         streams->audio.audioObjectType() == program->aac.audioObjectType &&
         streams->audio.samplingFrequencyIndex() ==
             program->aac.samplingFrequencyIndex &&
@@ -52,6 +54,49 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
     return ::media::Result<std::size_t>::success(current + added);
 }
 
+struct MaintenanceGroupGeometry final {
+    std::size_t payloadBytes;
+    std::size_t datagramCount;
+};
+
+::media::Result<MaintenanceGroupGeometry> maintenanceGroupGeometry(
+    const std::vector<std::size_t>& cursorPacketCounts,
+    std::size_t packetSize,
+    std::size_t maximumPacketsPerDatagram)
+{
+    if (cursorPacketCounts.size() == 0 || packetSize == 0 ||
+        maximumPacketsPerDatagram == 0) {
+        return ::media::Result<MaintenanceGroupGeometry>::failure(
+            invalid("MPEG-TS maintenance group geometry is incomplete"));
+    }
+    std::size_t totalPackets = 0;
+    std::size_t datagrams = 0;
+    for (const std::size_t packets : cursorPacketCounts) {
+        if (packets == 0 ||
+            totalPackets > (std::numeric_limits<std::size_t>::max)() - packets) {
+            return ::media::Result<MaintenanceGroupGeometry>::failure(
+                invalid("MPEG-TS maintenance packet count is not representable"));
+        }
+        totalPackets += packets;
+        const std::size_t cursorDatagrams =
+            packets / maximumPacketsPerDatagram +
+            (packets % maximumPacketsPerDatagram != 0 ? 1u : 0u);
+        if (datagrams > (std::numeric_limits<std::size_t>::max)() -
+                cursorDatagrams) {
+            return ::media::Result<MaintenanceGroupGeometry>::failure(
+                invalid("MPEG-TS maintenance datagram count is not representable"));
+        }
+        datagrams += cursorDatagrams;
+    }
+    if (totalPackets > (std::numeric_limits<std::size_t>::max)() /
+            packetSize) {
+        return ::media::Result<MaintenanceGroupGeometry>::failure(
+            invalid("MPEG-TS maintenance payload bytes are not representable"));
+    }
+    return ::media::Result<MaintenanceGroupGeometry>::success(
+        MaintenanceGroupGeometry{totalPackets * packetSize, datagrams});
+}
+
 } // namespace
 
 ::media::Result<std::unique_ptr<MediaTsMuxSession>> MediaTsMuxSession::create(
@@ -61,7 +106,10 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
         binding.plan,
         binding.emission.videoInitialServiceWindow(),
         binding.emission.audioInitialServiceWindow());
+    const bool expectsScheduledBatch =
+        binding.plan.parameters().transportKind == MediaOutputTransportKind::RtpAvp;
     if (!binding.sink || !binding.masterClock ||
+        static_cast<bool>(binding.scheduledBatch) != expectsScheduledBatch ||
         binding.activation.generation == 0 ||
         !materializedConfigMatches(binding) ||
         !expectedEmission || binding.emission != expectedEmission.value()) {
@@ -107,6 +155,7 @@ MediaTsMuxSession::MediaTsMuxSession(
       m_packetizer(std::move(packetizer)),
       m_tables(std::move(tables)),
       m_writer(std::move(writer)),
+      m_scheduledBatch(std::move(binding.scheduledBatch)),
       m_nextPsi(binding.activation.masterRelease),
       m_nextPcr(binding.activation.masterRelease)
 {
@@ -142,9 +191,9 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
 
 ::media::Result<std::size_t> MediaTsMuxSession::writeCursorThrough(
     MediaTsPacketCursor& cursor,
-    MediaRunningTime notBefore,
     MediaRunningTime availableThrough)
 {
+    const bool materializeScheduledBatch = static_cast<bool>(m_scheduledBatch);
     if (!m_emissionSchedule) {
         return ::media::Result<std::size_t>::failure(
             poison(invalid("MPEG-TS emission schedule is not active")).error());
@@ -166,29 +215,45 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
                     "MPEG-TS maintenance batch size is not representable")).error());
         }
         auto emission = m_emissionSchedule->prepareMaintenance(
-            packetCount * packetSize, notBefore);
+            packetCount * packetSize);
         if (!emission) {
             return ::media::Result<std::size_t>::failure(
                 poison(emission.error()).error());
         }
-        if (emission.value().deadline() > availableThrough ||
-            availableThrough > emission.value().latestEmissionTime()) {
+        if (!materializeScheduledBatch &&
+            (emission.value().deadline() > availableThrough ||
+             availableThrough > emission.value().latestEmissionTime())) {
             return ::media::Result<std::size_t>::failure(
                 poison(invalid(
                     "MPEG-TS maintenance emission is outside its canonical window")).error());
         }
-        auto actualLateness = availableThrough.checkedSubtract(
-            emission.value().deadline());
-        if (!actualLateness) {
+        auto writeReady = materializeScheduledBatch
+            ? ::media::Result<MediaRunningTime>::success(
+                  emission.value().deadline())
+            : m_masterClock->now();
+        if (!writeReady) {
             return ::media::Result<std::size_t>::failure(
-                poison(actualLateness.error()).error());
+                poison(writeReady.error()).error());
         }
         const MediaRunningTime plannedWait = emission.value().plannedWait();
         const std::size_t wireBytes = emission.value().wireBytes();
         const MediaRunningTime selectedDeadline = emission.value().deadline();
+        const MediaRunningTime writeTime = (std::max)(
+            selectedDeadline, writeReady.value());
+        if (writeTime > emission.value().latestEmissionTime()) {
+            return ::media::Result<std::size_t>::failure(
+                poison(invalid(
+                    "MPEG-TS maintenance write cannot meet its canonical window")).error());
+        }
+        auto window = MediaTsDatagramEnqueueWindow::create(
+            writeTime, emission.value().latestEmissionTime(),
+            emission.value().serviceDuration());
+        if (!window) {
+            return ::media::Result<std::size_t>::failure(
+                poison(window.error()).error());
+        }
         auto written = m_writer.writeNext(
-            cursor, std::move(batch).value(),
-            emission.value().deadline());
+            cursor, std::move(batch).value(), window.value());
         if (!written) {
             if (written.error().code == ::media::ErrorCode::WouldBlock) {
                 m_emissionDiagnostics.recordPressureFailure();
@@ -196,7 +261,9 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             return ::media::Result<std::size_t>::failure(
                 poison(written.error()).error());
         }
-        auto actualEmission = m_masterClock->now();
+        auto actualEmission = materializeScheduledBatch
+            ? ::media::Result<MediaRunningTime>::success(selectedDeadline)
+            : m_masterClock->now();
         if (!actualEmission ||
             actualEmission.value() < selectedDeadline ||
             actualEmission.value() > emission.value().latestEmissionTime()) {
@@ -212,8 +279,11 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             return ::media::Result<std::size_t>::failure(
                 poison(committed.error()).error());
         }
-        m_emissionDiagnostics.recordCommittedDatagram(
-            wireBytes, plannedWait, selectedDeadline, actualEmission.value());
+        if (!materializeScheduledBatch) {
+            m_emissionDiagnostics.recordCommittedDatagram(
+                wireBytes, plannedWait, selectedDeadline,
+                actualEmission.value());
+        }
         logEmissionProgress();
         auto total = checkedPacketCount(
             packetsWritten, written.value().packetsWritten);
@@ -226,28 +296,133 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     return ::media::Result<std::size_t>::success(packetsWritten);
 }
 
-::media::Result<std::size_t> MediaTsMuxSession::writeTables(
-    MediaRunningTime emitOnMaster,
+::media::Result<std::size_t> MediaTsMuxSession::writeDueMaintenance(
+    bool psiDue,
+    bool pcrDue,
+    MediaRunningTime deadline,
     MediaRunningTime availableThrough)
 {
-    auto pat = m_packetizer.beginPat(m_tables.pat());
-    if (!pat) return ::media::Result<std::size_t>::failure(poison(pat.error()).error());
-    auto patCursor = std::move(pat).value();
-    auto patWritten = writeCursorThrough(
-        patCursor, emitOnMaster, availableThrough);
-    if (!patWritten) return ::media::Result<std::size_t>::failure(
-        poison(patWritten.error()).error());
-    auto pmt = m_packetizer.beginPmt(m_tables.pmt());
-    if (!pmt) return ::media::Result<std::size_t>::failure(poison(pmt.error()).error());
-    auto pmtCursor = std::move(pmt).value();
-    auto pmtWritten = writeCursorThrough(
-        pmtCursor, emitOnMaster, availableThrough);
-    if (!pmtWritten) return ::media::Result<std::size_t>::failure(
-        poison(pmtWritten.error()).error());
-    auto total = checkedPacketCount(patWritten.value(), pmtWritten.value());
-    if (!total) return ::media::Result<std::size_t>::failure(
-        poison(total.error()).error());
-    return total;
+    if (!psiDue && !pcrDue) {
+        return ::media::Result<std::size_t>::failure(
+            poison(invalid("MPEG-TS maintenance group has no due member")).error());
+    }
+    std::optional<MediaTsPreparedPcrClock> preparedPcr;
+    std::vector<std::size_t> packetCounts;
+    std::optional<MediaRunningTime> completionDeadline;
+    if (psiDue) {
+        auto patPackets = m_packetizer.patPacketCount(m_tables.pat());
+        auto pmtPackets = m_packetizer.pmtPacketCount(m_tables.pmt());
+        if (!patPackets || !pmtPackets) {
+            return ::media::Result<std::size_t>::failure(
+                poison(!patPackets
+                    ? patPackets.error()
+                    : pmtPackets.error()).error());
+        }
+        packetCounts.push_back(patPackets.value());
+        packetCounts.push_back(pmtPackets.value());
+        auto psiCompletion = deadline.checkedAdd(
+            m_plan.parameters().psiRepeatInterval);
+        if (!psiCompletion) {
+            return ::media::Result<std::size_t>::failure(
+                poison(psiCompletion.error()).error());
+        }
+        completionDeadline = psiCompletion.value();
+    }
+    if (pcrDue) {
+        auto pcr = m_clock.preparePcr(
+            m_activation.generation, deadline);
+        if (!pcr) {
+            return ::media::Result<std::size_t>::failure(
+                poison(pcr.error()).error());
+        }
+        const auto& sample = pcr.value().clock();
+        if (auto status = m_clock.validateSerializedPcr(
+                sample, sample.extended27Mhz); !status) {
+            return ::media::Result<std::size_t>::failure(
+                poison(status.error()).error());
+        }
+        auto pcrPackets = m_packetizer.pcrOnlyPacketCount(sample);
+        if (!pcrPackets) {
+            return ::media::Result<std::size_t>::failure(
+                poison(pcrPackets.error()).error());
+        }
+        packetCounts.push_back(pcrPackets.value());
+        auto pcrCompletion = deadline.checkedAdd(
+            m_plan.clockPolicy().pcrInterval);
+        if (!pcrCompletion) {
+            return ::media::Result<std::size_t>::failure(
+                poison(pcrCompletion.error()).error());
+        }
+        completionDeadline = completionDeadline
+            ? (std::min)(*completionDeadline, pcrCompletion.value())
+            : pcrCompletion.value();
+        preparedPcr.emplace(std::move(pcr).value());
+    }
+    auto geometry = maintenanceGroupGeometry(
+        packetCounts, m_emissionPlan.packetSizeBytes(),
+        m_plan.parameters().maximumPacketsPerDatagram);
+    if (!geometry || !completionDeadline) {
+        return ::media::Result<std::size_t>::failure(
+            poison(geometry
+                ? invalid("MPEG-TS maintenance completion deadline is absent")
+                : geometry.error()).error());
+    }
+    if (auto status = m_emissionSchedule->beginMaintenanceGroup(
+            geometry.value().payloadBytes, geometry.value().datagramCount,
+            deadline, *completionDeadline); !status) {
+        return ::media::Result<std::size_t>::failure(
+            poison(status.error()).error());
+    }
+    std::size_t packetsWritten = 0;
+    const auto writeMaintenanceCursor = [this, availableThrough, &packetsWritten](
+        ::media::Result<MediaTsPacketCursor> cursorResult) -> ::media::Status {
+        if (!cursorResult) {
+            return ::media::Status::failure(cursorResult.error());
+        }
+        MediaTsPacketCursor cursor = std::move(cursorResult).value();
+        auto written = writeCursorThrough(cursor, availableThrough);
+        if (!written) {
+            return ::media::Status::failure(written.error());
+        }
+        auto total = checkedPacketCount(packetsWritten, written.value());
+        if (!total) {
+            return ::media::Status::failure(total.error());
+        }
+        packetsWritten = total.value();
+        return ::media::Status::success();
+    };
+    if (psiDue) {
+        if (auto status = writeMaintenanceCursor(
+                m_packetizer.beginPat(m_tables.pat())); !status) {
+            return ::media::Result<std::size_t>::failure(
+                poison(status.error()).error());
+        }
+        if (auto status = writeMaintenanceCursor(
+                m_packetizer.beginPmt(m_tables.pmt())); !status) {
+            return ::media::Result<std::size_t>::failure(
+                poison(status.error()).error());
+        }
+    }
+    if (preparedPcr) {
+        if (auto status = writeMaintenanceCursor(
+                m_packetizer.beginPcrOnly(preparedPcr->clock())); !status) {
+            return ::media::Result<std::size_t>::failure(
+                poison(status.error()).error());
+        }
+    }
+    if (auto status = m_emissionSchedule->completeMaintenanceGroup();
+        !status) {
+        return ::media::Result<std::size_t>::failure(
+            poison(status.error()).error());
+    }
+    if (preparedPcr) {
+        if (auto status = m_clock.commitPcr(std::move(*preparedPcr));
+            !status) {
+            return ::media::Result<std::size_t>::failure(
+                poison(status.error()).error());
+        }
+    }
+    return ::media::Result<std::size_t>::success(packetsWritten);
 }
 
 ::media::Status MediaTsMuxSession::start(MediaRunningTime emitOnMaster)
@@ -284,7 +459,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     }
 
     if (m_pendingEmission) {
-        return emitPending(masterNow, true);
+        return emitPendingThrough(masterNow);
     }
 
     const MediaRunningTime deadline =
@@ -330,22 +505,22 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
 }
 
 ::media::Result<MediaTsMuxSession::AdvanceResult>
-MediaTsMuxSession::emitPending(
-    MediaRunningTime masterNow,
-    bool oneDatagramOnly)
+MediaTsMuxSession::emitPendingThrough(
+    MediaRunningTime masterNow)
 {
     if (!m_pendingEmission || !m_emissionSchedule) {
         return advanceFailure(invalid(
             "MPEG-TS mux session has no pending canonical emission"));
     }
     std::size_t packetsWritten = 0;
-    bool emitted = false;
+    MediaRunningTime availableThrough = masterNow;
+    const bool materializeScheduledBatch = static_cast<bool>(m_scheduledBatch);
     while (m_pendingEmission &&
-           m_pendingEmission->deadline() <= masterNow &&
-           (!oneDatagramOnly || !emitted)) {
+           (materializeScheduledBatch ||
+            m_pendingEmission->deadline() <= availableThrough)) {
         auto written = m_pendingEmission->emitPrepared(
             m_writer, *m_emissionSchedule, m_emissionDiagnostics,
-            *m_masterClock, masterNow);
+            *m_masterClock, availableThrough, materializeScheduledBatch);
         if (!written) {
             if (written.error().code == ::media::ErrorCode::WouldBlock) {
                 m_emissionDiagnostics.recordPressureFailure();
@@ -357,7 +532,6 @@ MediaTsMuxSession::emitPending(
             packetsWritten, written.value().packetsWritten);
         if (!total) return advanceFailure(total.error());
         packetsWritten = total.value();
-        emitted = true;
         if (m_pendingEmission->finished()) {
             auto completed = completePending();
             if (!completed) {
@@ -366,15 +540,80 @@ MediaTsMuxSession::emitPending(
             }
             break;
         }
-        auto next = m_pendingEmission->prepareNext(
-            m_writer, *m_emissionSchedule);
-        if (!next) return advanceFailure(next.error());
+        auto interleaved = preparePendingDatagram();
+        if (!interleaved) return advanceFailure(interleaved.error());
+        auto withMaintenance = checkedPacketCount(
+            packetsWritten, interleaved.value());
+        if (!withMaintenance) return advanceFailure(withMaintenance.error());
+        packetsWritten = withMaintenance.value();
+        auto currentMasterNow = m_masterClock->now();
+        if (!currentMasterNow || currentMasterNow.value() < availableThrough) {
+            return advanceFailure(
+                currentMasterNow
+                    ? invalid(
+                          "MPEG-TS master clock regressed while draining due datagrams")
+                    : currentMasterNow.error());
+        }
+        availableThrough = currentMasterNow.value();
     }
     const MediaRunningTime nextDeadline = m_pendingEmission
         ? m_pendingEmission->deadline()
         : (m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi);
     return ::media::Result<AdvanceResult>::success(
         AdvanceResult{nextDeadline, packetsWritten});
+}
+
+::media::Result<std::size_t> MediaTsMuxSession::preparePendingDatagram()
+{
+    if (!m_pendingEmission || !m_emissionSchedule) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS pending datagram preparation has no active access unit"));
+    }
+    auto payloadBytes = m_pendingEmission->nextPayloadBytes();
+    if (!payloadBytes) {
+        return ::media::Result<std::size_t>::failure(payloadBytes.error());
+    }
+    std::size_t maintenancePackets = 0;
+    if (m_scheduledBatch) {
+        while (true) {
+            auto preview = m_emissionSchedule->previewAccessUnit(
+                payloadBytes.value());
+            if (!preview) {
+                return ::media::Result<std::size_t>::failure(preview.error());
+            }
+            const MediaRunningTime maintenanceDeadline =
+                m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi;
+            if (maintenanceDeadline >= preview.value().completion) break;
+            auto advanced = advanceThroughAvailable(
+                maintenanceDeadline, maintenanceDeadline);
+            if (!advanced) {
+                return ::media::Result<std::size_t>::failure(
+                    advanced.error());
+            }
+            auto total = checkedPacketCount(
+                maintenancePackets, advanced.value().packetsWritten);
+            if (!total) {
+                return ::media::Result<std::size_t>::failure(total.error());
+            }
+            maintenancePackets = total.value();
+        }
+    }
+    if (auto status = m_pendingEmission->preparePayload(m_writer); !status) {
+        return ::media::Result<std::size_t>::failure(status.error());
+    }
+    auto preparedPayloadBytes = m_pendingEmission->preparedPayloadBytes();
+    if (!preparedPayloadBytes ||
+        preparedPayloadBytes.value() != payloadBytes.value()) {
+        return ::media::Result<std::size_t>::failure(
+            preparedPayloadBytes
+                ? invalid("MPEG-TS prepared payload differs from its previewed geometry")
+                : preparedPayloadBytes.error());
+    }
+    auto reserved = m_pendingEmission->reservePrepared(*m_emissionSchedule);
+    if (!reserved) {
+        return ::media::Result<std::size_t>::failure(reserved.error());
+    }
+    return ::media::Result<std::size_t>::success(maintenancePackets);
 }
 
 ::media::Result<MediaTsMuxSession::AdvanceResult> MediaTsMuxSession::advanceThrough(
@@ -397,6 +636,12 @@ MediaTsMuxSession::advanceThroughAvailable(
             m_failure ? *m_failure : invalid("MPEG-TS mux session is not open"));
     }
     if (m_lastAdvance && emitOnMaster < *m_lastAdvance) {
+        if (m_scheduledBatch) {
+            const MediaRunningTime deadline =
+                m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi;
+            return ::media::Result<AdvanceResult>::success(
+                AdvanceResult{deadline, 0});
+        }
         return advanceFailure(invalid("MPEG-TS mux session emission time regressed"));
     }
     if (m_lastAdvance) {
@@ -412,33 +657,14 @@ MediaTsMuxSession::advanceThroughAvailable(
             m_nextPsi < m_nextPcr ? m_nextPsi : m_nextPcr;
         const bool psiDue = m_nextPsi == deadline;
         const bool pcrDue = m_nextPcr == deadline;
-        if (psiDue) {
-            auto tables = writeTables(deadline, availableThrough);
-            if (!tables) return ::media::Result<AdvanceResult>::failure(tables.error());
-            auto count = checkedPacketCount(packetCount, tables.value());
-            if (!count) return advanceFailure(count.error());
-            packetCount = count.value();
+        auto written = writeDueMaintenance(
+            psiDue, pcrDue, deadline, availableThrough);
+        if (!written) {
+            return ::media::Result<AdvanceResult>::failure(written.error());
         }
-        if (pcrDue) {
-            auto prepared = m_clock.preparePcr(
-                m_activation.generation, m_nextPcr);
-            if (!prepared) return advanceFailure(prepared.error());
-            const auto& sample = prepared.value().clock();
-            auto validation = m_clock.validateSerializedPcr(
-                sample, sample.extended27Mhz);
-            if (!validation) return advanceFailure(validation.error());
-            auto cursor = m_packetizer.beginPcrOnly(sample);
-            if (!cursor) return advanceFailure(cursor.error());
-            auto packetCursor = std::move(cursor).value();
-            auto result = writeCursorThrough(
-                packetCursor, deadline, availableThrough);
-            if (!result) return advanceFailure(result.error());
-            auto clockCommit = m_clock.commitPcr(std::move(prepared).value());
-            if (!clockCommit) return advanceFailure(clockCommit.error());
-            auto count = checkedPacketCount(packetCount, result.value());
-            if (!count) return advanceFailure(count.error());
-            packetCount = count.value();
-        }
+        auto count = checkedPacketCount(packetCount, written.value());
+        if (!count) return advanceFailure(count.error());
+        packetCount = count.value();
         if (psiDue) {
             auto next = m_nextPsi.checkedAdd(m_plan.parameters().psiRepeatInterval);
             if (!next) return advanceFailure(next.error());
@@ -467,7 +693,7 @@ MediaTsMuxSession::writeAccessUnit(
     }
     if (actualMasterNow < unit.emitOnMaster) {
         return advanceFailure(invalid(
-            "MPEG-TS access unit was presented before its canonical emission time"));
+            "MPEG-TS mux session requires an access unit at its canonical emission time"));
     }
     auto advanced = advanceThroughAvailable(
         unit.emitOnMaster, actualMasterNow);
@@ -538,7 +764,8 @@ MediaTsMuxSession::writeAccessUnit(
     auto packetCursor = std::move(cursor).value();
     m_pendingEmission.emplace(
         std::move(packetCursor), unit.emitOnMaster,
-        std::move(clock).value(), m_emissionPlan.packetSizeBytes());
+        std::move(clock).value(), m_emissionPlan.packetSizeBytes(),
+        m_plan.parameters().maximumPacketsPerDatagram);
     m_emissionDiagnostics.recordPendingBytes(
         m_pendingEmission->pendingBytes());
     auto schedulingNow = m_masterClock->now();
@@ -549,17 +776,20 @@ MediaTsMuxSession::writeAccessUnit(
     }
     auto emissionDecision = m_emissionSchedule->beginAccessUnit(
         unit.stream, m_pendingEmission->pendingBytes(),
-        unit.emitOnMaster, unit.dispatchOnMaster, schedulingNow.value());
+        unit.emitOnMaster, unit.dispatchOnMaster,
+        schedulingNow.value());
     if (!emissionDecision) return advanceFailure(emissionDecision.error());
     m_emissionDiagnostics.recordAccessUnitDecision(
         emissionDecision.value());
-    auto prepared = m_pendingEmission->prepareNext(
-        m_writer, *m_emissionSchedule);
-    if (!prepared) return advanceFailure(prepared.error());
-    auto result = emitPending(actualMasterNow, true);
+    auto interleaved = preparePendingDatagram();
+    if (!interleaved) return advanceFailure(interleaved.error());
+    auto result = emitPendingThrough(actualMasterNow);
     if (!result) return result;
     auto packetsWritten = checkedPacketCount(
-        advanced.value().packetsWritten, result.value().packetsWritten);
+        advanced.value().packetsWritten, interleaved.value());
+    if (!packetsWritten) return advanceFailure(packetsWritten.error());
+    packetsWritten = checkedPacketCount(
+        packetsWritten.value(), result.value().packetsWritten);
     if (!packetsWritten) return advanceFailure(packetsWritten.error());
     return ::media::Result<AdvanceResult>::success(
         AdvanceResult{result.value().nextDeadline, packetsWritten.value()});
@@ -603,10 +833,7 @@ void MediaTsMuxSession::abort() noexcept
 
 void MediaTsMuxSession::logEmissionProgress(bool force)
 {
-    const auto decision = mediaGraphDiagnosticSample(
-        MediaGraphDiagnosticLevel::Flow,
-        "mpegts_emission_" + std::to_string(m_activation.generation),
-        force);
+    const auto decision = m_emissionDiagnosticSampler.sample(force);
     if (decision.shouldLog) {
         m_emissionDiagnostics.logSnapshot(
             "periodic", "running", m_activation.generation);
@@ -625,6 +852,26 @@ void MediaTsMuxSession::logEmissionFinal(const char* exitReason)
 bool MediaTsMuxSession::hasPendingEmission() const noexcept
 {
     return m_pendingEmission.has_value();
+}
+
+bool MediaTsMuxSession::hasScheduledBatch() const noexcept
+{
+    return m_scheduledBatch && !m_scheduledBatch->empty();
+}
+
+::media::Result<MediaBufferRef> MediaTsMuxSession::takeScheduledBatch()
+{
+    if (!m_scheduledBatch || m_scheduledBatch->empty()) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS mux session has no scheduled datagram batch"));
+    }
+    auto batch = m_scheduledBatch->release();
+    if (!batch) return ::media::Result<MediaBufferRef>::failure(batch.error());
+    auto next = m_scheduledBatch->beginNextBatch();
+    if (!next) return ::media::Result<MediaBufferRef>::failure(next.error());
+    return ::media::Result<MediaBufferRef>::success(
+        std::move(batch).value());
 }
 
 } // namespace media::ffmpeg::graph

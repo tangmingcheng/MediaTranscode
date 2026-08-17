@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
+#include "internal/graph/protocol/mpegts/MediaTsVideoElementaryStreamContract.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -9,11 +10,6 @@
 #include <variant>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaTsH264InputLayout : std::uint8_t {
-    AnnexB = 0,
-    LengthPrefixed = 1
-};
 
 enum class MediaTsParameterSetPolicy : std::uint8_t {
     Never = 0,
@@ -80,8 +76,7 @@ struct MediaTsMuxPlanParameters final {
     std::uint8_t tableVersion;
     MediaRunningTime psiRepeatInterval;
     MediaTsProgramPlan program;
-    MediaTsH264InputLayout h264InputLayout;
-    std::uint8_t h264NalLengthBytes;
+    MediaTsVideoElementaryStreamContract video;
     MediaTsParameterSetPolicy parameterSetPolicy;
     MediaTsOutputClockPolicy clock;
     MediaRunningTime transportDecodeLead;

@@ -121,7 +121,7 @@ bool avccProfileHasExtension(std::uint8_t profile) noexcept
             invalidVideoConfig("is not a complete AVCDecoderConfigurationRecord"));
     }
     const auto nalLengthBytes = static_cast<std::uint8_t>((bytes[4] & 3) + 1);
-    if (nalLengthBytes != plan.h264NalLengthBytes) {
+    if (nalLengthBytes != plan.video.nalLengthBytes()) {
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
             invalidVideoConfig("NAL length width conflicts with the plan"));
     }
@@ -150,7 +150,7 @@ bool avccProfileHasExtension(std::uint8_t profile) noexcept
             extension.error());
     }
     return MediaTsMaterializedVideoConfig::create(
-        MediaTsH264InputLayout::LengthPrefixed,
+        MediaTsNalLayout::LengthPrefixed,
         nalLengthBytes,
         canonicalParameterSet(sps.value()),
         canonicalParameterSet(pps.value()));
@@ -211,8 +211,8 @@ std::optional<StartCode> findStartCode(ByteSpan bytes, std::size_t from) noexcep
             invalidVideoConfig("must contain exactly one SPS and one PPS"));
     }
     return MediaTsMaterializedVideoConfig::create(
-        MediaTsH264InputLayout::AnnexB,
-        plan.h264NalLengthBytes,
+        MediaTsNalLayout::AnnexB,
+        plan.video.nalLengthBytes(),
         std::move(sps),
         std::move(pps));
 }
@@ -235,10 +235,10 @@ MediaTsFfmpegStreamConfigMaterializer::video(
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
             bytes.error());
     }
-    switch (plan.parameters().h264InputLayout) {
-    case MediaTsH264InputLayout::LengthPrefixed:
+    switch (plan.parameters().video.layout()) {
+    case MediaTsNalLayout::LengthPrefixed:
         return parseAvcc(plan.parameters(), bytes.value());
-    case MediaTsH264InputLayout::AnnexB:
+    case MediaTsNalLayout::AnnexB:
         return parseAnnexB(plan.parameters(), bytes.value());
     default:
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(

@@ -97,8 +97,8 @@ MediaTsH264AccessUnitFramer::frame(
     std::vector<std::uint8_t>& workspace)
 {
     const auto& parameters = plan.parameters();
-    if (config.layout() != parameters.h264InputLayout ||
-        config.nalLengthBytes() != parameters.h264NalLengthBytes) {
+    if (config.layout() != parameters.video.layout() ||
+        config.nalLengthBytes() != parameters.video.nalLengthBytes()) {
         return invalid("MPEG-TS H.264 materialized config mismatches the plan");
     }
     if (payload.empty()) return invalid("MPEG-TS H.264 access unit is empty");
@@ -114,7 +114,7 @@ MediaTsH264AccessUnitFramer::frame(
         }
     }
 
-    if (parameters.h264InputLayout == MediaTsH264InputLayout::AnnexB) {
+    if (parameters.video.layout() == MediaTsNalLayout::AnnexB) {
         auto valid = MediaAnnexBAccessUnitValidator::validate(
             payload, MediaAnnexBCodec::H264);
         if (!valid) return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
@@ -133,11 +133,12 @@ MediaTsH264AccessUnitFramer::frame(
         std::copy(payload.begin(), payload.end(), iterator);
         return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
     }
-    if (parameters.h264InputLayout != MediaTsH264InputLayout::LengthPrefixed) {
+    if (parameters.video.layout() != MediaTsNalLayout::LengthPrefixed) {
         return invalid("MPEG-TS H.264 input layout is invalid");
     }
 
-    auto converted = convertedSize(payload, parameters.h264NalLengthBytes);
+    auto converted = convertedSize(
+        payload, parameters.video.nalLengthBytes());
     if (!converted) return invalid("MPEG-TS H.264 length-prefixed access unit is malformed");
     std::size_t totalSize = 0;
     if (!checkedAdd(injectionSize, converted.value(), totalSize)) {
@@ -149,7 +150,7 @@ MediaTsH264AccessUnitFramer::frame(
         iterator = std::copy(config.spsAnnexB().begin(), config.spsAnnexB().end(), iterator);
         iterator = std::copy(config.ppsAnnexB().begin(), config.ppsAnnexB().end(), iterator);
     }
-    writeConverted(payload, parameters.h264NalLengthBytes,
+    writeConverted(payload, parameters.video.nalLengthBytes(),
                    std::span<std::uint8_t>(workspace).subspan(injectionSize));
     return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
 }

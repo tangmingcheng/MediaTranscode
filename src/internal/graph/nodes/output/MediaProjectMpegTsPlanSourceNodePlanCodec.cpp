@@ -30,10 +30,18 @@ constexpr const char* EmissionVideoWindowKey =
     "project_mpeg_ts_plan.emission.video_initial_service_window_ns";
 constexpr const char* EmissionAudioWindowKey =
     "project_mpeg_ts_plan.emission.audio_initial_service_window_ns";
-constexpr std::size_t VideoOnlyMuxFieldCount = 26;
-constexpr std::size_t AudioVideoMuxFieldCount = 34;
+constexpr const char* ScheduledBatchMaximumBytesKey =
+    "project_mpeg_ts_plan.scheduled_batch.maximum_payload_bytes";
+constexpr const char* PacingExecutionKey =
+    "project_mpeg_ts_plan.pacing.execution";
+constexpr const char* PacingEvidenceKey =
+    "project_mpeg_ts_plan.pacing.evidence";
+constexpr const char* PacingDeadlinePolicyKey =
+    "project_mpeg_ts_plan.pacing.deadline_policy";
+constexpr std::size_t VideoOnlyMuxFieldCount = 27;
+constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
-constexpr std::array<const char*, 10> UdpKeys{
+constexpr std::array<const char*, 11> UdpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -43,9 +51,10 @@ constexpr std::array<const char*, 10> UdpKeys{
     MuxSessionKindKey,
     StreamSetKey,
     EmissionVideoWindowKey,
-    EmissionAudioWindowKey};
+    EmissionAudioWindowKey,
+    ScheduledBatchMaximumBytesKey};
 
-constexpr std::array<const char*, 33> RtpKeys{
+constexpr std::array<const char*, 37> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -78,7 +87,11 @@ constexpr std::array<const char*, 33> RtpKeys{
     MuxSessionKindKey,
     StreamSetKey,
     EmissionVideoWindowKey,
-    EmissionAudioWindowKey};
+    EmissionAudioWindowKey,
+    ScheduledBatchMaximumBytesKey,
+    PacingExecutionKey,
+    PacingEvidenceKey,
+    PacingDeadlinePolicyKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -199,8 +212,8 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
             << p.patPid << ',' << p.programMapPid << ','
             << static_cast<unsigned>(p.tableVersion) << ','
             << p.psiRepeatInterval.nanoseconds() << ','
-            << static_cast<unsigned>(p.h264InputLayout) << ','
-            << static_cast<unsigned>(p.h264NalLengthBytes) << ','
+            << static_cast<unsigned>(p.video.layout()) << ','
+            << static_cast<unsigned>(p.video.nalLengthBytes()) << ','
             << static_cast<unsigned>(p.parameterSetPolicy) << ','
             << p.clock.pcrInterval.nanoseconds() << ','
             << p.clock.maximumPcrGap.nanoseconds() << ','
@@ -211,7 +224,8 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
             << p.startupEmissionPreroll.nanoseconds() << ','
             << p.packetSize << ','
             << static_cast<unsigned>(p.maximumPacketsPerDatagram) << ','
-            << static_cast<unsigned>(p.transportKind);
+            << static_cast<unsigned>(p.transportKind) << ','
+            << static_cast<unsigned>(p.video.codec());
     if (const auto* video = muxPlan.videoOnlyProgram()) {
         encoded << ',' << video->videoPid << ',' << video->pcrPid << ','
                 << static_cast<unsigned>(video->videoStreamType) << ','
@@ -262,7 +276,9 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
         f[12] > std::uint64_t{INT64_MAX} ||
         f[15] > std::uint64_t{INT64_MAX} ||
         f[16] > std::uint64_t{INT64_MAX} ||
-        f[7] > 1 || f[9] > 1 ||
+        f[7] > static_cast<unsigned>(MediaTsNalLayout::LengthPrefixed) ||
+        f[9] > 1 ||
+        f[20] > static_cast<unsigned>(MediaTsVideoCodec::Hevc) ||
         f[19] > static_cast<unsigned>(
                      MediaOutputTransportKind::RtpAvp)) {
         return ::media::Result<MediaTsMuxPlan>::failure(
@@ -271,12 +287,12 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
     }
     MediaTsProgramPlan programPlan;
     if (f[0] == 0) {
-        auto videoPid = narrow<std::uint16_t>(f[20]);
-        auto pcrPid = narrow<std::uint16_t>(f[21]);
-        auto videoType = narrow<std::uint8_t>(f[22]);
-        auto continuityPat = narrow<std::uint8_t>(f[23]);
-        auto continuityPmt = narrow<std::uint8_t>(f[24]);
-        auto continuityVideo = narrow<std::uint8_t>(f[25]);
+        auto videoPid = narrow<std::uint16_t>(f[21]);
+        auto pcrPid = narrow<std::uint16_t>(f[22]);
+        auto videoType = narrow<std::uint8_t>(f[23]);
+        auto continuityPat = narrow<std::uint8_t>(f[24]);
+        auto continuityPmt = narrow<std::uint8_t>(f[25]);
+        auto continuityVideo = narrow<std::uint8_t>(f[26]);
         if (!videoPid || !pcrPid || !videoType || !continuityPat ||
             !continuityPmt || !continuityVideo) {
             return ::media::Result<MediaTsMuxPlan>::failure(
@@ -290,20 +306,20 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
                     continuityPat.value(), continuityPmt.value(),
                     continuityVideo.value()}});
     } else {
-        auto videoPid = narrow<std::uint16_t>(f[20]);
-        auto audioPid = narrow<std::uint16_t>(f[21]);
-        auto pcrPid = narrow<std::uint16_t>(f[22]);
-        auto videoType = narrow<std::uint8_t>(f[23]);
-        auto audioType = narrow<std::uint8_t>(f[24]);
-        auto aacMpeg = narrow<std::uint8_t>(f[25]);
-        auto aacObject = narrow<std::uint8_t>(f[26]);
-        auto aacFrequency = narrow<std::uint8_t>(f[27]);
-        auto aacChannels = narrow<std::uint8_t>(f[28]);
-        auto continuityPat = narrow<std::uint8_t>(f[29]);
-        auto continuityPmt = narrow<std::uint8_t>(f[30]);
-        auto continuityVideo = narrow<std::uint8_t>(f[31]);
-        auto continuityAudio = narrow<std::uint8_t>(f[32]);
-        auto maxAudioSamples = narrow<int>(f[33]);
+        auto videoPid = narrow<std::uint16_t>(f[21]);
+        auto audioPid = narrow<std::uint16_t>(f[22]);
+        auto pcrPid = narrow<std::uint16_t>(f[23]);
+        auto videoType = narrow<std::uint8_t>(f[24]);
+        auto audioType = narrow<std::uint8_t>(f[25]);
+        auto aacMpeg = narrow<std::uint8_t>(f[26]);
+        auto aacObject = narrow<std::uint8_t>(f[27]);
+        auto aacFrequency = narrow<std::uint8_t>(f[28]);
+        auto aacChannels = narrow<std::uint8_t>(f[29]);
+        auto continuityPat = narrow<std::uint8_t>(f[30]);
+        auto continuityPmt = narrow<std::uint8_t>(f[31]);
+        auto continuityVideo = narrow<std::uint8_t>(f[32]);
+        auto continuityAudio = narrow<std::uint8_t>(f[33]);
+        auto maxAudioSamples = narrow<int>(f[34]);
         if (!videoPid || !audioPid || !pcrPid || !videoType || !audioType ||
             !aacMpeg || !aacObject || !aacFrequency || !aacChannels ||
             !continuityPat || !continuityPmt || !continuityVideo ||
@@ -324,12 +340,21 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
                     continuityVideo.value(), continuityAudio.value()},
                 maxAudioSamples.value()});
     }
+    const auto videoStreamType = std::visit(
+        [](const auto& program) { return program.videoStreamType; },
+        programPlan);
+    auto video = MediaTsVideoElementaryStreamContract::create(
+        static_cast<MediaTsVideoCodec>(f[20]),
+        static_cast<MediaTsNalLayout>(f[7]), nalBytes.value(),
+        videoStreamType);
+    if (!video) {
+        return ::media::Result<MediaTsMuxPlan>::failure(video.error());
+    }
     return MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         tsid.value(), programNumber.value(), pat.value(), pmt.value(),
         table.value(),
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[6])),
-        std::move(programPlan),
-        static_cast<MediaTsH264InputLayout>(f[7]), nalBytes.value(),
+        std::move(programPlan), std::move(video).value(),
         static_cast<MediaTsParameterSetPolicy>(f[9]),
         MediaTsOutputClockPolicy{
             MediaRunningTime::fromNanoseconds(
@@ -442,6 +467,7 @@ bool sameRtpOutput(
         left.senderReportInterval() == right.senderReportInterval() &&
         left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
         left.tsPacketsPerPayload() == right.tsPacketsPerPayload() &&
+        left.pacing() == right.pacing() &&
         leftSdp.path == rightSdp.path &&
         leftSdp.originUsername == rightSdp.originUsername &&
         leftSdp.sessionName == rightSdp.sessionName &&
@@ -476,7 +502,8 @@ bool sameProtocol(
         !expectedEmission || output.emission != expectedEmission.value() ||
         !encodedStreamSet || !endpoint || endpoint.value().scheme != "udp" ||
         udp.resourceKind != MediaOutputResourceKind::ByteSink ||
-        udp.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
+        udp.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
+        output.scheduledBatchMaximumBytes != 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Project MPEG-TS UDP node plan is inconsistent"));
@@ -492,10 +519,11 @@ bool sameProtocol(
         {StreamSetKey, std::string(encodedStreamSet.value())},
         {EmissionVideoWindowKey, std::to_string(
              output.emission.videoInitialServiceWindow().nanoseconds())},
-        {EmissionAudioWindowKey, std::to_string(
-             output.emission.audioInitialServiceWindow()
-                 ? output.emission.audioInitialServiceWindow()->nanoseconds()
-                 : 0)}});
+         {EmissionAudioWindowKey, std::to_string(
+              output.emission.audioInitialServiceWindow()
+                  ? output.emission.audioInitialServiceWindow()->nanoseconds()
+                  : 0)},
+         {ScheduledBatchMaximumBytesKey, "0"}});
 }
 
 ::media::Status applyRtp(
@@ -525,9 +553,16 @@ bool sameProtocol(
         !expectedEmission || output.emission != expectedEmission.value() ||
         output.emission.maximumWireDatagramBytes() >
             sender.maximumDatagramBytes() ||
+        rtp.pacing().execution !=
+            MediaDatagramDispatchExecution::UserspaceWaitAndSend ||
+        rtp.pacing().evidence !=
+            MediaDatagramTimingEvidence::UserspaceSendReturn ||
+        rtp.pacing().deadlinePolicy !=
+            MediaDatagramDeadlinePolicy::CanonicalOrdered ||
         localPolicy.kind() !=
             MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
         localPolicy.rtpPort() || localPolicy.rtcpPort() ||
+        output.scheduledBatchMaximumBytes == 0 ||
         sender.ioBehavior() !=
             MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure) {
         return ::media::Status::failure(
@@ -569,10 +604,15 @@ bool sameProtocol(
         {StreamSetKey, std::string(encodedStreamSet.value())},
         {EmissionVideoWindowKey, std::to_string(
              output.emission.videoInitialServiceWindow().nanoseconds())},
-        {EmissionAudioWindowKey, std::to_string(
-             output.emission.audioInitialServiceWindow()
-                 ? output.emission.audioInitialServiceWindow()->nanoseconds()
-                 : 0)}});
+         {EmissionAudioWindowKey, std::to_string(
+              output.emission.audioInitialServiceWindow()
+                  ? output.emission.audioInitialServiceWindow()->nanoseconds()
+                  : 0)},
+         {ScheduledBatchMaximumBytesKey,
+          std::to_string(output.scheduledBatchMaximumBytes)},
+         {PacingExecutionKey, "userspace_wait_and_send"},
+         {PacingEvidenceKey, "userspace_send_return"},
+         {PacingDeadlinePolicyKey, "canonical_ordered"}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -593,17 +633,22 @@ bool sameProtocol(
         &node.options, Owner, UdpKeys[4]);
     auto muxSession = requiredNodeOption(
         &node.options, Owner, UdpKeys[5]);
-    if (!url || !resource || !muxSession) {
+    auto scheduledBatchMaximumBytes = parseUnsignedOption<std::uint64_t>(
+        node.options, ScheduledBatchMaximumBytesKey, true);
+    if (!url || !resource || !muxSession || !scheduledBatchMaximumBytes) {
         return Result::failure(
             !url ? url.error() :
-            !resource ? resource.error() : muxSession.error());
+            !resource ? resource.error() :
+            !muxSession ? muxSession.error() :
+            scheduledBatchMaximumBytes.error());
     }
     auto endpoint = parseRtpUdpUrlEndpoint(url.value());
     auto emission = decodeEmission(node.options, protocol.muxPlan());
     if (!endpoint || endpoint.value().scheme != "udp" ||
         !emission ||
         resource.value() != "byte_sink" ||
-        muxSession.value() != "project_mpegts") {
+        muxSession.value() != "project_mpegts" ||
+        scheduledBatchMaximumBytes.value() != 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Project MPEG-TS UDP options contain invalid transport facts"));
     }
@@ -611,6 +656,7 @@ bool sameProtocol(
         std::move(protocol),
         MediaMuxSessionKind::ProjectMpegTs,
         std::move(emission).value(),
+        0,
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsUdpOutputPlan>,
             MediaMpegTsUdpOutputPlan{
@@ -714,11 +760,18 @@ bool sameProtocol(
         &node.options, Owner, RtpKeys[26]);
     auto sdpCname = requiredNodeOption(
         &node.options, Owner, RtpKeys[27]);
+    auto pacingExecution = requiredNodeOption(
+        &node.options, Owner, PacingExecutionKey);
+    auto pacingEvidence = requiredNodeOption(
+        &node.options, Owner, PacingEvidenceKey);
+    auto pacingDeadlinePolicy = requiredNodeOption(
+        &node.options, Owner, PacingDeadlinePolicyKey);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
         !initialSequenceNumber ||
         !cname || !reportInterval || !packetCount || !sdpPath ||
         !originUsername || !sessionName || !originFamily ||
-        !originAddress || !sdpCname) {
+        !originAddress || !sdpCname || !pacingExecution ||
+        !pacingEvidence || !pacingDeadlinePolicy) {
         const ::media::ErrorInfo error =
             !payloadType ? payloadType.error() :
             !clockRate ? clockRate.error() :
@@ -733,18 +786,35 @@ bool sameProtocol(
             !sessionName ? sessionName.error() :
             !originFamily ? originFamily.error() :
             !originAddress ? originAddress.error() :
-            sdpCname.error();
+            !sdpCname ? sdpCname.error() :
+            !pacingExecution ? pacingExecution.error() :
+            !pacingEvidence ? pacingEvidence.error() :
+            pacingDeadlinePolicy.error();
         return Result::failure(error);
     }
+    if (pacingExecution.value() != "userspace_wait_and_send" ||
+        pacingEvidence.value() != "userspace_send_return" ||
+        pacingDeadlinePolicy.value() != "canonical_ordered") {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Project MPEG-TS RTP pacing capability is unsupported"));
+    }
+    const MediaScheduledDatagramPacingPlan pacing{
+        MediaDatagramDispatchExecution::UserspaceWaitAndSend,
+        MediaDatagramTimingEvidence::UserspaceSendReturn,
+        MediaDatagramDeadlinePolicy::CanonicalOrdered};
     auto rtp = MediaMpegTsRtpOutputPlan::create(
         std::move(transport).value(), sdpPath.value(),
         originUsername.value(),
-        MediaRunningTime::fromNanoseconds(reportInterval.value()));
+        MediaRunningTime::fromNanoseconds(reportInterval.value()),
+        pacing);
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
     auto emission = decodeEmission(node.options, protocol.muxPlan());
+    auto scheduledBatchMaximumBytes = parseUnsignedOption<std::uint64_t>(
+        node.options, ScheduledBatchMaximumBytesKey, false);
     if (!rtp || !expectedPackets ||
         !emission ||
+        !scheduledBatchMaximumBytes ||
         emission.value().maximumWireDatagramBytes() >
             maximumDatagram.value() ||
         payloadType.value() != rtp.value().payloadType() ||
@@ -773,6 +843,7 @@ bool sameProtocol(
         std::move(protocol),
         MediaMuxSessionKind::ProjectMpegTs,
         std::move(emission).value(),
+        scheduledBatchMaximumBytes.value(),
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsRtpOutputPlan>,
             std::move(rtp).value())});
@@ -899,6 +970,8 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::validateAgainstPlanner(
         decoded.outputPlan.muxSessionKind !=
             plannerProduct.muxSessionKind ||
         decoded.outputPlan.emission != plannerProduct.emission ||
+        decoded.outputPlan.scheduledBatchMaximumBytes !=
+            plannerProduct.scheduledBatchMaximumBytes ||
         decoded.outputPlan.transport.index() !=
             plannerProduct.transport.index()) {
         return ::media::Status::failure(
