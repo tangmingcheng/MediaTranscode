@@ -138,6 +138,33 @@ coded-buffer time scale only when the prepared encoder proves that contract.
 It never directly becomes network delay, socket capacity, path capacity,
 transport backlog, or end-to-end latency.
 
+## Hardware Frame Domain and Surface Contract
+
+Hardware frame storage and surface layout are separate typed facts. For RKMPP,
+the storage domain is `AV_PIX_FMT_DRM_PRIME`; NV12, P010, NV16, or another DRM
+fourcc is the layout inside that DRM-backed frame. Neither value substitutes
+for the other, and no backend or codec name implies a layout.
+
+Target-specific capability adapters authoritatively enumerate the decoder
+output, hardware filter input/output, and encoder input contracts. Each
+`MediaHardwareFrameContract` contains storage format, device/backend identity,
+surface fourcc, modifier requirement, plane count and ordering, pitch/offset
+alignment, dimensions, backing-object ownership, hardware-context requirements,
+and capability evidence. The planner computes the exact intersection across
+the selected decoder, optional RGA/filter, and encoder. It selects one complete
+contract for every stage and edge; an empty or ambiguous intersection fails
+before DAG creation. A fixed NV12/P010/NV16 choice, backend-derived default,
+runtime negotiation, or software fallback is forbidden.
+
+The builder only binds these contracts. Runtime validates that every RKMPP
+frame has `AVFrame::format == AV_PIX_FMT_DRM_PRIME`, a live descriptor-owning
+`AVBufferRef`, matching DRM objects, fourcc, modifier, planes, pitch/offset,
+dimensions, and backing bounds. A software frame, upload, download, generic
+software scale, or unplanned contract change is terminal. A no-resize edge
+preserves the decoder buffer identity through encoder admission; an RGA edge
+may replace the buffer only with a newly validated DRM PRIME output contract.
+These checks and buffer identities are counted and reported for every stage.
+
 ## Independent Rate Products
 
 `EncoderRateControlMode`, `TsMuxRateMode`, and
@@ -295,6 +322,18 @@ admission before DAG creation. Runtime prepare, validation, or commit failure
 is terminal without fallback. Every packet emitted during the transition
 remains subject to the new service ceiling and reaction deadline.
 
+The planner also creates one `SessionPersistentTransitionTransaction` for the
+complete transition. It fixes the encoder-generation switch and the full set
+of RTP/RTCP, timestamp, TS/PCR, shaper, controller, and other persistent-state
+participants; aggregates their temporary resource-cost vectors and deadlines;
+and assigns one transition barrier and publication epoch. All participants
+freeze, prepare, snapshot where required, and validate before a single
+immutable binding-set publication. Failure before publication aborts every
+participant and releases all prepared resources through RAII. Publication is
+one non-partial operation; after it, no old or mixed binding set may emit a
+packet. A failure detected after publication is terminal and cannot roll back,
+continue with mixed epochs, or fall back to another action.
+
 `PreparedSessionSwitch` flushes all delayed old-session output into the old
 generation before atomically switching to the admitted session; every resulting
 packet is revalidated against the lower ceiling and original deadline.
@@ -380,9 +419,12 @@ One immutable `MediaRealtimeExecutablePlan` is serialized as the complete
 runtime authority. It contains the resource ledger, selected datagram
 transport and packetization variants, optional mux and RTP session products,
 the derived `WireTrafficEnvelope`, service scope, stage service envelopes,
-prepared source and encoder binding identities, the selected
+all stage and edge `MediaHardwareFrameContract` products, prepared source and
+encoder binding identities, the selected
 `TransportServiceEnvelope`, legal generations, selected generation mechanism,
-transition table, and every `SessionPersistentTransitionContract`. For
+transition table, every `DiscontinuityTriggerContract`, every
+`SessionPersistentTransitionContract`, and each complete
+`SessionPersistentTransitionTransaction`. For
 adaptive service it contains the complete
 `AdaptiveTransportServiceEnvelope`: feedback binding, controller and control
 interval, reaction and feedback-loss deadlines, circuit breaker, prepared
@@ -403,6 +445,19 @@ planner, builders, nodes, and topology composition on Windows and RKMPP.
 
 ## Global Scheduling and Sender Contract
 
+`DiscontinuityTriggerContract` is a planner-created closed product containing
+one admitted evidence variant: `ProtocolExplicitDiscontinuity`,
+`AuthoritativeSessionTimingEpoch`, or `SourceLifecycleEpoch`. It binds the
+authoritative protocol/container/source adapter, source and session identities,
+old and new epoch identifiers, monotonic event sequence, deduplication rule,
+allowed persistent-state action matrix, and the exact decoder, mux, RTP, RTCP,
+PCR, shaper, and controller transition. Only the bound adapter may emit the
+typed evidence, and each event sequence is consumed at most once. Unknown,
+duplicate, stale, out-of-order, mismatched, or unbound evidence is terminal.
+Packet loss, reordering, jitter, timestamp regression, modular timestamp wrap,
+and a rate-only transition are explicitly non-discontinuity observations and
+cannot be promoted by runtime heuristics.
+
 The planner produces service envelopes and scheduling policy, not a list of
 unknown future AU deadlines. Runtime uses one continuous service-scope
 token-bucket or constant-rate state across media AUs and all selected UDP,
@@ -419,12 +474,11 @@ when every fragment remains inside all constraints proven for that variant.
 Demand exceeding peak, burst, backlog, residence, or deadline terminates; it
 never raises the service envelope or catches up by bursting. RTP timestamp and
 MPEG PTS, DTS, and PCR wrap are extended into monotonic internal domains and
-do not reset scheduling state or create a generation. Only independently
-detected source discontinuity or an authoritatively signaled session/timing
-epoch admitted by the transition table may use a discontinuity transition. A
-rate-generation transition alone is neither trigger. The executable plan
-records the trigger kind and permits only its compatible persistent-state
-actions and decoder, mux, RTP, RTCP, PCR, shaper, and controller rules.
+do not reset scheduling state or create a generation. Only evidence accepted by
+the bound `DiscontinuityTriggerContract` may use a discontinuity transition. A
+rate-generation transition alone is not evidence. The executable plan permits
+only the trigger variant's compatible persistent-state actions and decoder,
+mux, RTP, RTCP, PCR, shaper, and controller rules.
 
 The sender validates generation and non-overlapping reservations, waits for
 `enqueueNotBefore`, and performs nonblocking atomic datagram enqueue. On
@@ -479,14 +533,15 @@ pacing, cross-AU burst bounds, and receiver sequence/loss evidence.
 
 Timestamp gates use authoritative near-wrap RTP, PTS, DTS, and PCR inputs in the
 unchanged 120-second production DAG. A normal modular wrap must preserve the
-extended monotonic timeline and current generation. A separately signaled or
-authoritatively detected discontinuity must follow its planner-authored decoder,
-mux, RTP, and RTCP transition; it cannot be inferred from wrap or silently reset
-the schedule.
+extended monotonic timeline and current generation. Accepted typed
+discontinuity evidence must follow its planner-authored decoder, mux, RTP, and
+RTCP transition; it cannot be inferred from wrap or silently reset the schedule.
 
-Discontinuity gates separately cover detected source discontinuity and
-authoritatively signaled session/timing-epoch transition. A rate-only
-transition that attempts to authorize either trigger must fail.
+Discontinuity gates separately cover `ProtocolExplicitDiscontinuity`,
+`AuthoritativeSessionTimingEpoch`, and `SourceLifecycleEpoch`. A rate-only
+transition that attempts to manufacture any variant must fail. Packet loss,
+reordering, jitter, timestamp regression, and normal wrap must also pass
+negative gates proving that none can manufacture discontinuity evidence.
 
 Adaptive step-down and recovery gates for either generation mechanism verify
 SSRC, RTP sequence and timestamp extension, RTCP sender counters and mapping,
@@ -497,6 +552,15 @@ selected action and verify its exact counter, debt, history, and timing
 transformation, resource-domain peak, single ownership after commit, and
 terminal behavior on forced prepare, transfer, recreation, validation, or
 commit failure. Unsupported actions pass explicit pre-DAG rejection gates.
+
+RKMPP production gates record the probed decoder, RGA, and encoder capability
+sets and the planner-selected intersection. They cover every surface layout
+that the target authoritatively advertises without inserting sample-specific
+formats. Every accepted frame reports DRM PRIME storage, the selected fourcc,
+modifier and plane contract, valid backing ownership, and zero software,
+upload, or download events. No-resize chains verify decoder-to-encoder buffer
+identity; RGA resize chains allow only the planned DRM PRIME buffer replacement.
+An empty or inconsistent capability intersection must fail before DAG startup.
 
 Each gate records exact source, CLI, receiver and cleanup commands, precise
 PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
