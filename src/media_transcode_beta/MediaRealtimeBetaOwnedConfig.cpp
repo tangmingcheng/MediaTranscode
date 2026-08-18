@@ -149,7 +149,8 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
         config->input.payload_type > (std::numeric_limits<std::uint8_t>::max() >> 1U) ||
         config->input.clock_rate == 0U ||
         config->input.clock_rate > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-        !isVideoCodec(config->output.codec) || config->output.width == 0U ||
+        !isVideoCodec(config->input.codec) || !isVideoCodec(config->output.codec) ||
+        config->output.width == 0U ||
         config->output.height == 0U || config->output.frame_rate_num == 0U ||
         config->output.frame_rate_den == 0U || config->output.gop_frames == 0U ||
         config->output.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -169,11 +170,6 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     if (!destinationAddress) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(destinationAddress.error());
     }
-    if (bindAddress.value().addressFamily() != destinationAddress.value().addressFamily()) {
-        return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(
-            ::media::ErrorInfo::invalidArgument("bind and destination address families must match"));
-    }
-
     auto rateControl = copyRateControl(config->output);
     if (!rateControl) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(rateControl.error());

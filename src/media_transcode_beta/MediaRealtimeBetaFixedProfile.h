@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaHardwareBackendRequest.h"
 #include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
@@ -28,6 +29,8 @@ public:
         int pollIntervalMs;
         bool lowLatency;
         ffmpeg::graph::MediaTranscodeStreamSet streamSet;
+        bool disableHardware;
+        ffmpeg::graph::MediaHardwareBackendRequest hardwareBackend;
         ffmpeg::graph::RealtimeInputStreamLayout inputLayout;
         ffmpeg::graph::RealtimeOutputStreamLayout outputLayout;
         ffmpeg::graph::MediaOutputTransportKind outputTransport;

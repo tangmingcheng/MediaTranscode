@@ -3,19 +3,26 @@
 #include "media_transcode_beta/MediaRealtimeBetaFixedProfile.h"
 #include "media_transcode_beta/MediaRealtimeBetaOwnedConfig.h"
 
-#include "internal/graph/model/MediaHardwareBackendRequest.h"
 #include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 
 #include <string>
+#include <utility>
 
 namespace media::beta {
 namespace {
 
-std::string codecName(mt_beta_video_codec codec)
+::media::Result<std::string> codecName(mt_beta_video_codec codec)
 {
-    return codec == MT_BETA_VIDEO_CODEC_H264 ? "h264" : "hevc";
+    switch (codec) {
+    case MT_BETA_VIDEO_CODEC_H264:
+        return ::media::Result<std::string>::success("h264");
+    case MT_BETA_VIDEO_CODEC_HEVC:
+        return ::media::Result<std::string>::success("hevc");
+    }
+    return ::media::Result<std::string>::failure(
+        ::media::ErrorInfo::invalidArgument("video codec is unsupported"));
 }
 
 std::string rtpUrl(const MediaRealtimeBetaOwnedConfig& config)
@@ -39,6 +46,16 @@ MediaRealtimeBetaRequestMapper::map(
     }
 
     const auto& profile = MediaRealtimeBetaFixedProfile::current();
+    auto inputCodec = codecName(config.inputCodec());
+    if (!inputCodec) {
+        return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::failure(
+            inputCodec.error());
+    }
+    auto outputCodec = codecName(config.outputCodec());
+    if (!outputCodec) {
+        return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::failure(
+            outputCodec.error());
+    }
     ffmpeg::graph::MediaRealtimeRtpTranscodeRequest request;
     request.mediaId = config.mediaId();
     request.input.type = ffmpeg::graph::RealtimeInputType::RtpPort;
@@ -50,22 +67,18 @@ MediaRealtimeBetaRequestMapper::map(
     request.input.probeSizeBytes = profile.probeSizeBytes;
     request.input.lowLatency = profile.lowLatency;
     request.input.videoRtp.url = request.input.url;
-    request.input.videoRtp.codecName = codecName(config.inputCodec());
+    request.input.videoRtp.codecName = std::move(inputCodec).value();
     request.input.videoRtp.payloadType = static_cast<int>(config.inputPayloadType());
     request.input.videoRtp.clockRate = static_cast<int>(config.inputClockRate());
 
     request.parameters.execution.streamSet = profile.streamSet;
-    request.parameters.execution.disableHardware = false;
-#ifdef _WIN32
-    request.parameters.execution.hardwareBackend = ffmpeg::graph::MediaHardwareBackendRequest::Auto;
-#else
-    request.parameters.execution.hardwareBackend = ffmpeg::graph::MediaHardwareBackendRequest::RKMPP;
-#endif
+    request.parameters.execution.disableHardware = profile.disableHardware;
+    request.parameters.execution.hardwareBackend = profile.hardwareBackend;
     request.parameters.queues.metadata = profile.metadataQueue;
     request.parameters.queues.packet = profile.packetQueue;
     request.parameters.queues.frame = profile.frameQueue;
     request.parameters.queues.mux = profile.muxQueue;
-    request.parameters.video.codecName = codecName(config.outputCodec());
+    request.parameters.video.codecName = std::move(outputCodec).value();
     request.parameters.video.width = static_cast<int>(config.width());
     request.parameters.video.height = static_cast<int>(config.height());
     request.parameters.video.frameRate.numerator = static_cast<int>(config.frameRateNumerator());
