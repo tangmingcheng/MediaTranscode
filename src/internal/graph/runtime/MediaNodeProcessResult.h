@@ -49,12 +49,12 @@ struct MediaNodeProcessResult {
     MediaNodeProcessState state = MediaNodeProcessState::Waiting;
     std::optional<DeadlineWait> deadlineWait;
 
-    static constexpr MediaNodeProcessResult progress() noexcept
+    static MediaNodeProcessResult progress() noexcept
     {
         return { MediaNodeProcessState::Progress, std::nullopt };
     }
 
-    static constexpr MediaNodeProcessResult waiting() noexcept
+    static MediaNodeProcessResult waiting() noexcept
     {
         return { MediaNodeProcessState::Waiting, std::nullopt };
     }
@@ -78,7 +78,7 @@ struct MediaNodeProcessResult {
                     MediaNodeDeadlineWakePolicy::InputOrDeadline}};
     }
 
-    static constexpr MediaNodeProcessResult finished() noexcept
+    static MediaNodeProcessResult finished() noexcept
     {
         return { MediaNodeProcessState::Finished, std::nullopt };
     }
