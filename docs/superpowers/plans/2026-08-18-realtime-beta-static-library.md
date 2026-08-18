@@ -26,6 +26,7 @@
 - All tracked text is UTF-8 without BOM and CRLF. Preserve the user's untracked FFmpeg headers and `out/`; remove only exact task-owned temporary artifacts.
 - Each completed task is reviewed, committed, and pushed to the same branch. Final frozen code requires two new independent agents to report zero Critical and zero Important findings.
 - Final builds and real-media acceptance use Release. Windows builds strictly follow `.agents/skills/building-with-vs2026/SKILL.md`; RK builds run after `ffenv on` with `--parallel 8`.
+- The active RK build target is `192.168.130.229` at the exact repository child `/home/tang/MediaTranscode`; `192.168.96.211` is paused and must not be used. Missing remote build/FFmpeg/RKMPP dependencies may be installed and must be recorded, while any local-machine environment change still requires user approval.
 - Real acceptance may not reduce source resolution, bitrate, frame rate, duration, codec conversion, or any required standard to obtain a pass.
 
 ---
@@ -334,7 +335,7 @@ Without Windows scripts or `Start-Process`, launch the 120-second continuous sou
 
 - [ ] **Step 3: Synchronize committed bytes to RK and build Release with 8 jobs**
 
-Create a Git archive from the committed branch. On `192.168.96.211`, verify `pwd -P` exactly equals `/home/firefly/Downloads/MediaTranscode` before replacing the old tree; do not touch sibling media or versioned backups. Enter the FFmpeg environment with `ffenv on`, fully configure Release, and build all targets with `--parallel 8`. Preserve the exact output and prove `libmedia_transcode_beta.a` plus both CLIs link against the intended FFmpeg environment.
+Create a Git archive from the committed branch. On `192.168.130.229`, operate only on the exact repository child `/home/tang/MediaTranscode`: verify the resolved target before replacing it and never recursively delete, replace, or clean `/home/tang/` itself. Do not touch sibling media or versioned backups. Inspect the target first; if required build, FFmpeg, or RKMPP dependencies are missing, install only the necessary remote components and record every change. Enter the intended FFmpeg environment with `ffenv on` when available; if the target uses a different authoritative activation mechanism, record and verify it rather than fabricating the command. Fully configure Release and build all targets with `--parallel 8`. Preserve the exact output and prove `libmedia_transcode_beta.a` plus both CLIs link against the intended FFmpeg environment.
 
 - [ ] **Step 4: Run RK real-stream Beta acceptance**
 
@@ -342,7 +343,7 @@ Use the existing real VideoOnly RTP feed or the required non-degraded continuous
 
 - [ ] **Step 5: Back up the accepted RK artifact and publish commands**
 
-After all gates pass, create one timestamped directory under `/home/firefly/Downloads` containing the exact Release Beta archive, public header, required CMake/link manifest, example C source, and matching realtime CLI. Do not call it accepted if any codec/rate-control/quality/termination gate failed. Publish direct target-machine compile/link/run commands and the exact source/VLC commands used.
+After all gates pass, create one timestamped sibling directory under `/home/tang` with a narrow `MediaTranscode-rkmpp-beta-<timestamp>` name containing the exact Release Beta archive, public header, required CMake/link manifest, example C source, and matching realtime CLI. Do not call it accepted if any codec/rate-control/quality/termination gate failed. Publish direct target-machine compile/link/run commands and the exact source/VLC commands used.
 
 - [ ] **Step 6: Fix failures by ownership and repeat both platforms**
 
