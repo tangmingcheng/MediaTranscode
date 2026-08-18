@@ -228,44 +228,25 @@ void MediaRealtimeBetaSession::eventThreadMain() noexcept
     try {
         runOnEventThread();
     } catch (const std::bad_alloc&) {
-        try {
-            recordFirstFailure({
-                ::media::ErrorInfo::allocationFailed(
-                    "Beta realtime session allocation failed"),
-                MT_BETA_FAILURE_SESSION_CREATION,
-                MT_BETA_COMPLETION_STARTUP_FAILURE });
-            finishFailure();
-        } catch (...) {
-        }
+        const auto failure = currentFailureClassification();
+        recordEmergencyFailure(
+            MT_BETA_ERROR_ALLOCATION_FAILED, failure.stage,
+            failure.completionReason, 0,
+            "Beta realtime session allocation failed");
+        finishFailure();
     } catch (const std::exception& error) {
-        try {
-            recordFirstFailure({
-                ::media::ErrorInfo::internalError(
-                    std::string("Beta realtime session failed: ") +
-                    error.what()),
-                m_runningStateEmitted
-                    ? MT_BETA_FAILURE_RUNTIME_EXECUTION
-                    : MT_BETA_FAILURE_SESSION_CREATION,
-                m_runningStateEmitted
-                    ? MT_BETA_COMPLETION_RUNTIME_FAILURE
-                    : MT_BETA_COMPLETION_STARTUP_FAILURE });
-            finishFailure();
-        } catch (...) {
-        }
+        const auto failure = currentFailureClassification();
+        recordEmergencyFailure(
+            MT_BETA_ERROR_INTERNAL, failure.stage,
+            failure.completionReason, 0, error.what());
+        finishFailure();
     } catch (...) {
-        try {
-            recordFirstFailure({
-                ::media::ErrorInfo::internalError(
-                    "Beta realtime session failed with an unknown exception"),
-                m_runningStateEmitted
-                    ? MT_BETA_FAILURE_RUNTIME_EXECUTION
-                    : MT_BETA_FAILURE_SESSION_CREATION,
-                m_runningStateEmitted
-                    ? MT_BETA_COMPLETION_RUNTIME_FAILURE
-                    : MT_BETA_COMPLETION_STARTUP_FAILURE });
-            finishFailure();
-        } catch (...) {
-        }
+        const auto failure = currentFailureClassification();
+        recordEmergencyFailure(
+            MT_BETA_ERROR_INTERNAL, failure.stage,
+            failure.completionReason, 0,
+            "Beta realtime session failed with an unknown exception");
+        finishFailure();
     }
 
     {
@@ -319,6 +300,7 @@ void MediaRealtimeBetaSession::runOnEventThread()
     observer.progress = [this](const auto& report) {
         handleProgress(report);
     };
+    m_phase = SessionPhase::Preflight;
     const auto outcome = ffmpeg::graph::MediaRealtimeVideoRunController::run(
         request.value(), policy.value(), m_runControl, observer);
     handleOutcome(outcome);
@@ -327,6 +309,7 @@ void MediaRealtimeBetaSession::runOnEventThread()
 void MediaRealtimeBetaSession::handlePrepared(
     const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report)
 {
+    m_phase = SessionPhase::RuntimeStart;
     if (!m_description ||
         report.outputDescription.kind !=
             ffmpeg::graph::MediaRealtimeVideoOutputDescriptionKind::
@@ -361,7 +344,8 @@ void MediaRealtimeBetaSession::handlePrepared(
 void MediaRealtimeBetaSession::handleProgress(
     const ffmpeg::graph::MediaGraphRuntimeReport& report)
 {
-    if (m_firstFailure) {
+    m_phase = SessionPhase::RuntimeExecution;
+    if (hasRecordedFailure()) {
         requestStop();
         return;
     }
@@ -451,7 +435,7 @@ void MediaRealtimeBetaSession::handleOutcome(
         }
     }
 
-    if (!m_firstFailure) {
+    if (!hasRecordedFailure()) {
         auto output = publishOutputDescription(true);
         if (!output) {
             recordFirstFailure({
@@ -459,7 +443,7 @@ void MediaRealtimeBetaSession::handleOutcome(
                 MT_BETA_COMPLETION_RUNTIME_FAILURE });
         }
     }
-    if (m_firstFailure) {
+    if (hasRecordedFailure()) {
         finishFailure();
         return;
     }
@@ -477,20 +461,64 @@ void MediaRealtimeBetaSession::handleOutcome(
 
 void MediaRealtimeBetaSession::recordFirstFailure(SessionFailure failure)
 {
-    if (!m_firstFailure) {
+    if (!m_firstFailure && !m_hasEmergencyFailure) {
         m_firstFailure.emplace(std::move(failure));
     }
 }
 
-void MediaRealtimeBetaSession::finishFailure()
+void MediaRealtimeBetaSession::recordEmergencyFailure(
+    mt_beta_error_code errorCode,
+    mt_beta_failure_stage stage,
+    mt_beta_completion_reason completionReason,
+    std::int32_t nativeCode,
+    const char* detail) noexcept
 {
-    if (!m_firstFailure || m_terminalStateEmitted) {
+    if (m_firstFailure || m_hasEmergencyFailure || m_terminalStateEmitted) {
         return;
     }
-    setCompletionReason(m_firstFailure->completionReason);
-    emitError(*m_firstFailure);
-    transitionState(MT_BETA_REALTIME_FAILED);
-    emitCompleted(m_firstFailure->completionReason);
+    m_emergencyFailure = {
+        errorCode, stage, completionReason, nativeCode };
+    const char* source = detail != nullptr
+        ? detail
+        : "Beta realtime session failed without diagnostic detail";
+    std::size_t index = 0U;
+    while (index + 1U < m_emergencyDetail.size() && source[index] != '\0') {
+        m_emergencyDetail[index] = source[index];
+        ++index;
+    }
+    m_emergencyDetail[index] = '\0';
+    m_hasEmergencyFailure = true;
+}
+
+bool MediaRealtimeBetaSession::hasRecordedFailure() const noexcept
+{
+    return m_firstFailure.has_value() || m_hasEmergencyFailure;
+}
+
+void MediaRealtimeBetaSession::finishFailure() noexcept
+{
+    if (!hasRecordedFailure() || m_terminalStateEmitted) {
+        return;
+    }
+
+    const mt_beta_completion_reason completionReason = m_firstFailure
+        ? m_firstFailure->completionReason
+        : m_emergencyFailure.completionReason;
+    {
+        std::lock_guard lock(m_snapshotMutex);
+        m_snapshot.completion_reason = completionReason;
+        m_snapshot.state = MT_BETA_REALTIME_FAILED;
+    }
+    m_phase = SessionPhase::Terminal;
+    m_terminalStateEmitted = true;
+
+    if (m_firstFailure) {
+        emitError(*m_firstFailure);
+    } else {
+        emitEmergencyError(m_emergencyFailure);
+    }
+    emitState(MT_BETA_REALTIME_FAILED);
+    emitCompleted(completionReason);
 }
 
 void MediaRealtimeBetaSession::finishSuccess(
@@ -499,9 +527,15 @@ void MediaRealtimeBetaSession::finishSuccess(
     if (m_terminalStateEmitted) {
         return;
     }
+    m_phase = SessionPhase::Stopping;
     transitionState(MT_BETA_REALTIME_STOPPING);
+    if (hasRecordedFailure()) {
+        finishFailure();
+        return;
+    }
     setCompletionReason(completionReason);
     transitionState(MT_BETA_REALTIME_COMPLETED);
+    m_phase = SessionPhase::Terminal;
     emitCompleted(completionReason);
 }
 
@@ -538,18 +572,11 @@ void MediaRealtimeBetaSession::invokeCallback(
         m_callback(m_callbackUserData, &event);
     } catch (...) {
         m_callback = nullptr;
-        try {
-            recordFirstFailure({
-                ::media::ErrorInfo::internalError(
-                    "Beta event callback raised an exception"),
-                m_runningStateEmitted
-                    ? MT_BETA_FAILURE_RUNTIME_EXECUTION
-                    : MT_BETA_FAILURE_SESSION_CREATION,
-                m_runningStateEmitted
-                    ? MT_BETA_COMPLETION_RUNTIME_FAILURE
-                    : MT_BETA_COMPLETION_STARTUP_FAILURE });
-        } catch (...) {
-        }
+        const auto failure = currentFailureClassification();
+        recordEmergencyFailure(
+            MT_BETA_ERROR_INTERNAL, failure.stage,
+            failure.completionReason, 0,
+            "Beta event callback raised an exception");
         requestStop();
     }
 }
@@ -570,15 +597,27 @@ void MediaRealtimeBetaSession::emitOutputReady() noexcept
     invokeCallback(event);
 }
 
-void MediaRealtimeBetaSession::emitError(const SessionFailure& failure)
+void MediaRealtimeBetaSession::emitError(
+    const SessionFailure& failure) noexcept
 {
-    m_eventDetail = failure.error.describe();
     mt_beta_realtime_event event{};
     event.type = MT_BETA_EVENT_ERROR;
     event.error_code = betaErrorCode(failure.error.code);
     event.failure_stage = failure.stage;
     event.native_code = betaNativeCode(failure.error.nativeCode);
-    event.detail = m_eventDetail.c_str();
+    event.detail = failure.error.message.c_str();
+    invokeCallback(event);
+}
+
+void MediaRealtimeBetaSession::emitEmergencyError(
+    const EmergencyFailure& failure) noexcept
+{
+    mt_beta_realtime_event event{};
+    event.type = MT_BETA_EVENT_ERROR;
+    event.error_code = failure.errorCode;
+    event.failure_stage = failure.stage;
+    event.native_code = failure.nativeCode;
+    event.detail = m_emergencyDetail.data();
     invokeCallback(event);
 }
 
@@ -589,6 +628,40 @@ void MediaRealtimeBetaSession::emitCompleted(
     event.type = MT_BETA_EVENT_COMPLETED;
     event.completion_reason = completionReason;
     invokeCallback(event);
+}
+
+MediaRealtimeBetaSession::PhaseFailureClassification
+MediaRealtimeBetaSession::currentFailureClassification() const noexcept
+{
+    switch (m_phase) {
+    case SessionPhase::SessionCreation:
+        return {
+            MT_BETA_FAILURE_SESSION_CREATION,
+            MT_BETA_COMPLETION_STARTUP_FAILURE };
+    case SessionPhase::Preflight:
+        return {
+            MT_BETA_FAILURE_PREFLIGHT,
+            MT_BETA_COMPLETION_STARTUP_FAILURE };
+    case SessionPhase::RuntimeStart:
+        return {
+            MT_BETA_FAILURE_RUNTIME_START,
+            MT_BETA_COMPLETION_STARTUP_FAILURE };
+    case SessionPhase::RuntimeExecution:
+        return {
+            MT_BETA_FAILURE_RUNTIME_EXECUTION,
+            MT_BETA_COMPLETION_RUNTIME_FAILURE };
+    case SessionPhase::Stopping:
+        return {
+            MT_BETA_FAILURE_STOP,
+            MT_BETA_COMPLETION_RUNTIME_FAILURE };
+    case SessionPhase::Terminal:
+        return {
+            MT_BETA_FAILURE_RUNTIME_EXECUTION,
+            MT_BETA_COMPLETION_RUNTIME_FAILURE };
+    }
+    return {
+        MT_BETA_FAILURE_RUNTIME_EXECUTION,
+        MT_BETA_COMPLETION_RUNTIME_FAILURE };
 }
 
 std::chrono::milliseconds MediaRealtimeBetaSession::runningTime() const noexcept

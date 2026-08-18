@@ -25,11 +25,25 @@ public:
     ::media::Result<std::string> readCompletedText() const;
 
 private:
-    explicit MediaRealtimeBetaTemporaryDescription(std::string path) noexcept;
+    static ::media::Result<MediaRealtimeBetaTemporaryDescription>
+        createAtomicTemporaryFile();
+
+    MediaRealtimeBetaTemporaryDescription(
+#ifdef _WIN32
+        std::wstring nativePath,
+#else
+        std::string nativePath,
+#endif
+        std::string plannerPath) noexcept;
 
     void removeOwnedFile() noexcept;
 
-    std::string m_path;
+#ifdef _WIN32
+    std::wstring m_nativePath;
+#else
+    std::string m_nativePath;
+#endif
+    std::string m_plannerPath;
 };
 
 } // namespace media::beta

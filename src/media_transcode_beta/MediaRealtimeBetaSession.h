@@ -6,6 +6,7 @@
 #include "media_transcode_beta/MediaRealtimeBetaTemporaryDescription.h"
 #include "media_transcode_beta/realtime.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -30,8 +31,30 @@ public:
     bool isCurrentThreadEventThread() const noexcept;
 
 private:
+    enum class SessionPhase : std::uint8_t {
+        SessionCreation,
+        Preflight,
+        RuntimeStart,
+        RuntimeExecution,
+        Stopping,
+        Terminal
+    };
+
     struct SessionFailure final {
         ::media::ErrorInfo error;
+        mt_beta_failure_stage stage;
+        mt_beta_completion_reason completionReason;
+    };
+
+    struct EmergencyFailure final {
+        mt_beta_error_code errorCode = MT_BETA_ERROR_NONE;
+        mt_beta_failure_stage stage = MT_BETA_FAILURE_NONE;
+        mt_beta_completion_reason completionReason =
+            MT_BETA_COMPLETION_NONE;
+        std::int32_t nativeCode = 0;
+    };
+
+    struct PhaseFailureClassification final {
         mt_beta_failure_stage stage;
         mt_beta_completion_reason completionReason;
     };
@@ -47,15 +70,24 @@ private:
         const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome);
 
     void recordFirstFailure(SessionFailure failure);
-    void finishFailure();
+    void recordEmergencyFailure(
+        mt_beta_error_code errorCode,
+        mt_beta_failure_stage stage,
+        mt_beta_completion_reason completionReason,
+        std::int32_t nativeCode,
+        const char* detail) noexcept;
+    bool hasRecordedFailure() const noexcept;
+    void finishFailure() noexcept;
     void finishSuccess(mt_beta_completion_reason completionReason);
     void transitionState(mt_beta_realtime_state state);
     void setCompletionReason(mt_beta_completion_reason completionReason);
     void invokeCallback(const mt_beta_realtime_event& event) noexcept;
     void emitState(mt_beta_realtime_state state) noexcept;
     void emitOutputReady() noexcept;
-    void emitError(const SessionFailure& failure);
+    void emitError(const SessionFailure& failure) noexcept;
+    void emitEmergencyError(const EmergencyFailure& failure) noexcept;
     void emitCompleted(mt_beta_completion_reason completionReason) noexcept;
+    PhaseFailureClassification currentFailureClassification() const noexcept;
     std::chrono::milliseconds runningTime() const noexcept;
 
     MediaRealtimeBetaOwnedConfig m_config;
@@ -74,9 +106,12 @@ private:
     std::optional<MediaRealtimeBetaTemporaryDescription> m_description;
     std::string m_outputDescriptionPath;
     std::string m_outputDescription;
-    std::string m_eventDetail;
     std::optional<SessionFailure> m_firstFailure;
+    EmergencyFailure m_emergencyFailure;
+    std::array<char, 256U> m_emergencyDetail{};
     std::chrono::steady_clock::time_point m_startedAt;
+    SessionPhase m_phase = SessionPhase::SessionCreation;
+    bool m_hasEmergencyFailure = false;
     bool m_outputReady = false;
     bool m_runningStateEmitted = false;
     bool m_terminalStateEmitted = false;

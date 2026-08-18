@@ -1,5 +1,6 @@
 #include "media_transcode_beta/MediaRealtimeBetaTemporaryDescription.h"
 
+#include <array>
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
@@ -32,40 +33,158 @@ int checkedWindowsError(DWORD error) noexcept
         : 0;
 }
 
-::media::Result<std::string> createAtomicTemporaryFile()
+class WindowsTemporaryFileGuard final {
+public:
+    explicit WindowsTemporaryFileGuard(const wchar_t* path) noexcept
+        : m_path(path)
+    {
+    }
+
+    ~WindowsTemporaryFileGuard() noexcept
+    {
+        if (m_path != nullptr) {
+            DeleteFileW(m_path);
+        }
+    }
+
+    void release() noexcept { m_path = nullptr; }
+
+private:
+    const wchar_t* m_path;
+};
+
+class WindowsHandleGuard final {
+public:
+    explicit WindowsHandleGuard(HANDLE handle) noexcept
+        : m_handle(handle)
+    {
+    }
+
+    ~WindowsHandleGuard() noexcept
+    {
+        if (m_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(m_handle);
+        }
+    }
+
+private:
+    HANDLE m_handle;
+};
+
+::media::Result<std::string> checkedUtf8Path(const wchar_t* nativePath)
 {
-    std::vector<char> temporaryDirectory(MAX_PATH + 1U, '\0');
-    const DWORD directoryLength = GetTempPathA(
+    const int nativeLength = static_cast<int>(wcslen(nativePath));
+    const int utf8Length = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, nativePath, nativeLength, nullptr, 0,
+        nullptr, nullptr);
+    if (utf8Length <= 0) {
+        return ::media::Result<std::string>::failure(
+            ::media::ErrorInfo::ioFailure(
+                "failed to convert the temporary Beta description path to UTF-8",
+                checkedWindowsError(GetLastError())));
+    }
+
+    std::string utf8Path(static_cast<std::size_t>(utf8Length), '\0');
+    const int converted = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, nativePath, nativeLength,
+        utf8Path.data(), utf8Length, nullptr, nullptr);
+    if (converted != utf8Length) {
+        return ::media::Result<std::string>::failure(
+            ::media::ErrorInfo::ioFailure(
+                "failed to convert the temporary Beta description path to UTF-8",
+                checkedWindowsError(GetLastError())));
+    }
+    return ::media::Result<std::string>::success(std::move(utf8Path));
+}
+
+} // namespace
+
+::media::Result<MediaRealtimeBetaTemporaryDescription>
+MediaRealtimeBetaTemporaryDescription::createAtomicTemporaryFile()
+{
+    std::array<wchar_t, MAX_PATH + 1U> temporaryDirectory{};
+    const DWORD directoryLength = GetTempPathW(
         static_cast<DWORD>(temporaryDirectory.size()),
         temporaryDirectory.data());
     if (directoryLength == 0U ||
         directoryLength >= temporaryDirectory.size()) {
-        return ::media::Result<std::string>::failure(
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
             ::media::ErrorInfo::ioFailure(
                 "failed to resolve the Windows temporary directory",
                 checkedWindowsError(GetLastError())));
     }
 
-    std::vector<char> path(MAX_PATH + 1U, '\0');
-    if (GetTempFileNameA(
-            temporaryDirectory.data(), "mtb", 0U, path.data()) == 0U) {
-        return ::media::Result<std::string>::failure(
+    std::array<wchar_t, MAX_PATH + 1U> nativePath{};
+    if (GetTempFileNameW(
+            temporaryDirectory.data(), L"mtb", 0U,
+            nativePath.data()) == 0U) {
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
             ::media::ErrorInfo::ioFailure(
                 "failed to atomically create a temporary Beta description",
                 checkedWindowsError(GetLastError())));
     }
-    return ::media::Result<std::string>::success(path.data());
+    WindowsTemporaryFileGuard cleanup(nativePath.data());
+
+    auto plannerPath = checkedUtf8Path(nativePath.data());
+    if (!plannerPath) {
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
+                plannerPath.error());
+    }
+    MediaRealtimeBetaTemporaryDescription owner(
+        std::wstring(nativePath.data()), std::move(plannerPath).value());
+    cleanup.release();
+    return ::media::Result<MediaRealtimeBetaTemporaryDescription>::success(
+        std::move(owner));
 }
 
 #else
 
-::media::Result<std::string> createAtomicTemporaryFile()
+class PosixTemporaryFileGuard final {
+public:
+    PosixTemporaryFileGuard(const char* path, int descriptor) noexcept
+        : m_path(path)
+        , m_descriptor(descriptor)
+    {
+    }
+
+    ~PosixTemporaryFileGuard() noexcept
+    {
+        if (m_descriptor >= 0) {
+            ::close(m_descriptor);
+        }
+        if (m_path != nullptr) {
+            ::unlink(m_path);
+        }
+    }
+
+    int closeFile() noexcept
+    {
+        const int descriptor = m_descriptor;
+        m_descriptor = -1;
+        return ::close(descriptor);
+    }
+
+    void release() noexcept { m_path = nullptr; }
+
+private:
+    const char* m_path;
+    int m_descriptor;
+};
+
+} // namespace
+
+::media::Result<MediaRealtimeBetaTemporaryDescription>
+MediaRealtimeBetaTemporaryDescription::createAtomicTemporaryFile()
 {
     std::error_code error;
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path(error);
     if (error) {
-        return ::media::Result<std::string>::failure(
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
             ::media::ErrorInfo::ioFailure(
                 "failed to resolve the platform temporary directory",
                 error.value()));
@@ -77,22 +196,41 @@ int checkedWindowsError(DWORD error) noexcept
     writablePattern.push_back('\0');
     const int descriptor = ::mkstemp(writablePattern.data());
     if (descriptor < 0) {
-        return ::media::Result<std::string>::failure(
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
             ::media::ErrorInfo::ioFailure(
                 "failed to atomically create a temporary Beta description",
                 errno));
     }
-    ::close(descriptor);
-    return ::media::Result<std::string>::success(writablePattern.data());
+    PosixTemporaryFileGuard cleanup(writablePattern.data(), descriptor);
+    if (cleanup.closeFile() != 0) {
+        return ::media::Result<
+            MediaRealtimeBetaTemporaryDescription>::failure(
+                ::media::ErrorInfo::ioFailure(
+                    "failed to close the temporary Beta description",
+                    errno));
+    }
+
+    std::string nativePath(writablePattern.data());
+    std::string plannerPath(nativePath);
+    MediaRealtimeBetaTemporaryDescription owner(
+        std::move(nativePath), std::move(plannerPath));
+    cleanup.release();
+    return ::media::Result<MediaRealtimeBetaTemporaryDescription>::success(
+        std::move(owner));
 }
 
 #endif
 
-} // namespace
-
 MediaRealtimeBetaTemporaryDescription::MediaRealtimeBetaTemporaryDescription(
-    std::string path) noexcept
-    : m_path(std::move(path))
+#ifdef _WIN32
+    std::wstring nativePath,
+#else
+    std::string nativePath,
+#endif
+    std::string plannerPath) noexcept
+    : m_nativePath(std::move(nativePath))
+    , m_plannerPath(std::move(plannerPath))
 {
 }
 
@@ -100,14 +238,7 @@ MediaRealtimeBetaTemporaryDescription::MediaRealtimeBetaTemporaryDescription(
 MediaRealtimeBetaTemporaryDescription::create()
 {
     try {
-        auto path = createAtomicTemporaryFile();
-        if (!path) {
-            return ::media::Result<
-                MediaRealtimeBetaTemporaryDescription>::failure(path.error());
-        }
-        return ::media::Result<MediaRealtimeBetaTemporaryDescription>::success(
-            MediaRealtimeBetaTemporaryDescription(
-                std::move(path).value()));
+        return createAtomicTemporaryFile();
     } catch (const std::bad_alloc&) {
         return ::media::Result<
             MediaRealtimeBetaTemporaryDescription>::failure(
@@ -130,9 +261,11 @@ MediaRealtimeBetaTemporaryDescription::~MediaRealtimeBetaTemporaryDescription()
 
 MediaRealtimeBetaTemporaryDescription::MediaRealtimeBetaTemporaryDescription(
     MediaRealtimeBetaTemporaryDescription&& other) noexcept
-    : m_path(std::move(other.m_path))
+    : m_nativePath(std::move(other.m_nativePath))
+    , m_plannerPath(std::move(other.m_plannerPath))
 {
-    other.m_path.clear();
+    other.m_nativePath.clear();
+    other.m_plannerPath.clear();
 }
 
 MediaRealtimeBetaTemporaryDescription&
@@ -143,27 +276,80 @@ MediaRealtimeBetaTemporaryDescription::operator=(
         return *this;
     }
     removeOwnedFile();
-    m_path = std::move(other.m_path);
-    other.m_path.clear();
+    m_nativePath = std::move(other.m_nativePath);
+    m_plannerPath = std::move(other.m_plannerPath);
+    other.m_nativePath.clear();
+    other.m_plannerPath.clear();
     return *this;
 }
 
 const std::string& MediaRealtimeBetaTemporaryDescription::path() const noexcept
 {
-    return m_path;
+    return m_plannerPath;
 }
 
 ::media::Result<std::string>
 MediaRealtimeBetaTemporaryDescription::readCompletedText() const
 {
-    if (m_path.empty()) {
+    if (m_nativePath.empty()) {
         return ::media::Result<std::string>::failure(
             ::media::ErrorInfo::notInitialized(
                 "temporary Beta description has no owned path"));
     }
 
     try {
-        std::ifstream input(m_path, std::ios::binary);
+#ifdef _WIN32
+        const HANDLE file = CreateFileW(
+            m_nativePath.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            return ::media::Result<std::string>::failure(
+                ::media::ErrorInfo::ioFailure(
+                    "failed to open the completed Beta output description",
+                    checkedWindowsError(GetLastError())));
+        }
+        WindowsHandleGuard closeFile(file);
+
+        LARGE_INTEGER nativeSize{};
+        if (GetFileSizeEx(file, &nativeSize) == FALSE ||
+            nativeSize.QuadPart < 0 ||
+            static_cast<unsigned long long>(nativeSize.QuadPart) >
+                static_cast<unsigned long long>(
+                    std::numeric_limits<std::size_t>::max())) {
+            return ::media::Result<std::string>::failure(
+                ::media::ErrorInfo::ioFailure(
+                    "failed to size the completed Beta output description",
+                    checkedWindowsError(GetLastError())));
+        }
+        if (nativeSize.QuadPart == 0) {
+            return ::media::Result<std::string>::failure(
+                ::media::ErrorInfo::wouldBlock(
+                    "Beta output description is not complete"));
+        }
+
+        std::string text(
+            static_cast<std::size_t>(nativeSize.QuadPart), '\0');
+        std::size_t totalRead = 0U;
+        while (totalRead < text.size()) {
+            const std::size_t remaining = text.size() - totalRead;
+            const DWORD requested = remaining > MAXDWORD
+                ? MAXDWORD
+                : static_cast<DWORD>(remaining);
+            DWORD bytesRead = 0U;
+            if (ReadFile(
+                    file, text.data() + totalRead, requested, &bytesRead,
+                    nullptr) == FALSE ||
+                bytesRead == 0U) {
+                return ::media::Result<std::string>::failure(
+                    ::media::ErrorInfo::ioFailure(
+                        "failed to read the completed Beta output description",
+                        checkedWindowsError(GetLastError())));
+            }
+            totalRead += bytesRead;
+        }
+#else
+        std::ifstream input(m_nativePath, std::ios::binary);
         if (!input) {
             return ::media::Result<std::string>::failure(
                 ::media::ErrorInfo::ioFailure(
@@ -181,6 +367,7 @@ MediaRealtimeBetaTemporaryDescription::readCompletedText() const
                 ::media::ErrorInfo::wouldBlock(
                     "Beta output description is not complete"));
         }
+#endif
         return ::media::Result<std::string>::success(std::move(text));
     } catch (const std::bad_alloc&) {
         return ::media::Result<std::string>::failure(
@@ -196,15 +383,16 @@ MediaRealtimeBetaTemporaryDescription::readCompletedText() const
 
 void MediaRealtimeBetaTemporaryDescription::removeOwnedFile() noexcept
 {
-    if (m_path.empty()) {
+    if (m_nativePath.empty()) {
         return;
     }
 #ifdef _WIN32
-    DeleteFileA(m_path.c_str());
+    DeleteFileW(m_nativePath.c_str());
 #else
-    ::unlink(m_path.c_str());
+    ::unlink(m_nativePath.c_str());
 #endif
-    m_path.clear();
+    m_nativePath.clear();
+    m_plannerPath.clear();
 }
 
 } // namespace media::beta
