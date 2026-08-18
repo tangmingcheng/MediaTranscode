@@ -148,18 +148,30 @@ for the other, and no backend or codec name implies a layout.
 Target-specific capability adapters authoritatively enumerate the decoder
 output, hardware filter input/output, and encoder input contracts. Each
 `MediaHardwareFrameContract` contains storage format, device/backend identity,
-surface fourcc, modifier requirement, plane count and ordering, pitch/offset
-alignment, dimensions, backing-object ownership, hardware-context requirements,
-and capability evidence. The planner computes the exact intersection across
-the selected decoder, optional RGA/filter, and encoder. It selects one complete
-contract for every stage and edge; an empty or ambiguous intersection fails
+surface fourcc, dimensions, hardware-context requirements, and an exact DRM
+descriptor topology: object and layer counts, plane count/order, plane-to-object
+mapping, per-object modifier and minimum backing size, pitch/offset alignment,
+and ownership. It also carries capability evidence.
+
+A hardware filter adapter enumerates
+`MediaHardwareFrameTransformCapability(inputContract, transform,
+outputContract)` tuples. The transform identifies the supported size, layout,
+modifier, alignment, and descriptor-topology change. The planner selects a
+compatible path, not one whole-chain contract intersection. Without a filter,
+decoder output and encoder input must have the same complete contract. With
+RGA/filter, decoder output must match the selected transform input, and its
+output must match encoder input; input and output dimensions or layouts may
+differ exactly as the proven tuple permits. The executable plan carries each
+stage/edge contract and the selected transform tuple/evidence separately. No
+compatible path, an ambiguous path, or incomplete descriptor evidence fails
 before DAG creation. A fixed NV12/P010/NV16 choice, backend-derived default,
 runtime negotiation, or software fallback is forbidden.
 
 The builder only binds these contracts. Runtime validates that every RKMPP
 frame has `AVFrame::format == AV_PIX_FMT_DRM_PRIME`, a live descriptor-owning
-`AVBufferRef`, matching DRM objects, fourcc, modifier, planes, pitch/offset,
-dimensions, and backing bounds. A software frame, upload, download, generic
+`AVBufferRef`, matching object/layer counts, fourcc, per-object modifier and
+backing size, planes, plane-to-object mapping, pitch/offset, dimensions, and
+backing bounds. A software frame, upload, download, generic
 software scale, or unplanned contract change is terminal. A no-resize edge
 preserves the decoder buffer identity through encoder admission; an RGA edge
 may replace the buffer only with a newly validated DRM PRIME output contract.
@@ -291,8 +303,9 @@ PCR anchors, service-scope shaper state, and controller history are
 `SessionPersistentState`; they do not inherit encoder-input generation
 identity. Each has exactly one planner-authored transition action:
 `PreserveInPlace`, `SnapshotAndTransfer`, or
-`CloseAndRecreateWithExplicitDiscontinuity`. A closed compatibility matrix
-defines the legal actions for every persistent-state kind. Service-scope shaper
+`CloseAndRecreateWithExplicitDiscontinuity`. Closed schema-level compatibility
+rules validate the one action stored in its per-owner contract; they are not a
+second runtime policy product. Service-scope shaper
 debt and congestion-controller history permit only `PreserveInPlace` or exact
 `SnapshotAndTransfer` while the service scope remains active. They may close
 only when that scope terminates; any replacement flow requires fresh admission
@@ -326,7 +339,12 @@ The planner also creates one `SessionPersistentTransitionTransaction` for the
 complete transition. It fixes the encoder-generation switch and the full set
 of RTP/RTCP, timestamp, TS/PCR, shaper, controller, and other persistent-state
 participants; aggregates their temporary resource-cost vectors and deadlines;
-and assigns one transition barrier and publication epoch. All participants
+references exactly one per-owner transition contract for each participant, and
+assigns the only transition barrier, execution order, and publication epoch.
+Per-owner contracts exclusively own their action and state transformation; the
+session transaction exclusively owns participant completeness and atomic
+coordination. No parallel action matrix or transition policy is serialized.
+All participants
 freeze, prepare, snapshot where required, and validate before a single
 immutable binding-set publication. Failure before publication aborts every
 participant and releases all prepared resources through RAII. Publication is
@@ -419,8 +437,9 @@ One immutable `MediaRealtimeExecutablePlan` is serialized as the complete
 runtime authority. It contains the resource ledger, selected datagram
 transport and packetization variants, optional mux and RTP session products,
 the derived `WireTrafficEnvelope`, service scope, stage service envelopes,
-all stage and edge `MediaHardwareFrameContract` products, prepared source and
-encoder binding identities, the selected
+all stage and edge `MediaHardwareFrameContract` products, every selected
+`MediaHardwareFrameTransformCapability` tuple and its evidence, prepared source
+and encoder binding identities, the selected
 `TransportServiceEnvelope`, legal generations, selected generation mechanism,
 transition table, every `DiscontinuityTriggerContract`, every
 `SessionPersistentTransitionContract`, and each complete
@@ -450,9 +469,12 @@ one admitted evidence variant: `ProtocolExplicitDiscontinuity`,
 `AuthoritativeSessionTimingEpoch`, or `SourceLifecycleEpoch`. It binds the
 authoritative protocol/container/source adapter, source and session identities,
 old and new epoch identifiers, monotonic event sequence, deduplication rule,
-allowed persistent-state action matrix, and the exact decoder, mux, RTP, RTCP,
-PCR, shaper, and controller transition. Only the bound adapter may emit the
-typed evidence, and each event sequence is consumed at most once. Unknown,
+event scope, and exactly one planner-authored
+`SessionPersistentTransitionTransaction` key. The trigger contract owns no
+persistent-state action, participant, transformation, or publication policy;
+those exist only in the referenced transaction and its per-owner contracts.
+Only the bound adapter may emit the typed evidence, and each event sequence is
+consumed at most once. Unknown,
 duplicate, stale, out-of-order, mismatched, or unbound evidence is terminal.
 Packet loss, reordering, jitter, timestamp regression, modular timestamp wrap,
 and a rate-only transition are explicitly non-discontinuity observations and
@@ -553,14 +575,18 @@ transformation, resource-domain peak, single ownership after commit, and
 terminal behavior on forced prepare, transfer, recreation, validation, or
 commit failure. Unsupported actions pass explicit pre-DAG rejection gates.
 
-RKMPP production gates record the probed decoder, RGA, and encoder capability
-sets and the planner-selected intersection. They cover every surface layout
-that the target authoritatively advertises without inserting sample-specific
-formats. Every accepted frame reports DRM PRIME storage, the selected fourcc,
-modifier and plane contract, valid backing ownership, and zero software,
-upload, or download events. No-resize chains verify decoder-to-encoder buffer
-identity; RGA resize chains allow only the planned DRM PRIME buffer replacement.
-An empty or inconsistent capability intersection must fail before DAG startup.
+RKMPP production gates record the probed decoder and encoder contracts, RGA
+transform tuples, and the planner-selected end-to-end capability path. They
+cover every end-to-end tuple the planner product promises to support, rather
+than every isolated format an individual component advertises. Advertised but
+unreachable tuples pass explicit pre-DAG rejection gates; no sample-specific
+format is inserted to make a path. Every accepted frame reports DRM PRIME
+storage, the selected descriptor topology, fourcc, dimensions, per-object
+modifier/backing, plane mapping, valid ownership, and zero software, upload, or
+download events. No-resize chains verify decoder-to-encoder buffer identity;
+RGA resize or layout-conversion chains allow only the selected transform tuple
+and its planned DRM PRIME buffer replacement. A missing, ambiguous, or
+inconsistent capability path must fail before DAG startup.
 
 Each gate records exact source, CLI, receiver and cleanup commands, precise
 PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
