@@ -411,8 +411,8 @@ int runRealtimeVideoCli(int argc, char** argv)
         MediaRealtimeVideoRunController::run(
             options, runPolicy, control, observer);
     if (outcome.endReason == MediaRealtimeVideoRunEndReason::ProgressTimeout &&
-        outcome.finalReport) {
-        printStalledEdges(*outcome.finalReport);
+        outcome.failureReport) {
+        printStalledEdges(*outcome.failureReport);
     }
     if (outcome.finalReport) {
         std::cout << "[CLI] final " << outcome.finalReport->summary() << '\n';

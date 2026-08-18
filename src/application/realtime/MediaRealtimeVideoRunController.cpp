@@ -40,6 +40,7 @@ private:
 struct MediaRealtimeVideoWaitOutcome final {
     ::media::Status status;
     MediaRealtimeVideoRunEndReason endReason;
+    std::optional<MediaGraphRuntimeReport> failureReport;
 };
 
 MediaRealtimeVideoRunOutcome failureOutcome(
@@ -52,7 +53,66 @@ MediaRealtimeVideoRunOutcome failureOutcome(
         ::media::Status::failure(std::move(error)),
         stage,
         endReason,
+        std::nullopt,
         std::nullopt
+    };
+}
+
+bool sameError(
+    const ::media::ErrorInfo& left,
+    const ::media::ErrorInfo& right) noexcept
+{
+    return left.code == right.code &&
+           left.nativeCode == right.nativeCode &&
+           left.message == right.message;
+}
+
+MediaRealtimeVideoRunOutcome makeCompletedRunOutcome(
+    const MediaRealtimeVideoWaitOutcome& waitOutcome,
+    const MediaRealtimeRuntimeCompletionOutcome& completion,
+    const std::optional<::media::ErrorInfo>& completionPrimaryFailure,
+    const MediaGraphRuntimeReport& finalReport)
+{
+    if (completion.status) {
+        return {
+            ::media::Status::success(),
+            MediaRealtimeVideoRunStage::Completed,
+            waitOutcome.endReason,
+            waitOutcome.failureReport,
+            finalReport
+        };
+    }
+
+    const bool completionReplacedWaitFailure =
+        completionPrimaryFailure &&
+        (waitOutcome.status ||
+         !sameError(
+             waitOutcome.status.error(),
+             *completionPrimaryFailure));
+    if (completionReplacedWaitFailure) {
+        return {
+            ::media::Status::failure(completion.status.error()),
+            MediaRealtimeVideoRunStage::RuntimeCompletion,
+            MediaRealtimeVideoRunEndReason::WorkerFailure,
+            waitOutcome.failureReport,
+            finalReport
+        };
+    }
+    if (!waitOutcome.status) {
+        return {
+            ::media::Status::failure(completion.status.error()),
+            MediaRealtimeVideoRunStage::RuntimeProgress,
+            waitOutcome.endReason,
+            waitOutcome.failureReport,
+            finalReport
+        };
+    }
+    return {
+        ::media::Status::failure(completion.status.error()),
+        MediaRealtimeVideoRunStage::RuntimeCompletion,
+        MediaRealtimeVideoRunEndReason::Failure,
+        waitOutcome.failureReport,
+        finalReport
     };
 }
 
@@ -332,7 +392,8 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
             return {
                 ::media::Status::failure(::media::ErrorInfo::notInitialized(
                     "realtime runtime made no progress before timeout")),
-                MediaRealtimeVideoRunEndReason::ProgressTimeout
+                MediaRealtimeVideoRunEndReason::ProgressTimeout,
+                report
             };
         }
 
@@ -426,14 +487,24 @@ void MediaRealtimeVideoRunControl::requestStop() noexcept
 {
     {
         std::lock_guard lock(m_waitMutex);
-        m_stopRequested.store(true, std::memory_order_release);
+        m_state.store(State::StopRequested, std::memory_order_release);
     }
     m_waitCondition.notify_all();
 }
 
 bool MediaRealtimeVideoRunControl::stopRequested() const noexcept
 {
-    return m_stopRequested.load(std::memory_order_acquire);
+    return m_state.load(std::memory_order_acquire) == State::StopRequested;
+}
+
+bool MediaRealtimeVideoRunControl::tryClaimRuntimeStart() noexcept
+{
+    State expected = State::Ready;
+    return m_state.compare_exchange_strong(
+        expected,
+        State::RuntimeStartClaimed,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire);
 }
 
 bool MediaRealtimeVideoRunControl::waitForStop(
@@ -540,7 +611,7 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
             registerStatus.error(),
             MediaRealtimeVideoRunStage::RuntimeNodeRegistration);
     }
-    if (control.stopRequested()) {
+    if (!control.tryClaimRuntimeStart()) {
         return failureOutcome(
             ::media::ErrorInfo::cancelled(
                 "realtime video run stop was requested before runtime start"),
@@ -559,24 +630,18 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
         waitForRealtimeProgress(runtime, policy, control, observer);
     const auto completion = MediaRealtimeRuntimeCompletion::complete(
         runtime, waitOutcome.status);
+    std::optional<::media::ErrorInfo> completionPrimaryFailure;
+    if (const auto primaryFailure =
+            runtime.threadedExecutor().primaryFailure()) {
+        completionPrimaryFailure = primaryFailure->error;
+    }
     const MediaGraphRuntimeReport finalReport =
         MediaGraphRuntimeReporter::capture(runtime);
-    if (!completion.status) {
-        return {
-            ::media::Status::failure(completion.status.error()),
-            waitOutcome.status
-                ? MediaRealtimeVideoRunStage::RuntimeCompletion
-                : MediaRealtimeVideoRunStage::RuntimeProgress,
-            waitOutcome.endReason,
-            finalReport
-        };
-    }
-    return {
-        ::media::Status::success(),
-        MediaRealtimeVideoRunStage::Completed,
-        waitOutcome.endReason,
-        finalReport
-    };
+    return makeCompletedRunOutcome(
+        waitOutcome,
+        completion,
+        completionPrimaryFailure,
+        finalReport);
 }
 
 } // namespace media::ffmpeg::graph

@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -55,7 +56,17 @@ public:
     bool waitForStop(std::chrono::milliseconds timeout);
 
 private:
-    std::atomic_bool m_stopRequested{ false };
+    friend class MediaRealtimeVideoRunController;
+
+    enum class State : std::uint8_t {
+        Ready,
+        RuntimeStartClaimed,
+        StopRequested
+    };
+
+    bool tryClaimRuntimeStart() noexcept;
+
+    std::atomic<State> m_state{ State::Ready };
     std::mutex m_waitMutex;
     std::condition_variable m_waitCondition;
 };
@@ -144,6 +155,7 @@ struct MediaRealtimeVideoRunOutcome final {
     ::media::Status status;
     MediaRealtimeVideoRunStage stage;
     MediaRealtimeVideoRunEndReason endReason;
+    std::optional<MediaGraphRuntimeReport> failureReport;
     std::optional<MediaGraphRuntimeReport> finalReport;
 };
 
