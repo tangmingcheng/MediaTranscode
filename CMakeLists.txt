@@ -8,6 +8,8 @@ set(CMAKE_CXX_DEPFILE_FORMAT "")
 set(CMAKE_CXX_SCANDEP_SOURCE "")
 
 set(TARGET_CORE "media_transcode_core")
+set(TARGET_REALTIME_APPLICATION "media_transcode_realtime_application")
+set(TARGET_BETA "media_transcode_beta")
 set(TARGET_LOCAL_VIDEO_CLI "media_transcode_local_video_cli")
 set(TARGET_REALTIME_VIDEO_CLI "media_transcode_realtime_video_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
@@ -178,8 +180,51 @@ if(WIN32)
     target_link_libraries(${TARGET_CORE} PUBLIC ws2_32)
 endif()
 
-function(media_transcode_configure_app target_name)
-    target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
+add_library(${TARGET_REALTIME_APPLICATION} STATIC
+    src/application/realtime/MediaRealtimeVideoRunController.cpp
+    src/application/realtime/MediaRealtimeVideoRunController.h
+)
+add_library(MediaTranscode::realtime_application ALIAS
+    ${TARGET_REALTIME_APPLICATION}
+)
+target_include_directories(${TARGET_REALTIME_APPLICATION} PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+)
+target_compile_features(${TARGET_REALTIME_APPLICATION} PUBLIC cxx_std_20)
+target_link_libraries(${TARGET_REALTIME_APPLICATION} PUBLIC
+    MediaTranscode::core
+)
+if(MSVC)
+    target_compile_options(${TARGET_REALTIME_APPLICATION} PRIVATE /utf-8 /EHsc)
+endif()
+
+add_library(${TARGET_BETA} STATIC
+    src/media_transcode_beta/MediaRealtimeBetaApi.cpp
+    src/media_transcode_beta/MediaRealtimeBetaFixedProfile.cpp
+    src/media_transcode_beta/MediaRealtimeBetaOwnedConfig.cpp
+    src/media_transcode_beta/MediaRealtimeBetaRequestMapper.cpp
+    src/media_transcode_beta/MediaRealtimeBetaSession.cpp
+    src/media_transcode_beta/MediaRealtimeBetaSnapshotProjector.cpp
+    src/media_transcode_beta/MediaRealtimeBetaTemporaryDescription.cpp
+)
+add_library(MediaTranscode::beta ALIAS ${TARGET_BETA})
+target_include_directories(${TARGET_BETA}
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(${TARGET_BETA} PUBLIC cxx_std_20)
+target_link_libraries(${TARGET_BETA} PUBLIC
+    MediaTranscode::realtime_application
+)
+if(MSVC)
+    target_compile_options(${TARGET_BETA} PRIVATE /utf-8 /EHsc)
+endif()
+
+function(media_transcode_configure_app target_name linked_target)
+    target_link_libraries(${target_name} PRIVATE ${linked_target})
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_include_directories(${target_name} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -194,12 +239,13 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
     add_executable(${TARGET_LOCAL_VIDEO_CLI}
         tools/local_video_cli/main.cpp
     )
-    media_transcode_configure_app(${TARGET_LOCAL_VIDEO_CLI})
+    media_transcode_configure_app(${TARGET_LOCAL_VIDEO_CLI} MediaTranscode::core)
 
     add_executable(${TARGET_REALTIME_VIDEO_CLI}
-        src/application/realtime/MediaRealtimeVideoRunController.cpp
-        src/application/realtime/MediaRealtimeVideoRunController.h
         tools/realtime_video_cli/main.cpp
     )
-    media_transcode_configure_app(${TARGET_REALTIME_VIDEO_CLI})
+    media_transcode_configure_app(
+        ${TARGET_REALTIME_VIDEO_CLI}
+        MediaTranscode::realtime_application
+    )
 endif()
