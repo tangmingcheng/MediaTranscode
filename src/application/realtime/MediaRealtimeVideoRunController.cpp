@@ -523,125 +523,155 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
     MediaRealtimeVideoRunControl& control,
     const MediaRealtimeVideoRunObserver& observer)
 {
-    MediaGraphRuntime runtime;
-    MediaGraphRuntimeReset reset(runtime);
+    MediaRealtimeVideoRunStage activeStage =
+        MediaRealtimeVideoRunStage::PolicyValidation;
+    try {
+        MediaGraphRuntime runtime;
+        MediaGraphRuntimeReset reset(runtime);
 
-    auto policyStatus = policy.validate();
-    if (!policyStatus) {
-        return failureOutcome(
-            policyStatus.error(),
-            MediaRealtimeVideoRunStage::PolicyValidation);
-    }
-    if (control.stopRequested()) {
-        return failureOutcome(
-            ::media::ErrorInfo::cancelled(
-                "realtime video run stop was requested before preflight"),
-            MediaRealtimeVideoRunStage::StopRequested,
-            MediaRealtimeVideoRunEndReason::CallerStop);
-    }
+        auto policyStatus = policy.validate();
+        if (!policyStatus) {
+            return failureOutcome(
+                policyStatus.error(),
+                MediaRealtimeVideoRunStage::PolicyValidation);
+        }
+        if (control.stopRequested()) {
+            return failureOutcome(
+                ::media::ErrorInfo::cancelled(
+                    "realtime video run stop was requested before preflight"),
+                MediaRealtimeVideoRunStage::StopRequested,
+                MediaRealtimeVideoRunEndReason::CallerStop);
+        }
 
-    auto preflightResult = MediaRealtimeRtpTranscodePlanner::preflight(request);
-    if (!preflightResult) {
-        return failureOutcome(
-            preflightResult.error(),
-            MediaRealtimeVideoRunStage::Preflight);
-    }
-    MediaRealtimeTranscodePreflight preflight =
-        std::move(preflightResult).value();
-    const MediaRealtimeVideoPreparedReport prepared =
-        preparedReport(request, preflight.plan);
-    const MediaThreadingPolicy threadingPolicy = std::visit(
-        [](const auto& runtimePlan) {
-            return runtimePlan.threadingPolicy;
-        },
-        preflight.plan.runtime);
-    if (control.stopRequested()) {
-        return failureOutcome(
-            ::media::ErrorInfo::cancelled(
-                "realtime video run stop was requested after preflight"),
-            MediaRealtimeVideoRunStage::StopRequested,
-            MediaRealtimeVideoRunEndReason::CallerStop);
-    }
+        activeStage = MediaRealtimeVideoRunStage::Preflight;
+        auto preflightResult =
+            MediaRealtimeRtpTranscodePlanner::preflight(request);
+        if (!preflightResult) {
+            return failureOutcome(
+                preflightResult.error(),
+                MediaRealtimeVideoRunStage::Preflight);
+        }
+        MediaRealtimeTranscodePreflight preflight =
+            std::move(preflightResult).value();
+        const MediaRealtimeVideoPreparedReport prepared =
+            preparedReport(request, preflight.plan);
+        const MediaThreadingPolicy threadingPolicy = std::visit(
+            [](const auto& runtimePlan) {
+                return runtimePlan.threadingPolicy;
+            },
+            preflight.plan.runtime);
+        if (control.stopRequested()) {
+            return failureOutcome(
+                ::media::ErrorInfo::cancelled(
+                    "realtime video run stop was requested after preflight"),
+                MediaRealtimeVideoRunStage::StopRequested,
+                MediaRealtimeVideoRunEndReason::CallerStop);
+        }
 
-    auto executableResult =
-        MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
-            std::move(preflight));
-    if (!executableResult) {
-        return failureOutcome(
-            executableResult.error(),
-            MediaRealtimeVideoRunStage::ExecutableGraphBuild);
-    }
-    MediaRealtimeExecutableGraph executable =
-        std::move(executableResult).value();
+        activeStage = MediaRealtimeVideoRunStage::ExecutableGraphBuild;
+        auto executableResult =
+            MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
+                std::move(preflight));
+        if (!executableResult) {
+            return failureOutcome(
+                executableResult.error(),
+                MediaRealtimeVideoRunStage::ExecutableGraphBuild);
+        }
+        MediaRealtimeExecutableGraph executable =
+            std::move(executableResult).value();
 
-    auto preparedStatus = notifyPrepared(observer, prepared);
-    if (!preparedStatus) {
-        return failureOutcome(
-            preparedStatus.error(),
-            MediaRealtimeVideoRunStage::PreparedNotification);
-    }
-    if (control.stopRequested()) {
-        return failureOutcome(
-            ::media::ErrorInfo::cancelled(
-                "realtime video run stop was requested before runtime compile"),
-            MediaRealtimeVideoRunStage::StopRequested,
-            MediaRealtimeVideoRunEndReason::CallerStop);
-    }
+        activeStage = MediaRealtimeVideoRunStage::PreparedNotification;
+        auto preparedStatus = notifyPrepared(observer, prepared);
+        if (!preparedStatus) {
+            return failureOutcome(
+                preparedStatus.error(),
+                MediaRealtimeVideoRunStage::PreparedNotification);
+        }
+        if (control.stopRequested()) {
+            return failureOutcome(
+                ::media::ErrorInfo::cancelled(
+                    "realtime video run stop was requested before runtime compile"),
+                MediaRealtimeVideoRunStage::StopRequested,
+                MediaRealtimeVideoRunEndReason::CallerStop);
+        }
 
-    runtime.setDiagnosticsEnabled(
-        request.parameters.execution.diagnosticLogEnabled);
-    runtime.setThreadingPolicy(threadingPolicy);
-    auto compileStatus = runtime.compile(std::move(executable));
-    if (!compileStatus) {
-        return failureOutcome(
-            compileStatus.error(),
-            MediaRealtimeVideoRunStage::RuntimeCompile);
-    }
-    if (control.stopRequested()) {
-        return failureOutcome(
-            ::media::ErrorInfo::cancelled(
-                "realtime video run stop was requested before runtime node registration"),
-            MediaRealtimeVideoRunStage::StopRequested,
-            MediaRealtimeVideoRunEndReason::CallerStop);
-    }
+        activeStage = MediaRealtimeVideoRunStage::RuntimeCompile;
+        runtime.setDiagnosticsEnabled(
+            request.parameters.execution.diagnosticLogEnabled);
+        runtime.setThreadingPolicy(threadingPolicy);
+        auto compileStatus = runtime.compile(std::move(executable));
+        if (!compileStatus) {
+            return failureOutcome(
+                compileStatus.error(),
+                MediaRealtimeVideoRunStage::RuntimeCompile);
+        }
+        if (control.stopRequested()) {
+            return failureOutcome(
+                ::media::ErrorInfo::cancelled(
+                    "realtime video run stop was requested before runtime node registration"),
+                MediaRealtimeVideoRunStage::StopRequested,
+                MediaRealtimeVideoRunEndReason::CallerStop);
+        }
 
-    auto registerStatus = runtime.registerDefaultRuntimeNodes();
-    if (!registerStatus) {
-        return failureOutcome(
-            registerStatus.error(),
-            MediaRealtimeVideoRunStage::RuntimeNodeRegistration);
-    }
-    if (!control.tryClaimRuntimeStart()) {
-        return failureOutcome(
-            ::media::ErrorInfo::cancelled(
-                "realtime video run stop was requested before runtime start"),
-            MediaRealtimeVideoRunStage::StopRequested,
-            MediaRealtimeVideoRunEndReason::CallerStop);
-    }
+        activeStage = MediaRealtimeVideoRunStage::RuntimeNodeRegistration;
+        auto registerStatus = runtime.registerDefaultRuntimeNodes();
+        if (!registerStatus) {
+            return failureOutcome(
+                registerStatus.error(),
+                MediaRealtimeVideoRunStage::RuntimeNodeRegistration);
+        }
+        if (!control.tryClaimRuntimeStart()) {
+            return failureOutcome(
+                ::media::ErrorInfo::cancelled(
+                    "realtime video run stop was requested before runtime start"),
+                MediaRealtimeVideoRunStage::StopRequested,
+                MediaRealtimeVideoRunEndReason::CallerStop);
+        }
 
-    auto startStatus = runtime.startThreaded();
-    if (!startStatus) {
-        return failureOutcome(
-            startStatus.error(),
-            MediaRealtimeVideoRunStage::RuntimeStart);
-    }
+        activeStage = MediaRealtimeVideoRunStage::RuntimeStart;
+        auto startStatus = runtime.startThreaded();
+        if (!startStatus) {
+            return failureOutcome(
+                startStatus.error(),
+                MediaRealtimeVideoRunStage::RuntimeStart);
+        }
 
-    const MediaRealtimeVideoWaitOutcome waitOutcome =
-        waitForRealtimeProgress(runtime, policy, control, observer);
-    const auto completion = MediaRealtimeRuntimeCompletion::complete(
-        runtime, waitOutcome.status);
-    std::optional<::media::ErrorInfo> completionPrimaryFailure;
-    if (const auto primaryFailure =
-            runtime.threadedExecutor().primaryFailure()) {
-        completionPrimaryFailure = primaryFailure->error;
+        activeStage = MediaRealtimeVideoRunStage::RuntimeProgress;
+        const MediaRealtimeVideoWaitOutcome waitOutcome =
+            waitForRealtimeProgress(runtime, policy, control, observer);
+        activeStage = MediaRealtimeVideoRunStage::RuntimeCompletion;
+        const auto completion = MediaRealtimeRuntimeCompletion::complete(
+            runtime, waitOutcome.status);
+        std::optional<::media::ErrorInfo> completionPrimaryFailure;
+        if (const auto primaryFailure =
+                runtime.threadedExecutor().primaryFailure()) {
+            completionPrimaryFailure = primaryFailure->error;
+        }
+        const MediaGraphRuntimeReport finalReport =
+            MediaGraphRuntimeReporter::capture(runtime);
+        activeStage = MediaRealtimeVideoRunStage::Completed;
+        return makeCompletedRunOutcome(
+            waitOutcome,
+            completion,
+            completionPrimaryFailure,
+            finalReport);
+    } catch (const std::bad_alloc&) {
+        return failureOutcome(
+            ::media::ErrorInfo::allocationFailed(
+                "realtime video run stage allocation failed"),
+            activeStage);
+    } catch (const std::exception& error) {
+        return failureOutcome(
+            ::media::ErrorInfo::internalError(
+                std::string("realtime video run stage failed: ") +
+                error.what()),
+            activeStage);
+    } catch (...) {
+        return failureOutcome(
+            ::media::ErrorInfo::internalError(
+                "realtime video run stage failed with an unknown exception"),
+            activeStage);
     }
-    const MediaGraphRuntimeReport finalReport =
-        MediaGraphRuntimeReporter::capture(runtime);
-    return makeCompletedRunOutcome(
-        waitOutcome,
-        completion,
-        completionPrimaryFailure,
-        finalReport);
 }
 
 } // namespace media::ffmpeg::graph
