@@ -154,8 +154,11 @@ mt_beta_completion_reason controllerFailureReason(
 } // namespace
 
 MediaRealtimeBetaSession::MediaRealtimeBetaSession(
-    MediaRealtimeBetaOwnedConfig config) noexcept
+    MediaRealtimeBetaOwnedConfig config,
+    std::shared_ptr<MediaRealtimeBetaStartPublication>
+        startPublication) noexcept
     : m_config(std::move(config))
+    , m_startPublication(std::move(startPublication))
     , m_snapshot(MediaRealtimeBetaSnapshotProjector::initial(m_config))
 {
 }
@@ -163,6 +166,7 @@ MediaRealtimeBetaSession::MediaRealtimeBetaSession(
 MediaRealtimeBetaSession::~MediaRealtimeBetaSession() noexcept
 {
     requestStop();
+    m_startPublication->cancel();
     if (m_eventThread.joinable()) {
         if (isCurrentThreadEventThread()) {
             std::terminate();
@@ -232,6 +236,10 @@ bool MediaRealtimeBetaSession::isCurrentThreadEventThread() const noexcept
 
 void MediaRealtimeBetaSession::eventThreadMain() noexcept
 {
+    if (!m_startPublication->waitForOwnership()) {
+        return;
+    }
+
     {
         std::lock_guard lock(m_eventThreadIdentityMutex);
         m_eventThreadId = std::this_thread::get_id();

@@ -3,6 +3,7 @@
 #include "media_transcode/Result.h"
 #include "media_transcode_beta/MediaRealtimeBetaOwnedConfig.h"
 #include "media_transcode_beta/MediaRealtimeBetaSession.h"
+#include "media_transcode_beta/MediaRealtimeBetaStartPublication.h"
 
 #include <exception>
 #include <memory>
@@ -11,8 +12,10 @@
 
 struct mt_beta_realtime_session final {
     explicit mt_beta_realtime_session(
-        media::beta::MediaRealtimeBetaOwnedConfig config) noexcept
-        : implementation(std::move(config))
+        media::beta::MediaRealtimeBetaOwnedConfig config,
+        std::shared_ptr<media::beta::MediaRealtimeBetaStartPublication>
+            startPublication) noexcept
+        : implementation(std::move(config), std::move(startPublication))
     {
     }
 
@@ -68,17 +71,18 @@ extern "C" mt_beta_status mt_beta_realtime_start(
             return betaStatus(ownedConfig.error().code);
         }
 
+        auto startPublication = std::make_shared<
+            media::beta::MediaRealtimeBetaStartPublication>();
         auto candidate = std::make_unique<mt_beta_realtime_session>(
-            std::move(ownedConfig).value());
-        *session = candidate.get();
+            std::move(ownedConfig).value(), startPublication);
 
         const auto status = candidate->implementation.start();
         if (!status) {
-            *session = nullptr;
             return betaStatus(status);
         }
 
-        candidate.release();
+        *session = candidate.release();
+        startPublication->publishOwnership();
         return MT_BETA_STATUS_OK;
     } catch (const std::bad_alloc&) {
         *session = nullptr;

@@ -3,12 +3,14 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
 #include "media_transcode/Result.h"
 #include "media_transcode_beta/MediaRealtimeBetaOwnedConfig.h"
+#include "media_transcode_beta/MediaRealtimeBetaStartPublication.h"
 #include "media_transcode_beta/MediaRealtimeBetaTemporaryDescription.h"
 #include "media_transcode_beta/realtime.h"
 
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -19,7 +21,9 @@ namespace media::beta {
 class MediaRealtimeBetaSession final {
 public:
     explicit MediaRealtimeBetaSession(
-        MediaRealtimeBetaOwnedConfig config) noexcept;
+        MediaRealtimeBetaOwnedConfig config,
+        std::shared_ptr<MediaRealtimeBetaStartPublication>
+            startPublication) noexcept;
     ~MediaRealtimeBetaSession() noexcept;
 
     MediaRealtimeBetaSession(const MediaRealtimeBetaSession&) = delete;
@@ -94,6 +98,7 @@ private:
     std::chrono::milliseconds runningTime() const noexcept;
 
     MediaRealtimeBetaOwnedConfig m_config;
+    std::shared_ptr<MediaRealtimeBetaStartPublication> m_startPublication;
     ffmpeg::graph::MediaRealtimeVideoRunControl m_runControl;
     std::atomic<bool> m_startInvoked{false};
     std::atomic<bool> m_stopRequested{false};
