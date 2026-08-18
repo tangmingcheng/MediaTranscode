@@ -4,11 +4,10 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 
-#include <string>
-
 namespace media::beta {
 
 class MediaRealtimeBetaOwnedConfig;
+class MediaRealtimeBetaTemporaryDescription;
 
 class MediaRealtimeBetaRequestMapper final {
 public:
@@ -16,7 +15,7 @@ public:
 
     static ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest> map(
         const MediaRealtimeBetaOwnedConfig& config,
-        const std::string& sessionOwnedSdpPath);
+        const MediaRealtimeBetaTemporaryDescription& outputDescription);
 };
 
 } // namespace media::beta

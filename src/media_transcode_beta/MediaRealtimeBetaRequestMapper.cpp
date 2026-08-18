@@ -2,6 +2,7 @@
 
 #include "media_transcode_beta/MediaRealtimeBetaFixedProfile.h"
 #include "media_transcode_beta/MediaRealtimeBetaOwnedConfig.h"
+#include "media_transcode_beta/MediaRealtimeBetaTemporaryDescription.h"
 
 #include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
@@ -38,8 +39,9 @@ std::string rtpUrl(const MediaRealtimeBetaOwnedConfig& config)
 ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>
 MediaRealtimeBetaRequestMapper::map(
     const MediaRealtimeBetaOwnedConfig& config,
-    const std::string& sessionOwnedSdpPath)
+    const MediaRealtimeBetaTemporaryDescription& outputDescription)
 {
+    const std::string& sessionOwnedSdpPath = outputDescription.path();
     if (sessionOwnedSdpPath.empty()) {
         return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::failure(
             ::media::ErrorInfo::invalidArgument("session-owned SDP path is required"));
