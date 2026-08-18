@@ -76,6 +76,9 @@ private:
         mt_beta_completion_reason completionReason,
         std::int32_t nativeCode,
         const char* detail) noexcept;
+    bool recordControllerFailureSignal() noexcept;
+    PhaseFailureClassification controllerEmergencyClassification(
+        ::media::ErrorCode errorCode) const noexcept;
     bool hasRecordedFailure() const noexcept;
     void finishFailure() noexcept;
     void finishSuccess(mt_beta_completion_reason completionReason);
@@ -111,6 +114,7 @@ private:
     std::array<char, 256U> m_emergencyDetail{};
     std::chrono::steady_clock::time_point m_startedAt;
     SessionPhase m_phase = SessionPhase::SessionCreation;
+    bool m_controllerActive = false;
     bool m_hasEmergencyFailure = false;
     bool m_outputReady = false;
     bool m_runningStateEmitted = false;

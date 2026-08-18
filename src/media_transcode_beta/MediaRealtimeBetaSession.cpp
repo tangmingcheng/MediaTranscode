@@ -53,16 +53,15 @@ std::int32_t betaNativeCode(int nativeCode) noexcept
 }
 
 mt_beta_failure_stage controllerFailureStage(
-    const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome) noexcept
+    ::media::ErrorCode errorCode,
+    ffmpeg::graph::MediaRealtimeVideoRunStage stage) noexcept
 {
     using Stage = ffmpeg::graph::MediaRealtimeVideoRunStage;
-    if (!outcome.status &&
-        (outcome.status.error().code == ::media::ErrorCode::Unsupported ||
-         outcome.status.error().code ==
-             ::media::ErrorCode::HardwareUnavailable)) {
+    if (errorCode == ::media::ErrorCode::Unsupported ||
+        errorCode == ::media::ErrorCode::HardwareUnavailable) {
         return MT_BETA_FAILURE_CAPABILITY;
     }
-    switch (outcome.stage) {
+    switch (stage) {
     case Stage::PolicyValidation:
         return MT_BETA_FAILURE_SESSION_CREATION;
     case Stage::StopRequested:
@@ -84,6 +83,13 @@ mt_beta_failure_stage controllerFailureStage(
     return MT_BETA_FAILURE_RUNTIME_EXECUTION;
 }
 
+mt_beta_failure_stage controllerFailureStage(
+    const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome) noexcept
+{
+    return controllerFailureStage(
+        outcome.status.error().code, outcome.stage);
+}
+
 bool isRuntimeFailureStage(
     ffmpeg::graph::MediaRealtimeVideoRunStage stage) noexcept
 {
@@ -93,22 +99,29 @@ bool isRuntimeFailureStage(
 }
 
 mt_beta_completion_reason controllerFailureReason(
-    const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome) noexcept
+    ::media::ErrorCode errorCode,
+    ffmpeg::graph::MediaRealtimeVideoRunStage stage,
+    ffmpeg::graph::MediaRealtimeVideoRunEndReason endReason) noexcept
 {
-    if ((!outcome.status &&
-         outcome.status.error().code == ::media::ErrorCode::Cancelled) ||
-        outcome.endReason ==
+    if (errorCode == ::media::ErrorCode::Cancelled ||
+        endReason ==
             ffmpeg::graph::MediaRealtimeVideoRunEndReason::CallerStop) {
         return MT_BETA_COMPLETION_REQUESTED_STOP;
     }
-    if (!outcome.status &&
-        outcome.status.error().code == ::media::ErrorCode::IoFailure &&
-        isRuntimeFailureStage(outcome.stage)) {
+    if (errorCode == ::media::ErrorCode::IoFailure &&
+        isRuntimeFailureStage(stage)) {
         return MT_BETA_COMPLETION_SOURCE_LOSS;
     }
-    return isRuntimeFailureStage(outcome.stage)
+    return isRuntimeFailureStage(stage)
         ? MT_BETA_COMPLETION_RUNTIME_FAILURE
         : MT_BETA_COMPLETION_STARTUP_FAILURE;
+}
+
+mt_beta_completion_reason controllerFailureReason(
+    const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome) noexcept
+{
+    return controllerFailureReason(
+        outcome.status.error().code, outcome.stage, outcome.endReason);
 }
 
 ::media::Result<mt_beta_completion_reason> successCompletionReason(
@@ -228,24 +241,33 @@ void MediaRealtimeBetaSession::eventThreadMain() noexcept
     try {
         runOnEventThread();
     } catch (const std::bad_alloc&) {
-        const auto failure = currentFailureClassification();
-        recordEmergencyFailure(
-            MT_BETA_ERROR_ALLOCATION_FAILED, failure.stage,
-            failure.completionReason, 0,
-            "Beta realtime session allocation failed");
+        if (!recordControllerFailureSignal()) {
+            const auto failure = controllerEmergencyClassification(
+                ::media::ErrorCode::AllocationFailed);
+            recordEmergencyFailure(
+                MT_BETA_ERROR_ALLOCATION_FAILED, failure.stage,
+                failure.completionReason, 0,
+                "Beta realtime session allocation failed");
+        }
         finishFailure();
     } catch (const std::exception& error) {
-        const auto failure = currentFailureClassification();
-        recordEmergencyFailure(
-            MT_BETA_ERROR_INTERNAL, failure.stage,
-            failure.completionReason, 0, error.what());
+        if (!recordControllerFailureSignal()) {
+            const auto failure = controllerEmergencyClassification(
+                ::media::ErrorCode::InternalError);
+            recordEmergencyFailure(
+                MT_BETA_ERROR_INTERNAL, failure.stage,
+                failure.completionReason, 0, error.what());
+        }
         finishFailure();
     } catch (...) {
-        const auto failure = currentFailureClassification();
-        recordEmergencyFailure(
-            MT_BETA_ERROR_INTERNAL, failure.stage,
-            failure.completionReason, 0,
-            "Beta realtime session failed with an unknown exception");
+        if (!recordControllerFailureSignal()) {
+            const auto failure = controllerEmergencyClassification(
+                ::media::ErrorCode::InternalError);
+            recordEmergencyFailure(
+                MT_BETA_ERROR_INTERNAL, failure.stage,
+                failure.completionReason, 0,
+                "Beta realtime session failed with an unknown exception");
+        }
         finishFailure();
     }
 
@@ -301,8 +323,10 @@ void MediaRealtimeBetaSession::runOnEventThread()
         handleProgress(report);
     };
     m_phase = SessionPhase::Preflight;
+    m_controllerActive = true;
     const auto outcome = ffmpeg::graph::MediaRealtimeVideoRunController::run(
         request.value(), policy.value(), m_runControl, observer);
+    m_controllerActive = false;
     handleOutcome(outcome);
 }
 
@@ -488,6 +512,37 @@ void MediaRealtimeBetaSession::recordEmergencyFailure(
     }
     m_emergencyDetail[index] = '\0';
     m_hasEmergencyFailure = true;
+}
+
+bool MediaRealtimeBetaSession::recordControllerFailureSignal() noexcept
+{
+    const auto signal = m_runControl.firstFailureSignal();
+    if (!signal) {
+        return false;
+    }
+    recordEmergencyFailure(
+        betaErrorCode(signal->errorCode),
+        controllerFailureStage(signal->errorCode, signal->stage),
+        controllerFailureReason(
+            signal->errorCode, signal->stage, signal->endReason),
+        betaNativeCode(signal->nativeCode),
+        "Beta realtime controller preserved the first operational failure");
+    return true;
+}
+
+MediaRealtimeBetaSession::PhaseFailureClassification
+MediaRealtimeBetaSession::controllerEmergencyClassification(
+    ::media::ErrorCode errorCode) const noexcept
+{
+    if (!m_controllerActive) {
+        return currentFailureClassification();
+    }
+    const auto stage = m_runControl.activeStage();
+    return {
+        controllerFailureStage(errorCode, stage),
+        controllerFailureReason(
+            errorCode, stage,
+            ffmpeg::graph::MediaRealtimeVideoRunEndReason::Failure) };
 }
 
 bool MediaRealtimeBetaSession::hasRecordedFailure() const noexcept

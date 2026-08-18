@@ -44,6 +44,41 @@ private:
     std::optional<std::chrono::milliseconds> m_maximumDuration;
 };
 
+enum class MediaRealtimeVideoRunStage {
+    PolicyValidation,
+    StopRequested,
+    Preflight,
+    ExecutableGraphBuild,
+    PreparedNotification,
+    RuntimeCompile,
+    RuntimeNodeRegistration,
+    RuntimeStart,
+    RuntimeProgress,
+    RuntimeCompletion,
+    Completed
+};
+
+enum class MediaRealtimeVideoRunEndReason {
+    NotStarted,
+    CallerStop,
+    SourceCompleted,
+    MaximumDuration,
+    FirstOutputTimeout,
+    ProgressTimeout,
+    WorkerFailure,
+    RuntimeStopped,
+    Failure
+};
+
+struct MediaRealtimeVideoRunFailureSignal final {
+    ::media::ErrorCode errorCode = ::media::ErrorCode::None;
+    int nativeCode = 0;
+    MediaRealtimeVideoRunStage stage =
+        MediaRealtimeVideoRunStage::PolicyValidation;
+    MediaRealtimeVideoRunEndReason endReason =
+        MediaRealtimeVideoRunEndReason::NotStarted;
+};
+
 class MediaRealtimeVideoRunControl final {
 public:
     MediaRealtimeVideoRunControl() = default;
@@ -54,6 +89,9 @@ public:
     void requestStop() noexcept;
     bool stopRequested() const noexcept;
     bool waitForStop(std::chrono::milliseconds timeout);
+    MediaRealtimeVideoRunStage activeStage() const noexcept;
+    std::optional<MediaRealtimeVideoRunFailureSignal>
+        firstFailureSignal() const noexcept;
 
 private:
     friend class MediaRealtimeVideoRunController;
@@ -65,8 +103,18 @@ private:
     };
 
     bool tryClaimRuntimeStart() noexcept;
+    void beginRunTracking() noexcept;
+    void setActiveStage(MediaRealtimeVideoRunStage stage) noexcept;
+    void recordFirstFailureSignal(
+        const ::media::ErrorInfo& error,
+        MediaRealtimeVideoRunStage stage,
+        MediaRealtimeVideoRunEndReason endReason) noexcept;
 
     std::atomic<State> m_state{ State::Ready };
+    std::atomic<MediaRealtimeVideoRunStage> m_activeStage{
+        MediaRealtimeVideoRunStage::PolicyValidation };
+    MediaRealtimeVideoRunFailureSignal m_firstFailureSignal;
+    std::atomic_bool m_hasFirstFailureSignal{ false };
     std::mutex m_waitMutex;
     std::condition_variable m_waitCondition;
 };
@@ -123,32 +171,6 @@ struct MediaRealtimeVideoPreparedReport final {
 struct MediaRealtimeVideoRunObserver final {
     std::function<void(const MediaRealtimeVideoPreparedReport&)> prepared;
     std::function<void(const MediaGraphRuntimeReport&)> progress;
-};
-
-enum class MediaRealtimeVideoRunStage {
-    PolicyValidation,
-    StopRequested,
-    Preflight,
-    ExecutableGraphBuild,
-    PreparedNotification,
-    RuntimeCompile,
-    RuntimeNodeRegistration,
-    RuntimeStart,
-    RuntimeProgress,
-    RuntimeCompletion,
-    Completed
-};
-
-enum class MediaRealtimeVideoRunEndReason {
-    NotStarted,
-    CallerStop,
-    SourceCompleted,
-    MaximumDuration,
-    FirstOutputTimeout,
-    ProgressTimeout,
-    WorkerFailure,
-    RuntimeStopped,
-    Failure
 };
 
 struct MediaRealtimeVideoRunOutcome final {
