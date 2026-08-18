@@ -275,10 +275,11 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
     const auto startedAt = Clock::now();
     auto lastProgressAt = startedAt;
     MediaRealtimeProgressTracker progressTracker;
-    const auto workerStartupGrace = std::chrono::milliseconds(
-        std::min(
-            policy.progressTimeout().count(),
-            std::max(policy.pollInterval().count() * 2, 1000LL)));
+    const auto workerStartupGrace = std::min(
+        policy.progressTimeout(),
+        std::max(
+            policy.pollInterval() * 2,
+            std::chrono::milliseconds{1000}));
 
     while (true) {
         auto lifecycleStatus = runtime.synchronizeThreadedState();
