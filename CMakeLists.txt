@@ -197,6 +197,8 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
     media_transcode_configure_app(${TARGET_LOCAL_VIDEO_CLI})
 
     add_executable(${TARGET_REALTIME_VIDEO_CLI}
+        src/application/realtime/MediaRealtimeVideoRunController.cpp
+        src/application/realtime/MediaRealtimeVideoRunController.h
         tools/realtime_video_cli/main.cpp
     )
     media_transcode_configure_app(${TARGET_REALTIME_VIDEO_CLI})
