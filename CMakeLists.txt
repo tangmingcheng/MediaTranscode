@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21.1)
 
 project(MediaTranscode LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_DEPFILE_FLAGS_CXX "")
 set(CMAKE_CXX_DEPFILE_FORMAT "")
@@ -172,6 +174,7 @@ endif()
 target_link_libraries(${TARGET_CORE}
     PUBLIC
         thirdparty_ffmpeg
+        Threads::Threads
     PRIVATE
         thirdparty_spdlog
 )
