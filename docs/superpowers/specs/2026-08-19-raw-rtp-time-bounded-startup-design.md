@@ -16,13 +16,23 @@ only for URL and MPEG-TS inputs and is outside this change.
 ## Public Facts and Startup Deadline
 
 A raw RTP request supplies one caller-observable startup fact:
-`maximumStartupWait`. The application creates one absolute steady-clock
-deadline before resource admission. Admission, socket bind, discovery, every
-serial replan, hardware capability validation, graph build and prepare,
-random-access wait, and final commit all consume the same deadline. No phase
-may recreate or extend it. Socket read timeouts are cancellation quanta, not
-business deadlines. The existing first-output deadline begins only after the
-graph startup transaction commits.
+`maximumStartupWait`. Before resource admission, the application converts it
+once into an immutable, copy-safe `MediaRealtimeStartupDeadline` containing an
+absolute `std::chrono::steady_clock::time_point`. The controller owns this
+value and passes it unchanged through the planning context, capability probes,
+runtime compiler transaction, and ingress authority. Every blocking API
+accepts the typed deadline and computes only its current `remaining()` value;
+no lower layer accepts the original duration or calls `now()` to create a new
+business deadline.
+
+Admission, socket bind, discovery, every serial replan, hardware capability
+validation, graph build and prepare, random-access wait, and final commit all
+consume that deadline. A component that cannot cancel an in-progress platform
+operation must check the same deadline immediately after it returns and before
+publishing or committing state. Expiry returns one typed
+`StartupDeadlineExceeded` error carrying the active stage. Socket read
+timeouts are cancellation quanta, not business deadlines. The existing first-
+output deadline begins only after the graph startup transaction commits.
 
 Raw RTP planning and runtime must not read `probeSizeBytes`,
 `maximumBufferedBytes`, or `MediaRawRtpPreparedByteBudget`. Total observed
@@ -32,18 +42,30 @@ bytes are saturating telemetry only and never control success or allocation.
 
 `MediaRealtimeEngineResourcePolicy` is a deployment-level engine construction
 input, not a media request, CLI media parameter, or Beta C session field. It
-contains facts the hosting environment can directly establish, including the
-engine ingress-memory limit, maximum admitted sessions, and allocator,
-cgroup, or job-object limits. The core provides no default or sample-derived
+contains facts the hosting environment can directly establish: the engine
+ingress-memory limit, maximum admitted sessions, and allocator, cgroup, or
+job-object hard limit. The effective aggregate limit is the minimum of those
+authoritative byte limits. The core provides no default or sample-derived
 capacity.
 
 One engine-scoped `MediaRealtimeResourceGovernor` owns the admission ledger.
+At engine construction it deterministically partitions the effective aggregate
+limit into `maximumConcurrentSessions` equal reservation slots using checked
+integer division. Any remainder remains governor-owned slack and is not
+redistributed according to arrival order. This makes every session envelope
+stable and prevents a scheduling race from changing planner products. If one
+slot cannot contain the planner's mandatory protocol and platform storage, the
+session fails admission rather than borrowing from another slot.
+
 Before binding sockets, a controller atomically acquires one non-copyable RAII
-`MediaRealtimeResourceLease`. The lease reserves both a session slot and all
-ingress bytes and exposes an immutable `MediaRealtimeResourceEnvelope` plus a
-resource-contract revision. Failure returns `ResourceAdmissionDenied` before
-network state is created. Destroying the authority releases the lease only
-after receive activity has stopped and all owned storage has been destroyed.
+`MediaRealtimeResourceLease`. The lease reserves exactly one session slot and
+its precomputed byte envelope and exposes an immutable
+`MediaRealtimeResourceEnvelope` plus a resource-contract revision. The
+governor uses one atomic ledger transition for slot and byte reservation;
+release returns that exact slot and cannot alter other live leases. Failure
+returns `ResourceAdmissionDenied` before network state is created. Destroying
+the authority releases the lease only after receive activity has stopped and
+all owned storage has been destroyed.
 
 The planner uses checked arithmetic to divide the admitted envelope among the
 platform receive arena, descriptors, canonical parameter-set state, reorder
@@ -122,9 +144,32 @@ changes only when a fact invalidates a planner product.
 ## Transactional Graph Startup
 
 The graph executor provides a general prepare/commit/rollback transaction; it
-is not raw-RTP- or RK-specific. All nodes and edges first complete non-running
-prepare. Workers cannot call `process()` before commit. `RawRtpInputNode`
-registers a pull-only consumer capability, with at most one outstanding pull.
+is not raw-RTP- or RK-specific. It deepens the existing lifecycle without
+inventing a second node lifecycle API:
+
+- `MediaGraphScheduler::prepare()` runs the existing node `configure()` and
+  `start()` operations in execution order while no worker may call
+  `process()`. It records the successfully started prefix. Failure invokes
+  `abort()` in reverse order only for that prefix, clears channels and binding
+  capabilities, and returns the first error.
+- `MediaGraphThreadedExecutor::prepare()` invokes scheduler prepare, constructs
+  every worker, and starts each worker behind one shared start barrier. A
+  worker cannot enter its process loop until the barrier commits. Worker
+  construction or start failure aborts the barrier, interrupts and joins every
+  created worker, rolls back the scheduler, and leaves the runtime unstarted.
+- `commit()` is valid only from `Prepared`. It verifies the external startup
+  capability and deadline, then releases the barrier once. The scheduler and
+  executor become `Running` only after that release.
+- `rollback()` is valid only before commit. It aborts the barrier, joins all
+  waiting workers, aborts the prepared node prefix in reverse order, clears
+  channels and capabilities, and returns the runtime to its compiled or
+  destructible state. Destruction performs the same rollback through RAII.
+
+The single-thread executor uses the same scheduler `Prepared` state and simply
+does not call `processSchedulingStep()` until commit. Existing input types use
+the same transaction but have no random-access gate, so they may commit
+immediately after prepare. `RawRtpInputNode` registers a pull-only consumer
+capability, with at most one outstanding pull.
 
 After graph prepare succeeds, `prepareArm(token)` verifies the composite facts
 without permitting output and enters `AwaitRandomAccess`. The same receiver
@@ -138,8 +183,11 @@ ready, the authority compares the token again. A stable token permits one
 commit barrier that activates the executor and the consumer lease. The
 controller then relinquishes its planning capability. The node pulls one
 generation-consistent ordered event batch: configuration, clock, then encoded
-access unit. The builder, not the session, decides whether canonical signaling
-becomes codec extradata, packet side data, or an Annex-B prefix.
+access unit. The planner emits a typed
+`MediaRtpSignalingMaterializationPlan` selecting codec extradata, packet side
+data, or an Annex-B prefix from codec and decoder capability facts. The builder
+only maps that product into node options; neither builder nor session chooses
+the representation.
 
 Before commit, a stale token returns `ReplanRequired`. The authority rolls back
 to `AwaitGraphArm`, clears the candidate, and retains the same socket and
