@@ -16,7 +16,10 @@ public:
     static ::media::Result<MediaTsDatagramEmissionPlan> create(
         const MediaTsMuxPlan& muxPlan,
         MediaRunningTime videoAccessUnitCadence,
-        std::optional<MediaRunningTime> audioAccessUnitCadence);
+        std::optional<MediaRunningTime> audioAccessUnitCadence,
+        std::int64_t plannedWireBytesPerSecond,
+        MediaRunningTime maximumScheduledResidence,
+        std::uint64_t maximumQueuedBytes);
 
     MediaRunningTime accessUnitWindow() const noexcept;
     std::size_t packetSizeBytes() const noexcept;
@@ -27,6 +30,9 @@ public:
     MediaRunningTime videoInitialServiceWindow() const noexcept;
     const std::optional<MediaRunningTime>&
     audioInitialServiceWindow() const noexcept;
+    std::int64_t plannedWireBytesPerSecond() const noexcept;
+    MediaRunningTime maximumScheduledResidence() const noexcept;
+    std::uint64_t maximumQueuedBytes() const noexcept;
 
     friend bool operator==(const MediaTsDatagramEmissionPlan&,
                            const MediaTsDatagramEmissionPlan&) = default;
@@ -39,7 +45,10 @@ private:
         std::size_t packetSizeBytes,
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes,
-        bool scheduledDatagramOutput) noexcept;
+        bool scheduledDatagramOutput,
+        std::int64_t plannedWireBytesPerSecond,
+        MediaRunningTime maximumScheduledResidence,
+        std::uint64_t maximumQueuedBytes) noexcept;
 
     MediaRunningTime m_accessUnitWindow;
     MediaRunningTime m_videoInitialServiceWindow;
@@ -48,6 +57,9 @@ private:
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;
     bool m_scheduledDatagramOutput;
+    std::int64_t m_plannedWireBytesPerSecond;
+    MediaRunningTime m_maximumScheduledResidence;
+    std::uint64_t m_maximumQueuedBytes;
 };
 
 } // namespace media::ffmpeg::graph

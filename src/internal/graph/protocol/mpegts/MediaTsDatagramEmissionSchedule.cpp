@@ -146,47 +146,19 @@ DivisionResult divide(UInt128 dividend, std::uint64_t divisor) noexcept
             static_cast<std::int64_t>(nanoseconds.value())));
 }
 
-::media::Result<std::int64_t> rateForWindow(
-    std::uint64_t bytes,
-    MediaRunningTime window)
-{
-    if (bytes == 0 || window.nanoseconds() <= 0) {
-        return ::media::Result<std::int64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS access-unit rate requires positive bytes and time"));
-    }
-    auto rate = scaledQuotient(
-        bytes, NanosecondsPerSecond,
-        static_cast<std::uint64_t>(window.nanoseconds()), true);
-    if (!rate || rate.value() == 0 || rate.value() >
-            static_cast<std::uint64_t>(
-                (std::numeric_limits<std::int64_t>::max)())) {
-        return ::media::Result<std::int64_t>::failure(
-            rate ? ::media::ErrorInfo::invalidArgument(
-                       "MPEG-TS access-unit wire rate is not representable")
-                 : rate.error());
-    }
-    return ::media::Result<std::int64_t>::success(
-        static_cast<std::int64_t>(rate.value()));
-}
-
 } // namespace
 
 class MediaTsDatagramEmissionScheduleState final {
 public:
-    struct StreamObservation final {
-        MediaRunningTime emitOnMaster;
-        std::int64_t wireBytesPerSecond;
-    };
     struct ActiveAccessUnit final {
         MediaScheduledStream stream;
         MediaRunningTime emitOnMaster;
-        MediaRunningTime dispatchOnMaster;
+        MediaRunningTime completionDeadline;
+        MediaRunningTime reservationStart;
         MediaRunningTime timelineAvailableAt;
         std::uint64_t totalWireBytes;
         std::uint64_t committedWireBytes;
         std::int64_t selectedWireBytesPerSecond;
-        StreamObservation proposedObservation;
     };
     struct ActiveMaintenanceGroup final {
         MediaRunningTime notBefore;
@@ -196,7 +168,6 @@ public:
         std::uint64_t totalWireBytes;
         std::uint64_t committedWireBytes;
         std::int64_t selectedWireBytesPerSecond;
-        std::int64_t proposedMaintenanceWireBytesPerSecond;
         bool scheduledReservation;
     };
 
@@ -205,17 +176,16 @@ public:
         MediaRunningTime selectedOrigin) noexcept
         : plan(std::move(selectedPlan)),
           origin(selectedOrigin),
-          availableAt(selectedOrigin)
+          availableAt(selectedOrigin),
+          rateEpochOrigin(selectedOrigin)
     {
     }
 
     MediaTsDatagramEmissionPlan plan;
     MediaRunningTime origin;
     MediaRunningTime availableAt;
-    std::int64_t transportWireBytesPerSecond = 0;
-    std::int64_t maintenanceWireBytesPerSecond = 0;
-    std::optional<StreamObservation> videoObservation;
-    std::optional<StreamObservation> audioObservation;
+    MediaRunningTime rateEpochOrigin;
+    std::uint64_t rateEpochWireBytes = 0;
     std::optional<ActiveAccessUnit> activeAccessUnit;
     std::optional<ActiveMaintenanceGroup> activeMaintenanceGroup;
     std::optional<std::uint64_t> pendingRevision;
@@ -283,26 +253,6 @@ namespace {
         payload + datagrams * plan.perDatagramOverheadBytes());
 }
 
-std::optional<MediaTsDatagramEmissionScheduleState::StreamObservation>&
-observationFor(
-    MediaTsDatagramEmissionScheduleState& state,
-    MediaScheduledStream stream)
-{
-    return stream == MediaScheduledStream::Video
-        ? state.videoObservation
-        : state.audioObservation;
-}
-
-const std::optional<MediaTsDatagramEmissionScheduleState::StreamObservation>&
-otherObservation(
-    const MediaTsDatagramEmissionScheduleState& state,
-    MediaScheduledStream stream)
-{
-    return stream == MediaScheduledStream::Video
-        ? state.audioObservation
-        : state.videoObservation;
-}
-
 struct AccessUnitReservation final {
     MediaRunningTime notBefore;
     MediaRunningTime completion;
@@ -312,6 +262,66 @@ struct AccessUnitReservation final {
     std::uint64_t nextCommittedWireBytes;
     std::int64_t selectedWireBytesPerSecond;
 };
+
+MediaRunningTime currentTimelineAvailableAt(
+    const MediaTsDatagramEmissionScheduleState& state) noexcept
+{
+    if (state.activeMaintenanceGroup) {
+        return state.activeMaintenanceGroup->timelineAvailableAt;
+    }
+    if (state.activeAccessUnit) {
+        return state.activeAccessUnit->timelineAvailableAt;
+    }
+    return state.availableAt;
+}
+
+struct ContinuousTimelineReservation final {
+    MediaRunningTime completion;
+    MediaRunningTime serviceDuration;
+};
+
+::media::Result<ContinuousTimelineReservation> reserveContinuousTimeline(
+    const MediaTsDatagramEmissionScheduleState& state,
+    MediaRunningTime serviceStart,
+    std::uint64_t wireBytes)
+{
+    using Result = ::media::Result<ContinuousTimelineReservation>;
+    const MediaRunningTime availableAt = currentTimelineAvailableAt(state);
+    if (serviceStart < availableAt || wireBytes == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS continuous timeline reservation is invalid"));
+    }
+    const bool startsNewEpoch = serviceStart > availableAt;
+    const std::uint64_t existingWireBytes =
+        startsNewEpoch ? 0 : state.rateEpochWireBytes;
+    if (wireBytes >
+        (std::numeric_limits<std::uint64_t>::max)() - existingWireBytes) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS continuous timeline wire bytes are not representable"));
+    }
+    const MediaRunningTime epochOrigin =
+        startsNewEpoch ? serviceStart : state.rateEpochOrigin;
+    auto cumulativeDuration = rateDuration(
+        existingWireBytes + wireBytes,
+        state.plan.plannedWireBytesPerSecond(), true);
+    auto completion = cumulativeDuration
+        ? epochOrigin.checkedAdd(cumulativeDuration.value())
+        : ::media::Result<MediaRunningTime>::failure(
+              cumulativeDuration.error());
+    auto serviceDuration = completion
+        ? completion.value().checkedSubtract(serviceStart)
+        : ::media::Result<MediaRunningTime>::failure(completion.error());
+    if (!completion || !serviceDuration ||
+        serviceDuration.value().nanoseconds() <= 0) {
+        return Result::failure(
+            !completion ? completion.error() :
+            !serviceDuration ? serviceDuration.error() :
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS continuous timeline duration is not positive"));
+    }
+    return Result::success(ContinuousTimelineReservation{
+        completion.value(), serviceDuration.value()});
+}
 
 ::media::Result<AccessUnitReservation> accessUnitReservation(
     MediaTsDatagramEmissionScheduleState& state,
@@ -331,39 +341,26 @@ struct AccessUnitReservation final {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS access-unit datagram exceeds its materialized wire bytes"));
     }
-    const std::uint64_t remainingWireBytes =
-        active.totalWireBytes - active.committedWireBytes;
-    auto remainingWindow = active.dispatchOnMaster.checkedSubtract(
-        active.timelineAvailableAt);
-    auto requiredRate = remainingWindow &&
-            remainingWindow.value().nanoseconds() > 0
-        ? rateForWindow(remainingWireBytes, remainingWindow.value())
-        : ::media::Result<std::int64_t>::failure(
-              ::media::ErrorInfo::invalidArgument(
-                  "MPEG-TS access-unit remaining service window is exhausted"));
-    if (!requiredRate) return Result::failure(requiredRate.error());
-    const std::int64_t selectedRate = (std::max)(
-        active.selectedWireBytesPerSecond, requiredRate.value());
-    auto serviceDuration = rateDuration(wire.value(), selectedRate, true);
+    const std::uint64_t nextCommittedWireBytes =
+        active.committedWireBytes + wire.value();
+    const std::int64_t selectedRate =
+        state.plan.plannedWireBytesPerSecond();
+    auto timeline = reserveContinuousTimeline(
+        state, active.timelineAvailableAt, wire.value());
     auto plannedWait = active.timelineAvailableAt.checkedSubtract(
         active.emitOnMaster);
-    auto completion = serviceDuration
-        ? active.timelineAvailableAt.checkedAdd(serviceDuration.value())
-        : ::media::Result<MediaRunningTime>::failure(serviceDuration.error());
-    if (!serviceDuration || !plannedWait || !completion ||
-        serviceDuration.value().nanoseconds() <= 0 ||
-        completion.value() > active.dispatchOnMaster) {
+    if (!timeline || !plannedWait ||
+        timeline.value().completion > active.completionDeadline) {
         return Result::failure(
-            !serviceDuration ? serviceDuration.error() :
+            !timeline ? timeline.error() :
             !plannedWait ? plannedWait.error() :
-            !completion ? completion.error() :
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS access-unit datagram reservation is not representable"));
     }
     return Result::success(AccessUnitReservation{
-        active.timelineAvailableAt, completion.value(), plannedWait.value(),
-        serviceDuration.value(), wire.value(),
-        active.committedWireBytes + wire.value(), selectedRate});
+        active.timelineAvailableAt, timeline.value().completion,
+        plannedWait.value(), timeline.value().serviceDuration, wire.value(),
+        nextCommittedWireBytes, selectedRate});
 }
 
 } // namespace
@@ -521,97 +518,41 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
     }
     auto totalWire = wireBytesForPayload(m_state->plan, totalPayloadBytes);
     if (!totalWire) return Result::failure(totalWire.error());
+    if (totalWire.value() > m_state->plan.maximumQueuedBytes()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS access-unit exceeds the planned emission byte bound"));
+    }
     const MediaRunningTime serviceStart = (std::max)(
-        actualMasterNow,
-        (std::max)(emitOnMaster, m_state->availableAt));
-    auto completionWindow = dispatchOnMaster.checkedSubtract(
-        serviceStart);
-    if (!completionWindow || completionWindow.value().nanoseconds() <= 0) {
-        std::ostringstream message;
-        message << "MPEG-TS access-unit canonical window is exhausted"
-                << " stream="
-                << (stream == MediaScheduledStream::Video ? "video" : "audio")
-                << " payload_bytes=" << totalPayloadBytes
-                << " wire_bytes=" << totalWire.value()
-                << " emit_ns=" << emitOnMaster.nanoseconds()
-                << " dispatch_ns=" << dispatchOnMaster.nanoseconds()
-                << " actual_now_ns=" << actualMasterNow.nanoseconds()
-                << " available_at_ns=" << m_state->availableAt.nanoseconds()
-                << " service_start_ns=" << serviceStart.nanoseconds();
-        return Result::failure(
-            completionWindow
-                ? ::media::ErrorInfo::invalidArgument(
-                      message.str())
-                : completionWindow.error());
-    }
-
-    auto& current = observationFor(*m_state, stream);
-    MediaRunningTime cadence = stream == MediaScheduledStream::Video
-        ? m_state->plan.videoInitialServiceWindow()
-        : m_state->plan.audioInitialServiceWindow().value_or(
-              MediaRunningTime::fromNanoseconds(0));
-    if (cadence.nanoseconds() <= 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS access-unit stream has no planned initial cadence"));
-    }
-    if (current) {
-        auto observed = emitOnMaster.checkedSubtract(current->emitOnMaster);
-        if (!observed || observed.value().nanoseconds() <= 0) {
-            return Result::failure(
-                observed
-                    ? ::media::ErrorInfo::invalidArgument(
-                          "MPEG-TS access-unit stream cadence did not advance")
-                    : observed.error());
-        }
-        cadence = observed.value();
-    }
-    auto currentRate = rateForWindow(totalWire.value(), cadence);
-    auto requiredRate = rateForWindow(
-        totalWire.value(), completionWindow.value());
-    if (!currentRate || !requiredRate) {
-        return Result::failure(
-            currentRate ? requiredRate.error() : currentRate.error());
-    }
-    std::int64_t aggregateRate = currentRate.value();
-    if (m_state->maintenanceWireBytesPerSecond < 0 ||
-        aggregateRate > (std::numeric_limits<std::int64_t>::max)() -
-            m_state->maintenanceWireBytesPerSecond) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS aggregate maintenance rate is not representable"));
-    }
-    aggregateRate += m_state->maintenanceWireBytesPerSecond;
-    const auto& other = otherObservation(*m_state, stream);
-    if (other) {
-        if (aggregateRate >
-            (std::numeric_limits<std::int64_t>::max)() -
-                other->wireBytesPerSecond) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "MPEG-TS aggregate access-unit rate is not representable"));
-        }
-        aggregateRate += other->wireBytesPerSecond;
-    }
+        emitOnMaster, m_state->availableAt);
     const std::int64_t selectedRate =
-        (std::max)(aggregateRate, requiredRate.value());
-    auto serviceDuration = rateDuration(
-        totalWire.value(), selectedRate, true);
-    if (!serviceDuration) return Result::failure(serviceDuration.error());
-    auto completion = serviceStart.checkedAdd(serviceDuration.value());
+        m_state->plan.plannedWireBytesPerSecond();
+    auto fullReservation = reserveContinuousTimeline(
+        *m_state, serviceStart, totalWire.value());
+    if (!fullReservation) {
+        return Result::failure(fullReservation.error());
+    }
     auto debt = serviceStart.checkedSubtract(emitOnMaster);
-    if (!completion || !debt ||
-        completion.value() > dispatchOnMaster) {
+    auto completionDeadline = emitOnMaster.checkedAdd(
+        m_state->plan.maximumScheduledResidence());
+    if (!debt || !completionDeadline ||
+        fullReservation.value().completion > completionDeadline.value()) {
         return Result::failure(
-            !completion ? completion.error() :
             !debt ? debt.error() :
+            !completionDeadline ? completionDeadline.error() :
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS access-unit cannot meet its canonical dispatch deadline"));
+                "MPEG-TS access-unit exceeds the planned emission residence"));
+    }
+    if (serviceStart > currentTimelineAvailableAt(*m_state)) {
+        m_state->rateEpochOrigin = serviceStart;
+        m_state->rateEpochWireBytes = 0;
     }
     m_state->activeAccessUnit.emplace(
         MediaTsDatagramEmissionScheduleState::ActiveAccessUnit{
-            stream, emitOnMaster, dispatchOnMaster, serviceStart,
-            totalWire.value(), 0, selectedRate,
-            {emitOnMaster, currentRate.value()}});
+            stream, emitOnMaster, completionDeadline.value(), serviceStart,
+            serviceStart,
+            totalWire.value(), 0, selectedRate});
     return Result::success(MediaTsAccessUnitEmissionDecision{
-        selectedRate, debt.value(), completion.value()});
+        selectedRate, debt.value(), fullReservation.value().completion});
 }
 
 ::media::Result<MediaTsPreparedDatagramEmission>
@@ -637,7 +578,7 @@ MediaTsDatagramEmissionSchedule::prepareAccessUnit(
     m_state->pendingRevision = revision;
     return Result::success(MediaTsPreparedDatagramEmission(
         m_state, revision, reservation.value().notBefore,
-        m_state->activeAccessUnit->dispatchOnMaster,
+        m_state->activeAccessUnit->completionDeadline,
         reservation.value().plannedWait,
         reservation.value().serviceDuration,
         static_cast<std::size_t>(reservation.value().wireBytes),
@@ -693,76 +634,26 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
         ? (std::max)(notBefore, parentAvailableAt)
         : notBefore;
     std::int64_t selectedRate = 0;
-    std::int64_t proposedMaintenanceRate =
-        m_state->maintenanceWireBytesPerSecond;
     if (scheduledReservation) {
-        auto maintenancePeriod = completionDeadline.checkedSubtract(notBefore);
-        auto periodicMaintenanceRate = maintenancePeriod &&
-                maintenancePeriod.value().nanoseconds() > 0
-            ? rateForWindow(totalWire.value(), maintenancePeriod.value())
-            : ::media::Result<std::int64_t>::failure(
-                  ::media::ErrorInfo::invalidArgument(
-                      "MPEG-TS maintenance period is exhausted"));
-        if (!periodicMaintenanceRate) {
+        selectedRate = m_state->plan.plannedWireBytesPerSecond();
+        auto groupReservation = reserveContinuousTimeline(
+            *m_state, serviceStart, totalWire.value());
+        if (!groupReservation ||
+            groupReservation.value().completion > completionDeadline) {
             return ::media::Status::failure(
-                periodicMaintenanceRate.error());
+                !groupReservation ? groupReservation.error() :
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS maintenance exceeds the fixed emission timeline"));
         }
-        proposedMaintenanceRate = (std::max)(
-            proposedMaintenanceRate, periodicMaintenanceRate.value());
-        auto groupWindow = completionDeadline.checkedSubtract(serviceStart);
-        if (!groupWindow || groupWindow.value().nanoseconds() <= 0) {
-            return ::media::Status::failure(
-                groupWindow
-                    ? ::media::ErrorInfo::invalidArgument(
-                          "MPEG-TS maintenance group completion window is exhausted")
-                    : groupWindow.error());
-        }
-        auto requiredGroupRate = rateForWindow(
-            totalWire.value(), groupWindow.value());
-        if (!requiredGroupRate) {
-            return ::media::Status::failure(requiredGroupRate.error());
-        }
-        selectedRate = (std::max)(
-            m_state->transportWireBytesPerSecond,
-            requiredGroupRate.value());
-        if (m_state->activeAccessUnit) {
-            auto activeWindow = m_state->activeAccessUnit->dispatchOnMaster
-                .checkedSubtract(serviceStart);
-            const std::uint64_t remainingMediaWire =
-                m_state->activeAccessUnit->totalWireBytes -
-                m_state->activeAccessUnit->committedWireBytes;
-            if (!activeWindow || activeWindow.value().nanoseconds() <= 0 ||
-                remainingMediaWire >
-                    (std::numeric_limits<std::uint64_t>::max)() -
-                        totalWire.value()) {
-                return ::media::Status::failure(
-                    activeWindow && activeWindow.value().nanoseconds() > 0
-                        ? ::media::ErrorInfo::invalidArgument(
-                              "MPEG-TS active maintenance demand is not representable")
-                        : activeWindow
-                            ? ::media::ErrorInfo::invalidArgument(
-                                  "MPEG-TS active maintenance exhausted the access-unit window")
-                            : activeWindow.error());
-            }
-            auto requiredAggregateRate = rateForWindow(
-                remainingMediaWire + totalWire.value(),
-                activeWindow.value());
-            if (!requiredAggregateRate) {
-                return ::media::Status::failure(
-                    requiredAggregateRate.error());
-            }
-            selectedRate = (std::max)(
-                selectedRate,
-                (std::max)(
-                    m_state->activeAccessUnit->selectedWireBytesPerSecond,
-                    requiredAggregateRate.value()));
+        if (serviceStart > currentTimelineAvailableAt(*m_state)) {
+            m_state->rateEpochOrigin = serviceStart;
+            m_state->rateEpochWireBytes = 0;
         }
     }
     m_state->activeMaintenanceGroup.emplace(
         MediaTsDatagramEmissionScheduleState::ActiveMaintenanceGroup{
             notBefore, completionDeadline, serviceStart, serviceStart,
-            totalWire.value(), 0, selectedRate, proposedMaintenanceRate,
-            scheduledReservation});
+            totalWire.value(), 0, selectedRate, scheduledReservation});
     return ::media::Status::success();
 }
 
@@ -788,33 +679,24 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
     const MediaRunningTime serviceStart = group.timelineAvailableAt;
     const std::uint64_t nextCommittedWireBytes =
         group.committedWireBytes + wire.value();
-    auto cumulativeDuration = group.scheduledReservation
-        ? rateDuration(
-              nextCommittedWireBytes,
-              group.selectedWireBytesPerSecond, true)
-        : ::media::Result<MediaRunningTime>::success(
-              MediaRunningTime::fromNanoseconds(0));
-    auto reservationCompletion = cumulativeDuration
-        ? group.reservationStart.checkedAdd(cumulativeDuration.value())
-        : ::media::Result<MediaRunningTime>::failure(
-              cumulativeDuration.error());
-    auto serviceDuration = reservationCompletion
-        ? reservationCompletion.value().checkedSubtract(serviceStart)
-        : ::media::Result<MediaRunningTime>::failure(
-              reservationCompletion.error());
+    auto timeline = group.scheduledReservation
+        ? reserveContinuousTimeline(*m_state, serviceStart, wire.value())
+        : ::media::Result<ContinuousTimelineReservation>::success(
+              ContinuousTimelineReservation{
+                  serviceStart, MediaRunningTime::fromNanoseconds(0)});
     auto plannedWait = serviceStart.checkedSubtract(group.notBefore);
     if (!wire || wire.value() >
             static_cast<std::uint64_t>(
                 (std::numeric_limits<std::size_t>::max)()) ||
-        !serviceDuration || !reservationCompletion ||
+        !timeline ||
         !plannedWait ||
         (group.scheduledReservation &&
-         reservationCompletion.value() > group.completionDeadline) ||
+         timeline.value().completion > group.completionDeadline) ||
         m_state->nextRevision ==
             (std::numeric_limits<std::uint64_t>::max)()) {
-        if (wire && serviceDuration && reservationCompletion && plannedWait &&
+        if (wire && timeline && plannedWait &&
             group.scheduledReservation &&
-            reservationCompletion.value() > group.completionDeadline) {
+            timeline.value().completion > group.completionDeadline) {
             std::ostringstream message;
             message << "MPEG-TS maintenance cannot reserve its global service window"
                     << " group_not_before_ns=" << group.notBefore.nanoseconds()
@@ -822,9 +704,9 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
                     << group.completionDeadline.nanoseconds()
                     << " service_start_ns=" << serviceStart.nanoseconds()
                     << " service_duration_ns="
-                    << serviceDuration.value().nanoseconds()
+                    << timeline.value().serviceDuration.nanoseconds()
                     << " reservation_completion_ns="
-                    << reservationCompletion.value().nanoseconds()
+                    << timeline.value().completion.nanoseconds()
                     << " datagram_wire_bytes=" << wire.value()
                     << " committed_wire_bytes=" << group.committedWireBytes
                     << " total_wire_bytes=" << group.totalWireBytes
@@ -835,8 +717,7 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
         }
         return Result::failure(
             !wire ? wire.error() :
-            !serviceDuration ? serviceDuration.error() :
-            !reservationCompletion ? reservationCompletion.error() :
+            !timeline ? timeline.error() :
             !plannedWait ? plannedWait.error() :
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS maintenance cannot reserve its global service window"));
@@ -845,10 +726,10 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
     m_state->pendingRevision = revision;
     return Result::success(MediaTsPreparedDatagramEmission(
         m_state, revision, serviceStart, group.completionDeadline,
-        plannedWait.value(), serviceDuration.value(),
+        plannedWait.value(), timeline.value().serviceDuration,
         static_cast<std::size_t>(wire.value()),
         nextCommittedWireBytes,
-        reservationCompletion.value(), group.selectedWireBytesPerSecond,
+        timeline.value().completion, group.selectedWireBytesPerSecond,
         true));
 }
 
@@ -870,12 +751,6 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
             group.selectedWireBytesPerSecond;
     } else if (group.scheduledReservation) {
         m_state->availableAt = group.timelineAvailableAt;
-        m_state->transportWireBytesPerSecond =
-            group.selectedWireBytesPerSecond;
-    }
-    if (group.scheduledReservation) {
-        m_state->maintenanceWireBytesPerSecond =
-            group.proposedMaintenanceWireBytesPerSecond;
     }
     m_state->activeMaintenanceGroup.reset();
     return ::media::Status::success();
@@ -893,6 +768,17 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS emission commit rejects a stale transaction"));
+    }
+    const MediaRunningTime timelineAvailableAt =
+        currentTimelineAvailableAt(*m_state);
+    const bool scheduledReservation =
+        !prepared.m_maintenanceReservation ||
+        (m_state->activeMaintenanceGroup &&
+         m_state->activeMaintenanceGroup->scheduledReservation);
+    if (scheduledReservation && prepared.m_deadline < timelineAvailableAt) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS emission commit would move the continuous timeline backward"));
     }
     if (prepared.m_maintenanceReservation) {
         if (!m_state->activeMaintenanceGroup ||
@@ -922,14 +808,22 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
         }
         m_state->activeAccessUnit->selectedWireBytesPerSecond =
             prepared.m_selectedWireBytesPerSecond;
-        m_state->activeAccessUnit->timelineAvailableAt = (std::max)(
-            prepared.m_reservationCompletion, actualEmissionTime);
+        m_state->activeAccessUnit->timelineAvailableAt =
+            prepared.m_reservationCompletion;
         m_state->activeAccessUnit->committedWireBytes =
             prepared.m_nextCommittedWireBytes;
     } else if (prepared.m_nextCommittedWireBytes != 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS maintenance commit contains access-unit progress"));
+    }
+    if (scheduledReservation) {
+        if (prepared.m_deadline > timelineAvailableAt) {
+            m_state->rateEpochOrigin = prepared.m_deadline;
+            m_state->rateEpochWireBytes = prepared.m_wireBytes;
+        } else {
+            m_state->rateEpochWireBytes += prepared.m_wireBytes;
+        }
     }
     m_state->pendingRevision.reset();
     prepared.m_active = false;
@@ -948,9 +842,6 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
                 "MPEG-TS access-unit emission cannot complete"));
     }
     auto& active = *m_state->activeAccessUnit;
-    observationFor(*m_state, active.stream) = active.proposedObservation;
-    m_state->transportWireBytesPerSecond =
-        active.selectedWireBytesPerSecond;
     m_state->availableAt = active.timelineAvailableAt;
     m_state->activeAccessUnit.reset();
     return ::media::Status::success();

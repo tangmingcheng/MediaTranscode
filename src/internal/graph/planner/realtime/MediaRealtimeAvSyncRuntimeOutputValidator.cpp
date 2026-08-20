@@ -206,7 +206,10 @@ bool validRtpStream(
     auto expectedEmission = MediaTsDatagramEmissionPlan::create(
         output.protocol.muxPlan(),
         output.emission.videoInitialServiceWindow(),
-        output.emission.audioInitialServiceWindow());
+        output.emission.audioInitialServiceWindow(),
+        output.emission.plannedWireBytesPerSecond(),
+        output.emission.maximumScheduledResidence(),
+        output.emission.maximumQueuedBytes());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&

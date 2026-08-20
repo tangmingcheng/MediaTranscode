@@ -3,6 +3,7 @@
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
+#include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
@@ -184,8 +185,33 @@ planSeparateRtp(
             std::move(rtp).value());
     }
     outer.videoParameters.globalHeader = true;
-    auto emission = MediaTsDatagramEmissionPlan::create(
-        protocol.value().muxPlan(), videoCadence.value(), std::nullopt);
+    const auto& encoderRateControl =
+        outer.videoPlan.selected.encoder.encoderRateControl;
+    if (!encoderRateControl) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly scheduled MPEG-TS requires planned encoder rate control"));
+    }
+    const MediaTsDatagramEmissionPlanningFacts emissionFacts{
+        videoCadence.value(), *encoderRateControl,
+        std::nullopt, std::nullopt, startup.byteCapacity};
+    const auto& muxParameters = protocol.value().muxPlan().parameters();
+    auto wireRate = MediaTsDatagramEmissionPlanner::plannedWireBytesPerSecond(
+        muxParameters.packetSize,
+        muxParameters.maximumPacketsPerDatagram,
+        outer.outputTransport == MediaOutputTransportKind::RtpAvp ? 12u : 0u,
+        muxParameters.psiRepeatInterval,
+        muxParameters.clock.pcrInterval,
+        emissionFacts);
+    auto maximumResidence =
+        MediaTsDatagramEmissionPlanner::maximumResidence(emissionFacts);
+    auto emission = wireRate && maximumResidence
+        ? MediaTsDatagramEmissionPlan::create(
+              protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
+              wireRate.value(), maximumResidence.value(),
+              startup.byteCapacity)
+        : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+              wireRate ? maximumResidence.error() : wireRate.error());
     if (!emission) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());

@@ -88,9 +88,11 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_scheduledBatchMaximumBytes = 0;
     m_terminalFailure.reset();
     m_wakeup.reset();
+    m_forwardPacer.reset();
     m_maximumEnqueueLateness = MediaRunningTime::fromNanoseconds(0);
     m_maximumWakeOvershoot = MediaRunningTime::fromNanoseconds(0);
     m_maximumSendDuration = MediaRunningTime::fromNanoseconds(0);
+    m_maximumForwardShift = MediaRunningTime::fromNanoseconds(0);
     m_cumulativeWaitDuration = MediaRunningTime::fromNanoseconds(0);
     m_cumulativeSendDuration = MediaRunningTime::fromNanoseconds(0);
     m_batches = 0;
@@ -147,6 +149,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_generation = plan.activation().generation;
     m_pacing = rtp->pacing();
     m_previousPlannedCompletion.reset();
+    m_forwardPacer.reset();
     m_scheduledBatchMaximumBytes =
         plan.outputPlan().scheduledBatchMaximumBytes;
     return ::media::Status::success();
@@ -194,15 +197,28 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         if (!plannedCompletion) {
             return ::media::Status::failure(plannedCompletion.error());
         }
+        auto effectiveEligibility = m_forwardPacer.prepare(
+            datagram.enqueueNotBefore(), datagram.enqueueDeadline(),
+            datagram.serviceDuration());
+        if (!effectiveEligibility) {
+            return ::media::Status::failure(effectiveEligibility.error());
+        }
+        auto forwardShift = effectiveEligibility.value().checkedSubtract(
+            datagram.enqueueNotBefore());
+        if (!forwardShift) {
+            return ::media::Status::failure(forwardShift.error());
+        }
+        m_maximumForwardShift = (std::max)(
+            m_maximumForwardShift, forwardShift.value());
         auto waitStarted = m_authority->now();
         if (!waitStarted) return ::media::Status::failure(waitStarted.error());
-        auto waited = waitUntil(datagram.enqueueNotBefore());
+        auto waited = waitUntil(effectiveEligibility.value());
         if (!waited) return waited;
         auto before = m_authority->now();
         if (!before) return ::media::Status::failure(before.error());
         auto waitDuration = before.value().checkedSubtract(waitStarted.value());
-        auto wakeOvershoot = before.value() > datagram.enqueueNotBefore()
-            ? before.value().checkedSubtract(datagram.enqueueNotBefore())
+        auto wakeOvershoot = before.value() > effectiveEligibility.value()
+            ? before.value().checkedSubtract(effectiveEligibility.value())
             : ::media::Result<MediaRunningTime>::success(
                   MediaRunningTime::fromNanoseconds(0));
         if (!waitDuration || !wakeOvershoot) {
@@ -218,6 +234,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             m_maximumWakeOvershoot, wakeOvershoot.value());
         const bool missedBefore =
             before.value() > datagram.enqueueDeadline();
+        if (missedBefore) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "scheduled datagram exceeded its forward-only submission deadline"));
+        }
         auto sent = m_sink->enqueue(datagram.bytes(), before.value());
         if (!sent) return ::media::Status::failure(sent.error());
         auto actualEnqueue = m_authority->now();
@@ -235,6 +255,8 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             m_maximumSendDuration, sendDuration.value());
         const bool missedAfter =
             actualEnqueue.value() > datagram.enqueueDeadline();
+        auto committed = m_forwardPacer.commitSuccessfulSubmit(before.value());
+        if (!committed) return committed;
         if ((missedBefore || missedAfter) &&
             m_enqueueDeadlineMisses ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
@@ -258,6 +280,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         }
         ++m_datagrams;
         m_bytes += static_cast<std::uint64_t>(sent.value());
+        if (missedAfter) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "scheduled datagram submit completed after its forward-only deadline"));
+        }
     }
     if (m_batches == std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -287,6 +313,8 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << m_cumulativeWaitDuration.nanoseconds()
                    << " maximum_send_duration_ns="
                    << m_maximumSendDuration.nanoseconds()
+                   << " maximum_forward_shift_ns="
+                   << m_maximumForwardShift.nanoseconds()
                    << " cumulative_send_duration_ns="
                    << m_cumulativeSendDuration.nanoseconds()
                    << " enqueue_deadline_misses="

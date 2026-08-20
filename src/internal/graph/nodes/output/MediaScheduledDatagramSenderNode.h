@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
+#include "internal/graph/runtime/network/MediaForwardOnlyDatagramPacer.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
 #include <memory>
@@ -53,6 +54,7 @@ private:
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     std::unique_ptr<MediaMpegTsRtpDatagramSink> m_sink;
     MediaNodeWakeup m_wakeup;
+    MediaForwardOnlyDatagramPacer m_forwardPacer;
     std::optional<std::uint64_t> m_generation;
     std::optional<MediaScheduledDatagramPacingPlan> m_pacing;
     std::optional<MediaRunningTime> m_previousPlannedCompletion;
@@ -63,6 +65,8 @@ private:
     MediaRunningTime m_maximumWakeOvershoot =
         MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_maximumSendDuration =
+        MediaRunningTime::fromNanoseconds(0);
+    MediaRunningTime m_maximumForwardShift =
         MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_cumulativeWaitDuration =
         MediaRunningTime::fromNanoseconds(0);
