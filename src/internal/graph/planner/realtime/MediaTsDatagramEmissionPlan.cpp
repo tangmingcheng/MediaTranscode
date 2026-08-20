@@ -18,8 +18,6 @@ MediaTsDatagramEmissionPlan::create(
     const MediaTsMuxPlan& muxPlan,
     MediaRunningTime videoAccessUnitCadence,
     std::optional<MediaRunningTime> audioAccessUnitCadence,
-    std::int64_t plannedWireBytesPerSecond,
-    MediaRunningTime maximumScheduledResidence,
     std::uint64_t maximumQueuedBytes)
 {
     const auto& mux = muxPlan.parameters();
@@ -41,8 +39,6 @@ MediaTsDatagramEmissionPlan::create(
         (audioAccessUnitCadence &&
          audioAccessUnitCadence->nanoseconds() <= 0) ||
          maximumPayloadBytes == 0 ||
-        plannedWireBytesPerSecond <= 0 ||
-        maximumScheduledResidence.nanoseconds() <= 0 ||
         maximumQueuedBytes == 0 ||
         maximumPayloadBytes >
             (std::numeric_limits<std::size_t>::max)() -
@@ -62,8 +58,6 @@ MediaTsDatagramEmissionPlan::create(
             mux.packetSize,
             maximumPayloadBytes, perDatagramOverheadBytes,
             mux.transportKind == MediaOutputTransportKind::RtpAvp,
-            plannedWireBytesPerSecond,
-            maximumScheduledResidence,
             maximumQueuedBytes));
 }
 
@@ -75,8 +69,6 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     std::size_t maximumPayloadBytes,
     std::size_t perDatagramOverheadBytes,
     bool scheduledDatagramOutput,
-    std::int64_t plannedWireBytesPerSecond,
-    MediaRunningTime maximumScheduledResidence,
     std::uint64_t maximumQueuedBytes) noexcept
     : m_accessUnitWindow(accessUnitWindow)
     , m_videoInitialServiceWindow(videoInitialServiceWindow)
@@ -85,8 +77,6 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     , m_maximumPayloadBytes(maximumPayloadBytes)
     , m_perDatagramOverheadBytes(perDatagramOverheadBytes)
     , m_scheduledDatagramOutput(scheduledDatagramOutput)
-    , m_plannedWireBytesPerSecond(plannedWireBytesPerSecond)
-    , m_maximumScheduledResidence(maximumScheduledResidence)
     , m_maximumQueuedBytes(maximumQueuedBytes)
 {
 }
@@ -133,18 +123,6 @@ const std::optional<MediaRunningTime>&
 MediaTsDatagramEmissionPlan::audioInitialServiceWindow() const noexcept
 {
     return m_audioInitialServiceWindow;
-}
-
-std::int64_t
-MediaTsDatagramEmissionPlan::plannedWireBytesPerSecond() const noexcept
-{
-    return m_plannedWireBytesPerSecond;
-}
-
-MediaRunningTime
-MediaTsDatagramEmissionPlan::maximumScheduledResidence() const noexcept
-{
-    return m_maximumScheduledResidence;
 }
 
 std::uint64_t MediaTsDatagramEmissionPlan::maximumQueuedBytes() const noexcept

@@ -6,7 +6,6 @@
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
-#include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
@@ -489,47 +488,12 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
         outer.videoParameters.globalHeader = true;
-        const auto& videoRateControl =
-            outer.videoPlan.selected.encoder.encoderRateControl;
-        const auto* resolvedAudio = outer.audioPlan &&
-                outer.audioPlan->resolvedOutput
-            ? &*outer.audioPlan->resolvedOutput
-            : nullptr;
-        if (!videoRateControl || !resolvedAudio) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "A/V scheduled MPEG-TS requires planned encoder rate control"));
-        }
-        MediaEncoderRateControlPlan audioRateControl{
-            resolvedAudio->rateControl(), resolvedAudio->bitrateKbps(),
-            resolvedAudio->minBitrateKbps(), resolvedAudio->maxBitrateKbps(),
-            resolvedAudio->bufferSizeKbits(), std::nullopt};
         const std::uint64_t maximumQueuedBytes =
             edgePolicies.value().synchronizedPacket.bufferPolicy
                 .memoryBudget.maxBytes;
-        const MediaTsDatagramEmissionPlanningFacts emissionFacts{
-            videoCadence.value(), *videoRateControl,
-            audioCadence.value(), std::move(audioRateControl),
-            maximumQueuedBytes};
-        const auto& muxParameters = accepted.value().muxPlan().parameters();
-        auto wireRate =
-            MediaTsDatagramEmissionPlanner::plannedWireBytesPerSecond(
-                muxParameters.packetSize,
-                muxParameters.maximumPacketsPerDatagram,
-                outer.outputTransport == MediaOutputTransportKind::RtpAvp
-                    ? 12u : 0u,
-                muxParameters.psiRepeatInterval,
-                muxParameters.clock.pcrInterval,
-                emissionFacts);
-        auto maximumResidence =
-            MediaTsDatagramEmissionPlanner::maximumResidence(emissionFacts);
-        auto emission = wireRate && maximumResidence
-            ? MediaTsDatagramEmissionPlan::create(
-                  accepted.value().muxPlan(), videoCadence.value(),
-                  audioCadence.value(), wireRate.value(),
-                  maximumResidence.value(), maximumQueuedBytes)
-            : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
-                  wireRate ? maximumResidence.error() : wireRate.error());
+        auto emission = MediaTsDatagramEmissionPlan::create(
+            accepted.value().muxPlan(), videoCadence.value(),
+            audioCadence.value(), maximumQueuedBytes);
         if (!emission) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 emission.error());

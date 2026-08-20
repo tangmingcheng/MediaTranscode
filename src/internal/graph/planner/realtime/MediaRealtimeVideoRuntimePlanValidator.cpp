@@ -143,8 +143,6 @@ namespace media::ffmpeg::graph {
                    output->protocol.muxPlan(),
                    output->emission.videoInitialServiceWindow(),
                    output->emission.audioInitialServiceWindow(),
-                   output->emission.plannedWireBytesPerSecond(),
-                   output->emission.maximumScheduledResidence(),
                    output->emission.maximumQueuedBytes())
             : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
                    ::media::ErrorInfo::invalidArgument(

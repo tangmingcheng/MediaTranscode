@@ -17,8 +17,6 @@ public:
         const MediaTsMuxPlan& muxPlan,
         MediaRunningTime videoAccessUnitCadence,
         std::optional<MediaRunningTime> audioAccessUnitCadence,
-        std::int64_t plannedWireBytesPerSecond,
-        MediaRunningTime maximumScheduledResidence,
         std::uint64_t maximumQueuedBytes);
 
     MediaRunningTime accessUnitWindow() const noexcept;
@@ -30,8 +28,6 @@ public:
     MediaRunningTime videoInitialServiceWindow() const noexcept;
     const std::optional<MediaRunningTime>&
     audioInitialServiceWindow() const noexcept;
-    std::int64_t plannedWireBytesPerSecond() const noexcept;
-    MediaRunningTime maximumScheduledResidence() const noexcept;
     std::uint64_t maximumQueuedBytes() const noexcept;
 
     friend bool operator==(const MediaTsDatagramEmissionPlan&,
@@ -46,8 +42,6 @@ private:
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes,
         bool scheduledDatagramOutput,
-        std::int64_t plannedWireBytesPerSecond,
-        MediaRunningTime maximumScheduledResidence,
         std::uint64_t maximumQueuedBytes) noexcept;
 
     MediaRunningTime m_accessUnitWindow;
@@ -57,8 +51,6 @@ private:
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;
     bool m_scheduledDatagramOutput;
-    std::int64_t m_plannedWireBytesPerSecond;
-    MediaRunningTime m_maximumScheduledResidence;
     std::uint64_t m_maximumQueuedBytes;
 };
 
