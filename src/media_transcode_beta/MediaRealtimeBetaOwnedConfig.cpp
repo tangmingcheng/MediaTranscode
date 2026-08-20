@@ -37,29 +37,42 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
 ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl> copyRateControl(
     const mt_beta_video_output& output)
 {
-    const auto checkedKbps = [](std::uint64_t bitrateBps) -> ::media::Result<int> {
-        if (bitrateBps % std::kilo::num != 0U ||
-            bitrateBps / std::kilo::num >
+    const auto checkedKiloBits = [](
+        std::uint64_t bits,
+        const char* field) -> ::media::Result<int> {
+        if (bits % std::kilo::num != 0U ||
+            bits / std::kilo::num >
                 static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
             return ::media::Result<int>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "bitrate bps is not exactly representable as integer kbps"));
+                    std::string(field) +
+                    " is not exactly representable as integer kilobits"));
         }
         return ::media::Result<int>::success(
-            static_cast<int>(bitrateBps / std::kilo::num));
+            static_cast<int>(bits / std::kilo::num));
     };
     if (output.rate_control_mode == MT_BETA_RATE_CONTROL_CBR) {
-        if (output.rate_control.cbr.bitrate_bps == 0U) {
+        if (output.rate_control.cbr.bitrate_bps == 0U ||
+            output.vbv_buffer_size_bits == 0U) {
             return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
-                ::media::ErrorInfo::invalidArgument("CBR bitrate must be positive"));
+                ::media::ErrorInfo::invalidArgument(
+                    "CBR bitrate and VBV buffer size must be positive"));
         }
-        auto bitrate = checkedKbps(output.rate_control.cbr.bitrate_bps);
+        auto bitrate = checkedKiloBits(
+            output.rate_control.cbr.bitrate_bps, "CBR bitrate bps");
         if (!bitrate) {
             return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
                 bitrate.error());
         }
+        auto bufferSize = checkedKiloBits(
+            output.vbv_buffer_size_bits, "VBV buffer size bits");
+        if (!bufferSize) {
+            return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
+                bufferSize.error());
+        }
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
-            { output.rate_control_mode, bitrate.value(), 0, 0 });
+            { output.rate_control_mode, bitrate.value(), 0, 0,
+              bufferSize.value() });
     }
     if (output.rate_control_mode != MT_BETA_RATE_CONTROL_VBR) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
@@ -73,14 +86,25 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
                 ::media::ErrorInfo::invalidArgument("VBR bitrate range must satisfy min <= target <= max"));
     }
-    auto target = checkedKbps(vbr.target_bitrate_bps);
-    auto minimum = checkedKbps(vbr.min_bitrate_bps);
-    auto maximum = checkedKbps(vbr.max_bitrate_bps);
+    auto target = checkedKiloBits(vbr.target_bitrate_bps, "VBR target bitrate bps");
+    auto minimum = checkedKiloBits(vbr.min_bitrate_bps, "VBR minimum bitrate bps");
+    auto maximum = checkedKiloBits(vbr.max_bitrate_bps, "VBR maximum bitrate bps");
     if (!target) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(target.error());
     if (!minimum) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(minimum.error());
     if (!maximum) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(maximum.error());
+    int bufferSizeKbits = 0;
+    if (output.vbv_buffer_size_bits != 0U) {
+        auto bufferSize = checkedKiloBits(
+            output.vbv_buffer_size_bits, "VBV buffer size bits");
+        if (!bufferSize) {
+            return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
+                bufferSize.error());
+        }
+        bufferSizeKbits = bufferSize.value();
+    }
     return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
-        { output.rate_control_mode, target.value(), minimum.value(), maximum.value() });
+        { output.rate_control_mode, target.value(), minimum.value(), maximum.value(),
+          bufferSizeKbits });
 }
 
 } // namespace

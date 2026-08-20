@@ -97,6 +97,9 @@ MediaRealtimeBetaRequestMapper::map(
         request.parameters.video.minBitrateKbps = rateControl.minimumBitrateKbps;
         request.parameters.video.maxBitrateKbps = rateControl.maximumBitrateKbps;
     }
+    if (rateControl.bufferSizeKbits > 0) {
+        request.parameters.video.bufferSizeKbits = rateControl.bufferSizeKbits;
+    }
 
     request.avSyncStartup.maximumVideoUnitBytes = profile.startupMaximumVideoUnitBytes;
     request.output.streamLayout = profile.outputLayout;

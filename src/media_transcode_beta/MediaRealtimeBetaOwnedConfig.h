@@ -17,6 +17,7 @@ public:
         int targetBitrateKbps;
         int minimumBitrateKbps;
         int maximumBitrateKbps;
+        int bufferSizeKbits;
     };
 
     static ::media::Result<MediaRealtimeBetaOwnedConfig> create(
