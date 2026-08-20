@@ -78,7 +78,7 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     if (!packet.value()) {
         if (m_acquisitionDeadline->deadline()) {
             return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waitingUntil(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
                     *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
         }
         return processWaiting();

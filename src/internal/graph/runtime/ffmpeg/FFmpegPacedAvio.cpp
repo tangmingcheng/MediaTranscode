@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegPacedAvio.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegAvioWritePacket.h"
 
 extern "C" {
 #include <libavformat/avio.h>
@@ -53,7 +54,9 @@ void paceWrite(PacedAvioState& state, int size) noexcept
     }
 }
 
-int pacedWritePacket(void* opaque, const uint8_t* buffer, int size) noexcept
+int pacedWritePacket(void* opaque,
+                     FFmpegAvioWritePacketByte* buffer,
+                     int size) noexcept
 {
     auto* state = static_cast<PacedAvioState*>(opaque);
     if (!state || state->magic != PacedAvioMagic || !state->inner || !buffer || size < 0) {

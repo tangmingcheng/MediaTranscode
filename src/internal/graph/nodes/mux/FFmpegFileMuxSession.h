@@ -25,6 +25,7 @@ public:
                           const MediaBufferRef& buffer) override;
     ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) override;
+    bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status finish(MediaGraphExecutionContext& context) override;

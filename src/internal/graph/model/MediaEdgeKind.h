@@ -42,7 +42,10 @@ enum class MediaEdgeKind {
     Control,
 
     /* Diagnostic or tracing event edge. */
-    Event
+    Event,
+
+    /* Planner-timed batch of already muxed transport datagrams. */
+    ScheduledDatagramBatch
 };
 
 } // namespace media::ffmpeg::graph

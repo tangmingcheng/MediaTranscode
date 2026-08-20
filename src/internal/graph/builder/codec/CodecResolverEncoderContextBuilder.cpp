@@ -1,6 +1,7 @@
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 
 #include "internal/graph/builder/codec/CodecResolverEncoderFormatPlanner.h"
+#include "internal/graph/builder/codec/MediaEncoderRateControlOptionAdapter.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -82,38 +83,6 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     av_opt_set(context->priv_data, key.c_str(), value.c_str(), 0);
 }
 
-::media::Result<int64_t> bitsFromKbps(int kbps, const std::string& name)
-{
-    if (kbps <= 0) {
-        return ::media::Result<int64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(name + " must be positive"));
-    }
-
-    constexpr int64_t kBitsPerKbps = 1000;
-    if (kbps > std::numeric_limits<int64_t>::max() / kBitsPerKbps) {
-        return ::media::Result<int64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(name + " is too large"));
-    }
-
-    return ::media::Result<int64_t>::success(static_cast<int64_t>(kbps) * kBitsPerKbps);
-}
-
-::media::Result<int> bitsFromKbits(int kbits, const std::string& name)
-{
-    if (kbits <= 0) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument(name + " must be positive"));
-    }
-
-    constexpr int kBitsPerKbit = 1000;
-    if (kbits > std::numeric_limits<int>::max() / kBitsPerKbit) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument(name + " is too large"));
-    }
-
-    return ::media::Result<int>::success(kbits * kBitsPerKbit);
-}
-
 ::media::Result<AVRational> resolveFrameRate(const MediaTimeDescriptor& sourceTime,
                                              const MediaNodeOptions* options)
 {
@@ -151,15 +120,6 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires source stream"));
     }
 
-    return ::media::Status::success();
-}
-
-::media::Status requireBitrate(const AVCodecContext* encoderContext, const std::string& rcMode)
-{
-    if (!encoderContext || encoderContext->bit_rate <= 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " mode requires video bitrate"));
-    }
     return ::media::Status::success();
 }
 
@@ -258,6 +218,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->width = targetWidth;
     encoderContext->height = targetHeight;
     encoderContext->pix_fmt = formatPlan.encoderPixelFormat;
+    encoderContext->sw_pix_fmt = formatPlan.surfaceSoftwareFormat;
     encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
     encoderContext->framerate = frameRate;
     encoderContext->sample_aspect_ratio = AVRational{ request.sourceFormat.video.sampleAspectRatio.num,
@@ -266,7 +227,8 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->color_primaries = params->color_primaries;
     encoderContext->color_trc = params->color_trc;
     encoderContext->colorspace = params->color_space;
-    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
+        options, "video.lineage.encoder_copy_opaque");
     if (!copyOpaque) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
             copyOpaque.error());
@@ -292,77 +254,17 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         encoderContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    auto bitrateKbps = intOption(options, MediaTranscodeOptionKey::VideoBitrateKbps);
-    if (!bitrateKbps) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateKbps.error());
-    }
-    if (bitrateKbps.value()) {
-        if (*bitrateKbps.value() < 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects negative video bitrate"));
-        }
-        if (*bitrateKbps.value() > 0) {
-            auto bits = bitsFromKbps(*bitrateKbps.value(), "video bitrate");
-            if (!bits) {
-                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bits.error());
-            }
-            encoderContext->bit_rate = bits.value();
-        }
-    } else if (params->bit_rate > 0) {
-        encoderContext->bit_rate = params->bit_rate;
-    }
-
-    auto minBitrateKbps = intOption(options, MediaTranscodeOptionKey::VideoMinBitrateKbps);
-    if (!minBitrateKbps) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(minBitrateKbps.error());
-    }
-    if (minBitrateKbps.value()) {
-        if (*minBitrateKbps.value() < 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects negative video min bitrate"));
-        }
-        if (*minBitrateKbps.value() > 0) {
-            auto bits = bitsFromKbps(*minBitrateKbps.value(), "video min bitrate");
-            if (!bits) {
-                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bits.error());
-            }
-            encoderContext->rc_min_rate = bits.value();
-        }
-    }
-
-    auto maxBitrateKbps = intOption(options, MediaTranscodeOptionKey::VideoMaxBitrateKbps);
-    if (!maxBitrateKbps) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(maxBitrateKbps.error());
-    }
-    if (maxBitrateKbps.value()) {
-        if (*maxBitrateKbps.value() < 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects negative video max bitrate"));
-        }
-        if (*maxBitrateKbps.value() > 0) {
-            auto bits = bitsFromKbps(*maxBitrateKbps.value(), "video max bitrate");
-            if (!bits) {
-                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bits.error());
-            }
-            encoderContext->rc_max_rate = bits.value();
-        }
-    }
-
-    if (encoderContext->rc_min_rate > 0 && encoderContext->rc_max_rate > 0 && encoderContext->rc_min_rate > encoderContext->rc_max_rate) {
+    if (!options) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires video min bitrate <= max bitrate"));
+            ::media::ErrorInfo::invalidArgument(
+                "CodecResolverEncoderContextBuilder requires planner options"));
     }
-
-    auto bufferSizeKbits = intOption(options, MediaTranscodeOptionKey::VideoBufferSizeKbits);
-    if (!bufferSizeKbits) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bufferSizeKbits.error());
-    }
-    if (bufferSizeKbits.value()) {
-        auto bufferSizeBits = bitsFromKbits(*bufferSizeKbits.value(), "video buffer size");
-        if (!bufferSizeBits) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bufferSizeBits.error());
-        }
-        encoderContext->rc_buffer_size = bufferSizeBits.value();
+    auto rateControlPlan =
+        MediaEncoderRateControlOptionAdapter::applyBeforeOpen(
+            *encoderContext, *options);
+    if (!rateControlPlan) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            rateControlPlan.error());
     }
 
     auto gop = intOption(options, MediaTranscodeOptionKey::VideoGop);
@@ -389,7 +291,13 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         encoderContext->max_b_frames = *bframes.value();
     }
 
-    if (result.hardwareFramesFormat != AV_PIX_FMT_NONE) {
+    if (formatPlan.requiresHardwareDeviceContext && !request.hardwareDevice) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "CodecResolverEncoderContextBuilder requires the planner-selected hardware device context"));
+    }
+
+    if (formatPlan.requiresHardwareFramesContext) {
         auto framesStatus = configureEncoderHardwareFrames(encoderContext.get(),
                                                            request.hardwareDevice,
                                                            result.hardwareFramesFormat,
@@ -400,40 +308,17 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         if (!framesStatus) {
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(framesStatus.error());
         }
+    } else if (formatPlan.requiresHardwareDeviceContext) {
+        encoderContext->hw_device_ctx = av_buffer_ref(request.hardwareDevice);
+        if (!encoderContext->hw_device_ctx) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "CodecResolverEncoderContextBuilder failed to reference hardware device"));
+        }
     }
 
-    const std::string rcMode = optionValue(options, MediaTranscodeOptionKey::VideoRateControl);
-    if (rcMode == "cbr") {
-        auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
-        if (!bitrateStatus) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateStatus.error());
-        }
-        if (encoderContext->rc_min_rate <= 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video min bitrate"));
-        }
-        if (encoderContext->rc_max_rate <= 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video max bitrate"));
-        }
-        if (encoderContext->rc_buffer_size <= 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video buffer size"));
-        }
-    } else if (rcMode == "cvbr") {
-        auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
-        if (!bitrateStatus) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateStatus.error());
-        }
-        if (encoderContext->rc_max_rate <= 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires video max bitrate"));
-        }
-        if (encoderContext->rc_buffer_size <= 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires explicit video buffer size"));
-        }
-    }
+    const std::string rcMode =
+        mediaRateControlModeName(rateControlPlan.value().mode);
 
     setPrivateOption(encoderContext.get(), "preset", optionValue(options, MediaTranscodeOptionKey::VideoPreset));
     setPrivateOption(encoderContext.get(), "profile", optionValue(options, MediaTranscodeOptionKey::VideoProfile));
@@ -455,6 +340,11 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     if (openRet < 0) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
             FFmpegGraphError::statusFromCode(openRet, "avcodec_open2(video encoder " + plannedEncoder + ")").error());
+    }
+    if (auto status = MediaEncoderRateControlOptionAdapter::verifyAfterOpen(
+            *encoderContext, rateControlPlan.value()); !status) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            status.error());
     }
 
     result.context = std::move(encoderContext);

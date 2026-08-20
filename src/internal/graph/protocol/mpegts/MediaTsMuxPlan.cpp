@@ -24,16 +24,6 @@ bool assignablePid(std::uint16_t pid) noexcept
     return pid >= MinimumAssignablePid && pid < NullPid;
 }
 
-bool validH264Layout(MediaTsH264InputLayout layout) noexcept
-{
-    switch (layout) {
-    case MediaTsH264InputLayout::AnnexB:
-    case MediaTsH264InputLayout::LengthPrefixed:
-        return true;
-    }
-    return false;
-}
-
 bool validParameterSetPolicy(MediaTsParameterSetPolicy policy) noexcept
 {
     switch (policy) {
@@ -124,17 +114,14 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         parameters.psiRepeatInterval <= parameters.clock.pcrInterval) {
         return invalid("contains an invalid PSI cadence or version");
     }
-    if ((videoOnly && videoOnly->videoStreamType != 0x1B) ||
-        (audioVideo &&
-         (audioVideo->videoStreamType != 0x1B ||
-          audioVideo->audioStreamType != 0x0F))) {
-        return invalid("supports only H.264 video and optional AAC audio stream types");
+    const std::uint8_t programVideoStreamType = videoOnly
+        ? videoOnly->videoStreamType : audioVideo->videoStreamType;
+    if (programVideoStreamType != parameters.video.streamType() ||
+        (audioVideo && audioVideo->audioStreamType != 0x0F)) {
+        return invalid("contains conflicting video or AAC stream types");
     }
-    if (!validH264Layout(parameters.h264InputLayout) ||
-        parameters.h264NalLengthBytes < 1 ||
-        parameters.h264NalLengthBytes > 4 ||
-        !validParameterSetPolicy(parameters.parameterSetPolicy)) {
-        return invalid("contains an invalid H.264 input contract");
+    if (!validParameterSetPolicy(parameters.parameterSetPolicy)) {
+        return invalid("contains an invalid video elementary-stream contract");
     }
     if (audioVideo &&
         (audioVideo->aac.mpegId > 1 ||

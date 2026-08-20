@@ -20,9 +20,15 @@ std::string MediaGraphRuntimeReport::summary() const
            ", errors=" + std::to_string(metrics.errorCount) +
            ", stalledIntervals=" + std::to_string(metrics.stalledIntervals) +
            ", cpuSamples=" + std::to_string(metrics.cpuSampleCount) +
-           ", averageCpuPercent=" + std::to_string(metrics.averageCpuPercent) +
-           ", averageProcessCpuPercent=" + std::to_string(metrics.averageProcessCpuPercent) +
+           ", logicalProcessors=" + std::to_string(metrics.logicalProcessorCount) +
+           ", averageSystemMachineCpuPercent=" + std::to_string(metrics.averageSystemMachineCpuPercent) +
+           ", averageProcessMachineCpuPercent=" + std::to_string(metrics.averageProcessMachineCpuPercent) +
+           ", peakProcessMachineCpuPercent=" + std::to_string(metrics.peakProcessMachineCpuPercent) +
+           ", averageProcessSingleCoreCpuPercent=" + std::to_string(metrics.averageProcessSingleCoreCpuPercent) +
+           ", peakProcessSingleCoreCpuPercent=" + std::to_string(metrics.peakProcessSingleCoreCpuPercent) +
+           ", initialWorkingSetBytes=" + std::to_string(metrics.initialWorkingSetBytes) +
            ", workingSetBytes=" + std::to_string(metrics.workingSetBytes) +
+           ", peakWorkingSetBytes=" + std::to_string(metrics.peakWorkingSetBytes) +
            ", totalPushed=" + std::to_string(metrics.totalPushed) +
            ", totalPopped=" + std::to_string(metrics.totalPopped) +
            ", droppedBuffers=" + std::to_string(metrics.droppedBuffers) +
@@ -51,11 +57,22 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     report.state = runtime.state();
     const MediaGraphRuntimeMetrics acceptance = runtime.acceptanceCollector().snapshot();
     report.metrics.cpuSampleCount = acceptance.cpuSampleCount;
-    report.metrics.averageCpuPercent = acceptance.averageCpuPercent;
+    report.metrics.averageSystemMachineCpuPercent =
+        acceptance.averageSystemMachineCpuPercent;
     report.metrics.stalledIntervals = acceptance.stalledIntervals;
     report.metrics.errorCount = acceptance.errorCount;
-    report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+    report.metrics.averageProcessMachineCpuPercent =
+        acceptance.averageProcessMachineCpuPercent;
+    report.metrics.peakProcessMachineCpuPercent =
+        acceptance.peakProcessMachineCpuPercent;
+    report.metrics.averageProcessSingleCoreCpuPercent =
+        acceptance.averageProcessSingleCoreCpuPercent;
+    report.metrics.peakProcessSingleCoreCpuPercent =
+        acceptance.peakProcessSingleCoreCpuPercent;
+    report.metrics.logicalProcessorCount = acceptance.logicalProcessorCount;
+    report.metrics.initialWorkingSetBytes = acceptance.initialWorkingSetBytes;
     report.metrics.workingSetBytes = acceptance.workingSetBytes;
+    report.metrics.peakWorkingSetBytes = acceptance.peakWorkingSetBytes;
     report.metrics.processThreadCount = acceptance.processThreadCount;
 
     std::size_t queued = 0;
@@ -92,7 +109,8 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         const uint64_t encodedPacketsPopped = report.metrics.encodedPacketsPopped;
         report.metrics = executorMetrics;
         report.metrics.cpuSampleCount = acceptance.cpuSampleCount;
-        report.metrics.averageCpuPercent = acceptance.averageCpuPercent;
+        report.metrics.averageSystemMachineCpuPercent =
+            acceptance.averageSystemMachineCpuPercent;
         report.metrics.stalledIntervals = acceptance.stalledIntervals;
         report.metrics.errorCount += acceptance.errorCount;
         report.metrics.totalPushed = totalPushed;
@@ -100,8 +118,18 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         report.metrics.droppedBuffers = droppedBuffers;
         report.metrics.encodedPacketsPushed = encodedPacketsPushed;
         report.metrics.encodedPacketsPopped = encodedPacketsPopped;
-        report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+        report.metrics.averageProcessMachineCpuPercent =
+            acceptance.averageProcessMachineCpuPercent;
+        report.metrics.peakProcessMachineCpuPercent =
+            acceptance.peakProcessMachineCpuPercent;
+        report.metrics.averageProcessSingleCoreCpuPercent =
+            acceptance.averageProcessSingleCoreCpuPercent;
+        report.metrics.peakProcessSingleCoreCpuPercent =
+            acceptance.peakProcessSingleCoreCpuPercent;
+        report.metrics.logicalProcessorCount = acceptance.logicalProcessorCount;
+        report.metrics.initialWorkingSetBytes = acceptance.initialWorkingSetBytes;
         report.metrics.workingSetBytes = acceptance.workingSetBytes;
+        report.metrics.peakWorkingSetBytes = acceptance.peakWorkingSetBytes;
         report.metrics.processThreadCount = acceptance.processThreadCount;
         report.metrics.updateQueuedBuffers(queued, graphQueuePeak);
     }

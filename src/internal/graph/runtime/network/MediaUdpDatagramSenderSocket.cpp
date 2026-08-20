@@ -3,6 +3,12 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 #include <array>
@@ -24,6 +30,10 @@ struct MediaUdpDatagramSenderSocket::Impl final {
     SOCKET socket = INVALID_SOCKET;
     sockaddr_storage remoteAddress{};
     int remoteAddressLength = 0;
+#else
+    int socket = -1;
+    sockaddr_storage remoteAddress{};
+    socklen_t remoteAddressLength = 0;
 #endif
     std::optional<MediaUdpDatagramEndpoint> localEndpoint;
     std::optional<MediaUdpDatagramEndpoint> remoteEndpoint;
@@ -31,20 +41,29 @@ struct MediaUdpDatagramSenderSocket::Impl final {
     bool openAttempted = false;
 };
 
-#ifdef _WIN32
 namespace {
 
 ::media::Status fillSockaddr(const MediaUdpDatagramEndpoint& endpoint,
                              sockaddr_storage& storage,
+#ifdef _WIN32
                              int& length)
+#else
+                             socklen_t& length)
+#endif
 {
     std::memset(&storage, 0, sizeof(storage));
     if (endpoint.addressFamily() == MediaIpAddressFamily::Ipv4) {
         auto* address = reinterpret_cast<sockaddr_in*>(&storage);
         address->sin_family = AF_INET;
         address->sin_port = htons(endpoint.port());
-        if (InetPtonA(AF_INET, endpoint.numericAddress().c_str(),
-                      &address->sin_addr) != 1) {
+#ifdef _WIN32
+        const int converted = InetPtonA(
+            AF_INET, endpoint.numericAddress().c_str(), &address->sin_addr);
+#else
+        const int converted = inet_pton(
+            AF_INET, endpoint.numericAddress().c_str(), &address->sin_addr);
+#endif
+        if (converted != 1) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "invalid numeric IPv4 UDP sender address"));
         }
@@ -54,8 +73,14 @@ namespace {
     auto* address = reinterpret_cast<sockaddr_in6*>(&storage);
     address->sin6_family = AF_INET6;
     address->sin6_port = htons(endpoint.port());
-    if (InetPtonA(AF_INET6, endpoint.numericAddress().c_str(),
-                  &address->sin6_addr) != 1) {
+#ifdef _WIN32
+    const int converted = InetPtonA(
+        AF_INET6, endpoint.numericAddress().c_str(), &address->sin6_addr);
+#else
+    const int converted = inet_pton(
+        AF_INET6, endpoint.numericAddress().c_str(), &address->sin6_addr);
+#endif
+    if (converted != 1) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid numeric IPv6 UDP sender address"));
     }
@@ -69,24 +94,42 @@ namespace {
     std::array<char, INET6_ADDRSTRLEN> addressText{};
     if (storage.ss_family == AF_INET) {
         const auto* address = reinterpret_cast<const sockaddr_in*>(&storage);
+#ifdef _WIN32
         if (!InetNtopA(AF_INET, const_cast<IN_ADDR*>(&address->sin_addr),
                        addressText.data(), static_cast<DWORD>(addressText.size()))) {
+#else
+        if (!inet_ntop(AF_INET, &address->sin_addr,
+                       addressText.data(), addressText.size())) {
+#endif
             return ::media::Result<MediaUdpDatagramEndpoint>::failure(
                 ::media::ErrorInfo::ioFailure(
                     "InetNtop failed for bound IPv4 sender endpoint",
+#ifdef _WIN32
                     WSAGetLastError()));
+#else
+                    errno));
+#endif
         }
         return MediaUdpDatagramEndpoint::create(
             MediaIpAddressFamily::Ipv4, addressText.data(), ntohs(address->sin_port));
     }
     if (storage.ss_family == AF_INET6) {
         const auto* address = reinterpret_cast<const sockaddr_in6*>(&storage);
+#ifdef _WIN32
         if (!InetNtopA(AF_INET6, const_cast<IN6_ADDR*>(&address->sin6_addr),
                        addressText.data(), static_cast<DWORD>(addressText.size()))) {
+#else
+        if (!inet_ntop(AF_INET6, &address->sin6_addr,
+                       addressText.data(), addressText.size())) {
+#endif
             return ::media::Result<MediaUdpDatagramEndpoint>::failure(
                 ::media::ErrorInfo::ioFailure(
                     "InetNtop failed for bound IPv6 sender endpoint",
+#ifdef _WIN32
                     WSAGetLastError()));
+#else
+                    errno));
+#endif
         }
         return MediaUdpDatagramEndpoint::create(
             MediaIpAddressFamily::Ipv6, addressText.data(), ntohs(address->sin6_port));
@@ -97,7 +140,6 @@ namespace {
 }
 
 } // namespace
-#endif
 
 MediaUdpDatagramSenderSocket::MediaUdpDatagramSenderSocket(
     std::shared_ptr<MediaSocketRuntime> runtime)
@@ -113,7 +155,6 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
 ::media::Status MediaUdpDatagramSenderSocket::open(
     const MediaUdpDatagramSenderPortOpenRequest& request)
 {
-#ifdef _WIN32
     if (!m_impl->runtime) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "UDP sender socket requires an explicit socket runtime"));
@@ -127,6 +168,7 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
             MediaIpAddressFamily::Ipv4
         ? AF_INET
         : AF_INET6;
+ #ifdef _WIN32
     SOCKET socketHandle = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
     if (socketHandle == INVALID_SOCKET) {
         return ::media::Status::failure(::media::ErrorInfo::ioFailure(
@@ -137,6 +179,19 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
         socketHandle = INVALID_SOCKET;
         return ::media::Status::failure(std::move(error));
     };
+#else
+    int socketHandle = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
+    if (socketHandle < 0) {
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "UDP sender socket creation failed", errno));
+    }
+    const auto fail = [&socketHandle](::media::ErrorInfo error) {
+        ::close(socketHandle);
+        socketHandle = -1;
+        return ::media::Status::failure(std::move(error));
+    };
+#endif
+#ifdef _WIN32
     const BOOL exclusiveAddressUse = TRUE;
     if (setsockopt(socketHandle, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
                    reinterpret_cast<const char*>(&exclusiveAddressUse),
@@ -145,8 +200,10 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
             "UDP sender SO_EXCLUSIVEADDRUSE configuration failed",
             WSAGetLastError()));
     }
+#endif
     const int sendBufferBytes = request.sendBufferBytes();
     if (setsockopt(socketHandle, SOL_SOCKET, SO_SNDBUF,
+#ifdef _WIN32
                    reinterpret_cast<const char*>(&sendBufferBytes),
                    sizeof(sendBufferBytes)) == SOCKET_ERROR) {
         return fail(::media::ErrorInfo::ioFailure(
@@ -157,28 +214,74 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
         return fail(::media::ErrorInfo::ioFailure(
             "UDP sender nonblocking configuration failed", WSAGetLastError()));
     }
+#else
+                   &sendBufferBytes, sizeof(sendBufferBytes)) != 0) {
+        return fail(::media::ErrorInfo::ioFailure(
+            "UDP sender SO_SNDBUF configuration failed", errno));
+    }
+    const int currentFlags = fcntl(socketHandle, F_GETFL, 0);
+    if (currentFlags < 0 ||
+        fcntl(socketHandle, F_SETFL, currentFlags | O_NONBLOCK) != 0) {
+        return fail(::media::ErrorInfo::ioFailure(
+            "UDP sender nonblocking configuration failed", errno));
+    }
+#endif
     sockaddr_storage localAddress{};
+#ifdef _WIN32
     int localLength = 0;
+#else
+    socklen_t localLength = 0;
+#endif
     auto converted = fillSockaddr(
         request.localEndpoint(), localAddress, localLength);
     if (!converted) return fail(converted.error());
     if (bind(socketHandle, reinterpret_cast<const sockaddr*>(&localAddress),
-             localLength) == SOCKET_ERROR) {
+             localLength)
+#ifdef _WIN32
+            == SOCKET_ERROR
+#else
+            != 0
+#endif
+    ) {
         return fail(::media::ErrorInfo::ioFailure(
-            "UDP sender bind failed", WSAGetLastError()));
+            "UDP sender bind failed",
+#ifdef _WIN32
+            WSAGetLastError()));
+#else
+            errno));
+#endif
     }
     sockaddr_storage boundAddress{};
+#ifdef _WIN32
     int boundLength = sizeof(boundAddress);
+#else
+    socklen_t boundLength = sizeof(boundAddress);
+#endif
     if (getsockname(socketHandle,
                     reinterpret_cast<sockaddr*>(&boundAddress),
-                    &boundLength) == SOCKET_ERROR) {
+                    &boundLength)
+#ifdef _WIN32
+            == SOCKET_ERROR
+#else
+            != 0
+#endif
+    ) {
         return fail(::media::ErrorInfo::ioFailure(
-            "UDP sender getsockname failed", WSAGetLastError()));
+            "UDP sender getsockname failed",
+#ifdef _WIN32
+            WSAGetLastError()));
+#else
+            errno));
+#endif
     }
     auto boundEndpoint = endpointFromSockaddr(boundAddress);
     if (!boundEndpoint) return fail(boundEndpoint.error());
     sockaddr_storage remoteAddress{};
+#ifdef _WIN32
     int remoteLength = 0;
+#else
+    socklen_t remoteLength = 0;
+#endif
     converted = fillSockaddr(
         request.remoteEndpoint(), remoteAddress, remoteLength);
     if (!converted) return fail(converted.error());
@@ -190,18 +293,18 @@ MediaUdpDatagramSenderSocket::~MediaUdpDatagramSenderSocket()
     m_impl->remoteEndpoint = request.remoteEndpoint();
     m_impl->maximumDatagramBytes = request.maximumDatagramBytes();
     return ::media::Status::success();
-#else
-    (void)request;
-    return ::media::Status::failure(::media::ErrorInfo::unsupported(
-        "UDP sender socket is currently implemented for Windows"));
-#endif
 }
 
 MediaUdpDatagramSendOutcome MediaUdpDatagramSenderSocket::send(
     std::span<const std::uint8_t> datagram)
 {
+    if (
 #ifdef _WIN32
-    if (m_impl->socket == INVALID_SOCKET || datagram.empty() ||
+        m_impl->socket == INVALID_SOCKET ||
+#else
+        m_impl->socket < 0 ||
+#endif
+        datagram.empty() ||
         datagram.size() > m_impl->maximumDatagramBytes ||
         datagram.size() >
             static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -209,17 +312,52 @@ MediaUdpDatagramSendOutcome MediaUdpDatagramSenderSocket::send(
             ::media::ErrorInfo::invalidArgument(
                 "invalid UDP sender socket send request"));
     }
-    const int sent = sendto(
+    const auto sent = sendto(
         m_impl->socket,
+#ifdef _WIN32
         reinterpret_cast<const char*>(datagram.data()),
         static_cast<int>(datagram.size()),
+#else
+        datagram.data(), datagram.size(),
+#endif
         0,
         reinterpret_cast<const sockaddr*>(&m_impl->remoteAddress),
         m_impl->remoteAddressLength);
-    if (sent == SOCKET_ERROR) {
+    if (
+#ifdef _WIN32
+        sent == SOCKET_ERROR
+#else
+        sent < 0
+#endif
+    ) {
+#ifdef _WIN32
+        const int nativeError = WSAGetLastError();
+        if (nativeError == WSAEWOULDBLOCK || nativeError == WSAENOBUFS) {
+            return MediaUdpDatagramSendOutcome::notAccepted(
+                ::media::ErrorInfo::make(
+                    ::media::ErrorCode::WouldBlock,
+                    "UDP send buffer rejected datagram under pressure",
+                    nativeError));
+        }
+#else
+        const int nativeError = errno;
+        if (nativeError == EAGAIN || nativeError == EWOULDBLOCK ||
+            nativeError == ENOBUFS) {
+            return MediaUdpDatagramSendOutcome::notAccepted(
+                ::media::ErrorInfo::make(
+                    ::media::ErrorCode::WouldBlock,
+                    "UDP send buffer rejected datagram under pressure",
+                    nativeError));
+        }
+#endif
         return MediaUdpDatagramSendOutcome::notAccepted(
             ::media::ErrorInfo::ioFailure(
-                "UDP sendto accepted no bytes", WSAGetLastError()));
+                "UDP sendto accepted no bytes",
+#ifdef _WIN32
+                nativeError));
+#else
+                nativeError));
+#endif
     }
     if (sent == static_cast<int>(datagram.size())) {
         return MediaUdpDatagramSendOutcome::accepted(datagram.size());
@@ -233,12 +371,6 @@ MediaUdpDatagramSendOutcome MediaUdpDatagramSenderSocket::send(
         ::media::ErrorInfo::ioFailure(
             "UDP sendto reported a positive short send"),
         static_cast<std::size_t>(sent));
-#else
-    (void)datagram;
-    return MediaUdpDatagramSendOutcome::notAccepted(
-        ::media::ErrorInfo::unsupported(
-            "UDP sender socket is currently implemented for Windows"));
-#endif
 }
 
 std::optional<MediaUdpDatagramEndpoint>
@@ -259,6 +391,11 @@ void MediaUdpDatagramSenderSocket::close() noexcept
     if (m_impl->socket != INVALID_SOCKET) {
         closesocket(m_impl->socket);
         m_impl->socket = INVALID_SOCKET;
+    }
+#else
+    if (m_impl->socket >= 0) {
+        ::close(m_impl->socket);
+        m_impl->socket = -1;
     }
 #endif
     m_impl->localEndpoint.reset();

@@ -9,7 +9,6 @@ struct MediaRealtimeRtpTranscodePlanCore;
 struct MediaRealtimeOutputPlanningDraft;
 struct MediaAvSyncPlan;
 struct MediaAudioPipelinePlan;
-struct MediaRealtimeAvSyncComponentBounds;
 struct MediaRealtimeRtpInputNodePlan;
 
 class MediaRealtimeAvSyncPlanningFactsResolver final {

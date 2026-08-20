@@ -17,7 +17,7 @@ public:
 
     ::media::Result<std::size_t> write(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime emitOnMaster) override;
+        const MediaTsDatagramEnqueueWindow& enqueueWindow) override;
     ::media::Status flush() override;
     ::media::Status close() override;
     void abort() noexcept override;

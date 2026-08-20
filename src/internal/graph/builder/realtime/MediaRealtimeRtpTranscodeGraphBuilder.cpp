@@ -3,6 +3,7 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
+#include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
@@ -531,7 +532,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             plan.videoPlan.branchMode == MediaBranchMode::CopyPacket
                 ? MediaEdgeKind::EncodedPacket
                 : MediaEdgeKind::InputPacket;
-        syncOptions.releasedAudioEdgeKind = MediaEdgeKind::InputPacket;
+        syncOptions.releasedAudioEdgeKind =
+            avRuntime->audioPipeline.branchMode == MediaBranchMode::CopyPacket
+                ? MediaEdgeKind::EncodedPacket
+                : MediaEdgeKind::InputPacket;
         auto assembled = MediaRealtimeAvSyncInputSegmentBuilder::build(
             graph, syncOptions, *avRuntime);
         if (!assembled) {
@@ -556,7 +560,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     }
     if (avRuntime) {
         videoOptions.edgePolicies.videoPacket =
-            edgePolicies.synchronizedPacket;
+            edgePolicies.atomicVideoPacket;
     }
     videoOptions.inputStartRequiresKeyFrame = synchronizedInput
         ? false : plan.videoInputStartRequiresKeyFrame;
@@ -597,7 +601,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audioOptions.queues = queues;
         audioOptions.edgePolicies = edgePolicies;
         audioOptions.edgePolicies.audioPacket =
-            edgePolicies.synchronizedPacket;
+            edgePolicies.atomicAudioPacket;
         audioOptions.formatSourceNode = isolateRawRtpAudio
             ? audioInputChain.input
             : videoInputChain.value().input;
@@ -605,15 +609,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audioOptions.packetSourceNode = audioPacketSourceNode;
         audioOptions.packetSourcePort = audioPacketSourcePort;
         audioOptions.normalizeInputPackets = false;
-        audioOptions.correctionMode =
-            MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
-        audioOptions.lineageMode =
-            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
-        audioOptions.lineageCapacity = avSyncRuntime.queues.frame;
-        audioOptions.correctionGeneration = MediaFirstLockedSourceGeneration;
-        audioOptions.correctionLookaheadWindows =
-            avSyncRuntime.synchronization.audioServo.correctionLookaheadWindows;
-        audioOptions.syncGroup = avSyncRuntime.groupKey;
+        if (auto status = mapSynchronizedAudioBranchOptions(
+                avSyncRuntime, audioOptions); !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
         auto builtAudio = MediaAudioBranchSegmentBuilder::build(
             graph, audioOptions);
         if (!builtAudio) {
@@ -796,6 +795,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     } else if (auto* runtimePlan =
                    std::get_if<MediaRealtimeAvSyncRuntimePlan>(
                        &preflight.plan.runtime)) {
+        const auto audioExecutionProduct =
+            std::holds_alternative<MediaSynchronizedAudioPacketCopyBounds>(
+                runtimePlan->componentBounds)
+                ? MediaSynchronizedAudioExecutionProduct::PacketCopy
+                : MediaSynchronizedAudioExecutionProduct::FrameTranscode;
         auto outputProduct = std::visit(
             []<typename Product>(Product&& product)
                 -> MediaAvSyncRuntimeOutputProduct {
@@ -809,6 +813,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             std::move(runtimePlan->synchronization),
             std::move(runtimePlan->transition),
             runtimePlan->edgePolicies,
+            audioExecutionProduct,
             std::move(outputProduct)});
     } else {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(

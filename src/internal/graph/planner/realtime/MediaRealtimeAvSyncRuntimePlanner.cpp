@@ -4,10 +4,13 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <optional>
+#include <limits>
 #include <utility>
 #include <variant>
 
@@ -15,6 +18,30 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
+
+::media::Result<MediaRealtimeEdgePolicySet> planBoundedEdgePolicies(
+    const MediaRealtimeRtpTranscodePlanningDraft& outer,
+    const MediaAvSyncPlan& synchronization)
+{
+    if (!synchronization.startup.videoByteCapacity ||
+        !synchronization.startup.audioByteCapacity ||
+        *synchronization.startup.videoByteCapacity == 0 ||
+        *synchronization.startup.audioByteCapacity == 0 ||
+        outer.queues.packet == 0 ||
+        *synchronization.startup.videoByteCapacity >
+            (std::numeric_limits<std::uint64_t>::max)() -
+                *synchronization.startup.audioByteCapacity) {
+        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V edge byte capacity is incomplete or not representable"));
+    }
+    const auto maximumBytes =
+        *synchronization.startup.videoByteCapacity +
+        *synchronization.startup.audioByteCapacity;
+    return MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            outer.queues, maximumBytes, outer.queues.packet);
+}
 
 ::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(
     const MediaRealtimeRtpTranscodePlanCore& outer,
@@ -236,7 +263,8 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
-    MediaAvSyncPlan synchronization)
+    MediaAvSyncPlan synchronization,
+    MediaRational outputFrameRate)
 {
     if (!outer.audioPlan) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -244,10 +272,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 "Synchronized runtime planning requires an audio pipeline product"));
     }
     MediaAudioPipelinePlan& audio = *outer.audioPlan;
-    if (audio.branchMode != MediaBranchMode::TranscodeFrame) {
+    if (audio.branchMode != MediaBranchMode::TranscodeFrame &&
+        audio.branchMode != MediaBranchMode::CopyPacket) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "Synchronized runtime planning rejects audio packet copy"));
+                "Synchronized runtime planning requires copy or frame transcode audio"));
     }
     if (outer.videoPlan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -267,30 +296,49 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             facts.error());
     }
-    auto correction = MediaAudioCorrectionReachabilityPlanner::plan(
-        synchronization, facts.value());
-    if (!correction || !facts.value().acknowledgementTimeout ||
+    if (!facts.value().acknowledgementTimeout ||
         !facts.value().terminalDrainWindow ||
         !synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            correction ? ::media::ErrorInfo::notInitialized(
-                             "A/V generation transition timing facts are incomplete")
-                       : correction.error());
+            ::media::ErrorInfo::notInitialized(
+                "A/V generation transition timing facts are incomplete"));
     }
-    synchronization.audioServo.commandLeadNs = correction.value().commandLead;
-    synchronization.audioServo.compensationWindowNs =
-        correction.value().compensationWindow;
-    synchronization.audioServo.frequencyFilterTimeConstantNs =
-        correction.value().frequencyFilterTimeConstant;
-    if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
-        !status) {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            status.error());
+    std::optional<MediaAudioCorrectionReachabilityResult> correction;
+    if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
+        auto selected = MediaAudioCorrectionReachabilityPlanner::plan(
+            synchronization, facts.value());
+        if (!selected) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                selected.error());
+        }
+        correction = std::move(selected).value();
+        synchronization.audioServo.commandLeadNs = correction->commandLead;
+        synchronization.audioServo.compensationWindowNs =
+            correction->compensationWindow;
+        synchronization.audioServo.frequencyFilterTimeConstantNs =
+            correction->frequencyFilterTimeConstant;
+        if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
+            !status) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                status.error());
+        }
+    } else {
+        if (auto status =
+                MediaAvSyncPlanValidator::validatePolicy(synchronization);
+            !status) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                status.error());
+        }
     }
     auto assembly = planAssembly(outer, audio, synchronization, facts.value());
     if (!assembly) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             assembly.error());
+    }
+    auto edgePolicies = planBoundedEdgePolicies(outer, synchronization);
+    if (!edgePolicies) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            edgePolicies.error());
     }
 
     MediaAvSyncOutputAdapterKind adapter;
@@ -353,6 +401,24 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 accepted.error());
         }
+        if (!outputFrameRate.isKnown() || outputFrameRate.num <= 0 ||
+            outputFrameRate.den <= 0 ||
+            !facts.value().outputSampleRate ||
+            !facts.value().protocolBatchSamples ||
+            *facts.value().protocolBatchSamples <= 0) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS emission requires planner-owned output cadences"));
+        }
+        auto videoCadence = MediaRunningTime::checkedFromTicks(
+            1, outputFrameRate.den, outputFrameRate.num);
+        auto audioCadence = MediaRunningTime::checkedFromTicks(
+            *facts.value().protocolBatchSamples,
+            1, *facts.value().outputSampleRate);
+        if (!videoCadence || !audioCadence) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                videoCadence ? audioCadence.error() : videoCadence.error());
+        }
         auto projectActivationLead =
             accepted.value().muxPlan().transportDecodeLead().checkedAdd(
                 accepted.value().muxPlan().startupEmissionPreroll());
@@ -391,11 +457,18 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP output requires complete planned transport facts"));
             }
+            auto pacing = MediaScheduledDatagramPacingPlanner::plan(
+                *output.muxedOutput.rtpTransport);
+            if (!pacing) {
+                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                    pacing.error());
+            }
             auto rtp = MediaMpegTsRtpOutputPlan::create(
                 std::move(*output.muxedOutput.rtpTransport),
                 output.muxedOutput.sdpPath,
                 output.muxedOutput.mediaId,
-                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));
+                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond),
+                pacing.value());
             if (!rtp ||
                 rtp.value().tsPacketsPerPayload() !=
                     accepted.value().muxPlan().parameters()
@@ -415,10 +488,25 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
         outer.videoParameters.globalHeader = true;
+        const std::uint64_t maximumQueuedBytes =
+            edgePolicies.value().synchronizedPacket.bufferPolicy
+                .memoryBudget.maxBytes;
+        auto emission = MediaTsDatagramEmissionPlan::create(
+            accepted.value().muxPlan(), videoCadence.value(),
+            audioCadence.value(), maximumQueuedBytes);
+        if (!emission) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                emission.error());
+        }
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
                 std::move(accepted).value(),
                 MediaMuxSessionKind::ProjectMpegTs,
+                std::move(emission).value(),
+                outer.outputTransport == MediaOutputTransportKind::RtpAvp
+                    ? edgePolicies.value().synchronizedPacket.bufferPolicy
+                          .memoryBudget.maxBytes
+                    : 0,
                 std::move(*transport)});
     } else {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -434,6 +522,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
         *synchronization.sourceClockMode,
+        audio.branchMode,
+        outer.videoPlan.filterActive,
         *facts.value().acknowledgementTimeout,
         *facts.value().terminalDrainWindow);
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
@@ -447,12 +537,16 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             adapter,
             std::move(*protocolOutput),
             outer.queues,
-            outer.edgePolicies,
+            std::move(edgePolicies).value(),
             outer.threadingPolicy,
             *activationOutputLead,
+            outer.videoPlan.filterActive,
             std::move(transition),
             facts.value(),
-            correction.value().correction});
+            correction
+                ? std::optional<MediaAudioCorrectionReachabilityPlan>(
+                      correction->correction)
+                : std::nullopt});
 }
 
 } // namespace media::ffmpeg::graph

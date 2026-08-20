@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <mutex>
 #include <sstream>
@@ -18,6 +19,11 @@ std::mutex g_diagnosticsMutex;
 bool g_diagnosticsEnabled = true;
 MediaGraphDiagnosticConfig g_runtimeDiagnosticsConfig;
 std::unordered_map<std::string, std::uint64_t> g_sampleCounters;
+std::atomic<bool> g_diagnosticsEnabledSnapshot{true};
+std::atomic<int> g_diagnosticLevelSnapshot{
+    static_cast<int>(MediaGraphDiagnosticLevel::State)};
+std::atomic<std::size_t> g_firstPacketLimitSnapshot{5};
+std::atomic<std::size_t> g_packetSampleIntervalSnapshot{100};
 
 std::string rationalText(MediaRational rational)
 {
@@ -142,6 +148,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::EncodedAudioCanonicalizer: return "EncodedAudioCanonicalizer";
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
+    case MediaNodeKind::ScheduledDatagramSender: return "ScheduledDatagramSender";
     case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
     case MediaNodeKind::RtpSdpPublisher: return "RtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
@@ -226,18 +233,24 @@ void mediaGraphDiagnosticSetGlobalEnabled(bool enabled) noexcept
 {
     std::lock_guard lock(g_diagnosticsMutex);
     g_diagnosticsEnabled = enabled;
+    g_diagnosticsEnabledSnapshot.store(enabled, std::memory_order_release);
 }
 
 bool mediaGraphDiagnosticGlobalEnabled() noexcept
 {
-    std::lock_guard lock(g_diagnosticsMutex);
-    return g_diagnosticsEnabled;
+    return g_diagnosticsEnabledSnapshot.load(std::memory_order_acquire);
 }
 
 void mediaGraphDiagnosticSetGlobalConfig(MediaGraphDiagnosticConfig config)
 {
     std::lock_guard lock(g_diagnosticsMutex);
     g_runtimeDiagnosticsConfig = config;
+    g_firstPacketLimitSnapshot.store(
+        config.firstPacketLimit, std::memory_order_relaxed);
+    g_packetSampleIntervalSnapshot.store(
+        config.packetSampleInterval, std::memory_order_relaxed);
+    g_diagnosticLevelSnapshot.store(
+        static_cast<int>(config.level), std::memory_order_release);
 }
 
 MediaGraphDiagnosticConfig mediaGraphDiagnosticGlobalConfig()
@@ -248,8 +261,42 @@ MediaGraphDiagnosticConfig mediaGraphDiagnosticGlobalConfig()
 
 bool mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel requiredLevel) noexcept
 {
-    std::lock_guard lock(g_diagnosticsMutex);
-    return g_diagnosticsEnabled && levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel);
+    if (!g_diagnosticsEnabledSnapshot.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return levelAtLeast(
+        static_cast<MediaGraphDiagnosticLevel>(
+            g_diagnosticLevelSnapshot.load(std::memory_order_acquire)),
+        requiredLevel);
+}
+
+MediaGraphDiagnosticSampler::MediaGraphDiagnosticSampler(
+    MediaGraphDiagnosticLevel requiredLevel) noexcept
+    : m_requiredLevel(requiredLevel)
+{
+}
+
+MediaGraphDiagnosticSampleDecision
+MediaGraphDiagnosticSampler::sample(bool force) noexcept
+{
+    if (!mediaGraphDiagnosticLevelEnabled(m_requiredLevel)) return {};
+    ++m_sequence;
+    const auto firstPacketLimit =
+        g_firstPacketLimitSnapshot.load(std::memory_order_relaxed);
+    const auto packetSampleInterval =
+        g_packetSampleIntervalSnapshot.load(std::memory_order_relaxed);
+    const bool inFirstPacketWindow = m_sequence <= firstPacketLimit;
+    const bool onSampleInterval = packetSampleInterval > 0 &&
+        (m_sequence % packetSampleInterval) == 0;
+    const bool shouldLog = force || inFirstPacketWindow || onSampleInterval;
+    return MediaGraphDiagnosticSampleDecision{
+        shouldLog, m_sequence,
+        !force && !inFirstPacketWindow && !onSampleInterval};
+}
+
+void MediaGraphDiagnosticSampler::reset() noexcept
+{
+    m_sequence = 0;
 }
 
 std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer)
@@ -286,6 +333,7 @@ MediaGraphDiagnosticSampleDecision mediaGraphDiagnosticSample(MediaGraphDiagnost
                                                              const std::string& key,
                                                              bool force)
 {
+    if (!mediaGraphDiagnosticLevelEnabled(requiredLevel)) return {};
     std::lock_guard lock(g_diagnosticsMutex);
     if (!g_diagnosticsEnabled || !levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel)) {
         return {};

@@ -46,6 +46,8 @@ private:
         MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_transportLead =
         MediaRunningTime::fromNanoseconds(0);
+    MediaRunningTime m_activationLead =
+        MediaRunningTime::fromNanoseconds(0);
     std::size_t m_packetCapacity = 0;
     std::uint64_t m_maximumUnitBytes = 0;
     std::uint64_t m_byteCapacity = 0;

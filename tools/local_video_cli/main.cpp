@@ -56,7 +56,7 @@ int runLocalVideoCli(int argc, char** argv)
 {
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_local_video_cli --input in.mp4 --output out.mp4 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 [options]\n";
+        std::cout << "Usage: media_transcode_local_video_cli --input in.mp4 --output out.mp4 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 [--hardware-backend auto|rkmpp] [options]\n";
         return helpRequested ? 0 : 2;
     }
 
@@ -70,10 +70,14 @@ int runLocalVideoCli(int argc, char** argv)
                       : "off")
               << " width=" << optionalIntText(parameters.video.width)
               << " height=" << optionalIntText(parameters.video.height)
-              << " fps=" << frameRateText(parameters.video.frameRate)
+              << " output_fps=" << frameRateText(parameters.video.frameRate)
               << " bitrate_kbps=" << optionalIntText(parameters.video.bitrateKbps)
               << " rc=" << mediaRateControlModeName(parameters.video.rateControl)
-              << " hw=" << (parameters.execution.disableHardware ? "disabled" : "auto")
+              << " hw="
+              << (parameters.execution.disableHardware
+                      ? "disabled"
+                      : mediaHardwareBackendRequestName(
+                            parameters.execution.hardwareBackend))
               << " diagnostics=" << (parameters.execution.diagnosticLogEnabled ? "on" : "off")
               << '\n';
 

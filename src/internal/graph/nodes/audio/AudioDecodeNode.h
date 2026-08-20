@@ -88,6 +88,8 @@ private:
     bool& m_flushIsEof;
     bool& m_flushSent;
     MediaBufferRef& m_flushBuffer;
+    bool m_firstPacketDiagnosticEmitted = false;
+    bool m_firstFrameDiagnosticEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

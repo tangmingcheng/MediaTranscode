@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 
+#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
+
 #include "internal/graph/planner/MediaTranscodeStreamSetRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
@@ -125,6 +127,13 @@ bool preparedHandoffControlSpecified(
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (auto status = MediaPipelineHardwareBackendConstraint::validate(
+            request.parameters.execution.hardwareBackend,
+            request.parameters.execution.disableHardware,
+            "Realtime request");
+        !status) {
+        return status;
+    }
     if (request.mediaId.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Realtime media identity must be explicit"));

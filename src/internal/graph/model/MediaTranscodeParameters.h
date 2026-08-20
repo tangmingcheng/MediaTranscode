@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaHardwareBackendRequest.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 
 #include <cstddef>
@@ -23,6 +24,25 @@ inline const char* mediaBranchModeName(MediaBranchMode mode) noexcept
     case MediaBranchMode::TranscodeFrame: return "transcode_frame";
     }
     return "drop";
+}
+
+inline bool parseMediaBranchMode(
+    std::string_view text,
+    MediaBranchMode& mode) noexcept
+{
+    if (text == "copy_packet") {
+        mode = MediaBranchMode::CopyPacket;
+        return true;
+    }
+    if (text == "transcode_frame") {
+        mode = MediaBranchMode::TranscodeFrame;
+        return true;
+    }
+    if (text == "drop") {
+        mode = MediaBranchMode::Drop;
+        return true;
+    }
+    return false;
 }
 
 enum class MediaRateControlMode {
@@ -126,6 +146,7 @@ struct MediaAudioTranscodeParameters {
 
 struct MediaTranscodeExecutionParameters {
     std::optional<MediaTranscodeStreamSet> streamSet;
+    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
     bool disableHardware = false;
     bool diagnosticLogEnabled = true;
 };
@@ -177,6 +198,14 @@ inline constexpr char VideoLevel[] = "video.level";
 inline constexpr char VideoGop[] = "video.gop";
 inline constexpr char VideoBFrames[] = "video.bframes";
 inline constexpr char VideoGlobalHeader[] = "video.global_header";
+inline constexpr char PlannedVideoRateControl[] = "encoder.rate_control.mode";
+inline constexpr char PlannedVideoTargetBitrateKbps[] = "encoder.rate_control.target_kbps";
+inline constexpr char PlannedVideoMinBitrateKbps[] = "encoder.rate_control.min_kbps";
+inline constexpr char PlannedVideoMaxBitrateKbps[] = "encoder.rate_control.max_kbps";
+inline constexpr char PlannedVideoBufferSizeKbits[] = "encoder.rate_control.buffer_kbits";
+inline constexpr char PlannedVideoPrivateRateControlName[] = "encoder.rate_control.private.name";
+inline constexpr char PlannedVideoPrivateRateControlValue[] = "encoder.rate_control.private.value";
+inline constexpr char PlannedVideoPrivateRateControlExpected[] = "encoder.rate_control.private.expected";
 
 inline constexpr char AudioSourceStreamIndex[] = "audio.source_stream_index";
 inline constexpr char AudioCodec[] = "audio.codec";

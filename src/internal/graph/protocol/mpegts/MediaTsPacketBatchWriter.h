@@ -9,6 +9,12 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaTsBatchWriteResult final {
+    std::size_t packetsWritten;
+    std::size_t payloadBytes;
+    bool cursorFinished;
+};
+
 class MediaTsPacketBatchWriter final {
 public:
     static ::media::Result<MediaTsPacketBatchWriter> create(
@@ -22,9 +28,15 @@ public:
     MediaTsPacketBatchWriter& operator=(MediaTsPacketBatchWriter&&) = delete;
     ~MediaTsPacketBatchWriter();
 
-    ::media::Result<std::size_t> writeCursor(
+    ::media::Result<MediaTsPreparedPacketBatch> prepareNext(
+        MediaTsPacketCursor& cursor);
+    ::media::Result<MediaTsBatchWriteResult> writeNext(
         MediaTsPacketCursor& cursor,
-        MediaRunningTime emitOnMaster);
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
+    ::media::Result<MediaTsBatchWriteResult> writeNext(
+        MediaTsPacketCursor& cursor,
+        MediaTsPreparedPacketBatch&& batch,
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
     ::media::Status finish();
     void abort() noexcept;
 

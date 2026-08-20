@@ -32,6 +32,7 @@
 #include "internal/graph/nodes/output/MediaRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
+#include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
@@ -72,7 +73,7 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
-#include "internal/graph/runtime/filesystem/MediaWin32AtomicFileReplacePort.h"
+#include "internal/graph/runtime/filesystem/MediaPlatformAtomicFileReplacePort.h"
 #include "internal/graph/runtime/network/MediaSocketRuntime.h"
 #include "internal/graph/runtime/network/MediaUdpDatagramSenderSocket.h"
 
@@ -132,7 +133,8 @@ template <typename Node>
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoFrameRateStage(
-    const MediaNode& node)
+    const MediaNode& node,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>& preparationState)
 {
     auto capacity = prepareMediaVideoLineageStageCapacity(
         node, VideoFrameRateNode::generationPurgeIdentity());
@@ -140,10 +142,32 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             capacity.error());
     }
+    std::optional<MediaAvStartupVideoPreparationCapability> preparation;
+    if (node.options.value("video.startup_preparation.owner") == "1") {
+        if (!capacity.value()) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video startup preparation owner requires canonical lineage capacity"));
+        }
+        if (!preparationState) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Planned video startup preparation owner requires shared state"));
+        }
+        auto issued = MediaAvStartupVideoPreparationCapability::issue(
+            preparationState,
+            MediaAvStartupVideoPreparationRole::OutputReadiness);
+        if (!issued) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                issued.error());
+        }
+        preparation.emplace(std::move(issued).value());
+    }
     if (capacity.value()) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<VideoFrameRateNode>(
-                node.id, std::make_shared<MediaVideoFrameRateState>(true)));
+                node.id, std::make_shared<MediaVideoFrameRateState>(true),
+                std::move(preparation)));
     }
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
         std::make_unique<VideoFrameRateNode>(node.id));
@@ -274,9 +298,20 @@ template <typename Node>
             if (!binding || binding->nodeId != node.id ||
                 binding->expectedKind != MediaPreparedRealtimeInputKind::RawRtp ||
                 !binding->prepared.valid()) {
+                const bool nodeMatches = binding && binding->nodeId == node.id;
+                const bool kindMatches = binding &&
+                    binding->expectedKind ==
+                        MediaPreparedRealtimeInputKind::RawRtp;
+                const bool preparedValid = binding &&
+                    binding->prepared.valid();
                 return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                     ::media::ErrorInfo::notInitialized(
-                        "RawRtpInput runtime requires exact prepared raw RTP binding"));
+                        "RawRtpInput runtime requires exact prepared raw RTP binding; node=" +
+                        std::to_string(node.id.value) +
+                        " binding_present=" + (binding ? "1" : "0") +
+                        " node_matches=" + (nodeMatches ? "1" : "0") +
+                        " kind_matches=" + (kindMatches ? "1" : "0") +
+                        " prepared_valid=" + (preparedValid ? "1" : "0")));
             }
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<RawRtpInputNode>(
@@ -306,7 +341,7 @@ template <typename Node>
     case MediaNodeKind::HardwareTransfer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<HardwareTransferNode>(node.id));
     case MediaNodeKind::VideoFrameRate:
-        return createVideoFrameRateStage(node);
+        return createVideoFrameRateStage(node, videoPreparationState);
     case MediaNodeKind::VideoFilter:
     {
         auto prepared = prepareMediaVideoLineageStage(
@@ -322,7 +357,7 @@ template <typename Node>
         }
         auto capability = MediaAvStartupVideoPreparationCapability::issue(
             videoPreparationState,
-            MediaAvStartupVideoPreparationRole::FilterReadiness);
+            MediaAvStartupVideoPreparationRole::OutputReadiness);
         if (!capability) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 capability.error());
@@ -415,6 +450,22 @@ template <typename Node>
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 group.error());
         }
+        auto encodedAudioBranch = requiredNodeOption(
+            &node.options,
+            "MediaAvBoundReleaseExtractorNode",
+            "av_bound_release_extractor.audio_branch_mode");
+        if (!encodedAudioBranch) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                encodedAudioBranch.error());
+        }
+        MediaBranchMode audioBranchMode = MediaBranchMode::Drop;
+        if (!parseMediaBranchMode(encodedAudioBranch.value(), audioBranchMode) ||
+            (audioBranchMode != MediaBranchMode::CopyPacket &&
+             audioBranchMode != MediaBranchMode::TranscodeFrame)) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaAvBoundReleaseExtractorNode requires a planned audio branch mode"));
+        }
         if (videoPreparationState) {
             auto capability = MediaAvStartupVideoPreparationCapability::issue(
                 videoPreparationState,
@@ -427,11 +478,12 @@ template <typename Node>
                 std::make_unique<MediaAvBoundReleaseExtractorNode>(
                     node.id,
                     std::move(group).value(),
+                    audioBranchMode,
                     std::move(capability).value()));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvBoundReleaseExtractorNode>(
-                node.id, std::move(group).value()));
+                node.id, std::move(group).value(), audioBranchMode));
     }
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
@@ -562,7 +614,7 @@ template <typename Node>
         }
         auto publisher = MediaRtpSdpPublisherNode::create(
             node.id, decoded.value(), std::move(path).value(),
-            std::make_unique<MediaWin32AtomicFileReplacePort>());
+            std::make_unique<MediaPlatformAtomicFileReplacePort>());
         return publisher
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                   std::move(publisher).value())
@@ -573,6 +625,35 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled RTP sender requires compiler-injected output authority"));
+    case MediaNodeKind::ScheduledDatagramSender:
+    {
+        auto session = requiredNodeOption(
+            &node.options, "MediaScheduledDatagramSenderNode",
+            "scheduled_datagram_sender.session");
+        auto streamSet = requiredNodeOption(
+            &node.options, "MediaScheduledDatagramSenderNode",
+            "scheduled_datagram_sender.stream_set");
+        if (!session || !streamSet) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                session ? streamSet.error() : session.error());
+        }
+        auto decoded = MediaTranscodeStreamSetCodec::decode(streamSet.value());
+        MediaProtocolOutputSessionKey sessionKey(std::move(session).value());
+        if (!decoded || !protocolOutputAuthority || !sessionKey.valid()) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "scheduled datagram sender requires decoded output authority"));
+        }
+        auto created = MediaScheduledDatagramSenderNode::create(
+            node.id, std::move(sessionKey), decoded.value(),
+            protocolOutputAuthority);
+        if (!created) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                created.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::move(created).value());
+    }
     case MediaNodeKind::MpegTsRtpSdpPublisher:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -755,7 +836,7 @@ MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
         auto created = MediaMpegTsRtpSdpPublisherNode::create(
             node.id, std::move(sessionKey), decodedStreamSet.value(),
             std::move(authority),
-            std::make_unique<MediaWin32AtomicFileReplacePort>());
+            std::make_unique<MediaPlatformAtomicFileReplacePort>());
         if (!created) {
             return ::media::Result<
                 std::unique_ptr<MediaRuntimeNode>>::failure(
@@ -981,6 +1062,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpOutput:
     case MediaNodeKind::SdpWriter:
     case MediaNodeKind::ScheduledRtpSender:
+    case MediaNodeKind::ScheduledDatagramSender:
     case MediaNodeKind::RtpSdpPublisher:
     case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:

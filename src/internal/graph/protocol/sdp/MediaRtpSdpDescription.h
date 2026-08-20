@@ -12,6 +12,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaH264SdpCodecDescriptionFactory;
+class MediaHevcSdpCodecDescriptionFactory;
 class MediaAacLatmSdpCodecDescriptionFactory;
 
 enum class MediaSdpMediaKind {
@@ -62,8 +63,28 @@ private:
     bool m_configurationPresent;
 };
 
+class MediaHevcSdpCodecDescription final {
+public:
+    const std::string& spropVps() const noexcept { return m_spropVps; }
+    const std::string& spropSps() const noexcept { return m_spropSps; }
+    const std::string& spropPps() const noexcept { return m_spropPps; }
+
+private:
+    MediaHevcSdpCodecDescription(
+        std::string spropVps,
+        std::string spropSps,
+        std::string spropPps) noexcept;
+
+    friend class MediaHevcSdpCodecDescriptionFactory;
+
+    std::string m_spropVps;
+    std::string m_spropSps;
+    std::string m_spropPps;
+};
+
 using MediaSdpCodecDescription = std::variant<
     MediaH264SdpCodecDescription,
+    MediaHevcSdpCodecDescription,
     MediaAacLatmSdpCodecDescription>;
 
 class MediaSdpSessionIdentity final {

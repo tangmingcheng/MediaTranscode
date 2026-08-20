@@ -18,6 +18,9 @@ namespace {
     std::span<const std::uint8_t> bytes,
     const char* owner)
 {
+    while (!bytes.empty() && bytes.back() == 0) {
+        bytes = bytes.first(bytes.size() - 1);
+    }
     if (bytes.empty()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(

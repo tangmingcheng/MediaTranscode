@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -34,6 +35,7 @@ struct MediaRealtimeRtpTransportPlan final {
     int cnameTimeoutMs;
     MediaRtpClockLossPolicy clockLossPolicy;
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
+    std::optional<MediaRtpIngressPlan> ingress;
 };
 
 struct MediaRealtimeTsInputPolicy final {

@@ -7,8 +7,11 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -21,6 +24,31 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Status rescaleFrameForEncoder(AVFrame& frame,
+                                       const MediaRational& source,
+                                       AVRational target)
+{
+    if (!source.isKnown() || target.num <= 0 || target.den <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoEncodeNode requires explicit source and encoder time bases"));
+    }
+    const AVRational sourceTimeBase{source.num, source.den};
+    if (frame.pts != AV_NOPTS_VALUE) {
+        frame.pts = av_rescale_q(frame.pts, sourceTimeBase, target);
+    }
+    if (frame.pkt_dts != AV_NOPTS_VALUE) {
+        frame.pkt_dts = av_rescale_q(frame.pkt_dts, sourceTimeBase, target);
+    }
+    if (frame.duration > 0) {
+        frame.duration = av_rescale_q(frame.duration, sourceTimeBase, target);
+    }
+    return ::media::Status::success();
+}
+
+} // namespace
 
 VideoEncodeLineageState::VideoEncodeLineageState(
     std::shared_ptr<MediaCodecLineageRegistry> registry,
@@ -54,6 +82,11 @@ void VideoEncodeLineageState::clearOwnedLineage(
 
 void VideoEncodeLineageState::clearLineageStorage() noexcept
 {
+    av_buffer_unref(&pendingSubmissionLineage);
+    for (AVBufferRef* opaque : submissionOrderLineage) {
+        av_buffer_unref(&opaque);
+    }
+    submissionOrderLineage.clear();
     terminals.reset();
     eofEmitted = false;
     receivePending = false;
@@ -81,11 +114,6 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
-bool plannedHardwareEncoder(const MediaNodeOptions* options)
-{
-    return optionValue(options, "encoder.pipeline.frame_kind") == "hardware";
-}
-
 std::string pixelFormatName(int format)
 {
     const char* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(format));
@@ -111,7 +139,7 @@ void encodeLog(MediaGraphDiagnosticLevel level, const std::string& message)
                             std::string("video_encode.") + message);
 }
 
-::media::Status validateFrameAgainstPlan(const MediaNodeOptions* options,
+::media::Status validateEncoderContextAgainstPlan(const MediaHardwareDescriptor& contract,
                                          const AVCodecContext* encoderContext,
                                          const AVFrame* frame)
 {
@@ -120,18 +148,9 @@ void encodeLog(MediaGraphDiagnosticLevel level, const std::string& message)
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode requires valid encoder context and frame"));
     }
 
-    if (!plannedHardwareEncoder(options)) {
-        return ::media::Status::success();
-    }
-
-    if (!encoderContext->hw_frames_ctx) {
+    if (contract.requiresHardwareFramesContext && !encoderContext->hw_frames_ctx) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode planner requires hardware encoder but encoder hw_frames_ctx is not set"));
-    }
-
-    if (!frame->hw_frames_ctx) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoEncodeNode planner requires hardware encoder but input frame is not hardware-backed"));
     }
 
     if (encoderContext->pix_fmt != AV_PIX_FMT_NONE && frame->format != encoderContext->pix_fmt) {
@@ -204,6 +223,17 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 ::media::Status VideoEncodeNode::start(MediaGraphExecutionContext& context)
 {
     resetRuntimeState();
+    auto contract = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "encoder.pipeline.input", "VideoEncodeNode");
+    if (!contract) return ::media::Status::failure(contract.error());
+    m_inputContract = std::move(contract).value();
+    if (!parseMediaVideoEncoderAbortPolicy(
+            nodeOptions(context)->value("video_encode.abort_policy"),
+            m_abortPolicy)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoEncodeNode requires planner encoder abort policy"));
+    }
     if (m_lineageRegistry) {
         auto forceKeyFrame = requiredBoolNodeOption(
             nodeOptions(context), "VideoEncodeNode",
@@ -212,10 +242,30 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
             return ::media::Status::failure(forceKeyFrame.error());
         }
         m_forceGenerationStartKeyFrame = forceKeyFrame.value();
+        auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
+            nodeOptions(context), "video.lineage.encoder_copy_opaque");
+        if (!copyOpaque) {
+            return ::media::Status::failure(copyOpaque.error());
+        }
+        m_copyOpaqueLineage = copyOpaque.value();
     }
     return FFmpegCodecNodeRuntime::start(context);
 }
-void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
+void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    if (m_abortPolicy == MediaVideoEncoderAbortPolicy::DrainThenAbort &&
+        hasCodecContext() && m_codecApi) {
+        if (auto status = drainEncoderForStop(); !status) {
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                "video_encode.abort_drain_failed error=" +
+                    status.error().message);
+        }
+    }
+    FFmpegCodecNodeRuntime::abort(context);
+    resetRuntimeState();
+}
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
     m_encoderConfigEmitted = false;
@@ -224,6 +274,11 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_firstPacketDiagnosticEmitted = false;
     m_sendWouldBlock.reset();
     m_forceGenerationStartKeyFrame.reset();
+    m_copyOpaqueLineage.reset();
+    m_abortPolicy = MediaVideoEncoderAbortPolicy::Unknown;
+    m_inputContract.reset();
+    m_drmPrimeFrames = 0;
+    m_softwareFrames = 0;
     m_lineageState->resetForLifecycle();
 }
 
@@ -237,7 +292,16 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     if (!token) return ::media::Status::failure(token.error());
     auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
-    m_lineageState->pendingFrame->opaque_ref = opaque.value();
+    if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
+        m_lineageState->pendingFrame->opaque_ref = opaque.value();
+    } else {
+        if (m_lineageState->pendingSubmissionLineage) {
+            av_buffer_unref(&opaque.value());
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoEncodeNode already owns pending submission lineage"));
+        }
+        m_lineageState->pendingSubmissionLineage = opaque.value();
+    }
     m_lineageState->lineageGenerations.insert(
         m_lineageState->pendingLineage->generation);
     m_lineageState->pendingLineage.reset();
@@ -281,6 +345,24 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         encodeLog(MediaGraphDiagnosticLevel::State,
                   std::string("bind_encoder codec=") + codecName(encoder) +
                       " pix_fmt=" + pixelFormatName(encoder ? encoder->pix_fmt : AV_PIX_FMT_NONE) +
+                      " rate_control=" + optionValue(
+                          nodeOptions(context),
+                          MediaTranscodeOptionKey::PlannedVideoRateControl,
+                          "missing") +
+                      " bitrate=" + std::to_string(
+                          encoder ? encoder->bit_rate : 0) +
+                      " min_bitrate=" + std::to_string(
+                          encoder ? encoder->rc_min_rate : 0) +
+                      " max_bitrate=" + std::to_string(
+                          encoder ? encoder->rc_max_rate : 0) +
+                      " buffer_size=" + std::to_string(
+                          encoder ? encoder->rc_buffer_size : 0) +
+                      " fps=" + std::to_string(
+                          encoder ? encoder->framerate.num : 0) + "/" +
+                          std::to_string(
+                          encoder ? encoder->framerate.den : 0) +
+                      " gop=" + std::to_string(
+                          encoder ? encoder->gop_size : 0) +
                       " frame_kind=" + optionValue(nodeOptions(context), "encoder.pipeline.frame_kind", "software") +
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +
@@ -315,14 +397,33 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
     }
 
-    auto validateStatus = validateFrameAgainstPlan(nodeOptions(context), codecContext(), frame);
+    if (!m_inputContract) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized("VideoEncodeNode input frame contract is not bound"));
+    }
+    auto validateStatus = validateEncoderContextAgainstPlan(*m_inputContract, codecContext(), frame);
     if (!validateStatus) {
         return ::media::Result<MediaNodeProcessResult>::failure(validateStatus.error());
+    }
+    auto facts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_inputContract, "VideoEncodeNode encode input");
+    if (!facts) return ::media::Result<MediaNodeProcessResult>::failure(facts.error());
+    m_drmPrimeFrames += facts.value().drmPrime ? 1U : 0U;
+    m_softwareFrames += facts.value().software ? 1U : 0U;
+    if (!m_firstFrameDiagnosticEmitted) {
+        encodeLog(MediaGraphDiagnosticLevel::State,
+                  "input_contract " + MediaVideoFrameContractValidator::describe(*frame, facts.value()));
     }
     ::media::ffmpeg::FramePtr pendingFrame(av_frame_clone(frame));
     if (!pendingFrame) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::allocationFailed("VideoEncodeNode failed to clone input frame"));
+    }
+    auto rescaleStatus = rescaleFrameForEncoder(
+        *pendingFrame, buffer->timeDescriptor().timeBase, codecContext()->time_base);
+    if (!rescaleStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            rescaleStatus.error());
     }
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     if (m_lineageRegistry) {
@@ -377,7 +478,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             encodeLog(MediaGraphDiagnosticLevel::State, out.str());
         }
     }
-    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref) {
+    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref &&
+        !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));
     }
@@ -433,6 +535,11 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video)"));
     }
     if (sendRet == 0) {
+        if (m_lineageState->pendingSubmissionLineage) {
+            m_lineageState->submissionOrderLineage.push_back(
+                m_lineageState->pendingSubmissionLineage);
+            m_lineageState->pendingSubmissionLineage = nullptr;
+        }
         m_lineageState->pendingFrame.reset();
         m_lineageState->generationStartPending = false;
     }
@@ -451,6 +558,12 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             return status;
         }
     }
+    std::ostringstream summary;
+    summary << "video_encode.zero_copy_summary drm_prime=" << m_drmPrimeFrames
+            << " software_frame=" << m_softwareFrames;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            summary.str());
     auto status = FFmpegCodecNodeRuntime::stop(context);
     resetRuntimeState();
     return status;
@@ -524,7 +637,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
         std::shared_ptr<const MediaCanonicalLineage> lineage;
         if (m_lineageRegistry) {
-            auto resolved = m_lineageRegistry->resolveOutput(packet->opaque_ref);
+            AVBufferRef* lineageOpaque = packet->opaque_ref;
+            if (m_copyOpaqueLineage && !*m_copyOpaqueLineage) {
+                if (m_lineageState->submissionOrderLineage.empty()) {
+                    return ::media::Result<bool>::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "Submission-order encoder lineage has no pending token"));
+                }
+                lineageOpaque = m_lineageState->submissionOrderLineage.front();
+                m_lineageState->submissionOrderLineage.pop_front();
+            }
+            auto resolved = m_lineageRegistry->resolveOutput(lineageOpaque);
+            if (lineageOpaque != packet->opaque_ref) {
+                av_buffer_unref(&lineageOpaque);
+            }
             if (!resolved) return ::media::Result<bool>::failure(resolved.error());
             if (resolved.value()) lineage = std::move(*resolved.value());
             av_buffer_unref(&packet->opaque_ref);
@@ -621,7 +747,6 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         }
         const int ret = m_codecApi->receivePacket(codecContext(), packet.get());
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            m_codecApi->flushBuffers(codecContext());
             return ::media::Status::success();
         }
         if (ret < 0) {

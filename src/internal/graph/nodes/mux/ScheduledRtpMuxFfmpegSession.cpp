@@ -2,7 +2,7 @@
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegOptions.h"
 
-#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+#include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -165,11 +165,15 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
             ::media::ErrorInfo::invalidArgument(
                 "scheduled RTP mux requires an open session and non-empty access unit"));
     }
-    if (m_config->packetizationMode() ==
-        MediaScheduledRtpPacketizationMode::H264AnnexB) {
-        auto valid = MediaH264AnnexBAccessUnitValidator::validate(
+    const auto packetizationMode = m_config->packetizationMode();
+    if (packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB ||
+        packetizationMode == MediaScheduledRtpPacketizationMode::HevcAnnexB) {
+        auto valid = MediaAnnexBAccessUnitValidator::validate(
             std::span<const std::uint8_t>(
-                packet.data, static_cast<std::size_t>(packet.size)));
+                packet.data, static_cast<std::size_t>(packet.size)),
+            packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB
+                ? MediaAnnexBCodec::H264
+                : MediaAnnexBCodec::Hevc);
         if (!valid) return valid;
     }
     auto copy = ::media::ffmpeg::makePacket();

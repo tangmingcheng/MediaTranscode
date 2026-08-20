@@ -41,6 +41,7 @@ struct MediaRealtimeVideoTimingPlan final {
 
 struct MediaRealtimeVideoSchedulingPlan final {
     bool pacingEnabled;
+    MediaRunningTime activationLead;
     MediaRunningTime transportLead;
     std::uint64_t initialGeneration;
 };

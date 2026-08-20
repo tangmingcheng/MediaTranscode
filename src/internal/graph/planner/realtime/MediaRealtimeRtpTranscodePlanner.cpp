@@ -1,10 +1,13 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
+#include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
+
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
@@ -134,11 +137,6 @@ preparedDemuxTimestampFacts(
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr int RealtimeDefaultGopFrames = 30;
 
-std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execution)
-{
-    return execution.disableHardware ? "software" : "auto";
-}
-
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
 {
     MediaVideoTranscodeParameters planned = requested;
@@ -174,6 +172,15 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         return ::media::Result<MediaVideoTranscodeParameters>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be positive"));
     }
+    if (!planned.frameRate.specified()) {
+        if (!inputInfo.frameRate.isKnown()) {
+            return ::media::Result<MediaVideoTranscodeParameters>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Realtime output frame rate cannot inherit an unobserved input frame rate"));
+        }
+        planned.frameRate.numerator = inputInfo.frameRate.num;
+        planned.frameRate.denominator = inputInfo.frameRate.den;
+    }
     return ::media::Result<MediaVideoTranscodeParameters>::success(std::move(planned));
 }
 
@@ -194,14 +201,15 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.probeWidth = plannerOptions.targetWidth;
-    plannerOptions.probeHeight = plannerOptions.targetHeight;
+    plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
+        video.rateControl, video.bitrateKbps, video.minBitrateKbps,
+        video.maxBitrateKbps, video.bufferSizeKbits};
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
-        plannerOptions.probeFrameRate = MediaRational{
+        plannerOptions.targetFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.preferredHardware = planPreferredHardware(options.parameters.execution);
+    plannerOptions.hardwareBackend = options.parameters.execution.hardwareBackend;
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     plannerOptions.rtspTransport = options.input.rtspTransport;
     plannerOptions.openTimeoutMs = *options.input.openTimeoutMs;
@@ -209,14 +217,6 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.analyzeDurationUs = *options.input.analyzeDurationUs;
     plannerOptions.probeSizeBytes = *options.input.probeSizeBytes;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
-}
-
-::media::Status validatePositiveOptional(const std::optional<int>& value, const char* name)
-{
-    if (value && *value <= 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(std::string(name) + " must be positive"));
-    }
-    return ::media::Status::success();
 }
 
 ::media::Result<std::int64_t> planMpegTsMaximumPcrGap27Mhz(
@@ -247,62 +247,6 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         microseconds * PcrTicksPerMicrosecond);
 }
 
-::media::Result<MediaAudioPipelinePlannerOptions> planAudioPipelineOptions(
-    const MediaRealtimeRtpTranscodeRequest& options)
-{
-    const MediaAudioTranscodeParameters& audio = options.parameters.audio;
-    if (auto status = validatePositiveOptional(audio.bitrateKbps, "audio bitrate"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (auto status = validatePositiveOptional(audio.minBitrateKbps, "audio min bitrate"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (auto status = validatePositiveOptional(audio.maxBitrateKbps, "audio max bitrate"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (audio.minBitrateKbps && audio.maxBitrateKbps && *audio.minBitrateKbps > *audio.maxBitrateKbps) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(
-            ::media::ErrorInfo::invalidArgument("audio min bitrate must be <= audio max bitrate"));
-    }
-    if (auto status = validatePositiveOptional(audio.bufferSizeKbits, "audio buffer size"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (auto status = validatePositiveOptional(audio.sampleRate, "audio sample rate"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (auto status = validatePositiveOptional(audio.channels, "audio channels"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-    if (auto status = validatePositiveOptional(audio.quality, "audio quality"); !status) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
-    }
-
-    MediaAudioPipelinePlannerOptions plannerOptions(
-        *options.parameters.execution.streamSet);
-    plannerOptions.requestedCodecName = audio.codecName;
-    plannerOptions.rateControl = audio.rateControl;
-    plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
-    plannerOptions.requestedMinBitrateKbps = audio.minBitrateKbps;
-    plannerOptions.requestedMaxBitrateKbps = audio.maxBitrateKbps;
-    plannerOptions.requestedBufferSizeKbits = audio.bufferSizeKbits;
-    plannerOptions.requestedSampleRate = audio.sampleRate;
-    plannerOptions.requestedChannels = audio.channels;
-    plannerOptions.requestedQuality = audio.quality;
-    plannerOptions.requestedPreset = audio.preset;
-    plannerOptions.requestedProfile = audio.profile;
-    plannerOptions.outputRequirement.requireFrameTranscode =
-        options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
-    if (MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
-        plannerOptions.outputRequirement.codecName = "aac";
-        plannerOptions.outputRequirement.profile = MediaAudioProfile::knownAacLow();
-        plannerOptions.outputRequirement.sampleRate = 48'000;
-        plannerOptions.outputRequirement.channels = 2;
-    }
-    plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
-    return ::media::Result<MediaAudioPipelinePlannerOptions>::success(std::move(plannerOptions));
-}
-
-
 MediaThreadingPolicy planThreadingPolicy() noexcept
 {
     MediaThreadingPolicy policy;
@@ -313,8 +257,16 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 }
 
 ::media::Result<MediaPipelinePlan> planRawRtpVideoPipeline(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaDetectedRtpVideoSignaling& detected,
+    const MediaRational& detectedFrameRate)
 {
+    auto signaling = MediaRealtimeRtpVideoSignalingResolver::resolve(
+        request.input.videoRtp, &detected);
+    if (!signaling) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            signaling.error());
+    }
     auto outputUrls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
     if (!outputUrls) {
         return ::media::Result<MediaPipelinePlan>::failure(outputUrls.error());
@@ -325,9 +277,15 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         return ::media::Result<MediaPipelinePlan>::failure(
             pipelineOptions.error());
     }
+    pipelineOptions.value().probeWidth = signaling.value().codedSize.width;
+    pipelineOptions.value().probeHeight = signaling.value().codedSize.height;
+    pipelineOptions.value().sourceFrameRate = detectedFrameRate;
     MediaInputVideoStreamInfo input;
     input.streamIndex = MediaRealtimeRawInputPlan::VideoStreamIndex;
     input.codecName = canonicalCodecName(request.input.videoRtp.codecName);
+    input.width = signaling.value().codedSize.width;
+    input.height = signaling.value().codedSize.height;
+    input.frameRate = detectedFrameRate;
     return MediaPipelinePlanner::planVideoTranscodeKnownInput(
         std::move(input), request.input.videoRtp.url,
         std::move(pipelineOptions).value());
@@ -628,7 +586,8 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                 "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
     return planWithInput(
-        options, nullptr, nullptr, nullptr, nullptr, std::nullopt, nullptr);
+        options, nullptr, nullptr, nullptr, nullptr, nullptr, std::nullopt, nullptr,
+        nullptr);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(
@@ -637,22 +596,26 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     const MediaTsSelectedProgramPlan* selectedTsProgram,
     const MediaPreparedRealtimeInput* preparedResource,
     const MediaPreparedRealtimeInput* preparedAudioResource,
+    const MediaRtpIngressPlan* preparedVideoIngress,
     std::optional<MediaPipelinePlan> preplannedVideo,
-    const MediaDetectedRtpVideoSignaling* detectedVideoSignaling)
+    const MediaDetectedRtpVideoSignaling* detectedVideoSignaling,
+    const MediaRational* detectedVideoFrameRate)
 {
     if (auto status = validateRealtimeRequestNoIo(requestedOptions); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
     MediaRealtimeRtpTranscodeRequest options = requestedOptions;
+    std::optional<MediaSize> rawRtpCodedSize;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
-        auto resolvedFmtp =
-            MediaRealtimeRtpVideoSignalingResolver::resolveFmtp(
+        auto resolvedSignaling =
+            MediaRealtimeRtpVideoSignalingResolver::resolve(
                 options.input.videoRtp, detectedVideoSignaling);
-        if (!resolvedFmtp) {
+        if (!resolvedSignaling) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                resolvedFmtp.error());
+                resolvedSignaling.error());
         }
-        options.input.videoRtp.fmtp = std::move(resolvedFmtp).value();
+        options.input.videoRtp.fmtp = resolvedSignaling.value().fmtp;
+        rawRtpCodedSize = resolvedSignaling.value().codedSize;
     } else if (detectedVideoSignaling) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -676,8 +639,21 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(pipelineOptionsResult.error());
     }
     MediaPipelinePlannerOptions pipelineOptions = std::move(pipelineOptionsResult).value();
+    if (rawRtpCodedSize) {
+        pipelineOptions.probeWidth = rawRtpCodedSize->width;
+        pipelineOptions.probeHeight = rawRtpCodedSize->height;
+    }
+    if (detectedVideoFrameRate) {
+        if (!detectedVideoFrameRate->isKnown()) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "detected raw RTP video frame rate is invalid"));
+        }
+        pipelineOptions.sourceFrameRate = *detectedVideoFrameRate;
+    }
 
-    auto audioOptionsResult = planAudioPipelineOptions(options);
+    auto audioOptionsResult =
+        MediaRealtimeAudioPlannerOptionsResolver::resolve(options);
     if (!audioOptionsResult) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(audioOptionsResult.error());
     }
@@ -707,6 +683,9 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             plannedRawRtpAvSync ? &*plannedRawRtpAvSync : nullptr);
         if (!raw) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(raw.error());
         rawInput.emplace(std::move(raw).value());
+        rawInput->video.width = pipelineOptions.probeWidth;
+        rawInput->video.height = pipelineOptions.probeHeight;
+        rawInput->video.frameRate = pipelineOptions.sourceFrameRate;
 
         if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(*rawInput->audio, audioOptions);
@@ -816,6 +795,38 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
         plan.input.requiresPreparedInput =
             plan.requiredPreparedInputKind == MediaPreparedRealtimeInputKind::RawRtp;
+        if (preparedVideoIngress) {
+            if (!plan.input.rtpTransport || !preparedResource) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "planner-bound RTP ingress requires its prepared video transport"));
+            }
+            if (auto status = preparedVideoIngress->validateProduct(); !status) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    status.error());
+            }
+            plan.input.rtpTransport->ingress = *preparedVideoIngress;
+            if (preparedVideoIngress->socketReceiveCapacityBytes() >
+                    static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+                preparedVideoIngress->maximumDatagramBytes() >
+                    static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+                preparedVideoIngress->reorderWindowPackets() >
+                    static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "planner-bound RTP ingress facts exceed node option range"));
+            }
+            plan.input.rtpTransport->receiveBufferBytes = static_cast<int>(
+                preparedVideoIngress->socketReceiveCapacityBytes());
+            plan.input.rtpTransport->maximumDatagramBytes = static_cast<int>(
+                preparedVideoIngress->maximumDatagramBytes());
+            plan.input.rtpTransport->reorderWindowPackets =
+                preparedVideoIngress->reorderWindowPackets();
+            const auto delayNanoseconds =
+                preparedVideoIngress->maximumReorderDelayNanoseconds();
+            plan.input.rtpTransport->maximumReorderDelayMs =
+                static_cast<int>((delayNanoseconds + 999'999) / 1'000'000);
+        }
         if (plan.isolatedAudioInput) {
             if (*plan.input.requiresPreparedInput &&
                 !preparedAudioResource) {
@@ -892,6 +903,19 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
+    MediaRational outputFrameRate;
+    if (rawInput) {
+        outputFrameRate = rawInput->video.frameRate;
+    } else if (preparedInput) {
+        outputFrameRate = preparedInput->video.frameRate;
+    }
+    if (plan.videoParameters.frameRate.complete() &&
+        plan.videoParameters.frameRate.numerator &&
+        plan.videoParameters.frameRate.denominator) {
+        outputFrameRate = MediaRational{
+            *plan.videoParameters.frameRate.numerator,
+            *plan.videoParameters.frameRate.denominator};
+    }
     std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(options) &&
         options.parameters.execution.streamSet ==
@@ -943,6 +967,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             options, selectedAudioVideoProgram,
             resolvedTsFacts ? &*resolvedTsFacts : nullptr,
             demuxFacts ? &*demuxFacts : nullptr,
+            plannedAudio.branchMode,
             plannedAudio.resolvedOutput->sampleRate());
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
@@ -963,7 +988,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, output, std::move(avSync).value());
+            plan, output, std::move(avSync).value(), outputFrameRate);
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
@@ -996,11 +1021,9 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                 std::move(packetization).value();
         }
         MediaRational sourceTimeBase;
-        MediaRational outputFrameRate;
         if (rawInput) {
             sourceTimeBase = MediaRational{
                 1, rawInput->videoTransport.clockRate};
-            outputFrameRate = rawInput->video.frameRate;
         } else {
             if (!preparedResource) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
@@ -1018,14 +1041,6 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                     },
                     *selectedTsProgram);
             }
-            outputFrameRate = preparedInput->video.frameRate;
-        }
-        if (plan.videoParameters.frameRate.complete() &&
-            plan.videoParameters.frameRate.numerator &&
-            plan.videoParameters.frameRate.denominator) {
-            outputFrameRate = MediaRational{
-                *plan.videoParameters.frameRate.numerator,
-                *plan.videoParameters.frameRate.denominator};
         }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,
@@ -1060,8 +1075,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     const MediaTsSelectedProgramPlan& selectedTsProgram)
 {
     return planWithInput(
-        request, &input, &selectedTsProgram, nullptr, nullptr,
-        std::nullopt, nullptr);
+        request, &input, &selectedTsProgram, nullptr, nullptr, nullptr,
+        std::nullopt, nullptr, nullptr);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
@@ -1094,13 +1109,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         }
         const auto preflightDeadline = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(*request.input.openTimeoutMs);
-        auto preplannedVideo = planRawRtpVideoPipeline(request);
-        if (!preplannedVideo) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                preplannedVideo.error());
-        }
         auto remainingForProbe = remainingRawRtpStartupMilliseconds(
-            preflightDeadline, "hardware pipeline validation");
+            preflightDeadline, "video signaling detection");
         if (!remainingForProbe) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 remainingForProbe.error());
@@ -1125,6 +1135,11 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
                 return prepared.signaling;
             },
             probed.value());
+        const auto& detectedFrameRate = std::visit(
+            [](const auto& prepared) -> const MediaRational& {
+                return prepared.sourceFrameRate;
+            },
+            probed.value());
         auto* videoOnlyProbe = std::get_if<
             MediaPreparedRawRtpVideoOnlyProbe>(&probed.value());
         auto* audioVideoProbe = std::get_if<
@@ -1143,9 +1158,52 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         MediaPreparedRealtimeInput* preparedAudio = audioVideoProbe
             ? &audioVideoProbe->audio
             : nullptr;
+        auto preplannedVideo = planRawRtpVideoPipeline(
+            request, detected, detectedFrameRate);
+        if (!preplannedVideo) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                preplannedVideo.error());
+        }
+        if (auto status = preparedVideo.sealRawRtpPreflight();
+            !status) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                status.error());
+        }
+        auto videoObservation = preparedVideo.rawRtpIngressObservation();
+        if (!videoObservation) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                videoObservation.error());
+        }
+        auto socketCapacity =
+            preparedVideo.rawRtpEffectiveSocketReceivePayloadBytes();
+        if (!socketCapacity) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                socketCapacity.error());
+        }
+        auto videoCapability =
+            MediaRtpIngressCapabilityMaterializer::materialize(
+                socketCapacity.value());
+        if (!videoCapability) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                videoCapability.error());
+        }
+        auto preparedByteCapacity =
+            preparedVideo.rawRtpPreparedByteCapacity();
+        if (!preparedByteCapacity) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                preparedByteCapacity.error());
+        }
+        auto videoIngress = MediaRtpIngressPlan::create(
+            videoCapability.value(), videoObservation.value(),
+            preparedByteCapacity.value());
+        if (!videoIngress) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                videoIngress.error());
+        }
         auto planned = planWithInput(
             request, nullptr, nullptr, &preparedVideo, preparedAudio,
-            std::move(preplannedVideo).value(), &detected);
+            &videoIngress.value(), std::move(preplannedVideo).value(), &detected,
+            &detectedFrameRate);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
         auto remainingAfterPlanning = remainingRawRtpStartupMilliseconds(
             preflightDeadline, "resolved product planning");
@@ -1153,8 +1211,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 remainingAfterPlanning.error());
         }
-        if (auto status = preparedVideo.sealRawRtpPreflight();
-            !status) {
+        if (auto status = preparedVideo.configureRawRtpRuntimeIngress(
+                videoIngress.value()); !status) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 status.error());
         }
@@ -1191,7 +1249,7 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     auto planned = planWithInput(
         request, &scan.streams,
         scan.selectedTsProgram ? &*scan.selectedTsProgram : nullptr,
-        &scan.prepared, nullptr, std::nullopt, nullptr);
+        &scan.prepared, nullptr, nullptr, std::nullopt, nullptr, nullptr);
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }

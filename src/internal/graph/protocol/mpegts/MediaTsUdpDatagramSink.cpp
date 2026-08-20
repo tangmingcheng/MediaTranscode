@@ -53,8 +53,9 @@ MediaTsUdpDatagramSink::create(std::unique_ptr<MediaOutputByteSink> sink)
 
 ::media::Result<std::size_t> MediaTsUdpDatagramSink::write(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime emitOnMaster)
+    const MediaTsDatagramEnqueueWindow& enqueueWindow)
 {
+    const MediaRunningTime emitOnMaster = enqueueWindow.notBefore();
     if (m_failure) {
         return ::media::Result<std::size_t>::failure(*m_failure);
     }

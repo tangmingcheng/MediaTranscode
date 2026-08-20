@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/runtime/ffmpeg/FFmpegAvioWritePacket.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -54,7 +55,7 @@ private:
                             FFmpegDatagramSink sink);
 
     static int writePacket(void* opaque,
-                           const std::uint8_t* bytes,
+                           FFmpegAvioWritePacketByte* bytes,
                            int size) noexcept;
     int deliver(std::span<const std::uint8_t> bytes) noexcept;
     void release() noexcept;

@@ -2,8 +2,10 @@
 
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaEncodedPacketLayout.h"
+#include "internal/graph/model/MediaEncoderRateControlPlan.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -29,17 +31,33 @@ struct MediaPipelineStagePlan {
     std::string ffmpegName;
     std::string filterName;
     std::string hwaccelName;
-    std::string pixelFormat;
-    std::string hardwareFramesFormat;
-    std::string surfacePixelFormat;
-    MediaHardwareDeviceKind deviceKind = MediaHardwareDeviceKind::None;
-    MediaHardwareFrameKind frameKind = MediaHardwareFrameKind::Software;
-    bool hardware = false;
-    bool zeroCopy = false;
+    std::optional<MediaHardwareDescriptor> inputFrame;
+    std::optional<MediaHardwareDescriptor> outputFrame;
     bool available = false;
     int priority = 0;
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
+    std::optional<MediaEncoderRateControlPlan> encoderRateControl;
+
+    const MediaHardwareDescriptor* frameContract() const noexcept
+    {
+        return inputFrame ? &*inputFrame : outputFrame ? &*outputFrame : nullptr;
+    }
+    MediaHardwareDeviceKind deviceKind() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract ? contract->deviceKind : MediaHardwareDeviceKind::Unknown;
+    }
+    bool hardware() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract && contract->isHardwareBacked();
+    }
+    bool zeroCopy() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract && contract->zeroCopyPreferred;
+    }
 };
 
 struct MediaPipelineChainPlan {
@@ -52,6 +70,16 @@ struct MediaPipelineChainPlan {
     bool allHardware = false;
     bool sameHardwareDevice = false;
     bool zeroCopy = false;
+    bool filterActive = false;
+    MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
+    MediaVideoLineagePropagation decoderLineagePropagation =
+        MediaVideoLineagePropagation::Unknown;
+    MediaVideoLineagePropagation encoderLineagePropagation =
+        MediaVideoLineagePropagation::Unknown;
+    MediaVideoFilterImplementation filterImplementation =
+        MediaVideoFilterImplementation::Unknown;
+    MediaVideoEncoderAbortPolicy encoderAbortPolicy =
+        MediaVideoEncoderAbortPolicy::Unknown;
     std::string reason;
 };
 
@@ -72,13 +100,15 @@ struct MediaPipelinePlannerOptions {
     bool allowPacketCopy;
     std::string outputPath;
     std::string outputCodecName;
-    std::string preferredHardware;
     int probeWidth = 0;
     int probeHeight = 0;
-    MediaRational probeFrameRate;
+    MediaRational sourceFrameRate;
+    MediaRational targetFrameRate;
+    MediaEncoderRateControlRequest encoderRateControl;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
+    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
     bool disableHardware;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;
@@ -109,7 +139,7 @@ struct MediaPipelinePlan {
     std::string outputCodecName;
     bool diagnosticLogEnabled = false;
     bool synthesizeMissingTimestamps = false;
-    bool filterRequired = false;
+    bool filterActive = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };

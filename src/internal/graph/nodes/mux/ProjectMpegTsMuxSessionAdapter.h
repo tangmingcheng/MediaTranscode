@@ -3,7 +3,6 @@
 #include "internal/graph/nodes/mux/MediaMuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
-#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
@@ -42,9 +41,9 @@ private:
     std::optional<MediaProtocolOutputSessionKey> plannedSession;
     std::optional<MediaTranscodeStreamSet> streamSet;
     std::unique_ptr<MediaTsMuxSession> session;
-    std::shared_ptr<MediaMpegTsRtpContinuityState> rtpContinuity;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
+    MediaBufferRef stagedAccessUnit;
     bool mediaTimelineStarted = false;
     std::atomic<std::uint64_t> generation{0};
 };
@@ -93,6 +92,7 @@ public:
                           const MediaBufferRef& buffer) override;
     ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) override;
+    bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status finish(MediaGraphExecutionContext& context) override;
@@ -120,9 +120,9 @@ private:
         m_outputPlan;
     std::optional<MediaProtocolOutputActivation>& m_activation;
     std::unique_ptr<MediaTsMuxSession>& m_session;
-    std::shared_ptr<MediaMpegTsRtpContinuityState>& m_rtpContinuity;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
+    MediaBufferRef& m_stagedAccessUnit;
     bool& m_mediaTimelineStarted;
     std::atomic<std::uint64_t>& m_generation;
     std::unique_ptr<MediaOutputByteSink> m_sink;

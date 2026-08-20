@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/mux/ScheduledRtpMuxStreamConfig.h"
 
-#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+#include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 extern "C" {
@@ -36,6 +36,9 @@ bool packetizationMatches(MediaScheduledRtpPacketizationMode mode,
     return (mode == MediaScheduledRtpPacketizationMode::H264AnnexB &&
             parameters.codec_type == AVMEDIA_TYPE_VIDEO &&
             parameters.codec_id == AV_CODEC_ID_H264) ||
+           (mode == MediaScheduledRtpPacketizationMode::HevcAnnexB &&
+            parameters.codec_type == AVMEDIA_TYPE_VIDEO &&
+            parameters.codec_id == AV_CODEC_ID_HEVC) ||
            (mode == MediaScheduledRtpPacketizationMode::AacLatm &&
             parameters.codec_type == AVMEDIA_TYPE_AUDIO &&
             parameters.codec_id == AV_CODEC_ID_AAC);
@@ -71,15 +74,18 @@ materializeCodecParameters(
         ::media::Result<::media::ffmpeg::CodecParametersPtr>;
     const AVCodecParameters* source = &parameters;
     BsfPtr normalizer;
-    if (packetizationMode ==
-            MediaScheduledRtpPacketizationMode::H264AnnexB &&
+    if ((packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB ||
+         packetizationMode == MediaScheduledRtpPacketizationMode::HevcAnnexB) &&
         parameters.extradata && parameters.extradata_size > 0) {
+        const bool hevc = packetizationMode ==
+            MediaScheduledRtpPacketizationMode::HevcAnnexB;
         const AVBitStreamFilter* filter = av_bsf_get_by_name(
-            "h264_mp4toannexb");
+            hevc ? "hevc_mp4toannexb" : "h264_mp4toannexb");
         if (!filter) {
             return ParametersResult::failure(
                 ::media::ErrorInfo::unsupported(
-                    "FFmpeg H264 Annex-B codec configuration normalizer is unavailable"));
+                    std::string("FFmpeg ") + (hevc ? "HEVC" : "H264") +
+                    " Annex-B codec configuration normalizer is unavailable"));
         }
         AVBSFContext* raw = nullptr;
         const int allocated = av_bsf_alloc(filter, &raw);
@@ -89,9 +95,9 @@ materializeCodecParameters(
                 allocated < 0
                     ? FFmpegGraphError::fromCode(
                           allocated,
-                          "av_bsf_alloc(scheduled H264 Annex-B configuration)")
+                          "av_bsf_alloc(scheduled video Annex-B configuration)")
                     : ::media::ErrorInfo::allocationFailed(
-                          "scheduled H264 Annex-B configuration"));
+                          "scheduled video Annex-B configuration"));
         }
         const int copied = avcodec_parameters_copy(
             normalizer->par_in, &parameters);
@@ -99,7 +105,7 @@ materializeCodecParameters(
             return ParametersResult::failure(
                 FFmpegGraphError::fromCode(
                     copied,
-                    "avcodec_parameters_copy(scheduled H264 Annex-B input)"));
+                    "avcodec_parameters_copy(scheduled video Annex-B input)"));
         }
         normalizer->time_base_in = streamTimeBase;
         const int initialized = av_bsf_init(normalizer.get());
@@ -107,18 +113,19 @@ materializeCodecParameters(
             return ParametersResult::failure(
                 FFmpegGraphError::fromCode(
                     initialized,
-                    "av_bsf_init(scheduled H264 Annex-B configuration)"));
+                    "av_bsf_init(scheduled video Annex-B configuration)"));
         }
         source = normalizer->par_out;
         if (!source->extradata || source->extradata_size <= 0) {
             return ParametersResult::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "H264 Annex-B configuration normalization produced no parameter sets"));
+                    "Video Annex-B configuration normalization produced no parameter sets"));
         }
-        auto valid = MediaH264AnnexBAccessUnitValidator::validate(
+        auto valid = MediaAnnexBAccessUnitValidator::validate(
             std::span<const std::uint8_t>(
                 source->extradata,
-                static_cast<std::size_t>(source->extradata_size)));
+                static_cast<std::size_t>(source->extradata_size)),
+            hevc ? MediaAnnexBCodec::Hevc : MediaAnnexBCodec::H264);
         if (!valid) return ParametersResult::failure(valid.error());
     }
     auto materialized = ::media::ffmpeg::makeCodecParameters();

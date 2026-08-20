@@ -8,6 +8,7 @@
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 struct AVCodecContext;
+struct AVPacket;
 
 namespace media::ffmpeg::graph {
 
@@ -45,6 +46,7 @@ public:
         const MediaScheduledRtpOutputPlan& outputPlan,
         const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
         const AVCodecContext& codecContext,
+        const AVPacket* codecConfigurationAccessUnit,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
         const MediaProtocolOutputActivation& activation);
 };

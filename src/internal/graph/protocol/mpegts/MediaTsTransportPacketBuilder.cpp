@@ -90,6 +90,27 @@ void writeHeader(std::array<std::uint8_t, PacketSize>& packet,
 
 } // namespace
 
+::media::Result<std::size_t>
+MediaTsTransportPacketBuilder::payloadPacketCount(
+    std::span<const std::span<const std::uint8_t>> segments,
+    bool randomAccess,
+    bool discontinuity)
+{
+    auto logicalBytes = SegmentedLogicalBytes::create(segments);
+    if (!logicalBytes) {
+        return ::media::Result<std::size_t>::failure(logicalBytes.error());
+    }
+    const std::size_t firstCapacity =
+        randomAccess || discontinuity ? 182 : 184;
+    const std::size_t logicalSize = logicalBytes.value().size();
+    const std::size_t remaining = logicalSize > firstCapacity
+        ? logicalSize - firstCapacity
+        : 0;
+    const std::size_t trailingPackets =
+        remaining / 184 + (remaining % 184 != 0 ? 1u : 0u);
+    return ::media::Result<std::size_t>::success(1 + trailingPackets);
+}
+
 ::media::Result<std::vector<std::array<std::uint8_t, 188>>>
 MediaTsTransportPacketBuilder::payload(
     std::uint16_t pid,
@@ -110,13 +131,13 @@ MediaTsTransportPacketBuilder::payload(
     }
     auto reader = std::move(logicalBytes).value();
     workspace.clear();
-    const std::size_t firstCapacity =
-        randomAccess || discontinuity ? 182 : 184;
-    const std::size_t remaining = reader.size() > firstCapacity
-        ? reader.size() - firstCapacity
-        : 0;
-    const std::size_t trailingPackets = remaining / 184 + (remaining % 184 != 0);
-    workspace.reserve(1 + trailingPackets);
+    auto packetCount = payloadPacketCount(
+        segments, randomAccess, discontinuity);
+    if (!packetCount) {
+        return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::failure(
+            packetCount.error());
+    }
+    workspace.reserve(packetCount.value());
     std::size_t offset = 0;
     std::uint8_t nextContinuity = initialPayloadContinuity;
     while (offset < reader.size()) {

@@ -18,7 +18,7 @@ MediaAvSyncRuntimeBootstrap::createClocks(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync runtime binding requires a valid group key"));
     }
-    if (auto status = MediaAvSyncPlanValidator::validate(binding.plan);
+    if (auto status = MediaAvSyncPlanValidator::validateRuntime(binding.plan);
         !status) {
         return ::media::Result<MediaAvSyncClockBundle>::failure(
             status.error());

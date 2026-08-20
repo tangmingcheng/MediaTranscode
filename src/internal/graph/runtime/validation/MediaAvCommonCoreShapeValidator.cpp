@@ -134,6 +134,40 @@ const GroupOptionContract* findContract(
     return ::media::Status::success();
 }
 
+::media::Status validateReleasedAudioBranch(
+    const MediaAvSyncGraphShape& shape,
+    const MediaAvSyncRuntimeBinding& binding)
+{
+    const auto nodes = shape.nodes(MediaNodeKind::AvBoundReleaseExtractor);
+    if (nodes.size() != 1) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V common core requires one bound release extractor"));
+    }
+    auto encoded = requiredNodeOption(
+        &nodes.front()->options,
+        "MediaAvBoundReleaseExtractorNode",
+        "av_bound_release_extractor.audio_branch_mode");
+    if (!encoded) return ::media::Status::failure(encoded.error());
+    MediaBranchMode mode = MediaBranchMode::Drop;
+    if (!parseMediaBranchMode(encoded.value(), mode)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V release extractor audio branch mode is invalid"));
+    }
+    const auto expected =
+        binding.audioExecutionProduct ==
+                MediaSynchronizedAudioExecutionProduct::PacketCopy
+            ? MediaBranchMode::CopyPacket
+            : MediaBranchMode::TranscodeFrame;
+    if (mode != expected) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V release extractor audio branch conflicts with its runtime binding"));
+    }
+    return ::media::Status::success();
+}
+
 } // namespace
 
 ::media::Status MediaAvCommonCoreShapeValidator::validate(
@@ -141,6 +175,20 @@ const GroupOptionContract* findContract(
     const MediaAvSyncRuntimeBinding& binding)
 {
     const MediaAvSyncGraphShape shape(graph);
+    const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
+    if (encoders.size() != 1) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "A/V common core requires exactly one video encoder"));
+    }
+    auto filterActive = requiredBoolNodeOption(
+        &encoders.front()->options,
+        "VideoEncodeNode",
+        "pipeline.filter_active");
+    if (!filterActive) {
+        return ::media::Status::failure(filterActive.error());
+    }
+    const bool audioTranscode = binding.audioExecutionProduct ==
+        MediaSynchronizedAudioExecutionProduct::FrameTranscode;
     auto cardinality = shape.requireExact({
         {MediaNodeKind::SourceClockStateFanout, 1,
          "source-clock state fanout"},
@@ -153,7 +201,7 @@ const GroupOptionContract* findContract(
          "activated startup release sequencer"},
         {MediaNodeKind::AvBoundReleaseExtractor, 1,
          "bound release extractor"},
-        {MediaNodeKind::AudioDriftController, 1,
+        {MediaNodeKind::AudioDriftController, audioTranscode ? 1u : 0u,
          "audio drift controller"},
         {MediaNodeKind::AvOutputScheduler, 1, "A/V output scheduler"},
         {MediaNodeKind::ScheduledOutputRouter, 1,
@@ -162,14 +210,18 @@ const GroupOptionContract* findContract(
         {MediaNodeKind::VideoDecode, 1, "video decoder"},
         {MediaNodeKind::HardwareTransfer, 1, "hardware transfer"},
         {MediaNodeKind::VideoFrameRate, 1, "video frame-rate controller"},
-        {MediaNodeKind::VideoFilter, 1, "video filter"},
+        {MediaNodeKind::VideoFilter, filterActive.value() ? 1u : 0u,
+         "planner-selected video filter"},
         {MediaNodeKind::VideoEncode, 1, "video encoder"},
-        {MediaNodeKind::AudioCodecResolver, 1, "audio codec resolver"},
-        {MediaNodeKind::AudioDecode, 1, "audio decoder"},
-        {MediaNodeKind::AudioStartupTrim, 1, "audio startup trim"},
-        {MediaNodeKind::AudioResample, 1, "audio resampler"},
-        {MediaNodeKind::AudioEncode, 1, "audio encoder"},
-        {MediaNodeKind::EncodedAudioCanonicalizer, 1,
+        {MediaNodeKind::PacketSourceConfig, audioTranscode ? 0u : 1u,
+         "audio packet-copy source config"},
+        {MediaNodeKind::AudioCodecResolver, audioTranscode ? 1u : 0u,
+         "audio codec resolver"},
+        {MediaNodeKind::AudioDecode, audioTranscode ? 1u : 0u, "audio decoder"},
+        {MediaNodeKind::AudioStartupTrim, audioTranscode ? 1u : 0u, "audio startup trim"},
+        {MediaNodeKind::AudioResample, audioTranscode ? 1u : 0u, "audio resampler"},
+        {MediaNodeKind::AudioEncode, audioTranscode ? 1u : 0u, "audio encoder"},
+        {MediaNodeKind::EncodedAudioCanonicalizer, audioTranscode ? 1u : 0u,
          "encoded audio canonicalizer"}},
         "A/V common core shape");
     if (!cardinality) return cardinality;
@@ -177,7 +229,11 @@ const GroupOptionContract* findContract(
         !group) {
         return group;
     }
-    return validateStartupSourceMode(shape, binding);
+    if (auto sourceMode = validateStartupSourceMode(shape, binding);
+        !sourceMode) {
+        return sourceMode;
+    }
+    return validateReleasedAudioBranch(shape, binding);
 }
 
 } // namespace media::ffmpeg::graph

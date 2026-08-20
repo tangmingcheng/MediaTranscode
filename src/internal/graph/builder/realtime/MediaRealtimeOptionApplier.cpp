@@ -84,6 +84,23 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtp.reorder_window_packets", std::to_string(transport.reorderWindowPackets)); !status) return status;
         if (auto status = set("rtp.maximum_reorder_delay_ms", std::to_string(transport.maximumReorderDelayMs)); !status) return status;
         if (auto status = set("rtp.cancellable_read_timeout_ms", std::to_string(transport.cancellableReadTimeoutMs)); !status) return status;
+        if (!transport.ingress) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "prepared raw RTP input requires a planner-owned ingress product"));
+        }
+        const auto ingress = transport.ingress->facts();
+        if (auto status = set("rtp.ingress.adapter_kind", std::to_string(static_cast<int>(ingress.adapterKind))); !status) return status;
+        if (auto status = set("rtp.ingress.socket_receive_capacity_bytes", std::to_string(ingress.socketReceiveCapacityBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.maximum_datagram_bytes", std::to_string(ingress.maximumDatagramBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.batch_byte_capacity", std::to_string(ingress.batchByteCapacity)); !status) return status;
+        if (auto status = set("rtp.ingress.descriptor_capacity", std::to_string(ingress.descriptorCapacity)); !status) return status;
+        if (auto status = set("rtp.ingress.required_buffer_alignment_bytes", std::to_string(ingress.requiredBufferAlignmentBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.reorder_window_packets", std::to_string(ingress.reorderWindowPackets)); !status) return status;
+        if (auto status = set("rtp.ingress.maximum_reorder_delay_ns", std::to_string(ingress.maximumReorderDelayNanoseconds)); !status) return status;
+        if (auto status = set("rtp.ingress.storage_ownership", std::to_string(static_cast<int>(ingress.storageOwnership))); !status) return status;
+        if (auto status = set("rtp.ingress.cancellation_contract", std::to_string(static_cast<int>(ingress.cancellationContract))); !status) return status;
+        if (auto status = set("rtp.ingress.completion_evidence", std::to_string(static_cast<int>(ingress.completionEvidence))); !status) return status;
         if (auto status = set("rtcp.require_sender_reports", boolOption(transport.requireSenderReports)); !status) return status;
         if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
         if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;

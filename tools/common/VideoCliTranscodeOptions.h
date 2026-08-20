@@ -12,6 +12,17 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
         ? MediaTranscodeStreamSet::VideoOnly
         : MediaTranscodeStreamSet::AudioVideo;
     parameters.execution.disableHardware = disabledByExplicitArg(argc, argv, "--disable-hw", "hardware planning");
+    const std::string hardwareBackend = argValue(argc, argv, "--hardware-backend");
+    if (!parseMediaHardwareBackendRequest(
+            hardwareBackend, parameters.execution.hardwareBackend)) {
+        throw std::invalid_argument(
+            "unsupported hardware backend for --hardware-backend: " + hardwareBackend);
+    }
+    if (parameters.execution.hardwareBackend == MediaHardwareBackendRequest::RKMPP &&
+        parameters.execution.disableHardware) {
+        throw std::invalid_argument(
+            "--hardware-backend rkmpp conflicts with --disable-hw");
+    }
     parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
     parameters.queues.metadata = requiredSizeArg(argc, argv, "--metadata-queue");
     parameters.queues.packet = requiredSizeArg(argc, argv, "--packet-queue");
@@ -26,8 +37,8 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.video.level = argValue(argc, argv, "--level");
     parameters.video.width = optionalIntArg(argc, argv, "--width");
     parameters.video.height = optionalIntArg(argc, argv, "--height");
-    if (auto fps = optionalIntArg(argc, argv, "--fps")) {
-        parameters.video.frameRate.numerator = fps;
+    if (auto targetFps = optionalIntArg(argc, argv, "--fps")) {
+        parameters.video.frameRate.numerator = targetFps;
         parameters.video.frameRate.denominator = 1;
     }
     parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");
@@ -58,6 +69,7 @@ inline std::vector<std::string> commonVideoTranscodeValueArgs()
         "--frame-queue",
         "--mux-queue",
         "--video-codec",
+        "--hardware-backend",
         "--rc",
         "--preset",
         "--profile",

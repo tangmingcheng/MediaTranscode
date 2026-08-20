@@ -13,6 +13,7 @@ class MediaGraphExecutionContext;
 struct MediaMuxSessionPollResult final {
     bool progressed;
     std::optional<MediaNodeProcessResult::DeadlineWait> nextWait;
+    MediaBufferRef output;
 };
 
 class MediaMuxSession {
@@ -27,6 +28,7 @@ public:
                                   const MediaBufferRef& buffer) = 0;
     virtual ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) = 0;
+    virtual bool hasPendingOutput() const noexcept = 0;
     virtual bool bindingsReady() const noexcept = 0;
     virtual ::media::Status flush(MediaGraphExecutionContext& context) = 0;
     virtual ::media::Status finish(MediaGraphExecutionContext& context) = 0;

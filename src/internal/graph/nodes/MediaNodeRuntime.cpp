@@ -78,8 +78,13 @@ const std::string& MediaNodeRuntime::name() const noexcept
 
 ::media::Result<MediaNodeProcessResult> MediaNodeRuntime::process(MediaGraphExecutionContext& context)
 {
-    const std::string beginKey = "node:" + std::to_string(m_nodeId.value) + ":process.begin";
-    auto beginDecision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Trace, beginKey);
+    MediaGraphDiagnosticSampleDecision beginDecision;
+    if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::Trace)) {
+        const std::string beginKey =
+            "node:" + std::to_string(m_nodeId.value) + ":process.begin";
+        beginDecision = mediaGraphDiagnosticSample(
+            MediaGraphDiagnosticLevel::Trace, beginKey);
+    }
     if (beginDecision.shouldLog) {
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Trace,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
@@ -110,8 +115,13 @@ const std::string& MediaNodeRuntime::name() const noexcept
         return outcome;
     }
 
-    const std::string doneKey = "node:" + std::to_string(m_nodeId.value) + ":process.done";
-    auto doneDecision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Trace, doneKey);
+    MediaGraphDiagnosticSampleDecision doneDecision;
+    if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::Trace)) {
+        const std::string doneKey =
+            "node:" + std::to_string(m_nodeId.value) + ":process.done";
+        doneDecision = mediaGraphDiagnosticSample(
+            MediaGraphDiagnosticLevel::Trace, doneKey);
+    }
     if (doneDecision.shouldLog) {
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Trace,
                                 MediaGraphDiagnosticPhase::RuntimeNode,

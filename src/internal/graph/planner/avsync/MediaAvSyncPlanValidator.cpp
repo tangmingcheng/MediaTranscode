@@ -62,7 +62,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
     const auto& startup = plan.startup;
     if (!startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
-        !startup.trimAudioToCommonStart || !*startup.trimAudioToCommonStart ||
+        !startup.trimAudioToCommonStart ||
         !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
         !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
         !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
@@ -477,6 +477,20 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     if (auto status = validateShared(plan, false); !status) return status;
     if (auto status = validateInputClock(plan); !status) return status;
     return validateOutput(plan);
+}
+
+::media::Status MediaAvSyncPlanValidator::validateRuntime(
+    const MediaAvSyncPlan& plan)
+{
+    const bool commandLead = plan.audioServo.commandLeadNs.has_value();
+    const bool compensation =
+        plan.audioServo.compensationWindowNs.has_value();
+    const bool frequency =
+        plan.audioServo.frequencyFilterTimeConstantNs.has_value();
+    if (commandLead != compensation || commandLead != frequency) {
+        return invalid("runtime audio correction timing product");
+    }
+    return commandLead ? validate(plan) : validatePolicy(plan);
 }
 
 } // namespace media::ffmpeg::graph

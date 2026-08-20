@@ -51,7 +51,7 @@ MediaAvSyncGroupRuntime::create(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync group requires a key and steady master clock"));
     }
-    auto status = MediaAvSyncPlanValidator::validate(plan);
+    auto status = MediaAvSyncPlanValidator::validateRuntime(plan);
     if (!status) {
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             status.error());

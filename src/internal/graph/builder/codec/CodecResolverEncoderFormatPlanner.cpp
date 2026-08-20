@@ -57,6 +57,21 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return ::media::Result<AVPixelFormat>::success(format);
 }
 
+::media::Result<bool> parseRequiredBool(const MediaNodeOptions* options,
+                                        const std::string& key,
+                                        const std::string& owner)
+{
+    const std::string value = optionValue(options, key);
+    if (value == "1" || value == "true") {
+        return ::media::Result<bool>::success(true);
+    }
+    if (value == "0" || value == "false") {
+        return ::media::Result<bool>::success(false);
+    }
+    return ::media::Result<bool>::failure(
+        ::media::ErrorInfo::invalidArgument(owner + " requires explicit boolean " + key));
+}
+
 ::media::Status validateRequest(const CodecResolverEncoderFormatPlanRequest& request)
 {
     if (!request.encoder) {
@@ -108,16 +123,34 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     }
     plan.surfaceSoftwareFormat = surfaceSoftwareFormat.value();
 
-    if (plan.hardwareFramesFormat != AV_PIX_FMT_NONE &&
-        plan.surfaceSoftwareFormat == AV_PIX_FMT_NONE) {
+    auto requiresDevice = parseRequiredBool(request.options,
+                                            "encoder.requires_hw_device_ctx",
+                                            "CodecResolverEncoderFormatPlanner");
+    if (!requiresDevice) {
+        return ::media::Result<CodecResolverEncoderFormatPlan>::failure(requiresDevice.error());
+    }
+    plan.requiresHardwareDeviceContext = requiresDevice.value();
+
+    auto requiresFrames = parseRequiredBool(request.options,
+                                            "encoder.requires_hw_frames_ctx",
+                                            "CodecResolverEncoderFormatPlanner");
+    if (!requiresFrames) {
+        return ::media::Result<CodecResolverEncoderFormatPlan>::failure(requiresFrames.error());
+    }
+    plan.requiresHardwareFramesContext = requiresFrames.value();
+
+    if (plan.requiresHardwareFramesContext &&
+        (plan.hardwareFramesFormat == AV_PIX_FMT_NONE ||
+         plan.surfaceSoftwareFormat == AV_PIX_FMT_NONE ||
+         !plan.requiresHardwareDeviceContext)) {
         return ::media::Result<CodecResolverEncoderFormatPlan>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderFormatPlanner requires encoder.surface_pixel_format when encoder.hw_frames_format is set"));
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderFormatPlanner requires explicit device, frame, and surface formats for a generic hardware frames context"));
     }
 
-    if (plan.hardwareFramesFormat == AV_PIX_FMT_NONE &&
-        plan.surfaceSoftwareFormat != AV_PIX_FMT_NONE) {
+    if (!plan.requiresHardwareFramesContext &&
+        plan.hardwareFramesFormat != AV_PIX_FMT_NONE) {
         return ::media::Result<CodecResolverEncoderFormatPlan>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderFormatPlanner rejects encoder.surface_pixel_format without encoder.hw_frames_format"));
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderFormatPlanner rejects a synthetic hardware frames format when the contract does not require one"));
     }
 
     return ::media::Result<CodecResolverEncoderFormatPlan>::success(plan);

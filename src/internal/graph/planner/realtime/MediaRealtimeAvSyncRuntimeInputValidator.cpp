@@ -136,6 +136,27 @@ namespace {
     const MediaRealtimeRtpTranscodePlan& outer,
     const MediaRealtimeAvSyncRuntimePlan& runtime)
 {
+    const bool transcodeInputMatches =
+        runtime.audioPipeline.branchMode == MediaBranchMode::TranscodeFrame &&
+        runtime.planningFacts.inputAudioSampleRate &&
+        runtime.planningFacts.inputAudioSamplesPerAccessUnit &&
+        runtime.audioPipeline.selectedDecoder &&
+        runtime.audioPipeline.selectedDecoder->inputSampleRate ==
+            *runtime.planningFacts.inputAudioSampleRate &&
+        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples ==
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit;
+    const bool copyInputMatches =
+        runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket &&
+        runtime.planningFacts.inputAudioSampleRate &&
+        runtime.planningFacts.inputAudioSamplesPerAccessUnit &&
+        !runtime.audioPipeline.selectedDecoder &&
+        !runtime.audioPipeline.selectedResampler &&
+        runtime.audioPipeline.resolvedOutput &&
+        runtime.audioPipeline.maximumAccessUnitSamples &&
+        runtime.audioPipeline.resolvedOutput->sampleRate() ==
+            *runtime.planningFacts.inputAudioSampleRate &&
+        *runtime.audioPipeline.maximumAccessUnitSamples ==
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit;
     if (outer.inputType != RealtimeInputType::MpegTsUdp ||
         outer.inputLayout !=
             RealtimeInputStreamLayout::MuxedTransportStream ||
@@ -153,11 +174,7 @@ namespace {
         *runtime.planningFacts.inputAudioSampleRate <= 0 ||
         !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
         *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
-        !runtime.audioPipeline.selectedDecoder ||
-        runtime.audioPipeline.selectedDecoder->inputSampleRate !=
-            *runtime.planningFacts.inputAudioSampleRate ||
-        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples !=
-            *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
+        (!transcodeInputMatches && !copyInputMatches)) {
         return invalidInput("MPEG-TS clock assembly and selected decoder");
     }
 
@@ -197,6 +214,27 @@ namespace {
     const MediaRealtimeRtpTranscodePlan& outer,
     const MediaRealtimeAvSyncRuntimePlan& runtime)
 {
+    const bool transcodeInputMatches =
+        runtime.audioPipeline.branchMode == MediaBranchMode::TranscodeFrame &&
+        runtime.planningFacts.inputAudioSampleRate &&
+        runtime.planningFacts.inputAudioSamplesPerAccessUnit &&
+        runtime.audioPipeline.selectedDecoder &&
+        runtime.audioPipeline.selectedDecoder->inputSampleRate ==
+            *runtime.planningFacts.inputAudioSampleRate &&
+        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples ==
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit;
+    const bool copyInputMatches =
+        runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket &&
+        runtime.planningFacts.inputAudioSampleRate &&
+        runtime.planningFacts.inputAudioSamplesPerAccessUnit &&
+        !runtime.audioPipeline.selectedDecoder &&
+        !runtime.audioPipeline.selectedResampler &&
+        runtime.audioPipeline.resolvedOutput &&
+        runtime.audioPipeline.maximumAccessUnitSamples &&
+        runtime.audioPipeline.resolvedOutput->sampleRate() ==
+            *runtime.planningFacts.inputAudioSampleRate &&
+        *runtime.audioPipeline.maximumAccessUnitSamples ==
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit;
     if (outer.inputType != RealtimeInputType::Url ||
         outer.inputLayout != RealtimeInputStreamLayout::SessionDescribed ||
         !runtime.synchronization.demuxTimestampInput ||
@@ -212,11 +250,7 @@ namespace {
         *runtime.planningFacts.inputAudioSampleRate <= 0 ||
         !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
         *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
-        !runtime.audioPipeline.selectedDecoder ||
-        runtime.audioPipeline.selectedDecoder->inputSampleRate !=
-            *runtime.planningFacts.inputAudioSampleRate ||
-        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples !=
-            *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
+        (!transcodeInputMatches && !copyInputMatches)) {
         return invalidInput("demux timestamp clock assembly");
     }
     const auto& audioDuration =

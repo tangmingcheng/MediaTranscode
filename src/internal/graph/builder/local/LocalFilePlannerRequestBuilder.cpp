@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 
+#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
+
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -60,6 +62,15 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
+    auto backendValidation = MediaPipelineHardwareBackendConstraint::validate(
+        parameters.execution.hardwareBackend,
+        parameters.execution.disableHardware,
+        "LocalFilePlannerRequestBuilder");
+    if (!backendValidation) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            backendValidation.error());
+    }
+
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
                                                parameters.execution.disableHardware,
@@ -68,15 +79,17 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
+        video.rateControl, video.bitrateKbps, video.minBitrateKbps,
+        video.maxBitrateKbps, video.bufferSizeKbits};
     plannerOptions.probeWidth = plannerOptions.targetWidth;
     plannerOptions.probeHeight = plannerOptions.targetHeight;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
-        plannerOptions.probeFrameRate = MediaRational{
+        plannerOptions.targetFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.preferredHardware =
-        plannerOptions.disableHardware ? "software" : "auto";
+    plannerOptions.hardwareBackend = parameters.execution.hardwareBackend;
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }

@@ -358,9 +358,12 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
         options.releasedAudioStreamIndex < 0 ||
         (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
          options.releasedVideoEdgeKind != MediaEdgeKind::EncodedPacket) ||
-        options.releasedAudioEdgeKind != MediaEdgeKind::InputPacket ||
+        options.releasedAudioEdgeKind !=
+            (plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket
+                 ? MediaEdgeKind::EncodedPacket
+                 : MediaEdgeKind::InputPacket) ||
         !plan.groupKey.valid() ||
-        !MediaAvSyncPlanValidator::validate(plan.synchronization)) {
+        !MediaAvSyncPlanValidator::validateRuntime(plan.synchronization)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Synchronized input segment requires complete planned inputs"));

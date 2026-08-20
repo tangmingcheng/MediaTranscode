@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSchedulerSegmentBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include <algorithm>
 #include <string_view>
 
@@ -41,6 +42,13 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler segment requires its planned sync group and ordered packet policy"));
+    }
+    if (plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket &&
+        !MediaAtomicOutputPolicyContract::accepts(
+            plan.edgePolicies.atomicAudioPacket)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V scheduler packet-copy audio requires its planner atomic release policy"));
     }
     return ::media::Result<void>::success();
 }
@@ -195,6 +203,10 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
             status.error());
     }
     const auto& policy = plan.edgePolicies.synchronizedPacket;
+    const auto& audioPolicy =
+        plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket
+            ? plan.edgePolicies.atomicAudioPacket
+            : policy;
     if (auto status = MediaGraphBuildSupport::connectChecked(
             graph, Owner, options.canonicalVideo.node,
             options.canonicalVideo.port, scheduler, "video",
@@ -205,7 +217,7 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
     if (auto status = MediaGraphBuildSupport::connectChecked(
             graph, Owner, options.canonicalAudio.node,
             options.canonicalAudio.port, scheduler, "audio",
-            "canonical audio -> shared scheduler", policy); !status) {
+            "canonical audio -> shared scheduler", audioPolicy); !status) {
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }

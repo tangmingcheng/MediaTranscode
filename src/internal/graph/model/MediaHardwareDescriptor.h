@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
+
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -40,7 +42,9 @@ struct MediaHardwareDescriptor {
 
     std::string deviceName;
     std::string pixelFormat;
+    std::string surfacePixelFormat;
     std::string framesContextName;
+    MediaSize size;
 
     bool zeroCopyPreferred = true;
     bool requiresHardwareDeviceContext = false;

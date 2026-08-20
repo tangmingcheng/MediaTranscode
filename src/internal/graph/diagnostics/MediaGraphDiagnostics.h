@@ -34,6 +34,19 @@ struct MediaGraphDiagnosticSampleDecision {
     bool sampled = false;
 };
 
+class MediaGraphDiagnosticSampler final {
+public:
+    explicit MediaGraphDiagnosticSampler(
+        MediaGraphDiagnosticLevel requiredLevel) noexcept;
+
+    MediaGraphDiagnosticSampleDecision sample(bool force = false) noexcept;
+    void reset() noexcept;
+
+private:
+    MediaGraphDiagnosticLevel m_requiredLevel;
+    std::uint64_t m_sequence = 0;
+};
+
 enum class MediaGraphDiagnosticPhase {
     PlannerInput,
     PlannerCapability,

@@ -74,6 +74,9 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     auto transportLead = requiredPositiveInt64NodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
+    auto activationLead = requiredPositiveInt64NodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.activation_lead_ns");
     auto pacingEnabled = requiredBoolNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
@@ -88,7 +91,8 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled || !initialGeneration || !session) {
+        !transportLead || !activationLead || !pacingEnabled ||
+        !initialGeneration || !session) {
         const auto& error = !requireKeyFrame ? requireKeyFrame.error()
             : !maximumWait ? maximumWait.error()
             : !packetCapacity ? packetCapacity.error()
@@ -102,6 +106,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             : !packetTimeBaseDenominator ? packetTimeBaseDenominator.error()
             : !packetTimingMode ? packetTimingMode.error()
             : !transportLead ? transportLead.error()
+            : !activationLead ? activationLead.error()
             : !pacingEnabled ? pacingEnabled.error()
             : !initialGeneration ? initialGeneration.error()
             : session.error();
@@ -136,6 +141,8 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     }
     m_transportLead =
         MediaRunningTime::fromNanoseconds(transportLead.value());
+    m_activationLead =
+        MediaRunningTime::fromNanoseconds(activationLead.value());
     m_sourceTimeBase =
         MediaRational{sourceNumerator.value(), sourceDenominator.value()};
     m_outputFrameRate = MediaRational{
@@ -276,7 +283,9 @@ MediaVideoOutputSchedulerNode::emitPending(
     if (now.value() < *m_pendingDeadline) {
         return ::media::Result<MediaNodeProcessResult>::success(
             {MediaNodeProcessState::Waiting,
-             m_authority->deadlineWait(*m_pendingDeadline)});
+             m_authority->deadlineWait(
+                 *m_pendingDeadline,
+                 MediaNodeDeadlineWakePolicy::InputOrDeadline)});
     }
     MediaBufferRef scheduled = std::move(m_pendingScheduled);
     m_pendingDeadline.reset();
@@ -307,7 +316,7 @@ MediaVideoOutputSchedulerNode::onProcess(
                     deadline.error());
             }
             return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waitingUntil(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
                     m_startedAt + std::chrono::nanoseconds(
                         m_maximumStartupWait.nanoseconds())));
         }
@@ -364,7 +373,7 @@ MediaVideoOutputSchedulerNode::onProcess(
                 sourceStart.error());
         }
         auto activation = m_authority->activate(
-            sourceStart.value(), m_transportLead);
+            sourceStart.value(), m_activationLead);
         if (!activation) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 activation.error());
@@ -418,6 +427,7 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_startedMedia = false;
     m_maximumStartupWait = MediaRunningTime::fromNanoseconds(0);
     m_transportLead = MediaRunningTime::fromNanoseconds(0);
+    m_activationLead = MediaRunningTime::fromNanoseconds(0);
     m_packetCapacity = 0;
     m_maximumUnitBytes = 0;
     m_byteCapacity = 0;

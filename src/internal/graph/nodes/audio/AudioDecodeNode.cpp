@@ -10,6 +10,7 @@
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 extern "C" {
 #include <libavutil/error.h>
@@ -145,6 +146,8 @@ void AudioDecodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmp
 void AudioDecodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
+    m_firstPacketDiagnosticEmitted = false;
+    m_firstFrameDiagnosticEmitted = false;
     m_lineageState->resetForLifecycle();
 }
 
@@ -211,6 +214,13 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AudioDecodeNode requires an FFmpeg packet"));
+    }
+    if (!m_firstPacketDiagnosticEmitted) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "audio_decode_trace stage=first_packet");
+        m_firstPacketDiagnosticEmitted = true;
     }
     ::media::ffmpeg::PacketPtr pendingPacket(av_packet_clone(packet));
     if (!pendingPacket) {
@@ -360,6 +370,15 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 
         const int decodedSamples = frame->nb_samples;
         const int decodedRate = frame->sample_rate;
+        if (!m_firstFrameDiagnosticEmitted) {
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "audio_decode_trace stage=first_frame samples=" +
+                    std::to_string(decodedSamples) + " rate=" +
+                    std::to_string(decodedRate));
+            m_firstFrameDiagnosticEmitted = true;
+        }
         if (!codecContext() || decodedRate <= 0 ||
             decodedRate != codecContext()->sample_rate) {
             return ::media::Result<bool>::failure(

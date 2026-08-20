@@ -7,14 +7,13 @@
 namespace media::ffmpeg::graph {
 
 struct MediaTsOutputClockControlState final {
-    enum class PendingKind : std::uint8_t { None, Packet, Pcr };
-
     std::optional<std::int64_t> lastVideoExtendedDts;
     std::optional<std::int64_t> lastAudioExtendedDts;
     std::optional<MediaRunningTime> lastPcrMasterTime;
-    std::uint64_t nextRevision = 1;
-    std::uint64_t pendingRevision = 0;
-    PendingKind pendingKind = PendingKind::None;
+    std::uint64_t nextPacketRevision = 1;
+    std::uint64_t pendingPacketRevision = 0;
+    std::uint64_t nextPcrRevision = 1;
+    std::uint64_t pendingPcrRevision = 0;
 };
 
 namespace {
@@ -129,10 +128,8 @@ void MediaTsPreparedPacketClock::cancel() noexcept
 {
     if (!m_valid) return;
     if (auto owner = m_owner.lock(); owner &&
-        owner->pendingKind == MediaTsOutputClockControlState::PendingKind::Packet &&
-        owner->pendingRevision == m_revision) {
-        owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
-        owner->pendingRevision = 0;
+        owner->pendingPacketRevision == m_revision) {
+        owner->pendingPacketRevision = 0;
     }
     m_valid = false;
 }
@@ -180,10 +177,8 @@ void MediaTsPreparedPcrClock::cancel() noexcept
 {
     if (!m_valid) return;
     if (auto owner = m_owner.lock(); owner &&
-        owner->pendingKind == MediaTsOutputClockControlState::PendingKind::Pcr &&
-        owner->pendingRevision == m_revision) {
-        owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
-        owner->pendingRevision = 0;
+        owner->pendingPcrRevision == m_revision) {
+        owner->pendingPcrRevision = 0;
     }
     m_valid = false;
 }
@@ -290,15 +285,15 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
         return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("decode timeline regressed").error());
     }
-    if (m_control->pendingKind != MediaTsOutputClockControlState::PendingKind::None ||
-        m_control->nextRevision == 0 ||
-        m_control->nextRevision == std::numeric_limits<std::uint64_t>::max()) {
+    if (m_control->pendingPacketRevision != 0 ||
+        m_control->nextPacketRevision == 0 ||
+        m_control->nextPacketRevision ==
+            std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("already has a pending transaction or exhausted revisions").error());
     }
-    const std::uint64_t revision = m_control->nextRevision++;
-    m_control->pendingKind = MediaTsOutputClockControlState::PendingKind::Packet;
-    m_control->pendingRevision = revision;
+    const std::uint64_t revision = m_control->nextPacketRevision++;
+    m_control->pendingPacketRevision = revision;
     return ::media::Result<MediaTsPreparedPacketClock>::success(
         MediaTsPreparedPacketClock(
             m_control, revision, stream,
@@ -312,8 +307,7 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
 {
     auto owner = prepared.m_owner.lock();
     if (!prepared.m_valid || owner != m_control ||
-        owner->pendingKind != MediaTsOutputClockControlState::PendingKind::Packet ||
-        owner->pendingRevision != prepared.m_revision) {
+        owner->pendingPacketRevision != prepared.m_revision) {
         return invalid("packet transaction token is stale or foreign");
     }
     switch (prepared.m_stream) {
@@ -326,8 +320,7 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     default:
         return invalid("packet transaction stream is unsupported");
     }
-    owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
-    owner->pendingRevision = 0;
+    owner->pendingPacketRevision = 0;
     prepared.m_valid = false;
     return ::media::Status::success();
 }
@@ -340,9 +333,10 @@ MediaTsOutputClockGenerator::preparePcr(
     if (auto status = validateGeneration(generation); !status) {
         return ::media::Result<MediaTsPreparedPcrClock>::failure(status.error());
     }
-    if (m_control->pendingKind != MediaTsOutputClockControlState::PendingKind::None ||
-        m_control->nextRevision == 0 ||
-        m_control->nextRevision == std::numeric_limits<std::uint64_t>::max()) {
+    if (m_control->pendingPcrRevision != 0 ||
+        m_control->nextPcrRevision == 0 ||
+        m_control->nextPcrRevision ==
+            std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Result<MediaTsPreparedPcrClock>::failure(
             invalid("already has a pending transaction or exhausted revisions").error());
     }
@@ -362,9 +356,8 @@ MediaTsOutputClockGenerator::preparePcr(
     if (!extended) {
         return ::media::Result<MediaTsPreparedPcrClock>::failure(extended.error());
     }
-    const std::uint64_t revision = m_control->nextRevision++;
-    m_control->pendingKind = MediaTsOutputClockControlState::PendingKind::Pcr;
-    m_control->pendingRevision = revision;
+    const std::uint64_t revision = m_control->nextPcrRevision++;
+    m_control->pendingPcrRevision = revision;
     return ::media::Result<MediaTsPreparedPcrClock>::success(
         MediaTsPreparedPcrClock(
             m_control, revision,
@@ -378,13 +371,11 @@ MediaTsOutputClockGenerator::preparePcr(
 {
     auto owner = prepared.m_owner.lock();
     if (!prepared.m_valid || owner != m_control ||
-        owner->pendingKind != MediaTsOutputClockControlState::PendingKind::Pcr ||
-        owner->pendingRevision != prepared.m_revision) {
+        owner->pendingPcrRevision != prepared.m_revision) {
         return invalid("PCR transaction token is stale or foreign");
     }
     owner->lastPcrMasterTime = prepared.m_clock.masterTime;
-    owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
-    owner->pendingRevision = 0;
+    owner->pendingPcrRevision = 0;
     prepared.m_valid = false;
     return ::media::Status::success();
 }

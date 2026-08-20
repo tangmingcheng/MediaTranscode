@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeOutputValidator.h"
+#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -67,8 +68,9 @@ bool validRtpStream(
         candidate.packetization.maximumDatagramBytes() > 0 &&
         (video
              ? !candidate.packetization.maximumAccessUnitSamples()
-             : candidate.packetization.maximumAccessUnitSamples() ==
-                   runtime.audioCorrection.protocolBatchSamples) &&
+             : runtime.planningFacts.protocolBatchSamples &&
+                   candidate.packetization.maximumAccessUnitSamples() ==
+                       runtime.planningFacts.protocolBatchSamples) &&
         candidate.transport.maximumDatagramBytes() ==
             candidate.packetization.maximumDatagramBytes() &&
         candidate.transport.remoteRtpEndpoint().addressFamily() == family &&
@@ -148,7 +150,8 @@ bool validRtpStream(
             *runtime.planningFacts.outputVideoRtpPacketization,
             outer.videoPlan.outputCodecName,
             MediaScheduledStream::Video,
-            MediaScheduledRtpPacketizationMode::H264AnnexB,
+            runtime.planningFacts.outputVideoRtpPacketization
+                ->packetizationMode(),
             runtime) ||
         !validRtpStream(
             output.audio, synchronization.audioOutput,
@@ -200,14 +203,21 @@ bool validRtpStream(
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
     const auto& mux = output.protocol.muxPlan().parameters();
+    auto expectedEmission = MediaTsDatagramEmissionPlan::create(
+        output.protocol.muxPlan(),
+        output.emission.videoInitialServiceWindow(),
+        output.emission.audioInitialServiceWindow(),
+        output.emission.maximumQueuedBytes());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
+        runtime.planningFacts.outputSampleRate &&
         MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
-            runtime.audioCorrection.outputSampleRate;
+            *runtime.planningFacts.outputSampleRate;
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
-        !sampleRateMatches ||
+        !sampleRateMatches || !expectedEmission ||
+        output.emission != expectedEmission.value() ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {
@@ -218,6 +228,8 @@ bool validRtpStream(
             std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
         if (!udp || mux.transportKind !=
                          MediaOutputTransportKind::UdpDatagrams ||
+            output.scheduledBatchMaximumBytes != 0 ||
+            output.emission.perDatagramOverheadBytes() != 0 ||
             *runtime.synchronization.projectMpegTsOutput
                  ->useSharedNtpEpoch ||
             udp->url.empty() ||
@@ -242,11 +254,21 @@ bool validRtpStream(
     const auto& remoteRtcp = sender.remoteRtcpEndpoint();
     auto maximumPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         rtp->maximumDatagramBytes());
+    auto expectedPacing = MediaScheduledDatagramPacingPlanner::plan(
+        sender);
     auto sdpIdentity = MediaSdpSessionIdentity::create(
         rtp->sdp().originUsername, 0, 0, rtp->sdp().sessionName,
         rtp->sdp().originAddressFamily,
         rtp->sdp().originNumericAddress, rtp->sdp().cname);
-    if (!maximumPackets || !sdpIdentity ||
+    if (!maximumPackets || !sdpIdentity || !expectedPacing ||
+        rtp->pacing() != expectedPacing.value() ||
+        output.scheduledBatchMaximumBytes == 0 ||
+        output.scheduledBatchMaximumBytes !=
+            runtime.edgePolicies.synchronizedPacket.bufferPolicy
+                .memoryBudget.maxBytes ||
+        output.emission.perDatagramOverheadBytes() != 12 ||
+        output.emission.maximumWireDatagramBytes() >
+            rtp->maximumDatagramBytes() ||
         rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
         rtp->ssrc() == 0 || rtp->cname().empty() ||
         rtp->initialSequenceNumber() !=
@@ -260,9 +282,7 @@ bool validRtpStream(
         rtp->maximumDatagramBytes() != sender.maximumDatagramBytes() ||
         rtp->maximumDatagramBytes() >
             static_cast<std::size_t>(
-                (std::numeric_limits<int>::max)() / 2) ||
-        sender.sendBufferBytes() <
-            static_cast<int>(rtp->maximumDatagramBytes() * 2) ||
+                (std::numeric_limits<int>::max)()) ||
         rtp->tsPacketsPerPayload() != maximumPackets.value() ||
         mux.maximumPacketsPerDatagram != rtp->tsPacketsPerPayload() ||
         sender.ioBehavior() !=

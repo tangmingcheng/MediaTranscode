@@ -9,6 +9,8 @@ namespace media::ffmpeg::graph {
 class MediaRtpOutputIdentityPlanner final {
 public:
     static std::uint32_t stableNumeric(std::string_view identity) noexcept;
+    static std::uint32_t stableFfmpegMuxSsrc(
+        std::string_view identity) noexcept;
     static std::uint16_t stableSequenceNumber(
         std::string_view identity) noexcept;
     static std::string cname(std::string_view sessionIdentity);

@@ -35,6 +35,13 @@ bool sameCodec(const MediaSdpCodecDescription& left,
             h264->spropParameterSets() == other.spropParameterSets() &&
             h264->packetizationMode() == other.packetizationMode();
     }
+    if (const auto* hevc =
+            std::get_if<MediaHevcSdpCodecDescription>(&left)) {
+        const auto& other = std::get<MediaHevcSdpCodecDescription>(right);
+        return hevc->spropVps() == other.spropVps() &&
+            hevc->spropSps() == other.spropSps() &&
+            hevc->spropPps() == other.spropPps();
+    }
     const auto& aac = std::get<MediaAacLatmSdpCodecDescription>(left);
     const auto& other = std::get<MediaAacLatmSdpCodecDescription>(right);
     return aac.sampleRate() == other.sampleRate() &&

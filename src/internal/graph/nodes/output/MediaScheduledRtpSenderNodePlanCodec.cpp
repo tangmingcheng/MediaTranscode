@@ -3,6 +3,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/protocol/rtp/MediaScheduledRtpPacketizationModeCodec.h"
 
 #include <array>
 #include <charconv>
@@ -185,9 +186,8 @@ template <typename Unsigned>
         {"scheduled_rtp.packetization.time_base_den",
              std::to_string(output.packetization.streamTimeBaseDenominator())},
         {"scheduled_rtp.packetization.mode",
-             output.packetization.packetizationMode() ==
-                     MediaScheduledRtpPacketizationMode::H264AnnexB
-                 ? "h264_annexb" : "aac_latm"},
+             std::string(MediaScheduledRtpPacketizationModeCodec::encode(
+                 output.packetization.packetizationMode()))},
         {"scheduled_rtp.packetization.payload_type",
              std::to_string(output.packetization.payloadType())},
         {"scheduled_rtp.packetization.maximum_datagram_bytes",
@@ -350,10 +350,10 @@ MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
         streamKind, codec.value(), timeBaseNum.value(), timeBaseDen.value(),
         payloadType.value(), packetMaximum.value(), maximumSamples);
     if (!packetization) return DecodedResult::failure(packetization.error());
-    const char* expectedMode = packetization.value().packetizationMode() ==
-            MediaScheduledRtpPacketizationMode::H264AnnexB
-        ? "h264_annexb" : "aac_latm";
-    if (mode.value() != expectedMode ||
+    auto decodedMode = MediaScheduledRtpPacketizationModeCodec::decode(
+        mode.value());
+    if (!decodedMode ||
+        decodedMode.value() != packetization.value().packetizationMode() ||
         packetMaximum.value() != transportMaximum.value()) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP packetization options contradict the planned transport"));

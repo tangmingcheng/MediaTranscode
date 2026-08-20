@@ -3,6 +3,7 @@
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
 extern "C" {
@@ -28,14 +29,6 @@ MediaHardwareCapability unavailable(std::string reason)
 MediaHardwareCapability ffmpegUnavailable(const std::string& operation, int code)
 {
     return unavailable(operation + " failed: " + FFmpegGraphError::describe(code));
-}
-
-bool rkmppRuntimeAvailable()
-{
-    return MediaHardwareCapabilityProbe::decoderExists("h264_rkmpp") ||
-           MediaHardwareCapabilityProbe::decoderExists("hevc_rkmpp") ||
-           MediaHardwareCapabilityProbe::encoderExists("h264_rkmpp") ||
-           MediaHardwareCapabilityProbe::encoderExists("hevc_rkmpp");
 }
 
 AVPixelFormat pixelFormat(const std::string& name) noexcept
@@ -91,6 +84,176 @@ bool decoderSupportsDevice(const AVCodec& decoder,
     return frames;
 }
 
+::media::ffmpeg::BufferRefPtr createRkmppProbeDevice(
+    std::string& failure)
+{
+#if defined(__linux__)
+    AVBufferRef* rawDevice = nullptr;
+    const int result = av_hwdevice_ctx_create(
+        &rawDevice, AV_HWDEVICE_TYPE_RKMPP, nullptr, nullptr, 0);
+    ::media::ffmpeg::BufferRefPtr device(rawDevice);
+    if (result < 0 || !device) {
+        failure = FFmpegGraphError::describe(result);
+        return {};
+    }
+    return device;
+#else
+    failure = "RKMPP device probing is unavailable on this platform";
+    return {};
+#endif
+}
+
+MediaHardwareCapability validateInternallyManagedRkmppChain(
+    const MediaPipelineChainPlan& chain,
+    const MediaPipelinePlannerOptions& options)
+{
+    if (!chain.decoder.outputFrame || !chain.encoder.inputFrame) {
+        return unavailable("RKMPP frame contracts are missing");
+    }
+
+    const AVPixelFormat decoderFormat =
+        pixelFormat(chain.decoder.outputFrame->pixelFormat);
+    const AVPixelFormat encoderFormat =
+        pixelFormat(chain.encoder.inputFrame->pixelFormat);
+    const AVPixelFormat encoderSurfaceFormat =
+        pixelFormat(chain.encoder.inputFrame->surfacePixelFormat);
+    if (decoderFormat != AV_PIX_FMT_DRM_PRIME ||
+        encoderFormat != AV_PIX_FMT_DRM_PRIME ||
+        encoderSurfaceFormat == AV_PIX_FMT_NONE) {
+        return unavailable(
+            "RKMPP codecs require advertised DRM PRIME frames and an explicit surface format");
+    }
+
+    const AVCodec* decoder =
+        avcodec_find_decoder_by_name(chain.decoder.ffmpegName.c_str());
+    if (!decoder) {
+        return unavailable("planned decoder is unavailable: " + chain.decoder.ffmpegName);
+    }
+    if (!ffmpegCodecSupportsPixelFormat(decoder, decoderFormat)) {
+        return unavailable("planned RKMPP decoder does not advertise DRM PRIME frames");
+    }
+
+    const AVCodec* encoder =
+        avcodec_find_encoder_by_name(chain.encoder.ffmpegName.c_str());
+    if (!encoder) {
+        return unavailable("planned encoder is unavailable: " + chain.encoder.ffmpegName);
+    }
+    if (!ffmpegCodecSupportsPixelFormat(encoder, encoderFormat)) {
+        return unavailable("planned RKMPP encoder does not advertise DRM PRIME frames");
+    }
+
+    if (chain.filterActive) {
+        if (chain.filterImplementation != MediaVideoFilterImplementation::Rga ||
+            chain.filter.filterName.empty() ||
+            !chain.filter.inputFrame || !chain.filter.outputFrame) {
+            return unavailable("planned RKMPP resize filter contract is incomplete");
+        }
+        auto probeFrame = ::media::ffmpeg::makeFrame();
+        if (!probeFrame) {
+            return unavailable("av_frame_alloc(RKMPP filter probe) returned null");
+        }
+        std::string rkmppDeviceFailure;
+        auto rkmppDevice = createRkmppProbeDevice(rkmppDeviceFailure);
+        if (!rkmppDevice) {
+            return unavailable(
+                "planned RKMPP RGA device probe failed: " +
+                rkmppDeviceFailure);
+        }
+        std::string framesFailure;
+        auto probeFrames = createFramesContext(
+            rkmppDevice.get(), decoderFormat, encoderSurfaceFormat,
+            chain.filter.inputFrame->size.width,
+            chain.filter.inputFrame->size.height,
+            4, framesFailure);
+        if (!probeFrames) {
+            return unavailable(
+                "planned RKMPP RGA frames probe failed: " + framesFailure);
+        }
+        probeFrame->format = decoderFormat;
+        probeFrame->width = chain.filter.inputFrame->size.width;
+        probeFrame->height = chain.filter.inputFrame->size.height;
+        probeFrame->sample_aspect_ratio = AVRational{1, 1};
+        probeFrame->hw_frames_ctx = av_buffer_ref(probeFrames.get());
+        if (!probeFrame->hw_frames_ctx) {
+            return unavailable(
+                "av_buffer_ref(RKMPP RGA probe frames context) returned null");
+        }
+
+        MediaNodeOptions filterOptions;
+        filterOptions.set("filter.pipeline.filter", chain.filter.filterName);
+        VideoFilterGraphBuildRequest request;
+        request.options = &filterOptions;
+        request.firstFrame = probeFrame.get();
+        request.inputTimeBase =
+            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
+        request.inputFrameRate =
+            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
+        request.sampleAspectRatio = AVRational{1, 1};
+        auto filterGraph = VideoFilterGraphBuilder::build(request);
+        if (!filterGraph) {
+            return unavailable(
+                "planned RKMPP RGA graph negotiation failed: " +
+                filterGraph.error().message);
+        }
+        const int sinkFormat = av_buffersink_get_format(
+            filterGraph.value().bufferSink);
+        const int sinkWidth = av_buffersink_get_w(
+            filterGraph.value().bufferSink);
+        const int sinkHeight = av_buffersink_get_h(
+            filterGraph.value().bufferSink);
+        if (sinkFormat != encoderFormat ||
+            sinkWidth != chain.filter.outputFrame->size.width ||
+            sinkHeight != chain.filter.outputFrame->size.height) {
+            return unavailable(
+                "planned RKMPP RGA graph negotiated a different output frame contract");
+        }
+    }
+
+    auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
+    if (!decoderContext) {
+        return unavailable("avcodec_alloc_context3(RKMPP decoder) returned null");
+    }
+    decoderContext->width = options.probeWidth;
+    decoderContext->height = options.probeHeight;
+    const int decoderOpened = avcodec_open2(decoderContext.get(), decoder, nullptr);
+    if (decoderOpened < 0) {
+        return ffmpegUnavailable(
+            "avcodec_open2(decoder " + chain.decoder.ffmpegName + ")",
+            decoderOpened);
+    }
+
+    auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
+    if (!encoderContext) {
+        return unavailable("avcodec_alloc_context3(RKMPP encoder) returned null");
+    }
+    encoderContext->width =
+        options.targetWidth > 0 ? options.targetWidth : options.probeWidth;
+    encoderContext->height =
+        options.targetHeight > 0 ? options.targetHeight : options.probeHeight;
+    encoderContext->pix_fmt = encoderFormat;
+    encoderContext->sw_pix_fmt = encoderSurfaceFormat;
+    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
+    encoderContext->time_base =
+        AVRational{encoderFrameRate.den, encoderFrameRate.num};
+    encoderContext->framerate =
+        AVRational{encoderFrameRate.num, encoderFrameRate.den};
+    encoderContext->sample_aspect_ratio = AVRational{1, 1};
+    if (options.lowLatency) {
+        encoderContext->max_b_frames = 0;
+    }
+    const int encoderOpened = avcodec_open2(encoderContext.get(), encoder, nullptr);
+    if (encoderOpened < 0) {
+        return ffmpegUnavailable(
+            "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
+            encoderOpened);
+    }
+
+    return {true, chain.filterActive
+                      ? "internally managed RKMPP codecs and planned RGA graph negotiated"
+                      : "internally managed RKMPP codecs opened without a filter"};
+}
+
 MediaHardwareCapability validateCompleteChain(
     const MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
@@ -102,41 +265,43 @@ MediaHardwareCapability validateCompleteChain(
     if (options.probeWidth <= 0 || options.probeHeight <= 0) {
         return unavailable("hardware chain validation requires planner-resolved probe dimensions");
     }
-    if (!options.probeFrameRate.isKnown()) {
-        return unavailable("hardware chain validation requires planner-resolved probe frame rate");
+    if (!options.sourceFrameRate.isKnown()) {
+        return unavailable("hardware chain validation requires planner-resolved source frame rate");
+    }
+
+    if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
+        return validateInternallyManagedRkmppChain(chain, options);
+    }
+
+    if (!chain.decoder.outputFrame || !chain.encoder.inputFrame) {
+        return unavailable("hardware chain requires decoder output and encoder input frame contracts");
     }
 
     const int outputWidth = options.targetWidth > 0 ? options.targetWidth : options.probeWidth;
     const int outputHeight = options.targetHeight > 0 ? options.targetHeight : options.probeHeight;
-    const AVPixelFormat hardwareFormat = pixelFormat(chain.encoder.hardwareFramesFormat);
-    const AVPixelFormat surfaceFormat = pixelFormat(chain.encoder.surfacePixelFormat);
-    const AVPixelFormat encoderFormat = pixelFormat(chain.encoder.pixelFormat);
+    const AVPixelFormat hardwareFormat = pixelFormat(chain.encoder.inputFrame->pixelFormat);
+    const AVPixelFormat surfaceFormat = pixelFormat(chain.encoder.inputFrame->surfacePixelFormat);
+    const AVPixelFormat encoderFormat = pixelFormat(chain.encoder.inputFrame->pixelFormat);
     if (encoderFormat == AV_PIX_FMT_NONE) {
         return unavailable("planned encoder pixel format is not recognized by FFmpeg");
     }
 
     AVHWDeviceType deviceType = AV_HWDEVICE_TYPE_NONE;
     ::media::ffmpeg::BufferRefPtr device;
-    if (chain.decoder.deviceKind == MediaHardwareDeviceKind::RKMPP) {
-        if (!rkmppRuntimeAvailable()) {
-            return unavailable("RKMPP runtime codecs are unavailable");
-        }
-    } else {
-        if (chain.decoder.hwaccelName.empty()) {
-            return unavailable("hardware chain has no planned FFmpeg hardware device name");
-        }
-        deviceType = av_hwdevice_find_type_by_name(chain.decoder.hwaccelName.c_str());
-        if (deviceType == AV_HWDEVICE_TYPE_NONE) {
-            return unavailable("hardware backend is not recognized by FFmpeg");
-        }
+    if (chain.decoder.hwaccelName.empty()) {
+        return unavailable("hardware chain has no planned FFmpeg hardware device name");
+    }
+    deviceType = av_hwdevice_find_type_by_name(chain.decoder.hwaccelName.c_str());
+    if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+        return unavailable("hardware backend is not recognized by FFmpeg");
+    }
 
-        AVBufferRef* rawDevice = nullptr;
-        const int created = av_hwdevice_ctx_create(
-            &rawDevice, deviceType, nullptr, nullptr, 0);
-        device.reset(rawDevice);
-        if (created < 0 || !device) {
-            return ffmpegUnavailable("av_hwdevice_ctx_create", created);
-        }
+    AVBufferRef* rawDevice = nullptr;
+    const int created = av_hwdevice_ctx_create(
+        &rawDevice, deviceType, nullptr, nullptr, 0);
+    device.reset(rawDevice);
+    if (created < 0 || !device) {
+        return ffmpegUnavailable("av_hwdevice_ctx_create", created);
     }
 
     const AVCodec* decoder =
@@ -196,10 +361,13 @@ MediaHardwareCapability validateCompleteChain(
     encoderContext->width = outputWidth;
     encoderContext->height = outputHeight;
     encoderContext->pix_fmt = encoderFormat;
+    encoderContext->sw_pix_fmt = surfaceFormat;
+    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
     encoderContext->time_base =
-        AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+        AVRational{encoderFrameRate.den, encoderFrameRate.num};
     encoderContext->framerate =
-        AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+        AVRational{encoderFrameRate.num, encoderFrameRate.den};
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
     if (options.lowLatency) {
         encoderContext->max_b_frames = 0;
@@ -220,7 +388,7 @@ MediaHardwareCapability validateCompleteChain(
         encoderContext->hw_frames_ctx = encoderFrames.release();
     }
 
-    if (options.filterRequired) {
+    if (chain.filterActive) {
         auto firstFrame = ::media::ffmpeg::makeFrame();
         if (!firstFrame) {
             return unavailable("av_frame_alloc(filter capability) returned null");
@@ -241,9 +409,9 @@ MediaHardwareCapability validateCompleteChain(
         request.options = &filterOptions;
         request.firstFrame = firstFrame.get();
         request.inputTimeBase =
-            AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
         request.inputFrameRate =
-            AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
         request.sampleAspectRatio = AVRational{1, 1};
         auto filterGraph = VideoFilterGraphBuilder::build(request);
         if (!filterGraph) {
@@ -313,7 +481,7 @@ MediaHardwareCapabilityProbe::MediaHardwareCapabilityProbe(
 
     MediaHardwareCapability capability = m_chainValidator(chain, options);
     std::ostringstream out;
-    out << "backend=" << mediaHardwareDeviceKindName(chain.decoder.deviceKind)
+    out << "backend=" << mediaHardwareDeviceKindName(chain.decoder.deviceKind())
         << " status=" << (capability.available ? "found" : "not_found")
         << " probe=decoder_filter_encoder_open"
         << " note=" << capability.reason;
@@ -323,7 +491,7 @@ MediaHardwareCapabilityProbe::MediaHardwareCapabilityProbe(
 
     chain.decoder.available = capability.available;
     chain.decoder.availabilityReason = capability.reason;
-    if (options.filterRequired) {
+    if (chain.filterActive) {
         chain.filter.available = capability.available;
         chain.filter.availabilityReason = capability.reason;
     }

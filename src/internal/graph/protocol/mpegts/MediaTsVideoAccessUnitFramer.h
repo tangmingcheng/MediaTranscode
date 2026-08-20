@@ -8,7 +8,7 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaTsH264AccessUnitFramer final {
+class MediaTsVideoAccessUnitFramer final {
 public:
     static ::media::Result<std::span<const std::uint8_t>> frame(
         const MediaTsMuxPlan& plan,

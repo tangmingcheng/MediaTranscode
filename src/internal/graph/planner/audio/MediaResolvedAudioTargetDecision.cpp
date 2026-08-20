@@ -2,6 +2,7 @@
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
+#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -117,6 +118,16 @@ template <typename T>
     decision.m_branchMode = copy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     decision.m_rateControl = request.rateControl;
     decision.m_bitrateKbps = request.bitrateKbps;
+    if (!decision.m_bitrateKbps && source.bitrateBitsPerSecond > 0) {
+        const int64_t sourceBitrateKbps =
+            (source.bitrateBitsPerSecond + 999) / 1000;
+        if (sourceBitrateKbps > std::numeric_limits<int>::max()) {
+            return ::media::Result<MediaResolvedAudioTargetDecision>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "resolved source audio bitrate exceeds integer range"));
+        }
+        decision.m_bitrateKbps = static_cast<int>(sourceBitrateKbps);
+    }
     decision.m_minBitrateKbps = request.minBitrateKbps;
     decision.m_maxBitrateKbps = request.maxBitrateKbps;
     decision.m_bufferSizeKbits = request.bufferSizeKbits;

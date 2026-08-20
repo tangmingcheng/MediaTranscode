@@ -23,7 +23,8 @@ MediaProjectMpegTsMuxSegmentBuilder::build(
 {
     if (options.prefix.empty() ||
         (!options.expectVideo && !options.expectAudio) ||
-        options.sessionKind != MediaMuxSessionKind::ProjectMpegTs) {
+        options.sessionKind != MediaMuxSessionKind::ProjectMpegTs ||
+        options.requireByteSinkResource == options.emitScheduledDatagrams) {
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Project MPEG-TS mux segment requires complete planner assembly facts"));
@@ -83,6 +84,15 @@ MediaProjectMpegTsMuxSegmentBuilder::build(
             MediaPayloadKind::ProjectMpegTsRuntimePlan,
             true, false); !added) {
         return ::media::Result<MediaNodeId>::failure(added.error());
+    }
+    if (options.emitScheduledDatagrams) {
+        auto added = MediaGraphBuildSupport::addOutputPortChecked(
+            graph, Owner, mux, "batch", MediaStreamKind::Metadata,
+            MediaEdgeKind::ScheduledDatagramBatch,
+            MediaPayloadKind::ScheduledDatagramBatch, true, false);
+        if (!added) {
+            return ::media::Result<MediaNodeId>::failure(added.error());
+        }
     }
     return ::media::Result<MediaNodeId>::success(mux);
 }

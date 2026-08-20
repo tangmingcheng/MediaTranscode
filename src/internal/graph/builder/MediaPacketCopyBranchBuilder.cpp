@@ -127,7 +127,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                    "codec",
                                                                    options.streamKind,
                                                                    MediaEdgeKind::Metadata,
-                                                                   MediaPayloadKind::CodecParameters,
+                                                                   MediaPayloadKind::CodecContext,
                                                                    true,
                                                                    false); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (*options.normalizePackets) {

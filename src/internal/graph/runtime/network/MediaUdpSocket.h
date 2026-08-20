@@ -34,7 +34,9 @@ public:
         std::shared_ptr<MediaSocketRuntime> runtime, const MediaUdpSocketConfig& config);
 
     bool isOpen() const noexcept;
+    intptr_t nativeHandle() const noexcept;
     uint16_t localPort() const noexcept;
+    int effectiveReceiveBufferBytes() const noexcept;
     ::media::Status sendTo(const std::string& address, uint16_t port,
                            std::span<const uint8_t> datagram) const;
     void close() noexcept;
@@ -43,7 +45,7 @@ private:
     struct Impl;
     explicit MediaUdpSocket(std::unique_ptr<Impl> impl) noexcept;
     ::media::Result<std::vector<uint8_t>> receive(std::size_t maximumDatagramBytes);
-    void* waitHandle() const noexcept;
+    intptr_t waitHandle() const noexcept;
     ::media::Status consumeNetworkEvent() noexcept;
 
     friend class MediaRtpUdpTransport;

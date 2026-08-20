@@ -2,18 +2,21 @@ cmake_minimum_required(VERSION 3.21.1)
 
 project(MediaTranscode LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_DEPFILE_FLAGS_CXX "")
 set(CMAKE_CXX_DEPFILE_FORMAT "")
 set(CMAKE_CXX_SCANDEP_SOURCE "")
 
 set(TARGET_CORE "media_transcode_core")
+set(TARGET_REALTIME_APPLICATION "media_transcode_realtime_application")
+set(TARGET_BETA "media_transcode_beta")
 set(TARGET_LOCAL_VIDEO_CLI "media_transcode_local_video_cli")
 set(TARGET_REALTIME_VIDEO_CLI "media_transcode_realtime_video_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
-
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
@@ -25,10 +28,14 @@ set(MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES
 )
 
 set(MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES
+    src/internal/graph/planner/MediaEncoderRateControlPlanner.cpp
+    src/internal/graph/planner/MediaEncoderRateControlPlanner.h
     src/internal/graph/planner/MediaPipelineAudioSourceProbe.cpp
     src/internal/graph/planner/MediaPipelineAudioSourceProbe.h
     src/internal/graph/planner/MediaPipelineCapabilityScanner.cpp
     src/internal/graph/planner/MediaPipelineCapabilityScanner.h
+    src/internal/graph/planner/MediaPipelineHardwareBackendConstraint.cpp
+    src/internal/graph/planner/MediaPipelineHardwareBackendConstraint.h
     src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.cpp
     src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.h
     src/internal/graph/planner/capability/MediaInputCapabilityProbe.cpp
@@ -104,8 +111,22 @@ if(WIN32)
         swscale
         swresample
     )
-elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     find_package(PkgConfig REQUIRED)
+    if(DEFINED ENV{PKG_CONFIG_PATH})
+        set(ffmpeg_pkg_config_path_was_defined TRUE)
+    else()
+        set(ffmpeg_pkg_config_path_was_defined FALSE)
+    endif()
+    if(DEFINED ENV{PKG_CONFIG_LIBDIR})
+        set(ffmpeg_pkg_config_libdir_was_defined TRUE)
+    else()
+        set(ffmpeg_pkg_config_libdir_was_defined FALSE)
+    endif()
+    set(ffmpeg_original_pkg_config_path "$ENV{PKG_CONFIG_PATH}")
+    set(ffmpeg_original_pkg_config_libdir "$ENV{PKG_CONFIG_LIBDIR}")
+    include(cmake/MediaTranscodeFFmpegDiscovery.cmake)
+    media_transcode_select_runtime_ffmpeg_pkg_config(FFMPEG_PKG_CONFIG_DIR)
 
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavfilter
@@ -115,6 +136,20 @@ elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
         libswscale
         libswresample
     )
+    if(ffmpeg_pkg_config_path_was_defined)
+        set(ENV{PKG_CONFIG_PATH} "${ffmpeg_original_pkg_config_path}")
+    else()
+        unset(ENV{PKG_CONFIG_PATH})
+    endif()
+    if(ffmpeg_pkg_config_libdir_was_defined)
+        set(ENV{PKG_CONFIG_LIBDIR} "${ffmpeg_original_pkg_config_libdir}")
+    else()
+        unset(ENV{PKG_CONFIG_LIBDIR})
+    endif()
+    unset(ffmpeg_pkg_config_path_was_defined)
+    unset(ffmpeg_pkg_config_libdir_was_defined)
+    unset(ffmpeg_original_pkg_config_path)
+    unset(ffmpeg_original_pkg_config_libdir)
 
     target_link_libraries(thirdparty_ffmpeg INTERFACE
         PkgConfig::FFMPEG
@@ -139,6 +174,7 @@ endif()
 target_link_libraries(${TARGET_CORE}
     PUBLIC
         thirdparty_ffmpeg
+        Threads::Threads
     PRIVATE
         thirdparty_spdlog
 )
@@ -147,8 +183,51 @@ if(WIN32)
     target_link_libraries(${TARGET_CORE} PUBLIC ws2_32)
 endif()
 
-function(media_transcode_configure_app target_name)
-    target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
+add_library(${TARGET_REALTIME_APPLICATION} STATIC
+    src/application/realtime/MediaRealtimeVideoRunController.cpp
+    src/application/realtime/MediaRealtimeVideoRunController.h
+)
+add_library(MediaTranscode::realtime_application ALIAS
+    ${TARGET_REALTIME_APPLICATION}
+)
+target_include_directories(${TARGET_REALTIME_APPLICATION} PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+)
+target_compile_features(${TARGET_REALTIME_APPLICATION} PUBLIC cxx_std_20)
+target_link_libraries(${TARGET_REALTIME_APPLICATION} PUBLIC
+    MediaTranscode::core
+)
+if(MSVC)
+    target_compile_options(${TARGET_REALTIME_APPLICATION} PRIVATE /utf-8 /EHsc)
+endif()
+
+add_library(${TARGET_BETA} STATIC
+    src/media_transcode_beta/MediaRealtimeBetaApi.cpp
+    src/media_transcode_beta/MediaRealtimeBetaFixedProfile.cpp
+    src/media_transcode_beta/MediaRealtimeBetaOwnedConfig.cpp
+    src/media_transcode_beta/MediaRealtimeBetaRequestMapper.cpp
+    src/media_transcode_beta/MediaRealtimeBetaSession.cpp
+    src/media_transcode_beta/MediaRealtimeBetaSnapshotProjector.cpp
+    src/media_transcode_beta/MediaRealtimeBetaTemporaryDescription.cpp
+)
+add_library(MediaTranscode::beta ALIAS ${TARGET_BETA})
+target_include_directories(${TARGET_BETA}
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(${TARGET_BETA} PUBLIC cxx_std_20)
+target_link_libraries(${TARGET_BETA} PUBLIC
+    MediaTranscode::realtime_application
+)
+if(MSVC)
+    target_compile_options(${TARGET_BETA} PRIVATE /utf-8 /EHsc)
+endif()
+
+function(media_transcode_configure_app target_name linked_target)
+    target_link_libraries(${target_name} PRIVATE ${linked_target})
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_include_directories(${target_name} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -163,10 +242,13 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
     add_executable(${TARGET_LOCAL_VIDEO_CLI}
         tools/local_video_cli/main.cpp
     )
-    media_transcode_configure_app(${TARGET_LOCAL_VIDEO_CLI})
+    media_transcode_configure_app(${TARGET_LOCAL_VIDEO_CLI} MediaTranscode::core)
 
     add_executable(${TARGET_REALTIME_VIDEO_CLI}
         tools/realtime_video_cli/main.cpp
     )
-    media_transcode_configure_app(${TARGET_REALTIME_VIDEO_CLI})
+    media_transcode_configure_app(
+        ${TARGET_REALTIME_VIDEO_CLI}
+        MediaTranscode::realtime_application
+    )
 endif()

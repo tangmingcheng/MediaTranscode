@@ -99,8 +99,10 @@ private:
         const MediaTsSelectedProgramPlan* selectedTsProgram,
         const MediaPreparedRealtimeInput* preparedInput,
         const MediaPreparedRealtimeInput* preparedAudioInput,
+        const MediaRtpIngressPlan* preparedVideoIngress,
         std::optional<MediaPipelinePlan> preplannedVideo,
-        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling);
+        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling,
+        const MediaRational* detectedVideoFrameRate);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

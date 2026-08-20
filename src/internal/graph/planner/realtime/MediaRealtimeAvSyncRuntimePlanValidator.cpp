@@ -25,18 +25,28 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument(
                 std::string("Invalid synchronized runtime product: ") + field));
     };
-    if (runtime.audioPipeline.branchMode != MediaBranchMode::TranscodeFrame) {
+    const bool audioCopy =
+        runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket;
+    const bool audioTranscode =
+        runtime.audioPipeline.branchMode == MediaBranchMode::TranscodeFrame;
+    if (!audioCopy && !audioTranscode) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported(
-                "Synchronized runtime product rejects audio packet copy"));
+                "Synchronized runtime product requires copy or frame transcode audio"));
     }
     if (outer.videoPlan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported(
                 "Synchronized runtime product rejects video packet copy"));
     }
+    const auto synchronizationStatus = audioTranscode
+        ? MediaAvSyncPlanValidator::validate(runtime.synchronization)
+        : MediaAvSyncPlanValidator::validatePolicy(runtime.synchronization);
     if (runtime.groupKey.value() != "realtime.av" ||
-        !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {
+        !synchronizationStatus ||
+        !runtime.synchronization.startup.trimAudioToCommonStart ||
+        *runtime.synchronization.startup.trimAudioToCommonStart !=
+            audioTranscode) {
         return invalid("group or synchronization plan");
     }
     auto selectedBounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(
@@ -107,23 +117,42 @@ namespace media::ffmpeg::graph {
             *runtime.synchronization.audioServo.minimumUpdateIntervalNs) {
         return invalid("production assembly common contract");
     }
-    auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
-        runtime.synchronization, runtime.planningFacts);
-    if (!expectedCorrection ||
-        runtime.audioCorrection != expectedCorrection.value().correction ||
-        !runtime.synchronization.audioServo.commandLeadNs ||
-        !runtime.synchronization.audioServo.compensationWindowNs ||
-        !runtime.synchronization.audioServo.frequencyFilterTimeConstantNs ||
-        *runtime.synchronization.audioServo.commandLeadNs !=
-            expectedCorrection.value().commandLead ||
-        *runtime.synchronization.audioServo.compensationWindowNs !=
-            expectedCorrection.value().compensationWindow ||
-        *runtime.synchronization.audioServo.frequencyFilterTimeConstantNs !=
-            expectedCorrection.value().frequencyFilterTimeConstant) {
-        return invalid("audio correction derivation");
+    if (audioTranscode) {
+        auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
+            runtime.synchronization, runtime.planningFacts);
+        if (!expectedCorrection || !runtime.audioCorrection ||
+            *runtime.audioCorrection != expectedCorrection.value().correction ||
+            !runtime.synchronization.audioServo.commandLeadNs ||
+            !runtime.synchronization.audioServo.compensationWindowNs ||
+            !runtime.synchronization.audioServo.frequencyFilterTimeConstantNs ||
+            *runtime.synchronization.audioServo.commandLeadNs !=
+                expectedCorrection.value().commandLead ||
+            *runtime.synchronization.audioServo.compensationWindowNs !=
+                expectedCorrection.value().compensationWindow ||
+            *runtime.synchronization.audioServo.frequencyFilterTimeConstantNs !=
+                expectedCorrection.value().frequencyFilterTimeConstant) {
+            return invalid("audio correction derivation");
+        }
+    } else if (runtime.audioCorrection ||
+               runtime.synchronization.audioServo.commandLeadNs ||
+               runtime.synchronization.audioServo.compensationWindowNs ||
+               runtime.synchronization.audioServo.frequencyFilterTimeConstantNs) {
+        return invalid("packet copy contains audio correction facts");
     }
-    if (runtime.edgePolicies !=
-        MediaRealtimeEdgePolicyPlanner::plan(runtime.queues)) {
+    const auto videoBytes =
+        runtime.synchronization.startup.videoByteCapacity;
+    const auto audioBytes =
+        runtime.synchronization.startup.audioByteCapacity;
+    if (!videoBytes || !audioBytes || *videoBytes == 0 || *audioBytes == 0 ||
+        *videoBytes > (std::numeric_limits<std::uint64_t>::max)() -
+                          *audioBytes) {
+        return invalid("edge-policy byte facts");
+    }
+    auto expectedEdges = MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            runtime.queues, *videoBytes + *audioBytes,
+            runtime.queues.packet);
+    if (!expectedEdges || runtime.edgePolicies != expectedEdges.value()) {
         return invalid("edge-policy product");
     }
     if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
@@ -153,6 +182,8 @@ namespace media::ffmpeg::graph {
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
         runtime.outputAdapter,
         *runtime.synchronization.sourceClockMode,
+        runtime.audioPipeline.branchMode,
+        runtime.videoFilterActive,
         runtime.transition.acknowledgementTimeout,
         runtime.transition.terminalDrainWindow);
     if (runtime.transition.participants.size() !=
@@ -167,34 +198,36 @@ namespace media::ffmpeg::graph {
             return invalid("transition participant children");
         }
     }
-    const auto& correction = runtime.audioCorrection;
-    const bool reachabilitySumRepresentable =
-        correction.worstCaseInFlightSamples >= 0 &&
-        correction.mailboxDeliveryMarginSamples > 0 &&
-        correction.maximumResamplerOutputBlockSamples > 0 &&
-        correction.worstCaseInFlightSamples <=
+    if (audioTranscode) {
+        const auto& correction = *runtime.audioCorrection;
+        const bool reachabilitySumRepresentable =
+            correction.worstCaseInFlightSamples >= 0 &&
+            correction.mailboxDeliveryMarginSamples > 0 &&
+            correction.maximumResamplerOutputBlockSamples > 0 &&
+            correction.worstCaseInFlightSamples <=
             std::numeric_limits<std::int64_t>::max() -
                 correction.mailboxDeliveryMarginSamples &&
-        correction.worstCaseInFlightSamples +
+            correction.worstCaseInFlightSamples +
                 correction.mailboxDeliveryMarginSamples <=
             std::numeric_limits<std::int64_t>::max() -
                 correction.maximumResamplerOutputBlockSamples;
-    if (correction.outputSampleRate <= 0 ||
-        correction.epochOutputSampleIndex != 0 ||
-        correction.worstCaseInFlightSamples < 0 ||
-        correction.protocolBatchSamples <= 0 ||
-        correction.mailboxDeliveryMarginSamples <= 0 ||
-        correction.maximumResamplerOutputBlockSamples <= 0 ||
-        correction.mailboxCapacity != runtime.queues.metadata ||
-        !reachabilitySumRepresentable ||
-        correction.commandLeadSamples <=
+        if (correction.outputSampleRate <= 0 ||
+            correction.epochOutputSampleIndex != 0 ||
+            correction.worstCaseInFlightSamples < 0 ||
+            correction.protocolBatchSamples <= 0 ||
+            correction.mailboxDeliveryMarginSamples <= 0 ||
+            correction.maximumResamplerOutputBlockSamples <= 0 ||
+            correction.mailboxCapacity != runtime.queues.metadata ||
+            !reachabilitySumRepresentable ||
+            correction.commandLeadSamples <=
             correction.worstCaseInFlightSamples +
                 correction.mailboxDeliveryMarginSamples +
                 correction.maximumResamplerOutputBlockSamples ||
-        !runtime.synchronization.audioServo.outputSampleRate ||
-        correction.outputSampleRate !=
+            !runtime.synchronization.audioServo.outputSampleRate ||
+            correction.outputSampleRate !=
             *runtime.synchronization.audioServo.outputSampleRate) {
-        return invalid("audio correction reachability");
+            return invalid("audio correction reachability");
+        }
     }
     if (auto inputStatus =
             MediaRealtimeAvSyncRuntimeInputValidator::validate(

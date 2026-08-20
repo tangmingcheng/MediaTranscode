@@ -30,9 +30,15 @@ struct MediaGraphRuntimeMetrics {
     std::size_t activeWorkers = 0;
     std::size_t queuedBuffers = 0;
     std::size_t peakQueuedBuffers = 0;
-    double averageCpuPercent = 0.0;
-    double averageProcessCpuPercent = 0.0;
+    double averageSystemMachineCpuPercent = 0.0;
+    double averageProcessMachineCpuPercent = 0.0;
+    double peakProcessMachineCpuPercent = 0.0;
+    double averageProcessSingleCoreCpuPercent = 0.0;
+    double peakProcessSingleCoreCpuPercent = 0.0;
+    std::size_t logicalProcessorCount = 0;
+    std::uint64_t initialWorkingSetBytes = 0;
     std::uint64_t workingSetBytes = 0;
+    std::uint64_t peakWorkingSetBytes = 0;
 
     void updateThreadCount(std::size_t total, std::size_t active) noexcept
     {

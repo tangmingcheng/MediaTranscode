@@ -1,7 +1,6 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
-#include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderTransport.h"
@@ -13,7 +12,7 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaMpegTsRtpDatagramSink final : public MediaTsDatagramSink {
+class MediaMpegTsRtpDatagramSink final {
 public:
     static ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>> create(
         const MediaMpegTsRtpOutputPlan& plan,
@@ -21,14 +20,14 @@ public:
         const MediaSharedNtpEpoch& sharedNtpEpoch,
         std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
         MediaUdpDatagramSenderPortFactory& portFactory);
-    ~MediaMpegTsRtpDatagramSink() noexcept override;
+    ~MediaMpegTsRtpDatagramSink() noexcept;
 
-    ::media::Result<std::size_t> write(
+    ::media::Result<std::size_t> enqueue(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime emitOnMaster) override;
-    ::media::Status flush() override;
-    ::media::Status close() override;
-    void abort() noexcept override;
+        MediaRunningTime enqueueInstant);
+    ::media::Status flush();
+    ::media::Status close();
+    void abort() noexcept;
 
 private:
     MediaMpegTsRtpDatagramSink(
@@ -63,7 +62,7 @@ private:
     std::string m_cname;
     std::uint32_t m_ssrc;
     std::uint64_t m_generation;
-    std::optional<MediaRunningTime> m_lastEmitOnMaster;
+    std::optional<MediaRunningTime> m_lastEnqueueInstant;
     std::optional<std::uint16_t> m_firstSequenceNumber;
     std::optional<std::uint16_t> m_lastSequenceNumber;
     std::optional<::media::ErrorInfo> m_failure;

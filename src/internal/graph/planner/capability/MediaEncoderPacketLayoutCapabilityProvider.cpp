@@ -7,6 +7,8 @@ MediaEncoderPacketLayoutCapabilityProvider::find(
     std::string_view ffmpegEncoderName) noexcept
 {
     if (ffmpegEncoderName == "h264_nvenc" ||
+        ffmpegEncoderName == "h264_rkmpp" ||
+        ffmpegEncoderName == "hevc_rkmpp" ||
         ffmpegEncoderName == "libx264" ||
         ffmpegEncoderName == "libx264rgb") {
         return MediaEncodedPacketLayout::startCodeDelimited();
