@@ -26,10 +26,6 @@ namespace media::ffmpeg::graph {
         }
         eligibility = (std::max)(eligibility, previousCompletion.value());
     }
-    if (eligibility > submissionDeadline) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "forward-only datagram pacing exceeded its submission deadline"));
-    }
     m_pending = Pending{
         eligibility, submissionDeadline, serviceDuration};
     return Result::success(eligibility);
@@ -38,8 +34,7 @@ namespace media::ffmpeg::graph {
 ::media::Status MediaForwardOnlyDatagramPacer::commitSuccessfulSubmit(
     MediaRunningTime actualPreSubmit) noexcept
 {
-    if (!m_pending || actualPreSubmit < m_pending->eligibility ||
-        actualPreSubmit > m_pending->deadline) {
+    if (!m_pending || actualPreSubmit < m_pending->eligibility) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "forward-only datagram submit conflicts with its reservation"));
     }

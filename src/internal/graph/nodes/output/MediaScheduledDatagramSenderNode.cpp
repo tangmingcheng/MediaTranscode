@@ -234,10 +234,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             m_maximumWakeOvershoot, wakeOvershoot.value());
         const bool missedBefore =
             before.value() > datagram.enqueueDeadline();
-        if (missedBefore) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled datagram exceeded its forward-only submission deadline"));
-        }
         auto sent = m_sink->enqueue(datagram.bytes(), before.value());
         if (!sent) return ::media::Status::failure(sent.error());
         auto actualEnqueue = m_authority->now();
@@ -280,10 +276,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         }
         ++m_datagrams;
         m_bytes += static_cast<std::uint64_t>(sent.value());
-        if (missedAfter) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled datagram submit completed after its forward-only deadline"));
-        }
     }
     if (m_batches == std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(

@@ -675,20 +675,47 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
         : notBefore;
     std::int64_t selectedRate = 0;
     if (scheduledReservation) {
+        auto maintenanceWindow =
+            completionDeadline.checkedSubtract(serviceStart);
+        auto maintenanceRate = maintenanceWindow
+            ? wireRateForWindow(totalWire.value(), maintenanceWindow.value())
+            : ::media::Result<std::int64_t>::failure(
+                  maintenanceWindow.error());
+        if (!maintenanceRate) {
+            return ::media::Status::failure(maintenanceRate.error());
+        }
+        selectedRate = maintenanceRate.value();
         if (m_state->activeAccessUnit) {
-            selectedRate =
-                m_state->activeAccessUnit->selectedWireBytesPerSecond;
-        } else {
-            auto maintenanceWindow =
-                completionDeadline.checkedSubtract(serviceStart);
-            auto maintenanceRate = maintenanceWindow
-                ? wireRateForWindow(totalWire.value(), maintenanceWindow.value())
-                : ::media::Result<std::int64_t>::failure(
-                      maintenanceWindow.error());
-            if (!maintenanceRate) {
-                return ::media::Status::failure(maintenanceRate.error());
+            const auto& active = *m_state->activeAccessUnit;
+            if (active.committedWireBytes > active.totalWireBytes) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MPEG-TS active access-unit wire progress is invalid"));
             }
-            selectedRate = maintenanceRate.value();
+            const std::uint64_t remainingAccessUnitWireBytes =
+                active.totalWireBytes - active.committedWireBytes;
+            if (totalWire.value() >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    remainingAccessUnitWireBytes) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MPEG-TS combined maintenance work is not representable"));
+            }
+            auto combinedWindow =
+                active.completionDeadline.checkedSubtract(serviceStart);
+            auto combinedRate = combinedWindow
+                ? wireRateForWindow(
+                      totalWire.value() + remainingAccessUnitWireBytes,
+                      combinedWindow.value())
+                : ::media::Result<std::int64_t>::failure(
+                      combinedWindow.error());
+            if (!combinedRate) {
+                return ::media::Status::failure(combinedRate.error());
+            }
+            selectedRate = (std::max)({
+                selectedRate,
+                active.selectedWireBytesPerSecond,
+                combinedRate.value()});
         }
         auto groupReservation = reserveContinuousTimeline(
             *m_state, serviceStart, totalWire.value(), selectedRate);
