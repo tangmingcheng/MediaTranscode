@@ -583,12 +583,9 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS access-unit exceeds its transport dispatch deadline"));
     }
-    if (serviceStart > currentTimelineAvailableAt(*m_state) ||
-        m_state->rateEpochBytesPerSecond != selectedRate.value()) {
-        m_state->rateEpochOrigin = serviceStart;
-        m_state->rateEpochWireBytes = 0;
-        m_state->rateEpochBytesPerSecond = selectedRate.value();
-    }
+    m_state->rateEpochOrigin = serviceStart;
+    m_state->rateEpochWireBytes = 0;
+    m_state->rateEpochBytesPerSecond = selectedRate.value();
     m_state->activeAccessUnit.emplace(
         MediaTsDatagramEmissionScheduleState::ActiveAccessUnit{
             stream, emitOnMaster, dispatchOnMaster, serviceStart,
