@@ -185,7 +185,8 @@ void MediaTsPreparedPcrClock::cancel() noexcept
 
 ::media::Result<MediaTsOutputClockGenerator> MediaTsOutputClockGenerator::create(
     MediaTsOutputClockPolicy policy,
-    MediaProtocolOutputActivation activation)
+    MediaProtocolOutputActivation activation,
+    MediaRunningTime pcrOrigin)
 {
     if (policy.pcrInterval.nanoseconds() <= 0 ||
         policy.maximumPcrGap.nanoseconds() <= policy.pcrInterval.nanoseconds() ||
@@ -193,19 +194,23 @@ void MediaTsPreparedPcrClock::cancel() noexcept
         policy.maximumPcrJitter.nanoseconds() >= policy.pcrInterval.nanoseconds() ||
         policy.timestampTimeBaseNumerator != 1 ||
         policy.timestampTimeBaseDenominator != 90'000 ||
-        activation.generation == 0) {
+        activation.generation == 0 ||
+        pcrOrigin > activation.masterRelease) {
         return ::media::Result<MediaTsOutputClockGenerator>::failure(
             invalid("policy is incomplete or unsupported").error());
     }
     return ::media::Result<MediaTsOutputClockGenerator>::success(
-        MediaTsOutputClockGenerator(std::move(policy), activation));
+        MediaTsOutputClockGenerator(
+            std::move(policy), activation, pcrOrigin));
 }
 
 MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     MediaTsOutputClockPolicy policy,
-    MediaProtocolOutputActivation activation)
+    MediaProtocolOutputActivation activation,
+    MediaRunningTime pcrOrigin)
     : m_policy(std::move(policy))
     , m_activation(activation)
+    , m_pcrOrigin(pcrOrigin)
     , m_control(std::make_shared<MediaTsOutputClockControlState>())
 {
 }
@@ -261,8 +266,17 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
         return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("dispatch-to-emission lead differs from transport plan").error());
     }
-    auto pts = timestampTicks(presentationOnMaster);
-    auto dts = timestampTicks(dispatchOnMaster);
+    auto presentationTimestamp = presentationOnMaster.checkedAdd(
+        transportDecodeLead);
+    auto dispatchTimestamp = dispatchOnMaster.checkedAdd(
+        transportDecodeLead);
+    if (!presentationTimestamp || !dispatchTimestamp) {
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
+            presentationTimestamp ? dispatchTimestamp.error()
+                                  : presentationTimestamp.error());
+    }
+    auto pts = timestampTicks(presentationTimestamp.value());
+    auto dts = timestampTicks(dispatchTimestamp.value());
     if (!pts) return ::media::Result<MediaTsPreparedPacketClock>::failure(pts.error());
     if (!dts) return ::media::Result<MediaTsPreparedPacketClock>::failure(dts.error());
     if (dts.value() > pts.value()) {
@@ -340,7 +354,7 @@ MediaTsOutputClockGenerator::preparePcr(
         return ::media::Result<MediaTsPreparedPcrClock>::failure(
             invalid("already has a pending transaction or exhausted revisions").error());
     }
-    MediaRunningTime expected = m_activation.masterRelease;
+    MediaRunningTime expected = m_pcrOrigin;
     if (m_control->lastPcrMasterTime) {
         auto next = m_control->lastPcrMasterTime->checkedAdd(m_policy.pcrInterval);
         if (!next) {
@@ -388,7 +402,7 @@ MediaTsOutputClockGenerator::preparePcr(
         return status;
     }
     auto elapsed = planned.masterTime.checkedSubtract(
-        m_activation.masterRelease);
+        m_pcrOrigin);
     if (!elapsed || elapsed.value().nanoseconds() < 0 ||
         elapsed.value().nanoseconds() % m_policy.pcrInterval.nanoseconds() != 0) {
         return invalid("serialized PCR sample is outside the planned cadence");

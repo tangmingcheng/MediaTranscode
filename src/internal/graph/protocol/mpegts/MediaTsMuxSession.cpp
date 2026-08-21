@@ -113,8 +113,15 @@ struct MaintenanceGroupGeometry final {
         return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
             invalid("MPEG-TS mux session binding is incomplete or inconsistent"));
     }
+    auto pcrOrigin = mediaTsTransportEmissionOrigin(
+        binding.plan, binding.activation);
+    if (!pcrOrigin) {
+        return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
+            pcrOrigin.error());
+    }
     auto clock = MediaTsOutputClockGenerator::create(
-        binding.plan.clockPolicy(), binding.activation);
+        binding.plan.clockPolicy(), binding.activation,
+        pcrOrigin.value());
     if (!clock) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         clock.error());
     auto packetizer = MediaTsTransportPacketizer::create(
@@ -432,6 +439,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             "MPEG-TS mux session start must equal its planned transport emission origin"));
     }
     m_nextPsi = emitOnMaster;
+    m_nextPcr = emitOnMaster;
     m_lastAdvance = emitOnMaster;
     auto schedule = MediaTsDatagramEmissionSchedule::create(
         m_emissionPlan, emitOnMaster);

@@ -90,7 +90,8 @@ class MediaTsOutputClockGenerator final {
 public:
     static ::media::Result<MediaTsOutputClockGenerator> create(
         MediaTsOutputClockPolicy policy,
-        MediaProtocolOutputActivation activation);
+        MediaProtocolOutputActivation activation,
+        MediaRunningTime pcrOrigin);
 
     MediaTsOutputClockGenerator(const MediaTsOutputClockGenerator&) = delete;
     MediaTsOutputClockGenerator& operator=(const MediaTsOutputClockGenerator&) = delete;
@@ -122,7 +123,8 @@ public:
 private:
     MediaTsOutputClockGenerator(
         MediaTsOutputClockPolicy policy,
-        MediaProtocolOutputActivation activation);
+        MediaProtocolOutputActivation activation,
+        MediaRunningTime pcrOrigin);
 
     ::media::Result<std::int64_t> outputNanoseconds(
         MediaRunningTime masterTime) const;
@@ -134,6 +136,7 @@ private:
 
     MediaTsOutputClockPolicy m_policy;
     MediaProtocolOutputActivation m_activation;
+    MediaRunningTime m_pcrOrigin;
     std::shared_ptr<MediaTsOutputClockControlState> m_control;
 };
 
