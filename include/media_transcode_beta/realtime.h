@@ -133,6 +133,7 @@ typedef struct mt_beta_realtime_config {
     const char* media_id;
     mt_beta_rtp_video_input input;
     mt_beta_video_output output;
+    uint64_t transport_pacing_bitrate_bps;
 } mt_beta_realtime_config;
 
 typedef struct mt_beta_realtime_event mt_beta_realtime_event;

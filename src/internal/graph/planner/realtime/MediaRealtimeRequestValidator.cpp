@@ -164,6 +164,25 @@ bool preparedHandoffControlSpecified(
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Realtime RTP SDP output path must be explicit"));
         }
+        const bool muxedTransportStream =
+            request.output.streamLayout ==
+            RealtimeOutputStreamLayout::MuxedTransportStream;
+        if (muxedTransportStream &&
+            (!request.output.pacingBitrateBps ||
+             *request.output.pacingBitrateBps < 8)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS RTP output pacing bitrate must be explicit and at least eight bits per second"));
+        }
+        if (!muxedTransportStream && request.output.pacingBitrateBps) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "output pacing bitrate is valid only for MPEG-TS RTP output"));
+        }
+    } else if (request.output.pacingBitrateBps) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "output pacing bitrate is valid only for RTP output"));
     }
     if (auto status = validateQueues(request.parameters.queues); !status) return status;
     if (MediaRealtimeRequestClassifier::realtimeUrlInput(request)) {

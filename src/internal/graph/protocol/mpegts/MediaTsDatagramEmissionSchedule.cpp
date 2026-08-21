@@ -551,8 +551,13 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS access-unit exceeds the planned emission byte bound"));
     }
-    const MediaRunningTime serviceStart = (std::max)(
-        (std::max)(emitOnMaster, m_state->availableAt), actualMasterNow);
+    const bool scheduledOutput =
+        m_state->plan.usesScheduledDatagramOutput();
+    const MediaRunningTime serviceStart = scheduledOutput
+        ? (std::max)(emitOnMaster, m_state->availableAt)
+        : (std::max)(
+              (std::max)(emitOnMaster, m_state->availableAt),
+              actualMasterNow);
     auto remainingWindow = dispatchOnMaster.checkedSubtract(serviceStart);
     const std::optional<MediaRunningTime> plannedServiceWindow =
         stream == MediaScheduledStream::Video
@@ -569,7 +574,10 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
     }
     const MediaRunningTime serviceWindow = (std::min)(
         remainingWindow.value(), *plannedServiceWindow);
-    auto selectedRate = wireRateForWindow(totalWire.value(), serviceWindow);
+    auto selectedRate = scheduledOutput
+        ? ::media::Result<std::int64_t>::success(
+              *m_state->plan.scheduledWireBytesPerSecond())
+        : wireRateForWindow(totalWire.value(), serviceWindow);
     if (!selectedRate) return Result::failure(selectedRate.error());
     auto fullReservation = reserveContinuousTimeline(
         *m_state, serviceStart, totalWire.value(), selectedRate.value());
@@ -583,9 +591,12 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS access-unit exceeds its transport dispatch deadline"));
     }
-    m_state->rateEpochOrigin = serviceStart;
-    m_state->rateEpochWireBytes = 0;
-    m_state->rateEpochBytesPerSecond = selectedRate.value();
+    if (serviceStart > currentTimelineAvailableAt(*m_state) ||
+        m_state->rateEpochBytesPerSecond != selectedRate.value()) {
+        m_state->rateEpochOrigin = serviceStart;
+        m_state->rateEpochWireBytes = 0;
+        m_state->rateEpochBytesPerSecond = selectedRate.value();
+    }
     m_state->activeAccessUnit.emplace(
         MediaTsDatagramEmissionScheduleState::ActiveAccessUnit{
             stream, emitOnMaster, dispatchOnMaster, serviceStart,
@@ -675,16 +686,7 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
         : notBefore;
     std::int64_t selectedRate = 0;
     if (scheduledReservation) {
-        auto maintenanceWindow =
-            completionDeadline.checkedSubtract(serviceStart);
-        auto maintenanceRate = maintenanceWindow
-            ? wireRateForWindow(totalWire.value(), maintenanceWindow.value())
-            : ::media::Result<std::int64_t>::failure(
-                  maintenanceWindow.error());
-        if (!maintenanceRate) {
-            return ::media::Status::failure(maintenanceRate.error());
-        }
-        selectedRate = maintenanceRate.value();
+        selectedRate = *m_state->plan.scheduledWireBytesPerSecond();
         if (m_state->activeAccessUnit) {
             const auto& active = *m_state->activeAccessUnit;
             if (active.committedWireBytes > active.totalWireBytes) {
@@ -692,30 +694,11 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
                     ::media::ErrorInfo::invalidArgument(
                         "MPEG-TS active access-unit wire progress is invalid"));
             }
-            const std::uint64_t remainingAccessUnitWireBytes =
-                active.totalWireBytes - active.committedWireBytes;
-            if (totalWire.value() >
-                (std::numeric_limits<std::uint64_t>::max)() -
-                    remainingAccessUnitWireBytes) {
+            if (active.selectedWireBytesPerSecond != selectedRate) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
-                        "MPEG-TS combined maintenance work is not representable"));
+                        "MPEG-TS maintenance and access-unit service contracts differ"));
             }
-            auto combinedWindow =
-                active.completionDeadline.checkedSubtract(serviceStart);
-            auto combinedRate = combinedWindow
-                ? wireRateForWindow(
-                      totalWire.value() + remainingAccessUnitWireBytes,
-                      combinedWindow.value())
-                : ::media::Result<std::int64_t>::failure(
-                      combinedWindow.error());
-            if (!combinedRate) {
-                return ::media::Status::failure(combinedRate.error());
-            }
-            selectedRate = (std::max)({
-                selectedRate,
-                active.selectedWireBytesPerSecond,
-                combinedRate.value()});
         }
         auto groupReservation = reserveContinuousTimeline(
             *m_state, serviceStart, totalWire.value(), selectedRate);

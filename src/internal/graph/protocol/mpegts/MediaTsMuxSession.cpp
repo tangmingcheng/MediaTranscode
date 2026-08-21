@@ -102,7 +102,8 @@ struct MaintenanceGroupGeometry final {
         binding.plan,
         binding.emission.videoInitialServiceWindow(),
         binding.emission.audioInitialServiceWindow(),
-        binding.emission.maximumQueuedBytes());
+        binding.emission.maximumQueuedBytes(),
+        binding.emission.scheduledWireBytesPerSecond());
     const bool expectsScheduledBatch =
         binding.plan.parameters().transportKind == MediaOutputTransportKind::RtpAvp;
     if (!binding.sink || !binding.masterClock ||

@@ -190,7 +190,9 @@ std::optional<int> resolvedAudioBitrateKbps(
                     "MPEG-TS output requires a resolved transport"));
         }
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
-            if (!request.output.basePort || !request.output.packetSize) {
+            if (!request.output.basePort || !request.output.packetSize ||
+                !request.output.pacingBitrateBps ||
+                *request.output.pacingBitrateBps < 8) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP output requires explicit endpoint and datagram facts"));
@@ -226,6 +228,8 @@ std::optional<int> resolvedAudioBitrateKbps(
             output.muxedOutput.rtpTransport =
                 std::move(transport).value();
             output.muxedOutput.sdpPath = request.output.sdpPath;
+            output.muxedOutput.scheduledWireBytesPerSecond =
+                *request.output.pacingBitrateBps / 8;
         }
         return ::media::Status::success();
     }

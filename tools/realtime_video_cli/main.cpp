@@ -91,6 +91,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--input-layout",
         "--output-layout",
         "--output-transport",
+        "--output-pacing-bitrate-bps",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -181,6 +182,10 @@ void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig
         output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
         output.sdpPath = requiredArg(argc, argv, "--sdp");
         output.packetSize = requiredIntArg(argc, argv, "--packet-size");
+        if (hasArg(argc, argv, "--output-pacing-bitrate-bps")) {
+            output.pacingBitrateBps = static_cast<std::int64_t>(
+                requiredIntArg(argc, argv, "--output-pacing-bitrate-bps"));
+        }
         return;
     }
 

@@ -108,6 +108,8 @@ MediaRealtimeBetaRequestMapper::map(
     request.output.basePort = static_cast<std::size_t>(config.destinationPort());
     request.output.sdpPath = sessionOwnedSdpPath;
     request.output.packetSize = profile.mpegTsRtpPacketSizeBytes;
+    request.output.pacingBitrateBps = static_cast<std::int64_t>(
+        config.transportPacingBitrateBps());
     return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::success(
         std::move(request));
 }

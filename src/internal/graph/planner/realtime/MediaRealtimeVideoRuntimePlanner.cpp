@@ -186,7 +186,8 @@ planSeparateRtp(
     outer.videoParameters.globalHeader = true;
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
-        startup.byteCapacity);
+        startup.byteCapacity,
+        output.muxedOutput.scheduledWireBytesPerSecond);
     if (!emission) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());

@@ -124,6 +124,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     std::uint32_t frameRateNumerator,
     std::uint32_t frameRateDenominator,
     std::uint32_t gopFrames,
+    std::uint64_t transportPacingBitrateBps,
     RateControl rateControl,
     ffmpeg::graph::MediaIpAddressFamily addressFamily,
     mt_beta_realtime_event_callback eventCallback,
@@ -142,6 +143,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     , m_frameRateNumerator(frameRateNumerator)
     , m_frameRateDenominator(frameRateDenominator)
     , m_gopFrames(gopFrames)
+    , m_transportPacingBitrateBps(transportPacingBitrateBps)
     , m_rateControl(rateControl)
     , m_addressFamily(addressFamily)
     , m_eventCallback(eventCallback)
@@ -177,6 +179,9 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
         config->output.width == 0U ||
         config->output.height == 0U || config->output.frame_rate_num == 0U ||
         config->output.frame_rate_den == 0U || config->output.gop_frames == 0U ||
+        config->transport_pacing_bitrate_bps < 8U ||
+        config->transport_pacing_bitrate_bps >
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
         config->output.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->output.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->output.frame_rate_num > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -215,6 +220,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
             config->output.frame_rate_num,
             config->output.frame_rate_den,
             config->output.gop_frames,
+            config->transport_pacing_bitrate_bps,
             rateControl.value(),
             bindAddress.value().addressFamily(),
             callbacks->on_event,
@@ -235,6 +241,7 @@ std::uint32_t MediaRealtimeBetaOwnedConfig::height() const noexcept { return m_h
 std::uint32_t MediaRealtimeBetaOwnedConfig::frameRateNumerator() const noexcept { return m_frameRateNumerator; }
 std::uint32_t MediaRealtimeBetaOwnedConfig::frameRateDenominator() const noexcept { return m_frameRateDenominator; }
 std::uint32_t MediaRealtimeBetaOwnedConfig::gopFrames() const noexcept { return m_gopFrames; }
+std::uint64_t MediaRealtimeBetaOwnedConfig::transportPacingBitrateBps() const noexcept { return m_transportPacingBitrateBps; }
 const MediaRealtimeBetaOwnedConfig::RateControl& MediaRealtimeBetaOwnedConfig::rateControl() const noexcept { return m_rateControl; }
 ffmpeg::graph::MediaIpAddressFamily MediaRealtimeBetaOwnedConfig::addressFamily() const noexcept { return m_addressFamily; }
 mt_beta_realtime_event_callback MediaRealtimeBetaOwnedConfig::eventCallback() const noexcept { return m_eventCallback; }

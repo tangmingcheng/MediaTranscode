@@ -32,6 +32,8 @@ constexpr const char* EmissionAudioWindowKey =
     "project_mpeg_ts_plan.emission.audio_initial_service_window_ns";
 constexpr const char* EmissionMaximumQueuedBytesKey =
     "project_mpeg_ts_plan.emission.maximum_queued_bytes";
+constexpr const char* EmissionScheduledWireBytesPerSecondKey =
+    "project_mpeg_ts_plan.emission.scheduled_wire_bytes_per_second";
 constexpr const char* ScheduledBatchMaximumBytesKey =
     "project_mpeg_ts_plan.scheduled_batch.maximum_payload_bytes";
 constexpr const char* PacingExecutionKey =
@@ -43,7 +45,7 @@ constexpr const char* PacingDeadlinePolicyKey =
 constexpr std::size_t VideoOnlyMuxFieldCount = 27;
 constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
-constexpr std::array<const char*, 12> UdpKeys{
+constexpr std::array<const char*, 13> UdpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -55,9 +57,10 @@ constexpr std::array<const char*, 12> UdpKeys{
     EmissionVideoWindowKey,
     EmissionAudioWindowKey,
     EmissionMaximumQueuedBytesKey,
-    ScheduledBatchMaximumBytesKey};
+    ScheduledBatchMaximumBytesKey,
+    EmissionScheduledWireBytesPerSecondKey};
 
-constexpr std::array<const char*, 38> RtpKeys{
+constexpr std::array<const char*, 39> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -95,7 +98,8 @@ constexpr std::array<const char*, 38> RtpKeys{
     ScheduledBatchMaximumBytesKey,
     PacingExecutionKey,
     PacingEvidenceKey,
-    PacingDeadlinePolicyKey};
+    PacingDeadlinePolicyKey,
+    EmissionScheduledWireBytesPerSecondKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -141,11 +145,15 @@ template <typename Value>
         options, EmissionAudioWindowKey, true);
     auto maximumQueuedBytes = parseUnsignedOption<std::uint64_t>(
         options, EmissionMaximumQueuedBytesKey, false);
-    if (!videoWindow || !audioWindow || !maximumQueuedBytes) {
+    auto scheduledWireBytesPerSecond = parseUnsignedOption<std::int64_t>(
+        options, EmissionScheduledWireBytesPerSecondKey, true);
+    if (!videoWindow || !audioWindow || !maximumQueuedBytes ||
+        !scheduledWireBytesPerSecond) {
         return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
             !videoWindow ? videoWindow.error() :
             !audioWindow ? audioWindow.error() :
-            maximumQueuedBytes.error());
+            !maximumQueuedBytes ? maximumQueuedBytes.error() :
+            scheduledWireBytesPerSecond.error());
     }
     auto emission = MediaTsDatagramEmissionPlan::create(
         muxPlan,
@@ -154,7 +162,11 @@ template <typename Value>
                 ? std::nullopt
                 : std::optional<MediaRunningTime>(
                   MediaRunningTime::fromNanoseconds(audioWindow.value())),
-        maximumQueuedBytes.value());
+        maximumQueuedBytes.value(),
+        scheduledWireBytesPerSecond.value() == 0
+            ? std::nullopt
+            : std::optional<std::int64_t>(
+                  scheduledWireBytesPerSecond.value()));
     if (!emission ||
         emission.value().videoInitialServiceWindow().nanoseconds() !=
             videoWindow.value() ||
@@ -162,7 +174,12 @@ template <typename Value>
             !emission.value().audioInitialServiceWindow() ||
         (audioWindow.value() != 0 &&
          emission.value().audioInitialServiceWindow()->nanoseconds() !=
-             audioWindow.value())) {
+             audioWindow.value()) ||
+        emission.value().scheduledWireBytesPerSecond() !=
+            (scheduledWireBytesPerSecond.value() == 0
+                 ? std::nullopt
+                 : std::optional<std::int64_t>(
+                       scheduledWireBytesPerSecond.value()))) {
         return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
             emission ? ::media::ErrorInfo::invalidArgument(
                            "Project MPEG-TS emission windows are not canonical")
@@ -506,7 +523,8 @@ bool sameProtocol(
         output.protocol.muxPlan(),
         output.emission.videoInitialServiceWindow(),
         output.emission.audioInitialServiceWindow(),
-        output.emission.maximumQueuedBytes());
+        output.emission.maximumQueuedBytes(),
+        output.emission.scheduledWireBytesPerSecond());
     if (output.protocol.muxPlan().parameters().transportKind !=
             MediaOutputTransportKind::UdpDatagrams ||
         !expectedEmission || output.emission != expectedEmission.value() ||
@@ -535,7 +553,8 @@ bool sameProtocol(
                    : 0)},
          {EmissionMaximumQueuedBytesKey, std::to_string(
               output.emission.maximumQueuedBytes())},
-         {ScheduledBatchMaximumBytesKey, "0"}});
+          {ScheduledBatchMaximumBytesKey, "0"},
+          {EmissionScheduledWireBytesPerSecondKey, "0"}});
 }
 
 ::media::Status applyRtp(
@@ -557,7 +576,8 @@ bool sameProtocol(
         output.protocol.muxPlan(),
         output.emission.videoInitialServiceWindow(),
         output.emission.audioInitialServiceWindow(),
-        output.emission.maximumQueuedBytes());
+        output.emission.maximumQueuedBytes(),
+        output.emission.scheduledWireBytesPerSecond());
     auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
     if (mux.transportKind != MediaOutputTransportKind::RtpAvp ||
         !encodedStreamSet || !expectedPackets ||
@@ -627,7 +647,9 @@ bool sameProtocol(
           std::to_string(output.scheduledBatchMaximumBytes)},
          {PacingExecutionKey, "userspace_wait_and_send"},
          {PacingEvidenceKey, "userspace_send_return"},
-         {PacingDeadlinePolicyKey, "canonical_ordered"}});
+         {PacingDeadlinePolicyKey, "canonical_ordered"},
+         {EmissionScheduledWireBytesPerSecondKey,
+          std::to_string(*output.emission.scheduledWireBytesPerSecond())}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
