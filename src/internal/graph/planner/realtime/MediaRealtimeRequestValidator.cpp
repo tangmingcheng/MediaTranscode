@@ -174,15 +174,32 @@ bool preparedHandoffControlSpecified(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS RTP output pacing bitrate must be explicit and at least eight bits per second"));
         }
+        const bool videoOnly =
+            request.parameters.execution.streamSet ==
+            MediaTranscodeStreamSet::VideoOnly;
+        if (muxedTransportStream && videoOnly &&
+            (!request.output.transportDecodeLeadMs ||
+             *request.output.transportDecodeLeadMs <= 0)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoOnly MPEG-TS RTP transport decode lead must be explicit and positive"));
+        }
+        if ((!muxedTransportStream || !videoOnly) &&
+            request.output.transportDecodeLeadMs) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "output transport decode lead is valid only for VideoOnly MPEG-TS RTP output"));
+        }
         if (!muxedTransportStream && request.output.pacingBitrateBps) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "output pacing bitrate is valid only for MPEG-TS RTP output"));
         }
-    } else if (request.output.pacingBitrateBps) {
+    } else if (request.output.pacingBitrateBps ||
+               request.output.transportDecodeLeadMs) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "output pacing bitrate is valid only for RTP output"));
+                "output pacing bitrate and transport decode lead are valid only for RTP output"));
     }
     if (auto status = validateQueues(request.parameters.queues); !status) return status;
     if (MediaRealtimeRequestClassifier::realtimeUrlInput(request)) {

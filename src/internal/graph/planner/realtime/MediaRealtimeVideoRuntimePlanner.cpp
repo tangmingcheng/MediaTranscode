@@ -119,9 +119,14 @@ planSeparateRtp(
             ::media::ErrorInfo::unsupported(
                 "VideoOnly Project MPEG-TS transport is unsupported"));
     }
+    if (!output.muxedOutput.transportDecodeLead) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly MPEG-TS output requires a planned transport decode lead"));
+    }
     auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
         outer.videoPlan.outputCodecName, layout.value(),
-        MediaRunningTime::fromNanoseconds(ProtocolOutputLeadNs),
+        *output.muxedOutput.transportDecodeLead,
         MediaRunningTime::fromNanoseconds(ProjectTsStartupPrerollNs),
         outer.outputTransport, maximumPacketsPerDatagram);
     if (!protocol) {

@@ -192,10 +192,14 @@ std::optional<int> resolvedAudioBitrateKbps(
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
             if (!request.output.basePort || !request.output.packetSize ||
                 !request.output.pacingBitrateBps ||
-                *request.output.pacingBitrateBps < 8) {
+                *request.output.pacingBitrateBps < 8 ||
+                (request.parameters.execution.streamSet ==
+                     MediaTranscodeStreamSet::VideoOnly &&
+                 (!request.output.transportDecodeLeadMs ||
+                  *request.output.transportDecodeLeadMs <= 0))) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
-                        "MPEG-TS RTP output requires explicit endpoint and datagram facts"));
+                        "MPEG-TS RTP output requires explicit endpoint, datagram, pacing, and VideoOnly transport-lead facts"));
             }
             if (!request.avSyncStartup.maximumVideoUnitBytes ||
                 *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
@@ -230,6 +234,13 @@ std::optional<int> resolvedAudioBitrateKbps(
             output.muxedOutput.sdpPath = request.output.sdpPath;
             output.muxedOutput.scheduledWireBytesPerSecond =
                 *request.output.pacingBitrateBps / 8;
+            if (request.output.transportDecodeLeadMs) {
+                output.muxedOutput.transportDecodeLead =
+                    MediaRunningTime::fromNanoseconds(
+                        static_cast<std::int64_t>(
+                            *request.output.transportDecodeLeadMs) *
+                        1'000'000);
+            }
         }
         return ::media::Status::success();
     }

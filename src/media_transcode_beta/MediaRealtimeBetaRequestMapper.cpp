@@ -110,6 +110,8 @@ MediaRealtimeBetaRequestMapper::map(
     request.output.packetSize = profile.mpegTsRtpPacketSizeBytes;
     request.output.pacingBitrateBps = static_cast<std::int64_t>(
         config.transportPacingBitrateBps());
+    request.output.transportDecodeLeadMs = static_cast<int>(
+        config.transportDecodeLeadMs());
     return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::success(
         std::move(request));
 }

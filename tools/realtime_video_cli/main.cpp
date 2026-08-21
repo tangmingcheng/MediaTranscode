@@ -92,6 +92,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--output-layout",
         "--output-transport",
         "--output-pacing-bitrate-bps",
+        "--output-transport-lead-ms",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -185,6 +186,10 @@ void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig
         if (hasArg(argc, argv, "--output-pacing-bitrate-bps")) {
             output.pacingBitrateBps = static_cast<std::int64_t>(
                 requiredIntArg(argc, argv, "--output-pacing-bitrate-bps"));
+        }
+        if (hasArg(argc, argv, "--output-transport-lead-ms")) {
+            output.transportDecodeLeadMs =
+                requiredIntArg(argc, argv, "--output-transport-lead-ms");
         }
         return;
     }

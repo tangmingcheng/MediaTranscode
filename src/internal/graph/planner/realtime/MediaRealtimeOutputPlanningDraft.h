@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
+#include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstdint>
 #include <optional>
@@ -26,6 +27,7 @@ struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::optional<MediaRtpUdpSenderConfig> rtpTransport;
     std::string sdpPath;
     std::optional<std::int64_t> scheduledWireBytesPerSecond;
+    std::optional<MediaRunningTime> transportDecodeLead;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {
