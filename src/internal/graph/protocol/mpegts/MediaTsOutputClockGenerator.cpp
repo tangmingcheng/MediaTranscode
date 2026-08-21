@@ -266,17 +266,8 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
         return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("dispatch-to-emission lead differs from transport plan").error());
     }
-    auto presentationTimestamp = presentationOnMaster.checkedAdd(
-        transportDecodeLead);
-    auto dispatchTimestamp = dispatchOnMaster.checkedAdd(
-        transportDecodeLead);
-    if (!presentationTimestamp || !dispatchTimestamp) {
-        return ::media::Result<MediaTsPreparedPacketClock>::failure(
-            presentationTimestamp ? dispatchTimestamp.error()
-                                  : presentationTimestamp.error());
-    }
-    auto pts = timestampTicks(presentationTimestamp.value());
-    auto dts = timestampTicks(dispatchTimestamp.value());
+    auto pts = timestampTicks(presentationOnMaster);
+    auto dts = timestampTicks(dispatchOnMaster);
     if (!pts) return ::media::Result<MediaTsPreparedPacketClock>::failure(pts.error());
     if (!dts) return ::media::Result<MediaTsPreparedPacketClock>::failure(dts.error());
     if (dts.value() > pts.value()) {
