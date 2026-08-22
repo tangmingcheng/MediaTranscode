@@ -24,7 +24,10 @@ enum class MediaPayloadKind {
     OutputByteSink,
     ProjectMpegTsRuntimePlan,
     TsAccessUnit,
-    ScheduledDatagramBatch
+    ScheduledDatagramBatch,
+    WireDatagramBatch,
+    ScheduledWireDatagramBatch,
+    DatagramShapingPlan
 };
 
 } // namespace media::ffmpeg::graph

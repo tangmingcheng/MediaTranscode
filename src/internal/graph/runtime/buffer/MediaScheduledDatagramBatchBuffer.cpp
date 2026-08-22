@@ -49,22 +49,30 @@ MediaScheduledDatagramBatchBuffer::create(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "scheduled datagram descriptors"));
     }
-    MediaRunningTime previousCompletion =
-        descriptors.front().enqueueNotBefore;
+    std::uint64_t expectedOffset = 0;
+    std::optional<MediaRunningTime> previousCompletion;
+    std::optional<MediaRunningTime> previousDeadline;
     for (const auto& descriptor : descriptors) {
         auto completion = descriptor.enqueueNotBefore.checkedAdd(
             descriptor.serviceDuration);
         if (descriptor.payloadSize == 0 ||
+            descriptor.payloadOffset != expectedOffset ||
             descriptor.payloadOffset > payload.size() ||
             descriptor.payloadSize > payload.size() - descriptor.payloadOffset ||
             descriptor.enqueueNotBefore < MediaRunningTime::fromNanoseconds(0) ||
             descriptor.enqueueDeadline < descriptor.enqueueNotBefore ||
             descriptor.serviceDuration <= MediaRunningTime::fromNanoseconds(0) ||
-            descriptor.enqueueNotBefore < previousCompletion || !completion) {
+            (previousCompletion &&
+             descriptor.enqueueNotBefore < *previousCompletion) ||
+            (previousDeadline &&
+             descriptor.enqueueDeadline < *previousDeadline) ||
+            !completion) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled datagram batch is unordered or too large"));
+                "scheduled datagram batch payload or timing is not contiguous and ordered"));
         }
+        expectedOffset = descriptor.payloadOffset + descriptor.payloadSize;
         previousCompletion = completion.value();
+        previousDeadline = descriptor.enqueueDeadline;
         datagrams.push_back(MediaScheduledDatagram(
             std::span<const std::uint8_t>(
                 payload.data() + descriptor.payloadOffset,
@@ -72,6 +80,10 @@ MediaScheduledDatagramBatchBuffer::create(
             descriptor.enqueueNotBefore,
             descriptor.enqueueDeadline,
             descriptor.serviceDuration));
+    }
+    if (expectedOffset != payload.size()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "scheduled datagram descriptors must cover their payload exactly"));
     }
     try {
         return Result::success(std::shared_ptr<MediaScheduledDatagramBatchBuffer>(

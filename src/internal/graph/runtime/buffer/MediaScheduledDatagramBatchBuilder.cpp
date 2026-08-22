@@ -43,18 +43,25 @@ MediaScheduledDatagramBatchBuilder::create(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram batch builder cannot append after release"));
     }
-    if (bytes.empty() || m_payload.size() > m_maximumPayloadBytes ||
+    auto completion = enqueueNotBefore.checkedAdd(serviceDuration);
+    if (bytes.empty() ||
+        enqueueNotBefore < MediaRunningTime::fromNanoseconds(0) ||
+        enqueueDeadline < enqueueNotBefore ||
+        serviceDuration <= MediaRunningTime::fromNanoseconds(0) ||
+        !completion || m_payload.size() > m_maximumPayloadBytes ||
         bytes.size() > m_maximumPayloadBytes - m_payload.size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "scheduled datagram batch exceeds its planner-owned payload byte bound"));
+            "scheduled datagram batch requires valid timing within its payload byte bound"));
     }
     if (!m_descriptors.empty()) {
         auto previousCompletion =
             m_descriptors.back().enqueueNotBefore.checkedAdd(
                 m_descriptors.back().serviceDuration);
-        if (!previousCompletion || enqueueNotBefore < previousCompletion.value()) {
+        if (!previousCompletion ||
+            enqueueNotBefore < previousCompletion.value() ||
+            enqueueDeadline < m_descriptors.back().enqueueDeadline) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled datagram batch builder rejects overlapping enqueue reservations"));
+                "scheduled datagram batch builder rejects overlapping or deadline-regressing reservations"));
         }
     }
     const auto offset = m_payload.size();
@@ -63,13 +70,6 @@ MediaScheduledDatagramBatchBuilder::create(
     } catch (const std::bad_alloc&) {
         return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
             "scheduled datagram bytes"));
-    }
-    if (enqueueNotBefore < MediaRunningTime::fromNanoseconds(0) ||
-        enqueueDeadline < enqueueNotBefore ||
-        serviceDuration <= MediaRunningTime::fromNanoseconds(0)) {
-        m_payload.resize(offset);
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "scheduled datagram requires bytes and an ordered enqueue interval"));
     }
     try {
         m_descriptors.push_back(MediaScheduledDatagramDescriptor{
