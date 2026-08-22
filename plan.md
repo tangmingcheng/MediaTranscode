@@ -519,3 +519,24 @@ Detailed design and execution checklist:
 - [x] Task 4：实现互斥的 VideoOnly runtime 与单视频调度产品。
 - [ ] Task 5：统一 RTP、SDP、Project MPEG-TS 输出及严格 shape 校验。
 - [ ] Task 6：完成 clean-first 构建、56 条真实链路、质量评分、PR 与独立审核。
+
+---
+
+## 2026-08-22 可复用工业级 Datagram 发送控制
+
+设计规格：docs/superpowers/specs/2026-08-22-reusable-datagram-transmit-control-design.md
+
+实施计划：docs/superpowers/plans/2026-08-22-reusable-datagram-transmit-control.md
+
+参数基线：docs/realtime-core-parameter-review-baseline.md
+
+**目标：** 协议节点物化最终 wire datagram，公共 service-scope pacer/shaper 生成 enqueue 预约，公共 sender 在 deadline 内非阻塞原子提交；TX timestamp 与 zero-copy completion 仅作异步证据，不参与发送控制。
+
+**全局约束：** 不从 encoder bitrate、VBV、input AU 或 queue 推导 transport 参数；三类 UDP/RTP 输出复用同一 shaper/sender；缺部署 service/MTU/resource 事实时 DAG 前失败；临时 TDD 不入库；真实验收不得降规格。
+
+- [ ] Task 1：建立 MediaWireDatagramBatch、MediaScheduledWireDatagramBatch 与完整 MediaDatagramShapingPlan 产品。
+- [ ] Task 2：将 MPEG-TS/UDP、MPEG-TS/RTP、独立 RTP 统一改为最终 wire bytes 物化，删除协议层 socket/pacing。
+- [ ] Task 3：实现跨 batch、跨 RTP/RTCP 的公共 service-scope pacer/shaper，删除 forward-only 经验 pacing。
+- [ ] Task 4：实现公共非阻塞 transport 与异步 evidence collector；禁止 await TX completion gate。
+- [ ] Task 5：接入公共 sender、Planner、DAG 和参数契约，删除 input AU -> SO_SNDBUF、5/4 headroom、2 包 burst 与 caller-owned 内部容量。
+- [ ] Task 6：完成 Windows/RK 构建和三类输出 30 秒+120 秒真实验收、文档、质量评分、双智能体交叉审查、PR 与最终审核。
