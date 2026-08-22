@@ -24,7 +24,7 @@
 | 部署事实 | MPEG-TS maximum PCR gap | realtime CLI | 保留为源协议时钟 acceptance fact，仅适用于 MPEG-TS 输入 |
 | 部署事实 | path MTU/maximum IP packet/sender payload limit、transport service scope/rate/peak/burst、资源与 residence budget | 当前缺少完整类型化入口 | 本轮应新增部署 envelope；每项必须带 evidence，不接受裸经验数字 |
 | planner 产品 | maximum UDP payload、TS packets per datagram、RTP/RTCP endpoint plan、socket requested/effective bound | 当前部分由 packet-size 或代码推导 | 移出 CLI/API，由 MTU、packetization 和平台 probe 推导 |
-| planner 产品 | queue item/byte/residence、startup AU acceptance、prepared handoff、shaper backlog、batch byte bound | 当前部分由 CLI 或 beta profile 填写 | 移出调用方媒体请求；由 deployment resource/source acceptance facts规划 |
+| planner 产品 | queue item/byte/residence、startup AU acceptance、prepared handoff、startup gap、shaper backlog、batch byte bound | 当前部分由 CLI 或 beta profile 填写 | 移出调用方媒体请求；由 deployment resource/source acceptance facts 和真实源探测形成类型化产品 |
 | planner 产品 | pacing reservation、wire service duration、enqueue window、transport lead、service-scope token/debt | 当前部分由 pacing bitrate/lead 手工输入 | 形成唯一 shaping plan；runtime 不重建 |
 | planner 产品 | SSRC、RTP base sequence/timestamp、CNAME、RTCP schedule、MPEG-TS PID/continuity/PCR policy | 当前 planner/protocol plan | 保持 planner-owned，不新增对外手工参数 |
 | 后置审查 | max-duration、progress-timeout-ms、first-output-timeout-ms、poll-interval-ms | realtime CLI | 仅 runner/验收控制，不得进入 production DAG 媒体规划；正式 120 秒门禁禁用 max-duration |
@@ -36,7 +36,7 @@
 |---|---|---|
 | tools/common/VideoCliTranscodeOptions.h:27-30 | metadata/packet/frame/mux queue CLI | 调用方手工填写 DAG 内部容量；删除 CLI，改由 resource planner 产品 |
 | tools/realtime_video_cli/main.cpp:185-192 | packet-size、output-pacing-bitrate-bps、output-transport-lead-ms | packet-size 是 MTU/封装推导产品；后两者是无 scope/evidence 的裸数字。以 deployment transport envelope 替换 |
-| tools/realtime_video_cli/main.cpp:235-263 | startup max unit/gap、prepared-handoff packet/byte capacities | gap 可在类型化源时钟契约保留；unit/handoff capacities 不应由调用方手算，移入 source/resource planner |
+| tools/realtime_video_cli/main.cpp:235-263 | startup max unit/gap、prepared-handoff packet/byte capacities | 全部移出 caller CLI。startup gap 若真实需要，只能由权威源探测形成或进入类型化源时钟契约；unit/handoff capacities 由 source/resource planner 规划 |
 | src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h:51-66 | packetSize、pacingBitrateBps、transportDecodeLeadMs、startup/handoff capacities | 当前 request 混入 planner 产品；按上述分类拆分 |
 | src/internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.cpp:16-18,31-65 | 5/4 pacing headroom、2 packet burst | 无部署或协议证据的经验常量；删除，以 service curve/burst evidence 规划 |
 | src/internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.cpp:37-56,204-228 | maximum input AU -> RTP SO_SNDBUF | 输入媒体容量错误替代输出 socket memory；删除关联，按 endpoint datagram 与 kernel budget 规划并验证 effective value |
@@ -49,5 +49,6 @@
 
 - realtime CLI、beta API、request、planner plan 四层逐字段可追踪，不能同一事实多处独立拥有。
 - 全树不存在 caller-provided queue、handoff、packet-size 或 input AU -> SO_SNDBUF。
+- 全树不存在 caller-provided startup gap；若链路需要该约束，必须能追溯到真实源探测证据或类型化源时钟契约。
 - network service、MTU、resource/residence 缺少 scope/evidence 时 DAG 前失败。
-- encoder 参数只影响编码产品；TX timestamp/MSG_ZEROCOPY 只影响 evidence telemetry；后置审查参数不改变生产 DAG。
+- caller encoder 参数只进入 encoder planning；transport planner 只消费 prepared encoder emission envelope 与完整 wire overhead，不能直接复制 caller bitrate/VBV。TX timestamp/MSG_ZEROCOPY 只影响 evidence telemetry；后置审查参数不改变生产 DAG。

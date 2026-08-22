@@ -10,10 +10,11 @@
 
 - planner 是唯一策略权威；下游不得 fallback、补默认值或按平台/codec/stream set 选策略。
 - MPEG-TS/UDP、MPEG-TS/RTP、独立 RTP 复用同一 shaper/sender。
+- file output 不属于 Datagram transport，不接入、不复用也不依赖 Datagram shaper/sender。
 - wire sustained/peak rate 必须由 prepared encoder emission envelope、完整 mux/RTP/IP/UDP overhead 与 deployment service evidence 共同规划；encoder bitrate/VBV 不得单独等同 transport rate，input AU、startup/handoff/edge queue 不得推导 MTU、socket buffer、service rate 或 burst。
 - 不等待 TX completion 才发送下一包；异步证据不得回写 shaper 或协议状态。
 - 每个 Task 的临时 TDD 先 RED 后 GREEN，提交前删除 source/target/binary。
-- 每个 Task 冻结后由两名未参与实现的智能体审查，修复后两者重新复审。
+- SDD 每个 Task 由一名未参与该 Task 实现的 reviewer 审查并明确 PASS；全部代码冻结后，再由两名未参与任何实现的独立智能体交叉审查，必须同时 PASS，修复后两者都重新复审。
 
 ## Task 1：建立 wire Datagram 与 shaping 类型化产品
 
@@ -29,7 +30,7 @@
 - Modify: src/internal/graph/model/MediaPayloadKind.h
 - Modify: CMakeLists.txt
 
-**接口：** MediaWireDatagramDescriptor 只含 generation、endpointId、payload offset/size、canonical release/deadline、global sequence；scheduled descriptor 另含 enqueueNotBefore、enqueueNotAfter、wireServiceDuration。MediaDatagramShapingPlan 一次性接收 service scope、endpoint、MTU 证据、service curve、burst、backlog/residence、batch/socket hard bound、非阻塞提交和可选 evidence plan。
+**接口：** MediaWireDatagramDescriptor 只含 generation、endpointId、payload offset/size、canonical release/deadline、global sequence；scheduled descriptor 另含 enqueueNotBefore、enqueueNotAfter、wireServiceDuration。每个 wire entry 随协议 reservation 创建一个不透明、move-only 的 MediaDatagramSubmitCommitLease；shaper 只能把 lease 移入对应 MediaScheduledWireDatagramBatchBuffer entry，禁止裸回调或隐藏共享映射。MediaDatagramShapingPlan 一次性接收 service scope、endpoint、MTU 证据、service curve、burst、backlog/residence、batch/socket hard bound、非阻塞提交和可选 evidence plan。
 
 **临时 TDD RED/GREEN：**
 
@@ -55,7 +56,7 @@
 - Modify: src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.{h,cpp}
 - Modify: CMakeLists.txt
 
-**接口：** MPEG-TS/UDP 产生完整 TS datagram；MPEG-TS/RTP 产生 PT 33/90 kHz RTP 与 RTCP SR/BYE；elementary RTP 产生 codec RTP/RTCP。三者只输出 MediaWireDatagramBatchBuffer，RTP/RTCP 使用同一 global sequence。协议 commit token 只在非阻塞原子 enqueue 成功后提交；WouldBlock 重试复用完全相同的 bytes/sequence。
+**接口：** MPEG-TS/UDP 产生完整 TS datagram；MPEG-TS/RTP 产生 PT 33/90 kHz RTP 与 RTCP SR/BYE；elementary RTP 产生 codec RTP/RTCP。三者只输出 MediaWireDatagramBatchBuffer，RTP/RTCP 使用同一 global sequence。协议 reservation 由不透明 RAII MediaDatagramSubmitCommitLease 独占；shaper 将 lease 原样移交 scheduled batch，WouldBlock 重试保留同一 bytes/sequence/lease，sender 原子 enqueue 成功后才 commit。失败或未提交析构时 lease 不得推进协议状态，且 graph 必须终止；禁止裸回调或进程级共享 token map。
 
 **临时 TDD RED/GREEN：**
 
@@ -63,7 +64,7 @@
 - RED 证明旧 node/sink 仍直接持有 UDP transport；GREEN 后协议层不含 socket、timer 或 pacing。
 - 删除临时 TDD 产物。
 
-**真实验证：** 运行真实 CLI preflight/shape，确认三类输出都有 materializer 边且没有第二套 socket/pacing loop。
+**静态/临时集成验证：** 使用临时 graph fixture 检查三类 materializer 的 port/payload/ownership 契约，并静态检索协议层没有 socket、timer 或 pacing；本 Task 不声称 production DAG 已装配，不运行真实 CLI 或 30 秒门禁，完整装配推迟到 Task 5。
 
 **提交边界：** refactor(protocol): materialize final wire datagrams
 
@@ -87,7 +88,7 @@
 - RED 暴露旧 forward-only 局部位移；GREEN 对相同输入产生唯一非重叠预约。
 - 删除临时测试并确认全树只有一个 shaper 状态实现。
 
-**真实验证：** 用固定真实源执行 30 秒 MPEG-TS/RTP 门禁，记录 planner rate/burst、datagram 间隔和 shaper backlog/high-water。
+**静态/临时集成验证：** 用 fake clock、临时 channel 和临时 factory fixture 验证 materialized batch -> shaper -> scheduled batch 的端到端 ownership、预约与背压；静态确认只有一个 shaper 状态实现。本 Task 不运行 production DAG 或 30 秒真实门禁，完整 builder/compiler/factory 装配与真实验证由 Task 5 完成。
 
 **提交边界：** feat(output): shape datagrams by service scope
 
@@ -136,16 +137,16 @@
 - Modify: src/media_transcode_beta/MediaRealtimeBetaFixedProfile.{h,cpp}
 - Modify: src/media_transcode_beta/MediaRealtimeBetaRequestMapper.cpp
 
-**接口：** sender 状态机固定为 WaitReservation -> TrySubmit -> WaitWritableWithinDeadline -> CommitSubmit，不存在 AwaitCompletion。planner 从类型化 deployment service/MTU/resource facts 生成唯一 shaping plan。按参数基线移除 caller-owned queue/startup/handoff/packet-size 等内部产品；保留的 transport fact 必须带 scope/evidence。
+**接口：** sender 状态机固定为 WaitReservation -> TrySubmit -> WaitWritableWithinDeadline -> CommitLeaseAfterSubmit，不存在 AwaitCompletion。Submitted 后 sender 在释放 scheduled batch 前对同一 entry 的 MediaDatagramSubmitCommitLease 精确 commit 一次；WouldBlock 保留 lease，late/short/ambiguous/stop failure 均不 commit 并终止 graph。planner 从类型化 deployment service/MTU/resource facts 生成唯一 shaping plan。按参数基线移除 caller-owned queue、startup gap、startup/handoff capacity、packet-size 等内部产品；startup gap 若真实需要，只能来自权威源探测或类型化源时钟契约，保留的 transport fact 必须带 scope/evidence。file output 保持独立文件写入路径，shape validator 必须拒绝其接入 Datagram 节点。
 
 **临时 TDD RED/GREEN：**
 
-- planner 覆盖缺 MTU/service/rate-burst/resource evidence 的 DAG 前失败，并证明改变 input AU/encoder bitrate 不会改变 socket/shaper plan。
-- graph shape 覆盖三类输出各只有 materializer -> shaper -> sender。
-- sender fake clock 覆盖 early wait、WouldBlock retry、late、generation mismatch、stop/abort causality和首错。
+- planner 覆盖缺 MTU、deployment service scope/rate/burst 或 resource evidence 的 DAG 前失败；caller bitrate 不得直接复制为 transport rate，但 prepared encoder emission envelope 变化必须改变 wire demand/shaping plan，或因 deployment service 不足在 DAG 前失败。改变 input AU bound 不得改变 socket/shaper plan。
+- graph shape 覆盖三类 Datagram 输出各只有 materializer -> shaper -> sender，并证明 file output 不含任何 Datagram materializer/shaper/sender。
+- sender fake clock 覆盖 early wait、WouldBlock retry、Submitted 后 lease 精确 commit、late/short/ambiguous 不 commit且 graph终止、generation mismatch、stop/abort causality和首错。
 - GREEN 后扫描 CompletionGated、AwaitCompletion、UserspaceSendReturn、PacingHeadroomNumerator、PacingBurstPackets，生产执行代码应无命中；删除临时测试。
 
-**真实验证：** Windows 与 RK 对三类输出分别做 30 秒真实 CLI 门禁，记录 production DAG shape、shaper scope、pressure、queue、CPU/RSS 和退出原因。
+**真实验证：** 完成必要 factory/compiler/builder 装配后，Windows 与 RK 对三类输出分别做 30 秒真实 CLI 门禁，记录 production DAG shape、shaper scope、commit lease、pressure、queue、CPU/RSS 和退出原因；这是本计划第一次允许声明 production DAG/30 秒门禁通过。
 
 **提交边界：** refactor(realtime): route outputs through datagram shaper
 
@@ -165,12 +166,13 @@
 **真实验证：**
 
 - Windows clean-first x64 Debug、RK Release 构建成功。
-- 每个平台先 30 秒门禁，再以 out/acceptance/test-continuous-120s.mp4 验收 MPEG-TS/RTP、MPEG-TS/UDP、独立 RTP，不降低任何源参数或转码步骤。
+- 完整验收固定为 56 条链路：38 条 VideoOnly + 18 条 AudioVideo。Windows 执行全部 56 条矩阵；RK 对 capability probe/admission 明确支持的链路实跑，对不支持的链路必须以类型化 capability evidence 在 DAG 构建前明确拒绝，禁止运行期 fallback 或静默跳过。
+- 每条 admitted 链路先 30 秒门禁，再以 out/acceptance/test-continuous-120s.mp4 完整运行；覆盖 MPEG-TS/RTP、MPEG-TS/UDP、独立 RTP，不降低任何源参数或转码步骤。
 - 每条链路记录精确 FFmpeg source、CLI、VLC/receiver、端口、PID、CPU、RSS、A/V drift、shaper backlog/residence、socket pressure、loss/order、TS continuity/PCR、异步 evidence 覆盖率、退出原因和清理命令。
 - VLC 可见，CLI/FFmpeg 隐藏；停止 source 后等待 CLI 真实退出并检查进程残留。TX timestamp/sender pcap 不替代 receiver 和画面证据。
 
 **提交与审核边界：**
 
 - 更新完成文档与 QUALITY_SCORE.md，列出剩余风险。
-- 两名未参与实现的智能体同时明确通过；修复后两者重新复审。
+- SDD 各 Task 的一名 reviewer 均已 PASS；全部代码冻结后，两名未参与任何实现的独立智能体必须同时明确 PASS，修复后两者重新复审。
 - 提交 docs(realtime): record datagram shaping acceptance，push 同一分支，创建 PR，再由新智能体审核 PR 并明确通过。
