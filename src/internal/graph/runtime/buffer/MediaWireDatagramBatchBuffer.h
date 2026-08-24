@@ -9,6 +9,7 @@
 #include <memory>
 #include <new>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -21,6 +22,7 @@ class MediaScheduledDatagramSenderNode;
 class MediaScheduledWireDatagram;
 class MediaScheduledWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuffer;
+class MediaWireDatagramBatchBuilder;
 
 class MediaDatagramSubmitCommitLease final {
 public:
@@ -154,13 +156,13 @@ public:
 private:
     friend class MediaDatagramShaperNode;
     friend class MediaDatagramServiceShaper;
+    friend class MediaScheduledWireDatagramBatchBuffer;
     friend class MediaWireDatagramBatchBuffer;
 
     MediaWireDatagram(
         std::span<const std::uint8_t> bytes,
         const MediaWireDatagramDescriptor& descriptor,
         MediaDatagramSubmitCommitLease commitLease) noexcept;
-    MediaDatagramSubmitCommitLease takeCommitLease() noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaWireDatagramDescriptor m_descriptor;
@@ -169,15 +171,16 @@ private:
 
 class MediaWireDatagramBatchBuffer final : public MediaBuffer {
 public:
-    static ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-    create(std::vector<std::uint8_t> payload,
-           std::vector<MediaWireDatagramBatchEntry> entries);
-
     MediaBufferType type() const noexcept override
     {
         return MediaBufferType::WireDatagramBatch;
     }
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
+    const std::string& sessionKey() const noexcept { return m_sessionKey; }
+    const std::string& serviceScopeId() const noexcept
+    {
+        return m_serviceScopeId;
+    }
     std::uint64_t generation() const noexcept { return m_generation; }
     std::span<const MediaWireDatagram> datagrams() const noexcept
     {
@@ -187,12 +190,24 @@ public:
 private:
     friend class MediaDatagramShaperNode;
     friend class MediaDatagramServiceShaper;
+    friend class MediaScheduledWireDatagramBatchBuffer;
+    friend class MediaWireDatagramBatchBuilder;
+
+    static ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    create(std::string sessionKey,
+           std::string serviceScopeId,
+           std::vector<std::uint8_t> payload,
+           std::vector<MediaWireDatagramBatchEntry> entries);
 
     MediaWireDatagramBatchBuffer(
+        std::string sessionKey,
+        std::string serviceScopeId,
         std::uint64_t generation,
         std::vector<std::uint8_t> payload,
         std::vector<MediaWireDatagram> datagrams) noexcept;
 
+    const std::string m_sessionKey;
+    const std::string m_serviceScopeId;
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaWireDatagram> m_datagrams;

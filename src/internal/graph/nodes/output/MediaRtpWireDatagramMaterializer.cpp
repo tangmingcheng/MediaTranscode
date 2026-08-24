@@ -182,7 +182,12 @@ MediaRtpWireDatagramMaterializer::materialize(
             "RTP wire commit transaction"));
     }
 
-    MediaWireDatagramBatchBuilder builder(m_state->generation);
+    auto builderResult = MediaWireDatagramBatchBuilder::create(
+        m_state->globalSequence->sessionKey(),
+        m_state->globalSequence->serviceScopeId(),
+        m_state->generation);
+    if (!builderResult) return Result::failure(builderResult.error());
+    auto builder = std::move(builderResult).value();
     std::size_t index = 0;
     if (rtcpBytes) {
         auto sequence = transaction->sequence(index);
@@ -277,7 +282,12 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
     auto lease = makeMediaRtpWireCommitLease(
         transaction, 0, m_state->generation, sequence.value());
     if (!lease) return Result::failure(lease.error());
-    MediaWireDatagramBatchBuilder builder(m_state->generation);
+    auto builderResult = MediaWireDatagramBatchBuilder::create(
+        m_state->globalSequence->sessionKey(),
+        m_state->globalSequence->serviceScopeId(),
+        m_state->generation);
+    if (!builderResult) return Result::failure(builderResult.error());
+    auto builder = std::move(builderResult).value();
     auto appended = builder.append(
         datagram.value(),
         m_state->rtcpEndpointId,

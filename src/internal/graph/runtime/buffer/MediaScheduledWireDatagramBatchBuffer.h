@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -15,11 +16,6 @@ struct MediaScheduledWireDatagramDescriptor final {
     MediaRunningTime enqueueNotBefore;
     MediaRunningTime enqueueNotAfter;
     MediaRunningTime wireServiceDuration;
-};
-
-struct MediaScheduledWireDatagramBatchEntry final {
-    MediaScheduledWireDatagramDescriptor descriptor;
-    MediaDatagramSubmitCommitLease commitLease;
 };
 
 class MediaScheduledWireDatagram final {
@@ -85,19 +81,16 @@ private:
 
 class MediaScheduledWireDatagramBatchBuffer final : public MediaBuffer {
 public:
-    // This factory closes all per-batch limits. The future stateful shaper owns
-    // service-scope debt and pending usage that span multiple batches.
-    static ::media::Result<
-        std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
-    create(const MediaDatagramShapingPlan& plan,
-           std::vector<std::uint8_t> payload,
-           std::vector<MediaScheduledWireDatagramBatchEntry> entries);
-
     MediaBufferType type() const noexcept override
     {
         return MediaBufferType::ScheduledWireDatagramBatch;
     }
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
+    const std::string& sessionKey() const noexcept { return m_sessionKey; }
+    const std::string& serviceScopeId() const noexcept
+    {
+        return m_serviceScopeId;
+    }
     std::uint64_t generation() const noexcept { return m_generation; }
     std::span<const MediaScheduledWireDatagram> datagrams() const noexcept
     {
@@ -105,11 +98,21 @@ public:
     }
 
 private:
-    MediaScheduledWireDatagramBatchBuffer(
-        std::uint64_t generation,
-        std::vector<std::uint8_t> payload,
-        std::vector<MediaScheduledWireDatagram> datagrams) noexcept;
+    friend class MediaDatagramServiceShaper;
 
+    static ::media::Result<
+        std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
+    create(const MediaDatagramShapingPlan& plan,
+           MediaWireDatagramBatchBuffer& source,
+           std::vector<MediaScheduledWireDatagramDescriptor> descriptors);
+
+    MediaScheduledWireDatagramBatchBuffer(
+        std::string sessionKey,
+        std::string serviceScopeId,
+        std::uint64_t generation) noexcept;
+
+    const std::string m_sessionKey;
+    const std::string m_serviceScopeId;
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaScheduledWireDatagram> m_datagrams;

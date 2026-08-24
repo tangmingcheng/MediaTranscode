@@ -129,10 +129,14 @@ MediaDatagramServiceShaper::shape(
 {
     using Result = ::media::Result<
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>;
-    if (batch.generation() != m_plan.generation() ||
+    if (batch.sessionKey() != m_plan.sessionKey() ||
+        batch.serviceScopeId() != m_plan.serviceScope().scopeId ||
+        batch.generation() != m_plan.generation() ||
+        now < MediaRunningTime::fromNanoseconds(0) ||
+        (m_previousNow && now < *m_previousNow) ||
         batch.m_payload.empty() || batch.m_datagrams.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "service shaper requires an unconsumed batch for its active generation"));
+            "service shaper requires matching service identity, monotonic time, and an unconsumed active-generation batch"));
     }
 
     std::deque<PendingReservation> pending;
@@ -283,19 +287,8 @@ MediaDatagramServiceShaper::shape(
         previousSequence = wire.globalSequence;
     }
 
-    std::vector<MediaScheduledWireDatagramBatchEntry> entries;
-    try {
-        entries.reserve(batch.m_datagrams.size());
-        for (std::size_t index = 0; index < batch.m_datagrams.size(); ++index) {
-            entries.push_back({descriptors[index],
-                               batch.m_datagrams[index].takeCommitLease()});
-        }
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "service shaper output entries"));
-    }
     auto output = MediaScheduledWireDatagramBatchBuffer::create(
-        m_plan, std::move(batch.m_payload), std::move(entries));
+        m_plan, batch, std::move(descriptors));
     if (!output) return Result::failure(output.error());
 
     m_pending = std::move(pending);
@@ -304,6 +297,7 @@ MediaDatagramServiceShaper::shape(
     m_previousCanonicalRelease = previousRelease;
     m_previousCanonicalDeadline = previousDeadline;
     m_previousGlobalSequence = previousSequence;
+    m_previousNow = now;
     return output;
 }
 

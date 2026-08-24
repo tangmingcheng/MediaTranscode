@@ -40,6 +40,7 @@ private:
     std::optional<MediaRunningTime> m_previousCanonicalRelease;
     std::optional<MediaRunningTime> m_previousCanonicalDeadline;
     std::optional<std::uint64_t> m_previousGlobalSequence;
+    std::optional<MediaRunningTime> m_previousNow;
 };
 
 } // namespace media::ffmpeg::graph

@@ -26,17 +26,15 @@ MediaWireDatagram::MediaWireDatagram(
 {
 }
 
-MediaDatagramSubmitCommitLease
-MediaWireDatagram::takeCommitLease() noexcept
-{
-    return std::move(m_commitLease);
-}
-
 MediaWireDatagramBatchBuffer::MediaWireDatagramBatchBuffer(
+    std::string sessionKey,
+    std::string serviceScopeId,
     std::uint64_t generation,
     std::vector<std::uint8_t> payload,
     std::vector<MediaWireDatagram> datagrams) noexcept
-    : m_generation(generation),
+    : m_sessionKey(std::move(sessionKey)),
+      m_serviceScopeId(std::move(serviceScopeId)),
+      m_generation(generation),
       m_payload(std::move(payload)),
       m_datagrams(std::move(datagrams))
 {
@@ -47,14 +45,17 @@ MediaWireDatagramBatchBuffer::MediaWireDatagramBatchBuffer(
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaWireDatagramBatchBuffer::create(
+    std::string sessionKey,
+    std::string serviceScopeId,
     std::vector<std::uint8_t> payload,
     std::vector<MediaWireDatagramBatchEntry> entries)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    if (payload.empty() || entries.empty()) {
+    if (sessionKey.empty() || serviceScopeId.empty() || payload.empty() ||
+        entries.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "wire datagram batch requires payload and entries"));
+            "wire datagram batch requires service identity, payload, and entries"));
     }
     std::vector<MediaWireDatagram> datagrams;
     try {
@@ -91,6 +92,7 @@ MediaWireDatagramBatchBuffer::create(
     try {
         return Result::success(std::shared_ptr<MediaWireDatagramBatchBuffer>(
             new MediaWireDatagramBatchBuffer(
+                std::move(sessionKey), std::move(serviceScopeId),
                 validator.generation(), std::move(payload),
                 std::move(datagrams))));
     } catch (const std::bad_alloc&) {

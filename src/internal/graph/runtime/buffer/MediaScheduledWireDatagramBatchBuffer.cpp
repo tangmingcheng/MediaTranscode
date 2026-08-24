@@ -33,12 +33,12 @@ MediaScheduledWireDatagram::MediaScheduledWireDatagram(
 
 MediaScheduledWireDatagramBatchBuffer::
 MediaScheduledWireDatagramBatchBuffer(
-    std::uint64_t generation,
-    std::vector<std::uint8_t> payload,
-    std::vector<MediaScheduledWireDatagram> datagrams) noexcept
-    : m_generation(generation),
-      m_payload(std::move(payload)),
-      m_datagrams(std::move(datagrams))
+    std::string sessionKey,
+    std::string serviceScopeId,
+    std::uint64_t generation) noexcept
+    : m_sessionKey(std::move(sessionKey)),
+      m_serviceScopeId(std::move(serviceScopeId)),
+      m_generation(generation)
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::ScheduledWireDatagramBatch);
@@ -48,22 +48,26 @@ MediaScheduledWireDatagramBatchBuffer(
 ::media::Result<std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
 MediaScheduledWireDatagramBatchBuffer::create(
     const MediaDatagramShapingPlan& plan,
-    std::vector<std::uint8_t> payload,
-    std::vector<MediaScheduledWireDatagramBatchEntry> entries)
+    MediaWireDatagramBatchBuffer& source,
+    std::vector<MediaScheduledWireDatagramDescriptor> descriptors)
 {
     using Result = ::media::Result<
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>;
-    if (payload.empty() || entries.empty() ||
-        entries.size() > plan.batch().maximumDatagrams ||
-        payload.size() > plan.batch().maximumBytes) {
+    if (source.m_sessionKey != plan.sessionKey() ||
+        source.m_serviceScopeId != plan.serviceScope().scopeId ||
+        source.m_generation != plan.generation() || source.m_payload.empty() ||
+        source.m_datagrams.empty() ||
+        descriptors.size() != source.m_datagrams.size() ||
+        descriptors.size() > plan.batch().maximumDatagrams ||
+        source.m_payload.size() > plan.batch().maximumBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "scheduled wire datagram batch exceeds its planner-owned hard bounds"));
+            "scheduled wire datagram batch violates its service identity or planner-owned hard bounds"));
     }
 
     std::vector<MediaScheduledWireDatagram> datagrams;
     std::unordered_map<std::uint64_t, EndpointBatchUsage> endpointUsage;
     try {
-        datagrams.reserve(entries.size());
+        datagrams.reserve(descriptors.size());
         endpointUsage.reserve(plan.endpoints().size());
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -71,13 +75,14 @@ MediaScheduledWireDatagramBatchBuffer::create(
     }
 
     MediaWireDatagramDescriptorValidator validator(
-        static_cast<std::uint64_t>(payload.size()));
+        static_cast<std::uint64_t>(source.m_payload.size()));
     const auto zero = MediaRunningTime::fromNanoseconds(0);
     std::optional<MediaRunningTime> previousCompletion;
     std::optional<MediaRunningTime> previousEnqueueNotAfter;
-    for (auto& entry : entries) {
-        const auto& descriptor = entry.descriptor;
+    for (std::size_t index = 0; index < descriptors.size(); ++index) {
+        const auto& descriptor = descriptors[index];
         const auto& wire = descriptor.wire;
+        const auto& datagram = source.m_datagrams[index];
         const auto* endpoint = plan.endpoint(wire.endpointId);
         auto validWire = validator.accept(wire);
         auto plannedWireCost = plan.plannedWireCost(
@@ -100,7 +105,9 @@ MediaScheduledWireDatagramBatchBuffer::create(
              descriptor.enqueueNotBefore < *previousCompletion) ||
             (previousEnqueueNotAfter &&
              descriptor.enqueueNotAfter < *previousEnqueueNotAfter) ||
-            !entry.commitLease.matches(wire.generation, wire.globalSequence)) {
+            datagram.m_descriptor != wire ||
+            !datagram.m_commitLease.matches(
+                wire.generation, wire.globalSequence)) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "scheduled wire datagram violates plan, payload, generation, sequence, deadline, or lease ownership"));
         }
@@ -130,29 +137,32 @@ MediaScheduledWireDatagramBatchBuffer::create(
 
         previousCompletion = completion.value();
         previousEnqueueNotAfter = descriptor.enqueueNotAfter;
-        try {
-            datagrams.push_back(MediaScheduledWireDatagram(
-                std::span<const std::uint8_t>(
-                    payload.data() + wire.payloadOffset,
-                    static_cast<std::size_t>(wire.payloadSize)),
-                descriptor, std::move(entry.commitLease)));
-        } catch (const std::bad_alloc&) {
-            return Result::failure(::media::ErrorInfo::allocationFailed(
-                "scheduled wire datagram batch entries"));
-        }
     }
     auto complete = validator.finish();
     if (!complete) return Result::failure(complete.error());
+
+    std::shared_ptr<MediaScheduledWireDatagramBatchBuffer> output;
     try {
-        return Result::success(
-            std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>(
-                new MediaScheduledWireDatagramBatchBuffer(
-                    validator.generation(), std::move(payload),
-                    std::move(datagrams))));
+        output = std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>(
+            new MediaScheduledWireDatagramBatchBuffer(
+                source.m_sessionKey, source.m_serviceScopeId,
+                validator.generation()));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaScheduledWireDatagramBatchBuffer"));
     }
+    for (std::size_t index = 0; index < descriptors.size(); ++index) {
+        const auto& wire = descriptors[index].wire;
+        datagrams.push_back(MediaScheduledWireDatagram(
+            std::span<const std::uint8_t>(
+                source.m_payload.data() + wire.payloadOffset,
+                static_cast<std::size_t>(wire.payloadSize)),
+            descriptors[index],
+            std::move(source.m_datagrams[index].m_commitLease)));
+    }
+    output->m_payload = std::move(source.m_payload);
+    output->m_datagrams = std::move(datagrams);
+    return Result::success(std::move(output));
 }
 
 std::optional<std::uint64_t>

@@ -125,7 +125,10 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
         sequence.value(),
         MediaMpegTsUdpWireEntryReservation(transaction));
     if (!lease) return Result::failure(lease.error());
-    MediaWireDatagramBatchBuilder builder(m_config.generation);
+    auto builderResult = MediaWireDatagramBatchBuilder::create(
+        m_config.sessionKey, m_config.serviceScopeId, m_config.generation);
+    if (!builderResult) return Result::failure(builderResult.error());
+    auto builder = std::move(builderResult).value();
     auto appended = builder.append(
         completeTsPackets,
         m_config.endpointId,

@@ -7,9 +7,33 @@
 namespace media::ffmpeg::graph {
 
 MediaWireDatagramBatchBuilder::MediaWireDatagramBatchBuilder(
+    std::string sessionKey,
+    std::string serviceScopeId,
     std::uint64_t generation) noexcept
-    : m_generation(generation)
+    : m_sessionKey(std::move(sessionKey)),
+      m_serviceScopeId(std::move(serviceScopeId)),
+      m_generation(generation)
 {
+}
+
+::media::Result<MediaWireDatagramBatchBuilder>
+MediaWireDatagramBatchBuilder::create(
+    const std::string& sessionKey,
+    const std::string& serviceScopeId,
+    std::uint64_t generation)
+{
+    using Result = ::media::Result<MediaWireDatagramBatchBuilder>;
+    if (sessionKey.empty() || serviceScopeId.empty() || generation == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "wire datagram builder requires complete service identity"));
+    }
+    try {
+        return Result::success(MediaWireDatagramBatchBuilder(
+            sessionKey, serviceScopeId, generation));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "wire datagram builder identity"));
+    }
 }
 
 ::media::Status MediaWireDatagramBatchBuilder::append(
@@ -61,6 +85,7 @@ MediaWireDatagramBatchBuilder::finish()
     }
     m_finished = true;
     return MediaWireDatagramBatchBuffer::create(
+        std::move(m_sessionKey), std::move(m_serviceScopeId),
         std::move(m_payload), std::move(m_entries));
 }
 
