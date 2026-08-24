@@ -93,7 +93,10 @@ enum class MediaNodeKind {
     MpegTsRtpSdpPublisher = 67,
     VideoOutputScheduler = 68,
     ScheduledDatagramSender = 69,
-    DatagramShaper = 70
+    DatagramShaper = 70,
+    RtpDatagramMaterializer = 71,
+    MpegTsDatagramMaterializer = 72,
+    DatagramTransportPlanSource = 73
 };
 
 } // namespace media::ffmpeg::graph

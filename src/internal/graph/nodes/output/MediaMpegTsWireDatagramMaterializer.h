@@ -13,6 +13,13 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaMpegTsDatagramView final {
+    std::span<const std::uint8_t> completeTsPackets;
+    MediaRunningTime presentationOnMaster;
+    MediaRunningTime canonicalRelease;
+    MediaRunningTime canonicalDeadline;
+};
+
 struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
     std::string sessionKey;
     std::string serviceScopeId;
@@ -32,6 +39,8 @@ public:
         std::span<const std::uint8_t> completeTsPackets,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
 
 private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
@@ -70,6 +79,8 @@ public:
         MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(

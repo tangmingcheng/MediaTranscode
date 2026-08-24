@@ -12,14 +12,16 @@ namespace {
 
 void appendRtpEndpoints(
     std::vector<MediaDatagramRemoteEndpointFact>& endpoints,
-    const MediaRtpUdpSenderConfig& transport)
+    const MediaRtpUdpSenderConfig& transport,
+    MediaDatagramProtocolEndpointRole rtpRole,
+    MediaDatagramProtocolEndpointRole rtcpRole)
 {
     const auto& rtp = transport.remoteRtpEndpoint();
     const auto& rtcp = transport.remoteRtcpEndpoint();
     const auto nextId = static_cast<std::uint64_t>(endpoints.size()) + 1U;
-    endpoints.push_back({nextId, rtp.addressFamily(),
+    endpoints.push_back({nextId, rtpRole, rtp.addressFamily(),
                          rtp.numericAddress(), rtp.port()});
-    endpoints.push_back({nextId + 1U, rtcp.addressFamily(),
+    endpoints.push_back({nextId + 1U, rtcpRole, rtcp.addressFamily(),
                          rtcp.numericAddress(), rtcp.port()});
 }
 
@@ -43,7 +45,10 @@ MediaRealtimeDatagramTransportPlanner::plan(
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(2);
-        appendRtpEndpoints(endpoints, output.video.transport);
+        appendRtpEndpoints(
+            endpoints, output.video.transport,
+            MediaDatagramProtocolEndpointRole::VideoRtp,
+            MediaDatagramProtocolEndpointRole::VideoRtcp);
         return planRtp(sessionKey, deployment, std::move(endpoints));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
@@ -61,8 +66,14 @@ MediaRealtimeDatagramTransportPlanner::plan(
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(4);
-        appendRtpEndpoints(endpoints, output.video.transport);
-        appendRtpEndpoints(endpoints, output.audio.transport);
+        appendRtpEndpoints(
+            endpoints, output.video.transport,
+            MediaDatagramProtocolEndpointRole::VideoRtp,
+            MediaDatagramProtocolEndpointRole::VideoRtcp);
+        appendRtpEndpoints(
+            endpoints, output.audio.transport,
+            MediaDatagramProtocolEndpointRole::AudioRtp,
+            MediaDatagramProtocolEndpointRole::AudioRtcp);
         return planRtp(sessionKey, deployment, std::move(endpoints));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
@@ -82,7 +93,10 @@ MediaRealtimeDatagramTransportPlanner::plan(
         try {
             std::vector<MediaDatagramRemoteEndpointFact> endpoints;
             endpoints.reserve(2);
-            appendRtpEndpoints(endpoints, rtp->transport());
+            appendRtpEndpoints(
+                endpoints, rtp->transport(),
+                MediaDatagramProtocolEndpointRole::MpegTsRtp,
+                MediaDatagramProtocolEndpointRole::MpegTsRtcp);
             return planRtp(sessionKey, deployment, std::move(endpoints));
         } catch (const std::bad_alloc&) {
             return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
@@ -114,7 +128,8 @@ MediaRealtimeDatagramTransportPlanner::plan(
     }
     return MediaDatagramTransportPlanTemplate::create(
         sessionKey, deployment,
-        {{1, family, parsed.value().host, parsed.value().port}});
+        {{1, MediaDatagramProtocolEndpointRole::MpegTsUdp,
+          family, parsed.value().host, parsed.value().port}});
 }
 
 } // namespace media::ffmpeg::graph

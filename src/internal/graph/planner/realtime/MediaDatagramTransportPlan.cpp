@@ -30,13 +30,18 @@ MediaDatagramTransportPlanTemplate::create(
     }
     try {
         std::unordered_set<std::uint64_t> endpointIds;
+        std::unordered_set<std::uint8_t> endpointRoles;
         endpointIds.reserve(remoteEndpoints.size());
+        endpointRoles.reserve(remoteEndpoints.size());
         for (const auto& endpoint : remoteEndpoints) {
             if (endpoint.endpointId == 0 || endpoint.port == 0 ||
+                endpoint.role == MediaDatagramProtocolEndpointRole::Unknown ||
                 endpoint.addressFamily != facts.localPorts.addressFamily ||
                 !MediaNumericIpAddress::create(
                     endpoint.addressFamily, endpoint.numericAddress) ||
-                !endpointIds.insert(endpoint.endpointId).second) {
+                !endpointIds.insert(endpoint.endpointId).second ||
+                !endpointRoles.insert(
+                    static_cast<std::uint8_t>(endpoint.role)).second) {
                 return Result::failure(::media::ErrorInfo::invalidArgument(
                     "Datagram transport template requires unique numeric endpoints matching the reserved local address family"));
             }
@@ -161,6 +166,26 @@ const std::vector<MediaDatagramRemoteEndpointFact>&
 MediaDatagramTransportPlanTemplate::remoteEndpoints() const noexcept
 {
     return m_encoding.remoteEndpoints;
+}
+
+::media::Result<std::uint64_t>
+MediaDatagramTransportPlanTemplate::endpointId(
+    MediaDatagramProtocolEndpointRole role) const noexcept
+{
+    if (role == MediaDatagramProtocolEndpointRole::Unknown) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Datagram endpoint role must be explicit"));
+    }
+    for (const auto& endpoint : m_encoding.remoteEndpoints) {
+        if (endpoint.role == role) {
+            return ::media::Result<std::uint64_t>::success(
+                endpoint.endpointId);
+        }
+    }
+    return ::media::Result<std::uint64_t>::failure(
+        ::media::ErrorInfo::notInitialized(
+            "Datagram endpoint role is absent from the transport template"));
 }
 
 } // namespace media::ffmpeg::graph

@@ -29,7 +29,8 @@ enum class MediaBufferType {
     ScheduledDatagramBatch,
     WireDatagramBatch,
     ScheduledWireDatagramBatch,
-    DatagramShapingPlan
+    DatagramShapingPlan,
+    DatagramTransportPlan
 };
 
 enum class MediaBufferFlag : uint32_t {

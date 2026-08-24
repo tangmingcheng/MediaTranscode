@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <new>
+#include <array>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -21,14 +22,14 @@ public:
     {
     }
 
-    ::media::Result<std::uint64_t> sequence() const noexcept
+    ::media::Result<std::uint64_t> sequence(std::size_t index) const noexcept
     {
-        return m_reservation.sequence(0);
+        return m_reservation.sequence(index);
     }
 
-    ::media::Status commit() noexcept
+    ::media::Status commit(std::size_t index) noexcept
     {
-        return m_reservation.commit(0);
+        return m_reservation.commit(index);
     }
 
 private:
@@ -38,22 +39,24 @@ private:
 class MediaMpegTsUdpWireEntryReservation final {
 public:
     explicit MediaMpegTsUdpWireEntryReservation(
-        std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction)
+        std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction,
+        std::size_t index)
         noexcept
-        : m_transaction(std::move(transaction))
+        : m_transaction(std::move(transaction)), m_index(index)
     {
     }
 
     ::media::Status commit() noexcept
     {
         return m_transaction
-            ? m_transaction->commit()
+            ? m_transaction->commit(m_index)
             : ::media::Status::failure(::media::ErrorInfo::internalError(
                   "MPEG-TS UDP wire reservation has no transaction"));
     }
 
 private:
     std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> m_transaction;
+    std::size_t m_index;
 };
 
 } // namespace
@@ -97,17 +100,33 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline)
 {
+    const std::array<MediaMpegTsDatagramView, 1> datagrams{{
+        {completeTsPackets, canonicalRelease, canonicalRelease,
+         canonicalDeadline}}};
+    return materializeBatch(datagrams);
+}
+
+::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+MediaMpegTsUdpWireDatagramMaterializer::materializeBatch(
+    std::span<const MediaMpegTsDatagramView> datagrams)
+{
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    if (completeTsPackets.empty() ||
-        completeTsPackets.size() % m_config.tsPacketBytes != 0 ||
-        completeTsPackets.size() > m_config.maximumDatagramBytes ||
-        canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
-        canonicalDeadline < canonicalRelease) {
+    if (datagrams.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS UDP wire materializer requires one planned datagram of complete TS packets and an ordered canonical window"));
+            "MPEG-TS UDP wire materializer requires a nonempty batch"));
     }
-    auto global = m_config.globalSequence->reserve(1);
+    for (const auto& datagram : datagrams) {
+        if (datagram.completeTsPackets.empty() ||
+            datagram.completeTsPackets.size() % m_config.tsPacketBytes != 0 ||
+            datagram.completeTsPackets.size() > m_config.maximumDatagramBytes ||
+            datagram.canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
+            datagram.canonicalDeadline < datagram.canonicalRelease) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "MPEG-TS UDP wire materializer requires complete TS datagrams and ordered canonical windows"));
+        }
+    }
+    auto global = m_config.globalSequence->reserve(datagrams.size());
     if (!global) return Result::failure(global.error());
     std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction;
     try {
@@ -118,25 +137,24 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS UDP wire commit transaction"));
     }
-    auto sequence = transaction->sequence();
-    if (!sequence) return Result::failure(sequence.error());
-    auto lease = MediaDatagramSubmitCommitLease::create(
-        m_config.generation,
-        sequence.value(),
-        MediaMpegTsUdpWireEntryReservation(transaction));
-    if (!lease) return Result::failure(lease.error());
     auto builderResult = MediaWireDatagramBatchBuilder::create(
         m_config.sessionKey, m_config.serviceScopeId, m_config.generation);
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
-    auto appended = builder.append(
-        completeTsPackets,
-        m_config.endpointId,
-        canonicalRelease,
-        canonicalDeadline,
-        sequence.value(),
-        std::move(lease).value());
-    if (!appended) return Result::failure(appended.error());
+    for (std::size_t index = 0; index < datagrams.size(); ++index) {
+        auto sequence = transaction->sequence(index);
+        if (!sequence) return Result::failure(sequence.error());
+        auto lease = MediaDatagramSubmitCommitLease::create(
+            m_config.generation, sequence.value(),
+            MediaMpegTsUdpWireEntryReservation(transaction, index));
+        if (!lease) return Result::failure(lease.error());
+        auto appended = builder.append(
+            datagrams[index].completeTsPackets, m_config.endpointId,
+            datagrams[index].canonicalRelease,
+            datagrams[index].canonicalDeadline, sequence.value(),
+            std::move(lease).value());
+        if (!appended) return Result::failure(appended.error());
+    }
     return builder.finish();
 }
 
@@ -206,19 +224,49 @@ MediaMpegTsRtpWireDatagramMaterializer::materialize(
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline)
 {
-    auto packet = m_packetizer.packetize(
-        completeTsPackets, presentationOnMaster, 0);
-    if (!packet) {
-        return ::media::Result<
-            std::shared_ptr<MediaWireDatagramBatchBuffer>>::failure(
-                packet.error());
+    const std::array<MediaMpegTsDatagramView, 1> datagrams{{
+        {completeTsPackets, presentationOnMaster,
+         canonicalRelease, canonicalDeadline}}};
+    return materializeBatch(datagrams);
+}
+
+::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
+    std::span<const MediaMpegTsDatagramView> datagrams)
+{
+    using Result =
+        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    if (datagrams.empty()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS RTP wire materializer requires a nonempty batch"));
     }
-    return m_rtpMaterializer.materialize(
-        packet.value().datagram(),
-        packet.value().payloadOctets(),
-        presentationOnMaster,
-        canonicalRelease,
-        canonicalDeadline);
+    std::vector<std::vector<std::uint8_t>> payloads;
+    std::vector<std::size_t> payloadOctets;
+    std::vector<MediaPacketizedRtpDatagramView> packetized;
+    try {
+        payloads.reserve(datagrams.size());
+        payloadOctets.reserve(datagrams.size());
+        packetized.reserve(datagrams.size());
+        for (const auto& datagram : datagrams) {
+            auto packet = m_packetizer.packetize(
+                datagram.completeTsPackets,
+                datagram.presentationOnMaster, 0);
+            if (!packet) return Result::failure(packet.error());
+            payloadOctets.push_back(packet.value().payloadOctets());
+            payloads.push_back(packet.value().releaseDatagram());
+        }
+        for (std::size_t index = 0; index < datagrams.size(); ++index) {
+            packetized.push_back(MediaPacketizedRtpDatagramView{
+                payloads[index], payloadOctets[index],
+                datagrams[index].presentationOnMaster,
+                datagrams[index].canonicalRelease,
+                datagrams[index].canonicalDeadline});
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "MPEG-TS RTP wire batch"));
+    }
+    return m_rtpMaterializer.materializeBatch(packetized);
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>

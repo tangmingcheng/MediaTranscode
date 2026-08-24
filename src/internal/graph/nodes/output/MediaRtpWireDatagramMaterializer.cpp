@@ -7,6 +7,7 @@
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuilder.h"
 
 #include <limits>
+#include <array>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -84,14 +85,21 @@ MediaRtpWireDatagramMaterializer::materialize(
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline)
 {
+    const std::array<MediaPacketizedRtpDatagramView, 1> datagrams{{
+        {packetizedRtp, payloadOctets, presentationOnMaster,
+         canonicalRelease, canonicalDeadline}}};
+    return materializeBatch(datagrams);
+}
+
+::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+MediaRtpWireDatagramMaterializer::materializeBatch(
+    std::span<const MediaPacketizedRtpDatagramView> datagrams)
+{
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    auto times = validateTimes(canonicalRelease, canonicalDeadline);
-    if (!times) return Result::failure(times.error());
-    if (packetizedRtp.size() > m_state->maximumDatagramBytes ||
-        payloadOctets == 0) {
+    if (datagrams.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "RTP wire packet exceeds its planned datagram or counter bound"));
+            "RTP wire batch requires at least one packetized datagram"));
     }
     std::unique_lock protocolLock(m_state->mutex, std::try_to_lock);
     if (!protocolLock.owns_lock()) {
@@ -102,33 +110,67 @@ MediaRtpWireDatagramMaterializer::materialize(
         return Result::failure(::media::ErrorInfo::internalError(
             "RTP wire protocol state is terminal or poisoned"));
     }
-    const auto reservedPayloadOctets =
-        static_cast<std::uint64_t>(payloadOctets);
-    if (m_state->packetCount == MaximumProtocolCounter ||
-        reservedPayloadOctets >
-            MaximumProtocolCounter - m_state->octetCount) {
+    std::vector<std::vector<std::uint8_t>> materializedRtp;
+    std::vector<MediaRtpTimestamp> timestamps;
+    std::vector<std::uint64_t> reservedPayloadOctets;
+    try {
+        materializedRtp.reserve(datagrams.size());
+        timestamps.reserve(datagrams.size());
+        reservedPayloadOctets.reserve(datagrams.size());
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "RTP wire batch workspace"));
+    }
+    std::uint64_t totalPayloadOctets = 0;
+    std::optional<MediaRtpTimestamp> previousTimestamp =
+        m_state->lastCommittedTimestamp;
+    for (std::size_t index = 0; index < datagrams.size(); ++index) {
+        const auto& datagram = datagrams[index];
+        auto times = validateTimes(
+            datagram.canonicalRelease, datagram.canonicalDeadline);
+        if (!times) return Result::failure(times.error());
+        if (datagram.bytes.size() > m_state->maximumDatagramBytes ||
+            datagram.payloadOctets == 0 ||
+            datagram.payloadOctets >
+                MaximumProtocolCounter - totalPayloadOctets) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP wire packet exceeds its planned datagram or counter bound"));
+        }
+        auto timestamp = m_state->clockMapper.map(
+            datagram.presentationOnMaster);
+        if (!timestamp) return Result::failure(timestamp.error());
+        if (previousTimestamp && timestamp.value().extendedTicks() <
+                                     previousTimestamp->extendedTicks()) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP wire timestamp regressed within its batch"));
+        }
+        auto bytes = MediaRtpWirePacketComposer::compose(
+            datagram.bytes, datagram.payloadOctets, m_state->identity,
+            timestamp.value(),
+            static_cast<std::uint16_t>(m_state->nextRtpSequence + index),
+            m_state->maximumDatagramBytes);
+        if (!bytes) return Result::failure(bytes.error());
+        totalPayloadOctets +=
+            static_cast<std::uint64_t>(datagram.payloadOctets);
+        try {
+            materializedRtp.push_back(std::move(bytes).value());
+            timestamps.push_back(timestamp.value());
+            reservedPayloadOctets.push_back(
+                static_cast<std::uint64_t>(datagram.payloadOctets));
+        } catch (const std::bad_alloc&) {
+            return Result::failure(::media::ErrorInfo::allocationFailed(
+                "RTP wire batch materialization"));
+        }
+        previousTimestamp = timestamp.value();
+    }
+    if (datagrams.size() > MaximumProtocolCounter - m_state->packetCount ||
+        totalPayloadOctets > MaximumProtocolCounter - m_state->octetCount) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire counter reservation would overflow"));
     }
-    auto timestamp = m_state->clockMapper.map(presentationOnMaster);
-    if (!timestamp) return Result::failure(timestamp.error());
-    if (m_state->lastCommittedTimestamp &&
-        timestamp.value().extendedTicks() <
-            m_state->lastCommittedTimestamp->extendedTicks()) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "RTP wire timestamp regressed from committed protocol state"));
-    }
-    auto rtpBytes = MediaRtpWirePacketComposer::compose(
-        packetizedRtp,
-        payloadOctets,
-        m_state->identity,
-        timestamp.value(),
-        m_state->nextRtpSequence,
-        m_state->maximumDatagramBytes);
-    if (!rtpBytes) return Result::failure(rtpBytes.error());
 
     auto reportDecision = m_state->senderReportSchedule.prepare(
-        canonicalRelease, m_state->generation);
+        datagrams.front().canonicalRelease, m_state->generation);
     if (!reportDecision) return Result::failure(reportDecision.error());
     std::optional<std::vector<std::uint8_t>> rtcpBytes;
     if (reportDecision.value()) {
@@ -148,7 +190,13 @@ MediaRtpWireDatagramMaterializer::materialize(
         rtcpBytes = std::move(report).value();
     }
 
-    const std::size_t entryCount = rtcpBytes ? 2 : 1;
+    if (datagrams.size() > (std::numeric_limits<std::size_t>::max)() -
+                               (rtcpBytes ? 1U : 0U)) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP wire batch entry count is not representable"));
+    }
+    const std::size_t entryCount =
+        datagrams.size() + (rtcpBytes ? 1U : 0U);
     auto global = m_state->globalSequence->reserve(entryCount);
     if (!global) return Result::failure(global.error());
     std::vector<MediaRtpWireCommitAction> actions;
@@ -161,11 +209,13 @@ MediaRtpWireDatagramMaterializer::materialize(
                 0,
                 std::nullopt});
         }
-        actions.push_back(MediaRtpWireCommitAction{
-            MediaRtpWireCommitActionKind::Media,
-            std::nullopt,
-            reservedPayloadOctets,
-            timestamp.value()});
+        for (std::size_t index = 0; index < datagrams.size(); ++index) {
+            actions.push_back(MediaRtpWireCommitAction{
+                MediaRtpWireCommitActionKind::Media,
+                std::nullopt,
+                reservedPayloadOctets[index],
+                timestamps[index]});
+        }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "RTP wire commit actions"));
@@ -198,26 +248,29 @@ MediaRtpWireDatagramMaterializer::materialize(
         auto appended = builder.append(
             *rtcpBytes,
             m_state->rtcpEndpointId,
-            canonicalRelease,
-            canonicalDeadline,
+            datagrams.front().canonicalRelease,
+            datagrams.front().canonicalDeadline,
             sequence.value(),
             std::move(lease).value());
         if (!appended) return Result::failure(appended.error());
         ++index;
     }
-    auto sequence = transaction->sequence(index);
-    if (!sequence) return Result::failure(sequence.error());
-    auto lease = makeMediaRtpWireCommitLease(
-        transaction, index, m_state->generation, sequence.value());
-    if (!lease) return Result::failure(lease.error());
-    auto appended = builder.append(
-        rtpBytes.value(),
-        m_state->rtpEndpointId,
-        canonicalRelease,
-        canonicalDeadline,
-        sequence.value(),
-        std::move(lease).value());
-    if (!appended) return Result::failure(appended.error());
+    for (std::size_t datagramIndex = 0;
+         datagramIndex < datagrams.size(); ++datagramIndex, ++index) {
+        auto sequence = transaction->sequence(index);
+        if (!sequence) return Result::failure(sequence.error());
+        auto lease = makeMediaRtpWireCommitLease(
+            transaction, index, m_state->generation, sequence.value());
+        if (!lease) return Result::failure(lease.error());
+        auto appended = builder.append(
+            materializedRtp[datagramIndex],
+            m_state->rtpEndpointId,
+            datagrams[datagramIndex].canonicalRelease,
+            datagrams[datagramIndex].canonicalDeadline,
+            sequence.value(),
+            std::move(lease).value());
+        if (!appended) return Result::failure(appended.error());
+    }
     return builder.finish();
 }
 

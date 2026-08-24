@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -25,6 +26,10 @@ public:
     const std::vector<std::uint8_t>& datagram() const noexcept
     {
         return m_datagram;
+    }
+    std::vector<std::uint8_t> releaseDatagram() noexcept
+    {
+        return std::move(m_datagram);
     }
     std::size_t payloadOctets() const noexcept { return m_payloadOctets; }
     std::uint16_t sequenceNumber() const noexcept { return m_sequenceNumber; }

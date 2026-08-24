@@ -41,6 +41,14 @@ struct MediaRtpWireDatagramMaterializerSnapshot final {
     bool poisoned;
 };
 
+struct MediaPacketizedRtpDatagramView final {
+    std::span<const std::uint8_t> bytes;
+    std::size_t payloadOctets;
+    MediaRunningTime presentationOnMaster;
+    MediaRunningTime canonicalRelease;
+    MediaRunningTime canonicalDeadline;
+};
+
 class MediaRtpWireProtocolState;
 
 class MediaRtpWireDatagramMaterializer final {
@@ -54,6 +62,8 @@ public:
         MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
