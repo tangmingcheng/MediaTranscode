@@ -40,6 +40,62 @@ constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
                        static_cast<std::uint32_t>(lowProduct)};
 }
 
+::media::Result<std::uint64_t> checkedWireBytes(
+    const MediaDatagramEndpointPlan& endpoint,
+    std::uint64_t payloadBytes)
+{
+    using Result = ::media::Result<std::uint64_t>;
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    if (payloadBytes > maximum - endpoint.mtuEvidence.ipHeaderBytes) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram wire byte accounting overflowed"));
+    }
+    const auto ipPacketBytes =
+        payloadBytes + endpoint.mtuEvidence.ipHeaderBytes;
+    if (ipPacketBytes > maximum -
+                            endpoint.mtuEvidence.transportHeaderBytes) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram wire byte accounting overflowed"));
+    }
+    return Result::success(
+        ipPacketBytes + endpoint.mtuEvidence.transportHeaderBytes);
+}
+
+::media::Result<MediaRunningTime> checkedCeilingDuration(
+    std::uint64_t wireBytes,
+    std::uint64_t wireBytesPerSecond)
+{
+    using Result = ::media::Result<MediaRunningTime>;
+    if (wireBytes == 0 || wireBytesPerSecond == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram wire duration requires bytes and a wire rate"));
+    }
+
+    constexpr std::uint64_t nanosecondsPerSecond = 1'000'000'000;
+    const auto requiredService = multiply(wireBytes, nanosecondsPerSecond);
+    const auto maximumDuration = multiply(
+        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()),
+        wireBytesPerSecond);
+    if (!(maximumDuration >= requiredService)) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram wire duration is not representable"));
+    }
+
+    std::uint64_t first = 1;
+    std::uint64_t last =
+        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+    while (first < last) {
+        const auto middle = first + (last - first) / 2;
+        if (multiply(middle, wireBytesPerSecond) >= requiredService) {
+            last = middle;
+        } else {
+            first = middle + 1;
+        }
+    }
+    return Result::success(
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(first)));
+}
+
 ::media::Status validateMtuEvidence(const MediaDatagramEndpointPlan& endpoint)
 {
     const auto& evidence = endpoint.mtuEvidence;
@@ -175,10 +231,10 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
     using Result = ::media::Result<MediaDatagramShapingPlan>;
     if (encoding.sessionKey.empty() || encoding.generation == 0 ||
         encoding.endpoints.empty() || encoding.serviceCurve.authority.empty() ||
-        encoding.serviceCurve.serviceBytesPerSecond == 0 ||
-        encoding.serviceCurve.peakBytesPerSecond <
-            encoding.serviceCurve.serviceBytesPerSecond ||
-        encoding.serviceCurve.burstBytes == 0 ||
+        encoding.serviceCurve.sustainedWireBytesPerSecond == 0 ||
+        encoding.serviceCurve.peakWireBytesPerSecond <
+            encoding.serviceCurve.sustainedWireBytesPerSecond ||
+        encoding.serviceCurve.burstWireBytes == 0 ||
         encoding.backlog.maximumDatagrams == 0 ||
         encoding.backlog.maximumBytes == 0 ||
         encoding.backlog.maximumResidence <=
@@ -213,6 +269,11 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
         auto valid = validateEndpoint(endpoint);
         if (!valid)
             return Result::failure(valid.error());
+        auto maximumWireBytes = checkedWireBytes(
+            endpoint, endpoint.maximumDatagramBytes);
+        if (!maximumWireBytes) {
+            return Result::failure(maximumWireBytes.error());
+        }
         bool inserted = false;
         try {
             inserted = endpointIds.insert(endpoint.endpointId).second;
@@ -224,7 +285,7 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "datagram shaping endpoint identities must be unique"));
         }
-        if (endpoint.maximumDatagramBytes > encoding.serviceCurve.burstBytes ||
+        if (maximumWireBytes.value() > encoding.serviceCurve.burstWireBytes ||
             endpoint.maximumPendingDatagrams >
                 encoding.backlog.maximumDatagrams ||
             endpoint.maximumPendingBytes > encoding.backlog.maximumBytes ||
@@ -359,53 +420,33 @@ MediaDatagramShapingPlan::evidence() const noexcept
     return m_encoding.evidence;
 }
 
-::media::Result<MediaRunningTime>
-MediaDatagramShapingPlan::plannedServiceDuration(
+::media::Result<MediaDatagramPlannedWireCost>
+MediaDatagramShapingPlan::plannedWireCost(
+    std::uint64_t endpointId,
     std::uint64_t payloadBytes) const
 {
-    using Result = ::media::Result<MediaRunningTime>;
-    if (payloadBytes == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram service duration requires payload bytes"));
-    }
-
-    constexpr std::uint64_t nanosecondsPerSecond = 1'000'000'000;
-    const auto requiredService = multiply(payloadBytes, nanosecondsPerSecond);
-    const auto maximumDuration = multiply(
-        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()),
-        m_encoding.serviceCurve.serviceBytesPerSecond);
-    if (!(maximumDuration >= requiredService)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram service duration is not representable"));
-    }
-
-    std::uint64_t first = 1;
-    std::uint64_t last =
-        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
-    while (first < last) {
-        const auto middle = first + (last - first) / 2;
-        if (multiply(middle, m_encoding.serviceCurve.serviceBytesPerSecond) >=
-            requiredService) {
-            last = middle;
-        } else {
-            first = middle + 1;
-        }
-    }
-    return Result::success(
-        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(first)));
-}
-
-::media::Status
-MediaDatagramShapingPlan::validateDatagram(std::uint64_t endpointId,
-                                           std::uint64_t payloadBytes) const
-{
+    using Result = ::media::Result<MediaDatagramPlannedWireCost>;
     const auto* plannedEndpoint = endpoint(endpointId);
     if (!plannedEndpoint || payloadBytes == 0 ||
         payloadBytes > plannedEndpoint->maximumDatagramBytes) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire datagram differs from its planned endpoint or MTU bound"));
     }
-    return ::media::Status::success();
+
+    auto wireBytes = checkedWireBytes(*plannedEndpoint, payloadBytes);
+    if (!wireBytes) return Result::failure(wireBytes.error());
+    auto peakDuration = checkedCeilingDuration(
+        wireBytes.value(),
+        m_encoding.serviceCurve.peakWireBytesPerSecond);
+    if (!peakDuration) return Result::failure(peakDuration.error());
+    auto sustainedDuration = checkedCeilingDuration(
+        wireBytes.value(),
+        m_encoding.serviceCurve.sustainedWireBytesPerSecond);
+    if (!sustainedDuration) {
+        return Result::failure(sustainedDuration.error());
+    }
+    return Result::success(MediaDatagramPlannedWireCost{
+        wireBytes.value(), peakDuration.value(), sustainedDuration.value()});
 }
 
 } // namespace media::ffmpeg::graph

@@ -86,13 +86,22 @@ struct MediaDatagramEndpointPlan final {
 };
 
 struct MediaDatagramServiceCurvePlan final {
-    std::uint64_t serviceBytesPerSecond;
-    std::uint64_t peakBytesPerSecond;
-    std::uint64_t burstBytes;
+    std::uint64_t sustainedWireBytesPerSecond;
+    std::uint64_t peakWireBytesPerSecond;
+    std::uint64_t burstWireBytes;
     std::string authority;
 
     friend bool operator==(const MediaDatagramServiceCurvePlan&,
                            const MediaDatagramServiceCurvePlan&) = default;
+};
+
+struct MediaDatagramPlannedWireCost final {
+    std::uint64_t wireBytes;
+    MediaRunningTime peakServiceDuration;
+    MediaRunningTime sustainedDebtDuration;
+
+    friend bool operator==(const MediaDatagramPlannedWireCost&,
+                           const MediaDatagramPlannedWireCost&) = default;
 };
 
 struct MediaDatagramBacklogPlan final {
@@ -174,9 +183,7 @@ public:
     MediaDatagramPersistentStateMode persistentStateMode() const noexcept;
     const std::optional<MediaDatagramTransmitEvidencePlan>&
     evidence() const noexcept;
-    ::media::Result<MediaRunningTime> plannedServiceDuration(
-        std::uint64_t payloadBytes) const;
-    ::media::Status validateDatagram(
+    ::media::Result<MediaDatagramPlannedWireCost> plannedWireCost(
         std::uint64_t endpointId, std::uint64_t payloadBytes) const;
 
 private:

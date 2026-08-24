@@ -80,17 +80,15 @@ MediaScheduledWireDatagramBatchBuffer::create(
         const auto& wire = descriptor.wire;
         const auto* endpoint = plan.endpoint(wire.endpointId);
         auto validWire = validator.accept(wire);
-        auto plannedDatagram = plan.validateDatagram(
+        auto plannedWireCost = plan.plannedWireCost(
             wire.endpointId, wire.payloadSize);
-        auto plannedServiceDuration = plan.plannedServiceDuration(
-            wire.payloadSize);
         auto completion = descriptor.enqueueNotBefore.checkedAdd(
             descriptor.wireServiceDuration);
         auto residence = descriptor.enqueueNotAfter.checkedSubtract(
             wire.canonicalRelease);
         if (!validWire || wire.generation != plan.generation() || !endpoint ||
-            !plannedDatagram || !plannedServiceDuration ||
-            descriptor.wireServiceDuration != plannedServiceDuration.value() ||
+            !plannedWireCost || descriptor.wireServiceDuration !=
+                                    plannedWireCost.value().peakServiceDuration ||
             descriptor.enqueueNotBefore < wire.canonicalRelease ||
             descriptor.enqueueNotAfter < descriptor.enqueueNotBefore ||
             descriptor.enqueueNotAfter > wire.canonicalDeadline ||
