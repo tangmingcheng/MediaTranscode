@@ -49,6 +49,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
     case MediaNodeKind::ScheduledDatagramSender: return "ScheduledDatagramSender";
+    case MediaNodeKind::DatagramShaper: return "DatagramShaper";
     case MediaNodeKind::RtpSdpPublisher: return "RtpSdpPublisher";
     case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";

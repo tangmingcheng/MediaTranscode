@@ -92,7 +92,8 @@ enum class MediaNodeKind {
     DemuxPacketClockBinder = 66,
     MpegTsRtpSdpPublisher = 67,
     VideoOutputScheduler = 68,
-    ScheduledDatagramSender = 69
+    ScheduledDatagramSender = 69,
+    DatagramShaper = 70
 };
 
 } // namespace media::ffmpeg::graph

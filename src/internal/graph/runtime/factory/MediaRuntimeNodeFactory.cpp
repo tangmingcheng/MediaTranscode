@@ -654,6 +654,10 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::move(created).value());
     }
+    case MediaNodeKind::DatagramShaper:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Datagram shaper requires compiler-injected output clock"));
     case MediaNodeKind::MpegTsRtpSdpPublisher:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -1063,6 +1067,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::SdpWriter:
     case MediaNodeKind::ScheduledRtpSender:
     case MediaNodeKind::ScheduledDatagramSender:
+    case MediaNodeKind::DatagramShaper:
     case MediaNodeKind::RtpSdpPublisher:
     case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:

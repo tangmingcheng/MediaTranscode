@@ -149,6 +149,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
     case MediaNodeKind::ScheduledDatagramSender: return "ScheduledDatagramSender";
+    case MediaNodeKind::DatagramShaper: return "DatagramShaper";
     case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
     case MediaNodeKind::RtpSdpPublisher: return "RtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";

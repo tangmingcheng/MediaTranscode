@@ -16,6 +16,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaDatagramShaperNode;
+class MediaDatagramServiceShaper;
 class MediaScheduledDatagramSenderNode;
 class MediaScheduledWireDatagram;
 class MediaScheduledWireDatagramBatchBuffer;
@@ -152,6 +153,7 @@ public:
 
 private:
     friend class MediaDatagramShaperNode;
+    friend class MediaDatagramServiceShaper;
     friend class MediaWireDatagramBatchBuffer;
 
     MediaWireDatagram(
@@ -184,6 +186,7 @@ public:
 
 private:
     friend class MediaDatagramShaperNode;
+    friend class MediaDatagramServiceShaper;
 
     MediaWireDatagramBatchBuffer(
         std::uint64_t generation,
