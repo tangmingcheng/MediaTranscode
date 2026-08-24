@@ -1,13 +1,10 @@
 #pragma once
 
-#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/protocol/rtp/MediaRtpOutputClockMapper.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -18,7 +15,6 @@ struct MediaMpegTsRtpPacketizerConfig final {
     int clockRate;
     std::uint32_t ssrc;
     std::uint32_t baseTimestamp;
-    std::shared_ptr<MediaMpegTsRtpContinuityState> continuity;
     std::uint8_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
     MediaRunningTime masterOrigin;
@@ -56,7 +52,8 @@ public:
 
     ::media::Result<MediaMpegTsRtpPacket> packetize(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime emitOnMaster);
+        MediaRunningTime emitOnMaster,
+        std::uint16_t sequenceNumber) const;
 
     const MediaRtpOutputClockMapper& clockMapper() const noexcept
     {
@@ -70,7 +67,6 @@ private:
 
     MediaMpegTsRtpPacketizerConfig m_config;
     MediaRtpOutputClockMapper m_clockMapper;
-    std::optional<MediaRtpTimestamp> m_lastTimestamp;
 };
 
 } // namespace media::ffmpeg::graph

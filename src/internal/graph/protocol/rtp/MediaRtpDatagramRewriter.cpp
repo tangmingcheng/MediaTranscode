@@ -7,8 +7,8 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::size_t FixedHeaderBytes = 12;
-constexpr int MinimumDynamicPayloadType = 96;
-constexpr int MaximumDynamicPayloadType = 127;
+constexpr int MinimumPayloadType = 0;
+constexpr int MaximumPayloadType = 127;
 
 void writeU32(std::vector<std::uint8_t>& bytes,
               std::size_t offset,
@@ -64,11 +64,11 @@ MediaRtpDatagramRewriteIdentity::create(
     int payloadType,
     std::uint32_t ssrc) noexcept
 {
-    if (payloadType < MinimumDynamicPayloadType ||
-        payloadType > MaximumDynamicPayloadType) {
+    if (payloadType < MinimumPayloadType ||
+        payloadType > MaximumPayloadType) {
         return ::media::Result<MediaRtpDatagramRewriteIdentity>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP output requires a dynamic payload type from 96 through 127"));
+                "RTP rewrite identity requires a payload type from 0 through 127"));
     }
     if (ssrc == 0) {
         return ::media::Result<MediaRtpDatagramRewriteIdentity>::failure(

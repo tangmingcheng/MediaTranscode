@@ -2,7 +2,6 @@
 
 #include "media_transcode/Result.h"
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,7 +29,8 @@ public:
 
     std::uint64_t packetCount() const noexcept;
     std::uint64_t octetCount() const noexcept;
-    void commit() noexcept;
+    std::uint16_t sequenceNumber() const noexcept;
+    ::media::Status commit() noexcept;
 
 private:
     friend class MediaMpegTsRtpContinuityState;
@@ -51,7 +51,6 @@ public:
     static ::media::Result<std::shared_ptr<MediaMpegTsRtpContinuityState>>
     create(std::uint16_t initialSequenceNumber);
 
-    std::uint16_t takeSequenceNumber() noexcept;
     ::media::Result<MediaMpegTsRtpPacketCommitReservation> reservePacket(
         std::size_t payloadOctets);
     MediaMpegTsRtpCounterSnapshot counterSnapshot() const noexcept;
@@ -62,8 +61,8 @@ private:
     explicit MediaMpegTsRtpContinuityState(
         std::uint16_t initialSequenceNumber) noexcept;
 
-    std::atomic<std::uint32_t> m_nextSequenceNumber;
     mutable std::mutex m_counterMutex;
+    std::uint16_t m_nextSequenceNumber;
     std::uint64_t m_packetCount = 0;
     std::uint64_t m_octetCount = 0;
 };

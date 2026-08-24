@@ -35,12 +35,24 @@ MediaMpegTsRtpPacketCommitReservation::octetCount() const noexcept
     return m_state->m_octetCount;
 }
 
-void MediaMpegTsRtpPacketCommitReservation::commit() noexcept
+std::uint16_t
+MediaMpegTsRtpPacketCommitReservation::sequenceNumber() const noexcept
 {
-    if (m_committed) return;
+    return m_state->m_nextSequenceNumber;
+}
+
+::media::Status MediaMpegTsRtpPacketCommitReservation::commit() noexcept
+{
+    if (m_committed || !m_state || !m_lock.owns_lock()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                "MP2T RTP packet reservation cannot be committed twice or after move"));
+    }
+    ++m_state->m_nextSequenceNumber;
     ++m_state->m_packetCount;
     m_state->m_octetCount += m_payloadOctets;
     m_committed = true;
+    return ::media::Status::success();
 }
 
 MediaMpegTsRtpContinuityState::MediaMpegTsRtpContinuityState(
@@ -65,13 +77,6 @@ MediaMpegTsRtpContinuityState::create(
     return ::media::Result<
         std::shared_ptr<MediaMpegTsRtpContinuityState>>::success(
         std::move(state));
-}
-
-std::uint16_t
-MediaMpegTsRtpContinuityState::takeSequenceNumber() noexcept
-{
-    return static_cast<std::uint16_t>(
-        m_nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
 }
 
 ::media::Result<MediaMpegTsRtpPacketCommitReservation>

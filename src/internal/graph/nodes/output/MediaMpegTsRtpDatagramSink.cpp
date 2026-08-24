@@ -62,7 +62,7 @@ MediaMpegTsRtpDatagramSink::create(
     auto packetizer = MediaMpegTsRtpPacketizer::create(
         MediaMpegTsRtpPacketizerConfig{
             plan.payloadType(), plan.clockRate(), plan.ssrc(),
-            plan.baseTimestamp(), continuity,
+            plan.baseTimestamp(),
             plan.tsPacketsPerPayload(),
             plan.maximumDatagramBytes(),
             sharedNtpEpoch.masterAtCapture()});
@@ -189,16 +189,11 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
             "MP2T RTP sink enqueue instant regressed"));
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    auto packet = m_packetizer.packetize(
-        completeTsPackets, enqueueInstant);
-    if (!packet) {
-        auto status = fail(packet.error());
-        return ::media::Result<std::size_t>::failure(status.error());
-    }
     MediaMpegTsRtpCounterSnapshot committedCounters{};
+    std::uint16_t emittedSequence = 0;
     {
         auto counterReservation = m_continuity->reservePacket(
-            packet.value().payloadOctets());
+            completeTsPackets.size());
         if (!counterReservation) {
             auto status = fail(counterReservation.error());
             return ::media::Result<std::size_t>::failure(status.error());
@@ -206,6 +201,14 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
         const MediaMpegTsRtpCounterSnapshot counters{
             counterReservation.value().packetCount(),
             counterReservation.value().octetCount()};
+        auto packet = m_packetizer.packetize(
+            completeTsPackets,
+            enqueueInstant,
+            counterReservation.value().sequenceNumber());
+        if (!packet) {
+            auto status = fail(packet.error());
+            return ::media::Result<std::size_t>::failure(status.error());
+        }
         auto report = dispatchSenderReport(enqueueInstant, counters);
         if (!report) {
             auto status = fail(report.error());
@@ -225,12 +228,16 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
                 "MP2T RTP transport threw during datagram delivery"));
             return ::media::Result<std::size_t>::failure(status.error());
         }
-        counterReservation.value().commit();
+        auto committed = counterReservation.value().commit();
+        if (!committed) {
+            auto status = fail(committed.error());
+            return ::media::Result<std::size_t>::failure(status.error());
+        }
         committedCounters = MediaMpegTsRtpCounterSnapshot{
             counterReservation.value().packetCount(),
             counterReservation.value().octetCount()};
+        emittedSequence = packet.value().sequenceNumber();
     }
-    const auto emittedSequence = packet.value().sequenceNumber();
     m_lastSequenceNumber = emittedSequence;
     if (!m_firstSequenceNumber) {
         m_firstSequenceNumber = emittedSequence;

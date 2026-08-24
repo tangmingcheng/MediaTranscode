@@ -49,7 +49,6 @@ MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
 {
     if (config.payloadType != Mp2tStaticPayloadType ||
         config.clockRate != Mp2tClockRate || config.ssrc == 0 ||
-        !config.continuity ||
         config.maximumTsPackets < 1 || config.maximumTsPackets > 7 ||
         config.maximumDatagramBytes < RtpHeaderBytes + TsPacketBytes ||
         static_cast<std::size_t>(config.maximumTsPackets) >
@@ -78,7 +77,8 @@ MediaMpegTsRtpPacketizer::MediaMpegTsRtpPacketizer(
 ::media::Result<MediaMpegTsRtpPacket>
 MediaMpegTsRtpPacketizer::packetize(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime emitOnMaster)
+    MediaRunningTime emitOnMaster,
+    std::uint16_t sequenceNumber) const
 {
     const std::size_t payloadBytes = completeTsPackets.size();
     const std::size_t packetCount = payloadBytes / TsPacketBytes;
@@ -94,22 +94,13 @@ MediaMpegTsRtpPacketizer::packetize(
         return ::media::Result<MediaMpegTsRtpPacket>::failure(
             timestamp.error());
     }
-    if (m_lastTimestamp &&
-        timestamp.value().extendedTicks() <
-            m_lastTimestamp->extendedTicks()) {
-        return ::media::Result<MediaMpegTsRtpPacket>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MP2T RTP timestamp regressed"));
-    }
     try {
         std::vector<std::uint8_t> datagram(
             RtpHeaderBytes + payloadBytes);
         datagram[0] = 0x80;
         datagram[1] =
             static_cast<std::uint8_t>(m_config.payloadType);
-        const auto emittedSequence =
-            m_config.continuity->takeSequenceNumber();
-        writeU16(datagram, 2, emittedSequence);
+        writeU16(datagram, 2, sequenceNumber);
         writeU32(datagram, 4, timestamp.value().wire());
         writeU32(datagram, 8, m_config.ssrc);
         std::copy(
@@ -117,10 +108,9 @@ MediaMpegTsRtpPacketizer::packetize(
             datagram.begin() +
                 static_cast<std::ptrdiff_t>(RtpHeaderBytes));
 
-        m_lastTimestamp = timestamp.value();
         return ::media::Result<MediaMpegTsRtpPacket>::success(
             MediaMpegTsRtpPacket(
-                std::move(datagram), payloadBytes, emittedSequence,
+                std::move(datagram), payloadBytes, sequenceNumber,
                 timestamp.value()));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaMpegTsRtpPacket>::failure(

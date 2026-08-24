@@ -30,6 +30,11 @@ bool validTimeBase(AVRational value) noexcept
     return value.num > 0 && value.den > 0;
 }
 
+bool isDynamicPayloadType(int payloadType) noexcept
+{
+    return payloadType >= 96 && payloadType <= 127;
+}
+
 bool packetizationMatches(MediaScheduledRtpPacketizationMode mode,
                           const AVCodecParameters& parameters) noexcept
 {
@@ -181,10 +186,11 @@ ScheduledRtpMuxStreamConfig::create(
     }
     if (codecParameters.codec_id == AV_CODEC_ID_NONE ||
         !packetizationMatches(packetizationMode, codecParameters) ||
-        !validTimeBase(streamTimeBase)) {
+        !validTimeBase(streamTimeBase) ||
+        !isDynamicPayloadType(payloadType)) {
         return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP stream requires matching packetization and a positive time base"));
+                "scheduled RTP stream requires matching packetization, a positive time base, and a dynamic payload type"));
     }
     if (packetizationMode == MediaScheduledRtpPacketizationMode::AacLatm &&
         !isCompleteAacLatmConfig(codecParameters, streamTimeBase)) {
