@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
+#include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -31,6 +32,23 @@ struct MediaRealtimeDeploymentResourceBudget final {
                            const MediaRealtimeDeploymentResourceBudget&) = default;
 };
 
+struct MediaRealtimeDeploymentLocalPortRange final {
+    MediaIpAddressFamily addressFamily = MediaIpAddressFamily::Ipv4;
+    std::string numericAddress;
+    std::uint16_t firstPort = 0;
+    std::uint16_t portCount = 0;
+    std::string authority;
+    friend bool operator==(const MediaRealtimeDeploymentLocalPortRange&,
+                           const MediaRealtimeDeploymentLocalPortRange&) = default;
+};
+
+enum class MediaRealtimeTransmitEvidencePolicy : std::uint8_t {
+    Unknown = 0,
+    Disabled = 1,
+    Report = 2,
+    Fail = 3
+};
+
 struct MediaRealtimeDeploymentLatencyBudget final {
     MediaRunningTime targetResidence = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime maximumResidence = MediaRunningTime::fromNanoseconds(0);
@@ -43,6 +61,8 @@ struct MediaRealtimeDeploymentObservationBudget final {
     std::uint64_t maximumRunDatagrams = 0;
     std::uint64_t maximumCorrelationEntries = 0;
     MediaRunningTime maximumDrainResidence = MediaRunningTime::fromNanoseconds(0);
+    MediaRealtimeTransmitEvidencePolicy evidencePolicy =
+        MediaRealtimeTransmitEvidencePolicy::Unknown;
     std::string authority;
     friend bool operator==(const MediaRealtimeDeploymentObservationBudget&,
                            const MediaRealtimeDeploymentObservationBudget&) = default;
@@ -53,6 +73,7 @@ struct MediaRealtimeDeploymentEnvelopeEncoding final {
     MediaDatagramMtuEvidence mtu;
     MediaDatagramServiceCurvePlan service;
     MediaRealtimeDeploymentResourceBudget resources;
+    MediaRealtimeDeploymentLocalPortRange localPorts;
     MediaRealtimeDeploymentLatencyBudget latency;
     MediaRealtimeDeploymentObservationBudget observation;
     friend bool operator==(const MediaRealtimeDeploymentEnvelopeEncoding&,

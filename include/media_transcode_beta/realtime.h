@@ -134,6 +134,12 @@ typedef enum mt_beta_egress_scope_kind {
     MT_BETA_EGRESS_SCOPE_PROVISIONED = 2
 } mt_beta_egress_scope_kind;
 
+typedef enum mt_beta_tx_evidence_policy {
+    MT_BETA_TX_EVIDENCE_DISABLED = 1,
+    MT_BETA_TX_EVIDENCE_REPORT = 2,
+    MT_BETA_TX_EVIDENCE_FAIL = 3
+} mt_beta_tx_evidence_policy;
+
 typedef struct mt_beta_realtime_deployment {
     mt_beta_egress_scope_kind scope_kind;
     const char* scope_id;
@@ -156,11 +162,16 @@ typedef struct mt_beta_realtime_deployment {
     uint64_t maximum_endpoint_pending_bytes;
     uint64_t socket_hard_bound_bytes;
     const char* resource_authority;
+    const char* local_address;
+    uint16_t local_first_port;
+    uint16_t local_port_count;
+    const char* local_authority;
     uint64_t target_residence_ms;
     const char* latency_authority;
     uint64_t observation_run_datagrams;
     uint64_t observation_correlation_entries;
     uint64_t observation_drain_residence_ms;
+    mt_beta_tx_evidence_policy tx_evidence_policy;
     const char* observation_authority;
 } mt_beta_realtime_deployment;
 

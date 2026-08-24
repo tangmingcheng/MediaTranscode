@@ -3,6 +3,7 @@
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -356,6 +357,21 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 "VideoOnly runtime output layout is unsupported"));
     }
 
+    if (!request.deployment) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly Datagram transport requires deployment facts"));
+    }
+    auto datagramTransport = std::visit(
+        [&](const auto& plannedOutput) {
+            return MediaRealtimeDatagramTransportPlanner::plan(
+                request.mediaId, *request.deployment, plannedOutput);
+        },
+        *adapter);
+    if (!datagramTransport) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            datagramTransport.error());
+    }
     return ::media::Result<MediaRealtimeVideoRuntimePlan>::success(
         MediaRealtimeVideoRuntimePlan{
             std::move(startup).value(),
@@ -371,6 +387,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
             MediaProtocolOutputSessionKey(request.mediaId),
             output.packetCopyNormalizationRequired,
             std::move(*adapter),
+            std::move(datagramTransport).value(),
             outer.queues,
             std::move(edgePolicies),
             std::move(lineageEdgePolicies),

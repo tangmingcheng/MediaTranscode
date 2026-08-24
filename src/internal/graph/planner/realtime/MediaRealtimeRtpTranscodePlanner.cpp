@@ -972,7 +972,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, output, std::move(avSync).value(), outputFrameRate);
+            plan, output, options, std::move(avSync).value(), outputFrameRate);
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());

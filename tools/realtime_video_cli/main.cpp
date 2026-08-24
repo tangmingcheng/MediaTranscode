@@ -1,4 +1,5 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
+#include "internal/graph/model/MediaNumericIpAddress.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
@@ -139,11 +140,16 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-maximum-endpoint-pending-bytes",
         "--egress-socket-hard-bound-bytes",
         "--egress-resource-authority",
+        "--egress-local-address",
+        "--egress-local-first-port",
+        "--egress-local-port-count",
+        "--egress-local-authority",
         "--egress-target-residence-ms",
         "--egress-latency-authority",
         "--egress-observation-run-datagrams",
         "--egress-observation-correlation-entries",
         "--egress-observation-drain-residence-ms",
+        "--egress-tx-evidence-policy",
         "--egress-observation-authority",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
@@ -208,15 +214,58 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
             argc, argv, "--egress-maximum-endpoint-pending-bytes"),
         requiredSizeArg(argc, argv, "--egress-socket-hard-bound-bytes"),
         requiredArg(argc, argv, "--egress-resource-authority")};
+    const std::string localAddress = requiredArg(
+        argc, argv, "--egress-local-address");
+    std::optional<MediaIpAddressFamily> localFamily;
+    if (MediaNumericIpAddress::create(
+            MediaIpAddressFamily::Ipv4, localAddress)) {
+        localFamily = MediaIpAddressFamily::Ipv4;
+    } else if (MediaNumericIpAddress::create(
+                   MediaIpAddressFamily::Ipv6, localAddress)) {
+        localFamily = MediaIpAddressFamily::Ipv6;
+    } else {
+        throw std::invalid_argument(
+            "--egress-local-address must be a numeric IP address");
+    }
+    const int localFirstPort = requiredIntArg(
+        argc, argv, "--egress-local-first-port");
+    const int localPortCount = requiredIntArg(
+        argc, argv, "--egress-local-port-count");
+    if (localFirstPort <= 0 || localFirstPort > 65'535 ||
+        localPortCount <= 0 || localPortCount > 65'535) {
+        throw std::invalid_argument(
+            "egress local port range values must be within 1..65535");
+    }
+    encoding.localPorts = {
+        *localFamily,
+        localAddress,
+        static_cast<std::uint16_t>(localFirstPort),
+        static_cast<std::uint16_t>(localPortCount),
+        requiredArg(argc, argv, "--egress-local-authority")};
     encoding.latency = {
         milliseconds("--egress-target-residence-ms"),
         encoding.resources.maximumResidence,
         requiredArg(argc, argv, "--egress-latency-authority")};
+    const std::string evidencePolicy = requiredArg(
+        argc, argv, "--egress-tx-evidence-policy");
+    MediaRealtimeTransmitEvidencePolicy parsedEvidence =
+        MediaRealtimeTransmitEvidencePolicy::Unknown;
+    if (evidencePolicy == "disabled") {
+        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Disabled;
+    } else if (evidencePolicy == "report") {
+        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Report;
+    } else if (evidencePolicy == "fail") {
+        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Fail;
+    } else {
+        throw std::invalid_argument(
+            "--egress-tx-evidence-policy must be disabled, report, or fail");
+    }
     encoding.observation = {
         requiredSizeArg(argc, argv, "--egress-observation-run-datagrams"),
         requiredSizeArg(
             argc, argv, "--egress-observation-correlation-entries"),
         milliseconds("--egress-observation-drain-residence-ms"),
+        parsedEvidence,
         requiredArg(argc, argv, "--egress-observation-authority")};
     auto envelope = MediaRealtimeDeploymentEnvelope::decode(
         std::move(encoding));

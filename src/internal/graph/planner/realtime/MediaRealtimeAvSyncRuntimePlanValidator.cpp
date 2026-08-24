@@ -179,6 +179,18 @@ namespace media::ffmpeg::graph {
         runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         return invalid("output adapter");
     }
+    auto activatedTransport = runtime.datagramTransport.activate(
+        runtime.assembly.initialGeneration);
+    if (!activatedTransport ||
+        runtime.datagramTransport.sessionKey() != runtime.groupKey.value() ||
+        runtime.datagramTransport.serviceScopeId().empty() ||
+        runtime.datagramTransport.remoteEndpoints().empty() ||
+        activatedTransport.value().shaping.sessionKey() !=
+            runtime.groupKey.value() ||
+        activatedTransport.value().shaping.generation() !=
+            runtime.assembly.initialGeneration) {
+        return invalid("Datagram transport product");
+    }
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
         runtime.outputAdapter,
         *runtime.synchronization.sourceClockMode,

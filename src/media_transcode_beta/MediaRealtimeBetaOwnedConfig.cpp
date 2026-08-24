@@ -128,6 +128,8 @@ copyDeployment(const mt_beta_realtime_deployment& source)
              std::pair{source.mtu_authority, "deployment MTU authority"},
              std::pair{source.service_authority, "deployment service authority"},
              std::pair{source.resource_authority, "deployment resource authority"},
+             std::pair{source.local_address, "deployment local address"},
+             std::pair{source.local_authority, "deployment local authority"},
              std::pair{source.latency_authority, "deployment latency authority"},
              std::pair{source.observation_authority, "deployment observation authority"}}) {
         if (auto valid = requireText(field.first, field.second); !valid) {
@@ -169,12 +171,31 @@ copyDeployment(const mt_beta_realtime_deployment& source)
         source.maximum_endpoint_pending_datagrams,
         source.maximum_endpoint_pending_bytes, source.socket_hard_bound_bytes,
         source.resource_authority};
+    auto localAddress = parseNumericAddress(source.local_address);
+    if (!localAddress) {
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            localAddress.error());
+    }
+    encoding.localPorts = {
+        localAddress.value().addressFamily(), source.local_address,
+        source.local_first_port, source.local_port_count,
+        source.local_authority};
     encoding.latency = {
         targetResidence.value(), maximumResidence.value(),
         source.latency_authority};
+    MediaRealtimeTransmitEvidencePolicy evidencePolicy =
+        MediaRealtimeTransmitEvidencePolicy::Unknown;
+    if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_DISABLED) {
+        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Disabled;
+    } else if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_REPORT) {
+        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Report;
+    } else if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_FAIL) {
+        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Fail;
+    }
     encoding.observation = {
         source.observation_run_datagrams,
         source.observation_correlation_entries, drainResidence.value(),
+        evidencePolicy,
         source.observation_authority};
     return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));
 }

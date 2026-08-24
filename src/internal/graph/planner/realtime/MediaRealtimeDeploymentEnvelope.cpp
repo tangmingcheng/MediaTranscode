@@ -1,5 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 
+#include "internal/graph/model/MediaNumericIpAddress.h"
+
+#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -28,6 +31,7 @@ MediaRealtimeDeploymentEnvelope::decode(
     const auto& resources = encoding.resources;
     const auto& latency = encoding.latency;
     const auto& observation = encoding.observation;
+    const auto& localPorts = encoding.localPorts;
     const bool validScope =
         (scope.kind == MediaDatagramServiceScopeKind::ManagedEgress ||
          scope.kind == MediaDatagramServiceScopeKind::ProvisionedEgress) &&
@@ -50,6 +54,14 @@ MediaRealtimeDeploymentEnvelope::decode(
         resources.socketHardBoundBytes >= resources.maximumEndpointPendingBytes &&
         resources.maximumBatchDatagrams <= resources.maximumBacklogDatagrams &&
         resources.maximumBatchBytes <= resources.maximumBacklogBytes;
+    const auto localAddress = MediaNumericIpAddress::create(
+        localPorts.addressFamily, localPorts.numericAddress);
+    const bool validLocalPorts = localAddress && localPorts.firstPort > 0 &&
+        localPorts.portCount > 0 && !localPorts.authority.empty() &&
+        static_cast<std::uint32_t>(localPorts.firstPort) +
+                static_cast<std::uint32_t>(localPorts.portCount) - 1U <=
+            static_cast<std::uint32_t>(
+                (std::numeric_limits<std::uint16_t>::max)());
     const bool validLatency = !latency.authority.empty() &&
         positive(latency.targetResidence) &&
         latency.maximumResidence >= latency.targetResidence &&
@@ -57,9 +69,14 @@ MediaRealtimeDeploymentEnvelope::decode(
     const bool validObservation = !observation.authority.empty() &&
         observation.maximumRunDatagrams > 0 &&
         observation.maximumCorrelationEntries > 0 &&
+        observation.maximumCorrelationEntries >=
+            resources.maximumBacklogDatagrams &&
         observation.maximumCorrelationEntries <= observation.maximumRunDatagrams &&
-        positive(observation.maximumDrainResidence);
+        positive(observation.maximumDrainResidence) &&
+        observation.evidencePolicy !=
+            MediaRealtimeTransmitEvidencePolicy::Unknown;
     if (!validScope || !validMtu || !validService || !validResources ||
+        !validLocalPorts ||
         !validLatency || !validObservation) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(

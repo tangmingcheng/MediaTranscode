@@ -3,6 +3,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
@@ -263,6 +264,7 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
+    const MediaRealtimeRtpTranscodeRequest& request,
     MediaAvSyncPlan synchronization,
     MediaRational outputFrameRate)
 {
@@ -520,6 +522,22 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             ::media::ErrorInfo::notInitialized(
                 "A/V runtime output requires planner-owned activation lead"));
     }
+    if (!request.deployment) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V runtime output requires deployment transport facts"));
+    }
+    const MediaAvSyncGroupKey groupKey("realtime.av");
+    auto datagramTransport = std::visit(
+        [&](const auto& selectedOutput) {
+            return MediaRealtimeDatagramTransportPlanner::plan(
+                groupKey.value(), *request.deployment, selectedOutput);
+        },
+        *protocolOutput);
+    if (!datagramTransport) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            datagramTransport.error());
+    }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
         *synchronization.sourceClockMode,
@@ -532,11 +550,12 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             std::move(audio),
             std::move(outer.isolatedAudioInput),
             *outer.avSyncComponentBounds,
-            MediaAvSyncGroupKey("realtime.av"),
+            groupKey,
             std::move(synchronization),
             std::move(assembly).value(),
             adapter,
             std::move(*protocolOutput),
+            std::move(datagramTransport).value(),
             outer.queues,
             std::move(edgePolicies).value(),
             outer.threadingPolicy,

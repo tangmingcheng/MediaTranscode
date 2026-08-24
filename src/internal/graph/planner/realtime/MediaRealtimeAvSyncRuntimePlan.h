@@ -13,6 +13,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <cstdint>
@@ -45,6 +46,7 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaAvSyncOutputAdapterKind outputAdapter;
     std::variant<MediaSeparateRtpOutputRuntimePlan,
                  MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
+    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;

@@ -76,6 +76,18 @@ namespace media::ffmpeg::graph {
         !runtime.sessionKey.valid()) {
         return invalid("scheduling policy");
     }
+    auto activatedTransport = runtime.datagramTransport.activate(
+        runtime.scheduling.initialGeneration);
+    if (!activatedTransport ||
+        runtime.datagramTransport.sessionKey() != runtime.sessionKey.value() ||
+        runtime.datagramTransport.serviceScopeId().empty() ||
+        runtime.datagramTransport.remoteEndpoints().empty() ||
+        activatedTransport.value().shaping.sessionKey() !=
+            runtime.sessionKey.value() ||
+        activatedTransport.value().shaping.generation() !=
+            runtime.scheduling.initialGeneration) {
+        return invalid("Datagram transport product");
+    }
     auto expectedEdgesResult = MediaRealtimeEdgePolicyPlanner::
         planWithSynchronizedPacketMemoryBudget(
             runtime.queues, runtime.startup.byteCapacity,

@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputSessionKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -57,6 +58,7 @@ struct MediaRealtimeVideoRuntimePlan final {
     MediaProtocolOutputSessionKey sessionKey;
     bool packetCopyNormalizationRequired;
     MediaRealtimeVideoOutputAdapterPlan outputAdapter;
+    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaVideoLineageEdgePolicySet lineageEdgePolicies;
