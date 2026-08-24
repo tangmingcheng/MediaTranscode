@@ -73,6 +73,7 @@ MediaRealtimeDeploymentEnvelope::decode(
             resources.maximumBacklogDatagrams &&
         observation.maximumCorrelationEntries <= observation.maximumRunDatagrams &&
         positive(observation.maximumDrainResidence) &&
+        observation.maximumDrainResidence <= resources.maximumResidence &&
         observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Unknown;
     if (!validScope || !validMtu || !validService || !validResources ||

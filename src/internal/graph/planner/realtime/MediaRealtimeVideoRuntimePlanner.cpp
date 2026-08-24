@@ -17,8 +17,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
-constexpr std::int64_t ProtocolOutputLeadNs = 100'000'000;
-constexpr std::int64_t ProjectTsStartupPrerollNs = 40'000'000;
 constexpr std::int64_t SenderReportIntervalNs = 1'000'000'000;
 constexpr int VideoRtpPayloadType = 96;
 constexpr int VideoRtpClockRate = 90'000;
@@ -31,7 +29,7 @@ planSeparateRtp(
 {
     if (!output.videoOutput.scheduledTransport ||
         !output.videoOutput.scheduledPacketization ||
-        output.sdp.path.empty()) {
+        output.sdp.path.empty() || !request.deployment) {
         return ::media::Result<
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -68,7 +66,7 @@ planSeparateRtp(
             identity + ".video.timestamp"),
         VideoRtpClockRate,
         cname,
-        MediaRunningTime::fromNanoseconds(ProtocolOutputLeadNs),
+        request.deployment->encode().latency.targetResidence,
         MediaRunningTime::fromNanoseconds(SenderReportIntervalNs)};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
@@ -126,20 +124,24 @@ planSeparateRtp(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly MPEG-TS output requires a planned transport decode lead"));
     }
-    auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
-        outer.videoPlan.outputCodecName, layout.value(),
-        *output.muxedOutput.transportDecodeLead,
-        MediaRunningTime::fromNanoseconds(ProjectTsStartupPrerollNs),
-        outer.outputTransport, maximumPacketsPerDatagram);
-    if (!protocol) {
-        return ::media::Result<
-            MediaProjectMpegTsRuntimeOutputPlan>::failure(protocol.error());
-    }
     auto videoCadence = MediaRunningTime::checkedFromTicks(
         1, outputFrameRate.den, outputFrameRate.num);
     if (!videoCadence) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             videoCadence.error());
+    }
+    const MediaRunningTime startupEmissionPreroll =
+        videoCadence.value() < *output.muxedOutput.transportDecodeLead
+            ? videoCadence.value()
+            : *output.muxedOutput.transportDecodeLead;
+    auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
+        outer.videoPlan.outputCodecName, layout.value(),
+        *output.muxedOutput.transportDecodeLead,
+        startupEmissionPreroll,
+        outer.outputTransport, maximumPacketsPerDatagram);
+    if (!protocol) {
+        return ::media::Result<
+            MediaProjectMpegTsRuntimeOutputPlan>::failure(protocol.error());
     }
     std::optional<std::variant<MediaMpegTsUdpOutputPlan,
                                MediaMpegTsRtpOutputPlan>> transport;
