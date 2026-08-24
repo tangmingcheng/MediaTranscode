@@ -11,13 +11,7 @@
 namespace media::ffmpeg::graph {
 
 struct MediaScheduledWireDatagramDescriptor final {
-    std::uint64_t generation;
-    std::uint64_t endpointId;
-    std::uint64_t payloadOffset;
-    std::uint64_t payloadSize;
-    MediaRunningTime canonicalRelease;
-    MediaRunningTime canonicalDeadline;
-    std::uint64_t globalSequence;
+    MediaWireDatagramDescriptor wire;
     MediaRunningTime enqueueNotBefore;
     MediaRunningTime enqueueNotAfter;
     MediaRunningTime wireServiceDuration;
@@ -40,28 +34,37 @@ public:
         const MediaScheduledWireDatagram&) = delete;
 
     std::span<const std::uint8_t> bytes() const noexcept { return m_bytes; }
-    std::uint64_t generation() const noexcept { return m_generation; }
-    std::uint64_t endpointId() const noexcept { return m_endpointId; }
+    std::uint64_t generation() const noexcept
+    {
+        return m_descriptor.wire.generation;
+    }
+    std::uint64_t endpointId() const noexcept
+    {
+        return m_descriptor.wire.endpointId;
+    }
     MediaRunningTime canonicalRelease() const noexcept
     {
-        return m_canonicalRelease;
+        return m_descriptor.wire.canonicalRelease;
     }
     MediaRunningTime canonicalDeadline() const noexcept
     {
-        return m_canonicalDeadline;
+        return m_descriptor.wire.canonicalDeadline;
     }
-    std::uint64_t globalSequence() const noexcept { return m_globalSequence; }
+    std::uint64_t globalSequence() const noexcept
+    {
+        return m_descriptor.wire.globalSequence;
+    }
     MediaRunningTime enqueueNotBefore() const noexcept
     {
-        return m_enqueueNotBefore;
+        return m_descriptor.enqueueNotBefore;
     }
     MediaRunningTime enqueueNotAfter() const noexcept
     {
-        return m_enqueueNotAfter;
+        return m_descriptor.enqueueNotAfter;
     }
     MediaRunningTime wireServiceDuration() const noexcept
     {
-        return m_wireServiceDuration;
+        return m_descriptor.wireServiceDuration;
     }
     bool hasCommitLease() const noexcept { return m_commitLease.valid(); }
 
@@ -73,22 +76,17 @@ private:
         std::span<const std::uint8_t> bytes,
         const MediaScheduledWireDatagramDescriptor& descriptor,
         MediaDatagramSubmitCommitLease commitLease) noexcept;
-    ::media::Status commitSubmit();
+    ::media::Status commitSubmit() noexcept;
 
     std::span<const std::uint8_t> m_bytes;
-    std::uint64_t m_generation;
-    std::uint64_t m_endpointId;
-    MediaRunningTime m_canonicalRelease;
-    MediaRunningTime m_canonicalDeadline;
-    std::uint64_t m_globalSequence;
-    MediaRunningTime m_enqueueNotBefore;
-    MediaRunningTime m_enqueueNotAfter;
-    MediaRunningTime m_wireServiceDuration;
+    MediaScheduledWireDatagramDescriptor m_descriptor;
     MediaDatagramSubmitCommitLease m_commitLease;
 };
 
 class MediaScheduledWireDatagramBatchBuffer final : public MediaBuffer {
 public:
+    // This factory closes all per-batch limits. The future stateful shaper owns
+    // service-scope debt and pending usage that span multiple batches.
     static ::media::Result<
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
     create(const MediaDatagramShapingPlan& plan,

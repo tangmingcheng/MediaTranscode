@@ -11,79 +11,158 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Status validateMtuEvidence(
-    const MediaDatagramEndpointPlan& endpoint)
+struct UInt128 final {
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+
+    friend constexpr bool operator>=(UInt128 lhs, UInt128 rhs) noexcept
+    {
+        return lhs.high > rhs.high ||
+               (lhs.high == rhs.high && lhs.low >= rhs.low);
+    }
+};
+
+constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
+{
+    const std::uint64_t lhsLow = static_cast<std::uint32_t>(lhs);
+    const std::uint64_t lhsHigh = lhs >> 32;
+    const std::uint64_t rhsLow = static_cast<std::uint32_t>(rhs);
+    const std::uint64_t rhsHigh = rhs >> 32;
+
+    const std::uint64_t lowProduct = lhsLow * rhsLow;
+    const std::uint64_t firstCross = lhsHigh * rhsLow + (lowProduct >> 32);
+    const std::uint64_t firstCrossLow = static_cast<std::uint32_t>(firstCross);
+    const std::uint64_t firstCrossHigh = firstCross >> 32;
+    const std::uint64_t secondCross = lhsLow * rhsHigh + firstCrossLow;
+
+    return UInt128{lhsHigh * rhsHigh + firstCrossHigh + (secondCross >> 32),
+                   (secondCross << 32) +
+                       static_cast<std::uint32_t>(lowProduct)};
+}
+
+::media::Status validateMtuEvidence(const MediaDatagramEndpointPlan& endpoint)
 {
     const auto& evidence = endpoint.mtuEvidence;
-    if (evidence.authority.empty() ||
-        evidence.maximumIpPacketBytes == 0 ||
-        evidence.ipHeaderBytes == 0 ||
-        evidence.udpHeaderBytes == 0 ||
+    if (evidence.authority.empty() || evidence.maximumIpPacketBytes == 0 ||
+        evidence.ipHeaderBytes == 0 || evidence.transportHeaderBytes == 0 ||
         evidence.senderMaximumPayloadBytes == 0 ||
         evidence.ipHeaderBytes >= evidence.maximumIpPacketBytes ||
-        evidence.udpHeaderBytes >
+        evidence.transportHeaderBytes >
             evidence.maximumIpPacketBytes - evidence.ipHeaderBytes) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "datagram endpoint requires complete MTU evidence"));
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "datagram endpoint requires complete MTU evidence"));
     }
-    const auto networkPayloadBytes =
-        evidence.maximumIpPacketBytes - evidence.ipHeaderBytes -
-        evidence.udpHeaderBytes;
-    const auto derivedMaximum = (std::min)(
-        networkPayloadBytes, evidence.senderMaximumPayloadBytes);
+    const auto networkPayloadBytes = evidence.maximumIpPacketBytes -
+                                     evidence.ipHeaderBytes -
+                                     evidence.transportHeaderBytes;
+    const auto derivedMaximum =
+        (std::min)(networkPayloadBytes, evidence.senderMaximumPayloadBytes);
     if (endpoint.maximumDatagramBytes == 0 ||
         endpoint.maximumDatagramBytes != derivedMaximum) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "datagram endpoint maximum payload differs from its MTU evidence"));
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "datagram endpoint maximum payload differs from its MTU evidence"));
     }
     return ::media::Status::success();
 }
 
 ::media::Status validateEndpoint(const MediaDatagramEndpointPlan& endpoint)
 {
-    auto address = MediaNumericIpAddress::create(
-        endpoint.addressFamily, endpoint.numericAddress);
+    auto address = MediaNumericIpAddress::create(endpoint.addressFamily,
+                                                 endpoint.numericAddress);
     auto mtu = validateMtuEvidence(endpoint);
     if (endpoint.endpointId == 0 || endpoint.port == 0 || !address || !mtu ||
         endpoint.maximumPendingDatagrams == 0 ||
         endpoint.maximumPendingBytes < endpoint.maximumDatagramBytes ||
+        endpoint.maximumPendingBytes > endpoint.socketHardBoundBytes ||
         endpoint.maximumResidence <= MediaRunningTime::fromNanoseconds(0) ||
         endpoint.socketHardBoundBytes < endpoint.maximumDatagramBytes) {
         return ::media::Status::failure(
-            !address ? address.error()
-                     : (!mtu ? mtu.error()
-                             : ::media::ErrorInfo::invalidArgument(
-                                   "datagram endpoint hard bounds are incomplete")));
+            !address
+                ? address.error()
+                : (!mtu ? mtu.error()
+                        : ::media::ErrorInfo::invalidArgument(
+                              "datagram endpoint hard bounds are incomplete")));
     }
     return ::media::Status::success();
 }
 
-::media::Status validateEvidence(
-    const std::optional<MediaDatagramTransmitEvidencePlan>& evidence)
+bool knownScopeKind(MediaDatagramServiceScopeKind kind) noexcept
 {
-    if (!evidence) return ::media::Status::success();
-    const bool knownKind =
-        evidence->kind ==
-            MediaDatagramTransmitEvidenceKind::TransmitTimestamp ||
-        evidence->kind ==
-            MediaDatagramTransmitEvidenceKind::ZeroCopyCompletion ||
-        evidence->kind == MediaDatagramTransmitEvidenceKind::
-                              TransmitTimestampAndZeroCopyCompletion;
-    if (!knownKind || evidence->authority.empty() ||
-        evidence->firstEvidenceId == 0 ||
-        evidence->lastEvidenceId < evidence->firstEvidenceId ||
-        evidence->maximumCorrelationEntries == 0 ||
-        evidence->maximumDrainResidence <=
+    return kind == MediaDatagramServiceScopeKind::ManagedEgress ||
+           kind == MediaDatagramServiceScopeKind::ProvisionedEgress;
+}
+
+::media::Status
+validateScopeCoverage(const MediaDatagramServiceScopePlan& scope,
+                      const std::unordered_set<std::uint64_t>& endpointIds)
+{
+    if (!knownScopeKind(scope.kind) || scope.scopeId.empty() ||
+        scope.coverageAuthority.empty() ||
+        scope.endpointCoverage.size() != endpointIds.size()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "datagram service scope requires typed authority and exact "
+            "endpoint "
+            "coverage"));
+    }
+
+    std::unordered_set<std::uint64_t> coveredEndpointIds;
+    try {
+        coveredEndpointIds.reserve(scope.endpointCoverage.size());
+        for (const auto endpointId : scope.endpointCoverage) {
+            if (endpointId == 0 ||
+                !coveredEndpointIds.insert(endpointId).second) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "datagram service scope endpoint coverage must be "
+                        "unique"));
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "datagram service scope endpoint coverage"));
+    }
+    if (coveredEndpointIds != endpointIds) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "datagram service scope must cover exactly the planned endpoints"));
+    }
+    return ::media::Status::success();
+}
+
+::media::Status
+validateEvidence(const MediaDatagramShapingPlanEncoding& encoding)
+{
+    if (!encoding.evidence)
+        return ::media::Status::success();
+    const auto& evidence = *encoding.evidence;
+    const bool knownGapPolicy =
+        evidence.coverageGapPolicy ==
+            MediaDatagramEvidenceCoverageGapPolicy::Report ||
+        evidence.coverageGapPolicy ==
+            MediaDatagramEvidenceCoverageGapPolicy::Fail;
+    if (evidence.kind != MediaDatagramTransmitEvidenceKind::TransmitTimestamp ||
+        !knownGapPolicy || evidence.authority.empty() ||
+        evidence.firstEvidenceId == 0 ||
+        evidence.lastEvidenceId < evidence.firstEvidenceId ||
+        evidence.maximumCorrelationEntries <
+            encoding.backlog.maximumDatagrams ||
+        evidence.maximumDrainResidence <=
             MediaRunningTime::fromNanoseconds(0) ||
-        evidence->lastEvidenceId - evidence->firstEvidenceId ==
+        evidence.maximumDrainResidence > encoding.backlog.maximumResidence ||
+        evidence.lastEvidenceId - evidence.firstEvidenceId ==
             (std::numeric_limits<std::uint64_t>::max)() ||
-        evidence->lastEvidenceId - evidence->firstEvidenceId + 1 <
-            evidence->maximumCorrelationEntries) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "datagram transmit evidence plan is incomplete"));
+        evidence.lastEvidenceId - evidence.firstEvidenceId + 1 <
+            evidence.maximumCorrelationEntries) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "datagram transmit timestamp evidence plan is incomplete"));
+    }
+    for (const auto& endpoint : encoding.endpoints) {
+        if (evidence.maximumCorrelationEntries <
+                endpoint.maximumPendingDatagrams ||
+            evidence.maximumDrainResidence > endpoint.maximumResidence) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "datagram transmit timestamp evidence does not close endpoint "
+                "correlation bounds"));
+        }
     }
     return ::media::Status::success();
 }
@@ -91,13 +170,11 @@ namespace {
 } // namespace
 
 ::media::Result<MediaDatagramShapingPlan>
-MediaDatagramShapingPlan::decode(
-    MediaDatagramShapingPlanEncoding encoding)
+MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
 {
     using Result = ::media::Result<MediaDatagramShapingPlan>;
     if (encoding.sessionKey.empty() || encoding.generation == 0 ||
-        encoding.serviceScopeId.empty() || encoding.endpoints.empty() ||
-        encoding.serviceCurve.authority.empty() ||
+        encoding.endpoints.empty() || encoding.serviceCurve.authority.empty() ||
         encoding.serviceCurve.serviceBytesPerSecond == 0 ||
         encoding.serviceCurve.peakBytesPerSecond <
             encoding.serviceCurve.serviceBytesPerSecond ||
@@ -108,13 +185,11 @@ MediaDatagramShapingPlan::decode(
             MediaRunningTime::fromNanoseconds(0) ||
         encoding.batch.maximumDatagrams == 0 ||
         encoding.batch.maximumBytes == 0 ||
-        encoding.batch.maximumDatagrams >
-            encoding.backlog.maximumDatagrams ||
+        encoding.batch.maximumDatagrams > encoding.backlog.maximumDatagrams ||
         encoding.batch.maximumBytes > encoding.backlog.maximumBytes ||
         encoding.submitMode !=
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue ||
-        encoding.orderingMode !=
-            MediaDatagramOrderingMode::CanonicalOrdered ||
+        encoding.orderingMode != MediaDatagramOrderingMode::CanonicalOrdered ||
         encoding.pressureFailureMode !=
             MediaDatagramLimitFailureMode::Terminate ||
         encoding.deadlineFailureMode !=
@@ -122,7 +197,9 @@ MediaDatagramShapingPlan::decode(
         encoding.persistentStateMode !=
             MediaDatagramPersistentStateMode::PreserveScopeDebt) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram shaping plan requires complete scope, service, resource, and failure facts"));
+            "datagram shaping plan requires complete scope, service, resource, "
+            "and "
+            "failure facts"));
     }
 
     std::unordered_set<std::uint64_t> endpointIds;
@@ -134,7 +211,8 @@ MediaDatagramShapingPlan::decode(
     }
     for (const auto& endpoint : encoding.endpoints) {
         auto valid = validateEndpoint(endpoint);
-        if (!valid) return Result::failure(valid.error());
+        if (!valid)
+            return Result::failure(valid.error());
         bool inserted = false;
         try {
             inserted = endpointIds.insert(endpoint.endpointId).second;
@@ -146,8 +224,7 @@ MediaDatagramShapingPlan::decode(
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "datagram shaping endpoint identities must be unique"));
         }
-        if (endpoint.maximumDatagramBytes >
-                encoding.serviceCurve.burstBytes ||
+        if (endpoint.maximumDatagramBytes > encoding.serviceCurve.burstBytes ||
             endpoint.maximumPendingDatagrams >
                 encoding.backlog.maximumDatagrams ||
             endpoint.maximumPendingBytes > encoding.backlog.maximumBytes ||
@@ -156,26 +233,45 @@ MediaDatagramShapingPlan::decode(
                 "datagram endpoint bounds exceed the service-scope ledger"));
         }
     }
-    auto evidence = validateEvidence(encoding.evidence);
-    if (!evidence) return Result::failure(evidence.error());
+    auto scope = validateScopeCoverage(encoding.serviceScope, endpointIds);
+    if (!scope)
+        return Result::failure(scope.error());
+    auto evidence = validateEvidence(encoding);
+    if (!evidence)
+        return Result::failure(evidence.error());
     return Result::success(MediaDatagramShapingPlan(std::move(encoding)));
 }
 
 MediaDatagramShapingPlan::MediaDatagramShapingPlan(
     MediaDatagramShapingPlanEncoding encoding) noexcept
     : m_encoding(std::move(encoding))
-{
-}
+{}
 
-MediaDatagramShapingPlanEncoding MediaDatagramShapingPlan::encode() const
+::media::Result<MediaDatagramShapingPlanEncoding>
+MediaDatagramShapingPlan::encode() const noexcept
 {
-    return m_encoding;
+    using Result = ::media::Result<MediaDatagramShapingPlanEncoding>;
+    try {
+        return Result::success(m_encoding);
+    } catch (const std::bad_alloc&) {
+        return Result::failure(
+            ::media::ErrorInfo::allocationFailed("plan encode"));
+    }
 }
 
 ::media::Result<MediaDatagramShapingPlan>
-MediaDatagramShapingPlan::clone() const
+MediaDatagramShapingPlan::clone() const noexcept
 {
-    return decode(encode());
+    using Result = ::media::Result<MediaDatagramShapingPlan>;
+    try {
+        auto encoding = encode();
+        if (!encoding)
+            return Result::failure(encoding.error());
+        return decode(std::move(encoding).value());
+    } catch (const std::bad_alloc&) {
+        return Result::failure(
+            ::media::ErrorInfo::allocationFailed("plan clone"));
+    }
 }
 
 const std::string& MediaDatagramShapingPlan::sessionKey() const noexcept
@@ -188,9 +284,10 @@ std::uint64_t MediaDatagramShapingPlan::generation() const noexcept
     return m_encoding.generation;
 }
 
-const std::string& MediaDatagramShapingPlan::serviceScopeId() const noexcept
+const MediaDatagramServiceScopePlan&
+MediaDatagramShapingPlan::serviceScope() const noexcept
 {
-    return m_encoding.serviceScopeId;
+    return m_encoding.serviceScope;
 }
 
 const std::vector<MediaDatagramEndpointPlan>&
@@ -199,14 +296,14 @@ MediaDatagramShapingPlan::endpoints() const noexcept
     return m_encoding.endpoints;
 }
 
-const MediaDatagramEndpointPlan* MediaDatagramShapingPlan::endpoint(
-    std::uint64_t endpointId) const noexcept
+const MediaDatagramEndpointPlan*
+MediaDatagramShapingPlan::endpoint(std::uint64_t endpointId) const noexcept
 {
-    const auto found = std::find_if(
-        m_encoding.endpoints.begin(), m_encoding.endpoints.end(),
-        [endpointId](const MediaDatagramEndpointPlan& endpoint) {
-            return endpoint.endpointId == endpointId;
-        });
+    const auto found =
+        std::find_if(m_encoding.endpoints.begin(), m_encoding.endpoints.end(),
+                     [endpointId](const MediaDatagramEndpointPlan& endpoint) {
+                         return endpoint.endpointId == endpointId;
+                     });
     return found == m_encoding.endpoints.end() ? nullptr : &*found;
 }
 
@@ -222,8 +319,7 @@ MediaDatagramShapingPlan::backlog() const noexcept
     return m_encoding.backlog;
 }
 
-const MediaDatagramBatchPlan&
-MediaDatagramShapingPlan::batch() const noexcept
+const MediaDatagramBatchPlan& MediaDatagramShapingPlan::batch() const noexcept
 {
     return m_encoding.batch;
 }
@@ -263,15 +359,51 @@ MediaDatagramShapingPlan::evidence() const noexcept
     return m_encoding.evidence;
 }
 
-::media::Status MediaDatagramShapingPlan::validateDatagram(
-    std::uint64_t endpointId, std::uint64_t payloadBytes) const
+::media::Result<MediaRunningTime>
+MediaDatagramShapingPlan::plannedServiceDuration(
+    std::uint64_t payloadBytes) const
+{
+    using Result = ::media::Result<MediaRunningTime>;
+    if (payloadBytes == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram service duration requires payload bytes"));
+    }
+
+    constexpr std::uint64_t nanosecondsPerSecond = 1'000'000'000;
+    const auto requiredService = multiply(payloadBytes, nanosecondsPerSecond);
+    const auto maximumDuration = multiply(
+        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()),
+        m_encoding.serviceCurve.serviceBytesPerSecond);
+    if (!(maximumDuration >= requiredService)) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "datagram service duration is not representable"));
+    }
+
+    std::uint64_t first = 1;
+    std::uint64_t last =
+        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+    while (first < last) {
+        const auto middle = first + (last - first) / 2;
+        if (multiply(middle, m_encoding.serviceCurve.serviceBytesPerSecond) >=
+            requiredService) {
+            last = middle;
+        } else {
+            first = middle + 1;
+        }
+    }
+    return Result::success(
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(first)));
+}
+
+::media::Status
+MediaDatagramShapingPlan::validateDatagram(std::uint64_t endpointId,
+                                           std::uint64_t payloadBytes) const
 {
     const auto* plannedEndpoint = endpoint(endpointId);
     if (!plannedEndpoint || payloadBytes == 0 ||
         payloadBytes > plannedEndpoint->maximumDatagramBytes) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "wire datagram differs from its planned endpoint or MTU bound"));
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "wire datagram differs from its planned endpoint or MTU bound"));
     }
     return ::media::Status::success();
 }

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
-#include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramDescriptor.h"
 #include "media_transcode/Result.h"
 
 #include <concepts>
@@ -27,7 +27,7 @@ public:
         requires std::is_nothrow_move_constructible_v<Reservation> &&
                  std::is_nothrow_destructible_v<Reservation> &&
                  requires(Reservation& reservation) {
-                     { reservation.commit() } ->
+                     { reservation.commit() } noexcept ->
                          std::same_as<::media::Status>;
                  }
     static ::media::Result<MediaDatagramSubmitCommitLease> create(
@@ -67,7 +67,7 @@ private:
     class Concept {
     public:
         virtual ~Concept() = default;
-        virtual ::media::Status commit() = 0;
+        virtual ::media::Status commit() noexcept = 0;
     };
 
     template <typename Reservation>
@@ -78,7 +78,7 @@ private:
         {
         }
 
-        ::media::Status commit() override
+        ::media::Status commit() noexcept override
         {
             return m_reservation.commit();
         }
@@ -103,7 +103,7 @@ private:
         return valid() && m_generation == generation &&
                m_globalSequence == globalSequence;
     }
-    ::media::Status commit();
+    ::media::Status commit() noexcept;
 
     friend class MediaScheduledDatagramSenderNode;
     friend class MediaScheduledWireDatagram;
@@ -113,16 +113,6 @@ private:
     std::uint64_t m_generation;
     std::uint64_t m_globalSequence;
     std::unique_ptr<Concept> m_reservation;
-};
-
-struct MediaWireDatagramDescriptor final {
-    std::uint64_t generation;
-    std::uint64_t endpointId;
-    std::uint64_t payloadOffset;
-    std::uint64_t payloadSize;
-    MediaRunningTime canonicalRelease;
-    MediaRunningTime canonicalDeadline;
-    std::uint64_t globalSequence;
 };
 
 struct MediaWireDatagramBatchEntry final {
@@ -138,17 +128,26 @@ public:
     MediaWireDatagram& operator=(const MediaWireDatagram&) = delete;
 
     std::span<const std::uint8_t> bytes() const noexcept { return m_bytes; }
-    std::uint64_t generation() const noexcept { return m_generation; }
-    std::uint64_t endpointId() const noexcept { return m_endpointId; }
+    std::uint64_t generation() const noexcept
+    {
+        return m_descriptor.generation;
+    }
+    std::uint64_t endpointId() const noexcept
+    {
+        return m_descriptor.endpointId;
+    }
     MediaRunningTime canonicalRelease() const noexcept
     {
-        return m_canonicalRelease;
+        return m_descriptor.canonicalRelease;
     }
     MediaRunningTime canonicalDeadline() const noexcept
     {
-        return m_canonicalDeadline;
+        return m_descriptor.canonicalDeadline;
     }
-    std::uint64_t globalSequence() const noexcept { return m_globalSequence; }
+    std::uint64_t globalSequence() const noexcept
+    {
+        return m_descriptor.globalSequence;
+    }
     bool hasCommitLease() const noexcept { return m_commitLease.valid(); }
 
 private:
@@ -162,11 +161,7 @@ private:
     MediaDatagramSubmitCommitLease takeCommitLease() noexcept;
 
     std::span<const std::uint8_t> m_bytes;
-    std::uint64_t m_generation;
-    std::uint64_t m_endpointId;
-    MediaRunningTime m_canonicalRelease;
-    MediaRunningTime m_canonicalDeadline;
-    std::uint64_t m_globalSequence;
+    MediaWireDatagramDescriptor m_descriptor;
     MediaDatagramSubmitCommitLease m_commitLease;
 };
 

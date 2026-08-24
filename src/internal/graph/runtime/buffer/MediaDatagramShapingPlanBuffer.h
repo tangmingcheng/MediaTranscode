@@ -19,7 +19,7 @@ public:
     }
     const MediaDatagramShapingPlan& plan() const noexcept { return m_plan; }
     ::media::Result<std::shared_ptr<MediaDatagramShapingPlanBuffer>>
-    clone() const;
+    clone() const noexcept;
 
 private:
     explicit MediaDatagramShapingPlanBuffer(

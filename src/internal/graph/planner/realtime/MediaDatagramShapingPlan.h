@@ -12,36 +12,61 @@
 namespace media::ffmpeg::graph {
 
 enum class MediaDatagramSubmitMode {
-    NonBlockingAtomicEnqueue
+    Unknown = 0,
+    NonBlockingAtomicEnqueue = 1
 };
 
 enum class MediaDatagramOrderingMode {
-    CanonicalOrdered
+    Unknown = 0,
+    CanonicalOrdered = 1
 };
 
 enum class MediaDatagramLimitFailureMode {
-    Terminate
+    Unknown = 0,
+    Terminate = 1
 };
 
 enum class MediaDatagramPersistentStateMode {
-    PreserveScopeDebt
+    Unknown = 0,
+    PreserveScopeDebt = 1
 };
 
 enum class MediaDatagramTransmitEvidenceKind {
-    TransmitTimestamp,
-    ZeroCopyCompletion,
-    TransmitTimestampAndZeroCopyCompletion
+    Unknown = 0,
+    TransmitTimestamp = 1
+};
+
+enum class MediaDatagramEvidenceCoverageGapPolicy {
+    Unknown = 0,
+    Report = 1,
+    Fail = 2
+};
+
+enum class MediaDatagramServiceScopeKind {
+    Unknown = 0,
+    ManagedEgress = 1,
+    ProvisionedEgress = 2
 };
 
 struct MediaDatagramMtuEvidence final {
     std::string authority;
     std::uint64_t maximumIpPacketBytes;
     std::uint64_t ipHeaderBytes;
-    std::uint64_t udpHeaderBytes;
+    std::uint64_t transportHeaderBytes;
     std::uint64_t senderMaximumPayloadBytes;
 
     friend bool operator==(const MediaDatagramMtuEvidence&,
                            const MediaDatagramMtuEvidence&) = default;
+};
+
+struct MediaDatagramServiceScopePlan final {
+    MediaDatagramServiceScopeKind kind;
+    std::string scopeId;
+    std::string coverageAuthority;
+    std::vector<std::uint64_t> endpointCoverage;
+
+    friend bool operator==(const MediaDatagramServiceScopePlan&,
+                           const MediaDatagramServiceScopePlan&) = default;
 };
 
 struct MediaDatagramEndpointPlan final {
@@ -89,6 +114,7 @@ struct MediaDatagramBatchPlan final {
 
 struct MediaDatagramTransmitEvidencePlan final {
     MediaDatagramTransmitEvidenceKind kind;
+    MediaDatagramEvidenceCoverageGapPolicy coverageGapPolicy;
     std::string authority;
     std::uint64_t firstEvidenceId;
     std::uint64_t lastEvidenceId;
@@ -102,7 +128,7 @@ struct MediaDatagramTransmitEvidencePlan final {
 struct MediaDatagramShapingPlanEncoding final {
     std::string sessionKey;
     std::uint64_t generation;
-    std::string serviceScopeId;
+    MediaDatagramServiceScopePlan serviceScope;
     std::vector<MediaDatagramEndpointPlan> endpoints;
     MediaDatagramServiceCurvePlan serviceCurve;
     MediaDatagramBacklogPlan backlog;
@@ -130,11 +156,11 @@ public:
     MediaDatagramShapingPlan& operator=(
         const MediaDatagramShapingPlan&) = delete;
 
-    MediaDatagramShapingPlanEncoding encode() const;
-    ::media::Result<MediaDatagramShapingPlan> clone() const;
+    ::media::Result<MediaDatagramShapingPlanEncoding> encode() const noexcept;
+    ::media::Result<MediaDatagramShapingPlan> clone() const noexcept;
     const std::string& sessionKey() const noexcept;
     std::uint64_t generation() const noexcept;
-    const std::string& serviceScopeId() const noexcept;
+    const MediaDatagramServiceScopePlan& serviceScope() const noexcept;
     const std::vector<MediaDatagramEndpointPlan>& endpoints() const noexcept;
     const MediaDatagramEndpointPlan* endpoint(
         std::uint64_t endpointId) const noexcept;
@@ -148,6 +174,8 @@ public:
     MediaDatagramPersistentStateMode persistentStateMode() const noexcept;
     const std::optional<MediaDatagramTransmitEvidencePlan>&
     evidence() const noexcept;
+    ::media::Result<MediaRunningTime> plannedServiceDuration(
+        std::uint64_t payloadBytes) const;
     ::media::Status validateDatagram(
         std::uint64_t endpointId, std::uint64_t payloadBytes) const;
 
