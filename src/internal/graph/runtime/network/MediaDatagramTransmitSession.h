@@ -7,6 +7,7 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -20,6 +21,7 @@ struct MediaDatagramTransmitEndpointBinding final {
 struct MediaDatagramTransmitExecutionPlan final {
     MediaDatagramTransmitExecutionMode mode;
     std::string authority;
+    std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;
 };
 
 struct MediaDatagramTransmitJobEntry final {
@@ -31,6 +33,8 @@ struct MediaDatagramTransmitJobEntry final {
 
 class MediaDatagramTransmitSession final {
 public:
+    // The creating thread is the sole owner through close and destruction.
+    // Public operations are non-concurrent and may not migrate threads.
     ~MediaDatagramTransmitSession() noexcept;
 
     MediaDatagramTransmitSession(const MediaDatagramTransmitSession&) = delete;
@@ -96,6 +100,7 @@ private:
     MediaDatagramTransmitSubmitResult submitPending(
         MediaRunningTime now) noexcept;
     ::media::Status advanceClock(MediaRunningTime now) noexcept;
+    ::media::Status validateOwnerThread() noexcept;
     ::media::Status terminate(::media::ErrorInfo error) noexcept;
     MediaDatagramTransmitSubmitResult terminateSubmit(
         MediaDatagramTransmitError error) noexcept;
@@ -113,6 +118,7 @@ private:
     std::optional<MediaRunningTime> m_lastNow;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::optional<MediaDatagramTransmitError> m_terminalSubmitFailure;
+    std::thread::id m_ownerThread;
     bool m_portsClosed = false;
     bool m_closed = false;
 };

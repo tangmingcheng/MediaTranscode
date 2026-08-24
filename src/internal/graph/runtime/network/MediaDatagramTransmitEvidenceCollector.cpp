@@ -10,10 +10,12 @@ namespace media::ffmpeg::graph {
 MediaDatagramTransmitEvidenceCollector::MediaDatagramTransmitEvidenceCollector(
     std::uint64_t generation,
     std::uint64_t maximumTrackedDatagrams,
-    std::optional<MediaDatagramTransmitEvidencePlan> plan) noexcept
+    std::optional<MediaDatagramTransmitEvidencePlan> plan,
+    std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule) noexcept
     : m_generation(generation),
       m_maximumTrackedDatagrams(maximumTrackedDatagrams),
-      m_plan(std::move(plan))
+      m_plan(std::move(plan)),
+      m_kernelSchedule(std::move(kernelSchedule))
 {
 }
 
@@ -22,6 +24,7 @@ MediaDatagramTransmitEvidenceCollector::create(
     std::uint64_t generation,
     std::uint64_t maximumTrackedDatagrams,
     std::optional<MediaDatagramTransmitEvidencePlan> plan,
+    std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule,
     std::vector<MediaDatagramTransmitEvidenceEndpoint> endpoints)
 {
     using ResultType =
@@ -29,13 +32,25 @@ MediaDatagramTransmitEvidenceCollector::create(
     if (generation == 0 || maximumTrackedDatagrams == 0 ||
         maximumTrackedDatagrams >
             static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)()) ||
-        endpoints.empty()) {
+        endpoints.empty() ||
+        (kernelSchedule &&
+         (kernelSchedule->authority.empty() ||
+          kernelSchedule->maximumCorrelationEntries == 0 ||
+          kernelSchedule->maximumCorrelationEntries < maximumTrackedDatagrams ||
+          kernelSchedule->maximumRunDatagrams == 0 ||
+          kernelSchedule->maximumRunDatagrams >
+              static_cast<std::uint64_t>(
+                  (std::numeric_limits<std::uint32_t>::max)()) + 1ULL ||
+          kernelSchedule->maximumErrorQueueResidence <=
+              MediaRunningTime::fromNanoseconds(0) ||
+          kernelSchedule->maximumScheduleAheadNanoseconds == 0))) {
         return ResultType::failure(::media::ErrorInfo::invalidArgument(
             "invalid transmit evidence collector hard bounds"));
     }
     try {
         MediaDatagramTransmitEvidenceCollector collector(
-            generation, maximumTrackedDatagrams, std::move(plan));
+            generation, maximumTrackedDatagrams, std::move(plan),
+            std::move(kernelSchedule));
         collector.m_entries.reserve(
             static_cast<std::size_t>(maximumTrackedDatagrams));
         collector.m_endpoints.reserve(endpoints.size());
@@ -81,6 +96,19 @@ MediaDatagramTransmitEvidenceCollector::create(
                          (std::numeric_limits<std::uint32_t>::max)()))) {
                 return ResultType::failure(::media::ErrorInfo::invalidArgument(
                     "kernel timestamp correlation requires a uint32-bounded run budget"));
+            }
+            if (endpoint.capabilities.correlationMode ==
+                    MediaDatagramTransmitCorrelationMode::CallerSelectedUint32 &&
+                collector.m_plan &&
+                collector.m_plan->lastEvidenceId >
+                    (std::numeric_limits<std::uint32_t>::max)()) {
+                return ResultType::failure(::media::ErrorInfo::invalidArgument(
+                    "caller-selected timestamp ids exceed the uint32 planned run range"));
+            }
+            if (endpoint.capabilities.kernelTransmitTimeAvailable !=
+                collector.m_kernelSchedule.has_value()) {
+                return ResultType::failure(::media::ErrorInfo::invalidArgument(
+                    "kernel transmit-time capability differs from its typed plan"));
             }
             EndpointState state{
                 endpoint.port, endpoint.capabilities, 0, false, {}, {}};
@@ -169,8 +197,12 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
             const bool trackTimestamp = timestampExpected &&
                                         !omitTimestampForReport;
             const bool track = trackTimestamp || launchTimes[index];
+            const bool requestTimestamp = trackTimestamp ||
+                (timestampExpected &&
+                 endpoint->second.capabilities.correlationMode ==
+                     MediaDatagramTransmitCorrelationMode::KernelSequentialUint32);
             std::optional<std::uint32_t> platformId;
-            if (timestampExpected) {
+            if (requestTimestamp) {
                 if (endpoint->second.capabilities.correlationMode ==
                     MediaDatagramTransmitCorrelationMode::CallerSelectedUint32) {
                     if (evidenceIds[index] >
@@ -239,36 +271,27 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
     }
 }
 
-::media::Status MediaDatagramTransmitEvidenceCollector::markSubmittedPrefix(
+void MediaDatagramTransmitEvidenceCollector::markSubmittedPrefix(
     std::span<const MediaDatagramTransmitEvidenceReservation> reservations,
     std::uint64_t submittedPrefix) noexcept
 {
-    if (submittedPrefix > reservations.size()) {
-        return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "submitted prefix exceeds reserved Datagram batch"));
-    }
+    if (submittedPrefix > reservations.size()) return;
     for (std::uint64_t index = 0; index < submittedPrefix; ++index) {
-        if (m_telemetry.submitted ==
-            (std::numeric_limits<std::uint64_t>::max)()) {
-            return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "transmit evidence submitted counter overflowed"));
-        }
-        ++m_telemetry.submitted;
+        incrementCounter(m_telemetry.submitted);
         const auto entry = m_entries.find(reservations[index].evidenceId);
         if (entry == m_entries.end()) {
-            if (m_plan) ++m_telemetry.timestampUntracked;
+            if (m_plan) incrementCounter(m_telemetry.timestampUntracked);
             continue;
         }
-        if (entry->second.state != EntryState::Prepared) {
-            return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "Datagram evidence reservation submitted twice"));
-        }
+        if (entry->second.state != EntryState::Prepared) continue;
         entry->second.state = EntryState::Submitted;
-        if (entry->second.timestampExpected) ++m_telemetry.timestampTracked;
-        else if (m_plan) ++m_telemetry.timestampUntracked;
+        if (entry->second.timestampExpected) {
+            incrementCounter(m_telemetry.timestampTracked);
+        } else if (m_plan) {
+            incrementCounter(m_telemetry.timestampUntracked);
+        }
     }
     m_telemetry.deliveryEvidenceProven = false;
-    return ::media::Status::success();
 }
 
 void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
@@ -322,38 +345,58 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         }
         (void)endpointId;
     }
-    if (!m_plan) return ::media::Status::success();
     std::vector<std::uint64_t> expired;
     try {
         expired.reserve(m_entries.size());
-        for (const auto& [evidenceId, entry] : m_entries) {
+        for (auto& [evidenceId, entry] : m_entries) {
             if (entry.state != EntryState::Submitted) continue;
-            auto deadline = entry.submittedAt.checkedAdd(
-                m_plan->maximumDrainResidence);
-            if (!deadline || now > deadline.value()) expired.push_back(evidenceId);
+            if (entry.timestampExpected && m_plan) {
+                auto deadline = entry.submittedAt.checkedAdd(
+                    m_plan->maximumDrainResidence);
+                if (!deadline || now > deadline.value()) {
+                    if (!entry.timestampObserved) {
+                        incrementCounter(m_telemetry.lost);
+                        auto status = coverageFailure(
+                            "transmit timestamp evidence expired");
+                        if (!status) return status;
+                    }
+                    const auto endpoint = m_endpoints.find(entry.endpointId);
+                    if (endpoint != m_endpoints.end()) {
+                        endpoint->second.byPlatformId.erase(
+                            entry.platformCorrelationId);
+                    }
+                    entry.timestampExpected = false;
+                }
+            }
+            if (entry.launchTimeLowBits && m_kernelSchedule) {
+                auto deadline = entry.submittedAt.checkedAdd(
+                    m_kernelSchedule->maximumErrorQueueResidence);
+                if (!deadline || now > deadline.value()) {
+                    const auto endpoint = m_endpoints.find(entry.endpointId);
+                    if (endpoint != m_endpoints.end()) {
+                        endpoint->second.byLaunchTimeLowBits.erase(
+                            *entry.launchTimeLowBits);
+                    }
+                    entry.launchTimeLowBits.reset();
+                }
+            }
+            if (!entry.timestampExpected && !entry.launchTimeLowBits) {
+                expired.push_back(evidenceId);
+            }
         }
     } catch (const std::bad_alloc&) {
         m_terminalFailure = ::media::ErrorInfo::allocationFailed(
             "transmit evidence expiry scan");
         return ::media::Status::failure(*m_terminalFailure);
     }
-    for (const auto evidenceId : expired) {
-        const auto entry = m_entries.find(evidenceId);
-        if (entry != m_entries.end() && entry->second.timestampExpected &&
-            !entry->second.timestampObserved) {
-            ++m_telemetry.lost;
-            auto status = coverageFailure("transmit timestamp evidence expired");
-            if (!status) return status;
-        }
-        eraseEntry(evidenceId);
-    }
+    for (const auto evidenceId : expired) eraseEntry(evidenceId);
     m_telemetry.transmitTimestampCoverageComplete =
         m_telemetry.submitted != 0 &&
         m_telemetry.timestampTracked == m_telemetry.submitted &&
         m_telemetry.observed == m_telemetry.submitted &&
         m_telemetry.late == 0 && m_telemetry.lost == 0 &&
         m_telemetry.duplicate == 0 && m_telemetry.crossGeneration == 0 &&
-        m_telemetry.unmatched == 0;
+        m_telemetry.unmatched == 0 && !m_telemetry.counterSaturated;
     m_telemetry.deliveryEvidenceProven = false;
     return ::media::Status::success();
 }
@@ -369,7 +412,7 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         for (const auto& [evidenceId, entry] : m_entries) {
             if (entry.state == EntryState::Submitted &&
                 entry.timestampExpected && !entry.timestampObserved) {
-                ++m_telemetry.lost;
+                incrementCounter(m_telemetry.lost);
             }
             remaining.push_back(evidenceId);
         }
@@ -392,29 +435,29 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
     MediaRunningTime now) noexcept
 {
     if (event.generation != m_generation) {
-        ++m_telemetry.crossGeneration;
+        incrementCounter(m_telemetry.crossGeneration);
         return coverageFailure("cross-generation transmit platform event");
     }
     const auto endpoint = m_endpoints.find(event.endpointId);
     if (endpoint == m_endpoints.end()) {
-        ++m_telemetry.unmatched;
+        incrementCounter(m_telemetry.unmatched);
         return coverageFailure("unknown endpoint transmit platform event");
     }
     if (event.kind == MediaDatagramTransmitPlatformEventKind::Timestamp) {
         const auto mapped = endpoint->second.byPlatformId.find(
             event.platformCorrelationId);
         if (mapped == endpoint->second.byPlatformId.end()) {
-            ++m_telemetry.unmatched;
+            incrementCounter(m_telemetry.unmatched);
             return coverageFailure("unmatched transmit timestamp event");
         }
         const auto entry = m_entries.find(mapped->second);
         if (entry == m_entries.end() ||
             entry->second.state != EntryState::Submitted) {
-            ++m_telemetry.unmatched;
+            incrementCounter(m_telemetry.unmatched);
             return coverageFailure("timestamp arrived before submit commit");
         }
         if (entry->second.timestampObserved) {
-            ++m_telemetry.duplicate;
+            incrementCounter(m_telemetry.duplicate);
             return coverageFailure("duplicate transmit timestamp event");
         }
         if (event.timestampSource !=
@@ -429,16 +472,15 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         auto deadline = entry->second.submittedAt.checkedAdd(
             m_plan->maximumDrainResidence);
         if (!deadline || now > deadline.value()) {
-            ++m_telemetry.late;
+            incrementCounter(m_telemetry.late);
             auto status = coverageFailure("late transmit timestamp event");
             if (!status) return status;
         }
         entry->second.timestampObserved = true;
-        ++m_telemetry.observed;
+        incrementCounter(m_telemetry.observed);
         m_telemetry.lastTimestampSource = event.timestampSource;
         m_telemetry.lastRawTimestampCounter = event.rawTimestampCounter;
         m_telemetry.lastRawTimestampFrequency = event.rawTimestampFrequency;
-        if (!entry->second.launchTimeLowBits) eraseEntry(entry->second.evidenceId);
         return ::media::Status::success();
     }
 
@@ -456,10 +498,10 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         return ::media::Status::failure(*m_terminalFailure);
     }
     if (event.kind == MediaDatagramTransmitPlatformEventKind::TxTimeMissed) {
-        ++m_telemetry.txTimeMissed;
+        incrementCounter(m_telemetry.txTimeMissed);
     } else if (event.kind ==
                MediaDatagramTransmitPlatformEventKind::TxTimeInvalid) {
-        ++m_telemetry.txTimeInvalid;
+        incrementCounter(m_telemetry.txTimeInvalid);
     } else {
         m_terminalFailure = ::media::ErrorInfo::ioFailure(
             "unknown SO_TXTIME error kind");
@@ -487,6 +529,16 @@ void MediaDatagramTransmitEvidenceCollector::eraseEntry(
         }
     }
     m_entries.erase(entry);
+}
+
+void MediaDatagramTransmitEvidenceCollector::incrementCounter(
+    std::uint64_t& counter) noexcept
+{
+    if (counter == (std::numeric_limits<std::uint64_t>::max)()) {
+        m_telemetry.counterSaturated = true;
+        return;
+    }
+    ++counter;
 }
 
 ::media::Status MediaDatagramTransmitEvidenceCollector::coverageFailure(

@@ -28,6 +28,7 @@ struct MediaDatagramTransmitEvidenceTelemetry final {
     std::uint64_t lastRawTimestampFrequency = 0;
     bool transmitTimestampCoverageComplete = false;
     bool deliveryEvidenceProven = false;
+    bool counterSaturated = false;
 };
 
 struct MediaDatagramTransmitEvidenceReservation final {
@@ -47,6 +48,7 @@ public:
         std::uint64_t generation,
         std::uint64_t maximumTrackedDatagrams,
         std::optional<MediaDatagramTransmitEvidencePlan> plan,
+        std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule,
         std::vector<MediaDatagramTransmitEvidenceEndpoint> endpoints);
 
     ::media::Result<std::vector<MediaDatagramTransmitEvidenceReservation>>
@@ -55,7 +57,7 @@ public:
         std::span<const std::uint64_t> evidenceIds,
         std::span<const std::optional<std::uint64_t>> launchTimes,
         MediaRunningTime submittedAt) noexcept;
-    ::media::Status markSubmittedPrefix(
+    void markSubmittedPrefix(
         std::span<const MediaDatagramTransmitEvidenceReservation> reservations,
         std::uint64_t submittedPrefix) noexcept;
     void cancelPrepared(
@@ -95,17 +97,20 @@ private:
     MediaDatagramTransmitEvidenceCollector(
         std::uint64_t generation,
         std::uint64_t maximumTrackedDatagrams,
-        std::optional<MediaDatagramTransmitEvidencePlan> plan) noexcept;
+        std::optional<MediaDatagramTransmitEvidencePlan> plan,
+        std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule) noexcept;
 
     ::media::Status coverageFailure(const char* message) noexcept;
     ::media::Status ingestEvent(
         const MediaDatagramTransmitPlatformEvent& event,
         MediaRunningTime now) noexcept;
     void eraseEntry(std::uint64_t evidenceId) noexcept;
+    void incrementCounter(std::uint64_t& counter) noexcept;
 
     std::uint64_t m_generation;
     std::uint64_t m_maximumTrackedDatagrams;
     std::optional<MediaDatagramTransmitEvidencePlan> m_plan;
+    std::optional<MediaDatagramTransmitKernelSchedulePlan> m_kernelSchedule;
     std::unordered_map<std::uint64_t, EndpointState> m_endpoints;
     std::unordered_map<std::uint64_t, Entry> m_entries;
     std::optional<std::uint64_t> m_lastEvidenceId;

@@ -6,15 +6,76 @@
 #include <mstcpip.h>
 #include <windows.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 
 #include <array>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <thread>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
+
+struct WindowsTimestampClockEvidence final {
+    MediaDatagramTransmitTimestampSource source;
+    std::uint64_t frequency;
+};
+
+std::optional<WindowsTimestampClockEvidence> queryTimestampClockEvidence(
+    const sockaddr_storage& remote) noexcept
+{
+    HMODULE library = LoadLibraryExW(
+        L"iphlpapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!library) return std::nullopt;
+    const auto release = [&]() noexcept { FreeLibrary(library); };
+    using GetBestInterfaceExFunction = DWORD(WINAPI*)(const sockaddr*, PULONG);
+    using ConvertInterfaceIndexToLuidFunction =
+        NETIO_STATUS(WINAPI*)(NET_IFINDEX, PNET_LUID);
+    using GetActiveCapabilitiesFunction = DWORD(WINAPI*)(
+        const NET_LUID*, PINTERFACE_TIMESTAMP_CAPABILITIES);
+    const auto getBestInterface = reinterpret_cast<GetBestInterfaceExFunction>(
+        GetProcAddress(library, "GetBestInterfaceEx"));
+    const auto convertIndex =
+        reinterpret_cast<ConvertInterfaceIndexToLuidFunction>(
+            GetProcAddress(library, "ConvertInterfaceIndexToLuid"));
+    const auto getActive = reinterpret_cast<GetActiveCapabilitiesFunction>(
+        GetProcAddress(library, "GetInterfaceActiveTimestampCapabilities"));
+    if (!getBestInterface || !convertIndex || !getActive) {
+        release();
+        return std::nullopt;
+    }
+    ULONG index = 0;
+    NET_LUID luid{};
+    INTERFACE_TIMESTAMP_CAPABILITIES capabilities{};
+    if (getBestInterface(reinterpret_cast<const sockaddr*>(&remote), &index) !=
+            NO_ERROR ||
+        convertIndex(index, &luid) != NO_ERROR ||
+        getActive(&luid, &capabilities) != NO_ERROR) {
+        release();
+        return std::nullopt;
+    }
+    release();
+    const bool hardware = capabilities.HardwareCapabilities.TaggedTransmit ||
+                          capabilities.HardwareCapabilities.AllTransmit;
+    const bool software = capabilities.SoftwareCapabilities.TaggedTransmit ||
+                          capabilities.SoftwareCapabilities.AllTransmit;
+    if (hardware == software) return std::nullopt;
+    if (hardware) {
+        if (capabilities.HardwareClockFrequencyHz == 0) return std::nullopt;
+        return WindowsTimestampClockEvidence{
+            MediaDatagramTransmitTimestampSource::WindowsHardwareCounter,
+            capabilities.HardwareClockFrequencyHz};
+    }
+    LARGE_INTEGER frequency{};
+    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) {
+        return std::nullopt;
+    }
+    return WindowsTimestampClockEvidence{
+        MediaDatagramTransmitTimestampSource::WindowsPerformanceCounter,
+        static_cast<std::uint64_t>(frequency.QuadPart)};
+}
 
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
                             sockaddr_storage& storage,
@@ -80,11 +141,16 @@ public:
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
             request.executionMode !=
-                MediaDatagramTransmitExecutionMode::UserspaceNonblocking) {
+                MediaDatagramTransmitExecutionMode::UserspaceNonblocking ||
+            request.kernelSchedule ||
+            (request.evidence && request.evidence->lastEvidenceId >
+                (std::numeric_limits<std::uint32_t>::max)())) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Windows Datagram port open request"));
         }
         m_openAttempted = true;
+        m_ownerThread = std::this_thread::get_id();
+        m_hasOwner = true;
         const int family = request.endpoint.addressFamily ==
                 MediaIpAddressFamily::Ipv4 ? AF_INET : AF_INET6;
         SOCKET handle = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
@@ -174,24 +240,22 @@ public:
         if (request.evidence) {
             timestampAvailability =
                 MediaDatagramTransmitTimestampAvailability::Unavailable;
-            if (request.evidence->maximumCorrelationEntries <=
+            const auto clockEvidence = queryTimestampClockEvidence(m_remote);
+            if (clockEvidence &&
+                request.evidence->maximumCorrelationEntries <=
                 static_cast<std::uint64_t>(
                     (std::numeric_limits<USHORT>::max)())) {
                 TIMESTAMPING_CONFIG config{};
                 config.Flags = TIMESTAMPING_FLAG_TX;
                 config.TxTimestampsBuffered = static_cast<USHORT>(
                     request.evidence->maximumCorrelationEntries);
-                LARGE_INTEGER frequency{};
                 if (WSAIoctl(handle, SIO_TIMESTAMPING, &config, sizeof(config),
                              nullptr, 0, &bytes, nullptr, nullptr) == 0 &&
-                    QueryPerformanceFrequency(&frequency) &&
-                    frequency.QuadPart > 0) {
+                    clockEvidence->frequency > 0) {
                     timestampAvailability =
                         MediaDatagramTransmitTimestampAvailability::Available;
-                    timestampSource = MediaDatagramTransmitTimestampSource::
-                        WindowsPerformanceCounter;
-                    timestampFrequency =
-                        static_cast<std::uint64_t>(frequency.QuadPart);
+                    timestampSource = clockEvidence->source;
+                    timestampFrequency = clockEvidence->frequency;
                 }
             }
         }
@@ -212,6 +276,7 @@ public:
         m_maximumDatagramBytes = request.endpoint.maximumDatagramBytes;
         m_timestampAvailable = timestampAvailability ==
             MediaDatagramTransmitTimestampAvailability::Available;
+        m_timestampSource = timestampSource;
         m_timestampFrequency = timestampFrequency;
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
             request.endpoint.socketHardBoundBytes,
@@ -226,7 +291,7 @@ public:
     MediaDatagramTransmitSubmitResult trySubmit(
         std::span<const MediaDatagramTransmitPortRequest> requests) override
     {
-        if (m_socket == INVALID_SOCKET || requests.empty()) {
+        if (!isOwnerThread() || m_socket == INVALID_SOCKET || requests.empty()) {
             return MediaDatagramTransmitSubmitResult::failure(
                 mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
                     "invalid Windows Datagram submit request")));
@@ -237,8 +302,7 @@ public:
                 request.bytes.size() > static_cast<std::size_t>(
                     (std::numeric_limits<ULONG>::max)()) ||
                 request.kernelTransmitTimeNanoseconds ||
-                (m_timestampAvailable !=
-                 request.platformCorrelationId.has_value())) {
+                (!m_timestampAvailable && request.platformCorrelationId)) {
                 return MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(
                         ::media::ErrorInfo::invalidArgument(
@@ -258,7 +322,7 @@ public:
             message.namelen = m_remoteLength;
             message.lpBuffers = &buffer;
             message.dwBufferCount = 1;
-            if (m_timestampAvailable) {
+            if (request.platformCorrelationId) {
                 message.Control.buf = reinterpret_cast<char*>(control.data());
                 message.Control.len = WSA_CMSG_SPACE(sizeof(UINT32));
                 auto* header = WSA_CMSG_FIRSTHDR(&message);
@@ -306,7 +370,8 @@ public:
     {
         using ResultType =
             ::media::Result<MediaDatagramWritableWaitResult>;
-        if (m_socket == INVALID_SOCKET || maximumWait.nanoseconds() < 0) {
+        if (!isOwnerThread() || m_socket == INVALID_SOCKET ||
+            maximumWait.nanoseconds() < 0) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Windows Datagram writable wait"));
         }
@@ -366,6 +431,10 @@ public:
         using ResultType = ::media::Result<
             std::vector<MediaDatagramTransmitPlatformEvent>>;
         std::vector<MediaDatagramTransmitPlatformEvent> result;
+        if (!isOwnerThread() || m_socket == INVALID_SOCKET) {
+            return ResultType::failure(::media::ErrorInfo::invalidArgument(
+                "Windows Datagram evidence drain violated single-owner state"));
+        }
         if (!m_timestampAvailable) return ResultType::success(std::move(result));
         try {
             result.reserve(outstandingTimestampIds.size());
@@ -393,7 +462,7 @@ public:
                 m_endpointId, m_generation,
                 MediaDatagramTransmitPlatformEventKind::Timestamp,
                 correlationId,
-                MediaDatagramTransmitTimestampSource::WindowsPerformanceCounter,
+                m_timestampSource,
                 timestamp, m_timestampFrequency, 0});
         }
         return ResultType::success(std::move(result));
@@ -401,6 +470,10 @@ public:
 
     ::media::Status close() noexcept override
     {
+        if (m_hasOwner && !isOwnerThread()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Windows Datagram close violated its single-owner contract"));
+        }
         ::media::Status status = ::media::Status::success();
         if (m_socket != INVALID_SOCKET) {
             const SOCKET handle = m_socket;
@@ -422,6 +495,11 @@ public:
     }
 
 private:
+    bool isOwnerThread() const noexcept
+    {
+        return m_hasOwner && std::this_thread::get_id() == m_ownerThread;
+    }
+
     std::shared_ptr<MediaSocketRuntime> m_runtime;
     SOCKET m_socket = INVALID_SOCKET;
     LPFN_WSASENDMSG m_sendMsg = nullptr;
@@ -433,8 +511,12 @@ private:
     std::uint64_t m_generation = 0;
     std::size_t m_maximumDatagramBytes = 0;
     std::uint64_t m_timestampFrequency = 0;
+    MediaDatagramTransmitTimestampSource m_timestampSource =
+        MediaDatagramTransmitTimestampSource::Unknown;
     bool m_timestampAvailable = false;
     bool m_openAttempted = false;
+    bool m_hasOwner = false;
+    std::thread::id m_ownerThread;
 };
 
 } // namespace

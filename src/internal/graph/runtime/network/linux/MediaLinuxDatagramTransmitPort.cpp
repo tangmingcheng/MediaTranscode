@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
+#include <linux/version.h>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -16,7 +17,29 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <thread>
 #include <utility>
+
+#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && \
+    LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0) && \
+    defined(SO_TXTIME) && defined(SCM_TXTIME) && \
+    defined(SO_EE_ORIGIN_TXTIME) && \
+    defined(SO_EE_CODE_TXTIME_MISSED) && \
+    defined(SO_EE_CODE_TXTIME_INVALID_PARAM)
+#define MEDIA_DATAGRAM_HAS_LINUX_TXTIME 1
+#else
+#define MEDIA_DATAGRAM_HAS_LINUX_TXTIME 0
+#endif
+
+#if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && \
+    LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0) && \
+    defined(SO_TIMESTAMPING) && defined(SCM_TIMESTAMPING) && \
+    defined(SOF_TIMESTAMPING_MASK) && \
+    defined(SO_EE_ORIGIN_TIMESTAMPING)
+#define MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING 1
+#else
+#define MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING 0
+#endif
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -86,11 +109,16 @@ public:
             (request.executionMode !=
                  MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
              request.executionMode !=
-                 MediaDatagramTransmitExecutionMode::LinuxSocketTxTime)) {
+                 MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
+            ((request.executionMode ==
+                  MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
+             request.kernelSchedule.has_value())) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Linux Datagram port open request"));
         }
         m_openAttempted = true;
+        m_ownerThread = std::this_thread::get_id();
+        m_hasOwner = true;
         const int family = request.endpoint.addressFamily ==
                 MediaIpAddressFamily::Ipv4 ? AF_INET : AF_INET6;
         const int handle = ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK |
@@ -136,6 +164,7 @@ public:
         bool txtimeAvailable = false;
         if (request.executionMode ==
             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) {
+#if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
             sock_txtime configuration{};
             configuration.clockid = CLOCK_MONOTONIC;
             configuration.flags = SOF_TXTIME_REPORT_ERRORS;
@@ -153,11 +182,16 @@ public:
                     "Linux SO_TXTIME error queue configuration failed", errno));
             }
             txtimeAvailable = true;
+#else
+            return fail(::media::ErrorInfo::unsupported(
+                "Linux headers do not expose the required SO_TXTIME API"));
+#endif
         }
 
         auto timestampAvailability =
             MediaDatagramTransmitTimestampAvailability::NotRequested;
         if (request.evidence) {
+#if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
             const int flags = SOF_TIMESTAMPING_TX_SOFTWARE |
                               SOF_TIMESTAMPING_SOFTWARE |
                               SOF_TIMESTAMPING_OPT_ID |
@@ -170,6 +204,10 @@ public:
                 timestampAvailability =
                     MediaDatagramTransmitTimestampAvailability::Unavailable;
             }
+#else
+            timestampAvailability =
+                MediaDatagramTransmitTimestampAvailability::Unavailable;
+#endif
         }
         int effectiveBuffer = 0;
         socklen_t optionLength = sizeof(effectiveBuffer);
@@ -186,6 +224,12 @@ public:
         m_timestampAvailable = timestampAvailability ==
             MediaDatagramTransmitTimestampAvailability::Available;
         m_txtimeAvailable = txtimeAvailable;
+        if (request.kernelSchedule) {
+            m_maximumRunDatagrams =
+                request.kernelSchedule->maximumRunDatagrams;
+            m_maximumScheduleAheadNanoseconds =
+                request.kernelSchedule->maximumScheduleAheadNanoseconds;
+        }
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
             request.endpoint.socketHardBoundBytes,
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
@@ -202,10 +246,39 @@ public:
     MediaDatagramTransmitSubmitResult trySubmit(
         std::span<const MediaDatagramTransmitPortRequest> requests) override
     {
-        if (m_socket < 0 || requests.empty()) {
+        if (!isOwnerThread() || m_socket < 0 || requests.empty()) {
             return MediaDatagramTransmitSubmitResult::failure(
                 mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
                     "invalid Linux Datagram submit request")));
+        }
+        if (m_txtimeAvailable &&
+            (m_runSubmittedDatagrams > m_maximumRunDatagrams ||
+             requests.size() >
+                 m_maximumRunDatagrams - m_runSubmittedDatagrams)) {
+            return MediaDatagramTransmitSubmitResult::failure(
+                mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
+                    "Linux SO_TXTIME run exceeds its typed Datagram budget")));
+        }
+        std::uint64_t kernelNowNanoseconds = 0;
+        if (m_txtimeAvailable) {
+            timespec now{};
+            const int clockResult = ::clock_gettime(CLOCK_MONOTONIC, &now);
+            const int clockError = clockResult != 0 ? errno : 0;
+            if (clockResult != 0 ||
+                now.tv_sec < 0 || now.tv_nsec < 0 ||
+                now.tv_nsec >= 1'000'000'000L ||
+                static_cast<std::uint64_t>(now.tv_sec) >
+                    ((std::numeric_limits<std::uint64_t>::max)() -
+                     static_cast<std::uint64_t>(now.tv_nsec)) /
+                        1'000'000'000ULL) {
+                return MediaDatagramTransmitSubmitResult::failure(
+                    mediaDatagramTransmitError(::media::ErrorInfo::ioFailure(
+                        "Linux SO_TXTIME monotonic clock query failed",
+                        clockError)));
+            }
+            kernelNowNanoseconds = static_cast<std::uint64_t>(now.tv_sec) *
+                    1'000'000'000ULL +
+                static_cast<std::uint64_t>(now.tv_nsec);
         }
         auto expectedId = m_nextKernelTimestampId;
         for (const auto& request : requests) {
@@ -218,7 +291,13 @@ public:
                 (m_timestampAvailable &&
                  *request.platformCorrelationId != expectedId) ||
                 (m_txtimeAvailable !=
-                 request.kernelTransmitTimeNanoseconds.has_value())) {
+                 request.kernelTransmitTimeNanoseconds.has_value()) ||
+                (m_txtimeAvailable &&
+                 (*request.kernelTransmitTimeNanoseconds <
+                      kernelNowNanoseconds ||
+                  *request.kernelTransmitTimeNanoseconds -
+                          kernelNowNanoseconds >
+                      m_maximumScheduleAheadNanoseconds))) {
                 return MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(
                         ::media::ErrorInfo::invalidArgument(
@@ -239,6 +318,7 @@ public:
             message.msg_iov = &vector;
             message.msg_iovlen = 1;
             if (m_txtimeAvailable) {
+#if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
                 message.msg_control = control.data();
                 message.msg_controllen = control.size();
                 auto* header = CMSG_FIRSTHDR(&message);
@@ -247,6 +327,7 @@ public:
                 header->cmsg_len = CMSG_LEN(sizeof(std::uint64_t));
                 const auto launch = *request.kernelTransmitTimeNanoseconds;
                 std::memcpy(CMSG_DATA(header), &launch, sizeof(launch));
+#endif
             }
             const auto accepted = ::sendmsg(m_socket, &message, MSG_DONTWAIT);
             if (accepted < 0) {
@@ -273,6 +354,7 @@ public:
                     submitted);
             }
             ++submitted;
+            ++m_runSubmittedDatagrams;
             ++m_nextKernelTimestampId;
         }
         return MediaDatagramTransmitSubmitResult::success(
@@ -284,7 +366,8 @@ public:
         std::stop_token stopToken) override
     {
         using ResultType = ::media::Result<MediaDatagramWritableWaitResult>;
-        if (m_socket < 0 || m_stopFd < 0 || maximumWait.nanoseconds() < 0) {
+        if (!isOwnerThread() || m_socket < 0 || m_stopFd < 0 ||
+            maximumWait.nanoseconds() < 0) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Linux Datagram writable wait"));
         }
@@ -351,6 +434,10 @@ public:
         using ResultType = ::media::Result<
             std::vector<MediaDatagramTransmitPlatformEvent>>;
         std::vector<MediaDatagramTransmitPlatformEvent> events;
+        if (!isOwnerThread() || m_socket < 0) {
+            return ResultType::failure(::media::ErrorInfo::invalidArgument(
+                "Linux Datagram evidence drain violated single-owner state"));
+        }
         (void)outstandingTimestampIds;
         if (!m_timestampAvailable && !m_txtimeAvailable) {
             return ResultType::success(std::move(events));
@@ -377,7 +464,9 @@ public:
                         "Linux Datagram error queue control data was truncated"));
                 }
                 const sock_extended_err* extended = nullptr;
+#if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
                 const timespec* timestamps = nullptr;
+#endif
                 for (auto* header = CMSG_FIRSTHDR(&message); header;
                      header = CMSG_NXTHDR(&message, header)) {
                     if ((header->cmsg_level == IPPROTO_IP &&
@@ -392,7 +481,9 @@ public:
                         }
                         extended = reinterpret_cast<const sock_extended_err*>(
                             CMSG_DATA(header));
-                    } else if (header->cmsg_level == SOL_SOCKET &&
+                    }
+#if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
+                    else if (header->cmsg_level == SOL_SOCKET &&
                                header->cmsg_type == SCM_TIMESTAMPING) {
                         if (header->cmsg_len <
                             CMSG_LEN(sizeof(timespec) * 3)) {
@@ -403,11 +494,13 @@ public:
                         timestamps = reinterpret_cast<const timespec*>(
                             CMSG_DATA(header));
                     }
+#endif
                 }
                 if (!extended) {
                     return ResultType::failure(::media::ErrorInfo::ioFailure(
                         "Linux Datagram error queue lacked extended metadata"));
                 }
+#if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
                 if (extended->ee_origin == SO_EE_ORIGIN_TIMESTAMPING) {
                     if (!m_timestampAvailable || extended->ee_errno != ENOMSG ||
                         extended->ee_info != SCM_TSTAMP_SND || !timestamps ||
@@ -430,7 +523,11 @@ public:
                                 1'000'000'000ULL +
                             static_cast<std::uint64_t>(timestamps[0].tv_nsec),
                         1'000'000'000ULL, 0});
-                } else if (extended->ee_origin == SO_EE_ORIGIN_TXTIME) {
+                    continue;
+                }
+#endif
+#if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
+                if (extended->ee_origin == SO_EE_ORIGIN_TXTIME) {
                     if (!m_txtimeAvailable || extended->ee_errno != ECANCELED) {
                         return ResultType::failure(::media::ErrorInfo::ioFailure(
                             "Linux SO_TXTIME error metadata is invalid"));
@@ -449,10 +546,11 @@ public:
                         m_endpointId, m_generation, kind, 0,
                         MediaDatagramTransmitTimestampSource::Unknown,
                         0, 0, extended->ee_data});
-                } else {
-                    return ResultType::failure(::media::ErrorInfo::ioFailure(
-                        "Linux Datagram error queue returned an unknown origin"));
+                    continue;
                 }
+#endif
+                return ResultType::failure(::media::ErrorInfo::ioFailure(
+                    "Linux Datagram error queue returned an unknown origin"));
             }
         } catch (const std::bad_alloc&) {
             return ResultType::failure(::media::ErrorInfo::allocationFailed(
@@ -463,6 +561,10 @@ public:
 
     ::media::Status close() noexcept override
     {
+        if (m_hasOwner && !isOwnerThread()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Linux Datagram close violated its single-owner contract"));
+        }
         ::media::Status status = ::media::Status::success();
         if (m_socket >= 0) {
             const int handle = m_socket;
@@ -484,6 +586,11 @@ public:
     }
 
 private:
+    bool isOwnerThread() const noexcept
+    {
+        return m_hasOwner && std::this_thread::get_id() == m_ownerThread;
+    }
+
     std::shared_ptr<MediaSocketRuntime> m_runtime;
     int m_socket = -1;
     int m_stopFd = -1;
@@ -492,10 +599,15 @@ private:
     std::uint64_t m_endpointId = 0;
     std::uint64_t m_generation = 0;
     std::size_t m_maximumDatagramBytes = 0;
+    std::uint64_t m_maximumRunDatagrams = 0;
+    std::uint64_t m_runSubmittedDatagrams = 0;
+    std::uint64_t m_maximumScheduleAheadNanoseconds = 0;
     std::uint32_t m_nextKernelTimestampId = 0;
     bool m_timestampAvailable = false;
     bool m_txtimeAvailable = false;
     bool m_openAttempted = false;
+    bool m_hasOwner = false;
+    std::thread::id m_ownerThread;
 };
 
 } // namespace

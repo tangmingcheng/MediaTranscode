@@ -13,7 +13,8 @@ MediaDatagramTransmitSession::MediaDatagramTransmitSession(
     std::uint64_t generation) noexcept
     : m_sessionKey(std::move(sessionKey)),
       m_serviceScopeId(std::move(serviceScopeId)),
-      m_generation(generation)
+      m_generation(generation),
+      m_ownerThread(std::this_thread::get_id())
 {
 }
 
@@ -38,8 +39,24 @@ MediaDatagramTransmitSession::create(
         execution.authority.empty() ||
         bindings.size() != plan.endpoints().size() ||
         (execution.mode ==
-             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime &&
-         !plan.evidence())) {
+             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
+            execution.kernelSchedule.has_value() ||
+        (execution.kernelSchedule &&
+         (execution.kernelSchedule->authority.empty() ||
+          execution.kernelSchedule->maximumCorrelationEntries <
+              plan.backlog().maximumDatagrams ||
+          execution.kernelSchedule->maximumRunDatagrams == 0 ||
+          execution.kernelSchedule->maximumRunDatagrams >
+              static_cast<std::uint64_t>(
+                  (std::numeric_limits<std::uint32_t>::max)()) + 1ULL ||
+          execution.kernelSchedule->maximumErrorQueueResidence <=
+              MediaRunningTime::fromNanoseconds(0) ||
+          execution.kernelSchedule->maximumErrorQueueResidence >
+              plan.backlog().maximumResidence ||
+          execution.kernelSchedule->maximumScheduleAheadNanoseconds == 0)) ||
+        (plan.evidence() &&
+         plan.evidence()->lastEvidenceId >
+             (std::numeric_limits<std::uint32_t>::max)())) {
         return ResultType::failure(::media::ErrorInfo::invalidArgument(
             "invalid explicit Datagram transmit execution plan"));
     }
@@ -74,7 +91,7 @@ MediaDatagramTransmitSession::create(
             MediaDatagramTransmitPortOpenRequest request{
                 plan.sessionKey(), plan.serviceScope().scopeId,
                 plan.generation(), endpoint, local->second,
-                execution.mode, plan.evidence()};
+                execution.mode, plan.evidence(), execution.kernelSchedule};
             auto opened = port.value()->open(request);
             if (!opened) return ResultType::failure(opened.error());
             if (opened.value().zeroCopyEnabled) {
@@ -107,11 +124,8 @@ MediaDatagramTransmitSession::create(
         }
         auto collector = MediaDatagramTransmitEvidenceCollector::create(
             plan.generation(),
-            plan.evidence()
-                ? (std::min)(plan.backlog().maximumDatagrams,
-                             plan.evidence()->maximumCorrelationEntries)
-                : plan.backlog().maximumDatagrams,
-            plan.evidence(), std::move(evidenceEndpoints));
+            plan.backlog().maximumDatagrams, plan.evidence(),
+            execution.kernelSchedule, std::move(evidenceEndpoints));
         if (!collector) return ResultType::failure(collector.error());
         session->m_evidence =
             std::make_unique<MediaDatagramTransmitEvidenceCollector>(
@@ -128,6 +142,8 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
     std::span<const MediaDatagramTransmitJobEntry> entries,
     MediaRunningTime now) noexcept
 {
+    auto owner = validateOwnerThread();
+    if (!owner) return terminateSubmit(mediaDatagramTransmitError(owner.error()));
     if (m_terminalSubmitFailure) {
         return MediaDatagramTransmitSubmitResult::failure(
             *m_terminalSubmitFailure);
@@ -222,6 +238,8 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
 MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::retryPending(
     MediaRunningTime now) noexcept
 {
+    auto owner = validateOwnerThread();
+    if (!owner) return terminateSubmit(mediaDatagramTransmitError(owner.error()));
     if (m_terminalSubmitFailure) {
         return MediaDatagramTransmitSubmitResult::failure(
             *m_terminalSubmitFailure);
@@ -258,19 +276,30 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
     auto& endpoint = m_endpoints.at(m_pending->endpointId);
     auto submitted = endpoint.port->trySubmit(m_pending->portRequests);
     if (!submitted) {
-        const auto error = submitted.error();
-        std::uint64_t prefix = error.submittedPrefixDatagrams;
-        if (error.kind == MediaDatagramTransmitFailureKind::TerminalNoSubmit) {
-            prefix = 0;
+        auto error = submitted.error();
+        const auto count = m_pending->reservations.size();
+        const bool validNoSubmit =
+            error.kind == MediaDatagramTransmitFailureKind::TerminalNoSubmit &&
+            error.submittedPrefixDatagrams == 0;
+        const bool validPartial =
+            error.kind ==
+                MediaDatagramTransmitFailureKind::PartialSubmittedPrefix &&
+            error.submittedPrefixDatagrams > 0 &&
+            error.submittedPrefixDatagrams < count;
+        const bool validAmbiguous =
+            error.kind ==
+                MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix &&
+            error.submittedPrefixDatagrams < count;
+        if (!validNoSubmit && !validPartial && !validAmbiguous) {
+            error = mediaDatagramTransmitError(
+                ::media::ErrorInfo::internalError(
+                    "Datagram port returned invalid failure prefix metadata"),
+                MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix, 0);
         }
-        if (prefix > m_pending->reservations.size()) {
-            prefix = m_pending->reservations.size();
-        }
-        auto marked = m_evidence->markSubmittedPrefix(
-            m_pending->reservations, prefix);
+        const auto prefix = error.submittedPrefixDatagrams;
+        m_evidence->markSubmittedPrefix(m_pending->reservations, prefix);
         m_evidence->cancelPrepared(m_pending->reservations, prefix);
         m_pending.reset();
-        if (!marked) return terminateSubmit(mediaDatagramTransmitError(marked.error()));
         return terminateSubmit(error);
     }
     if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
@@ -282,10 +311,9 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
             ::media::ErrorInfo::internalError(
                 "Datagram port returned an unknown submit result")));
     }
-    auto marked = m_evidence->markSubmittedPrefix(
+    m_evidence->markSubmittedPrefix(
         m_pending->reservations, m_pending->reservations.size());
     m_pending.reset();
-    if (!marked) return terminateSubmit(mediaDatagramTransmitError(marked.error()));
     return submitted;
 }
 
@@ -297,6 +325,11 @@ MediaDatagramTransmitSession::waitWritable(
     std::stop_token stopToken) noexcept
 {
     using ResultType = ::media::Result<MediaDatagramWritableWaitResult>;
+    auto owner = validateOwnerThread();
+    if (!owner) {
+        terminate(owner.error());
+        return ResultType::failure(owner.error());
+    }
     if (m_terminalFailure) return ResultType::failure(*m_terminalFailure);
     auto clock = advanceClock(now);
     if (!clock) {
@@ -340,6 +373,8 @@ MediaDatagramTransmitSession::waitWritable(
 ::media::Status MediaDatagramTransmitSession::drainAvailableEvents(
     MediaRunningTime now) noexcept
 {
+    auto owner = validateOwnerThread();
+    if (!owner) return terminate(owner.error());
     if (m_terminalFailure) return ::media::Status::failure(*m_terminalFailure);
     auto clock = advanceClock(now);
     if (!clock) return terminate(clock.error());
@@ -352,6 +387,8 @@ MediaDatagramTransmitSession::waitWritable(
     ::media::ErrorInfo cause,
     MediaRunningTime now) noexcept
 {
+    auto owner = validateOwnerThread();
+    if (!owner) return terminate(owner.error());
     auto clock = advanceClock(now);
     if (!clock) return terminate(clock.error());
     if (cause.ok()) {
@@ -368,6 +405,8 @@ MediaDatagramTransmitSession::waitWritable(
 ::media::Status MediaDatagramTransmitSession::close(
     MediaRunningTime now) noexcept
 {
+    auto owner = validateOwnerThread();
+    if (!owner) return terminate(owner.error());
     if (m_closed) {
         return m_terminalFailure
             ? ::media::Status::failure(*m_terminalFailure)
@@ -396,6 +435,15 @@ MediaDatagramTransmitSession::waitWritable(
             "Datagram transmit clock must be nonnegative and monotonic"));
     }
     m_lastNow = now;
+    return ::media::Status::success();
+}
+
+::media::Status MediaDatagramTransmitSession::validateOwnerThread() noexcept
+{
+    if (std::this_thread::get_id() != m_ownerThread) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram transmit session is a non-migrating single-owner object"));
+    }
     return ::media::Status::success();
 }
 

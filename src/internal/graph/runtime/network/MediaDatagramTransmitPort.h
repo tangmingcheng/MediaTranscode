@@ -41,7 +41,8 @@ enum class MediaDatagramTransmitTimestampAvailability {
 enum class MediaDatagramTransmitTimestampSource {
     Unknown = 0,
     WindowsPerformanceCounter = 1,
-    LinuxSoftwareRealtime = 2
+    LinuxSoftwareRealtime = 2,
+    WindowsHardwareCounter = 3
 };
 
 enum class MediaDatagramTransmitCorrelationMode {
@@ -66,6 +67,14 @@ struct MediaDatagramTransmitError final {
     ::media::ErrorInfo cause;
     MediaDatagramTransmitFailureKind kind;
     std::uint64_t submittedPrefixDatagrams;
+};
+
+struct MediaDatagramTransmitKernelSchedulePlan final {
+    std::string authority;
+    std::uint64_t maximumCorrelationEntries;
+    std::uint64_t maximumRunDatagrams;
+    MediaRunningTime maximumErrorQueueResidence;
+    std::uint64_t maximumScheduleAheadNanoseconds;
 };
 
 struct MediaDatagramTransmitPortCapabilities final {
@@ -106,6 +115,7 @@ struct MediaDatagramTransmitPortOpenRequest final {
     MediaUdpDatagramEndpoint localEndpoint;
     MediaDatagramTransmitExecutionMode executionMode;
     std::optional<MediaDatagramTransmitEvidencePlan> evidence;
+    std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;
 };
 
 using MediaDatagramTransmitSubmitResult =
@@ -113,6 +123,8 @@ using MediaDatagramTransmitSubmitResult =
 
 class MediaDatagramTransmitPort {
 public:
+    // A port is a single-owner object. open, submit, wait, drain, and close
+    // must never execute concurrently or migrate to another owner thread.
     virtual ~MediaDatagramTransmitPort() = default;
 
     virtual ::media::Result<MediaDatagramTransmitPortCapabilities> open(

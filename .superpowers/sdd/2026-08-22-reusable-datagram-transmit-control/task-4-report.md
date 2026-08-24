@@ -86,3 +86,38 @@ Task 4 Windows loopback checks passed; timestamp=2
 本轮 fresh VS2026 x64 Debug clean-first all-target 已运行一次并成功：clean-first 后完成 555 个 Ninja step，脚本报告 configure/build exit 0，local/realtime CLI artifacts 均存在。最终冻结后将再次执行同一 clean-first 脚本。
 
 WSL 具有 Linux 5.15 headers，但本机没有 `g++`、`clang++` 或 `c++`，Docker Desktop engine 也未运行，因此不能声称 Linux/RK body 已编译。该风险不以 Windows `#else` stub 冒充验证；RK `ffenv on` Release 与真实 `MSG_ERRQUEUE/SO_TXTIME` 仍是目标机门禁。
+
+## Fix round 2
+
+本轮继续收紧 Task 4 边界，仍未接入 Task 5 production DAG：
+
+- 新增独立 `MediaDatagramTransmitKernelSchedulePlan`，以部署/planner authority 明确 `SO_TXTIME` correlation entries、run datagrams、error-queue residence 与最大 schedule-ahead。`LinuxSocketTxTime` 不再依赖可选 transmit timestamp evidence；无 evidence 时仍保留 launch low-bits correlation 并始终 drain error queue。Session 原 deadline 与 Linux `CLOCK_MONOTONIC` launch window 分别 fail-closed。
+- Windows 不再把所有 Winsock timestamp 无条件标为 QPC。adapter 动态调用系统 `GetBestInterfaceEx`、`ConvertInterfaceIndexToLuid` 与 `GetInterfaceActiveTimestampCapabilities` 确认实际 egress interface 和唯一 active source；软件源才使用 `QueryPerformanceFrequency`，硬件源必须取得 `HardwareClockFrequencyHz`。API、source 或 frequency 无法权威确定时如实 `Unavailable`。
+- Session 严格验证 port failure enum/prefix：no-submit 只能为 0，partial 必须位于 batch 内且非 0，ambiguous 只携带确定提交的前缀；无效 metadata 不再 clamp，转为 prefix 0 的 `AmbiguousSubmittedPrefix` terminal。所有 evidence/correlation 状态在 OS 前已预构造，OS 后 `markSubmittedPrefix` 为不可失败提交操作，Task 5 可使用 terminal error 中的确定 prefix。
+- Caller-selected Windows timestamp 的完整 planned evidence ID range 在 Session open 前及 collector create 时双重验证为 uint32 可表示。Report ledger 满时，Windows per-job reservation 不再生成 `SO_TIMESTAMP_ID`；Linux kernel sequential ID 因 socket API 语义继续推进，但不建立第二份 correlation ledger，并受 typed run budget 约束。
+- Linux UAPI 以 `LINUX_VERSION_CODE` 和对应 socket/error-queue feature macros 做 compile-time capability guard。旧 sysroot 缺少 timestamping 或 `SO_TXTIME` 时可以完成编译并返回 typed unavailable/unsupported，不直接引用缺失符号。
+- timestamp duplicate entry 保留到权威 residence 到期，因此 duplicate 与 unmatched 可区分。所有 telemetry counter 使用饱和递增并通过 `counterSaturated` 如实标记，coverage 不会在 counter 饱和后误报 complete。
+- `MediaDatagramTransmitSession` 与 platform port 明确为创建线程单一 owner，所有 submit/wait/drain/close 禁止并发和线程迁移；运行期检查违反合同时 fail-closed，避免 close/wakeup handle 竞争。
+
+临时 round2 TDD 使用 `/W4 /WX` 验证无 evidence 的 typed TXTIME session、invalid prefix 不 clamp、Report untracked 不请求 caller-selected timestamp ID、duplicate 分类、uint32 planned range 拒绝和 TXTIME invalid terminal，退出码 0。Windows 真实 loopback 使用实际 `WSASendMsg`，payload 原样收到；timestamp capability 仅允许 authoritative API 证明后的 typed source/frequency，否则验证为 `Unavailable`。临时测试不接入 CMake，提交前删除。
+
+RK 权威环境按当前 `AGENTS.md` 使用 `192.168.130.229`、`/home/tang`、`ffenv on`、`source /opt/mt-tools/mtenv.sh` 与 `mtenv on`。本轮未覆盖 `/home/tang/MediaTranscode`：先只读复制生产树到 `/home/tang/task4-round2-build.WM0Uu0`，再叠加本地冻结工作树的 Task 4 源码、现有 CMake 输入与 FFmpeg headers。overlay 为 1,149,850 bytes，本地和远端核对 SHA-256 均为 `117af27730b89e4c941f4b2a672c807fe2eadc2165976d4f8209c669143db3b4`。
+
+隔离构建实际执行环境与命令为：
+
+```text
+ffenv on
+source /opt/mt-tools/mtenv.sh
+mtenv on
+cmake -S /home/tang/task4-round2-build.WM0Uu0 -B /home/tang/task4-round2-build.WM0Uu0/out/build/task4-round2-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build /home/tang/task4-round2-build.WM0Uu0/out/build/task4-round2-release --clean-first
+```
+
+记录到 remote shell PID `3718405`、configure PID `3718418`、build wrapper PID `3718565` 与 Ninja PID `3718575`。GCC 12.4 的 Linux/aarch64 Release clean-first 完成全部 `554/554` step；其中 `MediaLinuxDatagramTransmitPort.cpp`、`MediaDatagramTransmitSession.cpp` 与 `MediaDatagramTransmitEvidenceCollector.cpp` 均真实编译，不是 Windows stub。build log 没有 `FAILED:`、`ninja: build stopped` 或 `error:`；两个最终链接产物如下：
+
+```text
+media_transcode_local_video_cli     5904168 bytes  sha256=380d08bbea9a82c7510679e392c72a192caad6fa452b0754d9e702b797f3d278
+media_transcode_realtime_video_cli  6883008 bytes  sha256=7b5a942e74f12985ed9d8c145d186417dea16f804e11ee2d7250aa82c2ff29bb
+```
+
+SSH 前台输出在 build 结束前脱离，未捕获脚本内的单独 `BUILD_RC=` 行；因此本报告以 `554/554` 最终链接、两个产物及零 failure marker 作为完成证据，不伪造缺失的 rc 文本。构建后验证 resolved path 精确等于 `/home/tang/task4-round2-build.WM0Uu0` 才递归删除；输出 `REMOTE_TEMP_REMOVED`，后续仅观察到检查命令自身，无 build/Ninja 残留。本地 overlay 与临时 RK build script 同步删除。
