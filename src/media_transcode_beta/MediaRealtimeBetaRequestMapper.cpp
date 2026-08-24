@@ -83,10 +83,6 @@ MediaRealtimeBetaRequestMapper::map(
     request.parameters.execution.streamSet = profile.streamSet;
     request.parameters.execution.disableHardware = profile.disableHardware;
     request.parameters.execution.hardwareBackend = profile.hardwareBackend;
-    request.parameters.queues.metadata = profile.metadataQueue;
-    request.parameters.queues.packet = profile.packetQueue;
-    request.parameters.queues.frame = profile.frameQueue;
-    request.parameters.queues.mux = profile.muxQueue;
     request.parameters.video.codecName = std::move(outputCodec).value();
     request.parameters.video.width = static_cast<int>(config.width());
     request.parameters.video.height = static_cast<int>(config.height());

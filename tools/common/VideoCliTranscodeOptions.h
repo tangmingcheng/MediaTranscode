@@ -24,11 +24,6 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
             "--hardware-backend rkmpp conflicts with --disable-hw");
     }
     parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
-    parameters.queues.metadata = requiredSizeArg(argc, argv, "--metadata-queue");
-    parameters.queues.packet = requiredSizeArg(argc, argv, "--packet-queue");
-    parameters.queues.frame = requiredSizeArg(argc, argv, "--frame-queue");
-    parameters.queues.mux = requiredSizeArg(argc, argv, "--mux-queue");
-
     parameters.video.codecName = argValue(argc, argv, "--video-codec");
     parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
     parameters.video.preset = argValue(argc, argv, "--preset");
@@ -64,10 +59,6 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
 inline std::vector<std::string> commonVideoTranscodeValueArgs()
 {
     return {
-        "--metadata-queue",
-        "--packet-queue",
-        "--frame-queue",
-        "--mux-queue",
         "--video-codec",
         "--hardware-backend",
         "--rc",

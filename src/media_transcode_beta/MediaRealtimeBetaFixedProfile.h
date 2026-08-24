@@ -14,16 +14,11 @@ class MediaRealtimeBetaFixedProfile final {
 public:
     struct Product final {
         const char* identity;
-        std::size_t metadataQueue;
-        std::size_t packetQueue;
-        std::size_t frameQueue;
-        std::size_t muxQueue;
         std::size_t startupMaximumVideoUnitBytes;
         int openTimeoutMs;
         int readTimeoutMs;
         int analyzeDurationUs;
         int probeSizeBytes;
-        int mpegTsRtpPacketSizeBytes;
         int progressTimeoutMs;
         int firstOutputTimeoutMs;
         int pollIntervalMs;

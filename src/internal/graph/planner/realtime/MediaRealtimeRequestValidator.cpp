@@ -39,15 +39,6 @@ namespace {
               "Realtime output layout and transport combination is not supported"));
 }
 
-::media::Status validateQueues(const MediaGraphQueueParameters& queues)
-{
-    if (queues.metadata == 0 || queues.packet == 0 || queues.frame == 0 || queues.mux == 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime queue capacities must be explicit and positive"));
-    }
-    return ::media::Status::success();
-}
-
 bool rawRtpAudioControlSpecified(
     const MediaRealtimeRtpInputMetadata& audio) noexcept
 {
@@ -165,7 +156,6 @@ bool preparedHandoffControlSpecified(
                 ::media::ErrorInfo::invalidArgument("Realtime RTP SDP output path must be explicit"));
         }
     }
-    if (auto status = validateQueues(request.parameters.queues); !status) return status;
     if (MediaRealtimeRequestClassifier::realtimeUrlInput(request)) {
         if (isUnsupportedRealtimeInputUrl(request.input.url)) {
             return ::media::Status::failure(

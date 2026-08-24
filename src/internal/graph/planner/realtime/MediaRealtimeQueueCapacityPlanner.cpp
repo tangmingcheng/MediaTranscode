@@ -1,69 +1,48 @@
 #include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 
 #include <limits>
+#include <cstdint>
 #include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::size_t MaximumRealtimeMetadataQueueCapacity = 1;
-constexpr std::size_t MaximumRealtimePacketQueueCapacity = 256;
-constexpr std::size_t MaximumRealtimeFrameQueueCapacity = 256;
-constexpr std::size_t MaximumRealtimeMuxQueueCapacity = 256;
-
-static_assert(MaximumRealtimeMetadataQueueCapacity <
-              std::numeric_limits<std::size_t>::max());
-static_assert(MaximumRealtimePacketQueueCapacity <
-              std::numeric_limits<std::size_t>::max());
-static_assert(MaximumRealtimeFrameQueueCapacity <
-              std::numeric_limits<std::size_t>::max());
-static_assert(MaximumRealtimeMuxQueueCapacity <
-              std::numeric_limits<std::size_t>::max());
-
-::media::Status validateMaximum(
-    const char* queueName,
-    std::size_t requested,
-    std::size_t maximum)
+::media::Result<std::size_t> representable(
+    std::uint64_t value,
+    const char* fact)
 {
-    if (requested <= maximum) {
-        return ::media::Status::success();
+    if (value > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::size_t>::max)())) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("Realtime deployment ") + fact +
+                " exceeds platform queue capacity"));
     }
-    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-        std::string("Realtime ") + queueName +
-        " queue capacity exceeds the planner policy ceiling: requested=" +
-        std::to_string(requested) + " maximum=" + std::to_string(maximum)));
+    return ::media::Result<std::size_t>::success(
+        static_cast<std::size_t>(value));
 }
 
 } // namespace
 
 ::media::Result<MediaGraphQueueParameters> MediaRealtimeQueueCapacityPlanner::plan(
-    const MediaGraphQueueParameters& requested)
+    const MediaRealtimeDeploymentEnvelope& deployment)
 {
-    if (auto status = validateMaximum(
-            "metadata", requested.metadata,
-            MaximumRealtimeMetadataQueueCapacity); !status) {
+    const auto& resources = deployment.encode().resources;
+    auto backlog = representable(
+        resources.maximumBacklogDatagrams, "maximum backlog datagrams");
+    if (!backlog) {
         return ::media::Result<MediaGraphQueueParameters>::failure(
-            status.error());
+            backlog.error());
     }
-    if (auto status = validateMaximum(
-            "packet", requested.packet,
-            MaximumRealtimePacketQueueCapacity); !status) {
+    auto batch = representable(
+        resources.maximumBatchDatagrams, "maximum batch datagrams");
+    if (!batch) {
         return ::media::Result<MediaGraphQueueParameters>::failure(
-            status.error());
+            batch.error());
     }
-    if (auto status = validateMaximum(
-            "frame", requested.frame,
-            MaximumRealtimeFrameQueueCapacity); !status) {
-        return ::media::Result<MediaGraphQueueParameters>::failure(
-            status.error());
-    }
-    if (auto status = validateMaximum(
-            "mux", requested.mux,
-            MaximumRealtimeMuxQueueCapacity); !status) {
-        return ::media::Result<MediaGraphQueueParameters>::failure(
-            status.error());
-    }
-    return ::media::Result<MediaGraphQueueParameters>::success(requested);
+    return ::media::Result<MediaGraphQueueParameters>::success(
+        MediaGraphQueueParameters{1, backlog.value(), batch.value(),
+                                  backlog.value()});
 }
 
 } // namespace media::ffmpeg::graph

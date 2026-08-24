@@ -32,6 +32,10 @@ std::string frameRateText(const MediaFrameRateParameters& frameRate)
 void rejectUnknownLocalArgs(int argc, char** argv)
 {
     std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
+    valueArgs.push_back("--metadata-queue");
+    valueArgs.push_back("--packet-queue");
+    valueArgs.push_back("--frame-queue");
+    valueArgs.push_back("--mux-queue");
     valueArgs.push_back("--input");
     valueArgs.push_back("--output");
 
@@ -49,6 +53,14 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.inputUrl = requiredArg(argc, argv, "--input");
     options.outputUrl = requiredArg(argc, argv, "--output");
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
+    options.parameters.queues.metadata = requiredSizeArg(
+        argc, argv, "--metadata-queue");
+    options.parameters.queues.packet = requiredSizeArg(
+        argc, argv, "--packet-queue");
+    options.parameters.queues.frame = requiredSizeArg(
+        argc, argv, "--frame-queue");
+    options.parameters.queues.mux = requiredSizeArg(
+        argc, argv, "--mux-queue");
     return options;
 }
 
