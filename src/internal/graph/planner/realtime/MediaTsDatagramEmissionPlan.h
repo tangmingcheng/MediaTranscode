@@ -18,7 +18,8 @@ public:
         MediaRunningTime videoAccessUnitCadence,
         std::optional<MediaRunningTime> audioAccessUnitCadence,
         std::uint64_t maximumQueuedBytes,
-        std::optional<std::int64_t> scheduledWireBytesPerSecond);
+        std::optional<std::int64_t> scheduledWireBytesPerSecond,
+        MediaRunningTime targetServiceResidence);
 
     MediaRunningTime accessUnitWindow() const noexcept;
     std::size_t packetSizeBytes() const noexcept;
@@ -29,6 +30,7 @@ public:
     MediaRunningTime videoInitialServiceWindow() const noexcept;
     const std::optional<MediaRunningTime>&
     audioInitialServiceWindow() const noexcept;
+    MediaRunningTime targetServiceResidence() const noexcept;
     std::uint64_t maximumQueuedBytes() const noexcept;
     const std::optional<std::int64_t>&
     scheduledWireBytesPerSecond() const noexcept;
@@ -41,6 +43,7 @@ private:
         MediaRunningTime accessUnitWindow,
         MediaRunningTime videoInitialServiceWindow,
         std::optional<MediaRunningTime> audioInitialServiceWindow,
+        MediaRunningTime targetServiceResidence,
         std::size_t packetSizeBytes,
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes,
@@ -51,6 +54,7 @@ private:
     MediaRunningTime m_accessUnitWindow;
     MediaRunningTime m_videoInitialServiceWindow;
     std::optional<MediaRunningTime> m_audioInitialServiceWindow;
+    MediaRunningTime m_targetServiceResidence;
     std::size_t m_packetSizeBytes;
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;

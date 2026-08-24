@@ -42,7 +42,8 @@ MediaAvSyncStartupPolicyPlanner::plan(
     startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
     startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
     startup.maximumGapNs = capacity.value().maximumGap;
-    startup.outputLeadNs = runningTime(100 * Millisecond);
+    startup.outputLeadNs =
+        request.deployment->encode().latency.maximumResidence;
     startup.videoCapacity = capacity.value().videoUnits;
     startup.audioCapacity = *capacity.value().audioUnits;
     startup.videoByteCapacity = capacity.value().videoBytes;

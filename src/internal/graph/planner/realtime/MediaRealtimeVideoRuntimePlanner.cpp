@@ -66,7 +66,7 @@ planSeparateRtp(
             identity + ".video.timestamp"),
         VideoRtpClockRate,
         cname,
-        request.deployment->encode().latency.targetResidence,
+        request.deployment->encode().latency.maximumResidence,
         MediaRunningTime::fromNanoseconds(SenderReportIntervalNs)};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
@@ -188,7 +188,8 @@ planSeparateRtp(
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
         startup.byteCapacity,
-        output.muxedOutput.scheduledWireBytesPerSecond);
+        output.muxedOutput.scheduledWireBytesPerSecond,
+        request.deployment->encode().latency.targetResidence);
     if (!emission) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());

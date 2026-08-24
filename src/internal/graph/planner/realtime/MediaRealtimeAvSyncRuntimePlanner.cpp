@@ -488,7 +488,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         auto emission = MediaTsDatagramEmissionPlan::create(
             accepted.value().muxPlan(), videoCadence.value(),
             audioCadence.value(), maximumQueuedBytes,
-            output.muxedOutput.scheduledWireBytesPerSecond);
+            output.muxedOutput.scheduledWireBytesPerSecond,
+            request.deployment->encode().latency.targetResidence);
         if (!emission) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 emission.error());

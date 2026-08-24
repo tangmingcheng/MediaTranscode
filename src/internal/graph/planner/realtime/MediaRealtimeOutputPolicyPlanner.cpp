@@ -193,6 +193,8 @@ std::optional<int> resolvedAudioBitrateKbps(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS output requires a resolved transport"));
         }
+        output.muxedOutput.transportDecodeLead =
+            deployment.latency.maximumResidence;
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
             if (!request.output.basePort) {
                 return ::media::Status::failure(
@@ -212,8 +214,6 @@ std::optional<int> resolvedAudioBitrateKbps(
             output.muxedOutput.scheduledWireBytesPerSecond =
                 static_cast<std::int64_t>(
                     deployment.service.sustainedWireBytesPerSecond);
-            output.muxedOutput.transportDecodeLead =
-                deployment.latency.targetResidence;
         }
         return ::media::Status::success();
     }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -236,8 +237,39 @@ MediaDatagramServiceShaper::shape(
             wire.canonicalDeadline,
             (std::min)(endpointDeadline.value(), backlogDeadline.value()));
         if (eligibility > enqueueNotAfter) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "service shaper reservation misses its immutable deadline"));
+            std::ostringstream message;
+            message
+                << "service shaper reservation misses its immutable deadline"
+                << " global_sequence=" << wire.globalSequence
+                << " endpoint_id=" << wire.endpointId
+                << " payload_bytes=" << wire.payloadSize
+                << " wire_bytes=" << cost.value().wireBytes
+                << " canonical_release_ns="
+                << wire.canonicalRelease.nanoseconds()
+                << " canonical_deadline_ns="
+                << wire.canonicalDeadline.nanoseconds()
+                << " now_ns=" << now.nanoseconds()
+                << " peak_available_ns="
+                << (peakAvailable ? peakAvailable->nanoseconds() : -1)
+                << " debt_eligibility_ns=";
+            if (sustainedDebtUntil) {
+                auto debtEligibility = sustainedDebtUntil->checkedSubtract(
+                    burstSlack.value());
+                message << (debtEligibility
+                    ? debtEligibility.value().nanoseconds() : -1);
+            } else {
+                message << -1;
+            }
+            message
+                << " selected_eligibility_ns=" << eligibility.nanoseconds()
+                << " endpoint_deadline_ns="
+                << endpointDeadline.value().nanoseconds()
+                << " backlog_deadline_ns="
+                << backlogDeadline.value().nanoseconds()
+                << " enqueue_not_after_ns="
+                << enqueueNotAfter.nanoseconds();
+            return Result::failure(
+                ::media::ErrorInfo::invalidArgument(message.str()));
         }
 
         EndpointUsage* endpointPending = nullptr;

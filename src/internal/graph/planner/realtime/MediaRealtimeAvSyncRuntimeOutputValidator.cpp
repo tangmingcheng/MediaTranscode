@@ -207,7 +207,8 @@ bool validRtpStream(
         output.emission.videoInitialServiceWindow(),
         output.emission.audioInitialServiceWindow(),
         output.emission.maximumQueuedBytes(),
-        output.emission.scheduledWireBytesPerSecond());
+        output.emission.scheduledWireBytesPerSecond(),
+        output.emission.targetServiceResidence());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&

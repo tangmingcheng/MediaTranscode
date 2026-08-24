@@ -150,7 +150,8 @@ namespace media::ffmpeg::graph {
                    output->emission.videoInitialServiceWindow(),
                    output->emission.audioInitialServiceWindow(),
                    output->emission.maximumQueuedBytes(),
-                   output->emission.scheduledWireBytesPerSecond())
+                   output->emission.scheduledWireBytesPerSecond(),
+                   output->emission.targetServiceResidence())
             : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
                    ::media::ErrorInfo::invalidArgument(
                        "Project MPEG-TS output is absent"));

@@ -19,7 +19,8 @@ MediaTsDatagramEmissionPlan::create(
     MediaRunningTime videoAccessUnitCadence,
     std::optional<MediaRunningTime> audioAccessUnitCadence,
     std::uint64_t maximumQueuedBytes,
-    std::optional<std::int64_t> scheduledWireBytesPerSecond)
+    std::optional<std::int64_t> scheduledWireBytesPerSecond,
+    MediaRunningTime targetServiceResidence)
 {
     const auto& mux = muxPlan.parameters();
     const std::size_t maximumPayloadBytes =
@@ -32,8 +33,10 @@ MediaTsDatagramEmissionPlan::create(
     const bool hasAudio = muxPlan.audioVideoProgram() != nullptr;
     const std::int64_t streamCount = hasAudio ? 2 : 1;
     const auto fairServiceWindow = MediaRunningTime::fromNanoseconds(
-        mux.transportDecodeLead.nanoseconds() / streamCount);
+        targetServiceResidence.nanoseconds() / streamCount);
     if (mux.transportDecodeLead.nanoseconds() <= 0 ||
+        targetServiceResidence.nanoseconds() <= 0 ||
+        targetServiceResidence > mux.transportDecodeLead ||
         fairServiceWindow.nanoseconds() <= 0 ||
         videoAccessUnitCadence.nanoseconds() <= 0 ||
         hasAudio != audioAccessUnitCadence.has_value() ||
@@ -60,6 +63,7 @@ MediaTsDatagramEmissionPlan::create(
                 ? std::optional<MediaRunningTime>((std::min)(
                       *audioAccessUnitCadence, fairServiceWindow))
                 : std::nullopt,
+            targetServiceResidence,
             mux.packetSize,
             maximumPayloadBytes, perDatagramOverheadBytes,
             mux.transportKind == MediaOutputTransportKind::RtpAvp,
@@ -71,6 +75,7 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     MediaRunningTime accessUnitWindow,
     MediaRunningTime videoInitialServiceWindow,
     std::optional<MediaRunningTime> audioInitialServiceWindow,
+    MediaRunningTime targetServiceResidence,
     std::size_t packetSizeBytes,
     std::size_t maximumPayloadBytes,
     std::size_t perDatagramOverheadBytes,
@@ -80,6 +85,7 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     : m_accessUnitWindow(accessUnitWindow)
     , m_videoInitialServiceWindow(videoInitialServiceWindow)
     , m_audioInitialServiceWindow(std::move(audioInitialServiceWindow))
+    , m_targetServiceResidence(targetServiceResidence)
     , m_packetSizeBytes(packetSizeBytes)
     , m_maximumPayloadBytes(maximumPayloadBytes)
     , m_perDatagramOverheadBytes(perDatagramOverheadBytes)
@@ -131,6 +137,12 @@ const std::optional<MediaRunningTime>&
 MediaTsDatagramEmissionPlan::audioInitialServiceWindow() const noexcept
 {
     return m_audioInitialServiceWindow;
+}
+
+MediaRunningTime
+MediaTsDatagramEmissionPlan::targetServiceResidence() const noexcept
+{
+    return m_targetServiceResidence;
 }
 
 std::uint64_t MediaTsDatagramEmissionPlan::maximumQueuedBytes() const noexcept
