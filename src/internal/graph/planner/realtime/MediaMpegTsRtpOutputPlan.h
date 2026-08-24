@@ -1,7 +1,6 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
-#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlan.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -26,8 +25,7 @@ public:
         MediaRtpUdpSenderConfig transport,
         std::string sdpPath,
         std::string sessionIdentity,
-        MediaRunningTime senderReportInterval,
-        MediaScheduledDatagramPacingPlan pacing);
+        MediaRunningTime senderReportInterval);
 
     MediaMpegTsRtpOutputPlan(MediaMpegTsRtpOutputPlan&&) noexcept = default;
     MediaMpegTsRtpOutputPlan& operator=(
@@ -48,7 +46,6 @@ public:
     std::size_t maximumDatagramBytes() const noexcept;
     std::uint8_t tsPacketsPerPayload() const noexcept;
     const MediaMpegTsRtpSdpPlan& sdp() const noexcept;
-    const MediaScheduledDatagramPacingPlan& pacing() const noexcept;
 
 private:
     MediaMpegTsRtpOutputPlan(
@@ -62,8 +59,7 @@ private:
         MediaRunningTime senderReportInterval,
         std::size_t maximumDatagramBytes,
         std::uint8_t tsPacketsPerPayload,
-        MediaMpegTsRtpSdpPlan sdp,
-        MediaScheduledDatagramPacingPlan pacing) noexcept;
+        MediaMpegTsRtpSdpPlan sdp) noexcept;
 
     MediaRtpUdpSenderConfig m_transport;
     int m_payloadType;
@@ -76,7 +72,6 @@ private:
     std::size_t m_maximumDatagramBytes;
     std::uint8_t m_tsPacketsPerPayload;
     MediaMpegTsRtpSdpPlan m_sdp;
-    MediaScheduledDatagramPacingPlan m_pacing;
 };
 
 } // namespace media::ffmpeg::graph

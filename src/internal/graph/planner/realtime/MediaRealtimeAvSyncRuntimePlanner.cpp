@@ -6,7 +6,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
-#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
@@ -459,18 +458,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP output requires complete planned transport facts"));
             }
-            auto pacing = MediaScheduledDatagramPacingPlanner::plan(
-                *output.muxedOutput.rtpTransport);
-            if (!pacing) {
-                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                    pacing.error());
-            }
             auto rtp = MediaMpegTsRtpOutputPlan::create(
                 std::move(*output.muxedOutput.rtpTransport),
                 output.muxedOutput.sdpPath,
                 output.muxedOutput.mediaId,
-                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond),
-                pacing.value());
+                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));
             if (!rtp ||
                 rtp.value().tsPacketsPerPayload() !=
                     accepted.value().muxPlan().parameters()

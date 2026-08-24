@@ -36,12 +36,6 @@ constexpr const char* EmissionScheduledWireBytesPerSecondKey =
     "project_mpeg_ts_plan.emission.scheduled_wire_bytes_per_second";
 constexpr const char* ScheduledBatchMaximumBytesKey =
     "project_mpeg_ts_plan.scheduled_batch.maximum_payload_bytes";
-constexpr const char* PacingExecutionKey =
-    "project_mpeg_ts_plan.pacing.execution";
-constexpr const char* PacingEvidenceKey =
-    "project_mpeg_ts_plan.pacing.evidence";
-constexpr const char* PacingDeadlinePolicyKey =
-    "project_mpeg_ts_plan.pacing.deadline_policy";
 constexpr std::size_t VideoOnlyMuxFieldCount = 27;
 constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
@@ -60,7 +54,7 @@ constexpr std::array<const char*, 13> UdpKeys{
     ScheduledBatchMaximumBytesKey,
     EmissionScheduledWireBytesPerSecondKey};
 
-constexpr std::array<const char*, 39> RtpKeys{
+constexpr std::array<const char*, 36> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -96,9 +90,6 @@ constexpr std::array<const char*, 39> RtpKeys{
     EmissionAudioWindowKey,
     EmissionMaximumQueuedBytesKey,
     ScheduledBatchMaximumBytesKey,
-    PacingExecutionKey,
-    PacingEvidenceKey,
-    PacingDeadlinePolicyKey,
     EmissionScheduledWireBytesPerSecondKey};
 
 template <typename Value>
@@ -493,7 +484,6 @@ bool sameRtpOutput(
         left.senderReportInterval() == right.senderReportInterval() &&
         left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
         left.tsPacketsPerPayload() == right.tsPacketsPerPayload() &&
-        left.pacing() == right.pacing() &&
         leftSdp.path == rightSdp.path &&
         leftSdp.originUsername == rightSdp.originUsername &&
         leftSdp.sessionName == rightSdp.sessionName &&
@@ -586,12 +576,6 @@ bool sameProtocol(
         !expectedEmission || output.emission != expectedEmission.value() ||
         output.emission.maximumWireDatagramBytes() >
             sender.maximumDatagramBytes() ||
-        rtp.pacing().execution !=
-            MediaDatagramDispatchExecution::UserspaceWaitAndSend ||
-        rtp.pacing().evidence !=
-            MediaDatagramTimingEvidence::UserspaceSendReturn ||
-        rtp.pacing().deadlinePolicy !=
-            MediaDatagramDeadlinePolicy::CanonicalOrdered ||
         localPolicy.kind() !=
             MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
         localPolicy.rtpPort() || localPolicy.rtcpPort() ||
@@ -645,9 +629,6 @@ bool sameProtocol(
               output.emission.maximumQueuedBytes())},
          {ScheduledBatchMaximumBytesKey,
           std::to_string(output.scheduledBatchMaximumBytes)},
-         {PacingExecutionKey, "userspace_wait_and_send"},
-         {PacingEvidenceKey, "userspace_send_return"},
-         {PacingDeadlinePolicyKey, "canonical_ordered"},
          {EmissionScheduledWireBytesPerSecondKey,
           std::to_string(*output.emission.scheduledWireBytesPerSecond())}});
 }
@@ -797,18 +778,11 @@ bool sameProtocol(
         &node.options, Owner, RtpKeys[26]);
     auto sdpCname = requiredNodeOption(
         &node.options, Owner, RtpKeys[27]);
-    auto pacingExecution = requiredNodeOption(
-        &node.options, Owner, PacingExecutionKey);
-    auto pacingEvidence = requiredNodeOption(
-        &node.options, Owner, PacingEvidenceKey);
-    auto pacingDeadlinePolicy = requiredNodeOption(
-        &node.options, Owner, PacingDeadlinePolicyKey);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
         !initialSequenceNumber ||
         !cname || !reportInterval || !packetCount || !sdpPath ||
         !originUsername || !sessionName || !originFamily ||
-        !originAddress || !sdpCname || !pacingExecution ||
-        !pacingEvidence || !pacingDeadlinePolicy) {
+        !originAddress || !sdpCname) {
         const ::media::ErrorInfo error =
             !payloadType ? payloadType.error() :
             !clockRate ? clockRate.error() :
@@ -823,27 +797,13 @@ bool sameProtocol(
             !sessionName ? sessionName.error() :
             !originFamily ? originFamily.error() :
             !originAddress ? originAddress.error() :
-            !sdpCname ? sdpCname.error() :
-            !pacingExecution ? pacingExecution.error() :
-            !pacingEvidence ? pacingEvidence.error() :
-            pacingDeadlinePolicy.error();
+            sdpCname.error();
         return Result::failure(error);
     }
-    if (pacingExecution.value() != "userspace_wait_and_send" ||
-        pacingEvidence.value() != "userspace_send_return" ||
-        pacingDeadlinePolicy.value() != "canonical_ordered") {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Project MPEG-TS RTP pacing capability is unsupported"));
-    }
-    const MediaScheduledDatagramPacingPlan pacing{
-        MediaDatagramDispatchExecution::UserspaceWaitAndSend,
-        MediaDatagramTimingEvidence::UserspaceSendReturn,
-        MediaDatagramDeadlinePolicy::CanonicalOrdered};
     auto rtp = MediaMpegTsRtpOutputPlan::create(
         std::move(transport).value(), sdpPath.value(),
         originUsername.value(),
-        MediaRunningTime::fromNanoseconds(reportInterval.value()),
-        pacing);
+        MediaRunningTime::fromNanoseconds(reportInterval.value()));
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
     auto emission = decodeEmission(node.options, protocol.muxPlan());

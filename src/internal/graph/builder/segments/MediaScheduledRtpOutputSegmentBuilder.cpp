@@ -3,7 +3,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaDatagramOutputExecutionSegmentBuilder.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 
 #include <algorithm>
 #include <string_view>
@@ -156,14 +156,14 @@ MediaScheduledRtpOutputSegmentBuilder::build(
                 MediaTranscodeStreamSet::AudioVideo,
                 &plan.datagramTransport, &plan.edgePolicies});
     if (!execution) return SegmentResult::failure(execution.error());
-    if (auto applied = MediaScheduledRtpSenderNodePlanCodec::apply(
+        if (auto applied = MediaRtpDatagramMaterializerNodePlanCodec::apply(
             graph, video,
             MediaProtocolOutputSessionKey(plan.groupKey.value()),
             MediaTranscodeStreamSet::AudioVideo,
             output.video, output.sdp); !applied) {
         return SegmentResult::failure(applied.error());
     }
-    if (auto applied = MediaScheduledRtpSenderNodePlanCodec::apply(
+        if (auto applied = MediaRtpDatagramMaterializerNodePlanCodec::apply(
             graph, audio,
             MediaProtocolOutputSessionKey(plan.groupKey.value()),
             MediaTranscodeStreamSet::AudioVideo,
@@ -295,7 +295,7 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
                 MediaTranscodeStreamSet::VideoOnly,
                 &plan.datagramTransport, &plan.edgePolicies});
     if (!execution) return Result::failure(execution.error());
-    auto senderPlan = MediaScheduledRtpSenderNodePlanCodec::apply(
+    auto senderPlan = MediaRtpDatagramMaterializerNodePlanCodec::apply(
         graph, video, plan.sessionKey, MediaTranscodeStreamSet::VideoOnly,
         output->video, output->sdp);
     if (!senderPlan) return Result::failure(senderPlan.error());

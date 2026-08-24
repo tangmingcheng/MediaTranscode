@@ -1,4 +1,4 @@
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
@@ -14,8 +14,8 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::string_view Owner = "MediaScheduledRtpSenderNodePlanCodec";
-constexpr const char* NodeName = "MediaScheduledRtpSenderNode";
+constexpr std::string_view Owner = "MediaRtpDatagramMaterializerNodePlanCodec";
+constexpr const char* NodeName = "MediaRtpDatagramMaterializerNode";
 constexpr std::array<const char*, 35> OptionKeys{
     "scheduled_rtp.session",
     "scheduled_rtp.stream_set",
@@ -127,7 +127,7 @@ template <typename Unsigned>
 
 } // namespace
 
-::media::Status MediaScheduledRtpSenderNodePlanCodec::apply(
+::media::Status MediaRtpDatagramMaterializerNodePlanCodec::apply(
     MediaGraph& graph,
     MediaNodeId nodeId,
     const MediaProtocolOutputSessionKey& sessionKey,
@@ -219,7 +219,7 @@ template <typename Unsigned>
 }
 
 ::media::Result<MediaDecodedScheduledRtpSenderNodePlan>
-MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
+MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
 {
     using DecodedResult =
         ::media::Result<MediaDecodedScheduledRtpSenderNodePlan>;

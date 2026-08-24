@@ -20,8 +20,7 @@ MediaMpegTsRtpOutputPlan::create(
     MediaRtpUdpSenderConfig transport,
     std::string sdpPath,
     std::string sessionIdentity,
-    MediaRunningTime senderReportInterval,
-    MediaScheduledDatagramPacingPlan pacing)
+    MediaRunningTime senderReportInterval)
 {
     const auto& rtp = transport.remoteRtpEndpoint();
     const auto& rtcp = transport.remoteRtcpEndpoint();
@@ -39,12 +38,6 @@ MediaMpegTsRtpOutputPlan::create(
         rtp.addressFamily(), rtp.numericAddress(), cname);
     if (!packetCount || sdpPath.empty() || sessionIdentity.empty() ||
         senderReportInterval <= MediaRunningTime::fromNanoseconds(0) ||
-        pacing.execution !=
-            MediaDatagramDispatchExecution::UserspaceWaitAndSend ||
-        pacing.evidence !=
-            MediaDatagramTimingEvidence::UserspaceSendReturn ||
-        pacing.deadlinePolicy !=
-            MediaDatagramDeadlinePolicy::CanonicalOrdered ||
         maximumDatagramBytes >
             static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         transport.sendBufferBytes() <
@@ -84,8 +77,7 @@ MediaMpegTsRtpOutputPlan::create(
             packetCount.value(),
             MediaMpegTsRtpSdpPlan{
                 std::move(sdpPath), sessionIdentity, sessionIdentity,
-                addressFamily, numericAddress, cname},
-            pacing));
+                addressFamily, numericAddress, cname}));
 }
 
 MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
@@ -99,8 +91,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
     MediaRunningTime senderReportInterval,
     std::size_t maximumDatagramBytes,
     std::uint8_t tsPacketsPerPayload,
-    MediaMpegTsRtpSdpPlan sdp,
-    MediaScheduledDatagramPacingPlan pacing) noexcept
+    MediaMpegTsRtpSdpPlan sdp) noexcept
     : m_transport(std::move(transport)),
       m_payloadType(payloadType),
       m_clockRate(clockRate),
@@ -111,8 +102,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
       m_senderReportInterval(senderReportInterval),
       m_maximumDatagramBytes(maximumDatagramBytes),
       m_tsPacketsPerPayload(tsPacketsPerPayload),
-      m_sdp(std::move(sdp)),
-      m_pacing(pacing)
+      m_sdp(std::move(sdp))
 {
 }
 
@@ -136,8 +126,7 @@ MediaMpegTsRtpOutputPlan::clone() const
             m_senderReportInterval,
             m_maximumDatagramBytes,
             m_tsPacketsPerPayload,
-            m_sdp,
-            m_pacing));
+            m_sdp));
 }
 
 const MediaRtpUdpSenderConfig&
@@ -199,12 +188,6 @@ const MediaMpegTsRtpSdpPlan&
 MediaMpegTsRtpOutputPlan::sdp() const noexcept
 {
     return m_sdp;
-}
-
-const MediaScheduledDatagramPacingPlan&
-MediaMpegTsRtpOutputPlan::pacing() const noexcept
-{
-    return m_pacing;
 }
 
 } // namespace media::ffmpeg::graph

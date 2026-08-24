@@ -14,7 +14,7 @@ struct MediaDecodedScheduledRtpSenderNodePlan final {
     MediaSeparateRtpSdpRuntimePlan sdp;
 };
 
-class MediaScheduledRtpSenderNodePlanCodec final {
+class MediaRtpDatagramMaterializerNodePlanCodec final {
 public:
     static ::media::Status apply(
         MediaGraph& graph,
@@ -28,7 +28,7 @@ public:
         const MediaNode& node);
 
 private:
-    MediaScheduledRtpSenderNodePlanCodec() = delete;
+    MediaRtpDatagramMaterializerNodePlanCodec() = delete;
 };
 
 } // namespace media::ffmpeg::graph

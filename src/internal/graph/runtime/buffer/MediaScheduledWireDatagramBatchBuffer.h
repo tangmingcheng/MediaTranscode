@@ -99,6 +99,7 @@ public:
 
 private:
     friend class MediaDatagramServiceShaper;
+    friend class MediaScheduledDatagramSenderNode;
 
     static ::media::Result<
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>

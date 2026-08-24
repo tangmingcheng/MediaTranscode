@@ -6,7 +6,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRealtimeRuntimeBinding.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 #include "internal/graph/runtime/validation/MediaDatagramOutputGraphShapeValidator.h"
@@ -443,7 +443,7 @@ const MediaEdge* exactEdge(
         *shape.nodes(MediaNodeKind::RtpDatagramMaterializer).front();
     const MediaNode& sdp =
         *shape.nodes(MediaNodeKind::RtpSdpPublisher).front();
-    auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(sender);
+    auto decoded = MediaRtpDatagramMaterializerNodePlanCodec::decode(sender);
     if (!decoded) return ::media::Status::failure(decoded.error());
     if (decoded.value().sessionKey != runtime.sessionKey ||
         decoded.value().streamSet != MediaTranscodeStreamSet::VideoOnly ||

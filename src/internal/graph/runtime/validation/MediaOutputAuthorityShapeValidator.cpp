@@ -4,7 +4,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 #include "internal/graph/runtime/validation/MediaDatagramOutputGraphShapeValidator.h"
@@ -101,7 +101,7 @@ bool exactAudioVideoCodecEdges(
     const MediaNode& publisher,
     const char* publisherPort)
 {
-    auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(sender);
+    auto decoded = MediaRtpDatagramMaterializerNodePlanCodec::decode(sender);
     if (!decoded) return ::media::Status::failure(decoded.error());
     const MediaStreamKind stream = product.stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
@@ -197,7 +197,7 @@ bool exactAudioVideoCodecEdges(
     const MediaNode* audio = nullptr;
     for (const MediaNode* sender :
          shape.nodes(MediaNodeKind::RtpDatagramMaterializer)) {
-        auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(*sender);
+        auto decoded = MediaRtpDatagramMaterializerNodePlanCodec::decode(*sender);
         if (!decoded) return ::media::Status::failure(decoded.error());
         if (decoded.value().output.stream == MediaScheduledStream::Video) {
             if (video) {

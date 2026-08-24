@@ -10,7 +10,6 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
@@ -287,7 +286,6 @@ public:
     const MediaNode* videoPreparationOwner = nullptr;
     const MediaNode* releaseExtractor = nullptr;
     const MediaNode* mpegTsRtpSdpPublisher = nullptr;
-    std::vector<const MediaNode*> scheduledRtpSenders;
     std::vector<const MediaNode*> demuxClockBinders;
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
@@ -315,8 +313,6 @@ public:
         }
         if (node.kind == MediaNodeKind::AvBoundReleaseExtractor)
             releaseExtractor = &node;
-        if (node.kind == MediaNodeKind::ScheduledRtpSender)
-            scheduledRtpSenders.push_back(&node);
         if (node.kind == MediaNodeKind::DemuxPacketClockBinder)
             demuxClockBinders.push_back(&node);
         if (node.kind == MediaNodeKind::MpegTsRtpSdpPublisher) {
@@ -363,24 +359,6 @@ public:
     } else if (playbackEpochActivationCapability) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Compiler-issued activation authority has no activation release sequencer"));
-    }
-    for (const MediaNode* sender : scheduledRtpSenders) {
-        if (!sender) {
-            return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "Scheduled RTP sender registration lost its planned node"));
-        }
-        if (scheduler.findNode(sender->id)) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "Scheduled RTP sender runtime node is already registered without compiler injection"));
-        }
-        auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(*sender);
-        if (!decoded) return ::media::Status::failure(decoded.error());
-        if (!protocolOutputAuthority ||
-            protocolOutputAuthority->sessionKey() != decoded.value().sessionKey ||
-            protocolOutputAuthority->streamSet() != decoded.value().streamSet) {
-            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                "Scheduled RTP sender compiler injection cannot find its exact output authority"));
-        }
     }
     std::shared_ptr<MediaDemuxTimestampClockMapper> demuxMapper;
     std::shared_ptr<MediaAvSyncGroupRuntime> demuxGroup;
@@ -493,7 +471,6 @@ public:
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer ||
             node.kind == MediaNodeKind::VideoOutputScheduler ||
-            node.kind == MediaNodeKind::ScheduledRtpSender ||
             node.kind == MediaNodeKind::DemuxPacketClockBinder ||
             node.kind == MediaNodeKind::MpegTsRtpSdpPublisher)
             continue;
@@ -546,14 +523,6 @@ public:
         auto runtimeNode =
             MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
                 *mpegTsRtpSdpPublisher, protocolOutputAuthority);
-        if (!runtimeNode) {
-            return ::media::Status::failure(runtimeNode.error());
-        }
-        preparedNodes.push_back(std::move(runtimeNode).value());
-    }
-    for (const MediaNode* sender : scheduledRtpSenders) {
-        auto runtimeNode = MediaRuntimeNodeFactory::createScheduledRtpSender(
-            *sender, protocolOutputAuthority);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }

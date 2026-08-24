@@ -4,7 +4,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
-#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
@@ -166,19 +165,11 @@ planSeparateRtp(
                 ::media::ErrorInfo::notInitialized(
                     "VideoOnly MPEG-TS/RTP requires complete RTP and SDP facts"));
         }
-        auto pacing = MediaScheduledDatagramPacingPlanner::plan(
-            *output.muxedOutput.rtpTransport);
-        if (!pacing) {
-            return ::media::Result<
-                MediaProjectMpegTsRuntimeOutputPlan>::failure(
-                pacing.error());
-        }
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
             output.muxedOutput.sdpPath,
             request.mediaId,
-            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs),
-            pacing.value());
+            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<

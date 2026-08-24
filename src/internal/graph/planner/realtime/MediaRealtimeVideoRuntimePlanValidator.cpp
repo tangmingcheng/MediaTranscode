@@ -1,7 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanValidator.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
-#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
@@ -169,12 +168,6 @@ namespace media::ffmpeg::graph {
             : ::media::Result<MediaRunningTime>::failure(
                   ::media::ErrorInfo::invalidArgument(
                       "Project MPEG-TS output is absent"));
-        auto expectedPacing = rtp
-            ? MediaScheduledDatagramPacingPlanner::plan(
-                  rtp->transport())
-            : ::media::Result<MediaScheduledDatagramPacingPlan>::failure(
-                  ::media::ErrorInfo::invalidArgument(
-                      "Project MPEG-TS RTP output is absent"));
         if (!output ||
             output->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
             !output->protocol.muxPlan().videoOnlyProgram() ||
@@ -195,8 +188,7 @@ namespace media::ffmpeg::graph {
             output->protocol.muxPlan().parameters().transportKind !=
                 outer.outputTransport ||
             (outer.outputTransport == MediaOutputTransportKind::RtpAvp &&
-             (!expectedPacing || output->scheduledBatchMaximumBytes == 0 ||
-              rtp->pacing() != expectedPacing.value()))) {
+             output->scheduledBatchMaximumBytes == 0)) {
             return invalid("muxed adapter");
         }
     } else {
