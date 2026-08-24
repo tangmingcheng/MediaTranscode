@@ -67,6 +67,10 @@ public:
     const std::string& serviceScopeId() const noexcept;
     const std::vector<MediaDatagramRemoteEndpointFact>& remoteEndpoints()
         const noexcept;
+    const MediaDatagramTransportPlanTemplateEncoding& encode() const noexcept
+    {
+        return m_encoding;
+    }
     ::media::Result<std::uint64_t> endpointId(
         MediaDatagramProtocolEndpointRole role) const noexcept;
 

@@ -385,7 +385,8 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
     if (buffer->isEof() || buffer->isFlush()) {
         return broadcastControlToAllOutputs(context, buffer);
     }
-    if (buffer->payloadKind() == MediaPayloadKind::ScheduledDatagramBatch) {
+    if (buffer->payloadKind() ==
+            MediaPayloadKind::MpegTsProtocolDatagramBatch) {
         return pushToAllOutputs(context, buffer);
     }
     return ::media::Status::success();

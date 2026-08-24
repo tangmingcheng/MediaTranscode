@@ -2,7 +2,6 @@
 
 #include "internal/graph/nodes/mux/CloseOnceOutputByteSink.h"
 #include "internal/graph/nodes/mux/MediaTsFfmpegStreamConfigMaterializer.h"
-#include "internal/graph/nodes/mux/ProjectMpegTsDatagramSinkFactory.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsTransportEmissionOrigin.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
@@ -359,14 +358,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session output authority is not registered"));
     }
-    auto transportReady =
-        ProjectMpegTsDatagramSinkFactory::bindingsReady(
-            outputPlan->protocol.muxPlan(),
-            m_sink.get());
-    if (!transportReady) return fail(transportReady.error());
-    if (!transportReady.value()) {
-        return ::media::Status::success();
-    }
     const auto generation = m_generation.load(std::memory_order_acquire);
     if (generation == 0) return ::media::Status::success();
     auto disposition = m_generationState->classifyGeneration(generation);
@@ -432,14 +423,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                         }
                     }
                     if (!failure) {
-                        auto datagramBinding =
-                            ProjectMpegTsDatagramSinkFactory::create(
-                                *m_outputPlan, muxPlan, *m_activation,
-                                m_sink.get());
-                        if (!datagramBinding) {
-                            failure = datagramBinding.error();
-                        } else {
-                            auto binding = std::move(datagramBinding).value();
+                        {
                             MediaTsMuxSession::MaterializedStreams streams =
                                 MediaTsMuxSession::VideoOnlyStreams{
                                     std::move(video).value()};
@@ -455,8 +439,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                                     *m_activation,
                                     m_outputAuthority,
                                     std::move(streams),
-                                    std::move(binding.sink),
-                                    std::move(binding.scheduledBatch),
                                     current.value().
                                         startsAfterGenerationTransition()});
                             if (!session) {

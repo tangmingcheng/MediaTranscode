@@ -3,12 +3,12 @@
 #include "internal/graph/protocol/mpegts/MediaTsAccessUnitView.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
-#include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
 #include "internal/graph/time/MediaMasterClock.h"
-#include "internal/graph/runtime/buffer/MediaScheduledDatagramBatchBuilder.h"
+#include "internal/graph/runtime/buffer/MediaMpegTsProtocolDatagramBatchBuffer.h"
 
+#include <deque>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -35,8 +35,6 @@ public:
         MediaProtocolOutputActivation activation;
         std::shared_ptr<const MediaMasterClock> masterClock;
         MaterializedStreams streams;
-        std::unique_ptr<MediaTsDatagramSink> sink;
-        std::shared_ptr<MediaScheduledDatagramBatchBuilder> scheduledBatch;
         bool startsWithDiscontinuity;
     };
     struct AdvanceResult final {
@@ -64,8 +62,7 @@ private:
     MediaTsMuxSession(Binding binding,
                       MediaTsOutputClockGenerator clock,
                       MediaTsTransportPacketizer packetizer,
-                      MediaTsProgramTables tables,
-                      MediaTsPacketBatchWriter writer) noexcept;
+                      MediaTsProgramTables tables) noexcept;
     ::media::Result<std::size_t> writeDueMaintenance(
         bool psiDue,
         bool pcrDue,
@@ -95,8 +92,7 @@ private:
     MediaTsOutputClockGenerator m_clock;
     MediaTsTransportPacketizer m_packetizer;
     MediaTsProgramTables m_tables;
-    MediaTsPacketBatchWriter m_writer;
-    std::shared_ptr<MediaScheduledDatagramBatchBuilder> m_scheduledBatch;
+    std::deque<MediaBufferRef> m_protocolBatches;
     std::optional<MediaTsDatagramEmissionSchedule> m_emissionSchedule;
     std::optional<MediaTsPendingEmission> m_pendingEmission;
     MediaTsEmissionDiagnostics m_emissionDiagnostics;

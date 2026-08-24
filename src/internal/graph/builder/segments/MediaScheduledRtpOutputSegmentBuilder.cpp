@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/segments/MediaDatagramOutputExecutionSegmentBuilder.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 
@@ -71,9 +72,20 @@ constexpr std::string_view Owner = "MediaScheduledRtpOutputSegmentBuilder";
             true, false); !added) {
         return ::media::Status::failure(added.error());
     }
+    if (auto added = addInputPortChecked(
+            graph, Owner, node, "transport_plan", MediaStreamKind::Metadata,
+            MediaEdgeKind::Metadata, MediaPayloadKind::DatagramTransportPlan,
+            true, false); !added) {
+        return ::media::Status::failure(added.error());
+    }
     auto added = addOutputPortChecked(
         graph, Owner, node, "description", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, false);
+    if (!added) return ::media::Status::failure(added.error());
+    added = addOutputPortChecked(
+        graph, Owner, node, "wire_batch", MediaStreamKind::Metadata,
+        MediaEdgeKind::ScheduledDatagramBatch,
+        MediaPayloadKind::WireDatagramBatch, true, false);
     return added ? ::media::Status::success()
                  : ::media::Status::failure(added.error());
 }
@@ -112,7 +124,8 @@ MediaScheduledRtpOutputSegmentBuilder::build(
     }
     const bool duplicate = std::any_of(
         graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::ScheduledRtpSender ||
+            return node.kind == MediaNodeKind::RtpDatagramMaterializer ||
+                node.kind == MediaNodeKind::DatagramTransportPlanSource ||
                 node.kind == MediaNodeKind::RtpSdpPublisher;
         });
     if (duplicate) {
@@ -122,13 +135,13 @@ MediaScheduledRtpOutputSegmentBuilder::build(
     const auto& output =
         std::get<MediaSeparateRtpOutputRuntimePlan>(plan.protocolOutput);
     MediaNodeId video = graph.addNode(
-        MediaNodeKind::ScheduledRtpSender,
-        options.prefix + ".video.sender",
-        "Scheduled video RTP/RTCP sender");
+        MediaNodeKind::RtpDatagramMaterializer,
+        options.prefix + ".video.materializer",
+        "Video RTP/RTCP protocol materializer");
     MediaNodeId audio = graph.addNode(
-        MediaNodeKind::ScheduledRtpSender,
-        options.prefix + ".audio.sender",
-        "Scheduled audio RTP/RTCP sender");
+        MediaNodeKind::RtpDatagramMaterializer,
+        options.prefix + ".audio.materializer",
+        "Audio RTP/RTCP protocol materializer");
     MediaNodeId sdp = graph.addNode(
         MediaNodeKind::RtpSdpPublisher,
         options.prefix + ".sdp.publisher",
@@ -137,6 +150,12 @@ MediaScheduledRtpOutputSegmentBuilder::build(
         return SegmentResult::failure(::media::ErrorInfo::internalError(
             "Scheduled RTP output segment failed to add its nodes"));
     }
+    auto execution = MediaDatagramOutputExecutionSegmentBuilder::build(
+        graph, {options.prefix, options.epochActivated,
+                MediaProtocolOutputSessionKey(plan.groupKey.value()),
+                MediaTranscodeStreamSet::AudioVideo,
+                &plan.datagramTransport, &plan.edgePolicies});
+    if (!execution) return SegmentResult::failure(execution.error());
     if (auto applied = MediaScheduledRtpSenderNodePlanCodec::apply(
             graph, video,
             MediaProtocolOutputSessionKey(plan.groupKey.value()),
@@ -181,6 +200,17 @@ MediaScheduledRtpOutputSegmentBuilder::build(
             options.epochActivated, sender, "activation",
             "output activation -> scheduled RTP sender",
             plan.edgePolicies.atomicMetadata);
+        if (!connected) return SegmentResult::failure(connected.error());
+        connected =
+            MediaDatagramOutputExecutionSegmentBuilder::connectTransportConsumer(
+                graph, execution.value(), sender, "transport_plan",
+                plan.edgePolicies.atomicMetadata,
+                "transport plan -> RTP materializer");
+        if (!connected) return SegmentResult::failure(connected.error());
+        connected = MediaDatagramOutputExecutionSegmentBuilder::connectWireSource(
+            graph, execution.value(), {sender, "wire_batch"},
+            plan.edgePolicies.synchronizedPacket,
+            "RTP wire datagrams -> shared shaper");
         if (!connected) return SegmentResult::failure(connected.error());
     }
     for (const auto& [from, to, port, label, policy] : {
@@ -242,7 +272,8 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
     }
     const bool duplicate = std::any_of(
         graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::ScheduledRtpSender ||
+            return node.kind == MediaNodeKind::RtpDatagramMaterializer ||
+                node.kind == MediaNodeKind::DatagramTransportPlanSource ||
                 node.kind == MediaNodeKind::RtpSdpPublisher;
         });
     if (duplicate) {
@@ -250,8 +281,8 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
             "VideoOnly RTP output rejects duplicate output authority"));
     }
     const MediaNodeId video = graph.addNode(
-        MediaNodeKind::ScheduledRtpSender,
-        options.prefix + ".video.sender", "Scheduled video RTP/RTCP sender");
+        MediaNodeKind::RtpDatagramMaterializer,
+        options.prefix + ".video.materializer", "Video RTP/RTCP protocol materializer");
     const MediaNodeId sdp = graph.addNode(
         MediaNodeKind::RtpSdpPublisher,
         options.prefix + ".sdp.publisher", "Atomic video-only SDP publisher");
@@ -259,6 +290,11 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
         return Result::failure(::media::ErrorInfo::internalError(
             "VideoOnly RTP output failed to add its nodes"));
     }
+    auto execution = MediaDatagramOutputExecutionSegmentBuilder::build(
+        graph, {options.prefix, options.activation, plan.sessionKey,
+                MediaTranscodeStreamSet::VideoOnly,
+                &plan.datagramTransport, &plan.edgePolicies});
+    if (!execution) return Result::failure(execution.error());
     auto senderPlan = MediaScheduledRtpSenderNodePlanCodec::apply(
         graph, video, plan.sessionKey, MediaTranscodeStreamSet::VideoOnly,
         output->video, output->sdp);
@@ -294,6 +330,17 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
         graph, Owner, video, "description", sdp, "video",
         "video sender -> SDP publisher", plan.edgePolicies.metadata);
     if (!description) return Result::failure(description.error());
+    auto transport =
+        MediaDatagramOutputExecutionSegmentBuilder::connectTransportConsumer(
+            graph, execution.value(), video, "transport_plan",
+            plan.edgePolicies.atomicMetadata,
+            "transport plan -> video RTP materializer");
+    if (!transport) return Result::failure(transport.error());
+    auto wire = MediaDatagramOutputExecutionSegmentBuilder::connectWireSource(
+        graph, execution.value(), {video, "wire_batch"},
+        plan.edgePolicies.synchronizedPacket,
+        "video RTP wire datagrams -> shared shaper");
+    if (!wire) return Result::failure(wire.error());
     return Result::success({video, sdp});
 }
 

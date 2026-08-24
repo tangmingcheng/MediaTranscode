@@ -2,7 +2,9 @@
 #include "internal/graph/protocol/mpegts/MediaTsTransportPacketBuilder.h"
 
 #include <algorithm>
+#include <deque>
 #include <limits>
+#include <new>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -40,9 +42,16 @@ using ProgramContinuityState = std::variant<
 } // namespace
 
 struct MediaTsPacketizerControlState final {
+    struct ContinuityReservation final {
+        std::uint64_t cursorIdentity;
+        std::uint8_t nextPayload;
+        bool clearsDiscontinuity;
+    };
+
     MediaTsMuxPlan plan;
     ProgramContinuityState continuity;
-    std::array<std::optional<std::uint64_t>, 5> activeCursors;
+    std::array<std::optional<std::uint64_t>, 4> activeCursors;
+    std::array<std::deque<ContinuityReservation>, 4> reservations;
     std::uint64_t nextCursorIdentity = 1;
     std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
     bool poisoned = false;
@@ -65,6 +74,7 @@ struct MediaTsPacketCursorState final {
         bool clearsDiscontinuity;
     };
     std::optional<Pending> pending;
+    bool continuityReserved = false;
 };
 
 struct MediaTsPacketCursorFactory final {
@@ -112,7 +122,7 @@ std::optional<std::uint64_t>* activeCursor(
     MediaTsPacketizerControlState& state,
     CursorPidKind kind) noexcept
 {
-    const std::size_t index = static_cast<std::size_t>(kind);
+    const std::size_t index = continuityIndex(kind);
     return index < state.activeCursors.size()
         ? &state.activeCursors[index]
         : nullptr;
@@ -122,10 +132,38 @@ const std::optional<std::uint64_t>* activeCursor(
     const MediaTsPacketizerControlState& state,
     CursorPidKind kind) noexcept
 {
-    const std::size_t index = static_cast<std::size_t>(kind);
+    const std::size_t index = continuityIndex(kind);
     return index < state.activeCursors.size()
         ? &state.activeCursors[index]
         : nullptr;
+}
+
+std::deque<MediaTsPacketizerControlState::ContinuityReservation>*
+reservationLedger(MediaTsPacketizerControlState& state,
+                  CursorPidKind kind) noexcept
+{
+    const std::size_t index = continuityIndex(kind);
+    return index < state.reservations.size() ? &state.reservations[index]
+                                             : nullptr;
+}
+
+std::uint8_t reservedNextPayload(MediaTsPacketizerControlState& state,
+                                 CursorPidKind kind) noexcept
+{
+    auto* ledger = reservationLedger(state, kind);
+    ContinuityState* committed = continuity(state, kind);
+    return ledger && !ledger->empty() ? ledger->back().nextPayload
+                                      : committed->nextPayload;
+}
+
+bool reservedDiscontinuityPending(MediaTsPacketizerControlState& state,
+                                  CursorPidKind kind) noexcept
+{
+    auto* ledger = reservationLedger(state, kind);
+    bool* committed = discontinuityPending(state, kind);
+    return ledger && !ledger->empty() && ledger->back().clearsDiscontinuity
+        ? false
+        : *committed;
 }
 
 ::media::Result<MediaTsPacketCursor> beginPayload(
@@ -155,9 +193,10 @@ const std::optional<std::uint64_t>* activeCursor(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS stream is absent from the typed program plan"));
     }
-    const bool discontinuity = *pendingDiscontinuity;
+    const std::uint8_t initialContinuity = reservedNextPayload(*state, kind);
+    const bool discontinuity = reservedDiscontinuityPending(*state, kind);
     auto packets = MediaTsTransportPacketBuilder::payload(
-        pid, nextContinuity->nextPayload, segments, randomAccess,
+        pid, initialContinuity, segments, randomAccess,
         discontinuity, std::move(state->packetWorkspace));
     if (!packets) {
         return ::media::Result<MediaTsPacketCursor>::failure(packets.error());
@@ -167,7 +206,7 @@ const std::optional<std::uint64_t>* activeCursor(
     cursor->owner = state;
     cursor->identity = identity;
     cursor->pidKind = kind;
-    cursor->initialPayloadContinuity = nextContinuity->nextPayload;
+    cursor->initialPayloadContinuity = initialContinuity;
     cursor->advancesPayloadContinuity = true;
     cursor->carriesDiscontinuity = discontinuity;
     cursor->packets = std::make_shared<std::vector<std::array<std::uint8_t, PacketSize>>>(
@@ -292,6 +331,9 @@ MediaTsPacketCursor& MediaTsPacketCursor::operator=(
 void MediaTsPacketCursor::cancel() noexcept
 {
     if (m_state && m_state->owner) {
+        if (m_state->continuityReserved && m_state->pending) {
+            m_state->owner->poisoned = true;
+        }
         if (m_state->packets && m_state->packets.use_count() == 1) {
             m_state->owner->packetWorkspace =
                 std::move(*m_state->packets);
@@ -367,9 +409,27 @@ MediaTsPacketCursor::prepareRemaining()
         ? static_cast<std::uint8_t>(
               (m_state->initialPayloadContinuity + end) & 0x0F)
         : m_state->initialPayloadContinuity;
+    const bool clearsDiscontinuity =
+        m_state->carriesDiscontinuity && begin == 0;
+    auto* ledger = reservationLedger(
+        *m_state->owner, m_state->pidKind);
+    auto* active = activeCursor(*m_state->owner, m_state->pidKind);
+    if (!ledger || !active || *active != m_state->identity) {
+        return ::media::Result<MediaTsPreparedPacketSeries>::failure(
+            invalid("MPEG-TS packet cursor lost its reservation authority"));
+    }
+    try {
+        ledger->push_back(
+            {m_state->identity, nextPayload, clearsDiscontinuity});
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaTsPreparedPacketSeries>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "MPEG-TS continuity reservation ledger"));
+    }
     m_state->pending = MediaTsPacketCursorState::Pending{
-        revision, end, nextPayload,
-        m_state->carriesDiscontinuity && begin == 0};
+        revision, end, nextPayload, clearsDiscontinuity};
+    m_state->continuityReserved = true;
+    active->reset();
     return ::media::Result<MediaTsPreparedPacketSeries>::success(
         MediaTsPreparedPacketSeries(
             m_state->packets, begin, end - begin,
@@ -391,12 +451,18 @@ void MediaTsPacketCursor::poison() noexcept
     }
     auto tokenOwner = token.m_owner.lock();
     const auto* active = activeCursor(*m_state->owner, m_state->pidKind);
+    auto* ledger = reservationLedger(*m_state->owner, m_state->pidKind);
+    const bool reservationMatches = m_state->continuityReserved
+        ? ledger && !ledger->empty() &&
+            ledger->front().cursorIdentity == m_state->identity
+        : active && *active == m_state->identity;
     if (!tokenOwner || tokenOwner.get() != m_state->owner.get() ||
         token.m_cursorIdentity != m_state->identity ||
         token.m_revision != m_state->pending->revision ||
-        !active || *active != m_state->identity) {
+        !reservationMatches) {
+        m_state->owner->poisoned = true;
         return ::media::Status::failure(
-            invalid("MPEG-TS packet commit token identity or revision does not match"));
+            invalid("MPEG-TS packet commit token is stale, reordered, or has a continuity gap"));
     }
     ContinuityState* nextContinuity = continuity(
         *m_state->owner, m_state->pidKind);
@@ -410,9 +476,12 @@ void MediaTsPacketCursor::poison() noexcept
     if (m_state->pending->clearsDiscontinuity) {
         *pendingDiscontinuity = false;
     }
+    if (m_state->continuityReserved) {
+        ledger->pop_front();
+    }
     m_state->committedOffset = m_state->pending->endOffset;
     m_state->pending.reset();
-    if (finished()) {
+    if (finished() && !m_state->continuityReserved) {
         activeCursor(*m_state->owner, m_state->pidKind)->reset();
     }
     return ::media::Status::success();
@@ -600,9 +669,9 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PCR authority is absent from the program"));
     }
-    const auto next = nextState->nextPayload;
+    const auto next = reservedNextPayload(*m_state, kind);
     cursor->carriesDiscontinuity =
-        *pendingDiscontinuity;
+        reservedDiscontinuityPending(*m_state, kind);
     auto packet = MediaTsTransportPacketBuilder::pcrOnly(
         m_state->plan.pcrPid(), next, pcr.wire27Mhz,
         cursor->carriesDiscontinuity);

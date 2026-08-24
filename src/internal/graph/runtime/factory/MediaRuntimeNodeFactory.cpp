@@ -25,6 +25,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
+#include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
@@ -33,6 +34,11 @@
 #include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
+#include "internal/graph/nodes/output/MediaDatagramShaperNode.h"
+#include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNode.h"
+#include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNode.h"
+#include "internal/graph/nodes/output/MediaMpegTsDatagramMaterializerNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
@@ -625,6 +631,61 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled RTP sender requires compiler-injected output authority"));
+    case MediaNodeKind::DatagramTransportPlanSource:
+    {
+        auto decoded =
+            MediaDatagramTransportPlanSourceNodePlanCodec::decode(node);
+        if (!decoded || !protocolOutputAuthority) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                decoded ? ::media::ErrorInfo::notInitialized(
+                              "Datagram transport plan source requires output authority")
+                        : decoded.error());
+        }
+        auto created = MediaDatagramTransportPlanSourceNode::create(
+            node.id, std::move(decoded).value(), protocolOutputAuthority);
+        return created
+            ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                  std::move(created).value())
+            : ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                  created.error());
+    }
+    case MediaNodeKind::RtpDatagramMaterializer:
+    {
+        auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(node);
+        if (!decoded || !protocolOutputAuthority) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                decoded ? ::media::ErrorInfo::notInitialized(
+                              "RTP materializer requires output authority")
+                        : decoded.error());
+        }
+        MediaRtpDatagramMaterializerNodeDependencies dependencies{
+            protocolOutputAuthority,
+            std::make_unique<ScheduledRtpMuxFfmpegSessionFactory>()};
+        auto created = MediaRtpDatagramMaterializerNode::create(
+            node.id, std::move(decoded.value().sessionKey),
+            std::move(decoded.value().output), std::move(decoded.value().sdp),
+            std::move(dependencies));
+        return created
+            ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                  std::move(created).value())
+            : ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                  created.error());
+    }
+    case MediaNodeKind::MpegTsDatagramMaterializer:
+    {
+        if (!protocolOutputAuthority) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS materializer requires output authority"));
+        }
+        auto created = MediaMpegTsDatagramMaterializerNode::create(
+            node.id, protocolOutputAuthority);
+        return created
+            ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                  std::move(created).value())
+            : ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                  created.error());
+    }
     case MediaNodeKind::ScheduledDatagramSender:
     {
         auto session = requiredNodeOption(
@@ -655,9 +716,15 @@ template <typename Node>
             std::move(created).value());
     }
     case MediaNodeKind::DatagramShaper:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "Datagram shaper requires compiler-injected output clock"));
+    {
+        auto created = MediaDatagramShaperNode::create(
+            node.id, protocolOutputAuthority);
+        return created
+            ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                  std::move(created).value())
+            : ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                  created.error());
+    }
     case MediaNodeKind::MpegTsRtpSdpPublisher:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -1068,6 +1135,9 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::ScheduledRtpSender:
     case MediaNodeKind::ScheduledDatagramSender:
     case MediaNodeKind::DatagramShaper:
+    case MediaNodeKind::RtpDatagramMaterializer:
+    case MediaNodeKind::MpegTsDatagramMaterializer:
+    case MediaNodeKind::DatagramTransportPlanSource:
     case MediaNodeKind::RtpSdpPublisher:
     case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:

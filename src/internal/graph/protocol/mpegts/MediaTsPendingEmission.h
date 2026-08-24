@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 #include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
 #include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/runtime/buffer/MediaMpegTsProtocolDatagramBatchBuffer.h"
 
 #include <optional>
 
@@ -36,6 +37,9 @@ public:
         const MediaMasterClock& masterClock,
         MediaRunningTime availableThrough,
         bool materializeScheduledBatch);
+    ::media::Result<MediaBufferRef> materializeProtocolBatch(
+        std::uint64_t generation,
+        MediaTsDatagramEmissionSchedule& schedule);
 
     MediaRunningTime deadline() const noexcept;
     bool finished() const noexcept;
@@ -51,6 +55,7 @@ private:
     std::optional<MediaTsPreparedPacketClock> m_packetClock;
     std::size_t m_packetSizeBytes;
     std::size_t m_maximumPacketsPerDatagram;
+    bool m_materialized = false;
 };
 
 } // namespace media::ffmpeg::graph

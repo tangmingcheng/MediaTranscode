@@ -89,7 +89,7 @@ MediaProjectMpegTsMuxSegmentBuilder::build(
         auto added = MediaGraphBuildSupport::addOutputPortChecked(
             graph, Owner, mux, "batch", MediaStreamKind::Metadata,
             MediaEdgeKind::ScheduledDatagramBatch,
-            MediaPayloadKind::ScheduledDatagramBatch, true, false);
+            MediaPayloadKind::MpegTsProtocolDatagramBatch, true, false);
         if (!added) {
             return ::media::Result<MediaNodeId>::failure(added.error());
         }

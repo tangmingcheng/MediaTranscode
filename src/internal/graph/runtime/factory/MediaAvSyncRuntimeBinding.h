@@ -30,6 +30,7 @@ struct MediaAvSyncRuntimeBinding final {
     MediaAvSyncPlan plan;
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeEdgePolicySet edgePolicies;
+    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaSynchronizedAudioExecutionProduct audioExecutionProduct;
     MediaAvSyncRuntimeOutputProduct outputProduct;
     std::shared_ptr<MediaAvStartupVideoPreparationState>

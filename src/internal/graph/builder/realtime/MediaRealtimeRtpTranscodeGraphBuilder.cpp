@@ -813,6 +813,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             std::move(runtimePlan->synchronization),
             std::move(runtimePlan->transition),
             runtimePlan->edgePolicies,
+            std::move(runtimePlan->datagramTransport),
             audioExecutionProduct,
             std::move(outputProduct)});
     } else {

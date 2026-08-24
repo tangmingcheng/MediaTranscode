@@ -1,7 +1,7 @@
 #include "internal/graph/nodes/output/MediaDatagramShaperNode.h"
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
-#include "internal/graph/runtime/buffer/MediaDatagramShapingPlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include <new>
@@ -51,7 +51,7 @@ MediaNodeKind MediaDatagramShaperNode::staticKind() noexcept
     if (context.inputChannels(nodeId()).size() != 2 ||
         context.outputChannels(nodeId()).size() != 1 || !plan || !batch ||
         !scheduled || plan->binding().streamKind != MediaStreamKind::Metadata ||
-        plan->binding().payloadKind != MediaPayloadKind::DatagramShapingPlan ||
+        plan->binding().payloadKind != MediaPayloadKind::DatagramTransportPlan ||
         batch->binding().streamKind != MediaStreamKind::Metadata ||
         batch->binding().payloadKind != MediaPayloadKind::WireDatagramBatch ||
         scheduled->binding().streamKind != MediaStreamKind::Metadata ||
@@ -81,14 +81,14 @@ MediaDatagramShaperNode::onProcess(MediaGraphExecutionContext& context)
     }
     if (planInput.value()) {
         const auto* planBuffer =
-            dynamic_cast<const MediaDatagramShapingPlanBuffer*>(
+            dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
                 planInput.value()->get());
         if (!planBuffer) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "datagram shaper plan input requires a shaping plan"));
+                    "datagram shaper plan input requires an activated transport plan"));
         }
-        auto cloned = planBuffer->plan().clone();
+        auto cloned = planBuffer->plan().shaping.clone();
         if (!cloned) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 cloned.error());

@@ -42,7 +42,7 @@ MediaTsPendingEmission::MediaTsPendingEmission(
 ::media::Result<std::size_t>
 MediaTsPendingEmission::nextPayloadBytes() const
 {
-    if (m_cursor.finished() || m_batch || m_emission ||
+    if (m_materialized || m_cursor.finished() || m_batch || m_emission ||
         m_packetSizeBytes == 0 || m_maximumPacketsPerDatagram == 0) {
         return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -59,6 +59,43 @@ MediaTsPendingEmission::nextPayloadBytes() const
     }
     return ::media::Result<std::size_t>::success(
         packets * m_packetSizeBytes);
+}
+
+::media::Result<MediaBufferRef>
+MediaTsPendingEmission::materializeProtocolBatch(
+    std::uint64_t generation,
+    MediaTsDatagramEmissionSchedule& schedule)
+{
+    if (m_materialized || m_batch || m_emission || generation == 0 ||
+        m_cursor.finished() || m_packetSizeBytes == 0 ||
+        m_maximumPacketsPerDatagram == 0 ||
+        m_cursor.remainingPacketCount() >
+            (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS pending emission cannot materialize its protocol transaction"));
+    }
+    const std::size_t payloadBytes =
+        m_cursor.remainingPacketCount() * m_packetSizeBytes;
+    auto emission = schedule.prepareAccessUnit(payloadBytes);
+    if (!emission) {
+        return ::media::Result<MediaBufferRef>::failure(emission.error());
+    }
+    const MediaRunningTime release = emission.value().deadline();
+    const MediaRunningTime deadline = emission.value().latestEmissionTime();
+    auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
+        generation, std::move(m_cursor),
+        static_cast<std::uint8_t>(m_maximumPacketsPerDatagram),
+        m_notBefore, release, deadline);
+    if (!batch) return ::media::Result<MediaBufferRef>::failure(batch.error());
+    auto committed = schedule.commit(
+        std::move(emission).value(), release);
+    if (!committed) {
+        return ::media::Result<MediaBufferRef>::failure(committed.error());
+    }
+    m_materialized = true;
+    return ::media::Result<MediaBufferRef>::success(
+        std::move(batch).value());
 }
 
 ::media::Status MediaTsPendingEmission::preparePayload(
@@ -196,12 +233,14 @@ MediaRunningTime MediaTsPendingEmission::deadline() const noexcept
 
 bool MediaTsPendingEmission::finished() const noexcept
 {
-    return m_cursor.finished() && !m_batch && !m_emission;
+    return m_materialized ||
+        (m_cursor.finished() && !m_batch && !m_emission);
 }
 
 std::size_t MediaTsPendingEmission::pendingBytes() const noexcept
 {
-    const std::size_t packets = m_cursor.remainingPacketCount();
+    const std::size_t packets = m_materialized
+        ? 0 : m_cursor.remainingPacketCount();
     return m_packetSizeBytes == 0 ||
            packets > (std::numeric_limits<std::size_t>::max)() /
                m_packetSizeBytes
