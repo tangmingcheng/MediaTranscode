@@ -59,7 +59,7 @@ class MediaWireGlobalSequenceState final
 public:
     static ::media::Result<std::shared_ptr<MediaWireGlobalSequenceState>>
     create(std::string sessionKey,
-           std::uint64_t serviceScopeId,
+           std::string serviceScopeId,
            std::uint64_t generation,
            std::uint64_t firstGlobalSequence);
 
@@ -67,7 +67,7 @@ public:
         std::size_t count);
     MediaWireGlobalSequenceSnapshot snapshot() const noexcept;
     const std::string& sessionKey() const noexcept { return m_sessionKey; }
-    std::uint64_t serviceScopeId() const noexcept
+    const std::string& serviceScopeId() const noexcept
     {
         return m_serviceScopeId;
     }
@@ -77,13 +77,13 @@ private:
     friend class MediaWireGlobalSequenceReservation;
 
     MediaWireGlobalSequenceState(std::string sessionKey,
-                                 std::uint64_t serviceScopeId,
+                                 std::string serviceScopeId,
                                  std::uint64_t generation,
                                  std::uint64_t firstGlobalSequence) noexcept;
 
     mutable std::mutex m_mutex;
     const std::string m_sessionKey;
-    const std::uint64_t m_serviceScopeId;
+    const std::string m_serviceScopeId;
     const std::uint64_t m_generation;
     std::uint64_t m_nextGlobalSequence;
     bool m_reservationActive = false;

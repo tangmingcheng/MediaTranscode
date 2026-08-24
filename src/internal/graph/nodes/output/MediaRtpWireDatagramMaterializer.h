@@ -17,7 +17,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaRtpWireDatagramMaterializerConfig final {
     std::string sessionKey;
-    std::uint64_t serviceScopeId;
+    std::string serviceScopeId;
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
     std::uint64_t rtcpEndpointId;

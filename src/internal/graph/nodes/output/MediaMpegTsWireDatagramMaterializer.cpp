@@ -71,7 +71,7 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
 {
     using Result =
         ::media::Result<MediaMpegTsUdpWireDatagramMaterializer>;
-    if (config.sessionKey.empty() || config.serviceScopeId == 0 ||
+    if (config.sessionKey.empty() || config.serviceScopeId.empty() ||
         config.generation == 0 || config.endpointId == 0 ||
         !config.globalSequence ||
         config.tsPacketBytes != ProjectTsPacketBytes ||
@@ -176,7 +176,7 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
     auto rtpMaterializer = MediaRtpWireDatagramMaterializer::create(
         MediaRtpWireDatagramMaterializerConfig{
             std::move(config.sessionKey),
-            config.serviceScopeId,
+            std::move(config.serviceScopeId),
             config.generation,
             config.rtpEndpointId,
             config.rtcpEndpointId,

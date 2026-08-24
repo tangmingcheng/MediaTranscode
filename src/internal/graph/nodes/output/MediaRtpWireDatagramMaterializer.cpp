@@ -45,7 +45,7 @@ MediaRtpWireDatagramMaterializer::create(
     MediaRtpWireDatagramMaterializerConfig config)
 {
     using Result = ::media::Result<MediaRtpWireDatagramMaterializer>;
-    if (config.sessionKey.empty() || config.serviceScopeId == 0 ||
+    if (config.sessionKey.empty() || config.serviceScopeId.empty() ||
         config.generation == 0 || config.rtpEndpointId == 0 ||
         config.rtcpEndpointId == 0 ||
         config.rtpEndpointId == config.rtcpEndpointId ||

@@ -114,11 +114,11 @@ void MediaWireGlobalSequenceReservation::abandon() noexcept
 
 MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
     std::string sessionKey,
-    std::uint64_t serviceScopeId,
+    std::string serviceScopeId,
     std::uint64_t generation,
     std::uint64_t firstGlobalSequence) noexcept
     : m_sessionKey(std::move(sessionKey)),
-      m_serviceScopeId(serviceScopeId),
+      m_serviceScopeId(std::move(serviceScopeId)),
       m_generation(generation),
       m_nextGlobalSequence(firstGlobalSequence)
 {
@@ -127,25 +127,30 @@ MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
 ::media::Result<std::shared_ptr<MediaWireGlobalSequenceState>>
 MediaWireGlobalSequenceState::create(
     std::string sessionKey,
-    std::uint64_t serviceScopeId,
+    std::string serviceScopeId,
     std::uint64_t generation,
     std::uint64_t firstGlobalSequence)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireGlobalSequenceState>>;
-    if (sessionKey.empty() || serviceScopeId == 0 || generation == 0) {
+    if (sessionKey.empty() || serviceScopeId.empty() || generation == 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire global sequence state requires session, service scope, and generation identity"));
     }
-    auto state = std::shared_ptr<MediaWireGlobalSequenceState>(
-        new (std::nothrow) MediaWireGlobalSequenceState(
-            std::move(sessionKey), serviceScopeId, generation,
-            firstGlobalSequence));
+    auto* state = new (std::nothrow) MediaWireGlobalSequenceState(
+        std::move(sessionKey), std::move(serviceScopeId), generation,
+        firstGlobalSequence);
     if (!state) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaWireGlobalSequenceState"));
     }
-    return Result::success(std::move(state));
+    try {
+        return Result::success(
+            std::shared_ptr<MediaWireGlobalSequenceState>(state));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "MediaWireGlobalSequenceState shared ownership"));
+    }
 }
 
 ::media::Result<MediaWireGlobalSequenceReservation>
