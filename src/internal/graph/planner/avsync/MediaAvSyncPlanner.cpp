@@ -189,14 +189,15 @@ void planTsInput(MediaAvSyncPlan& plan,
     }
     std::uint8_t maximumPacketsPerDatagram = 7;
     if (*request.output.transport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.output.packetSize ||
-            *request.output.packetSize <= 0) {
+        if (!request.deployment) {
             return ::media::Result<MediaTsMuxPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS RTP output requires an explicit maximum datagram size"));
+                    "MPEG-TS RTP output requires deployment MTU authority"));
         }
+        const auto maximumDatagram =
+            request.deployment->encode().mtu.senderMaximumPayloadBytes;
         auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(*request.output.packetSize));
+            static_cast<std::size_t>(maximumDatagram));
         if (!packetCount) {
             return ::media::Result<MediaTsMuxPlan>::failure(
                 packetCount.error());

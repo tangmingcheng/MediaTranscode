@@ -49,9 +49,6 @@ struct MediaRealtimeOutputConfig {
     std::optional<std::size_t> basePort;
     std::string sdpPath;
     std::string url;
-    std::optional<int> packetSize;
-    std::optional<std::int64_t> pacingBitrateBps;
-    std::optional<int> transportDecodeLeadMs;
 };
 
 struct MediaRealtimeAvSyncStartupConfig {

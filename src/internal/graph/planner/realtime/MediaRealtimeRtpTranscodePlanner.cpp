@@ -135,14 +135,10 @@ preparedDemuxTimestampFacts(
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
-constexpr int RealtimeDefaultGopFrames = 30;
 
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
 {
     MediaVideoTranscodeParameters planned = requested;
-    if (!planned.gop) {
-        planned.gop = RealtimeDefaultGopFrames;
-    }
     planned.bFrames = RealtimeNoBidirectionalFrames;
     return planned;
 }
@@ -152,6 +148,11 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     const MediaInputVideoStreamInfo& inputInfo)
 {
     MediaVideoTranscodeParameters planned = planRealtimeVideoParameters(requested);
+    if (!planned.gop || *planned.gop <= 0) {
+        return ::media::Result<MediaVideoTranscodeParameters>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Realtime output GOP must be an explicit positive encoding request"));
+    }
     if (planned.bitrateKbps && *planned.bitrateKbps < 0) {
         return ::media::Result<MediaVideoTranscodeParameters>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be non-negative"));

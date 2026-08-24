@@ -142,11 +142,6 @@ bool preparedHandoffControlSpecified(
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Realtime Datagram output requires an authoritative deployment envelope before DAG construction"));
     }
-    if (request.output.packetSize || request.output.pacingBitrateBps ||
-        request.output.transportDecodeLeadMs) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Realtime request rejects caller-owned packet size, pacing bitrate, and transport lead; these are deployment-derived planner products"));
-    }
     if (auto status = MediaTranscodeStreamSetRequestValidator::validate(
             request.parameters);
         !status) {

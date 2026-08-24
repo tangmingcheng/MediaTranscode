@@ -98,14 +98,15 @@ planSeparateRtp(
     }
     std::uint8_t maximumPacketsPerDatagram = 7;
     if (outer.outputTransport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.output.packetSize || *request.output.packetSize <= 0) {
+        if (!request.deployment) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "VideoOnly MPEG-TS/RTP requires an explicit datagram size"));
+                    "VideoOnly MPEG-TS/RTP requires deployment MTU authority"));
         }
         auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(*request.output.packetSize));
+            static_cast<std::size_t>(
+                request.deployment->encode().mtu.senderMaximumPayloadBytes));
         if (!packetCount) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
