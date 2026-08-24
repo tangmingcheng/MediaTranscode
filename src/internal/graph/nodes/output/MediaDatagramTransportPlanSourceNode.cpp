@@ -123,13 +123,6 @@ MediaDatagramTransportPlanSourceNode::onProcess(
             ::media::ErrorInfo::invalidArgument(
                 "Datagram transport plan source rejects duplicate or regressed generation"));
     }
-    auto permitted = m_generationState->permitActivatedGeneration(
-        *m_authority, activation.value().generation,
-        activation.value().completedTransitionSequence);
-    if (!permitted) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            permitted.error());
-    }
     auto created = MediaDatagramTransportPlanBuffer::create(
         m_planTemplate, activation.value().generation);
     if (!created) {
@@ -137,7 +130,13 @@ MediaDatagramTransportPlanSourceNode::onProcess(
             created.error());
     }
     {
-        auto mutation = m_generationState->reserveSessionMutation();
+        auto permitted = m_generationState->permitActivatedGeneration(
+            *m_authority, activation.value().generation,
+            activation.value().completedTransitionSequence);
+        if (!permitted) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                permitted.error());
+        }
         m_pendingPlan = std::move(created).value();
         m_pendingGeneration = activation.value().generation;
         pendingPlan = m_pendingPlan;
@@ -172,7 +171,6 @@ MediaDatagramTransportPlanSourceNode::reserveOutputCommit(
 {
     const auto* plan = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
         buffer.get());
-    auto mutation = m_generationState->reserveSessionMutation();
     if (!plan || !m_pendingGeneration || !m_pendingPlan ||
         plan->plan().shaping.generation() != *m_pendingGeneration ||
         buffer != m_pendingPlan) {
