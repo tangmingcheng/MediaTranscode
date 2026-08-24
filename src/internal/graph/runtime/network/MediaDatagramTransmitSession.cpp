@@ -1,8 +1,8 @@
 #include "internal/graph/runtime/network/MediaDatagramTransmitSession.h"
 
+#include <algorithm>
 #include <limits>
 #include <new>
-#include <unordered_set>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -19,7 +19,7 @@ MediaDatagramTransmitSession::MediaDatagramTransmitSession(
 
 MediaDatagramTransmitSession::~MediaDatagramTransmitSession() noexcept
 {
-    close();
+    closePorts();
 }
 
 ::media::Result<std::unique_ptr<MediaDatagramTransmitSession>>
@@ -36,12 +36,16 @@ MediaDatagramTransmitSession::create(
          execution.mode !=
              MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
         execution.authority.empty() ||
-        bindings.size() != plan.endpoints().size()) {
+        bindings.size() != plan.endpoints().size() ||
+        (execution.mode ==
+             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime &&
+         !plan.evidence())) {
         return ResultType::failure(::media::ErrorInfo::invalidArgument(
             "invalid explicit Datagram transmit execution plan"));
     }
     try {
         std::unordered_map<std::uint64_t, MediaUdpDatagramEndpoint> localById;
+        localById.reserve(bindings.size());
         for (auto& binding : bindings) {
             if (!localById.emplace(binding.endpointId,
                                    std::move(binding.localEndpoint)).second) {
@@ -54,8 +58,11 @@ MediaDatagramTransmitSession::create(
                 plan.sessionKey(), plan.serviceScope().scopeId,
                 plan.generation()));
         session->m_burstWireBytes = plan.serviceCurve().burstWireBytes;
-        std::vector<MediaDatagramTransmitPort*> evidencePorts;
-        evidencePorts.reserve(plan.endpoints().size());
+        session->m_maximumBatchDatagrams = plan.batch().maximumDatagrams;
+        session->m_maximumBatchBytes = plan.batch().maximumBytes;
+        session->m_endpoints.reserve(plan.endpoints().size());
+        std::vector<MediaDatagramTransmitEvidenceEndpoint> evidenceEndpoints;
+        evidenceEndpoints.reserve(plan.endpoints().size());
         for (const auto& endpoint : plan.endpoints()) {
             const auto local = localById.find(endpoint.endpointId);
             if (local == localById.end()) {
@@ -95,10 +102,16 @@ MediaDatagramTransmitSession::create(
                                 std::move(port.value()), opened.value()};
             session->m_endpoints.emplace(endpoint.endpointId,
                                          std::move(state));
-            evidencePorts.push_back(portView);
+            evidenceEndpoints.push_back(MediaDatagramTransmitEvidenceEndpoint{
+                endpoint.endpointId, portView, opened.value()});
         }
         auto collector = MediaDatagramTransmitEvidenceCollector::create(
-            plan.generation(), plan.evidence(), std::move(evidencePorts));
+            plan.generation(),
+            plan.evidence()
+                ? (std::min)(plan.backlog().maximumDatagrams,
+                             plan.evidence()->maximumCorrelationEntries)
+                : plan.backlog().maximumDatagrams,
+            plan.evidence(), std::move(evidenceEndpoints));
         if (!collector) return ResultType::failure(collector.error());
         session->m_evidence =
             std::make_unique<MediaDatagramTransmitEvidenceCollector>(
@@ -110,131 +123,315 @@ MediaDatagramTransmitSession::create(
     }
 }
 
-::media::Result<MediaDatagramTransmitAttempt>
-MediaDatagramTransmitSession::trySubmit(
+MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
     std::uint64_t endpointId,
-    std::span<const MediaDatagramTransmitRequest> requests,
-    MediaRunningTime submittedAt) noexcept
+    std::span<const MediaDatagramTransmitJobEntry> entries,
+    MediaRunningTime now) noexcept
 {
-    using ResultType = ::media::Result<MediaDatagramTransmitAttempt>;
-    if (m_terminalFailure) return ResultType::failure(*m_terminalFailure);
+    if (m_terminalSubmitFailure) {
+        return MediaDatagramTransmitSubmitResult::failure(
+            *m_terminalSubmitFailure);
+    }
+    if (m_terminalFailure) {
+        return MediaDatagramTransmitSubmitResult::failure(
+            mediaDatagramTransmitError(*m_terminalFailure));
+    }
+    auto clock = advanceClock(now);
+    if (!clock) return terminateSubmit(mediaDatagramTransmitError(clock.error()));
     const auto endpoint = m_endpoints.find(endpointId);
-    if (m_closed || endpoint == m_endpoints.end() || requests.empty()) {
-        auto error = ::media::ErrorInfo::invalidArgument(
-            "invalid Datagram transmit submission");
-        terminate(error);
-        return ResultType::failure(std::move(error));
+    if (m_closed || m_pending || endpoint == m_endpoints.end() ||
+        entries.empty() ||
+        entries.size() > m_maximumBatchDatagrams) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::invalidArgument(
+                "invalid new Datagram transmit job")));
     }
-    const auto batchDeadline = requests.front().enqueueNotAfter;
-    std::uint64_t batchWireBytes = 0;
-    for (const auto& request : requests) {
-        if (request.bytes.empty() ||
-            request.bytes.size() > endpoint->second.maximumDatagramBytes ||
-            request.enqueueNotAfter != batchDeadline ||
-            request.enqueueNotAfter.nanoseconds() < 0 ||
-            request.bytes.size() >
-                (std::numeric_limits<std::uint64_t>::max)() -
-                    endpoint->second.wireOverheadBytes) {
-            auto error = ::media::ErrorInfo::invalidArgument(
-                "Datagram transmit batch violates endpoint or deadline contract");
-            terminate(error);
-            return ResultType::failure(std::move(error));
+    const auto deadline = entries.front().enqueueNotAfter;
+    std::uint64_t payloadBytes = 0;
+    std::uint64_t wireBytes = 0;
+    std::vector<std::uint64_t> evidenceIds;
+    std::vector<std::optional<std::uint64_t>> launchTimes;
+    try {
+        evidenceIds.reserve(entries.size());
+        launchTimes.reserve(entries.size());
+        for (const auto& entry : entries) {
+            if (entry.bytes.empty() ||
+                entry.bytes.size() > endpoint->second.maximumDatagramBytes ||
+                entry.enqueueNotAfter != deadline || now > deadline ||
+                entry.enqueueNotAfter.nanoseconds() < 0 ||
+                entry.bytes.size() >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        endpoint->second.wireOverheadBytes) {
+                return terminateSubmit(mediaDatagramTransmitError(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Datagram transmit job violates endpoint or deadline")));
+            }
+            const auto size = static_cast<std::uint64_t>(entry.bytes.size());
+            if (payloadBytes >
+                    (std::numeric_limits<std::uint64_t>::max)() - size ||
+                wireBytes > (std::numeric_limits<std::uint64_t>::max)() -
+                    size - endpoint->second.wireOverheadBytes) {
+                return terminateSubmit(mediaDatagramTransmitError(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Datagram transmit batch accounting overflowed")));
+            }
+            payloadBytes += size;
+            wireBytes += size + endpoint->second.wireOverheadBytes;
+            evidenceIds.push_back(entry.evidenceId);
+            launchTimes.push_back(entry.kernelTransmitTimeNanoseconds);
         }
-        const auto wireBytes = static_cast<std::uint64_t>(request.bytes.size()) +
-                               endpoint->second.wireOverheadBytes;
-        if (batchWireBytes > (std::numeric_limits<std::uint64_t>::max)() -
-                                 wireBytes) {
-            auto error = ::media::ErrorInfo::invalidArgument(
-                "Datagram transmit batch wire accounting overflowed");
-            terminate(error);
-            return ResultType::failure(std::move(error));
+    } catch (const std::bad_alloc&) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::allocationFailed(
+                "Datagram transmit pending job")));
+    }
+    if (payloadBytes > m_maximumBatchBytes || wireBytes > m_burstWireBytes) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::invalidArgument(
+                "Datagram transmit job exceeds planner batch or burst bound")));
+    }
+    auto reservations = m_evidence->reserveBeforeSubmit(
+        endpointId, evidenceIds, launchTimes, now);
+    if (!reservations) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            reservations.error()));
+    }
+    try {
+        auto pending = std::make_unique<PendingJob>();
+        pending->endpointId = endpointId;
+        pending->entries.assign(entries.begin(), entries.end());
+        pending->portRequests.reserve(entries.size());
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            pending->portRequests.push_back(MediaDatagramTransmitPortRequest{
+                entries[index].bytes,
+                reservations.value()[index].platformCorrelationId,
+                entries[index].kernelTransmitTimeNanoseconds});
         }
-        batchWireBytes += wireBytes;
+        pending->reservations = std::move(reservations.value());
+        pending->requiresWritableWait = false;
+        m_pending = std::move(pending);
+    } catch (const std::bad_alloc&) {
+        m_evidence->cancelPrepared(reservations.value(), 0);
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::allocationFailed(
+                "Datagram transmit pending job")));
     }
-    if (batchWireBytes > m_burstWireBytes) {
-        auto error = ::media::ErrorInfo::invalidArgument(
-            "Datagram transmit batch exceeds planner burst contract");
-        terminate(error);
-        return ResultType::failure(std::move(error));
+    return submitPending(now);
+}
+
+MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::retryPending(
+    MediaRunningTime now) noexcept
+{
+    if (m_terminalSubmitFailure) {
+        return MediaDatagramTransmitSubmitResult::failure(
+            *m_terminalSubmitFailure);
     }
-    auto submitted = endpoint->second.port->trySubmit(requests);
+    if (m_terminalFailure) {
+        return MediaDatagramTransmitSubmitResult::failure(
+            mediaDatagramTransmitError(*m_terminalFailure));
+    }
+    auto clock = advanceClock(now);
+    if (!clock) return terminateSubmit(mediaDatagramTransmitError(clock.error()));
+    if (!m_pending || m_pending->requiresWritableWait) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::invalidArgument(
+                "Datagram retry requires a successful writable wait")));
+    }
+    return submitPending(now);
+}
+
+MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
+    MediaRunningTime now) noexcept
+{
+    const auto deadline = m_pending->entries.front().enqueueNotAfter;
+    if (now > deadline) {
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending.reset();
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::ioFailure(
+                "Datagram submit exceeded its original deadline")));
+    }
+    auto evidence = m_evidence->drainAvailable(now);
+    if (!evidence) {
+        return terminateSubmit(mediaDatagramTransmitError(evidence.error()));
+    }
+    auto& endpoint = m_endpoints.at(m_pending->endpointId);
+    auto submitted = endpoint.port->trySubmit(m_pending->portRequests);
     if (!submitted) {
-        auto error = submitted.error();
-        terminate(error);
-        return ResultType::failure(std::move(error));
+        const auto error = submitted.error();
+        std::uint64_t prefix = error.submittedPrefixDatagrams;
+        if (error.kind == MediaDatagramTransmitFailureKind::TerminalNoSubmit) {
+            prefix = 0;
+        }
+        if (prefix > m_pending->reservations.size()) {
+            prefix = m_pending->reservations.size();
+        }
+        auto marked = m_evidence->markSubmittedPrefix(
+            m_pending->reservations, prefix);
+        m_evidence->cancelPrepared(m_pending->reservations, prefix);
+        m_pending.reset();
+        if (!marked) return terminateSubmit(mediaDatagramTransmitError(marked.error()));
+        return terminateSubmit(error);
     }
     if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
+        m_pending->requiresWritableWait = true;
         return submitted;
     }
-    for (const auto& request : requests) {
-        auto recorded = m_evidence->recordSubmitted(
-            endpointId, request.evidenceId, submittedAt);
-        if (!recorded) {
-            auto error = recorded.error();
-            terminate(error);
-            return ResultType::failure(std::move(error));
-        }
+    if (submitted.value() != MediaDatagramTransmitAttempt::Submitted) {
+        return terminateSubmit(mediaDatagramTransmitError(
+            ::media::ErrorInfo::internalError(
+                "Datagram port returned an unknown submit result")));
     }
+    auto marked = m_evidence->markSubmittedPrefix(
+        m_pending->reservations, m_pending->reservations.size());
+    m_pending.reset();
+    if (!marked) return terminateSubmit(mediaDatagramTransmitError(marked.error()));
     return submitted;
 }
 
 ::media::Result<MediaDatagramWritableWaitResult>
 MediaDatagramTransmitSession::waitWritable(
     std::uint64_t endpointId,
-    MediaRunningTime maximumWait) noexcept
+    MediaRunningTime now,
+    MediaRunningTime maximumWait,
+    std::stop_token stopToken) noexcept
 {
     using ResultType = ::media::Result<MediaDatagramWritableWaitResult>;
     if (m_terminalFailure) return ResultType::failure(*m_terminalFailure);
-    const auto endpoint = m_endpoints.find(endpointId);
-    if (m_closed || endpoint == m_endpoints.end() ||
-        maximumWait.nanoseconds() < 0) {
-        return ResultType::failure(::media::ErrorInfo::invalidArgument(
-            "invalid Datagram writable wait"));
+    auto clock = advanceClock(now);
+    if (!clock) {
+        terminate(clock.error());
+        return ResultType::failure(clock.error());
     }
-    auto waited = endpoint->second.port->waitWritable(maximumWait);
+    const auto endpoint = m_endpoints.find(endpointId);
+    if (m_closed || endpoint == m_endpoints.end() || !m_pending ||
+        m_pending->endpointId != endpointId ||
+        !m_pending->requiresWritableWait || maximumWait.nanoseconds() < 0) {
+        auto error = ::media::ErrorInfo::invalidArgument(
+            "invalid Datagram writable wait state");
+        terminate(error);
+        return ResultType::failure(std::move(error));
+    }
+    auto remaining = m_pending->entries.front().enqueueNotAfter.checkedSubtract(now);
+    if (!remaining || remaining.value().nanoseconds() < 0 ||
+        maximumWait > remaining.value()) {
+        auto error = ::media::ErrorInfo::invalidArgument(
+            "Datagram writable wait exceeds original deadline");
+        terminate(error);
+        return ResultType::failure(std::move(error));
+    }
+    auto waited = endpoint->second.port->waitWritable(maximumWait, stopToken);
     if (!waited) {
-        auto error = waited.error();
+        terminate(waited.error());
+        return ResultType::failure(waited.error());
+    }
+    if (waited.value() == MediaDatagramWritableWaitResult::Writable) {
+        m_pending->requiresWritableWait = false;
+    } else if (waited.value() != MediaDatagramWritableWaitResult::TimedOut &&
+               waited.value() != MediaDatagramWritableWaitResult::Stopped) {
+        auto error = ::media::ErrorInfo::internalError(
+            "Datagram port returned an unknown writable wait result");
         terminate(error);
         return ResultType::failure(std::move(error));
     }
     return waited;
 }
 
-::media::Status MediaDatagramTransmitSession::drainAvailableEvidence(
+::media::Status MediaDatagramTransmitSession::drainAvailableEvents(
     MediaRunningTime now) noexcept
 {
     if (m_terminalFailure) return ::media::Status::failure(*m_terminalFailure);
+    auto clock = advanceClock(now);
+    if (!clock) return terminate(clock.error());
     auto drained = m_evidence->drainAvailable(now);
     if (!drained) return terminate(drained.error());
     return drained;
 }
 
 ::media::Status MediaDatagramTransmitSession::abort(
-    ::media::ErrorInfo cause) noexcept
+    ::media::ErrorInfo cause,
+    MediaRunningTime now) noexcept
 {
+    auto clock = advanceClock(now);
+    if (!clock) return terminate(clock.error());
     if (cause.ok()) {
-        cause = ::media::ErrorInfo::cancelled(
-            "Datagram transmit session aborted");
+        return terminate(::media::ErrorInfo::invalidArgument(
+            "Datagram abort requires explicit worker-local causality"));
+    }
+    if (m_pending) {
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending.reset();
     }
     return terminate(std::move(cause));
 }
 
-::media::Status MediaDatagramTransmitSession::close() noexcept
+::media::Status MediaDatagramTransmitSession::close(
+    MediaRunningTime now) noexcept
 {
     if (m_closed) {
         return m_terminalFailure
             ? ::media::Status::failure(*m_terminalFailure)
             : ::media::Status::success();
     }
-    m_closed = true;
-    for (auto& [id, endpoint] : m_endpoints) {
-        (void)id;
-        auto closed = endpoint.port->close();
-        if (!closed && !m_terminalFailure) m_terminalFailure = closed.error();
+    auto clock = advanceClock(now);
+    if (!clock && !m_terminalFailure) m_terminalFailure = clock.error();
+    if (m_pending) {
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending.reset();
     }
+    auto settled = m_evidence->settleOnClose(now);
+    if (!settled && !m_terminalFailure) m_terminalFailure = settled.error();
+    closePorts();
+    m_closed = true;
     return m_terminalFailure
         ? ::media::Status::failure(*m_terminalFailure)
         : ::media::Status::success();
+}
+
+::media::Status MediaDatagramTransmitSession::advanceClock(
+    MediaRunningTime now) noexcept
+{
+    if (now.nanoseconds() < 0 || (m_lastNow && now < *m_lastNow)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram transmit clock must be nonnegative and monotonic"));
+    }
+    m_lastNow = now;
+    return ::media::Status::success();
+}
+
+::media::Status MediaDatagramTransmitSession::terminate(
+    ::media::ErrorInfo error) noexcept
+{
+    if (!m_terminalFailure) m_terminalFailure = std::move(error);
+    if (m_pending) {
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending.reset();
+    }
+    return ::media::Status::failure(*m_terminalFailure);
+}
+
+MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::terminateSubmit(
+    MediaDatagramTransmitError error) noexcept
+{
+    if (!m_terminalSubmitFailure) m_terminalSubmitFailure = error;
+    if (!m_terminalFailure) m_terminalFailure = error.cause;
+    if (m_pending) {
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending.reset();
+    }
+    return MediaDatagramTransmitSubmitResult::failure(
+        *m_terminalSubmitFailure);
+}
+
+void MediaDatagramTransmitSession::closePorts() noexcept
+{
+    if (m_portsClosed) return;
+    m_portsClosed = true;
+    for (auto& [endpointId, endpoint] : m_endpoints) {
+        auto closed = endpoint.port->close();
+        if (!closed && !m_terminalFailure) m_terminalFailure = closed.error();
+        (void)endpointId;
+    }
 }
 
 const MediaDatagramTransmitEvidenceTelemetry&
@@ -248,14 +445,6 @@ MediaDatagramTransmitSession::capabilities(std::uint64_t endpointId) const noexc
 {
     const auto endpoint = m_endpoints.find(endpointId);
     return endpoint == m_endpoints.end() ? nullptr : &endpoint->second.capabilities;
-}
-
-::media::Status MediaDatagramTransmitSession::terminate(
-    ::media::ErrorInfo error) noexcept
-{
-    if (!m_terminalFailure) m_terminalFailure = std::move(error);
-    close();
-    return ::media::Status::failure(*m_terminalFailure);
 }
 
 } // namespace media::ffmpeg::graph

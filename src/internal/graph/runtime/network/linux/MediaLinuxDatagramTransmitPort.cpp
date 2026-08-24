@@ -2,15 +2,17 @@
 
 #ifndef _WIN32
 #include <arpa/inet.h>
-#include <cerno>
+#include <cerrno>
 #include <fcntl.h>
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
 #include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -18,11 +20,6 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-
-struct PendingTimestamp final {
-    std::uint32_t platformId;
-    std::uint64_t evidenceId;
-};
 
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
                             sockaddr_storage& storage,
@@ -34,22 +31,33 @@ struct PendingTimestamp final {
         value->sin_family = AF_INET;
         value->sin_port = htons(endpoint.port());
         length = sizeof(*value);
-        if (inet_pton(AF_INET, endpoint.numericAddress().c_str(),
-                      &value->sin_addr) == 1) {
+        if (::inet_pton(AF_INET, endpoint.numericAddress().c_str(),
+                        &value->sin_addr) == 1) {
             return ::media::Status::success();
         }
-    } else {
+    } else if (endpoint.addressFamily() == MediaIpAddressFamily::Ipv6) {
         auto* value = reinterpret_cast<sockaddr_in6*>(&storage);
         value->sin6_family = AF_INET6;
         value->sin6_port = htons(endpoint.port());
         length = sizeof(*value);
-        if (inet_pton(AF_INET6, endpoint.numericAddress().c_str(),
-                      &value->sin6_addr) == 1) {
+        if (::inet_pton(AF_INET6, endpoint.numericAddress().c_str(),
+                        &value->sin6_addr) == 1) {
             return ::media::Status::success();
         }
     }
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "invalid numeric Linux Datagram address"));
+}
+
+MediaDatagramTransmitSubmitResult submitFailure(
+    const char* message,
+    int nativeCode,
+    MediaDatagramTransmitFailureKind kind,
+    std::uint64_t prefix)
+{
+    return MediaDatagramTransmitSubmitResult::failure(
+        mediaDatagramTransmitError(
+            ::media::ErrorInfo::ioFailure(message, nativeCode), kind, prefix));
 }
 
 class MediaLinuxDatagramTransmitPort final : public MediaDatagramTransmitPort {
@@ -74,49 +82,44 @@ public:
             request.endpoint.socketHardBoundBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
-                request.endpoint.addressFamily) {
+                request.endpoint.addressFamily ||
+            (request.executionMode !=
+                 MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
+             request.executionMode !=
+                 MediaDatagramTransmitExecutionMode::LinuxSocketTxTime)) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Linux Datagram port open request"));
         }
         m_openAttempted = true;
-        if (request.executionMode !=
-                MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
-            request.executionMode !=
-                MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) {
-            return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                "unknown Linux Datagram execution mode"));
-        }
         const int family = request.endpoint.addressFamily ==
                 MediaIpAddressFamily::Ipv4 ? AF_INET : AF_INET6;
-        int handle = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
+        const int handle = ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK |
+                                             SOCK_CLOEXEC, IPPROTO_UDP);
         if (handle < 0) {
             return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Linux Datagram socket creation failed", erno));
+                "Linux Datagram socket creation failed", errno));
         }
-        const auto fail = [&handle](::media::ErrorInfo error) {
+        int stopFd = -1;
+        const auto fail = [&](::media::ErrorInfo error) {
+            if (stopFd >= 0) ::close(stopFd);
             ::close(handle);
             return ResultType::failure(std::move(error));
         };
         const int requestedBuffer =
             static_cast<int>(request.endpoint.socketHardBoundBytes);
-        if (setsockopt(handle, SOL_SOCKET, SO_SNDBUF,
-                       &requestedBuffer, sizeof(requestedBuffer)) != 0) {
+        if (::setsockopt(handle, SOL_SOCKET, SO_SNDBUF, &requestedBuffer,
+                         sizeof(requestedBuffer)) != 0) {
             return fail(::media::ErrorInfo::ioFailure(
-                "Linux Datagram SO_SNDBUF configuration failed", erno));
-        }
-        const int flags = fcntl(handle, F_GETFL, 0);
-        if (flags < 0 || fcntl(handle, F_SETFL, flags | O_NONBLOCK) != 0) {
-            return fail(::media::ErrorInfo::ioFailure(
-                "Linux Datagram nonblocking configuration failed", erno));
+                "Linux Datagram SO_SNDBUF configuration failed", errno));
         }
         sockaddr_storage local{};
         socklen_t localLength = 0;
         auto converted = fillAddress(request.localEndpoint, local, localLength);
         if (!converted) return fail(converted.error());
-        if (bind(handle, reinterpret_cast<const sockaddr*>(&local),
-                 localLength) != 0) {
+        if (::bind(handle, reinterpret_cast<const sockaddr*>(&local),
+                   localLength) != 0) {
             return fail(::media::ErrorInfo::ioFailure(
-                "Linux Datagram bind failed", erno));
+                "Linux Datagram bind failed", errno));
         }
         auto remote = MediaUdpDatagramEndpoint::create(
             request.endpoint.addressFamily, request.endpoint.numericAddress,
@@ -124,52 +127,59 @@ public:
         if (!remote) return fail(remote.error());
         converted = fillAddress(remote.value(), m_remote, m_remoteLength);
         if (!converted) return fail(converted.error());
+        stopFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (stopFd < 0) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Linux Datagram stop wakeup creation failed", errno));
+        }
 
         bool txtimeAvailable = false;
         if (request.executionMode ==
             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) {
-            sock_txtime config{};
-            config.clockid = CLOCK_MONOTONIC;
-            config.flags = SOF_TXTIME_REPORT_ERRORS;
-            if (setsockopt(handle, SOL_SOCKET, SO_TXTIME,
-                           &config, sizeof(config)) != 0) {
-                return fail(::media::ErrorInfo::unsupported(
-                    "required Linux SO_TXTIME capability probe failed"));
+            sock_txtime configuration{};
+            configuration.clockid = CLOCK_MONOTONIC;
+            configuration.flags = SOF_TXTIME_REPORT_ERRORS;
+            if (::setsockopt(handle, SOL_SOCKET, SO_TXTIME, &configuration,
+                             sizeof(configuration)) != 0) {
+                return fail(::media::ErrorInfo::ioFailure(
+                    "required Linux SO_TXTIME capability probe failed", errno));
+            }
+            const int enabled = 1;
+            const int level = family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+            const int option = family == AF_INET ? IP_RECVERR : IPV6_RECVERR;
+            if (::setsockopt(handle, level, option, &enabled,
+                             sizeof(enabled)) != 0) {
+                return fail(::media::ErrorInfo::ioFailure(
+                    "Linux SO_TXTIME error queue configuration failed", errno));
             }
             txtimeAvailable = true;
         }
-        MediaDatagramTransmitTimestampAvailability timestampAvailability =
+
+        auto timestampAvailability =
             MediaDatagramTransmitTimestampAvailability::NotRequested;
         if (request.evidence) {
-            timestampAvailability =
-                MediaDatagramTransmitTimestampAvailability::Unavailable;
-            const int timestampFlags =
-                SOF_TIMESTAMPING_TX_SOFTWARE |
-                SOF_TIMESTAMPING_SOFTWARE |
-                SOF_TIMESTAMPING_OPT_ID |
-                SOF_TIMESTAMPING_OPT_TSONLY;
-            if (setsockopt(handle, SOL_SOCKET, SO_TIMESTAMPING,
-                           &timestampFlags, sizeof(timestampFlags)) == 0) {
-                try {
-                    m_pending.reserve(static_cast<std::size_t>(
-                        request.evidence->maximumCorrelationEntries));
-                    timestampAvailability =
-                        MediaDatagramTransmitTimestampAvailability::Available;
-                } catch (const std::bad_alloc&) {
-                    return fail(::media::ErrorInfo::allocationFailed(
-                        "Linux transmit timestamp correlation"));
-                }
+            const int flags = SOF_TIMESTAMPING_TX_SOFTWARE |
+                              SOF_TIMESTAMPING_SOFTWARE |
+                              SOF_TIMESTAMPING_OPT_ID |
+                              SOF_TIMESTAMPING_OPT_TSONLY;
+            if (::setsockopt(handle, SOL_SOCKET, SO_TIMESTAMPING, &flags,
+                             sizeof(flags)) == 0) {
+                timestampAvailability =
+                    MediaDatagramTransmitTimestampAvailability::Available;
+            } else {
+                timestampAvailability =
+                    MediaDatagramTransmitTimestampAvailability::Unavailable;
             }
         }
         int effectiveBuffer = 0;
         socklen_t optionLength = sizeof(effectiveBuffer);
-        if (getsockopt(handle, SOL_SOCKET, SO_SNDBUF,
-                       &effectiveBuffer, &optionLength) != 0 ||
-            effectiveBuffer <= 0) {
+        if (::getsockopt(handle, SOL_SOCKET, SO_SNDBUF, &effectiveBuffer,
+                         &optionLength) != 0 || effectiveBuffer <= 0) {
             return fail(::media::ErrorInfo::ioFailure(
-                "Linux Datagram effective SO_SNDBUF query failed", erno));
+                "Linux Datagram effective SO_SNDBUF query failed", errno));
         }
         m_socket = handle;
+        m_stopFd = stopFd;
         m_endpointId = request.endpoint.endpointId;
         m_generation = request.generation;
         m_maximumDatagramBytes = request.endpoint.maximumDatagramBytes;
@@ -178,37 +188,51 @@ public:
         m_txtimeAvailable = txtimeAvailable;
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
             request.endpoint.socketHardBoundBytes,
-            static_cast<std::uint64_t>(effectiveBuffer),
-            timestampAvailability, txtimeAvailable, false});
+            static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
+            m_timestampAvailable
+                ? MediaDatagramTransmitTimestampSource::LinuxSoftwareRealtime
+                : MediaDatagramTransmitTimestampSource::Unknown,
+            m_timestampAvailable ? 1'000'000'000ULL : 0,
+            m_timestampAvailable
+                ? MediaDatagramTransmitCorrelationMode::KernelSequentialUint32
+                : MediaDatagramTransmitCorrelationMode::None,
+            m_txtimeAvailable, false});
     }
 
-    ::media::Result<MediaDatagramTransmitAttempt> trySubmit(
-        std::span<const MediaDatagramTransmitRequest> requests) override
+    MediaDatagramTransmitSubmitResult trySubmit(
+        std::span<const MediaDatagramTransmitPortRequest> requests) override
     {
-        using ResultType = ::media::Result<MediaDatagramTransmitAttempt>;
         if (m_socket < 0 || requests.empty()) {
-            return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                "invalid Linux Datagram submit request"));
+            return MediaDatagramTransmitSubmitResult::failure(
+                mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
+                    "invalid Linux Datagram submit request")));
         }
-        if (m_timestampAvailable &&
-            requests.size() > m_pending.capacity() - m_pending.size()) {
-            return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Linux transmit timestamp correlation cannot admit batch"));
-        }
+        auto expectedId = m_nextKernelTimestampId;
         for (const auto& request : requests) {
             if (request.bytes.empty() ||
                 request.bytes.size() > m_maximumDatagramBytes ||
+                request.bytes.size() > static_cast<std::size_t>(
+                    (std::numeric_limits<ssize_t>::max)()) ||
+                (m_timestampAvailable !=
+                 request.platformCorrelationId.has_value()) ||
+                (m_timestampAvailable &&
+                 *request.platformCorrelationId != expectedId) ||
                 (m_txtimeAvailable !=
                  request.kernelTransmitTimeNanoseconds.has_value())) {
-                return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                    "invalid Linux Datagram payload or launch time"));
+                return MediaDatagramTransmitSubmitResult::failure(
+                    mediaDatagramTransmitError(
+                        ::media::ErrorInfo::invalidArgument(
+                            "invalid Linux Datagram payload metadata")));
             }
+            ++expectedId;
         }
-        std::size_t submitted = 0;
+
+        std::uint64_t submitted = 0;
         for (const auto& request : requests) {
             iovec vector{const_cast<std::uint8_t*>(request.bytes.data()),
                          request.bytes.size()};
-            std::array<char, CMSG_SPACE(sizeof(std::uint64_t))> control{};
+            alignas(cmsghdr) std::array<std::byte,
+                CMSG_SPACE(sizeof(std::uint64_t))> control{};
             msghdr message{};
             message.msg_name = &m_remote;
             message.msg_namelen = m_remoteLength;
@@ -221,177 +245,254 @@ public:
                 header->cmsg_level = SOL_SOCKET;
                 header->cmsg_type = SCM_TXTIME;
                 header->cmsg_len = CMSG_LEN(sizeof(std::uint64_t));
-                std::memcpy(CMSG_DATA(header),
-                            &*request.kernelTransmitTimeNanoseconds,
-                            sizeof(std::uint64_t));
+                const auto launch = *request.kernelTransmitTimeNanoseconds;
+                std::memcpy(CMSG_DATA(header), &launch, sizeof(launch));
             }
-            if (m_timestampAvailable) {
-                m_pending.push_back(PendingTimestamp{
-                    m_nextTimestampId, request.evidenceId});
-            }
-            const ssize_t accepted = sendmsg(m_socket, &message, 0);
+            const auto accepted = ::sendmsg(m_socket, &message, MSG_DONTWAIT);
             if (accepted < 0) {
-                const int native = erno;
-                if (m_timestampAvailable) m_pending.pop_back();
+                const int native = errno;
                 if ((native == EAGAIN || native == EWOULDBLOCK ||
                      native == ENOBUFS) && submitted == 0) {
-                    return ResultType::success(
+                    return MediaDatagramTransmitSubmitResult::success(
                         MediaDatagramTransmitAttempt::WouldBlock);
                 }
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
+                return submitFailure(
                     submitted == 0
                         ? "Linux Datagram submit failed"
-                        : "Linux Datagram batch delivery is ambiguous",
-                    native));
+                        : "Linux Datagram batch stopped after a submitted prefix",
+                    native,
+                    submitted == 0
+                        ? MediaDatagramTransmitFailureKind::TerminalNoSubmit
+                        : MediaDatagramTransmitFailureKind::PartialSubmittedPrefix,
+                    submitted);
             }
             if (static_cast<std::size_t>(accepted) != request.bytes.size()) {
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Linux Datagram short or partial batch submit"));
+                return submitFailure(
+                    "Linux Datagram short submit has ambiguous delivery", 0,
+                    MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix,
+                    submitted);
             }
-            if (m_timestampAvailable) ++m_nextTimestampId;
             ++submitted;
+            ++m_nextKernelTimestampId;
         }
-        return ResultType::success(MediaDatagramTransmitAttempt::Submitted);
+        return MediaDatagramTransmitSubmitResult::success(
+            MediaDatagramTransmitAttempt::Submitted);
     }
 
     ::media::Result<MediaDatagramWritableWaitResult> waitWritable(
-        MediaRunningTime maximumWait) override
+        MediaRunningTime maximumWait,
+        std::stop_token stopToken) override
     {
-        using ResultType =
-            ::media::Result<MediaDatagramWritableWaitResult>;
-        if (m_socket < 0 || maximumWait.nanoseconds() < 0) {
+        using ResultType = ::media::Result<MediaDatagramWritableWaitResult>;
+        if (m_socket < 0 || m_stopFd < 0 || maximumWait.nanoseconds() < 0) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Linux Datagram writable wait"));
         }
-        const std::uint64_t milliseconds = static_cast<std::uint64_t>(
-            maximumWait.nanoseconds() / 1'000'000) +
-            (maximumWait.nanoseconds() % 1'000'000 != 0 ? 1 : 0);
-        if (milliseconds > static_cast<std::uint64_t>(
-            (std::numeric_limits<int>::max)())) {
+        if (stopToken.stop_requested()) {
+            return ResultType::success(MediaDatagramWritableWaitResult::Stopped);
+        }
+        std::stop_callback callback(stopToken, [fd = m_stopFd]() noexcept {
+            const std::uint64_t one = 1;
+            const auto result = ::write(fd, &one, sizeof(one));
+            (void)result;
+        });
+        const auto nanoseconds =
+            static_cast<std::uint64_t>(maximumWait.nanoseconds());
+        const auto milliseconds = nanoseconds / 1'000'000ULL +
+            (nanoseconds % 1'000'000ULL != 0 ? 1 : 0);
+        if (milliseconds >
+            static_cast<std::uint64_t>((std::numeric_limits<int>::max)())) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "Linux Datagram writable wait exceeds platform range"));
         }
-        pollfd descriptor{m_socket, POLLOUT, 0};
-        const int result = poll(&descriptor, 1, static_cast<int>(milliseconds));
+        pollfd descriptors[2]{{m_socket, POLLOUT, 0},
+                              {m_stopFd, POLLIN, 0}};
+        const int result = ::poll(descriptors, 2,
+                                  static_cast<int>(milliseconds));
+        if (result < 0) {
+            if (errno == EINTR && stopToken.stop_requested()) {
+                return ResultType::success(
+                    MediaDatagramWritableWaitResult::Stopped);
+            }
+            return ResultType::failure(::media::ErrorInfo::ioFailure(
+                "Linux Datagram writable wait failed", errno));
+        }
         if (result == 0) {
             return ResultType::success(
                 MediaDatagramWritableWaitResult::TimedOut);
         }
-        if (result < 0) {
+        if ((descriptors[1].revents & POLLIN) != 0) {
+            std::uint64_t count = 0;
+            while (::read(m_stopFd, &count, sizeof(count)) < 0 &&
+                   errno == EINTR) {
+            }
+            if (stopToken.stop_requested()) {
+                return ResultType::success(
+                    MediaDatagramWritableWaitResult::Stopped);
+            }
             return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Linux Datagram writable wait failed", erno));
+                "Linux Datagram stop wakeup lacked worker causality"));
         }
-        if ((descriptor.revents & POLLOUT) == 0) {
+        if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
             return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Linux Datagram writable wait returned terminal events"));
+                "Linux Datagram socket failed during writable wait"));
+        }
+        if ((descriptors[0].revents & POLLOUT) == 0) {
+            return ResultType::failure(::media::ErrorInfo::ioFailure(
+                "Linux Datagram writable wait returned no writable event"));
         }
         return ResultType::success(MediaDatagramWritableWaitResult::Writable);
     }
 
-    ::media::Result<std::vector<MediaDatagramTransmitEvidence>>
-    drainAvailableEvidence() override
+    ::media::Result<std::vector<MediaDatagramTransmitPlatformEvent>>
+    drainAvailableEvents(
+        std::span<const std::uint32_t> outstandingTimestampIds) override
     {
-        using ResultType =
-            ::media::Result<std::vector<MediaDatagramTransmitEvidence>>;
-        std::vector<MediaDatagramTransmitEvidence> result;
-        if (!m_timestampAvailable) return ResultType::success(std::move(result));
+        using ResultType = ::media::Result<
+            std::vector<MediaDatagramTransmitPlatformEvent>>;
+        std::vector<MediaDatagramTransmitPlatformEvent> events;
+        (void)outstandingTimestampIds;
+        if (!m_timestampAvailable && !m_txtimeAvailable) {
+            return ResultType::success(std::move(events));
+        }
         try {
-            result.reserve(m_pending.size());
+            for (;;) {
+                std::array<std::byte, 1> payload{};
+                iovec vector{payload.data(), payload.size()};
+                alignas(cmsghdr) std::array<std::byte, 512> control{};
+                msghdr message{};
+                message.msg_iov = &vector;
+                message.msg_iovlen = 1;
+                message.msg_control = control.data();
+                message.msg_controllen = control.size();
+                const auto received = ::recvmsg(
+                    m_socket, &message, MSG_ERRQUEUE | MSG_DONTWAIT);
+                if (received < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    return ResultType::failure(::media::ErrorInfo::ioFailure(
+                        "Linux Datagram error queue drain failed", errno));
+                }
+                if ((message.msg_flags & MSG_CTRUNC) != 0) {
+                    return ResultType::failure(::media::ErrorInfo::ioFailure(
+                        "Linux Datagram error queue control data was truncated"));
+                }
+                const sock_extended_err* extended = nullptr;
+                const timespec* timestamps = nullptr;
+                for (auto* header = CMSG_FIRSTHDR(&message); header;
+                     header = CMSG_NXTHDR(&message, header)) {
+                    if ((header->cmsg_level == IPPROTO_IP &&
+                         header->cmsg_type == IP_RECVERR) ||
+                        (header->cmsg_level == IPPROTO_IPV6 &&
+                         header->cmsg_type == IPV6_RECVERR)) {
+                        if (header->cmsg_len <
+                            CMSG_LEN(sizeof(sock_extended_err))) {
+                            return ResultType::failure(
+                                ::media::ErrorInfo::ioFailure(
+                                    "Linux Datagram extended error was truncated"));
+                        }
+                        extended = reinterpret_cast<const sock_extended_err*>(
+                            CMSG_DATA(header));
+                    } else if (header->cmsg_level == SOL_SOCKET &&
+                               header->cmsg_type == SCM_TIMESTAMPING) {
+                        if (header->cmsg_len <
+                            CMSG_LEN(sizeof(timespec) * 3)) {
+                            return ResultType::failure(
+                                ::media::ErrorInfo::ioFailure(
+                                    "Linux Datagram timestamp data was truncated"));
+                        }
+                        timestamps = reinterpret_cast<const timespec*>(
+                            CMSG_DATA(header));
+                    }
+                }
+                if (!extended) {
+                    return ResultType::failure(::media::ErrorInfo::ioFailure(
+                        "Linux Datagram error queue lacked extended metadata"));
+                }
+                if (extended->ee_origin == SO_EE_ORIGIN_TIMESTAMPING) {
+                    if (!m_timestampAvailable || extended->ee_errno != ENOMSG ||
+                        extended->ee_info != SCM_TSTAMP_SND || !timestamps ||
+                        timestamps[0].tv_sec < 0 ||
+                        timestamps[0].tv_nsec < 0 ||
+                        timestamps[0].tv_nsec >= 1'000'000'000L ||
+                        static_cast<std::uint64_t>(timestamps[0].tv_sec) >
+                            ((std::numeric_limits<std::uint64_t>::max)() -
+                             static_cast<std::uint64_t>(timestamps[0].tv_nsec)) /
+                                1'000'000'000ULL) {
+                        return ResultType::failure(::media::ErrorInfo::ioFailure(
+                            "Linux Datagram transmit timestamp metadata is invalid"));
+                    }
+                    events.push_back(MediaDatagramTransmitPlatformEvent{
+                        m_endpointId, m_generation,
+                        MediaDatagramTransmitPlatformEventKind::Timestamp,
+                        extended->ee_data,
+                        MediaDatagramTransmitTimestampSource::LinuxSoftwareRealtime,
+                        static_cast<std::uint64_t>(timestamps[0].tv_sec) *
+                                1'000'000'000ULL +
+                            static_cast<std::uint64_t>(timestamps[0].tv_nsec),
+                        1'000'000'000ULL, 0});
+                } else if (extended->ee_origin == SO_EE_ORIGIN_TXTIME) {
+                    if (!m_txtimeAvailable || extended->ee_errno != ECANCELED) {
+                        return ResultType::failure(::media::ErrorInfo::ioFailure(
+                            "Linux SO_TXTIME error metadata is invalid"));
+                    }
+                    MediaDatagramTransmitPlatformEventKind kind{};
+                    if (extended->ee_code == SO_EE_CODE_TXTIME_MISSED) {
+                        kind = MediaDatagramTransmitPlatformEventKind::TxTimeMissed;
+                    } else if (extended->ee_code ==
+                               SO_EE_CODE_TXTIME_INVALID_PARAM) {
+                        kind = MediaDatagramTransmitPlatformEventKind::TxTimeInvalid;
+                    } else {
+                        return ResultType::failure(::media::ErrorInfo::ioFailure(
+                            "Linux SO_TXTIME returned an unknown error code"));
+                    }
+                    events.push_back(MediaDatagramTransmitPlatformEvent{
+                        m_endpointId, m_generation, kind, 0,
+                        MediaDatagramTransmitTimestampSource::Unknown,
+                        0, 0, extended->ee_data});
+                } else {
+                    return ResultType::failure(::media::ErrorInfo::ioFailure(
+                        "Linux Datagram error queue returned an unknown origin"));
+                }
+            }
         } catch (const std::bad_alloc&) {
             return ResultType::failure(::media::ErrorInfo::allocationFailed(
-                "Linux transmit evidence drain"));
+                "Linux Datagram error queue events"));
         }
-        for (;;) {
-            std::array<char, 256> control{};
-            std::uint8_t byte = 0;
-            iovec vector{&byte, sizeof(byte)};
-            msghdr message{};
-            message.msg_iov = &vector;
-            message.msg_iovlen = 1;
-            message.msg_control = control.data();
-            message.msg_controllen = control.size();
-            if (recvmsg(m_socket, &message, MSG_ERRQUEUE | MSG_DONTWAIT) < 0) {
-                if (erno == EAGAIN || erno == EWOULDBLOCK) break;
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Linux transmit timestamp drain failed", erno));
-            }
-            const sock_extended_err* extended = nullptr;
-            const timespec* timestamps = nullptr;
-            for (auto* header = CMSG_FIRSTHDR(&message); header;
-                 header = CMSG_NXTHDR(&message, header)) {
-                if (header->cmsg_level == SOL_SOCKET &&
-                    header->cmsg_type == SCM_TIMESTAMPING) {
-                    timestamps = reinterpret_cast<const timespec*>(
-                        CMSG_DATA(header));
-                } else if ((header->cmsg_level == SOL_IP &&
-                            header->cmsg_type == IP_RECVERR) ||
-                           (header->cmsg_level == SOL_IPV6 &&
-                            header->cmsg_type == IPV6_RECVERR)) {
-                    extended = reinterpret_cast<const sock_extended_err*>(
-                        CMSG_DATA(header));
-                }
-            }
-            if (!extended || extended->ee_origin != SO_EE_ORIGIN_TIMESTAMPING ||
-                !timestamps) {
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Linux Datagram error queue contained non-timestamp data"));
-            }
-            auto pending = m_pending.end();
-            for (auto it = m_pending.begin(); it != m_pending.end(); ++it) {
-                if (it->platformId == extended->ee_data) {
-                    pending = it;
-                    break;
-                }
-            }
-            if (pending == m_pending.end()) {
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Linux transmit timestamp id is not correlated"));
-            }
-            const timespec& timestamp = timestamps[0].tv_sec != 0 ||
-                    timestamps[0].tv_nsec != 0 ? timestamps[0] : timestamps[2];
-            if (timestamp.tv_sec < 0 || timestamp.tv_nsec < 0 ||
-                timestamp.tv_nsec >= 1'000'000'000 ||
-                static_cast<std::uint64_t>(timestamp.tv_sec) >
-                    ((std::numeric_limits<std::uint64_t>::max)() -
-                     static_cast<std::uint64_t>(timestamp.tv_nsec)) /
-                        1'000'000'000ULL) {
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Linux transmit timestamp is not representable"));
-            }
-            const std::uint64_t nanoseconds =
-                static_cast<std::uint64_t>(timestamp.tv_sec) *
-                    1'000'000'000ULL +
-                static_cast<std::uint64_t>(timestamp.tv_nsec);
-            result.push_back(MediaDatagramTransmitEvidence{
-                m_endpointId, m_generation, pending->evidenceId, nanoseconds});
-            m_pending.erase(pending);
-        }
-        return ResultType::success(std::move(result));
+        return ResultType::success(std::move(events));
     }
 
     ::media::Status close() noexcept override
     {
-        if (m_socket < 0) return ::media::Status::success();
-        const int handle = m_socket;
-        m_socket = -1;
-        m_pending.clear();
-        if (::close(handle) != 0) {
-            return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-                "Linux Datagram close failed", erno));
+        ::media::Status status = ::media::Status::success();
+        if (m_socket >= 0) {
+            const int handle = m_socket;
+            m_socket = -1;
+            if (::close(handle) != 0) {
+                status = ::media::Status::failure(::media::ErrorInfo::ioFailure(
+                    "Linux Datagram close failed", errno));
+            }
         }
-        return ::media::Status::success();
+        if (m_stopFd >= 0) {
+            const int handle = m_stopFd;
+            m_stopFd = -1;
+            if (::close(handle) != 0 && status) {
+                status = ::media::Status::failure(::media::ErrorInfo::ioFailure(
+                    "Linux Datagram stop wakeup close failed", errno));
+            }
+        }
+        return status;
     }
 
 private:
     std::shared_ptr<MediaSocketRuntime> m_runtime;
     int m_socket = -1;
+    int m_stopFd = -1;
     sockaddr_storage m_remote{};
     socklen_t m_remoteLength = 0;
     std::uint64_t m_endpointId = 0;
     std::uint64_t m_generation = 0;
     std::size_t m_maximumDatagramBytes = 0;
-    std::uint32_t m_nextTimestampId = 0;
-    std::vector<PendingTimestamp> m_pending;
+    std::uint32_t m_nextKernelTimestampId = 0;
     bool m_timestampAvailable = false;
     bool m_txtimeAvailable = false;
     bool m_openAttempted = false;

@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <mswsock.h>
 #include <mstcpip.h>
+#include <windows.h>
 #include <ws2tcpip.h>
 
 #include <array>
@@ -15,19 +16,12 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-struct PendingTimestamp final {
-    std::uint32_t platformId;
-    std::uint64_t evidenceId;
-};
-
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
                             sockaddr_storage& storage,
                             int& length) noexcept
 {
     std::memset(&storage, 0, sizeof(storage));
-    const int family = endpoint.addressFamily() == MediaIpAddressFamily::Ipv4
-        ? AF_INET : AF_INET6;
-    if (family == AF_INET) {
+    if (endpoint.addressFamily() == MediaIpAddressFamily::Ipv4) {
         auto* value = reinterpret_cast<sockaddr_in*>(&storage);
         value->sin_family = AF_INET;
         value->sin_port = htons(endpoint.port());
@@ -48,6 +42,17 @@ struct PendingTimestamp final {
     }
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "invalid numeric Windows Datagram address"));
+}
+
+MediaDatagramTransmitSubmitResult submitFailure(
+    const char* message,
+    int nativeCode,
+    MediaDatagramTransmitFailureKind kind,
+    std::uint64_t prefix)
+{
+    return MediaDatagramTransmitSubmitResult::failure(
+        mediaDatagramTransmitError(
+            ::media::ErrorInfo::ioFailure(message, nativeCode), kind, prefix));
 }
 
 class MediaWindowsDatagramTransmitPort final
@@ -73,16 +78,13 @@ public:
             request.endpoint.socketHardBoundBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
-                request.endpoint.addressFamily) {
+                request.endpoint.addressFamily ||
+            request.executionMode !=
+                MediaDatagramTransmitExecutionMode::UserspaceNonblocking) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Windows Datagram port open request"));
         }
         m_openAttempted = true;
-        if (request.executionMode !=
-            MediaDatagramTransmitExecutionMode::UserspaceNonblocking) {
-            return ResultType::failure(::media::ErrorInfo::unsupported(
-                "SO_TXTIME is not a Windows Datagram capability"));
-        }
         const int family = request.endpoint.addressFamily ==
                 MediaIpAddressFamily::Ipv4 ? AF_INET : AF_INET6;
         SOCKET handle = ::socket(family, SOCK_DGRAM, IPPROTO_UDP);
@@ -90,7 +92,11 @@ public:
             return ResultType::failure(::media::ErrorInfo::ioFailure(
                 "Windows Datagram socket creation failed", WSAGetLastError()));
         }
-        const auto fail = [&handle](::media::ErrorInfo error) {
+        WSAEVENT socketEvent = WSA_INVALID_EVENT;
+        HANDLE stopEvent = nullptr;
+        const auto fail = [&](::media::ErrorInfo error) {
+            if (socketEvent != WSA_INVALID_EVENT) WSACloseEvent(socketEvent);
+            if (stopEvent) CloseHandle(stopEvent);
             closesocket(handle);
             return ResultType::failure(std::move(error));
         };
@@ -142,8 +148,29 @@ public:
                 "Windows Datagram WSASendMsg capability lookup failed",
                 WSAGetLastError()));
         }
-        MediaDatagramTransmitTimestampAvailability timestampAvailability =
+        socketEvent = WSACreateEvent();
+        if (socketEvent == WSA_INVALID_EVENT) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram socket-event creation failed",
+                WSAGetLastError()));
+        }
+        stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!stopEvent) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram stop-event creation failed",
+                static_cast<int>(GetLastError())));
+        }
+        if (WSAEventSelect(handle, socketEvent, FD_WRITE | FD_CLOSE) ==
+            SOCKET_ERROR) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram wait wakeup initialization failed",
+                WSAGetLastError()));
+        }
+
+        auto timestampAvailability =
             MediaDatagramTransmitTimestampAvailability::NotRequested;
+        auto timestampSource = MediaDatagramTransmitTimestampSource::Unknown;
+        std::uint64_t timestampFrequency = 0;
         if (request.evidence) {
             timestampAvailability =
                 MediaDatagramTransmitTimestampAvailability::Unavailable;
@@ -154,17 +181,17 @@ public:
                 config.Flags = TIMESTAMPING_FLAG_TX;
                 config.TxTimestampsBuffered = static_cast<USHORT>(
                     request.evidence->maximumCorrelationEntries);
+                LARGE_INTEGER frequency{};
                 if (WSAIoctl(handle, SIO_TIMESTAMPING, &config, sizeof(config),
-                             nullptr, 0, &bytes, nullptr, nullptr) == 0) {
-                    try {
-                        m_pending.reserve(static_cast<std::size_t>(
-                            request.evidence->maximumCorrelationEntries));
-                        timestampAvailability =
-                            MediaDatagramTransmitTimestampAvailability::Available;
-                    } catch (const std::bad_alloc&) {
-                        return fail(::media::ErrorInfo::allocationFailed(
-                            "Windows transmit timestamp correlation"));
-                    }
+                             nullptr, 0, &bytes, nullptr, nullptr) == 0 &&
+                    QueryPerformanceFrequency(&frequency) &&
+                    frequency.QuadPart > 0) {
+                    timestampAvailability =
+                        MediaDatagramTransmitTimestampAvailability::Available;
+                    timestampSource = MediaDatagramTransmitTimestampSource::
+                        WindowsPerformanceCounter;
+                    timestampFrequency =
+                        static_cast<std::uint64_t>(frequency.QuadPart);
                 }
             }
         }
@@ -178,92 +205,104 @@ public:
                 WSAGetLastError()));
         }
         m_socket = handle;
+        m_socketEvent = socketEvent;
+        m_stopEvent = stopEvent;
         m_endpointId = request.endpoint.endpointId;
         m_generation = request.generation;
         m_maximumDatagramBytes = request.endpoint.maximumDatagramBytes;
         m_timestampAvailable = timestampAvailability ==
             MediaDatagramTransmitTimestampAvailability::Available;
+        m_timestampFrequency = timestampFrequency;
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
             request.endpoint.socketHardBoundBytes,
-            static_cast<std::uint64_t>(effectiveBuffer),
-            timestampAvailability, false, false});
+            static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
+            timestampSource, timestampFrequency,
+            m_timestampAvailable
+                ? MediaDatagramTransmitCorrelationMode::CallerSelectedUint32
+                : MediaDatagramTransmitCorrelationMode::None,
+            false, false});
     }
 
-    ::media::Result<MediaDatagramTransmitAttempt> trySubmit(
-        std::span<const MediaDatagramTransmitRequest> requests) override
+    MediaDatagramTransmitSubmitResult trySubmit(
+        std::span<const MediaDatagramTransmitPortRequest> requests) override
     {
-        using ResultType = ::media::Result<MediaDatagramTransmitAttempt>;
         if (m_socket == INVALID_SOCKET || requests.empty()) {
-            return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                "invalid Windows Datagram submit request"));
-        }
-        if (m_timestampAvailable &&
-            requests.size() > m_pending.capacity() - m_pending.size()) {
-            return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Windows transmit timestamp correlation cannot admit batch"));
+            return MediaDatagramTransmitSubmitResult::failure(
+                mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
+                    "invalid Windows Datagram submit request")));
         }
         for (const auto& request : requests) {
             if (request.bytes.empty() ||
                 request.bytes.size() > m_maximumDatagramBytes ||
                 request.bytes.size() > static_cast<std::size_t>(
                     (std::numeric_limits<ULONG>::max)()) ||
-                request.kernelTransmitTimeNanoseconds) {
-                return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                    "invalid Windows Datagram payload or launch time"));
+                request.kernelTransmitTimeNanoseconds ||
+                (m_timestampAvailable !=
+                 request.platformCorrelationId.has_value())) {
+                return MediaDatagramTransmitSubmitResult::failure(
+                    mediaDatagramTransmitError(
+                        ::media::ErrorInfo::invalidArgument(
+                            "invalid Windows Datagram payload metadata")));
             }
         }
-        std::size_t submitted = 0;
+        std::uint64_t submitted = 0;
         for (const auto& request : requests) {
             WSABUF buffer{static_cast<ULONG>(request.bytes.size()),
                           reinterpret_cast<char*>(
                               const_cast<std::uint8_t*>(request.bytes.data()))};
-            std::array<char, WSA_CMSG_SPACE(sizeof(UINT32))> control{};
+            std::array<std::uint64_t,
+                WSA_CMSG_SPACE(sizeof(UINT32)) / sizeof(std::uint64_t) + 1>
+                control{};
             WSAMSG message{};
             message.name = reinterpret_cast<sockaddr*>(&m_remote);
             message.namelen = m_remoteLength;
             message.lpBuffers = &buffer;
             message.dwBufferCount = 1;
-            std::uint32_t platformId = 0;
             if (m_timestampAvailable) {
-                platformId = m_nextTimestampId++;
-                message.Control.buf = control.data();
-                message.Control.len = static_cast<ULONG>(control.size());
+                message.Control.buf = reinterpret_cast<char*>(control.data());
+                message.Control.len = WSA_CMSG_SPACE(sizeof(UINT32));
                 auto* header = WSA_CMSG_FIRSTHDR(&message);
                 header->cmsg_level = SOL_SOCKET;
                 header->cmsg_type = SO_TIMESTAMP_ID;
                 header->cmsg_len = WSA_CMSG_LEN(sizeof(UINT32));
-                std::memcpy(WSA_CMSG_DATA(header), &platformId,
-                            sizeof(platformId));
-                m_pending.push_back(
-                    PendingTimestamp{platformId, request.evidenceId});
+                const UINT32 id = *request.platformCorrelationId;
+                std::memcpy(WSA_CMSG_DATA(header), &id, sizeof(id));
             }
             DWORD accepted = 0;
             if (m_sendMsg(m_socket, &message, 0, &accepted,
                           nullptr, nullptr) == SOCKET_ERROR) {
                 const int native = WSAGetLastError();
-                if (m_timestampAvailable) m_pending.pop_back();
                 if ((native == WSAEWOULDBLOCK || native == WSAENOBUFS) &&
                     submitted == 0) {
-                    return ResultType::success(
+                    return MediaDatagramTransmitSubmitResult::success(
                         MediaDatagramTransmitAttempt::WouldBlock);
                 }
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
+                return submitFailure(
                     submitted == 0
                         ? "Windows Datagram submit failed"
-                        : "Windows Datagram batch delivery is ambiguous",
-                    native));
+                        : "Windows Datagram batch stopped after a submitted prefix",
+                    native,
+                    submitted == 0
+                        ? MediaDatagramTransmitFailureKind::TerminalNoSubmit
+                        : MediaDatagramTransmitFailureKind::PartialSubmittedPrefix,
+                    submitted);
             }
             if (accepted != request.bytes.size()) {
-                return ResultType::failure(::media::ErrorInfo::ioFailure(
-                    "Windows Datagram short or partial batch submit"));
+                return submitFailure(
+                    "Windows Datagram short submit has ambiguous delivery",
+                    0,
+                    MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix,
+                    submitted);
             }
             ++submitted;
         }
-        return ResultType::success(MediaDatagramTransmitAttempt::Submitted);
+        return MediaDatagramTransmitSubmitResult::success(
+            MediaDatagramTransmitAttempt::Submitted);
     }
 
     ::media::Result<MediaDatagramWritableWaitResult> waitWritable(
-        MediaRunningTime maximumWait) override
+        MediaRunningTime maximumWait,
+        std::stop_token stopToken) override
     {
         using ResultType =
             ::media::Result<MediaDatagramWritableWaitResult>;
@@ -271,91 +310,129 @@ public:
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Windows Datagram writable wait"));
         }
+        if (stopToken.stop_requested()) {
+            return ResultType::success(MediaDatagramWritableWaitResult::Stopped);
+        }
+        ResetEvent(m_stopEvent);
+        std::stop_callback callback(stopToken, [event = m_stopEvent]() noexcept {
+            SetEvent(event);
+        });
         const std::uint64_t milliseconds = static_cast<std::uint64_t>(
             maximumWait.nanoseconds() / 1'000'000) +
             (maximumWait.nanoseconds() % 1'000'000 != 0 ? 1 : 0);
-        if (milliseconds > static_cast<std::uint64_t>(
-            (std::numeric_limits<int>::max)())) {
+        if (milliseconds > MAXDWORD - 1) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "Windows Datagram writable wait exceeds platform range"));
         }
-        WSAPOLLFD descriptor{m_socket, POLLWRNORM, 0};
-        const int result = WSAPoll(&descriptor, 1,
-                                   static_cast<int>(milliseconds));
-        if (result == 0) {
-            return ResultType::success(
-                MediaDatagramWritableWaitResult::TimedOut);
+        const HANDLE handles[2] = {m_socketEvent, m_stopEvent};
+        const DWORD result = WaitForMultipleObjects(
+            2, handles, FALSE, static_cast<DWORD>(milliseconds));
+        if (result == WAIT_TIMEOUT) {
+            return ResultType::success(MediaDatagramWritableWaitResult::TimedOut);
         }
-        if (result == SOCKET_ERROR) {
-            return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Windows Datagram writable wait failed", WSAGetLastError()));
+        if (result == WAIT_OBJECT_0 + 1) {
+            return ResultType::success(MediaDatagramWritableWaitResult::Stopped);
         }
-        if ((descriptor.revents & POLLWRNORM) == 0) {
+        if (result != WAIT_OBJECT_0) {
             return ResultType::failure(::media::ErrorInfo::ioFailure(
-                "Windows Datagram writable wait returned terminal events"));
+                "Windows Datagram writable wait failed",
+                static_cast<int>(GetLastError())));
+        }
+        WSANETWORKEVENTS events{};
+        if (WSAEnumNetworkEvents(m_socket, m_socketEvent, &events) ==
+            SOCKET_ERROR) {
+            return ResultType::failure(::media::ErrorInfo::ioFailure(
+                "Windows Datagram network-event drain failed",
+                WSAGetLastError()));
+        }
+        if ((events.lNetworkEvents & FD_CLOSE) != 0) {
+            return ResultType::failure(::media::ErrorInfo::ioFailure(
+                "Windows Datagram socket closed during writable wait",
+                events.iErrorCode[FD_CLOSE_BIT]));
+        }
+        if ((events.lNetworkEvents & FD_WRITE) == 0 ||
+            events.iErrorCode[FD_WRITE_BIT] != 0) {
+            return ResultType::failure(::media::ErrorInfo::ioFailure(
+                "Windows Datagram writable event is invalid",
+                events.iErrorCode[FD_WRITE_BIT]));
         }
         return ResultType::success(MediaDatagramWritableWaitResult::Writable);
     }
 
-    ::media::Result<std::vector<MediaDatagramTransmitEvidence>>
-    drainAvailableEvidence() override
+    ::media::Result<std::vector<MediaDatagramTransmitPlatformEvent>>
+    drainAvailableEvents(
+        std::span<const std::uint32_t> outstandingTimestampIds) override
     {
-        using ResultType =
-            ::media::Result<std::vector<MediaDatagramTransmitEvidence>>;
-        std::vector<MediaDatagramTransmitEvidence> result;
+        using ResultType = ::media::Result<
+            std::vector<MediaDatagramTransmitPlatformEvent>>;
+        std::vector<MediaDatagramTransmitPlatformEvent> result;
         if (!m_timestampAvailable) return ResultType::success(std::move(result));
         try {
-            result.reserve(m_pending.size());
+            result.reserve(outstandingTimestampIds.size());
         } catch (const std::bad_alloc&) {
             return ResultType::failure(::media::ErrorInfo::allocationFailed(
                 "Windows transmit evidence drain"));
         }
-        for (auto it = m_pending.begin(); it != m_pending.end();) {
-            UINT32 id = it->platformId;
+        for (const auto correlationId : outstandingTimestampIds) {
+            UINT32 id = correlationId;
             UINT64 timestamp = 0;
             DWORD bytes = 0;
             if (WSAIoctl(m_socket, SIO_GET_TX_TIMESTAMP,
                          &id, sizeof(id), &timestamp, sizeof(timestamp),
                          &bytes, nullptr, nullptr) == SOCKET_ERROR) {
                 const int native = WSAGetLastError();
-                if (native == WSAEWOULDBLOCK) {
-                    ++it;
-                    continue;
-                }
+                if (native == WSAEWOULDBLOCK) continue;
                 return ResultType::failure(::media::ErrorInfo::ioFailure(
                     "Windows transmit timestamp drain failed", native));
             }
-            result.push_back(MediaDatagramTransmitEvidence{
-                m_endpointId, m_generation, it->evidenceId, timestamp});
-            it = m_pending.erase(it);
+            if (bytes != sizeof(timestamp)) {
+                return ResultType::failure(::media::ErrorInfo::ioFailure(
+                    "Windows transmit timestamp has an invalid size"));
+            }
+            result.push_back(MediaDatagramTransmitPlatformEvent{
+                m_endpointId, m_generation,
+                MediaDatagramTransmitPlatformEventKind::Timestamp,
+                correlationId,
+                MediaDatagramTransmitTimestampSource::WindowsPerformanceCounter,
+                timestamp, m_timestampFrequency, 0});
         }
         return ResultType::success(std::move(result));
     }
 
     ::media::Status close() noexcept override
     {
-        if (m_socket == INVALID_SOCKET) return ::media::Status::success();
-        const SOCKET handle = m_socket;
-        m_socket = INVALID_SOCKET;
-        m_pending.clear();
-        if (closesocket(handle) == SOCKET_ERROR) {
-            return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-                "Windows Datagram close failed", WSAGetLastError()));
+        ::media::Status status = ::media::Status::success();
+        if (m_socket != INVALID_SOCKET) {
+            const SOCKET handle = m_socket;
+            m_socket = INVALID_SOCKET;
+            if (closesocket(handle) == SOCKET_ERROR) {
+                status = ::media::Status::failure(::media::ErrorInfo::ioFailure(
+                    "Windows Datagram close failed", WSAGetLastError()));
+            }
         }
-        return ::media::Status::success();
+        if (m_socketEvent != WSA_INVALID_EVENT) {
+            WSACloseEvent(m_socketEvent);
+            m_socketEvent = WSA_INVALID_EVENT;
+        }
+        if (m_stopEvent) {
+            CloseHandle(m_stopEvent);
+            m_stopEvent = nullptr;
+        }
+        return status;
     }
 
 private:
     std::shared_ptr<MediaSocketRuntime> m_runtime;
     SOCKET m_socket = INVALID_SOCKET;
     LPFN_WSASENDMSG m_sendMsg = nullptr;
+    WSAEVENT m_socketEvent = WSA_INVALID_EVENT;
+    HANDLE m_stopEvent = nullptr;
     sockaddr_storage m_remote{};
     int m_remoteLength = 0;
     std::uint64_t m_endpointId = 0;
     std::uint64_t m_generation = 0;
     std::size_t m_maximumDatagramBytes = 0;
-    std::uint32_t m_nextTimestampId = 0;
-    std::vector<PendingTimestamp> m_pending;
+    std::uint64_t m_timestampFrequency = 0;
     bool m_timestampAvailable = false;
     bool m_openAttempted = false;
 };

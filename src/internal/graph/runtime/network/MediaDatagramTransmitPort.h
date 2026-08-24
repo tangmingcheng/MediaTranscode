@@ -8,6 +8,9 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -25,7 +28,8 @@ enum class MediaDatagramTransmitAttempt {
 
 enum class MediaDatagramWritableWaitResult {
     Writable = 1,
-    TimedOut = 2
+    TimedOut = 2,
+    Stopped = 3
 };
 
 enum class MediaDatagramTransmitTimestampAvailability {
@@ -34,25 +38,63 @@ enum class MediaDatagramTransmitTimestampAvailability {
     Unavailable = 3
 };
 
+enum class MediaDatagramTransmitTimestampSource {
+    Unknown = 0,
+    WindowsPerformanceCounter = 1,
+    LinuxSoftwareRealtime = 2
+};
+
+enum class MediaDatagramTransmitCorrelationMode {
+    None = 1,
+    CallerSelectedUint32 = 2,
+    KernelSequentialUint32 = 3
+};
+
+enum class MediaDatagramTransmitPlatformEventKind {
+    Timestamp = 1,
+    TxTimeMissed = 2,
+    TxTimeInvalid = 3
+};
+
+enum class MediaDatagramTransmitFailureKind {
+    TerminalNoSubmit = 1,
+    PartialSubmittedPrefix = 2,
+    AmbiguousSubmittedPrefix = 3
+};
+
+struct MediaDatagramTransmitError final {
+    ::media::ErrorInfo cause;
+    MediaDatagramTransmitFailureKind kind;
+    std::uint64_t submittedPrefixDatagrams;
+};
+
 struct MediaDatagramTransmitPortCapabilities final {
     std::uint64_t requestedSendBufferBytes;
     std::uint64_t effectiveSendBufferBytes;
     MediaDatagramTransmitTimestampAvailability timestampAvailability;
+    MediaDatagramTransmitTimestampSource timestampSource;
+    std::uint64_t timestampCounterFrequency;
+    MediaDatagramTransmitCorrelationMode correlationMode;
     bool kernelTransmitTimeAvailable;
     bool zeroCopyEnabled;
 };
 
-struct MediaDatagramTransmitEvidence final {
-    std::uint64_t endpointId;
-    std::uint64_t generation;
-    std::uint64_t evidenceId;
-    std::uint64_t platformTimestampNanoseconds;
+struct MediaDatagramTransmitPlatformEvent final {
+    std::uint64_t endpointId = 0;
+    std::uint64_t generation = 0;
+    MediaDatagramTransmitPlatformEventKind kind =
+        MediaDatagramTransmitPlatformEventKind::Timestamp;
+    std::uint32_t platformCorrelationId = 0;
+    MediaDatagramTransmitTimestampSource timestampSource =
+        MediaDatagramTransmitTimestampSource::Unknown;
+    std::uint64_t rawTimestampCounter = 0;
+    std::uint64_t rawTimestampFrequency = 0;
+    std::uint32_t launchTimeLowBits = 0;
 };
 
-struct MediaDatagramTransmitRequest final {
+struct MediaDatagramTransmitPortRequest final {
     std::span<const std::uint8_t> bytes;
-    std::uint64_t evidenceId;
-    MediaRunningTime enqueueNotAfter;
+    std::optional<std::uint32_t> platformCorrelationId;
     std::optional<std::uint64_t> kernelTransmitTimeNanoseconds;
 };
 
@@ -66,18 +108,23 @@ struct MediaDatagramTransmitPortOpenRequest final {
     std::optional<MediaDatagramTransmitEvidencePlan> evidence;
 };
 
+using MediaDatagramTransmitSubmitResult =
+    ::media::Result<MediaDatagramTransmitAttempt, MediaDatagramTransmitError>;
+
 class MediaDatagramTransmitPort {
 public:
     virtual ~MediaDatagramTransmitPort() = default;
 
     virtual ::media::Result<MediaDatagramTransmitPortCapabilities> open(
         const MediaDatagramTransmitPortOpenRequest& request) = 0;
-    virtual ::media::Result<MediaDatagramTransmitAttempt> trySubmit(
-        std::span<const MediaDatagramTransmitRequest> requests) = 0;
+    virtual MediaDatagramTransmitSubmitResult trySubmit(
+        std::span<const MediaDatagramTransmitPortRequest> requests) = 0;
     virtual ::media::Result<MediaDatagramWritableWaitResult> waitWritable(
-        MediaRunningTime maximumWait) = 0;
-    virtual ::media::Result<std::vector<MediaDatagramTransmitEvidence>>
-    drainAvailableEvidence() = 0;
+        MediaRunningTime maximumWait,
+        std::stop_token stopToken) = 0;
+    virtual ::media::Result<std::vector<MediaDatagramTransmitPlatformEvent>>
+    drainAvailableEvents(
+        std::span<const std::uint32_t> outstandingTimestampIds) = 0;
     virtual ::media::Status close() noexcept = 0;
 };
 
@@ -87,5 +134,15 @@ public:
     virtual ::media::Result<std::unique_ptr<MediaDatagramTransmitPort>>
     create() = 0;
 };
+
+inline MediaDatagramTransmitError mediaDatagramTransmitError(
+    ::media::ErrorInfo cause,
+    MediaDatagramTransmitFailureKind kind =
+        MediaDatagramTransmitFailureKind::TerminalNoSubmit,
+    std::uint64_t submittedPrefixDatagrams = 0)
+{
+    return MediaDatagramTransmitError{
+        std::move(cause), kind, submittedPrefixDatagrams};
+}
 
 } // namespace media::ffmpeg::graph
