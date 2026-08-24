@@ -111,12 +111,6 @@ std::size_t MediaAvStartupUnitIdHash::operator()(
 MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
     MediaAvStartupConfig config)
 {
-    const bool videoCapacityOverflow = config.maximumVideoUnitBytes != 0 &&
-        config.videoCapacity > std::numeric_limits<std::uint64_t>::max() /
-                                   config.maximumVideoUnitBytes;
-    const bool audioCapacityOverflow = config.maximumAudioUnitBytes != 0 &&
-        config.audioCapacity > std::numeric_limits<std::uint64_t>::max() /
-                                   config.maximumAudioUnitBytes;
     if (!config.requireVideoKeyFrame ||
         config.allowDegradedClock ||
         config.maximumWait <= Zero || config.preroll <= Zero ||
@@ -133,13 +127,8 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         config.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
         config.videoByteCapacity == 0 || config.audioByteCapacity == 0 ||
         config.maximumVideoUnitBytes == 0 || config.maximumAudioUnitBytes == 0 ||
-        videoCapacityOverflow || audioCapacityOverflow ||
-        (!videoCapacityOverflow &&
-         config.videoByteCapacity != static_cast<std::uint64_t>(config.videoCapacity) *
-                                         config.maximumVideoUnitBytes) ||
-        (!audioCapacityOverflow &&
-         config.audioByteCapacity != static_cast<std::uint64_t>(config.audioCapacity) *
-                                         config.maximumAudioUnitBytes) ||
+        config.maximumVideoUnitBytes > config.videoByteCapacity ||
+        config.maximumAudioUnitBytes > config.audioByteCapacity ||
         config.maximumVideoUnitBytes >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
         config.maximumAudioUnitBytes >

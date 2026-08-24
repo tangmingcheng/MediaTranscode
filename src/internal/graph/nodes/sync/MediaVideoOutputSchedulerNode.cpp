@@ -133,9 +133,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     m_packetCapacity = static_cast<std::size_t>(packetCapacity.value());
     m_maximumUnitBytes = static_cast<std::uint64_t>(maximumUnitBytes.value());
     m_byteCapacity = static_cast<std::uint64_t>(byteCapacity.value());
-    if (m_packetCapacity > m_byteCapacity / m_maximumUnitBytes ||
-        static_cast<std::uint64_t>(m_packetCapacity) * m_maximumUnitBytes !=
-            m_byteCapacity) {
+    if (m_maximumUnitBytes > m_byteCapacity) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoOnly scheduler startup bounds are inconsistent"));
     }

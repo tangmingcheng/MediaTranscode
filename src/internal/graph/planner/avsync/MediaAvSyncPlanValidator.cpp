@@ -41,8 +41,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         std::numeric_limits<std::int64_t>::max());
     return positive(units) && positive(maximumUnitBytes) && positive(bytes) &&
            *maximumUnitBytes <= MaximumSerialized && *bytes <= MaximumSerialized &&
-           *units <= std::numeric_limits<std::uint64_t>::max() / *maximumUnitBytes &&
-           *bytes == static_cast<std::uint64_t>(*units) * *maximumUnitBytes;
+           *maximumUnitBytes <= *bytes;
 }
 
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)

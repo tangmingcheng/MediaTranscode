@@ -23,12 +23,7 @@ namespace media::ffmpeg::graph {
         runtime.startup.packetCapacity == 0 ||
         runtime.startup.maximumUnitBytes == 0 ||
         runtime.startup.packetCapacity != runtime.queues.packet ||
-        runtime.startup.packetCapacity >
-            std::numeric_limits<std::uint64_t>::max() /
-                runtime.startup.maximumUnitBytes ||
-        runtime.startup.byteCapacity !=
-            static_cast<std::uint64_t>(runtime.startup.packetCapacity) *
-                runtime.startup.maximumUnitBytes) {
+        runtime.startup.maximumUnitBytes > runtime.startup.byteCapacity) {
         return invalid("startup policy");
     }
     if (!runtime.timing.sourceTimeBase.isKnown() ||

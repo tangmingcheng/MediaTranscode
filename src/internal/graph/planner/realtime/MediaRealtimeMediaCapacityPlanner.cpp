@@ -20,32 +20,28 @@ MediaRealtimeMediaCapacityPlanner::plan(
                 MediaTranscodeStreamSet::AudioVideo
             ? std::uint64_t{2}
             : std::uint64_t{1};
-    const auto units = static_cast<std::uint64_t>(
-        request.parameters.queues.packet);
     const auto& deployment = request.deployment->encode();
     const auto bytesPerStream =
         deployment.resources.maximumBacklogBytes / streamCount;
-    const auto unitBytes = bytesPerStream / units;
-    if (unitBytes == 0 ||
-        unitBytes > static_cast<std::uint64_t>(
+    if (bytesPerStream == 0 ||
+        bytesPerStream > static_cast<std::uint64_t>(
             (std::numeric_limits<std::int64_t>::max)())) {
         return ::media::Result<MediaRealtimeMediaCapacityPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Realtime deployment byte budget cannot admit one media unit per planned queue slot"));
+                "Realtime deployment byte budget cannot admit one media stream"));
     }
-    const auto admittedBytes = units * unitBytes;
     MediaRealtimeMediaCapacityPlan product{
         request.parameters.queues.packet,
-        unitBytes,
-        admittedBytes,
+        bytesPerStream,
+        bytesPerStream,
         std::nullopt,
         std::nullopt,
         std::nullopt,
         deployment.latency.maximumResidence};
     if (streamCount == 2) {
         product.audioUnits = request.parameters.queues.packet;
-        product.audioUnitBytes = unitBytes;
-        product.audioBytes = admittedBytes;
+        product.audioUnitBytes = bytesPerStream;
+        product.audioBytes = bytesPerStream;
     }
     return ::media::Result<MediaRealtimeMediaCapacityPlan>::success(
         std::move(product));
