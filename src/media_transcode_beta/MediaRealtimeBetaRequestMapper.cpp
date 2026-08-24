@@ -60,6 +60,13 @@ MediaRealtimeBetaRequestMapper::map(
     }
     ffmpeg::graph::MediaRealtimeRtpTranscodeRequest request;
     request.mediaId = config.mediaId();
+    auto deployment = ffmpeg::graph::MediaRealtimeDeploymentEnvelope::decode(
+        config.deployment().encode());
+    if (!deployment) {
+        return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::failure(
+            deployment.error());
+    }
+    request.deployment = std::move(deployment).value();
     request.input.type = ffmpeg::graph::RealtimeInputType::RtpPort;
     request.input.streamLayout = profile.inputLayout;
     request.input.url = rtpUrl(config);
@@ -107,11 +114,6 @@ MediaRealtimeBetaRequestMapper::map(
     request.output.host = config.destinationAddress();
     request.output.basePort = static_cast<std::size_t>(config.destinationPort());
     request.output.sdpPath = sessionOwnedSdpPath;
-    request.output.packetSize = profile.mpegTsRtpPacketSizeBytes;
-    request.output.pacingBitrateBps = static_cast<std::int64_t>(
-        config.transportPacingBitrateBps());
-    request.output.transportDecodeLeadMs = static_cast<int>(
-        config.transportDecodeLeadMs());
     return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::success(
         std::move(request));
 }

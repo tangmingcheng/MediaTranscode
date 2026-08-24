@@ -6,6 +6,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -91,8 +92,6 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--input-layout",
         "--output-layout",
         "--output-transport",
-        "--output-pacing-bitrate-bps",
-        "--output-transport-lead-ms",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -114,7 +113,6 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--rtp-host",
         "--rtp-port",
         "--sdp",
-        "--packet-size",
         "--output",
         "--max-duration",
         "--progress-timeout-ms",
@@ -127,12 +125,110 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--prepared-handoff-audio-packets",
         "--prepared-handoff-video-bytes",
         "--prepared-handoff-audio-bytes",
+        "--egress-scope-kind",
+        "--egress-scope-id",
+        "--egress-scope-authority",
+        "--egress-mtu-authority",
+        "--egress-maximum-ip-packet-bytes",
+        "--egress-ip-header-bytes",
+        "--egress-transport-header-bytes",
+        "--egress-sender-maximum-payload-bytes",
+        "--egress-sustained-wire-bytes-per-second",
+        "--egress-peak-wire-bytes-per-second",
+        "--egress-burst-wire-bytes",
+        "--egress-service-authority",
+        "--egress-maximum-backlog-datagrams",
+        "--egress-maximum-backlog-bytes",
+        "--egress-maximum-residence-ms",
+        "--egress-maximum-batch-datagrams",
+        "--egress-maximum-batch-bytes",
+        "--egress-maximum-endpoint-pending-datagrams",
+        "--egress-maximum-endpoint-pending-bytes",
+        "--egress-socket-hard-bound-bytes",
+        "--egress-resource-authority",
+        "--egress-target-residence-ms",
+        "--egress-latency-authority",
+        "--egress-observation-run-datagrams",
+        "--egress-observation-correlation-entries",
+        "--egress-observation-drain-residence-ms",
+        "--egress-observation-authority",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
     std::vector<std::string> flagArgs = commonVideoTranscodeFlagArgs();
     flagArgs.push_back("--no-low-latency");
     rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
+}
+
+MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
+    int argc, char** argv)
+{
+    const std::string scopeKind = requiredArg(
+        argc, argv, "--egress-scope-kind");
+    MediaDatagramServiceScopeKind kind =
+        MediaDatagramServiceScopeKind::Unknown;
+    if (scopeKind == "managed") {
+        kind = MediaDatagramServiceScopeKind::ManagedEgress;
+    } else if (scopeKind == "provisioned") {
+        kind = MediaDatagramServiceScopeKind::ProvisionedEgress;
+    } else {
+        throw std::invalid_argument(
+            "--egress-scope-kind must be managed or provisioned");
+    }
+    const auto milliseconds = [&](const char* option) {
+        const std::size_t value = requiredSizeArg(argc, argv, option);
+        if (value == 0 || value > static_cast<std::size_t>(
+                std::numeric_limits<std::int64_t>::max() / 1'000'000)) {
+            throw std::invalid_argument(
+                std::string(option) + " is outside the running-time range");
+        }
+        return MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(value) * 1'000'000);
+    };
+    MediaRealtimeDeploymentEnvelopeEncoding encoding;
+    encoding.serviceScope = {
+        kind,
+        requiredArg(argc, argv, "--egress-scope-id"),
+        requiredArg(argc, argv, "--egress-scope-authority")};
+    encoding.mtu = {
+        requiredArg(argc, argv, "--egress-mtu-authority"),
+        requiredSizeArg(argc, argv, "--egress-maximum-ip-packet-bytes"),
+        requiredSizeArg(argc, argv, "--egress-ip-header-bytes"),
+        requiredSizeArg(argc, argv, "--egress-transport-header-bytes"),
+        requiredSizeArg(argc, argv, "--egress-sender-maximum-payload-bytes")};
+    encoding.service = {
+        requiredSizeArg(
+            argc, argv, "--egress-sustained-wire-bytes-per-second"),
+        requiredSizeArg(
+            argc, argv, "--egress-peak-wire-bytes-per-second"),
+        requiredSizeArg(argc, argv, "--egress-burst-wire-bytes"),
+        requiredArg(argc, argv, "--egress-service-authority")};
+    encoding.resources = {
+        requiredSizeArg(argc, argv, "--egress-maximum-backlog-datagrams"),
+        requiredSizeArg(argc, argv, "--egress-maximum-backlog-bytes"),
+        milliseconds("--egress-maximum-residence-ms"),
+        requiredSizeArg(argc, argv, "--egress-maximum-batch-datagrams"),
+        requiredSizeArg(argc, argv, "--egress-maximum-batch-bytes"),
+        requiredSizeArg(
+            argc, argv, "--egress-maximum-endpoint-pending-datagrams"),
+        requiredSizeArg(
+            argc, argv, "--egress-maximum-endpoint-pending-bytes"),
+        requiredSizeArg(argc, argv, "--egress-socket-hard-bound-bytes"),
+        requiredArg(argc, argv, "--egress-resource-authority")};
+    encoding.latency = {
+        milliseconds("--egress-target-residence-ms"),
+        encoding.resources.maximumResidence,
+        requiredArg(argc, argv, "--egress-latency-authority")};
+    encoding.observation = {
+        requiredSizeArg(argc, argv, "--egress-observation-run-datagrams"),
+        requiredSizeArg(
+            argc, argv, "--egress-observation-correlation-entries"),
+        milliseconds("--egress-observation-drain-residence-ms"),
+        requiredArg(argc, argv, "--egress-observation-authority")};
+    auto envelope = MediaRealtimeDeploymentEnvelope::decode(
+        std::move(encoding));
+    if (!envelope) throw std::invalid_argument(envelope.error().message);
+    return std::move(envelope).value();
 }
 
 void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& input)
@@ -182,15 +278,6 @@ void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig
         output.host = requiredArg(argc, argv, "--rtp-host");
         output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
         output.sdpPath = requiredArg(argc, argv, "--sdp");
-        output.packetSize = requiredIntArg(argc, argv, "--packet-size");
-        if (hasArg(argc, argv, "--output-pacing-bitrate-bps")) {
-            output.pacingBitrateBps = static_cast<std::int64_t>(
-                requiredIntArg(argc, argv, "--output-pacing-bitrate-bps"));
-        }
-        if (hasArg(argc, argv, "--output-transport-lead-ms")) {
-            output.transportDecodeLeadMs =
-                requiredIntArg(argc, argv, "--output-transport-lead-ms");
-        }
         return;
     }
 
@@ -230,6 +317,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.mediaId = requiredArg(argc, argv, "--media-id");
     parseRealtimeInputOptions(argc, argv, options.input);
     parseRealtimeOutputOptions(argc, argv, options.output);
+    options.deployment = parseRealtimeDeploymentEnvelope(argc, argv);
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
     parseAudioRtpOptions(argc, argv, options);
     options.avSyncStartup.maximumVideoUnitBytes = requiredSizeArg(

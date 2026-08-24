@@ -129,12 +129,46 @@ typedef struct mt_beta_video_output {
     } rate_control;
 } mt_beta_video_output;
 
+typedef enum mt_beta_egress_scope_kind {
+    MT_BETA_EGRESS_SCOPE_MANAGED = 1,
+    MT_BETA_EGRESS_SCOPE_PROVISIONED = 2
+} mt_beta_egress_scope_kind;
+
+typedef struct mt_beta_realtime_deployment {
+    mt_beta_egress_scope_kind scope_kind;
+    const char* scope_id;
+    const char* scope_authority;
+    const char* mtu_authority;
+    uint64_t maximum_ip_packet_bytes;
+    uint64_t ip_header_bytes;
+    uint64_t transport_header_bytes;
+    uint64_t sender_maximum_payload_bytes;
+    uint64_t sustained_wire_bytes_per_second;
+    uint64_t peak_wire_bytes_per_second;
+    uint64_t burst_wire_bytes;
+    const char* service_authority;
+    uint64_t maximum_backlog_datagrams;
+    uint64_t maximum_backlog_bytes;
+    uint64_t maximum_residence_ms;
+    uint64_t maximum_batch_datagrams;
+    uint64_t maximum_batch_bytes;
+    uint64_t maximum_endpoint_pending_datagrams;
+    uint64_t maximum_endpoint_pending_bytes;
+    uint64_t socket_hard_bound_bytes;
+    const char* resource_authority;
+    uint64_t target_residence_ms;
+    const char* latency_authority;
+    uint64_t observation_run_datagrams;
+    uint64_t observation_correlation_entries;
+    uint64_t observation_drain_residence_ms;
+    const char* observation_authority;
+} mt_beta_realtime_deployment;
+
 typedef struct mt_beta_realtime_config {
     const char* media_id;
     mt_beta_rtp_video_input input;
     mt_beta_video_output output;
-    uint64_t transport_pacing_bitrate_bps;
-    uint32_t transport_decode_lead_ms;
+    mt_beta_realtime_deployment deployment;
 } mt_beta_realtime_config;
 
 typedef struct mt_beta_realtime_event mt_beta_realtime_event;

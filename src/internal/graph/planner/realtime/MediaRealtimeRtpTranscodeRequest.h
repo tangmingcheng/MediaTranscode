@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
@@ -69,6 +70,7 @@ struct MediaRealtimePreparedHandoffConfig {
 struct MediaRealtimeRtpTranscodeRequest {
     MediaRealtimeInputConfig input;
     MediaRealtimeOutputConfig output;
+    std::optional<MediaRealtimeDeploymentEnvelope> deployment;
     MediaTranscodeParameterSet parameters;
     MediaRealtimeAvSyncStartupConfig avSyncStartup;
     MediaRealtimePreparedHandoffConfig preparedHandoff;

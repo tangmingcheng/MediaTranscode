@@ -4,6 +4,7 @@
 #include "media_transcode_beta/realtime.h"
 
 #include "internal/graph/model/MediaIpAddressFamily.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 
 #include <cstdint>
 #include <string>
@@ -39,8 +40,7 @@ public:
     std::uint32_t frameRateNumerator() const noexcept;
     std::uint32_t frameRateDenominator() const noexcept;
     std::uint32_t gopFrames() const noexcept;
-    std::uint64_t transportPacingBitrateBps() const noexcept;
-    std::uint32_t transportDecodeLeadMs() const noexcept;
+    const ffmpeg::graph::MediaRealtimeDeploymentEnvelope& deployment() const noexcept;
     const RateControl& rateControl() const noexcept;
     ffmpeg::graph::MediaIpAddressFamily addressFamily() const noexcept;
     mt_beta_realtime_event_callback eventCallback() const noexcept;
@@ -62,8 +62,7 @@ private:
         std::uint32_t frameRateNumerator,
         std::uint32_t frameRateDenominator,
         std::uint32_t gopFrames,
-        std::uint64_t transportPacingBitrateBps,
-        std::uint32_t transportDecodeLeadMs,
+        ffmpeg::graph::MediaRealtimeDeploymentEnvelope deployment,
         RateControl rateControl,
         ffmpeg::graph::MediaIpAddressFamily addressFamily,
         mt_beta_realtime_event_callback eventCallback,
@@ -83,8 +82,7 @@ private:
     std::uint32_t m_frameRateNumerator;
     std::uint32_t m_frameRateDenominator;
     std::uint32_t m_gopFrames;
-    std::uint64_t m_transportPacingBitrateBps;
-    std::uint32_t m_transportDecodeLeadMs;
+    ffmpeg::graph::MediaRealtimeDeploymentEnvelope m_deployment;
     RateControl m_rateControl;
     ffmpeg::graph::MediaIpAddressFamily m_addressFamily;
     mt_beta_realtime_event_callback m_eventCallback;
