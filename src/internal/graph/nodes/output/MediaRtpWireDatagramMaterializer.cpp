@@ -95,9 +95,19 @@ MediaRtpWireDatagramMaterializer::materialize(
 MediaRtpWireDatagramMaterializer::materializeBatch(
     std::span<const MediaPacketizedRtpDatagramView> datagrams)
 {
+    return materializeBatchWithProtocolCommit(datagrams, {});
+}
+
+::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
+    std::span<const MediaPacketizedRtpDatagramView> datagrams,
+    std::vector<MediaProtocolDatagramCommitLease> protocolCommits)
+{
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    if (datagrams.empty()) {
+    if (datagrams.empty() ||
+        (!protocolCommits.empty() &&
+         protocolCommits.size() != datagrams.size())) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire batch requires at least one packetized datagram"));
     }
@@ -210,11 +220,16 @@ MediaRtpWireDatagramMaterializer::materializeBatch(
                 std::nullopt});
         }
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
-            actions.push_back(MediaRtpWireCommitAction{
+            MediaRtpWireCommitAction action{
                 MediaRtpWireCommitActionKind::Media,
                 std::nullopt,
                 reservedPayloadOctets[index],
-                timestamps[index]});
+                timestamps[index]};
+            if (!protocolCommits.empty()) {
+                action.protocolCommit.emplace(
+                    std::move(protocolCommits[index]));
+            }
+            actions.push_back(std::move(action));
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -368,6 +383,11 @@ MediaRtpWireDatagramMaterializer::snapshot() const noexcept
         m_state->octetCount,
         m_state->terminalCommitted,
         m_state->poisoned});
+}
+
+std::uint64_t MediaRtpWireDatagramMaterializer::generation() const noexcept
+{
+    return m_state ? m_state->generation : 0;
 }
 
 int MediaRtpWireDatagramMaterializer::payloadType() const noexcept

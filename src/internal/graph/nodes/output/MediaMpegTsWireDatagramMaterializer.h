@@ -4,12 +4,14 @@
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
+#include "internal/graph/runtime/buffer/MediaMpegTsProtocolDatagramBatchBuffer.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -41,10 +43,17 @@ public:
         MediaRunningTime canonicalDeadline);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeProtocolBatch(
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
 
 private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
         MediaMpegTsUdpWireDatagramMaterializerConfig config) noexcept;
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatchWithProtocolCommit(
+        std::span<const MediaMpegTsDatagramView> datagrams,
+        std::vector<MediaProtocolDatagramCommitLease> protocolCommits);
 
     MediaMpegTsUdpWireDatagramMaterializerConfig m_config;
 };
@@ -81,6 +90,9 @@ public:
         MediaRunningTime canonicalDeadline);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeProtocolBatch(
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(

@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpOutputClockMapper.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
+#include "internal/graph/runtime/buffer/MediaProtocolDatagramCommitLease.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -64,6 +66,10 @@ public:
         MediaRunningTime canonicalDeadline);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatchWithProtocolCommit(
+        std::span<const MediaPacketizedRtpDatagramView> datagrams,
+        std::vector<MediaProtocolDatagramCommitLease> protocolCommits);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
@@ -77,6 +83,7 @@ public:
     int payloadType() const noexcept;
     int clockRate() const noexcept;
     std::uint32_t ssrc() const noexcept;
+    std::uint64_t generation() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
 
 private:

@@ -20,6 +20,7 @@ struct MediaRtpWireCommitAction final {
     std::optional<MediaRtcpSenderReportCommitToken> reportToken;
     std::uint64_t payloadOctets;
     std::optional<MediaRtpTimestamp> timestamp;
+    std::optional<MediaProtocolDatagramCommitLease> protocolCommit;
 };
 
 class MediaRtpWireCommitTransaction;

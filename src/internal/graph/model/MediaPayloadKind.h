@@ -28,7 +28,8 @@ enum class MediaPayloadKind {
     WireDatagramBatch,
     ScheduledWireDatagramBatch,
     DatagramShapingPlan,
-    DatagramTransportPlan
+    DatagramTransportPlan,
+    MpegTsProtocolDatagramBatch
 };
 
 } // namespace media::ffmpeg::graph

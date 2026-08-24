@@ -86,7 +86,11 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
     }
     auto globalReady = m_globalReservation.canCommit(index);
     if (!globalReady) return poison(globalReady.error());
-    const auto& action = m_actions[index];
+    auto& action = m_actions[index];
+    if (action.protocolCommit) {
+        auto protocolCommitted = action.protocolCommit->commit();
+        if (!protocolCommitted) return poison(protocolCommitted.error());
+    }
     switch (action.kind) {
     case MediaRtpWireCommitActionKind::SenderReport:
         if (!action.reportToken) {

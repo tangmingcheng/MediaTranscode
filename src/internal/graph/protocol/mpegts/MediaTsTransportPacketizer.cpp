@@ -45,6 +45,7 @@ struct MediaTsPacketizerControlState final {
     std::array<std::optional<std::uint64_t>, 5> activeCursors;
     std::uint64_t nextCursorIdentity = 1;
     std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
+    bool poisoned = false;
 };
 
 struct MediaTsPacketCursorState final {
@@ -134,7 +135,7 @@ const std::optional<std::uint64_t>* activeCursor(
     std::span<const std::span<const std::uint8_t>> segments,
     bool randomAccess)
 {
-    if (!state) {
+    if (!state || state->poisoned) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer was moved from"));
     }
@@ -236,6 +237,32 @@ MediaTsPacketCommitToken MediaTsPreparedPacketBatch::takeCommitToken() noexcept
     return std::move(m_commitToken);
 }
 
+MediaTsPreparedPacketSeries::MediaTsPreparedPacketSeries(
+    std::shared_ptr<const PacketStorage> storage,
+    std::size_t begin,
+    std::size_t count,
+    MediaTsPacketCommitToken commitToken) noexcept
+    : m_storage(std::move(storage)),
+      m_begin(begin),
+      m_count(count),
+      m_commitToken(std::move(commitToken))
+{
+}
+
+std::span<const std::array<std::uint8_t, 188>>
+MediaTsPreparedPacketSeries::packets() const noexcept
+{
+    if (!m_storage) return {};
+    return std::span<const std::array<std::uint8_t, 188>>(*m_storage).subspan(
+        m_begin, m_count);
+}
+
+MediaTsPacketCommitToken
+MediaTsPreparedPacketSeries::takeCommitToken() noexcept
+{
+    return std::move(m_commitToken);
+}
+
 MediaTsPacketCursor::MediaTsPacketCursor(
     std::unique_ptr<MediaTsPacketCursorState> state) noexcept
     : m_state(std::move(state))
@@ -280,9 +307,9 @@ void MediaTsPacketCursor::cancel() noexcept
 ::media::Result<MediaTsPreparedPacketBatch> MediaTsPacketCursor::prepare(
     std::size_t maximumPackets)
 {
-    if (!m_state || !m_state->owner) {
+    if (!m_state || !m_state->owner || m_state->owner->poisoned) {
         return ::media::Result<MediaTsPreparedPacketBatch>::failure(
-            invalid("MPEG-TS packet cursor was moved from"));
+            invalid("MPEG-TS packet cursor cannot prepare from poisoned state"));
     }
     if (maximumPackets < 1 ||
         maximumPackets > m_state->owner->plan.parameters().maximumPacketsPerDatagram) {
@@ -320,9 +347,45 @@ void MediaTsPacketCursor::cancel() noexcept
             MediaTsPacketCommitToken(m_state->owner, m_state->identity, revision)));
 }
 
+::media::Result<MediaTsPreparedPacketSeries>
+MediaTsPacketCursor::prepareRemaining()
+{
+    if (!m_state || !m_state->owner || m_state->owner->poisoned) {
+        return ::media::Result<MediaTsPreparedPacketSeries>::failure(
+            invalid("MPEG-TS packet cursor cannot reserve from poisoned state"));
+    }
+    if (m_state->pending || finished() ||
+        m_state->nextRevision == 0 ||
+        m_state->nextRevision == (std::numeric_limits<std::uint64_t>::max)()) {
+        return ::media::Result<MediaTsPreparedPacketSeries>::failure(
+            invalid("MPEG-TS packet cursor cannot reserve its remaining series"));
+    }
+    const std::size_t begin = m_state->committedOffset;
+    const std::size_t end = m_state->packets->size();
+    const std::uint64_t revision = m_state->nextRevision++;
+    const std::uint8_t nextPayload = m_state->advancesPayloadContinuity
+        ? static_cast<std::uint8_t>(
+              (m_state->initialPayloadContinuity + end) & 0x0F)
+        : m_state->initialPayloadContinuity;
+    m_state->pending = MediaTsPacketCursorState::Pending{
+        revision, end, nextPayload,
+        m_state->carriesDiscontinuity && begin == 0};
+    return ::media::Result<MediaTsPreparedPacketSeries>::success(
+        MediaTsPreparedPacketSeries(
+            m_state->packets, begin, end - begin,
+            MediaTsPacketCommitToken(
+                m_state->owner, m_state->identity, revision)));
+}
+
+void MediaTsPacketCursor::poison() noexcept
+{
+    if (m_state && m_state->owner) m_state->owner->poisoned = true;
+}
+
 ::media::Status MediaTsPacketCursor::commit(MediaTsPacketCommitToken token)
 {
-    if (!m_state || !m_state->owner || !m_state->pending || !token.m_valid) {
+    if (!m_state || !m_state->owner || m_state->owner->poisoned ||
+        !m_state->pending || !token.m_valid) {
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit token is not valid for a prepared batch"));
     }
@@ -481,7 +544,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPat(
     const MediaTsPatSection& section)
 {
-    if (!m_state || !section.matches(m_state->plan)) {
+    if (!m_state || m_state->poisoned || !section.matches(m_state->plan)) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PAT section does not match the packetizer plan"));
     }
@@ -496,7 +559,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPmt(
     const MediaTsPmtSection& section)
 {
-    if (!m_state || !section.matches(m_state->plan)) {
+    if (!m_state || m_state->poisoned || !section.matches(m_state->plan)) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PMT section does not match the packetizer plan"));
     }
@@ -511,7 +574,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPcrOnly(
     const MediaTsPcrClock& pcr)
 {
-    if (!m_state) {
+    if (!m_state || m_state->poisoned) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer was moved from"));
     }
@@ -565,6 +628,10 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     std::span<const std::uint8_t> payload,
     bool randomAccess)
 {
+    if (!m_state || m_state->poisoned) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS packetizer is poisoned"));
+    }
     CursorPidKind kind;
     std::uint16_t pid = 0;
     switch (stream) {

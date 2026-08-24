@@ -57,6 +57,10 @@ public:
     {
         return m_streamConfig;
     }
+    ScheduledRtpMuxStreamConfig releaseStreamConfig() noexcept
+    {
+        return std::move(m_streamConfig);
+    }
     const MediaSharedNtpEpoch& ntpEpoch() const noexcept { return m_ntpEpoch; }
     const MediaRtpOutputClockMapper& rtpMapper() const noexcept
     {

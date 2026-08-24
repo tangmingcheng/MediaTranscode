@@ -30,7 +30,8 @@ enum class MediaBufferType {
     WireDatagramBatch,
     ScheduledWireDatagramBatch,
     DatagramShapingPlan,
-    DatagramTransportPlan
+    DatagramTransportPlan,
+    MpegTsProtocolDatagramBatch
 };
 
 enum class MediaBufferFlag : uint32_t {
