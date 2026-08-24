@@ -17,8 +17,8 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::size_t RtpFixedHeaderBytes = 12;
-constexpr std::uint64_t MaximumRtcpCounter =
-    (std::numeric_limits<std::uint32_t>::max)();
+constexpr std::uint64_t MaximumProtocolCounter =
+    (std::numeric_limits<std::uint64_t>::max)();
 
 ::media::Status validateTimes(MediaRunningTime release,
                               MediaRunningTime deadline)
@@ -45,23 +45,24 @@ MediaRtpWireDatagramMaterializer::create(
     MediaRtpWireDatagramMaterializerConfig config)
 {
     using Result = ::media::Result<MediaRtpWireDatagramMaterializer>;
-    if (config.generation == 0 || config.rtpEndpointId == 0 ||
+    if (config.sessionKey.empty() || config.serviceScopeId == 0 ||
+        config.generation == 0 || config.rtpEndpointId == 0 ||
         config.rtcpEndpointId == 0 ||
         config.rtpEndpointId == config.rtcpEndpointId ||
         !config.globalSequence || config.identity.ssrc() == 0 ||
         config.clockMapper.clockRate() <= 0 ||
         config.senderReportSchedule.generation() != config.generation ||
-        config.maximumDatagramBytes <= RtpFixedHeaderBytes ||
-        config.initialPacketCount > MaximumRtcpCounter ||
-        config.initialOctetCount > MaximumRtcpCounter) {
+        config.maximumDatagramBytes <= RtpFixedHeaderBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire materializer requires complete generation, endpoint, identity, clock, schedule, counter, and datagram facts"));
     }
     const auto global = config.globalSequence->snapshot();
-    if (global.generation != config.generation || global.poisoned ||
+    if (config.globalSequence->sessionKey() != config.sessionKey ||
+        config.globalSequence->serviceScopeId() != config.serviceScopeId ||
+        global.generation != config.generation || global.poisoned ||
         global.reservationActive) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "RTP wire materializer global sequence scope differs from its generation"));
+            "RTP wire materializer global sequence session or service scope identity differs"));
     }
     auto cname = MediaRtcpSdesTextValidator::validateCname(config.cname);
     if (!cname) return Result::failure(cname.error());
@@ -88,7 +89,7 @@ MediaRtpWireDatagramMaterializer::materialize(
     auto times = validateTimes(canonicalRelease, canonicalDeadline);
     if (!times) return Result::failure(times.error());
     if (packetizedRtp.size() > m_state->maximumDatagramBytes ||
-        payloadOctets == 0 || payloadOctets > MaximumRtcpCounter) {
+        payloadOctets == 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire packet exceeds its planned datagram or counter bound"));
     }
@@ -101,8 +102,11 @@ MediaRtpWireDatagramMaterializer::materialize(
         return Result::failure(::media::ErrorInfo::internalError(
             "RTP wire protocol state is terminal or poisoned"));
     }
-    if (m_state->packetCount == MaximumRtcpCounter ||
-        payloadOctets > MaximumRtcpCounter - m_state->octetCount) {
+    const auto reservedPayloadOctets =
+        static_cast<std::uint64_t>(payloadOctets);
+    if (m_state->packetCount == MaximumProtocolCounter ||
+        reservedPayloadOctets >
+            MaximumProtocolCounter - m_state->octetCount) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire counter reservation would overflow"));
     }
@@ -160,7 +164,7 @@ MediaRtpWireDatagramMaterializer::materialize(
         actions.push_back(MediaRtpWireCommitAction{
             MediaRtpWireCommitActionKind::Media,
             std::nullopt,
-            payloadOctets,
+            reservedPayloadOctets,
             timestamp.value()});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

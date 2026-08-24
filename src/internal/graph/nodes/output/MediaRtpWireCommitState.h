@@ -18,7 +18,7 @@ enum class MediaRtpWireCommitActionKind {
 struct MediaRtpWireCommitAction final {
     MediaRtpWireCommitActionKind kind;
     std::optional<MediaRtcpSenderReportCommitToken> reportToken;
-    std::size_t payloadOctets;
+    std::uint64_t payloadOctets;
     std::optional<MediaRtpTimestamp> timestamp;
 };
 

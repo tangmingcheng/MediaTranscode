@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <new>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -129,8 +130,15 @@ MediaRtpDatagramRewriteParameters::MediaRtpDatagramRewriteParameters(
             ::media::ErrorInfo::invalidArgument("RTP datagram carries no media payload"));
     }
 
-    output.resize(datagram.size());
-    std::copy(datagram.begin(), datagram.end(), output.begin());
+    try {
+        output.resize(datagram.size());
+        std::copy(datagram.begin(), datagram.end(), output.begin());
+    } catch (const std::bad_alloc&) {
+        output.clear();
+        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "RTP datagram rewrite output"));
+    }
     output[1] = static_cast<std::uint8_t>(
         (output[1] & 0x80) | parameters.identity().payloadType());
     writeU32(output, 4, parameters.timestamp().wire());

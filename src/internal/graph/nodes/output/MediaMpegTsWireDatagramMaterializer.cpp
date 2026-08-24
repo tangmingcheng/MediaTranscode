@@ -71,7 +71,8 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
 {
     using Result =
         ::media::Result<MediaMpegTsUdpWireDatagramMaterializer>;
-    if (config.generation == 0 || config.endpointId == 0 ||
+    if (config.sessionKey.empty() || config.serviceScopeId == 0 ||
+        config.generation == 0 || config.endpointId == 0 ||
         !config.globalSequence ||
         config.tsPacketBytes != ProjectTsPacketBytes ||
         config.maximumDatagramBytes < config.tsPacketBytes) {
@@ -79,10 +80,12 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
             "MPEG-TS UDP wire materializer requires explicit generation, endpoint, 188-byte TS packet, and datagram facts"));
     }
     const auto global = config.globalSequence->snapshot();
-    if (global.generation != config.generation || global.poisoned ||
+    if (config.globalSequence->sessionKey() != config.sessionKey ||
+        config.globalSequence->serviceScopeId() != config.serviceScopeId ||
+        global.generation != config.generation || global.poisoned ||
         global.reservationActive) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS UDP wire materializer global sequence scope differs from its generation"));
+            "MPEG-TS UDP wire materializer global sequence session or service scope identity differs"));
     }
     return Result::success(MediaMpegTsUdpWireDatagramMaterializer(
         std::move(config)));
@@ -172,6 +175,8 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
     if (!mapper) return Result::failure(mapper.error());
     auto rtpMaterializer = MediaRtpWireDatagramMaterializer::create(
         MediaRtpWireDatagramMaterializerConfig{
+            std::move(config.sessionKey),
+            config.serviceScopeId,
             config.generation,
             config.rtpEndpointId,
             config.rtcpEndpointId,

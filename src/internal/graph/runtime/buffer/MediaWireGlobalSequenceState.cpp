@@ -7,11 +7,11 @@
 namespace media::ffmpeg::graph {
 
 MediaWireGlobalSequenceReservation::MediaWireGlobalSequenceReservation(
-    MediaWireGlobalSequenceState& state,
+    std::shared_ptr<MediaWireGlobalSequenceState> state,
     std::size_t count,
     std::unique_lock<std::mutex> lock) noexcept
-    : m_state(&state),
-      m_firstSequence(state.m_nextGlobalSequence),
+    : m_state(std::move(state)),
+      m_firstSequence(m_state->m_nextGlobalSequence),
       m_count(count),
       m_lock(std::move(lock))
 {
@@ -19,7 +19,7 @@ MediaWireGlobalSequenceReservation::MediaWireGlobalSequenceReservation(
 
 MediaWireGlobalSequenceReservation::MediaWireGlobalSequenceReservation(
     MediaWireGlobalSequenceReservation&& other) noexcept
-    : m_state(std::exchange(other.m_state, nullptr)),
+    : m_state(std::move(other.m_state)),
       m_firstSequence(other.m_firstSequence),
       m_count(other.m_count),
       m_committed(other.m_committed),
@@ -33,7 +33,7 @@ MediaWireGlobalSequenceReservation::operator=(
 {
     if (this == &other) return *this;
     abandon();
-    m_state = std::exchange(other.m_state, nullptr);
+    m_state = std::move(other.m_state);
     m_firstSequence = other.m_firstSequence;
     m_count = other.m_count;
     m_committed = other.m_committed;
@@ -99,8 +99,8 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
 void MediaWireGlobalSequenceReservation::releaseCompleted() noexcept
 {
     m_state->m_reservationActive = false;
-    m_state = nullptr;
     if (m_lock.owns_lock()) m_lock.unlock();
+    m_state.reset();
 }
 
 void MediaWireGlobalSequenceReservation::abandon() noexcept
@@ -108,32 +108,39 @@ void MediaWireGlobalSequenceReservation::abandon() noexcept
     if (!m_state) return;
     if (m_committed != m_count) m_state->m_poisoned = true;
     m_state->m_reservationActive = false;
-    m_state = nullptr;
     if (m_lock.owns_lock()) m_lock.unlock();
+    m_state.reset();
 }
 
 MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
+    std::string sessionKey,
+    std::uint64_t serviceScopeId,
     std::uint64_t generation,
     std::uint64_t firstGlobalSequence) noexcept
-    : m_generation(generation),
+    : m_sessionKey(std::move(sessionKey)),
+      m_serviceScopeId(serviceScopeId),
+      m_generation(generation),
       m_nextGlobalSequence(firstGlobalSequence)
 {
 }
 
 ::media::Result<std::shared_ptr<MediaWireGlobalSequenceState>>
 MediaWireGlobalSequenceState::create(
+    std::string sessionKey,
+    std::uint64_t serviceScopeId,
     std::uint64_t generation,
     std::uint64_t firstGlobalSequence)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireGlobalSequenceState>>;
-    if (generation == 0) {
+    if (sessionKey.empty() || serviceScopeId == 0 || generation == 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "wire global sequence state requires a generation"));
+            "wire global sequence state requires session, service scope, and generation identity"));
     }
     auto state = std::shared_ptr<MediaWireGlobalSequenceState>(
         new (std::nothrow) MediaWireGlobalSequenceState(
-            generation, firstGlobalSequence));
+            std::move(sessionKey), serviceScopeId, generation,
+            firstGlobalSequence));
     if (!state) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaWireGlobalSequenceState"));
@@ -145,6 +152,13 @@ MediaWireGlobalSequenceState::create(
 MediaWireGlobalSequenceState::reserve(std::size_t count)
 {
     using Result = ::media::Result<MediaWireGlobalSequenceReservation>;
+    std::shared_ptr<MediaWireGlobalSequenceState> owner;
+    try {
+        owner = shared_from_this();
+    } catch (const std::bad_weak_ptr&) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "wire global sequence state has no shared ownership"));
+    }
     std::unique_lock lock(m_mutex, std::try_to_lock);
     if (!lock.owns_lock() || m_reservationActive) {
         return Result::failure(::media::ErrorInfo::wouldBlock(
@@ -162,7 +176,7 @@ MediaWireGlobalSequenceState::reserve(std::size_t count)
     }
     m_reservationActive = true;
     return Result::success(MediaWireGlobalSequenceReservation(
-        *this, count, std::move(lock)));
+        std::move(owner), count, std::move(lock)));
 }
 
 MediaWireGlobalSequenceSnapshot

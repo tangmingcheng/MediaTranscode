@@ -6,8 +6,8 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::uint64_t MaximumRtcpCounter =
-    (std::numeric_limits<std::uint32_t>::max)();
+constexpr std::uint64_t MaximumProtocolCounter =
+    (std::numeric_limits<std::uint64_t>::max)();
 
 class MediaRtpWireEntryReservation final {
 public:
@@ -101,9 +101,9 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
         break;
     case MediaRtpWireCommitActionKind::Media:
         if (!action.timestamp || action.payloadOctets == 0 ||
-            m_state->packetCount == MaximumRtcpCounter ||
+            m_state->packetCount == MaximumProtocolCounter ||
             action.payloadOctets >
-                MaximumRtcpCounter - m_state->octetCount) {
+                MaximumProtocolCounter - m_state->octetCount) {
             return poison(::media::ErrorInfo::internalError(
                 "RTP wire media commit differs from its prepared counters"));
         }

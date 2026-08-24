@@ -14,6 +14,8 @@
 namespace media::ffmpeg::graph {
 
 struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
+    std::string sessionKey;
+    std::uint64_t serviceScopeId;
     std::uint64_t generation;
     std::uint64_t endpointId;
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
@@ -39,6 +41,8 @@ private:
 };
 
 struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
+    std::string sessionKey;
+    std::uint64_t serviceScopeId;
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
     std::uint64_t rtcpEndpointId;
