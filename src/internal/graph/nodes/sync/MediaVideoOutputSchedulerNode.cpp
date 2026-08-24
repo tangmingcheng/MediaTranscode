@@ -120,12 +120,12 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     }
     const auto inputs = context.inputChannels(nodeId());
     const auto outputs = context.outputChannels(nodeId());
-    if (inputs.size() != 1 || outputs.size() != 2 ||
+    if (inputs.size() != 1 || outputs.size() < 2 ||
         !context.findInputChannel(nodeId(), "video") ||
         !context.findOutputChannel(nodeId(), "activation") ||
         !context.findOutputChannel(nodeId(), "scheduled_video")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly scheduler requires one video input and exact activation/scheduled outputs"));
+            "VideoOnly scheduler requires one video input and connected activation/scheduled outputs"));
     }
     m_requireKeyFrame = requireKeyFrame.value();
     m_maximumStartupWait =
