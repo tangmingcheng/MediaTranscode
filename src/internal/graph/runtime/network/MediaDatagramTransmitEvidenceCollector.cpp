@@ -43,7 +43,10 @@ MediaDatagramTransmitEvidenceCollector::create(
                   (std::numeric_limits<std::uint32_t>::max)()) + 1ULL ||
           kernelSchedule->maximumErrorQueueResidence <=
               MediaRunningTime::fromNanoseconds(0) ||
-          kernelSchedule->maximumScheduleAheadNanoseconds == 0))) {
+          kernelSchedule->maximumScheduleAheadNanoseconds == 0 ||
+          kernelSchedule->maximumScheduleAheadNanoseconds >
+              static_cast<std::uint64_t>(
+                  (std::numeric_limits<std::int64_t>::max)())))) {
         return ResultType::failure(::media::ErrorInfo::invalidArgument(
             "invalid transmit evidence collector hard bounds"));
     }
@@ -51,6 +54,17 @@ MediaDatagramTransmitEvidenceCollector::create(
         MediaDatagramTransmitEvidenceCollector collector(
             generation, maximumTrackedDatagrams, std::move(plan),
             std::move(kernelSchedule));
+        if (collector.m_kernelSchedule) {
+            auto residence = MediaRunningTime::fromNanoseconds(
+                static_cast<std::int64_t>(collector.m_kernelSchedule->
+                    maximumScheduleAheadNanoseconds)).checkedAdd(
+                        collector.m_kernelSchedule->maximumErrorQueueResidence);
+            if (!residence) {
+                return ResultType::failure(::media::ErrorInfo::invalidArgument(
+                    "SO_TXTIME correlation horizon is not representable"));
+            }
+            collector.m_launchCorrelationResidence = residence.value();
+        }
         collector.m_entries.reserve(
             static_cast<std::size_t>(maximumTrackedDatagrams));
         collector.m_endpoints.reserve(endpoints.size());
@@ -242,8 +256,19 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
                 throw ::media::ErrorInfo::invalidArgument(
                     "SO_TXTIME launch id conflicts with outstanding work");
             }
+            std::optional<MediaRunningTime> launchRetainUntil;
+            if (launchLow) {
+                auto retainUntil = submittedAt.checkedAdd(
+                    *m_launchCorrelationResidence);
+                if (!retainUntil) {
+                    throw ::media::ErrorInfo::invalidArgument(
+                        "SO_TXTIME correlation retention is not representable");
+                }
+                launchRetainUntil = retainUntil.value();
+            }
             Entry entry{endpointId, evidenceIds[index], platformId.value_or(0),
-                        launchLow, submittedAt, EntryState::Prepared,
+                        launchLow, launchRetainUntil, submittedAt,
+                        EntryState::Prepared,
                         trackTimestamp, false};
             m_entries.emplace(evidenceIds[index], std::move(entry));
             inserted.push_back(evidenceIds[index]);
@@ -368,17 +393,15 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
                     entry.timestampExpected = false;
                 }
             }
-            if (entry.launchTimeLowBits && m_kernelSchedule) {
-                auto deadline = entry.submittedAt.checkedAdd(
-                    m_kernelSchedule->maximumErrorQueueResidence);
-                if (!deadline || now > deadline.value()) {
-                    const auto endpoint = m_endpoints.find(entry.endpointId);
-                    if (endpoint != m_endpoints.end()) {
-                        endpoint->second.byLaunchTimeLowBits.erase(
-                            *entry.launchTimeLowBits);
-                    }
-                    entry.launchTimeLowBits.reset();
+            if (entry.launchTimeLowBits &&
+                entry.launchCorrelationRetainUntil &&
+                now > *entry.launchCorrelationRetainUntil) {
+                const auto endpoint = m_endpoints.find(entry.endpointId);
+                if (endpoint != m_endpoints.end()) {
+                    endpoint->second.byLaunchTimeLowBits.erase(
+                        *entry.launchTimeLowBits);
                 }
+                entry.launchTimeLowBits.reset();
             }
             if (!entry.timestampExpected && !entry.launchTimeLowBits) {
                 expired.push_back(evidenceId);

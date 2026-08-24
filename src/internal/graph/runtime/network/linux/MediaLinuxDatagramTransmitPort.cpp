@@ -42,6 +42,12 @@
 #endif
 
 namespace media::ffmpeg::graph {
+
+bool detail::mediaLinuxDatagramSubmitWouldBlock(int nativeError) noexcept
+{
+    return nativeError == EAGAIN || nativeError == EWOULDBLOCK;
+}
+
 namespace {
 
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
@@ -91,7 +97,7 @@ public:
     {
     }
 
-    ~MediaLinuxDatagramTransmitPort() override { close(); }
+    ~MediaLinuxDatagramTransmitPort() override { forceCloseForDestruction(); }
 
     ::media::Result<MediaDatagramTransmitPortCapabilities> open(
         const MediaDatagramTransmitPortOpenRequest& request) override
@@ -332,8 +338,8 @@ public:
             const auto accepted = ::sendmsg(m_socket, &message, MSG_DONTWAIT);
             if (accepted < 0) {
                 const int native = errno;
-                if ((native == EAGAIN || native == EWOULDBLOCK ||
-                     native == ENOBUFS) && submitted == 0) {
+                if (detail::mediaLinuxDatagramSubmitWouldBlock(native) &&
+                    submitted == 0) {
                     return MediaDatagramTransmitSubmitResult::success(
                         MediaDatagramTransmitAttempt::WouldBlock);
                 }
@@ -565,6 +571,17 @@ public:
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Linux Datagram close violated its single-owner contract"));
         }
+        return releaseResources();
+    }
+
+private:
+    void forceCloseForDestruction() noexcept
+    {
+        (void)releaseResources();
+    }
+
+    ::media::Status releaseResources() noexcept
+    {
         ::media::Status status = ::media::Status::success();
         if (m_socket >= 0) {
             const int handle = m_socket;
@@ -585,7 +602,6 @@ public:
         return status;
     }
 
-private:
     bool isOwnerThread() const noexcept
     {
         return m_hasOwner && std::this_thread::get_id() == m_ownerThread;

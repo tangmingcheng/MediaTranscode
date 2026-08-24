@@ -53,7 +53,14 @@ MediaDatagramTransmitSession::create(
               MediaRunningTime::fromNanoseconds(0) ||
           execution.kernelSchedule->maximumErrorQueueResidence >
               plan.backlog().maximumResidence ||
-          execution.kernelSchedule->maximumScheduleAheadNanoseconds == 0)) ||
+          execution.kernelSchedule->maximumScheduleAheadNanoseconds == 0 ||
+          execution.kernelSchedule->maximumScheduleAheadNanoseconds >
+              static_cast<std::uint64_t>(
+                  (std::numeric_limits<std::int64_t>::max)()) ||
+          !MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
+               execution.kernelSchedule->maximumScheduleAheadNanoseconds))
+               .checkedAdd(
+                   execution.kernelSchedule->maximumErrorQueueResidence))) ||
         (plan.evidence() &&
          plan.evidence()->lastEvidenceId >
              (std::numeric_limits<std::uint32_t>::max)())) {

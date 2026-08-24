@@ -27,7 +27,7 @@
 
 ## 平台 adapter 与异步 evidence
 
-- Windows 使用非阻塞 UDP socket、`WSASendMsg`、`WSAPoll`、`SIO_TIMESTAMPING`、`SO_TIMESTAMP_ID` 与 `SIO_GET_TX_TIMESTAMP`。requested/effective `SO_SNDBUF` 均保留为 capability telemetry；timestamp 配置失败时按 plan 的 `Report`/`Fail` 策略如实 unavailable/拒绝，绝不运行期改写发送语义。
+- Windows 使用非阻塞 UDP socket、`WSASendMsg`、`WSAEventSelect`、`SIO_TIMESTAMPING`、`SO_TIMESTAMP_ID` 与 `SIO_GET_TX_TIMESTAMP`。requested/effective `SO_SNDBUF` 均保留为 capability telemetry；timestamp 配置失败时按 plan 的 `Report`/`Fail` 策略如实 unavailable/拒绝，绝不运行期改写发送语义。
 - Linux/RK 使用非阻塞 UDP socket、`sendmsg`、`poll`、`SO_TIMESTAMPING`、`MSG_ERRQUEUE` 与 `SOF_TIMESTAMPING_OPT_ID`。`LinuxSocketTxTime` 只有 `SO_TXTIME` capability probe 成功才 open，且每次提交必须携带显式 kernel launch time；否则 fail-closed，不降级到 userspace。
 - `MediaDatagramTransmitEvidenceCollector::drainAvailable()` 只更新 submitted/observed/late/lost/duplicate/cross-generation/unmatched 与 timestamp coverage telemetry。相关历史受 `maximumCorrelationEntries` 硬边界限制；TX timestamp coverage 即使完整，`deliveryEvidenceProven` 仍固定为 false，不宣称 receiver delivery。
 - evidence `Report` 只报告覆盖缺口；`Fail` 可终止 graph，但 evidence 从不形成 shaper credit、协议 commit 或逐包 completion wait。
@@ -121,3 +121,13 @@ media_transcode_realtime_video_cli  6883008 bytes  sha256=7b5a942e74f12985ed9d8c
 ```
 
 SSH 前台输出在 build 结束前脱离，未捕获脚本内的单独 `BUILD_RC=` 行；因此本报告以 `554/554` 最终链接、两个产物及零 failure marker 作为完成证据，不伪造缺失的 rc 文本。构建后验证 resolved path 精确等于 `/home/tang/task4-round2-build.WM0Uu0` 才递归删除；输出 `REMOTE_TEMP_REMOVED`，后续仅观察到检查命令自身，无 build/Ninja 残留。本地 overlay 与临时 RK build script 同步删除。
+
+## Fix round 3
+
+- Linux submit 仅把 `EAGAIN/EWOULDBLOCK` 映射为 `WouldBlock`，Windows 仅接受 `WSAEWOULDBLOCK`；`ENOBUFS/WSAENOBUFS` 与其他 pressure/native error 均进入 typed terminal failure，已提交前缀仍按实际值保留。
+- `SO_TXTIME` low-bit correlation 不再只保留 `maximumErrorQueueResidence`。create 在任何 OS open 前验证 `maximumScheduleAheadNanoseconds + maximumErrorQueueResidence` 可由 `MediaRunningTime` 表示；每个 entry 在 OS submit 前保存 typed `launchCorrelationRetainUntil`，回收及 low-bit 复用均等待该完整 horizon，从而覆盖合法最晚 launch 后才抵达的 error queue 事件。
+- 业务 `close()` 继续执行 single-owner 检查并 fail-closed；Linux/Windows adapter 的 `noexcept` 析构改走私有 `forceCloseForDestruction()`，无论销毁线程是否为 owner 都无条件释放 socket、eventfd、WSAEVENT 与 HANDLE。该析构前提仍是不与业务操作并发，跨线程迁移本身不会再造成资源泄漏。
+
+临时 Windows `/W4 /WX` TDD 验证 `WSAEWOULDBLOCK` 与 `WSAENOBUFS` 分类、完整 TXTIME horizon 边界及溢出拒绝、真实 `WSASendMsg` loopback payload，以及 32 次非 owner 线程销毁后的进程 handle 计数无增长，退出码 0。临时 Linux TDD 在 RK 以 GCC 12.4、`-Wall -Wextra -Werror` 编译，验证 `EAGAIN/EWOULDBLOCK=true`、`ENOBUFS/ECONNREFUSED=false`，退出码 0。
+
+冻结后的 Windows VS2026 Debug clean-first 完成 555 step，configure/build exit 0。RK 使用隔离目录 `/home/tang/task4-round3-build.6YdXRU`，overlay SHA-256 为 `5165254bc71e3fc19fde2af5e44181ce35d0cd887c22889b49e61dd138121119`。首次 configure 如实因非权威 `/usr/bin/ffmpeg` 被选择而失败；删除尚未生成产物的隔离 build dir 后，以 `ffenv on`、`source /opt/mt-tools/mtenv.sh`、`mtenv on` 并显式确认 `/usr/local/bin/ffmpeg` 重新 fresh configure。第二次 configure rc 0、Release clean-first build rc 0、`554/554`，PID 为 shell `3882947`、configure `3883013`、build wrapper `3883465`、Ninja `3883469`；build log 无 failure marker。构建与 TDD 后隔离目录、脚本、源码、目标和进程全部删除并复核无残留。

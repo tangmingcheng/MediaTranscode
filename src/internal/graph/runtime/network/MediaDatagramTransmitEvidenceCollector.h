@@ -79,6 +79,7 @@ private:
         std::uint64_t evidenceId;
         std::uint32_t platformCorrelationId;
         std::optional<std::uint32_t> launchTimeLowBits;
+        std::optional<MediaRunningTime> launchCorrelationRetainUntil;
         MediaRunningTime submittedAt;
         EntryState state;
         bool timestampExpected;
@@ -111,6 +112,7 @@ private:
     std::uint64_t m_maximumTrackedDatagrams;
     std::optional<MediaDatagramTransmitEvidencePlan> m_plan;
     std::optional<MediaDatagramTransmitKernelSchedulePlan> m_kernelSchedule;
+    std::optional<MediaRunningTime> m_launchCorrelationResidence;
     std::unordered_map<std::uint64_t, EndpointState> m_endpoints;
     std::unordered_map<std::uint64_t, Entry> m_entries;
     std::optional<std::uint64_t> m_lastEvidenceId;

@@ -16,6 +16,12 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+bool detail::mediaWindowsDatagramSubmitWouldBlock(int nativeError) noexcept
+{
+    return nativeError == WSAEWOULDBLOCK;
+}
+
 namespace {
 
 struct WindowsTimestampClockEvidence final {
@@ -125,7 +131,7 @@ public:
     {
     }
 
-    ~MediaWindowsDatagramTransmitPort() override { close(); }
+    ~MediaWindowsDatagramTransmitPort() override { forceCloseForDestruction(); }
 
     ::media::Result<MediaDatagramTransmitPortCapabilities> open(
         const MediaDatagramTransmitPortOpenRequest& request) override
@@ -336,7 +342,7 @@ public:
             if (m_sendMsg(m_socket, &message, 0, &accepted,
                           nullptr, nullptr) == SOCKET_ERROR) {
                 const int native = WSAGetLastError();
-                if ((native == WSAEWOULDBLOCK || native == WSAENOBUFS) &&
+                if (detail::mediaWindowsDatagramSubmitWouldBlock(native) &&
                     submitted == 0) {
                     return MediaDatagramTransmitSubmitResult::success(
                         MediaDatagramTransmitAttempt::WouldBlock);
@@ -474,6 +480,17 @@ public:
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Windows Datagram close violated its single-owner contract"));
         }
+        return releaseResources();
+    }
+
+private:
+    void forceCloseForDestruction() noexcept
+    {
+        (void)releaseResources();
+    }
+
+    ::media::Status releaseResources() noexcept
+    {
         ::media::Status status = ::media::Status::success();
         if (m_socket != INVALID_SOCKET) {
             const SOCKET handle = m_socket;
@@ -494,7 +511,6 @@ public:
         return status;
     }
 
-private:
     bool isOwnerThread() const noexcept
     {
         return m_hasOwner && std::this_thread::get_id() == m_ownerThread;

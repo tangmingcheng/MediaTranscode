@@ -5,6 +5,10 @@
 
 namespace media::ffmpeg::graph {
 
+namespace detail {
+bool mediaLinuxDatagramSubmitWouldBlock(int nativeError) noexcept;
+}
+
 class MediaLinuxDatagramTransmitPortFactory final
     : public MediaDatagramTransmitPortFactory {
 public:

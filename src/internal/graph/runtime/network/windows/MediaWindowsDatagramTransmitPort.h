@@ -5,6 +5,10 @@
 
 namespace media::ffmpeg::graph {
 
+namespace detail {
+bool mediaWindowsDatagramSubmitWouldBlock(int nativeError) noexcept;
+}
+
 class MediaWindowsDatagramTransmitPortFactory final
     : public MediaDatagramTransmitPortFactory {
 public:
