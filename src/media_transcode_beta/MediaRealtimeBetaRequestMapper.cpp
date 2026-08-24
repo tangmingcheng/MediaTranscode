@@ -104,7 +104,6 @@ MediaRealtimeBetaRequestMapper::map(
         request.parameters.video.bufferSizeKbits = rateControl.bufferSizeKbits;
     }
 
-    request.avSyncStartup.maximumVideoUnitBytes = profile.startupMaximumVideoUnitBytes;
     request.output.streamLayout = profile.outputLayout;
     request.output.transport = profile.outputTransport;
     request.output.host = config.destinationAddress();

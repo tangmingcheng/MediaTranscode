@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -210,35 +211,22 @@ planSeparateRtp(
 }
 
 ::media::Result<MediaRealtimeVideoStartupPlan> planStartup(
-    const MediaRealtimeRtpTranscodePlanningDraft& outer,
     const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (outer.queues.packet == 0 ||
-        !request.avSyncStartup.maximumVideoUnitBytes ||
-        *request.avSyncStartup.maximumVideoUnitBytes == 0) {
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(request);
+    if (!capacity || capacity.value().audioUnits) {
         return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "VideoOnly runtime requires explicit video startup bounds"));
-    }
-    const auto capacity = static_cast<std::uint64_t>(outer.queues.packet);
-    const auto unitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumVideoUnitBytes);
-    if (capacity > std::numeric_limits<std::uint64_t>::max() / unitBytes ||
-        unitBytes > static_cast<std::uint64_t>(
-            std::numeric_limits<std::int64_t>::max()) ||
-        capacity * unitBytes > static_cast<std::uint64_t>(
-            std::numeric_limits<std::int64_t>::max())) {
-        return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VideoOnly startup byte capacity is not representable"));
+            capacity ? ::media::ErrorInfo::invalidArgument(
+                           "VideoOnly runtime rejects audio capacity")
+                     : capacity.error());
     }
     return ::media::Result<MediaRealtimeVideoStartupPlan>::success(
         MediaRealtimeVideoStartupPlan{
             true,
             MediaRunningTime::fromNanoseconds(VideoStartupMaximumWaitNs),
-            outer.queues.packet,
-            unitBytes,
-            capacity * unitBytes});
+            capacity.value().videoUnits,
+            capacity.value().videoUnitBytes,
+            capacity.value().videoBytes});
 }
 
 void applyStartupMemoryBounds(
@@ -291,7 +279,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "VideoOnly runtime requires an explicit media identity"));
     }
-    auto startup = planStartup(outer, request);
+    auto startup = planStartup(request);
     if (!startup) {
         return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
             startup.error());

@@ -5,7 +5,6 @@
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 
-#include <cstddef>
 #include <string>
 
 namespace media::beta {
@@ -14,7 +13,6 @@ class MediaRealtimeBetaFixedProfile final {
 public:
     struct Product final {
         const char* identity;
-        std::size_t startupMaximumVideoUnitBytes;
         int openTimeoutMs;
         int readTimeoutMs;
         int analyzeDurationUs;

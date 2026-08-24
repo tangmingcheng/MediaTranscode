@@ -7,7 +7,6 @@ namespace {
 
 const MediaRealtimeBetaFixedProfile::Product CurrentProfile{
     "realtime-beta-fixed-v1",
-    4194304U,
     30000,
     2000,
     5000000,
@@ -39,7 +38,6 @@ std::string MediaRealtimeBetaFixedProfile::diagnosticSummary()
 {
     const auto& profile = current();
     return std::string("profile=") + profile.identity +
-           " startup_maximum_video_unit_bytes=" + std::to_string(profile.startupMaximumVideoUnitBytes) +
            " open_timeout_ms=" + std::to_string(profile.openTimeoutMs) +
            " read_timeout_ms=" + std::to_string(profile.readTimeoutMs) +
            " analyze_duration_us=" + std::to_string(profile.analyzeDurationUs) +

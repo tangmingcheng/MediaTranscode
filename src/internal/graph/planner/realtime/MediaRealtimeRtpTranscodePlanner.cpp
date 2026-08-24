@@ -8,6 +8,7 @@
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
@@ -355,24 +356,14 @@ MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
 ::media::Result<MediaRealtimeTsInputPlan::Retention> planMpegTsRetention(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
-    const auto packetCapacity = request.parameters.queues.packet;
-    if (packetCapacity == 0 ||
-        !request.avSyncStartup.maximumVideoUnitBytes ||
-        *request.avSyncStartup.maximumVideoUnitBytes == 0) {
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(request);
+    if (!capacity) {
         return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "MPEG-TS retention requires explicit video bounds"));
+            capacity.error());
     }
-    const auto videoUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumVideoUnitBytes);
-    if (packetCapacity > std::numeric_limits<std::uint64_t>::max() /
-            videoUnitBytes) {
-        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS video retention capacity is not representable"));
-    }
-    const auto videoByteCapacity =
-        static_cast<std::uint64_t>(packetCapacity) * videoUnitBytes;
+    const auto packetCapacity = capacity.value().videoUnits;
+    const auto videoUnitBytes = capacity.value().videoUnitBytes;
+    const auto videoByteCapacity = capacity.value().videoBytes;
     const auto maximumSerialized = static_cast<std::uint64_t>(
         std::numeric_limits<std::int64_t>::max());
     if (videoByteCapacity > maximumSerialized) {
@@ -386,22 +377,14 @@ MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
             MediaRealtimeTsInputPlan::VideoOnlyRetention(
                 packetCapacity, videoByteCapacity, videoUnitBytes));
     }
-    if (!request.avSyncStartup.maximumAudioUnitBytes ||
-        *request.avSyncStartup.maximumAudioUnitBytes == 0) {
+    if (!capacity.value().audioUnits || !capacity.value().audioUnitBytes ||
+        !capacity.value().audioBytes) {
         return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
             ::media::ErrorInfo::notInitialized(
-                "AudioVideo MPEG-TS retention requires explicit audio bounds"));
+                "AudioVideo MPEG-TS retention requires planned audio bounds"));
     }
-    const auto audioUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumAudioUnitBytes);
-    if (packetCapacity > std::numeric_limits<std::uint64_t>::max() /
-            audioUnitBytes) {
-        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS audio retention capacity is not representable"));
-    }
-    const auto audioByteCapacity =
-        static_cast<std::uint64_t>(packetCapacity) * audioUnitBytes;
+    const auto audioUnitBytes = *capacity.value().audioUnitBytes;
+    const auto audioByteCapacity = *capacity.value().audioBytes;
     if (audioByteCapacity > maximumSerialized) {
         return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -409,7 +392,7 @@ MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
     }
     return ::media::Result<MediaRealtimeTsInputPlan::Retention>::success(
         MediaRealtimeTsInputPlan::AudioVideoRetention(
-            packetCapacity, packetCapacity,
+            packetCapacity, *capacity.value().audioUnits,
             videoByteCapacity, audioByteCapacity,
             videoUnitBytes, audioUnitBytes));
 }

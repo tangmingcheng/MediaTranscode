@@ -1,5 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
+#include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 
 #include <cstdint>
@@ -22,17 +23,14 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 MediaAvSyncStartupPolicyPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (request.parameters.queues.packet == 0 ||
-        request.parameters.queues.packet > MediaAvStartupMaximumUnitCapacity ||
-        !request.avSyncStartup.maximumVideoUnitBytes ||
-        !request.avSyncStartup.maximumAudioUnitBytes ||
-        !request.avSyncStartup.maximumGap ||
-        *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
-        *request.avSyncStartup.maximumAudioUnitBytes == 0 ||
-        *request.avSyncStartup.maximumGap <= runningTime(0)) {
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(request);
+    if (!capacity || !capacity.value().audioUnits ||
+        !capacity.value().audioUnitBytes || !capacity.value().audioBytes ||
+        capacity.value().videoUnits > MediaAvStartupMaximumUnitCapacity) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V startup requires explicit unit and byte capacity inputs"));
+            capacity ? ::media::ErrorInfo::invalidArgument(
+                           "A/V startup deployment budget is incomplete")
+                     : capacity.error());
     }
 
     MediaAvSyncStartupPolicy startup;
@@ -43,31 +41,18 @@ MediaAvSyncStartupPolicyPlanner::plan(
     startup.keyFrameWaitNs = runningTime(5 * Second);
     startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
     startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
-    startup.maximumGapNs = *request.avSyncStartup.maximumGap;
+    startup.maximumGapNs = capacity.value().maximumGap;
     startup.outputLeadNs = runningTime(100 * Millisecond);
-    startup.videoCapacity = request.parameters.queues.packet;
-    startup.audioCapacity = request.parameters.queues.packet;
-
-    const auto units = static_cast<std::uint64_t>(
-        request.parameters.queues.packet);
-    const auto videoUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumVideoUnitBytes);
-    const auto audioUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumAudioUnitBytes);
-    if (units > std::numeric_limits<std::uint64_t>::max() / videoUnitBytes ||
-        units > std::numeric_limits<std::uint64_t>::max() / audioUnitBytes) {
-        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V startup byte capacity is not representable"));
-    }
-    startup.videoByteCapacity = units * videoUnitBytes;
-    startup.audioByteCapacity = units * audioUnitBytes;
-    startup.maximumVideoUnitBytes = videoUnitBytes;
-    startup.maximumAudioUnitBytes = audioUnitBytes;
+    startup.videoCapacity = capacity.value().videoUnits;
+    startup.audioCapacity = *capacity.value().audioUnits;
+    startup.videoByteCapacity = capacity.value().videoBytes;
+    startup.audioByteCapacity = *capacity.value().audioBytes;
+    startup.maximumVideoUnitBytes = capacity.value().videoUnitBytes;
+    startup.maximumAudioUnitBytes = *capacity.value().audioUnitBytes;
     const auto maximumSerialized = static_cast<std::uint64_t>(
         std::numeric_limits<std::int64_t>::max());
-    if (videoUnitBytes > maximumSerialized ||
-        audioUnitBytes > maximumSerialized ||
+    if (*startup.maximumVideoUnitBytes > maximumSerialized ||
+        *startup.maximumAudioUnitBytes > maximumSerialized ||
         *startup.videoByteCapacity > maximumSerialized ||
         *startup.audioByteCapacity > maximumSerialized) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
