@@ -27,9 +27,11 @@ private:
     MediaDatagramShaperNode(MediaNodeId nodeId,
                             std::shared_ptr<MediaMasterClock> clock) noexcept;
     ::media::Status validatePorts(MediaGraphExecutionContext& context) const;
+    void emitDiagnostics(const char* stage) noexcept;
 
     std::shared_ptr<MediaMasterClock> m_clock;
     std::unique_ptr<MediaDatagramServiceShaper> m_shaper;
+    bool m_diagnosticsEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

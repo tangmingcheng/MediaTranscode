@@ -12,6 +12,18 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaDatagramServiceShaperTelemetry final {
+    std::uint64_t admittedBatches = 0;
+    std::uint64_t admittedDatagrams = 0;
+    std::uint64_t admittedPayloadBytes = 0;
+    std::uint64_t admittedWireBytes = 0;
+    std::int64_t maximumDebtDelayNanoseconds = 0;
+    std::uint64_t serviceCurveViolations = 0;
+    std::uint64_t deadlineMisses = 0;
+    std::uint64_t pressureFailures = 0;
+    bool counterSaturated = false;
+};
+
 class MediaDatagramServiceShaper final {
 public:
     static ::media::Result<std::unique_ptr<MediaDatagramServiceShaper>> create(
@@ -20,6 +32,10 @@ public:
     ::media::Result<std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
     shape(MediaWireDatagramBatchBuffer& batch, MediaRunningTime now);
     const MediaDatagramShapingPlan& plan() const noexcept { return m_plan; }
+    const MediaDatagramServiceShaperTelemetry& telemetry() const noexcept
+    {
+        return m_telemetry;
+    }
 
 private:
     struct PendingReservation final {
@@ -34,6 +50,7 @@ private:
 
     MediaDatagramShapingPlan m_plan;
     MediaRunningTime m_burstDebtDuration;
+    MediaDatagramServiceShaperTelemetry m_telemetry;
     std::deque<PendingReservation> m_pending;
     std::optional<MediaRunningTime> m_peakAvailable;
     std::optional<MediaRunningTime> m_sustainedDebtUntil;

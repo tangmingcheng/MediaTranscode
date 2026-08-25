@@ -104,6 +104,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_bytes = 0;
     m_wouldBlockEvents = 0;
     m_writableWaits = 0;
+    m_deadlineMisses = 0;
+    m_pressureFailures = 0;
+    m_partialSubmittedFailures = 0;
+    m_ambiguousSubmittedFailures = 0;
     m_diagnosticsEmitted = false;
     auto valid = validatePorts(context);
     return valid ? FFmpegNodeRuntime::start(context) : valid;
@@ -219,6 +223,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     if (overhead == m_wireOverheadBytes.end() ||
         first.bytes().size() > m_maximumBatchBytes ||
         first.bytes().size() + overhead->second > m_burstWireBytes) {
+        ++m_pressureFailures;
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled wire job exceeds the activated batch or burst envelope"));
     }
@@ -282,6 +287,13 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 MediaScheduledDatagramSenderNode::failSubmit(
     const MediaDatagramTransmitError& error)
 {
+    if (error.kind ==
+        MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
+        ++m_partialSubmittedFailures;
+    } else if (error.kind ==
+               MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix) {
+        ++m_ambiguousSubmittedFailures;
+    }
     if ((error.kind ==
              MediaDatagramTransmitFailureKind::PartialSubmittedPrefix ||
          error.kind ==
@@ -322,6 +334,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             auto now = m_clock->now();
             if (!now) return failTerminal(now.error());
             if (now.value() >= m_groupDeadline) {
+                ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram remained blocked through its original deadline"));
             }
@@ -333,6 +346,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 m_stopSource.get_token());
             if (!waited) return failTerminal(waited.error());
             if (waited.value() == MediaDatagramWritableWaitResult::TimedOut) {
+                ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram writability wait reached its original deadline"));
             }
@@ -347,6 +361,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             auto now = m_clock->now();
             if (!now) return failTerminal(now.error());
             if (now.value() > m_groupDeadline) {
+                ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram submit exceeded its original deadline"));
             }
@@ -401,16 +416,31 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
         diagnostic << "scheduled_datagram_sender stage=" << stage
                    << " generation=" << m_generation.value_or(0)
                    << " service_scope=" << m_serviceScopeId
-                   << " batches=" << m_batches
-                   << " datagrams=" << m_datagrams
-                   << " bytes=" << m_bytes
+                   << " committed_batches=" << m_batches
+                   << " committed_datagrams=" << m_datagrams
+                   << " committed_payload_bytes=" << m_bytes
                    << " would_block=" << m_wouldBlockEvents
-                   << " writable_waits=" << m_writableWaits;
+                   << " writable_waits=" << m_writableWaits
+                   << " deadline_misses=" << m_deadlineMisses
+                   << " pressure_failures=" << m_pressureFailures
+                   << " partial_submitted_failures="
+                   << m_partialSubmittedFailures
+                   << " ambiguous_submitted_failures="
+                   << m_ambiguousSubmittedFailures;
         if (m_session) {
             const auto& evidence = m_session->evidenceTelemetry();
             diagnostic << " evidence_submitted=" << evidence.submitted
+                       << " evidence_timestamp_tracked="
+                       << evidence.timestampTracked
+                       << " evidence_timestamp_untracked="
+                       << evidence.timestampUntracked
                        << " evidence_observed=" << evidence.observed
-                       << " evidence_lost=" << evidence.lost;
+                       << " evidence_lost=" << evidence.lost
+                       << " evidence_late=" << evidence.late
+                       << " evidence_duplicate=" << evidence.duplicate
+                       << " evidence_unmatched=" << evidence.unmatched
+                       << " evidence_coverage_complete="
+                       << (evidence.transmitTimestampCoverageComplete ? 1 : 0);
         }
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,

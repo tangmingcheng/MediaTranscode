@@ -157,6 +157,11 @@ MediaDatagramServiceShaper::shape(
 
     std::uint64_t backlogDatagrams = 0;
     std::uint64_t backlogWireBytes = 0;
+    std::uint64_t batchDatagrams = 0;
+    std::uint64_t batchPayloadBytes = 0;
+    std::uint64_t batchWireBytes = 0;
+    std::int64_t maximumDebtDelayNanoseconds =
+        m_telemetry.maximumDebtDelayNanoseconds;
     try {
         for (const auto& item : pending) {
             if (backlogDatagrams ==
@@ -206,6 +211,12 @@ MediaDatagramServiceShaper::shape(
             cost.value().sustainedDebtDuration);
         if (!burstSlack ||
             burstSlack.value() < MediaRunningTime::fromNanoseconds(0)) {
+            if (m_telemetry.serviceCurveViolations ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                m_telemetry.counterSaturated = true;
+            } else {
+                ++m_telemetry.serviceCurveViolations;
+            }
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "service shaper datagram exceeds the burst envelope"));
         }
@@ -237,6 +248,12 @@ MediaDatagramServiceShaper::shape(
             wire.canonicalDeadline,
             (std::min)(endpointDeadline.value(), backlogDeadline.value()));
         if (eligibility > enqueueNotAfter) {
+            if (m_telemetry.deadlineMisses ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                m_telemetry.counterSaturated = true;
+            } else {
+                ++m_telemetry.deadlineMisses;
+            }
             std::ostringstream message;
             message
                 << "service shaper reservation misses its immutable deadline"
@@ -300,9 +317,35 @@ MediaDatagramServiceShaper::shape(
             endpointPending->datagrams > endpoint->maximumPendingDatagrams ||
             endpointPending->bytes > endpoint->maximumPendingBytes ||
             endpointPending->bytes > endpoint->socketHardBoundBytes) {
+            if (m_telemetry.pressureFailures ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                m_telemetry.counterSaturated = true;
+            } else {
+                ++m_telemetry.pressureFailures;
+            }
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "service shaper terminates on backlog or endpoint pressure"));
         }
+        auto debtDelay = eligibility.checkedSubtract(wire.canonicalRelease);
+        if (!debtDelay || debtDelay.value().nanoseconds() < 0 ||
+            batchDatagrams ==
+                (std::numeric_limits<std::uint64_t>::max)() ||
+            wire.payloadSize >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    batchPayloadBytes ||
+            cost.value().wireBytes >
+                (std::numeric_limits<std::uint64_t>::max)() - batchWireBytes) {
+            return Result::failure(
+                !debtDelay ? debtDelay.error() :
+                ::media::ErrorInfo::internalError(
+                    "service shaper admitted telemetry is not representable"));
+        }
+        ++batchDatagrams;
+        batchPayloadBytes += wire.payloadSize;
+        batchWireBytes += cost.value().wireBytes;
+        maximumDebtDelayNanoseconds = (std::max)(
+            maximumDebtDelayNanoseconds,
+            debtDelay.value().nanoseconds());
         try {
             pending.push_back({wire.endpointId, wire.payloadSize,
                                cost.value().wireBytes, completion.value()});
@@ -322,6 +365,29 @@ MediaDatagramServiceShaper::shape(
     auto output = MediaScheduledWireDatagramBatchBuffer::create(
         m_plan, batch, std::move(descriptors));
     if (!output) return Result::failure(output.error());
+
+    const bool telemetryOverflow =
+        m_telemetry.admittedBatches ==
+            (std::numeric_limits<std::uint64_t>::max)() ||
+        batchDatagrams >
+            (std::numeric_limits<std::uint64_t>::max)() -
+                m_telemetry.admittedDatagrams ||
+        batchPayloadBytes >
+            (std::numeric_limits<std::uint64_t>::max)() -
+                m_telemetry.admittedPayloadBytes ||
+        batchWireBytes >
+            (std::numeric_limits<std::uint64_t>::max)() -
+                m_telemetry.admittedWireBytes;
+    if (telemetryOverflow) {
+        m_telemetry.counterSaturated = true;
+        return Result::failure(::media::ErrorInfo::internalError(
+            "service shaper admitted telemetry overflowed"));
+    }
+    ++m_telemetry.admittedBatches;
+    m_telemetry.admittedDatagrams += batchDatagrams;
+    m_telemetry.admittedPayloadBytes += batchPayloadBytes;
+    m_telemetry.admittedWireBytes += batchWireBytes;
+    m_telemetry.maximumDebtDelayNanoseconds = maximumDebtDelayNanoseconds;
 
     m_pending = std::move(pending);
     m_peakAvailable = peakAvailable;

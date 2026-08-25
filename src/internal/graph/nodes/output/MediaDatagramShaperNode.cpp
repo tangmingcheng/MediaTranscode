@@ -1,10 +1,12 @@
 #include "internal/graph/nodes/output/MediaDatagramShaperNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include <new>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -42,6 +44,47 @@ MediaNodeKind MediaDatagramShaperNode::staticKind() noexcept
     return MediaNodeKind::DatagramShaper;
 }
 
+void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
+{
+    if (m_diagnosticsEmitted) return;
+    m_diagnosticsEmitted = true;
+    try {
+        std::ostringstream diagnostic;
+        diagnostic << "datagram_shaper stage=" << stage;
+        if (m_shaper) {
+            const auto& plan = m_shaper->plan();
+            const auto& telemetry = m_shaper->telemetry();
+            diagnostic
+                << " generation=" << plan.generation()
+                << " service_scope=" << plan.serviceScope().scopeId
+                << " admitted_batches=" << telemetry.admittedBatches
+                << " admitted_datagrams=" << telemetry.admittedDatagrams
+                << " admitted_payload_bytes="
+                << telemetry.admittedPayloadBytes
+                << " admitted_wire_bytes=" << telemetry.admittedWireBytes
+                << " maximum_debt_delay_ns="
+                << telemetry.maximumDebtDelayNanoseconds
+                << " service_curve_violations="
+                << telemetry.serviceCurveViolations
+                << " deadline_misses=" << telemetry.deadlineMisses
+                << " pressure_failures=" << telemetry.pressureFailures
+                << " counter_saturated="
+                << (telemetry.counterSaturated ? 1 : 0)
+                << " sustained_wire_bytes_per_second="
+                << plan.serviceCurve().sustainedWireBytesPerSecond
+                << " peak_wire_bytes_per_second="
+                << plan.serviceCurve().peakWireBytesPerSecond
+                << " burst_wire_bytes="
+                << plan.serviceCurve().burstWireBytes;
+        }
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            diagnostic.str());
+    } catch (...) {
+    }
+}
+
 ::media::Status MediaDatagramShaperNode::validatePorts(
     MediaGraphExecutionContext& context) const
 {
@@ -67,6 +110,7 @@ MediaNodeKind MediaDatagramShaperNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     m_shaper.reset();
+    m_diagnosticsEmitted = false;
     auto valid = validatePorts(context);
     return valid ? FFmpegNodeRuntime::start(context) : valid;
 }
@@ -144,6 +188,7 @@ MediaDatagramShaperNode::onProcess(MediaGraphExecutionContext& context)
     }
     auto scheduled = m_shaper->shape(*batch, now.value());
     if (!scheduled) {
+        emitDiagnostics("failed");
         return ::media::Result<MediaNodeProcessResult>::failure(
             scheduled.error());
     }
@@ -154,6 +199,7 @@ MediaDatagramShaperNode::onProcess(MediaGraphExecutionContext& context)
 ::media::Status MediaDatagramShaperNode::stop(
     MediaGraphExecutionContext& context)
 {
+    emitDiagnostics("stopped");
     m_shaper.reset();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -161,6 +207,7 @@ MediaDatagramShaperNode::onProcess(MediaGraphExecutionContext& context)
 void MediaDatagramShaperNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    emitDiagnostics("aborted");
     m_shaper.reset();
     FFmpegNodeRuntime::abort(context);
 }

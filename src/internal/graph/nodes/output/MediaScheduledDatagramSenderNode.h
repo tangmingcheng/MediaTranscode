@@ -93,6 +93,10 @@ private:
     std::uint64_t m_bytes = 0;
     std::uint64_t m_wouldBlockEvents = 0;
     std::uint64_t m_writableWaits = 0;
+    std::uint64_t m_deadlineMisses = 0;
+    std::uint64_t m_pressureFailures = 0;
+    std::uint64_t m_partialSubmittedFailures = 0;
+    std::uint64_t m_ambiguousSubmittedFailures = 0;
     bool m_diagnosticsEmitted = false;
 };
 
