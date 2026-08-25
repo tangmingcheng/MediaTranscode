@@ -93,7 +93,9 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
         config.deadline.endpointId != config.endpointId ||
         !config.globalSequence ||
         config.tsPacketBytes != ProjectTsPacketBytes ||
-        config.maximumDatagramBytes < config.tsPacketBytes) {
+        config.maximumDatagramBytes < config.tsPacketBytes ||
+        config.batchPlan.maximumDatagrams == 0 ||
+        config.batchPlan.maximumBytes < config.maximumDatagramBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP wire materializer requires explicit generation, endpoint, 188-byte TS packet, and datagram facts"));
     }
@@ -109,7 +111,7 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
         std::move(config)));
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
     MediaRunningTime canonicalRelease)
@@ -119,19 +121,18 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
     return materializeBatch(datagrams);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeBatch(
     std::span<const MediaMpegTsDatagramView> datagrams)
 {
     return materializeBatchReserved(datagrams, nullptr);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
     MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (protocolBatch.generation() != m_config.generation) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP protocol batch generation differs"));
@@ -152,13 +153,12 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
     return materializeBatchReserved(views, &protocolBatch);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     std::span<const MediaMpegTsDatagramView> datagrams,
     MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
         (protocolBatch &&
          protocolBatch->datagrams().size() != datagrams.size())) {
@@ -210,8 +210,9 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS UDP wire commit transaction"));
     }
-    auto builderResult = MediaWireDatagramBatchBuilder::create(
-        m_config.sessionKey, m_config.serviceScopeId, m_config.generation);
+    auto builderResult = MediaWireDatagramBatchPartitionBuilder::create(
+        m_config.sessionKey, m_config.serviceScopeId, m_config.generation,
+        m_config.batchPlan);
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
@@ -286,14 +287,15 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
             0,
             0,
             config.maximumDatagramBytes,
-            config.maximumOutstandingDatagrams});
+            config.maximumOutstandingDatagrams,
+            config.batchPlan});
     if (!rtpMaterializer) return Result::failure(rtpMaterializer.error());
     return Result::success(MediaMpegTsRtpWireDatagramMaterializer(
         std::move(packetizer).value(),
         std::move(rtpMaterializer).value()));
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
     MediaRunningTime canonicalRelease)
@@ -303,12 +305,11 @@ MediaMpegTsRtpWireDatagramMaterializer::materialize(
     return materializeBatch(datagrams);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
     std::span<const MediaMpegTsDatagramView> datagrams)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS RTP wire materializer requires a nonempty batch"));
@@ -341,12 +342,11 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
     return m_rtpMaterializer.materializeBatch(packetized);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
     MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (protocolBatch.generation() != m_rtpMaterializer.generation()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS RTP protocol batch generation differs"));

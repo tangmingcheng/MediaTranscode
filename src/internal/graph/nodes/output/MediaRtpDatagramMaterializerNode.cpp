@@ -169,8 +169,7 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
         m_outputPlan, m_sdpPlan, *codec->context(), configurationPacket,
         *m_dependencies.authority->sharedNtpEpoch(), *m_activationFacts);
     if (!materialized) return ::media::Status::failure(materialized.error());
-    m_pendingOutput = materialized.value().releaseDescription();
-    m_pendingOutputKind = PendingOutputKind::Description;
+    m_pendingDescription = materialized.value().releaseDescription();
     auto senderConfig = materialized.value().releaseSenderConfig();
     auto packetizer = m_dependencies.packetizerFactory->create(
         senderConfig.releaseStreamConfig(),
@@ -258,7 +257,8 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
             std::move(schedule).value(), m_outputPlan.cname,
             initialSequence, 0, 0,
             m_outputPlan.packetization.maximumDatagramBytes(),
-            transport->plan().shaping.backlog().maximumDatagrams});
+            transport->plan().shaping.backlog().maximumDatagrams,
+            transport->plan().shaping.batch()});
     if (!created) return ::media::Status::failure(created.error());
     m_wireMaterializer = std::move(created).value();
     return ::media::Status::success();
@@ -355,9 +355,21 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
     m_pendingAccessUnit.reset();
     m_packetizedPayloadOctets.clear();
     m_packetizedBytes.clear();
-    m_pendingOutput = std::move(wire).value();
-    m_pendingOutputKind = PendingOutputKind::Wire;
-    auto emitted = emitOutput(context, "wire_batch", m_pendingOutput);
+    try {
+        for (auto& partition : wire.value()) {
+            m_pendingWireOutputs.push_back(std::move(partition));
+        }
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "RTP wire output partitions"));
+    }
+    if (m_pendingWireOutputs.empty()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(invalid(
+            "RTP wire materializer emitted no batch partitions"));
+    }
+    auto emitted = emitOutput(
+        context, "wire_batch", m_pendingWireOutputs.front());
     return emitted ? processProgress() : processProgress(std::move(emitted));
 }
 
@@ -365,10 +377,15 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
 MediaRtpDatagramMaterializerNode::onProcess(
     MediaGraphExecutionContext& context)
 {
-    if (m_pendingOutput) {
-        const char* port = m_pendingOutputKind == PendingOutputKind::Description
-            ? "description" : "wire_batch";
-        auto emitted = emitOutput(context, port, m_pendingOutput);
+    if (m_pendingDescription) {
+        auto emitted = emitOutput(
+            context, "description", m_pendingDescription);
+        return emitted ? processProgress()
+                       : processProgress(std::move(emitted));
+    }
+    if (!m_pendingWireOutputs.empty()) {
+        auto emitted = emitOutput(
+            context, "wire_batch", m_pendingWireOutputs.front());
         return emitted ? processProgress()
                        : processProgress(std::move(emitted));
     }
@@ -414,7 +431,8 @@ MediaRtpDatagramMaterializerNode::onProcess(
             return ::media::Result<MediaNodeProcessResult>::failure(
                 opened.error());
         }
-        auto emitted = emitOutput(context, "description", m_pendingOutput);
+        auto emitted = emitOutput(
+            context, "description", m_pendingDescription);
         return emitted ? processProgress() : processProgress(std::move(emitted));
     }
     if (!m_descriptionEmitted) return processWaiting();
@@ -424,16 +442,18 @@ MediaRtpDatagramMaterializerNode::onProcess(
 ::media::Status MediaRtpDatagramMaterializerNode::commitReservedOutput(
     const MediaBufferRef& buffer)
 {
-    if (!m_pendingOutput || buffer != m_pendingOutput) {
-        return ::media::Status::failure(::media::ErrorInfo::cancelled(
-            "RTP materializer output commit differs from pending output"));
-    }
-    if (m_pendingOutputKind == PendingOutputKind::Description) {
+    if (m_pendingDescription && buffer == m_pendingDescription) {
         m_descriptionEmitted = true;
+        m_pendingDescription.reset();
+        return ::media::Status::success();
     }
-    m_pendingOutput.reset();
-    m_pendingOutputKind = PendingOutputKind::None;
-    return ::media::Status::success();
+    if (!m_pendingWireOutputs.empty() &&
+        buffer == m_pendingWireOutputs.front()) {
+        m_pendingWireOutputs.pop_front();
+        return ::media::Status::success();
+    }
+    return ::media::Status::failure(::media::ErrorInfo::cancelled(
+        "RTP materializer output commit differs from pending output"));
 }
 
 ::media::Status MediaRtpDatagramMaterializerNode::stop(
@@ -457,8 +477,8 @@ void MediaRtpDatagramMaterializerNode::resetState() noexcept
     m_packetizedBytes.clear();
     m_wireMaterializer.reset();
     m_packetizer.reset();
-    m_pendingOutput.reset();
-    m_pendingOutputKind = PendingOutputKind::None;
+    m_pendingDescription.reset();
+    m_pendingWireOutputs.clear();
     m_descriptionEmitted = false;
     m_stagedConfigurationAccessUnit.reset();
     m_pendingAccessUnit.reset();

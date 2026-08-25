@@ -4,7 +4,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/protocol/rtp/MediaRtpOutputClockMapper.h"
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
-#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramBatchPartitionBuilder.h"
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 #include "internal/graph/runtime/buffer/MediaProtocolDatagramCommitLease.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
@@ -37,6 +37,7 @@ struct MediaRtpWireDatagramMaterializerConfig final {
     std::uint64_t initialOctetCount;
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
+    MediaDatagramBatchPlan batchPlan;
 };
 
 struct MediaRtpWireDatagramMaterializerSnapshot final {
@@ -62,14 +63,14 @@ public:
     static ::media::Result<MediaRtpWireDatagramMaterializer> create(
         MediaRtpWireDatagramMaterializerConfig config);
 
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
+    ::media::Result<MediaWireDatagramBatchCollection> materialize(
         std::span<const std::uint8_t> packetizedRtp,
         std::size_t payloadOctets,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
         std::span<const MediaPacketizedRtpDatagramView> datagrams,
         MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
@@ -91,7 +92,7 @@ public:
 private:
     explicit MediaRtpWireDatagramMaterializer(
         std::shared_ptr<MediaRtpWireProtocolState> state) noexcept;
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatchReserved(
         std::span<const MediaPacketizedRtpDatagramView> datagrams,
         MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);

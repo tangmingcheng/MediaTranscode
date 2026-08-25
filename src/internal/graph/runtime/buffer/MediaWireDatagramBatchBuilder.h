@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
 
 class MediaMpegTsUdpWireDatagramMaterializer;
 class MediaRtpWireDatagramMaterializer;
+class MediaWireDatagramBatchPartitionBuilder;
 
 class MediaWireDatagramBatchBuilder final {
 public:
@@ -28,6 +29,7 @@ public:
 private:
     friend class MediaMpegTsUdpWireDatagramMaterializer;
     friend class MediaRtpWireDatagramMaterializer;
+    friend class MediaWireDatagramBatchPartitionBuilder;
 
     static ::media::Result<MediaWireDatagramBatchBuilder> create(
         const std::string& sessionKey,

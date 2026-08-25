@@ -59,6 +59,7 @@ private:
     std::optional<MediaRunningTime> projectedLastCanonicalRelease;
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
+    MediaDatagramBatchPlan batchPlan;
     std::size_t outstandingDatagrams = 0;
     std::uint64_t nextReservationIdentity = 1;
     struct ReservationRecord final {

@@ -46,7 +46,9 @@ MediaRtpWireDatagramMaterializer::create(
         config.clockMapper.clockRate() <= 0 ||
         config.senderReportSchedule.generation() != config.generation ||
         config.maximumDatagramBytes <= RtpFixedHeaderBytes ||
-        config.maximumOutstandingDatagrams == 0) {
+        config.maximumOutstandingDatagrams == 0 ||
+        config.batchPlan.maximumDatagrams == 0 ||
+        config.batchPlan.maximumBytes < config.maximumDatagramBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire materializer requires complete generation, endpoint, identity, clock, schedule, counter, and datagram facts"));
     }
@@ -69,7 +71,7 @@ MediaRtpWireDatagramMaterializer::create(
     }
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> packetizedRtp,
     std::size_t payloadOctets,
@@ -82,14 +84,14 @@ MediaRtpWireDatagramMaterializer::materialize(
     return materializeBatch(datagrams);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeBatch(
     std::span<const MediaPacketizedRtpDatagramView> datagrams)
 {
     return materializeBatchReserved(datagrams, nullptr);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeProtocolBatch(
     std::span<const MediaPacketizedRtpDatagramView> datagrams,
     MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
@@ -97,13 +99,12 @@ MediaRtpWireDatagramMaterializer::materializeProtocolBatch(
     return materializeBatchReserved(datagrams, &protocolBatch);
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     std::span<const MediaPacketizedRtpDatagramView> datagrams,
     MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
         (protocolBatch &&
          protocolBatch->datagrams().size() != datagrams.size())) {
@@ -307,10 +308,10 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     }
     protocolLock.unlock();
 
-    auto builderResult = MediaWireDatagramBatchBuilder::create(
+    auto builderResult = MediaWireDatagramBatchPartitionBuilder::create(
         m_state->globalSequence->sessionKey(),
         m_state->globalSequence->serviceScopeId(),
-        m_state->generation);
+        m_state->generation, m_state->batchPlan);
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
     std::size_t index = 0;

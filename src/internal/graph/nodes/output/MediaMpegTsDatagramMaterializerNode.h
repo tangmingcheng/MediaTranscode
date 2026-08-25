@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <variant>
+#include <deque>
 
 namespace media::ffmpeg::graph {
 
@@ -45,7 +46,7 @@ private:
     MediaBufferRef m_protocolPlan;
     MediaBufferRef m_transportPlan;
     MediaBufferRef m_pendingProtocolBatch;
-    MediaBufferRef m_pendingOutput;
+    std::deque<MediaBufferRef> m_pendingOutputs;
     std::optional<Materializer> m_materializer;
 };
 

@@ -54,7 +54,8 @@ MediaRtpWireProtocolState::MediaRtpWireProtocolState(
       projectedPacketCount(config.initialPacketCount),
       projectedOctetCount(config.initialOctetCount),
       maximumDatagramBytes(config.maximumDatagramBytes),
-      maximumOutstandingDatagrams(config.maximumOutstandingDatagrams)
+      maximumOutstandingDatagrams(config.maximumOutstandingDatagrams),
+      batchPlan(config.batchPlan)
 {
 }
 

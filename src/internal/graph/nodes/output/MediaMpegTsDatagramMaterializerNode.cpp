@@ -129,7 +129,8 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
                 deadline.value(),
                 transport->globalSequence(),
                 protocol->muxPlan().parameters().packetSize,
-                static_cast<std::size_t>(endpoint->maximumDatagramBytes)});
+                static_cast<std::size_t>(endpoint->maximumDatagramBytes),
+                shaping.batch()});
         if (!created) return ::media::Status::failure(created.error());
         m_materializer.emplace<MediaMpegTsUdpWireDatagramMaterializer>(
             std::move(created).value());
@@ -173,6 +174,7 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
             rtp->baseTimestamp(), rtp->initialSequenceNumber(),
             rtp->tsPacketsPerPayload(), rtp->maximumDatagramBytes(),
             shaping.backlog().maximumDatagrams,
+            shaping.batch(),
             m_authority->sharedNtpEpoch()->masterAtCapture(),
             *m_authority->sharedNtpEpoch(),
             std::move(reportSchedule).value(), rtp->cname()});
@@ -186,8 +188,9 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
 MediaMpegTsDatagramMaterializerNode::onProcess(
     MediaGraphExecutionContext& context)
 {
-    if (m_pendingOutput) {
-        auto emitted = emitOutput(context, "wire_batch", m_pendingOutput);
+    if (!m_pendingOutputs.empty()) {
+        auto emitted = emitOutput(
+            context, "wire_batch", m_pendingOutputs.front());
         return emitted ? processProgress()
                        : processProgress(std::move(emitted));
     }
@@ -242,21 +245,33 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             wire.error());
     }
-    m_pendingProtocolBatch.reset();
-    m_pendingOutput = std::move(wire).value();
-    auto emitted = emitOutput(context, "wire_batch", m_pendingOutput);
+    try {
+        for (auto& partition : wire.value()) {
+            m_pendingOutputs.push_back(std::move(partition));
+        }
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "MPEG-TS wire output partitions"));
+    }
+    if (m_pendingOutputs.empty()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(invalid(
+            "MPEG-TS wire materializer emitted no batch partitions"));
+    }
+    auto emitted = emitOutput(
+        context, "wire_batch", m_pendingOutputs.front());
     return emitted ? processProgress() : processProgress(std::move(emitted));
 }
 
 ::media::Status MediaMpegTsDatagramMaterializerNode::commitReservedOutput(
     const MediaBufferRef& buffer)
 {
-    if (!m_pendingOutput || buffer != m_pendingOutput) {
+    if (m_pendingOutputs.empty() || buffer != m_pendingOutputs.front()) {
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "MPEG-TS wire batch commit differs from pending output"));
     }
-    m_pendingOutput.reset();
-    m_pendingProtocolBatch.reset();
+    m_pendingOutputs.pop_front();
+    if (m_pendingOutputs.empty()) m_pendingProtocolBatch.reset();
     return ::media::Status::success();
 }
 
@@ -277,7 +292,7 @@ void MediaMpegTsDatagramMaterializerNode::abort(
 void MediaMpegTsDatagramMaterializerNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
-    m_pendingOutput.reset();
+    m_pendingOutputs.clear();
     m_materializer.reset();
     m_transportPlan.reset();
     m_protocolPlan.reset();

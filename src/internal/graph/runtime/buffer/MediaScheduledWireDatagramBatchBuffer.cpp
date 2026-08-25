@@ -3,6 +3,7 @@
 
 #include <limits>
 #include <new>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 
@@ -57,11 +58,20 @@ MediaScheduledWireDatagramBatchBuffer::create(
         source.m_serviceScopeId != plan.serviceScope().scopeId ||
         source.m_generation != plan.generation() || source.m_payload.empty() ||
         source.m_datagrams.empty() ||
-        descriptors.size() != source.m_datagrams.size() ||
-        descriptors.size() > plan.batch().maximumDatagrams ||
-        source.m_payload.size() > plan.batch().maximumBytes) {
+        descriptors.size() != source.m_datagrams.size()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "scheduled wire datagram batch violates its service identity or planner-owned hard bounds"));
+            "scheduled wire datagram batch violates its service identity or descriptor cardinality"));
+    }
+    if (descriptors.size() > plan.batch().maximumDatagrams ||
+        source.m_payload.size() > plan.batch().maximumBytes) {
+        std::ostringstream message;
+        message << "scheduled wire datagram batch exceeds planner partition"
+                << " datagrams=" << descriptors.size()
+                << " maximum_datagrams=" << plan.batch().maximumDatagrams
+                << " bytes=" << source.m_payload.size()
+                << " maximum_bytes=" << plan.batch().maximumBytes;
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            message.str()));
     }
 
     std::vector<MediaScheduledWireDatagram> datagrams;

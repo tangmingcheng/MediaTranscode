@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <deque>
 
 namespace media::ffmpeg::graph {
 
@@ -38,8 +39,6 @@ protected:
         const MediaBufferRef& buffer) override;
 
 private:
-    enum class PendingOutputKind : std::uint8_t { None, Description, Wire };
-
     MediaRtpDatagramMaterializerNode(
         MediaNodeId nodeId,
         MediaProtocolOutputSessionKey plannedSessionKey,
@@ -68,8 +67,8 @@ private:
     MediaBufferRef m_transportPlan;
     MediaBufferRef m_stagedConfigurationAccessUnit;
     MediaBufferRef m_pendingAccessUnit;
-    MediaBufferRef m_pendingOutput;
-    PendingOutputKind m_pendingOutputKind = PendingOutputKind::None;
+    MediaBufferRef m_pendingDescription;
+    std::deque<MediaBufferRef> m_pendingWireOutputs;
     bool m_descriptionEmitted = false;
     std::unique_ptr<ScheduledRtpPacketizerSession> m_packetizer;
     std::optional<MediaRtpWireDatagramMaterializer> m_wireMaterializer;

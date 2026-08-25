@@ -2,7 +2,7 @@
 
 #include "internal/graph/nodes/output/MediaRtpWireDatagramMaterializer.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
-#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramBatchPartitionBuilder.h"
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 #include "internal/graph/runtime/buffer/MediaMpegTsProtocolDatagramBatchBuffer.h"
 
@@ -29,6 +29,7 @@ struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
     std::uint16_t tsPacketBytes;
     std::size_t maximumDatagramBytes;
+    MediaDatagramBatchPlan batchPlan;
 };
 
 class MediaMpegTsUdpWireDatagramMaterializer final {
@@ -36,19 +37,19 @@ public:
     static ::media::Result<MediaMpegTsUdpWireDatagramMaterializer> create(
         MediaMpegTsUdpWireDatagramMaterializerConfig config);
 
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
+    ::media::Result<MediaWireDatagramBatchCollection> materialize(
         std::span<const std::uint8_t> completeTsPackets,
         MediaRunningTime canonicalRelease);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
         MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
 
 private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
         MediaMpegTsUdpWireDatagramMaterializerConfig config) noexcept;
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatchReserved(
         std::span<const MediaMpegTsDatagramView> datagrams,
         MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);
@@ -73,6 +74,7 @@ struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
     std::uint8_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
+    MediaDatagramBatchPlan batchPlan;
     MediaRunningTime masterOrigin;
     MediaSharedNtpEpoch ntpEpoch;
     MediaRtcpSenderReportSchedule senderReportSchedule;
@@ -84,12 +86,12 @@ public:
     static ::media::Result<MediaMpegTsRtpWireDatagramMaterializer> create(
         MediaMpegTsRtpWireDatagramMaterializerConfig config);
 
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
+    ::media::Result<MediaWireDatagramBatchCollection> materialize(
         std::span<const std::uint8_t> completeTsPackets,
         MediaRunningTime canonicalRelease);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
         MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
 

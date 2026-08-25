@@ -23,6 +23,7 @@ class MediaScheduledWireDatagram;
 class MediaScheduledWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuilder;
+class MediaWireDatagramBatchPartitionBuilder;
 
 class MediaDatagramSubmitCommitLease final {
 public:
@@ -192,6 +193,7 @@ private:
     friend class MediaDatagramServiceShaper;
     friend class MediaScheduledWireDatagramBatchBuffer;
     friend class MediaWireDatagramBatchBuilder;
+    friend class MediaWireDatagramBatchPartitionBuilder;
 
     static ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     create(std::string sessionKey,
