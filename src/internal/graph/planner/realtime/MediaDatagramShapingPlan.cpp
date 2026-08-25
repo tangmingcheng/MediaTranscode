@@ -114,9 +114,9 @@ constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
     const auto derivedMaximum =
         (std::min)(networkPayloadBytes, evidence.senderMaximumPayloadBytes);
     if (endpoint.maximumDatagramBytes == 0 ||
-        endpoint.maximumDatagramBytes != derivedMaximum) {
+        endpoint.maximumDatagramBytes > derivedMaximum) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "datagram endpoint maximum payload differs from its MTU evidence"));
+            "datagram endpoint maximum payload exceeds its MTU evidence"));
     }
     return ::media::Status::success();
 }
