@@ -33,6 +33,51 @@ namespace {
     return ::media::Status::success();
 }
 
+::media::Status publishPacketLayoutThroughAdvertisedSoftwareSurface(
+    MediaPipelineChainPlan& chain,
+    const AVCodec& encoder,
+    const AVCodecContext& openedHardwareContext,
+    AVPixelFormat surfaceFormat)
+{
+    const AVPixFmtDescriptor* surfaceDescriptor =
+        av_pix_fmt_desc_get(surfaceFormat);
+    if (!surfaceDescriptor ||
+        (surfaceDescriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) != 0 ||
+        !ffmpegCodecSupportsPixelFormat(&encoder, surfaceFormat)) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "opened hardware encoder exposes no advertised software-input packet-layout probe contract"));
+    }
+    if (!chain.encoder.encoderRateControl) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "hardware encoder packet-layout probe has no rate-control contract"));
+    }
+
+    auto probeContext = ::media::ffmpeg::makeCodecContext(&encoder);
+    if (!probeContext) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "hardware encoder software-input packet-layout probe context"));
+    }
+    probeContext->width = openedHardwareContext.width;
+    probeContext->height = openedHardwareContext.height;
+    probeContext->pix_fmt = surfaceFormat;
+    probeContext->sw_pix_fmt = surfaceFormat;
+    probeContext->time_base = openedHardwareContext.time_base;
+    probeContext->framerate = openedHardwareContext.framerate;
+    probeContext->sample_aspect_ratio = openedHardwareContext.sample_aspect_ratio;
+    probeContext->max_b_frames = openedHardwareContext.max_b_frames;
+
+    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
+        *probeContext, *chain.encoder.encoderRateControl);
+    if (!applied) return ::media::Status::failure(applied.error());
+
+    const int opened = avcodec_open2(probeContext.get(), &encoder, nullptr);
+    if (opened < 0) {
+        return FFmpegGraphError::statusFromCode(
+            opened, "avcodec_open2(hardware encoder software-input packet-layout probe)");
+    }
+    return publishPacketLayout(chain, *probeContext);
+}
+
 MediaHardwareCapability unavailable(std::string reason)
 {
     return {false, std::move(reason)};
@@ -269,6 +314,10 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
             encoderOpened);
     }
     auto packetLayout = publishPacketLayout(chain, *encoderContext);
+    if (!packetLayout) {
+        packetLayout = publishPacketLayoutThroughAdvertisedSoftwareSurface(
+            chain, *encoder, *encoderContext, encoderSurfaceFormat);
+    }
     if (!packetLayout) return unavailable(packetLayout.error().message);
 
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
