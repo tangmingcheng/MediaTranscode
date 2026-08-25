@@ -450,6 +450,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         } else if (outer.outputTransport ==
                    MediaOutputTransportKind::RtpAvp) {
             if (!output.muxedOutput.rtpTransport ||
+                !output.muxedOutput.maximumDatagramBytes ||
                 output.muxedOutput.sdpPath.empty() ||
                 output.muxedOutput.mediaId.empty() ||
                 accepted.value().muxPlan().parameters().transportKind !=
@@ -460,6 +461,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             }
             auto rtp = MediaMpegTsRtpOutputPlan::create(
                 std::move(*output.muxedOutput.rtpTransport),
+                *output.muxedOutput.maximumDatagramBytes,
                 output.muxedOutput.sdpPath,
                 output.muxedOutput.mediaId,
                 MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
+#include "internal/graph/protocol/rtp/MediaRtpRemoteEndpointPair.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -22,7 +22,8 @@ struct MediaMpegTsRtpSdpPlan final {
 class MediaMpegTsRtpOutputPlan final {
 public:
     static ::media::Result<MediaMpegTsRtpOutputPlan> create(
-        MediaRtpUdpSenderConfig transport,
+        MediaRtpRemoteEndpointPair transport,
+        std::size_t maximumDatagramBytes,
         std::string sdpPath,
         std::string sessionIdentity,
         MediaRunningTime senderReportInterval);
@@ -35,7 +36,7 @@ public:
         const MediaMpegTsRtpOutputPlan&) = delete;
 
     ::media::Result<MediaMpegTsRtpOutputPlan> clone() const;
-    const MediaRtpUdpSenderConfig& transport() const noexcept;
+    const MediaRtpRemoteEndpointPair& transport() const noexcept;
     int payloadType() const noexcept;
     int clockRate() const noexcept;
     std::uint32_t ssrc() const noexcept;
@@ -49,7 +50,7 @@ public:
 
 private:
     MediaMpegTsRtpOutputPlan(
-        MediaRtpUdpSenderConfig transport,
+        MediaRtpRemoteEndpointPair transport,
         int payloadType,
         int clockRate,
         std::uint32_t ssrc,
@@ -61,7 +62,7 @@ private:
         std::uint8_t tsPacketsPerPayload,
         MediaMpegTsRtpSdpPlan sdp) noexcept;
 
-    MediaRtpUdpSenderConfig m_transport;
+    MediaRtpRemoteEndpointPair m_transport;
     int m_payloadType;
     int m_clockRate;
     std::uint32_t m_ssrc;

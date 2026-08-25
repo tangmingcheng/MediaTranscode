@@ -12,7 +12,7 @@ namespace {
 
 void appendRtpEndpoints(
     std::vector<MediaDatagramRemoteEndpointFact>& endpoints,
-    const MediaRtpUdpSenderConfig& transport,
+    const MediaRtpRemoteEndpointPair& transport,
     MediaDatagramProtocolEndpointRole rtpRole,
     MediaDatagramProtocolEndpointRole rtcpRole)
 {

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
-#include "internal/graph/runtime/network/MediaUdpDatagramSenderPort.h"
+#include "internal/graph/runtime/network/MediaUdpDatagramEndpoint.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>

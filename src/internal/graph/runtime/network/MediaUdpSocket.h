@@ -37,8 +37,6 @@ public:
     intptr_t nativeHandle() const noexcept;
     uint16_t localPort() const noexcept;
     int effectiveReceiveBufferBytes() const noexcept;
-    ::media::Status sendTo(const std::string& address, uint16_t port,
-                           std::span<const uint8_t> datagram) const;
     void close() noexcept;
 
 private:

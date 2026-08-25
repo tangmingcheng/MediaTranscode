@@ -57,22 +57,16 @@ constexpr std::array<const char*, 14> UdpKeys{
     ScheduledBatchMaximumBytesKey,
     EmissionScheduledWireBytesPerSecondKey};
 
-constexpr std::array<const char*, 37> RtpKeys{
+constexpr std::array<const char*, 31> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
     "project_mpeg_ts_plan.transport.rtp.address_family",
-    "project_mpeg_ts_plan.transport.rtp.local_address",
     "project_mpeg_ts_plan.transport.rtp.remote_rtp_address",
     "project_mpeg_ts_plan.transport.rtp.remote_rtcp_address",
     "project_mpeg_ts_plan.transport.rtp.remote_rtp_port",
     "project_mpeg_ts_plan.transport.rtp.remote_rtcp_port",
-    "project_mpeg_ts_plan.transport.rtp.local_port_policy",
-    "project_mpeg_ts_plan.transport.rtp.local_rtp_port",
-    "project_mpeg_ts_plan.transport.rtp.local_rtcp_port",
-    "project_mpeg_ts_plan.transport.rtp.send_buffer_bytes",
     "project_mpeg_ts_plan.transport.rtp.maximum_datagram_bytes",
-    "project_mpeg_ts_plan.transport.rtp.io_behavior",
     "project_mpeg_ts_plan.transport.rtp.payload_type",
     "project_mpeg_ts_plan.transport.rtp.clock_rate",
     "project_mpeg_ts_plan.transport.rtp.ssrc",
@@ -455,28 +449,13 @@ bool exactOptionKeys(
     return ::media::Status::success();
 }
 
-bool sameLocalPortPolicy(
-    const MediaRtpUdpLocalPortPolicy& left,
-    const MediaRtpUdpLocalPortPolicy& right) noexcept
-{
-    return left.kind() == right.kind() &&
-        left.rtpPort() == right.rtpPort() &&
-        left.rtcpPort() == right.rtcpPort();
-}
-
-bool sameSenderConfig(
-    const MediaRtpUdpSenderConfig& left,
-    const MediaRtpUdpSenderConfig& right) noexcept
+bool sameRemoteEndpointPair(
+    const MediaRtpRemoteEndpointPair& left,
+    const MediaRtpRemoteEndpointPair& right) noexcept
 {
     return left.addressFamily() == right.addressFamily() &&
-        left.localNumericAddress() == right.localNumericAddress() &&
         left.remoteRtpEndpoint() == right.remoteRtpEndpoint() &&
-        left.remoteRtcpEndpoint() == right.remoteRtcpEndpoint() &&
-        sameLocalPortPolicy(
-            left.localPortPolicy(), right.localPortPolicy()) &&
-        left.sendBufferBytes() == right.sendBufferBytes() &&
-        left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
-        left.ioBehavior() == right.ioBehavior();
+        left.remoteRtcpEndpoint() == right.remoteRtcpEndpoint();
 }
 
 bool sameRtpOutput(
@@ -485,7 +464,7 @@ bool sameRtpOutput(
 {
     const auto& leftSdp = left.sdp();
     const auto& rightSdp = right.sdp();
-    return sameSenderConfig(left.transport(), right.transport()) &&
+    return sameRemoteEndpointPair(left.transport(), right.transport()) &&
         left.payloadType() == right.payloadType() &&
         left.clockRate() == right.clockRate() &&
         left.ssrc() == right.ssrc() &&
@@ -571,11 +550,10 @@ bool sameProtocol(
 {
     const auto& mux = output.protocol.muxPlan().parameters();
     const auto& sender = rtp.transport();
-    const auto& localPolicy = sender.localPortPolicy();
     const auto& remoteRtp = sender.remoteRtpEndpoint();
     const auto& remoteRtcp = sender.remoteRtcpEndpoint();
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-        sender.maximumDatagramBytes());
+        rtp.maximumDatagramBytes());
     auto expectedEmission = MediaTsDatagramEmissionPlan::create(
         output.protocol.muxPlan(),
         output.emission.videoInitialServiceWindow(),
@@ -590,13 +568,8 @@ bool sameProtocol(
         rtp.tsPacketsPerPayload() != expectedPackets.value() ||
         !expectedEmission || output.emission != expectedEmission.value() ||
         output.emission.maximumWireDatagramBytes() >
-            sender.maximumDatagramBytes() ||
-        localPolicy.kind() !=
-            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
-        localPolicy.rtpPort() || localPolicy.rtcpPort() ||
-        output.scheduledBatchMaximumBytes == 0 ||
-        sender.ioBehavior() !=
-            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure) {
+            rtp.maximumDatagramBytes() ||
+        output.scheduledBatchMaximumBytes == 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Project MPEG-TS RTP node plan is inconsistent"));
@@ -606,33 +579,27 @@ bool sameProtocol(
         {PlanKey, encodeMux(output.protocol.muxPlan())},
         {VariantKey, "rtp"},
         {RtpKeys[3], familyName(sender.addressFamily())},
-        {RtpKeys[4], sender.localNumericAddress()},
-        {RtpKeys[5], remoteRtp.numericAddress()},
-        {RtpKeys[6], remoteRtcp.numericAddress()},
-        {RtpKeys[7], std::to_string(remoteRtp.port())},
-        {RtpKeys[8], std::to_string(remoteRtcp.port())},
-        {RtpKeys[9], "os_assigned_independent"},
-        {RtpKeys[10], "0"},
-        {RtpKeys[11], "0"},
-        {RtpKeys[12], std::to_string(sender.sendBufferBytes())},
-        {RtpKeys[13], std::to_string(sender.maximumDatagramBytes())},
-        {RtpKeys[14], "nonblocking_reject_on_pressure"},
-        {RtpKeys[15], std::to_string(rtp.payloadType())},
-        {RtpKeys[16], std::to_string(rtp.clockRate())},
-        {RtpKeys[17], std::to_string(rtp.ssrc())},
-        {RtpKeys[18], std::to_string(rtp.baseTimestamp())},
-        {RtpKeys[19], rtp.cname()},
-        {RtpKeys[20],
+        {RtpKeys[4], remoteRtp.numericAddress()},
+        {RtpKeys[5], remoteRtcp.numericAddress()},
+        {RtpKeys[6], std::to_string(remoteRtp.port())},
+        {RtpKeys[7], std::to_string(remoteRtcp.port())},
+        {RtpKeys[8], std::to_string(rtp.maximumDatagramBytes())},
+        {RtpKeys[9], std::to_string(rtp.payloadType())},
+        {RtpKeys[10], std::to_string(rtp.clockRate())},
+        {RtpKeys[11], std::to_string(rtp.ssrc())},
+        {RtpKeys[12], std::to_string(rtp.baseTimestamp())},
+        {RtpKeys[13], rtp.cname()},
+        {RtpKeys[14],
             std::to_string(rtp.senderReportInterval().nanoseconds())},
-        {RtpKeys[21], std::to_string(rtp.tsPacketsPerPayload())},
-        {RtpKeys[22], rtp.sdp().path},
-        {RtpKeys[23], rtp.sdp().originUsername},
-        {RtpKeys[24], rtp.sdp().sessionName},
-        {RtpKeys[25], familyName(rtp.sdp().originAddressFamily)},
-        {RtpKeys[26], rtp.sdp().originNumericAddress},
-        {RtpKeys[27], rtp.sdp().cname},
-        {RtpKeys[28], std::to_string(rtp.initialSequenceNumber())},
-        {RtpKeys[29], "project_mpegts"},
+        {RtpKeys[15], std::to_string(rtp.tsPacketsPerPayload())},
+        {RtpKeys[16], rtp.sdp().path},
+        {RtpKeys[17], rtp.sdp().originUsername},
+        {RtpKeys[18], rtp.sdp().sessionName},
+        {RtpKeys[19], familyName(rtp.sdp().originAddressFamily)},
+        {RtpKeys[20], rtp.sdp().originNumericAddress},
+        {RtpKeys[21], rtp.sdp().cname},
+        {RtpKeys[22], std::to_string(rtp.initialSequenceNumber())},
+        {RtpKeys[23], "project_mpegts"},
         {StreamSetKey, std::string(encodedStreamSet.value())},
         {EmissionVideoWindowKey, std::to_string(
              output.emission.videoInitialServiceWindow().nanoseconds())},
@@ -712,89 +679,64 @@ bool sameProtocol(
             "Project MPEG-TS RTP options have missing, extra, or mismatched fields"));
     }
     auto family = parseFamily(node.options, RtpKeys[3]);
-    auto localAddress = requiredNodeOption(
-        &node.options, Owner, RtpKeys[4]);
     auto remoteRtpAddress = requiredNodeOption(
-        &node.options, Owner, RtpKeys[5]);
+        &node.options, Owner, RtpKeys[4]);
     auto remoteRtcpAddress = requiredNodeOption(
-        &node.options, Owner, RtpKeys[6]);
+        &node.options, Owner, RtpKeys[5]);
     auto remoteRtpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[7], false);
+        node.options, RtpKeys[6], false);
     auto remoteRtcpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[8], false);
-    auto localPolicy = requiredNodeOption(
-        &node.options, Owner, RtpKeys[9]);
-    auto localRtpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[10], true);
-    auto localRtcpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[11], true);
-    auto sendBuffer = parseUnsignedOption<int>(
-        node.options, RtpKeys[12], false);
+        node.options, RtpKeys[7], false);
     auto maximumDatagram = parseUnsignedOption<std::size_t>(
-        node.options, RtpKeys[13], false);
-    auto ioBehavior = requiredNodeOption(
-        &node.options, Owner, RtpKeys[14]);
-    if (!family || !localAddress || !remoteRtpAddress ||
+        node.options, RtpKeys[8], false);
+    if (!family || !remoteRtpAddress ||
         !remoteRtcpAddress || !remoteRtpPort || !remoteRtcpPort ||
-        !localPolicy || !localRtpPort || !localRtcpPort ||
-        !sendBuffer || !maximumDatagram || !ioBehavior) {
+        !maximumDatagram) {
         const ::media::ErrorInfo error =
             !family ? family.error() :
-            !localAddress ? localAddress.error() :
             !remoteRtpAddress ? remoteRtpAddress.error() :
             !remoteRtcpAddress ? remoteRtcpAddress.error() :
             !remoteRtpPort ? remoteRtpPort.error() :
             !remoteRtcpPort ? remoteRtcpPort.error() :
-            !localPolicy ? localPolicy.error() :
-            !localRtpPort ? localRtpPort.error() :
-            !localRtcpPort ? localRtcpPort.error() :
-            !sendBuffer ? sendBuffer.error() :
-            !maximumDatagram ? maximumDatagram.error() :
-            ioBehavior.error();
+            maximumDatagram.error();
         return Result::failure(error);
     }
-    if (remoteRtpAddress.value() != remoteRtcpAddress.value() ||
-        localPolicy.value() != "os_assigned_independent" ||
-        localRtpPort.value() != 0 || localRtcpPort.value() != 0 ||
-        ioBehavior.value() != "nonblocking_reject_on_pressure") {
+    if (remoteRtpAddress.value() != remoteRtcpAddress.value()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Project MPEG-TS RTP options contradict the transport policy"));
     }
-    auto transport = MediaRtpUdpSenderConfig::create(
-        family.value(), localAddress.value(), remoteRtpAddress.value(),
-        remoteRtpPort.value(), remoteRtcpPort.value(),
-        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
-        sendBuffer.value(), maximumDatagram.value(),
-        MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
+    auto transport = MediaRtpRemoteEndpointPair::create(
+        family.value(), remoteRtpAddress.value(),
+        remoteRtpPort.value(), remoteRtcpPort.value());
     if (!transport) return Result::failure(transport.error());
 
     auto payloadType = parseUnsignedOption<int>(
-        node.options, RtpKeys[15], true);
+        node.options, RtpKeys[9], true);
     auto clockRate = parseUnsignedOption<int>(
-        node.options, RtpKeys[16], false);
+        node.options, RtpKeys[10], false);
     auto ssrc = parseUnsignedOption<std::uint32_t>(
-        node.options, RtpKeys[17], false);
+        node.options, RtpKeys[11], false);
     auto baseTimestamp = parseUnsignedOption<std::uint32_t>(
-        node.options, RtpKeys[18], true);
+        node.options, RtpKeys[12], true);
     auto initialSequenceNumber = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[28], true);
+        node.options, RtpKeys[22], true);
     auto cname = requiredNodeOption(
-        &node.options, Owner, RtpKeys[19]);
+        &node.options, Owner, RtpKeys[13]);
     auto reportInterval = requiredPositiveInt64NodeOption(
-        &node.options, Owner, RtpKeys[20]);
+        &node.options, Owner, RtpKeys[14]);
     auto packetCount = parseUnsignedOption<std::uint8_t>(
-        node.options, RtpKeys[21], false);
+        node.options, RtpKeys[15], false);
     auto sdpPath = requiredNodeOption(
-        &node.options, Owner, RtpKeys[22]);
+        &node.options, Owner, RtpKeys[16]);
     auto originUsername = requiredNodeOption(
-        &node.options, Owner, RtpKeys[23]);
+        &node.options, Owner, RtpKeys[17]);
     auto sessionName = requiredNodeOption(
-        &node.options, Owner, RtpKeys[24]);
-    auto originFamily = parseFamily(node.options, RtpKeys[25]);
+        &node.options, Owner, RtpKeys[18]);
+    auto originFamily = parseFamily(node.options, RtpKeys[19]);
     auto originAddress = requiredNodeOption(
-        &node.options, Owner, RtpKeys[26]);
+        &node.options, Owner, RtpKeys[20]);
     auto sdpCname = requiredNodeOption(
-        &node.options, Owner, RtpKeys[27]);
+        &node.options, Owner, RtpKeys[21]);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
         !initialSequenceNumber ||
         !cname || !reportInterval || !packetCount || !sdpPath ||
@@ -818,7 +760,7 @@ bool sameProtocol(
         return Result::failure(error);
     }
     auto rtp = MediaMpegTsRtpOutputPlan::create(
-        std::move(transport).value(), sdpPath.value(),
+        std::move(transport).value(), maximumDatagram.value(), sdpPath.value(),
         originUsername.value(),
         MediaRunningTime::fromNanoseconds(reportInterval.value()));
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(

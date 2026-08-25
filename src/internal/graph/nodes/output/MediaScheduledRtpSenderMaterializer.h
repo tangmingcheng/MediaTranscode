@@ -2,7 +2,6 @@
 
 #include "internal/graph/nodes/mux/ScheduledRtpSenderConfig.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
-#include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
@@ -23,7 +22,6 @@ public:
     MediaScheduledRtpSenderMaterialization& operator=(
         const MediaScheduledRtpSenderMaterialization&) = delete;
 
-    MediaRtpUdpSenderConfig releaseTransportConfig() noexcept;
     ScheduledRtpSenderConfig releaseSenderConfig() noexcept;
     MediaBufferRef releaseDescription() noexcept;
 
@@ -31,11 +29,9 @@ private:
     friend class MediaScheduledRtpSenderMaterializer;
 
     MediaScheduledRtpSenderMaterialization(
-        MediaRtpUdpSenderConfig transportConfig,
         ScheduledRtpSenderConfig senderConfig,
         MediaBufferRef description) noexcept;
 
-    MediaRtpUdpSenderConfig m_transportConfig;
     ScheduledRtpSenderConfig m_senderConfig;
     MediaBufferRef m_description;
 };

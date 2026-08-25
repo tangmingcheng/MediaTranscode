@@ -57,33 +57,25 @@ std::optional<int> resolvedAudioBitrateKbps(
     return *plan.audioPlan->resolvedOutput->bitrateKbps();
 }
 
-::media::Result<MediaRtpUdpSenderConfig> rtpTransport(
+::media::Result<MediaRtpRemoteEndpointPair> rtpTransport(
     const std::string& host,
-    std::size_t rtpPort,
-    int maximumDatagramBytes,
-    int sendBufferBytes)
+    std::size_t rtpPort)
 {
     const bool bracketedIpv6 = host.size() > 2 && host.front() == '[' &&
         host.back() == ']';
     const std::string numericHost = bracketedIpv6
         ? host.substr(1, host.size() - 2)
         : host;
-    if (!validRtpPort(rtpPort) || maximumDatagramBytes <= 0 ||
-        sendBufferBytes <= 0) {
-        return ::media::Result<MediaRtpUdpSenderConfig>::failure(
+    if (!validRtpPort(rtpPort)) {
+        return ::media::Result<MediaRtpRemoteEndpointPair>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP transport facts are incomplete"));
     }
-    return MediaRtpUdpSenderConfig::create(
+    return MediaRtpRemoteEndpointPair::create(
         bracketedIpv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
-        bracketedIpv6 ? "::" : "0.0.0.0",
         numericHost,
         static_cast<std::uint16_t>(rtpPort),
-        static_cast<std::uint16_t>(rtpPort + 1),
-        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
-        sendBufferBytes,
-        static_cast<std::size_t>(maximumDatagramBytes),
-        MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
+        static_cast<std::uint16_t>(rtpPort + 1));
 }
 
 } // namespace
@@ -171,17 +163,13 @@ std::optional<int> resolvedAudioBitrateKbps(
             deployment.mtu.transportHeaderBytes);
     auto packetSize = checkedSocketInteger(
         maximumDatagram, "planned maximum Datagram payload");
-    auto sendBuffer = checkedSocketInteger(
-        deployment.resources.socketHardBoundBytes,
-        "planned Datagram socket hard bound");
-    if (!packetSize || !sendBuffer ||
+    if (!packetSize ||
         deployment.service.sustainedWireBytesPerSecond >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
         deployment.service.burstWireBytes >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         return ::media::Status::failure(
             !packetSize ? packetSize.error() :
-            !sendBuffer ? sendBuffer.error() :
             ::media::ErrorInfo::invalidArgument(
                 "deployment service curve exceeds the runtime numeric range"));
     }
@@ -202,14 +190,14 @@ std::optional<int> resolvedAudioBitrateKbps(
                         "MPEG-TS RTP output requires an explicit endpoint"));
             }
             auto transport = rtpTransport(
-                request.output.host, *request.output.basePort,
-                packetSize.value(),
-                sendBuffer.value());
+                request.output.host, *request.output.basePort);
             if (!transport) {
                 return ::media::Status::failure(transport.error());
             }
             output.muxedOutput.rtpTransport =
                 std::move(transport).value();
+            output.muxedOutput.maximumDatagramBytes =
+                static_cast<std::size_t>(packetSize.value());
             output.muxedOutput.sdpPath = request.output.sdpPath;
             output.muxedOutput.scheduledWireBytesPerSecond =
                 static_cast<std::int64_t>(
@@ -233,12 +221,10 @@ std::optional<int> resolvedAudioBitrateKbps(
             std::numeric_limits<int>::max()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP video transport send buffer exceeds integer range"));
+                "scheduled RTP video burst exceeds integer range"));
     }
     auto videoTransport = rtpTransport(
-        request.output.host, *request.output.basePort,
-        output.videoOutput.packetSize,
-        sendBuffer.value());
+        request.output.host, *request.output.basePort);
     if (!videoTransport) {
         return ::media::Status::failure(videoTransport.error());
     }
@@ -259,12 +245,10 @@ std::optional<int> resolvedAudioBitrateKbps(
                 std::numeric_limits<int>::max()) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "scheduled RTP transport send buffer exceeds integer range"));
+                    "scheduled RTP audio burst exceeds integer range"));
         }
         auto audioTransport = rtpTransport(
-            request.output.host, *request.output.basePort + 2,
-            output.audioOutput.packetSize,
-            sendBuffer.value());
+            request.output.host, *request.output.basePort + 2);
         if (!audioTransport) {
             return ::media::Status::failure(audioTransport.error());
         }

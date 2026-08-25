@@ -16,7 +16,6 @@ class MediaOutputByteSink;
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
-class MediaUdpDatagramSenderPortFactory;
 struct MediaProjectMpegTsRuntimeOutputPlan;
 
 class ProjectMpegTsGenerationSessionState final

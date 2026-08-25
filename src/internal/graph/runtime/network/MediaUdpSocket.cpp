@@ -299,37 +299,6 @@ int MediaUdpSocket::effectiveReceiveBufferBytes() const noexcept
     return m_impl ? m_impl->effectiveReceiveBufferBytes : 0;
 }
 
-::media::Status MediaUdpSocket::sendTo(const std::string& address, uint16_t port,
-                                       std::span<const uint8_t> datagram) const
-{
-    if (!isOpen() || datagram.empty() ||
-        datagram.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("UDP send requires open socket and non-empty bounded datagram"));
-    }
-#ifdef _WIN32
-    sockaddr_storage destination{};
-    int destinationSize = 0;
-    if (auto status = makeAddress(m_impl->family, address, port, destination, destinationSize); !status) return status;
-    const int sent = sendto(m_impl->socket, reinterpret_cast<const char*>(datagram.data()),
-                            static_cast<int>(datagram.size()), 0,
-                            reinterpret_cast<const sockaddr*>(&destination), destinationSize);
-    if (sent != static_cast<int>(datagram.size())) {
-        return ::media::Status::failure(::media::ErrorInfo::ioFailure("UDP datagram send failed", WSAGetLastError()));
-    }
-    return ::media::Status::success();
-#else
-    sockaddr_storage destination{};
-    socklen_t destinationSize = 0;
-    if (auto status = makeAddress(m_impl->family, address, port, destination, destinationSize); !status) return status;
-    const ssize_t sent = sendto(m_impl->socket, datagram.data(), datagram.size(), 0,
-                                reinterpret_cast<const sockaddr*>(&destination), destinationSize);
-    if (sent != static_cast<ssize_t>(datagram.size())) {
-        return ::media::Status::failure(::media::ErrorInfo::ioFailure("UDP datagram send failed", errno));
-    }
-    return ::media::Status::success();
-#endif
-}
-
 ::media::Result<std::vector<uint8_t>> MediaUdpSocket::receive(std::size_t maximumDatagramBytes)
 {
     if (!isOpen() || maximumDatagramBytes == 0 ||

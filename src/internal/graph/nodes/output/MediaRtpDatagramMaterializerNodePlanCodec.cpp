@@ -16,21 +16,14 @@ namespace {
 
 constexpr std::string_view Owner = "MediaRtpDatagramMaterializerNodePlanCodec";
 constexpr const char* NodeName = "MediaRtpDatagramMaterializerNode";
-constexpr std::array<const char*, 35> OptionKeys{
+constexpr std::array<const char*, 28> OptionKeys{
     "scheduled_rtp.session",
     "scheduled_rtp.stream_set",
     "scheduled_rtp.stream",
     "scheduled_rtp.transport.address_family",
-    "scheduled_rtp.transport.local_address",
     "scheduled_rtp.transport.remote_address",
     "scheduled_rtp.transport.remote_rtp_port",
     "scheduled_rtp.transport.remote_rtcp_port",
-    "scheduled_rtp.transport.local_port_policy",
-    "scheduled_rtp.transport.local_rtp_port",
-    "scheduled_rtp.transport.local_rtcp_port",
-    "scheduled_rtp.transport.send_buffer_bytes",
-    "scheduled_rtp.transport.maximum_datagram_bytes",
-    "scheduled_rtp.transport.io_behavior",
     "scheduled_rtp.packetization.codec",
     "scheduled_rtp.packetization.time_base_num",
     "scheduled_rtp.packetization.time_base_den",
@@ -149,9 +142,6 @@ template <typename Unsigned>
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP node options require one complete planned sender"));
     }
-    const auto& localPolicy = output.transport.localPortPolicy();
-    const bool fixed = localPolicy.kind() ==
-        MediaRtpUdpLocalPortPolicyKind::FixedAdjacent;
     return setOptions(graph, nodeId, {
         {"scheduled_rtp.session", sessionKey.value()},
         {"scheduled_rtp.stream_set", std::string(encodedStreamSet.value())},
@@ -159,26 +149,12 @@ template <typename Unsigned>
              ? "video" : "audio"},
         {"scheduled_rtp.transport.address_family",
              familyName(output.transport.addressFamily())},
-        {"scheduled_rtp.transport.local_address",
-             output.transport.localNumericAddress()},
         {"scheduled_rtp.transport.remote_address",
              output.transport.remoteRtpEndpoint().numericAddress()},
         {"scheduled_rtp.transport.remote_rtp_port",
              std::to_string(output.transport.remoteRtpEndpoint().port())},
         {"scheduled_rtp.transport.remote_rtcp_port",
              std::to_string(output.transport.remoteRtcpEndpoint().port())},
-        {"scheduled_rtp.transport.local_port_policy",
-             fixed ? "fixed_adjacent" : "os_assigned_independent"},
-        {"scheduled_rtp.transport.local_rtp_port",
-             std::to_string(fixed ? *localPolicy.rtpPort() : 0)},
-        {"scheduled_rtp.transport.local_rtcp_port",
-             std::to_string(fixed ? *localPolicy.rtcpPort() : 0)},
-        {"scheduled_rtp.transport.send_buffer_bytes",
-             std::to_string(output.transport.sendBufferBytes())},
-        {"scheduled_rtp.transport.maximum_datagram_bytes",
-             std::to_string(output.transport.maximumDatagramBytes())},
-        {"scheduled_rtp.transport.io_behavior",
-             "nonblocking_reject_on_pressure"},
         {"scheduled_rtp.packetization.codec",
              output.packetization.codecName()},
         {"scheduled_rtp.packetization.time_base_num",
@@ -236,45 +212,21 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         &node.options, NodeName, "scheduled_rtp.stream");
     auto transportFamily = parseFamily(
         node.options, "scheduled_rtp.transport.address_family");
-    auto localAddress = requiredNodeOption(
-        &node.options, NodeName, "scheduled_rtp.transport.local_address");
     auto remoteAddress = requiredNodeOption(
         &node.options, NodeName, "scheduled_rtp.transport.remote_address");
     auto remoteRtpPort = parseUnsigned<std::uint16_t>(
         node.options, "scheduled_rtp.transport.remote_rtp_port");
     auto remoteRtcpPort = parseUnsigned<std::uint16_t>(
         node.options, "scheduled_rtp.transport.remote_rtcp_port");
-    auto localPolicyText = requiredNodeOption(
-        &node.options, NodeName,
-        "scheduled_rtp.transport.local_port_policy");
-    auto localRtpPort = parseUnsigned<std::uint16_t>(
-        node.options, "scheduled_rtp.transport.local_rtp_port", true);
-    auto localRtcpPort = parseUnsigned<std::uint16_t>(
-        node.options, "scheduled_rtp.transport.local_rtcp_port", true);
-    auto sendBuffer = parseUnsigned<int>(
-        node.options, "scheduled_rtp.transport.send_buffer_bytes");
-    auto transportMaximum = parseUnsigned<std::size_t>(
-        node.options, "scheduled_rtp.transport.maximum_datagram_bytes");
-    auto ioBehavior = requiredNodeOption(
-        &node.options, NodeName, "scheduled_rtp.transport.io_behavior");
-    if (!sessionText || !streamSetText || !streamText || !transportFamily || !localAddress ||
-        !remoteAddress || !remoteRtpPort || !remoteRtcpPort ||
-        !localPolicyText || !localRtpPort || !localRtcpPort || !sendBuffer ||
-        !transportMaximum || !ioBehavior) {
+    if (!sessionText || !streamSetText || !streamText || !transportFamily ||
+        !remoteAddress || !remoteRtpPort || !remoteRtcpPort) {
         const ::media::ErrorInfo error = !sessionText ? sessionText.error()
             : !streamSetText ? streamSetText.error()
             : !streamText ? streamText.error()
             : !transportFamily ? transportFamily.error()
-            : !localAddress ? localAddress.error()
             : !remoteAddress ? remoteAddress.error()
             : !remoteRtpPort ? remoteRtpPort.error()
-            : !remoteRtcpPort ? remoteRtcpPort.error()
-            : !localPolicyText ? localPolicyText.error()
-            : !localRtpPort ? localRtpPort.error()
-            : !localRtcpPort ? localRtcpPort.error()
-            : !sendBuffer ? sendBuffer.error()
-            : !transportMaximum ? transportMaximum.error()
-            : ioBehavior.error();
+            : remoteRtcpPort.error();
         return DecodedResult::failure(error);
     }
     MediaScheduledStream stream;
@@ -289,27 +241,9 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP sender rejects an unknown stream"));
     }
-    MediaRtpUdpLocalPortPolicy localPolicy =
-        MediaRtpUdpLocalPortPolicy::osAssignedIndependent();
-    if (localPolicyText.value() == "fixed_adjacent") {
-        auto fixed = MediaRtpUdpLocalPortPolicy::fixedAdjacent(
-            localRtpPort.value(), localRtcpPort.value());
-        if (!fixed) return DecodedResult::failure(fixed.error());
-        localPolicy = std::move(fixed).value();
-    } else if (localPolicyText.value() != "os_assigned_independent" ||
-               localRtpPort.value() != 0 || localRtcpPort.value() != 0) {
-        return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled RTP sender local-port options contradict their policy"));
-    }
-    if (ioBehavior.value() != "nonblocking_reject_on_pressure") {
-        return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled RTP sender rejects an unknown I/O behavior"));
-    }
-    auto transport = MediaRtpUdpSenderConfig::create(
-        transportFamily.value(), localAddress.value(), remoteAddress.value(),
-        remoteRtpPort.value(), remoteRtcpPort.value(),
-        std::move(localPolicy), sendBuffer.value(), transportMaximum.value(),
-        MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
+    auto transport = MediaRtpRemoteEndpointPair::create(
+        transportFamily.value(), remoteAddress.value(),
+        remoteRtpPort.value(), remoteRtcpPort.value());
     if (!transport) return DecodedResult::failure(transport.error());
 
     auto codec = requiredNodeOption(
@@ -353,8 +287,7 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
     auto decodedMode = MediaScheduledRtpPacketizationModeCodec::decode(
         mode.value());
     if (!decodedMode ||
-        decodedMode.value() != packetization.value().packetizationMode() ||
-        packetMaximum.value() != transportMaximum.value()) {
+        decodedMode.value() != packetization.value().packetizationMode()) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP packetization options contradict the planned transport"));
     }

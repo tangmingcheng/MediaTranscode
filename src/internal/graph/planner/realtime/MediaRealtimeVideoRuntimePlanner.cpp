@@ -161,6 +161,7 @@ planSeparateRtp(
                 MediaMuxSessionKind::ProjectMpegTs});
     } else {
         if (!output.muxedOutput.rtpTransport ||
+            !output.muxedOutput.maximumDatagramBytes ||
             output.muxedOutput.sdpPath.empty()) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
@@ -169,6 +170,7 @@ planSeparateRtp(
         }
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
+            *output.muxedOutput.maximumDatagramBytes,
             output.muxedOutput.sdpPath,
             request.mediaId,
             MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));

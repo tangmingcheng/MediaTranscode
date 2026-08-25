@@ -102,7 +102,7 @@ $cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
 
 & $cli @inputRtp @common --media-id rtp-to-tsrtp `
     --output-layout mpegts --output-transport rtp `
-    --rtp-host 127.0.0.1 --rtp-port 5020 --packet-size 1328 `
+    --rtp-host 127.0.0.1 --rtp-port 5020 `
     --sdp out/build/x64-debug/rtp-to-tsrtp.sdp
 ```
 

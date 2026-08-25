@@ -160,19 +160,11 @@ namespace {
 
 MediaScheduledRtpSenderMaterialization::
 MediaScheduledRtpSenderMaterialization(
-    MediaRtpUdpSenderConfig transportConfig,
     ScheduledRtpSenderConfig senderConfig,
     MediaBufferRef description) noexcept
-    : m_transportConfig(std::move(transportConfig)),
-      m_senderConfig(std::move(senderConfig)),
+    : m_senderConfig(std::move(senderConfig)),
       m_description(std::move(description))
 {
-}
-
-MediaRtpUdpSenderConfig
-MediaScheduledRtpSenderMaterialization::releaseTransportConfig() noexcept
-{
-    return std::move(m_transportConfig);
 }
 
 ScheduledRtpSenderConfig
@@ -225,16 +217,9 @@ MediaScheduledRtpSenderMaterializer::materialize(
             MediaScheduledRtpSenderMaterialization>::failure(
             senderConfig.error());
     }
-    auto transportConfig = outputPlan.transport.clone();
-    if (!transportConfig) {
-        return ::media::Result<
-            MediaScheduledRtpSenderMaterialization>::failure(
-            transportConfig.error());
-    }
     return ::media::Result<
         MediaScheduledRtpSenderMaterialization>::success(
         MediaScheduledRtpSenderMaterialization(
-            std::move(transportConfig).value(),
             std::move(senderConfig).value(),
             std::move(description).value()));
 }

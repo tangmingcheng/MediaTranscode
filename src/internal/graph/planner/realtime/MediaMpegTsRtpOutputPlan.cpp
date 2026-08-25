@@ -17,14 +17,14 @@ constexpr int Mp2tClockRate = 90'000;
 
 ::media::Result<MediaMpegTsRtpOutputPlan>
 MediaMpegTsRtpOutputPlan::create(
-    MediaRtpUdpSenderConfig transport,
+    MediaRtpRemoteEndpointPair transport,
+    std::size_t maximumDatagramBytes,
     std::string sdpPath,
     std::string sessionIdentity,
     MediaRunningTime senderReportInterval)
 {
     const auto& rtp = transport.remoteRtpEndpoint();
     const auto& rtcp = transport.remoteRtcpEndpoint();
-    const auto maximumDatagramBytes = transport.maximumDatagramBytes();
     auto packetCount =
         MediaTsMuxPlan::maximumPacketsPerRtpDatagram(maximumDatagramBytes);
     const auto addressFamily = rtp.addressFamily();
@@ -40,22 +40,10 @@ MediaMpegTsRtpOutputPlan::create(
         senderReportInterval <= MediaRunningTime::fromNanoseconds(0) ||
         maximumDatagramBytes >
             static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        transport.sendBufferBytes() <
-            static_cast<int>(maximumDatagramBytes) ||
         rtp.port() == 0 || (rtp.port() % 2) != 0 ||
         rtcp.port() != rtp.port() + 1 ||
         rtcp.addressFamily() != rtp.addressFamily() ||
         rtcp.numericAddress() != rtp.numericAddress() ||
-        transport.localPortPolicy().kind() !=
-            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
-        transport.localPortPolicy().rtpPort() ||
-        transport.localPortPolicy().rtcpPort() ||
-        transport.localNumericAddress() !=
-            (rtp.addressFamily() == MediaIpAddressFamily::Ipv4
-                 ? "0.0.0.0"
-                 : "::") ||
-        transport.ioBehavior() !=
-            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure ||
         !sdpIdentity) {
         return ::media::Result<MediaMpegTsRtpOutputPlan>::failure(
             packetCount
@@ -81,7 +69,7 @@ MediaMpegTsRtpOutputPlan::create(
 }
 
 MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
-    MediaRtpUdpSenderConfig transport,
+    MediaRtpRemoteEndpointPair transport,
     int payloadType,
     int clockRate,
     std::uint32_t ssrc,
@@ -129,7 +117,7 @@ MediaMpegTsRtpOutputPlan::clone() const
             m_sdp));
 }
 
-const MediaRtpUdpSenderConfig&
+const MediaRtpRemoteEndpointPair&
 MediaMpegTsRtpOutputPlan::transport() const noexcept
 {
     return m_transport;
