@@ -11,6 +11,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPlanningDraft.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
@@ -33,6 +34,7 @@ struct MediaRealtimeRtpTranscodePlanCore {
     MediaOutputTransportKind outputTransport;
     MediaPipelinePlan videoPlan;
     MediaVideoTranscodeParameters videoParameters;
+    std::optional<MediaRealtimeGraphResourceLedgerPlan> resourceLedger;
     std::optional<MediaPreparedRealtimeInputKind> requiredPreparedInputKind;
     bool videoInputStartRequiresKeyFrame = false;
     MediaRealtimeRtpInputNodePlan input;

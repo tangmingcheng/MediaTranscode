@@ -9,6 +9,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaRealtimeGraphResourceLedgerPlan;
+
 class MediaAvSyncPlanner final {
 public:
     static ::media::Result<MediaAvSyncRtpInputPlan> planRtpInputClock(
@@ -18,6 +20,7 @@ public:
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
         const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+        const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
         MediaBranchMode audioBranchMode,
         int resolvedOutputAudioSampleRate);
 

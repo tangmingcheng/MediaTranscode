@@ -736,7 +736,8 @@ void MediaRealtimeInputPlanner::applyNodePlans(
         return prepareMpegTs(
             request, io ? &io->openMpegTs : nullptr);
     }
-    auto startup = MediaAvSyncStartupPolicyPlanner::plan(request);
+    auto startup =
+        MediaAvSyncStartupPolicyPlanner::planInputPreflight(request);
     if (!startup) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
             startup.error());

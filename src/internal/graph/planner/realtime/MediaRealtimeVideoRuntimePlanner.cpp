@@ -205,9 +205,9 @@ planSeparateRtp(
 }
 
 ::media::Result<MediaRealtimeVideoStartupPlan> planStartup(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
-    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(request);
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(ledger);
     if (!capacity || capacity.value().audioUnits) {
         return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
             capacity ? ::media::ErrorInfo::invalidArgument(
@@ -273,7 +273,12 @@ MediaRealtimeVideoRuntimePlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "VideoOnly runtime requires an explicit media identity"));
     }
-    auto startup = planStartup(request);
+    if (!outer.resourceLedger) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly runtime requires the graph resource ledger"));
+    }
+    auto startup = planStartup(*outer.resourceLedger);
     if (!startup) {
         return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
             startup.error());

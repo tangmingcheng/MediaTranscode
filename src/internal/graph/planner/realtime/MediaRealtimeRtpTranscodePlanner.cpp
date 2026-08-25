@@ -10,7 +10,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
-#include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
@@ -28,6 +29,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -354,9 +356,10 @@ MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
 }
 
 ::media::Result<MediaRealtimeTsInputPlan::Retention> planMpegTsRetention(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
-    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(request);
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(ledger);
     if (!capacity) {
         return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
             capacity.error());
@@ -747,21 +750,34 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             *videoParameters.frameRate.numerator,
             *videoParameters.frameRate.denominator};
     }
-    std::optional<int> audioAccessUnitSamples;
-    std::optional<int> audioSampleRate;
-    if (audioPlan && audioPlan->resolvedOutput) {
-        audioAccessUnitSamples =
-            audioPlan->resolvedOutput->codecFrameSamples();
-        audioSampleRate = audioPlan->resolvedOutput->sampleRate();
-    }
-    auto selectedQueues = MediaRealtimeQueueCapacityPlanner::plan(
-        *requestedOptions.deployment, outputFrameRate,
-        audioAccessUnitSamples, audioSampleRate);
-    if (!selectedQueues) {
+    auto emission = MediaPreparedEmissionResolver::resolve(
+        videoPlan, outputFrameRate, audioPlan ? &*audioPlan : nullptr);
+    const auto sourceWidth = rawInput
+        ? rawInput->video.width
+        : preparedInput ? preparedInput->video.width : 0;
+    const auto sourceHeight = rawInput
+        ? rawInput->video.height
+        : preparedInput ? preparedInput->video.height : 0;
+    const auto* encoderFrame = videoPlan.selected.encoder.frameContract();
+    const std::string_view surfacePixelFormat = encoderFrame
+        ? (!encoderFrame->surfacePixelFormat.empty()
+               ? encoderFrame->surfacePixelFormat
+               : encoderFrame->pixelFormat)
+        : std::string_view{};
+    auto resourceLedger = emission
+        ? MediaRealtimeGraphResourceLedgerPlanner::plan(
+              *requestedOptions.deployment, emission.value(),
+              videoParameters.width.value_or(sourceWidth),
+              videoParameters.height.value_or(sourceHeight),
+              surfacePixelFormat,
+              videoPlan.selected.encoder.hardware())
+        : ::media::Result<MediaRealtimeGraphResourceLedgerPlan>::failure(
+              emission.error());
+    if (!resourceLedger) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            selectedQueues.error());
+            resourceLedger.error());
     }
-    options.parameters.queues = std::move(selectedQueues).value();
+    options.parameters.queues = resourceLedger.value().queues;
     options.parameters.video = videoParameters;
     if (audioPlan && audioPlan->resolvedOutput) {
         const auto& resolvedAudio = *audioPlan->resolvedOutput;
@@ -783,6 +799,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
     plan.queues = options.parameters.queues;
+    plan.resourceLedger = std::move(resourceLedger).value();
     plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(plan.queues);
     plan.threadingPolicy = planThreadingPolicy();
     if (MediaRealtimeRequestClassifier::realtimeUrlInput(options)) {
@@ -896,7 +913,11 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS selected program stream set conflicts with request"));
         }
-        auto retention = planMpegTsRetention(options);
+        auto retention = plan.resourceLedger
+            ? planMpegTsRetention(options, *plan.resourceLedger)
+            : ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+                  ::media::ErrorInfo::notInitialized(
+                      "MPEG-TS retention requires the graph resource ledger"));
         if (!retention) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 retention.error());
@@ -970,6 +991,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             options, selectedAudioVideoProgram,
             resolvedTsFacts ? &*resolvedTsFacts : nullptr,
             demuxFacts ? &*demuxFacts : nullptr,
+            *plan.resourceLedger,
             plannedAudio.branchMode,
             plannedAudio.resolvedOutput->sampleRate());
         if (!avSync) {
@@ -1272,6 +1294,15 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
 ::media::Status MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
     const MediaRealtimeRtpTranscodePlan& plan)
 {
+    if (!plan.resourceLedger) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "realtime plan lacks its graph resource ledger"));
+    }
+    if (auto status = MediaRealtimeGraphResourceLedgerPlanner::validate(
+            *plan.resourceLedger);
+        !status) {
+        return status;
+    }
     if (auto status = MediaRealtimeRtpInputPlanValidator::validate(
             plan.inputType, plan.input);
         !status) {

@@ -6,9 +6,14 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaRealtimeGraphResourceLedgerPlan;
+
 class MediaAvSyncStartupPolicyPlanner final {
 public:
     static ::media::Result<MediaAvSyncStartupPolicy> plan(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeGraphResourceLedgerPlan& ledger);
+    static ::media::Result<MediaAvSyncStartupPolicy> planInputPreflight(
         const MediaRealtimeRtpTranscodeRequest& request);
 
 private:

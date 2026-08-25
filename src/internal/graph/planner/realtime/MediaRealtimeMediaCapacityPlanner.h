@@ -9,6 +9,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaRealtimeGraphResourceLedgerPlan;
+
 struct MediaRealtimeMediaCapacityPlan final {
     std::size_t videoUnits;
     std::uint64_t videoUnitBytes;
@@ -22,7 +24,7 @@ struct MediaRealtimeMediaCapacityPlan final {
 class MediaRealtimeMediaCapacityPlanner final {
 public:
     static ::media::Result<MediaRealtimeMediaCapacityPlan> plan(
-        const MediaRealtimeRtpTranscodeRequest& request);
+        const MediaRealtimeGraphResourceLedgerPlan& ledger);
 
 private:
     MediaRealtimeMediaCapacityPlanner() = delete;

@@ -1,0 +1,324 @@
+#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
+
+#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
+#include <limits>
+#include <memory>
+#include <new>
+#include <utility>
+
+namespace media::ffmpeg::graph {
+namespace {
+
+constexpr std::uint64_t RetainLatestItemCount = 1;
+
+::media::Result<std::uint64_t> residenceUnits(
+    std::uint64_t numerator,
+    std::uint64_t denominator,
+    MediaRunningTime residence,
+    const char* fact)
+{
+    if (residence.nanoseconds() <= 0) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "graph resource residence must be positive"));
+    }
+    auto scaledDenominator = MediaRealtimePlanningArithmetic::multiply(
+        denominator, 1'000'000'000ULL, fact);
+    auto inWindow = scaledDenominator
+        ? MediaRealtimePlanningArithmetic::ceilScale(
+              static_cast<std::uint64_t>(residence.nanoseconds()), numerator,
+              scaledDenominator.value(), fact)
+        : scaledDenominator;
+    return inWindow
+        ? MediaRealtimePlanningArithmetic::add(
+              inWindow.value(), 1U, fact)
+        : inWindow;
+}
+
+::media::Result<std::uint64_t> logicalSurfaceBytes(
+    int width, int height, std::string_view pixelFormat)
+{
+    if (width <= 0 || height <= 0) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "graph resource ledger requires prepared output dimensions"));
+    }
+    auto pixels = MediaRealtimePlanningArithmetic::multiply(
+        static_cast<std::uint64_t>(width),
+        static_cast<std::uint64_t>(height), "video surface pixels");
+    if (!pixels) return pixels;
+    if (pixelFormat == "nv12" || pixelFormat == "yuv420p") {
+        return MediaRealtimePlanningArithmetic::ceilScale(
+            pixels.value(), 3U, 2U, "8-bit 4:2:0 surface bytes");
+    }
+    if (pixelFormat == "p010le" || pixelFormat == "yuv420p10le") {
+        return MediaRealtimePlanningArithmetic::multiply(
+            pixels.value(), 3U, "10-bit 4:2:0 surface bytes");
+    }
+    return ::media::Result<std::uint64_t>::failure(
+        ::media::ErrorInfo::unsupported(
+            "graph resource ledger requires an authoritative supported surface pixel format"));
+}
+
+::media::Result<std::size_t> size(std::uint64_t value, const char* fact)
+{
+    if (value > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::size_t>::max)())) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string(fact) + " exceeds platform size_t"));
+    }
+    return ::media::Result<std::size_t>::success(
+        static_cast<std::size_t>(value));
+}
+
+} // namespace
+
+::media::Result<MediaRealtimeGraphResourceLedgerPlan>
+MediaRealtimeGraphResourceLedgerPlanner::plan(
+    const MediaRealtimeDeploymentEnvelope& deployment,
+    const MediaPreparedRealtimeEmissionSet& emission,
+    int outputWidth,
+    int outputHeight,
+    std::string_view surfacePixelFormat,
+    bool hardwareSurface)
+{
+    using Result = ::media::Result<MediaRealtimeGraphResourceLedgerPlan>;
+    const auto residence = deployment.encode().latency.maximumResidence;
+    auto videoUnits = residenceUnits(
+        emission.video.accessUnitsPerSecondNumerator,
+        emission.video.accessUnitsPerSecondDenominator,
+        residence, "video residence units");
+    auto surfaceUnitBytes = logicalSurfaceBytes(
+        outputWidth, outputHeight, surfacePixelFormat);
+    auto videoPacketBytes = videoUnits
+        ? MediaRealtimePlanningArithmetic::multiply(
+              videoUnits.value(), emission.video.maximumAccessUnitPayloadBytes,
+              "encoded video ledger bytes")
+        : videoUnits;
+    auto surfaceBytes = videoUnits && surfaceUnitBytes
+        ? MediaRealtimePlanningArithmetic::multiply(
+              videoUnits.value(), surfaceUnitBytes.value(),
+              "video surface ledger bytes")
+        : (!videoUnits ? videoUnits : surfaceUnitBytes);
+    if (!videoUnits || !surfaceUnitBytes || !videoPacketBytes ||
+        !surfaceBytes || emission.video.maximumAccessUnitPayloadBytes == 0) {
+        return Result::failure(
+            !videoUnits ? videoUnits.error() :
+            !surfaceUnitBytes ? surfaceUnitBytes.error() :
+            !videoPacketBytes ? videoPacketBytes.error() :
+            !surfaceBytes ? surfaceBytes.error() :
+            ::media::ErrorInfo::notInitialized(
+                "prepared video emission lacks a maximum access unit"));
+    }
+
+    std::uint64_t audioUnitCount = 0;
+    std::uint64_t audioBytes = 0;
+    if (emission.audio) {
+        auto units = residenceUnits(
+            emission.audio->accessUnitsPerSecondNumerator,
+            emission.audio->accessUnitsPerSecondDenominator,
+            residence, "audio residence units");
+        auto bytes = units
+            ? MediaRealtimePlanningArithmetic::multiply(
+                  units.value(),
+                  emission.audio->maximumAccessUnitPayloadBytes,
+                  "encoded audio ledger bytes")
+            : units;
+        if (!units || !bytes ||
+            emission.audio->maximumAccessUnitPayloadBytes == 0) {
+            return Result::failure(
+                !units ? units.error() : !bytes ? bytes.error() :
+                ::media::ErrorInfo::notInitialized(
+                    "prepared audio emission lacks a maximum access unit"));
+        }
+        audioUnitCount = units.value();
+        audioBytes = bytes.value();
+    }
+
+    auto packetItems = MediaRealtimePlanningArithmetic::add(
+        videoUnits.value(), audioUnitCount, "aggregate packet items");
+    auto ownedPayload = MediaRealtimePlanningArithmetic::add(
+        videoPacketBytes.value(), audioBytes, "shared encoded payload bytes");
+    auto withSurfaces = ownedPayload
+        ? MediaRealtimePlanningArithmetic::add(
+              ownedPayload.value(), surfaceBytes.value(),
+              "media payload and surface bytes")
+        : ownedPayload;
+    auto packetEdgeItems = packetItems
+        ? MediaRealtimePlanningArithmetic::multiply(
+              packetItems.value(), 2U,
+              "shared packet and mux descriptor items")
+        : packetItems;
+    auto packetAndSurfaceItems = packetEdgeItems
+        ? MediaRealtimePlanningArithmetic::add(
+              packetEdgeItems.value(), videoUnits.value(),
+              "packet and surface descriptor items")
+        : packetEdgeItems;
+    auto descriptorItems = packetAndSurfaceItems
+        ? MediaRealtimePlanningArithmetic::add(
+              packetAndSurfaceItems.value(), RetainLatestItemCount,
+              "queue descriptor items")
+        : packetAndSurfaceItems;
+    auto containerBytes = descriptorItems
+        ? MediaRealtimePlanningArithmetic::multiply(
+              descriptorItems.value(),
+              static_cast<std::uint64_t>(sizeof(std::shared_ptr<MediaBuffer>)),
+              "queue container bytes")
+        : descriptorItems;
+    auto admitted = withSurfaces && containerBytes
+        ? MediaRealtimePlanningArithmetic::add(
+              withSurfaces.value(), containerBytes.value(),
+              "aggregate graph ledger bytes")
+        : (!withSurfaces ? withSurfaces : containerBytes);
+    auto videoCount = size(videoUnits.value(), "video queue items");
+    auto packetCount = packetItems
+        ? size(packetItems.value(), "packet queue items")
+        : ::media::Result<std::size_t>::failure(packetItems.error());
+    auto audioCount = emission.audio
+        ? size(audioUnitCount, "audio queue items")
+        : ::media::Result<std::size_t>::success(0);
+    if (!admitted || !videoCount || !packetCount || !audioCount ||
+        admitted.value() >
+            deployment.encode().resources.maximumGraphMemoryBytes) {
+        return Result::failure(
+            !admitted ? admitted.error() : !videoCount ? videoCount.error() :
+            !packetCount ? packetCount.error() : !audioCount ? audioCount.error() :
+            ::media::ErrorInfo::invalidArgument(
+                "deployment graph memory budget cannot admit the per-edge resource ledger"));
+    }
+
+    auto videoContainers = MediaRealtimePlanningArithmetic::multiply(
+        videoUnits.value(),
+        static_cast<std::uint64_t>(sizeof(std::shared_ptr<MediaBuffer>)),
+        "video packet containers");
+    auto audioContainers = MediaRealtimePlanningArithmetic::multiply(
+        audioUnitCount,
+        static_cast<std::uint64_t>(sizeof(std::shared_ptr<MediaBuffer>)),
+        "audio packet containers");
+    auto muxContainers = MediaRealtimePlanningArithmetic::multiply(
+        packetItems.value(),
+        static_cast<std::uint64_t>(sizeof(std::shared_ptr<MediaBuffer>)),
+        "mux descriptor containers");
+    auto surfaceContainers = MediaRealtimePlanningArithmetic::multiply(
+        videoUnits.value(),
+        static_cast<std::uint64_t>(sizeof(std::shared_ptr<MediaBuffer>)),
+        "video surface containers");
+    if (!videoContainers || !audioContainers || !muxContainers ||
+        !surfaceContainers) {
+        return Result::failure(
+            !videoContainers ? videoContainers.error() :
+            !audioContainers ? audioContainers.error() :
+            !muxContainers ? muxContainers.error() :
+            surfaceContainers.error());
+    }
+
+    try {
+        std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
+        entries.reserve(emission.audio ? 5U : 4U);
+        entries.push_back({
+            MediaRealtimeResourceAccountingGroup::EncodedVideoPacket,
+            MediaRealtimeQueueRetentionSemantics::BoundedFifo,
+            videoUnits.value(), videoPacketBytes.value(),
+            videoContainers.value(),
+            emission.video.authority + "+shared-packet-ownership"});
+        entries.push_back({
+            MediaRealtimeResourceAccountingGroup::DecodedVideoSurface,
+            MediaRealtimeQueueRetentionSemantics::BoundedFifo,
+            videoUnits.value(), surfaceBytes.value(),
+            surfaceContainers.value(),
+            hardwareSurface
+                ? "prepared-hardware-surface-logical-bytes"
+                : "prepared-software-frame-logical-bytes"});
+        if (emission.audio) {
+            entries.push_back({
+                MediaRealtimeResourceAccountingGroup::EncodedAudioPacket,
+                MediaRealtimeQueueRetentionSemantics::BoundedFifo,
+                audioUnitCount, audioBytes,
+                audioContainers.value(),
+                emission.audio->authority + "+shared-packet-ownership"});
+        }
+        entries.push_back({
+            MediaRealtimeResourceAccountingGroup::MuxDescriptor,
+            MediaRealtimeQueueRetentionSemantics::BoundedFifo,
+            packetItems.value(), 0,
+            muxContainers.value(),
+            "mux-descriptor-shares-encoded-payload"});
+        entries.push_back({
+            MediaRealtimeResourceAccountingGroup::RetainLatestMetadata,
+            MediaRealtimeQueueRetentionSemantics::RetainLatest,
+            RetainLatestItemCount, 0,
+            sizeof(std::shared_ptr<MediaBuffer>),
+            "retain-latest-protocol-state"});
+
+        MediaRealtimeMediaCapacityPlan media{
+            videoCount.value(), emission.video.maximumAccessUnitPayloadBytes,
+            videoPacketBytes.value(),
+            emission.audio ? std::optional<std::size_t>(audioCount.value())
+                           : std::nullopt,
+            emission.audio
+                ? std::optional<std::uint64_t>(
+                      emission.audio->maximumAccessUnitPayloadBytes)
+                : std::nullopt,
+            emission.audio ? std::optional<std::uint64_t>(audioBytes)
+                           : std::nullopt,
+            residence};
+        return Result::success(MediaRealtimeGraphResourceLedgerPlan{
+            MediaGraphQueueParameters{
+                static_cast<std::size_t>(RetainLatestItemCount),
+                packetCount.value(), videoCount.value(), packetCount.value()},
+            std::move(media), admitted.value(), std::move(entries)});
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "realtime graph resource ledger"));
+    }
+}
+
+::media::Status MediaRealtimeGraphResourceLedgerPlanner::validate(
+    const MediaRealtimeGraphResourceLedgerPlan& ledger)
+{
+    if (ledger.admittedGraphBytes == 0 || ledger.entries.empty() ||
+        ledger.queues.metadata != RetainLatestItemCount ||
+        ledger.queues.packet == 0 || ledger.queues.frame == 0 ||
+        ledger.queues.mux == 0 || ledger.media.videoUnits == 0 ||
+        ledger.media.videoUnitBytes == 0 || ledger.media.videoBytes == 0 ||
+        ledger.media.maximumGap.nanoseconds() <= 0) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "realtime graph resource ledger is incomplete"));
+    }
+    bool retainLatest = false;
+    std::uint64_t accountedBytes = 0;
+    for (const auto& entry : ledger.entries) {
+        if (entry.itemCount == 0 ||
+            (entry.payloadBytes == 0 && entry.containerBytes == 0) ||
+            entry.authority.empty()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "graph resource ledger entry lacks a byte hard bound or authority"));
+        }
+        auto entryBytes = MediaRealtimePlanningArithmetic::add(
+            entry.payloadBytes, entry.containerBytes,
+            "graph ledger entry bytes");
+        auto total = entryBytes
+            ? MediaRealtimePlanningArithmetic::add(
+                  accountedBytes, entryBytes.value(),
+                  "graph ledger accounted bytes")
+            : entryBytes;
+        if (!total) return ::media::Status::failure(total.error());
+        accountedBytes = total.value();
+        retainLatest = retainLatest ||
+            (entry.accountingGroup ==
+                 MediaRealtimeResourceAccountingGroup::RetainLatestMetadata &&
+             entry.retention ==
+                 MediaRealtimeQueueRetentionSemantics::RetainLatest &&
+             entry.itemCount == RetainLatestItemCount);
+    }
+    return retainLatest && accountedBytes == ledger.admittedGraphBytes
+        ? ::media::Status::success()
+        : ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+              "graph resource ledger lacks RetainLatest metadata semantics"));
+}
+
+} // namespace media::ffmpeg::graph

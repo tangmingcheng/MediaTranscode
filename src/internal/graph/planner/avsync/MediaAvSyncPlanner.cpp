@@ -239,6 +239,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+    const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
     MediaBranchMode audioBranchMode,
     int resolvedOutputAudioSampleRate)
 {
@@ -266,7 +267,8 @@ void planTsInput(MediaAvSyncPlan& plan,
     if (preparedDemuxFacts) {
         plan.startup = preparedDemuxFacts->startup;
     } else {
-        auto startup = MediaAvSyncStartupPolicyPlanner::plan(request);
+        auto startup = MediaAvSyncStartupPolicyPlanner::plan(
+            request, resourceLedger);
         if (!startup) {
             return ::media::Result<MediaAvSyncPlan>::failure(startup.error());
         }
