@@ -84,7 +84,7 @@ Windows source 精确命令（`PORT` 分别为 5004、5006、5008）：
 - Windows VS2026 x64 Debug 最终 clean-first：554/554，RC=0。
 - RK exact production code `9a88963b` 在隔离目录 `/home/tang/task5-9a88963b` 以 Release clean-first、`--parallel 8` 完整构建；最终报告提交仅修改文档，不改变构建输入。
 - production shape validator 要求唯一 transport-plan source、shared shaper、common sender；三类 materializer 分别是 elementary RTP、MP2T/RTP、TS/UDP。file output validator 排除全部 datagram 节点。
-- 旧 caller 参数、第二 pacing authority、固定 7 包、legacy sender/pacer/sink/direct transport、`CompletionGated`、`AwaitCompletion`、`UserspaceSendReturn` 和临时 fixture 均无生产引用。系统调用只存在于 Linux/Windows transmit adapter。
+- 旧 caller 参数、第二 pacing authority、固定 7 包、legacy network sender/pacer/sink/direct transport、`CompletionGated`、`AwaitCompletion`、`UserspaceSendReturn` 和临时 fixture 均无生产引用。协议物化层仍有历史 `SenderSession`/`SenderMaterializer` 类型名，但它们不持有 socket、不提交 datagram，也不是第二发送控制器；后续可作纯命名清理。系统调用只存在于 Linux/Windows transmit adapter。
 
 Task5 提交按时间顺序为：`92a87130`、`535bd95d`、`477e1774`、`0de94681`、`c34a5361`、`b0a351f6`、`b121af1b`、`81519a0d`、`019ff629`、`290893f5`、`d1feb9c4`、`c3a23829`、`fedd4c0f`、`8cf42a45`、`27189678`、`b1e6af64`、`6ae26f10`、`68da54a8`、`ce875d9d`、`470ac83a`、`8ace0876`、`521973f6`、`edf30d26`、`2ccbc775`、`d727929d`、`9a88963b`，以及本完成报告提交。
 
