@@ -199,10 +199,10 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
 {
     using DecodedResult =
         ::media::Result<MediaDecodedScheduledRtpSenderNodePlan>;
-    if (node.kind != MediaNodeKind::ScheduledRtpSender ||
+    if (node.kind != MediaNodeKind::RtpDatagramMaterializer ||
         !hasExactOptionKeys(node.options)) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled RTP node plan decoder requires the sender kind and exact option set"));
+            "RTP datagram materializer plan decoder requires its kind and exact option set"));
     }
     auto sessionText = requiredNodeOption(
         &node.options, NodeName, "scheduled_rtp.session");
