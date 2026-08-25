@@ -12,6 +12,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -130,6 +131,8 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     std::uint64_t totalPayloadOctets = 0;
     std::optional<MediaRtpTimestamp> previousTimestamp =
         m_state->projectedLastTimestamp;
+    std::optional<MediaRunningTime> previousRelease =
+        m_state->projectedLastCanonicalRelease;
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
         const auto& datagram = datagrams[index];
         auto deadline = m_state->rtpDeadline.canonicalDeadline(
@@ -147,8 +150,25 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
         if (!timestamp) return Result::failure(timestamp.error());
         if (previousTimestamp && timestamp.value().extendedTicks() <
                                      previousTimestamp->extendedTicks()) {
+            std::ostringstream message;
+            message << "RTP wire timestamp regressed across projected order"
+                    << " index=" << index
+                    << " previous_extended_ticks="
+                    << previousTimestamp->extendedTicks()
+                    << " current_extended_ticks="
+                    << timestamp.value().extendedTicks()
+                    << " previous_wire=" << previousTimestamp->wire()
+                    << " current_wire=" << timestamp.value().wire()
+                    << " previous_release_ns="
+                    << (previousRelease
+                            ? previousRelease->nanoseconds()
+                            : -1)
+                    << " current_presentation_ns="
+                    << datagram.presentationOnMaster.nanoseconds()
+                    << " current_release_ns="
+                    << datagram.canonicalRelease.nanoseconds();
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "RTP wire timestamp regressed within its batch"));
+                message.str()));
         }
         auto bytes = MediaRtpWirePacketComposer::compose(
             datagram.bytes, datagram.payloadOctets, m_state->identity,
@@ -170,6 +190,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
                 "RTP wire batch materialization"));
         }
         previousTimestamp = timestamp.value();
+        previousRelease = datagram.canonicalRelease;
     }
     if (datagrams.size() >
             MaximumProtocolCounter - m_state->projectedPacketCount ||
@@ -270,6 +291,8 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     m_state->projectedPacketCount += datagrams.size();
     m_state->projectedOctetCount += totalPayloadOctets;
     m_state->projectedLastTimestamp = timestamps.back();
+    m_state->projectedLastCanonicalRelease =
+        datagrams.back().canonicalRelease;
     std::shared_ptr<MediaRtpWireCommitTransaction> transaction;
     try {
         transaction = std::make_shared<MediaRtpWireCommitTransaction>(

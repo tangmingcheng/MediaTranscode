@@ -56,6 +56,7 @@ private:
     std::uint64_t projectedPacketCount;
     std::uint64_t projectedOctetCount;
     std::optional<MediaRtpTimestamp> projectedLastTimestamp;
+    std::optional<MediaRunningTime> projectedLastCanonicalRelease;
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
     std::size_t outstandingDatagrams = 0;

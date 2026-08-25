@@ -115,7 +115,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
     MediaRunningTime canonicalRelease)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
-        {completeTsPackets, canonicalRelease, canonicalRelease}}};
+        {completeTsPackets, canonicalRelease}}};
     return materializeBatch(datagrams);
 }
 
@@ -143,8 +143,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
              index < protocolBatch.datagrams().size(); ++index) {
             const auto& datagram = protocolBatch.datagrams()[index];
             views.push_back(MediaMpegTsDatagramView{
-                datagram.bytes(), datagram.presentationOnMaster(),
-                datagram.canonicalRelease()});
+                datagram.bytes(), datagram.canonicalRelease()});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -297,12 +296,10 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaMpegTsRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime presentationOnMaster,
     MediaRunningTime canonicalRelease)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
-        {completeTsPackets, presentationOnMaster,
-         canonicalRelease}}};
+        {completeTsPackets, canonicalRelease}}};
     return materializeBatch(datagrams);
 }
 
@@ -326,7 +323,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
         for (const auto& datagram : datagrams) {
             auto packet = m_packetizer.packetize(
                 datagram.completeTsPackets,
-                datagram.presentationOnMaster, 0);
+                datagram.canonicalRelease, 0);
             if (!packet) return Result::failure(packet.error());
             payloadOctets.push_back(packet.value().payloadOctets());
             payloads.push_back(packet.value().releaseDatagram());
@@ -334,7 +331,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
-                datagrams[index].presentationOnMaster,
+                datagrams[index].canonicalRelease,
                 datagrams[index].canonicalRelease});
         }
     } catch (const std::bad_alloc&) {
@@ -365,7 +362,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
             const auto& datagram = datagrams[index];
             auto packet = m_packetizer.packetize(
-                datagram.bytes(), datagram.presentationOnMaster(), 0);
+                datagram.bytes(), datagram.canonicalRelease(), 0);
             if (!packet) return Result::failure(packet.error());
             payloadOctets.push_back(packet.value().payloadOctets());
             payloads.push_back(packet.value().releaseDatagram());
@@ -373,7 +370,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
-                datagrams[index].presentationOnMaster(),
+                datagrams[index].canonicalRelease(),
                 datagrams[index].canonicalRelease()});
         }
     } catch (const std::bad_alloc&) {

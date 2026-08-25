@@ -17,7 +17,6 @@ namespace media::ffmpeg::graph {
 
 struct MediaMpegTsDatagramView final {
     std::span<const std::uint8_t> completeTsPackets;
-    MediaRunningTime presentationOnMaster;
     MediaRunningTime canonicalRelease;
 };
 
@@ -87,7 +86,6 @@ public:
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
