@@ -215,13 +215,11 @@ std::optional<int> resolvedAudioBitrateKbps(
             ::media::ErrorInfo::invalidArgument(
                 "deployment MTU cannot carry an RTP payload"));
     }
-    const int maximumRtpPayloadBytes =
-        packetSize.value() - RtpFixedHeaderBytes;
     const std::string codec = canonicalCodecName(plan.videoPlan.outputCodecName);
     if (codec == "h264" || codec == "avc" || codec == "avc1") plan.videoParameters.globalHeader = true;
 
     output.videoOutput.url = urls.video;
-    output.videoOutput.packetSize = maximumRtpPayloadBytes;
+    output.videoOutput.packetSize = packetSize.value();
     output.videoOutput.mediaId = request.mediaId;
     auto videoTransport = rtpTransport(
         request.output.host, *request.output.basePort);
@@ -238,7 +236,7 @@ std::optional<int> resolvedAudioBitrateKbps(
                     "Realtime RTP audio output requires planner-resolved positive audio bitrate"));
         }
         output.audioOutput.url = urls.audio;
-        output.audioOutput.packetSize = maximumRtpPayloadBytes;
+        output.audioOutput.packetSize = packetSize.value();
         output.audioOutput.mediaId = request.mediaId;
         auto audioTransport = rtpTransport(
             request.output.host, *request.output.basePort + 2);
