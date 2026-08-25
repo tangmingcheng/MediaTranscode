@@ -72,8 +72,12 @@ namespace media::ffmpeg::graph {
     }
     auto activatedTransport = runtime.datagramTransport.activate(
         runtime.scheduling.initialGeneration);
-    if (!activatedTransport ||
-        runtime.datagramTransport.sessionKey() != runtime.sessionKey.value() ||
+    if (!activatedTransport) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Invalid VideoOnly runtime product: Datagram transport activation: " +
+            activatedTransport.error().message));
+    }
+    if (runtime.datagramTransport.sessionKey() != runtime.sessionKey.value() ||
         runtime.datagramTransport.serviceScopeId().empty() ||
         runtime.datagramTransport.remoteEndpoints().empty() ||
         activatedTransport.value().shaping.sessionKey() !=

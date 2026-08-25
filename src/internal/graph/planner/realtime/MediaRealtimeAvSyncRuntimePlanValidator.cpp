@@ -181,8 +181,12 @@ namespace media::ffmpeg::graph {
     }
     auto activatedTransport = runtime.datagramTransport.activate(
         runtime.assembly.initialGeneration);
-    if (!activatedTransport ||
-        runtime.datagramTransport.sessionKey() != runtime.groupKey.value() ||
+    if (!activatedTransport) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Invalid AudioVideo runtime product: Datagram transport activation: " +
+            activatedTransport.error().message));
+    }
+    if (runtime.datagramTransport.sessionKey() != runtime.groupKey.value() ||
         runtime.datagramTransport.serviceScopeId().empty() ||
         runtime.datagramTransport.remoteEndpoints().empty() ||
         activatedTransport.value().shaping.sessionKey() !=
