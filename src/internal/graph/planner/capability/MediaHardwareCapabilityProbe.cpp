@@ -3,6 +3,7 @@
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
+#include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -21,6 +22,16 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
+
+::media::Status publishPacketLayout(
+    MediaPipelineChainPlan& chain, AVCodecContext& context)
+{
+    auto layout =
+        MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(context);
+    if (!layout) return ::media::Status::failure(layout.error());
+    chain.encoder.encodedPacketLayout = std::move(layout).value();
+    return ::media::Status::success();
+}
 
 MediaHardwareCapability unavailable(std::string reason)
 {
@@ -257,6 +268,8 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
             "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
             encoderOpened);
     }
+    auto packetLayout = publishPacketLayout(chain, *encoderContext);
+    if (!packetLayout) return unavailable(packetLayout.error().message);
 
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *encoderContext, *chain.encoder.encoderRateControl,
@@ -311,6 +324,8 @@ MediaHardwareCapability validateSoftwareEncoder(
             "avcodec_open2(software encoder " + chain.encoder.ffmpegName + ")",
             opened);
     }
+    auto packetLayout = publishPacketLayout(chain, *context);
+    if (!packetLayout) return unavailable(packetLayout.error().message);
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *context, *chain.encoder.encoderRateControl, cadence,
         "opened-encoder-context:" + chain.encoder.ffmpegName, "ffmpeg-software");
@@ -511,6 +526,8 @@ MediaHardwareCapability validateCompleteChain(
             "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
             encoderOpened);
     }
+    auto packetLayout = publishPacketLayout(chain, *encoderContext);
+    if (!packetLayout) return unavailable(packetLayout.error().message);
 
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *encoderContext, *chain.encoder.encoderRateControl,

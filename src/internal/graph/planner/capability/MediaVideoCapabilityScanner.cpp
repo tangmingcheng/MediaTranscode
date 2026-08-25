@@ -1,5 +1,4 @@
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
-#include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include <string>
@@ -204,11 +203,6 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.ffmpegName = std::move(ffmpegName);
     stage.hwaccelName = std::move(hwaccelName);
     stage.priority = priority;
-    if (stage.role == MediaPipelineStageRole::Encoder) {
-        stage.encodedPacketLayout =
-            MediaEncoderPacketLayoutCapabilityProvider::find(stage.ffmpegName);
-    }
-
     const bool codecOk = role == MediaPipelineStageRole::Decoder
                              ? decoderExists(stage.ffmpegName)
                              : encoderExists(stage.ffmpegName);
