@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 
+#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+
 #include <limits>
 #include <string>
 
@@ -8,7 +10,6 @@ namespace {
 
 constexpr std::uint64_t BitsPerByte = 8;
 constexpr std::uint64_t Kilo = 1000;
-constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
 
 ::media::Result<std::uint64_t> checkedKbitsToBytes(
     std::uint64_t kbits, const char* fact)
@@ -21,36 +22,6 @@ constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
     const auto bits = kbits * Kilo;
     return ::media::Result<std::uint64_t>::success(
         bits / BitsPerByte + (bits % BitsPerByte != 0 ? 1U : 0U));
-}
-
-::media::Result<std::uint64_t> checkedAdd(
-    std::uint64_t left, std::uint64_t right, const char* fact)
-{
-    if (right > (std::numeric_limits<std::uint64_t>::max)() - left) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                std::string(fact) + " is not representable"));
-    }
-    return ::media::Result<std::uint64_t>::success(left + right);
-}
-
-::media::Result<std::uint64_t> bytesForResidence(
-    std::uint64_t rate, std::uint64_t residenceNanoseconds,
-    const char* fact)
-{
-    const auto seconds = residenceNanoseconds / NanosecondsPerSecond;
-    const auto remainder = residenceNanoseconds % NanosecondsPerSecond;
-    if (seconds > (std::numeric_limits<std::uint64_t>::max)() / rate ||
-        remainder > (std::numeric_limits<std::uint64_t>::max)() / rate) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                std::string(fact) + " is not representable"));
-    }
-    const auto whole = seconds * rate;
-    const auto product = remainder * rate;
-    const auto fraction = product / NanosecondsPerSecond +
-        (product % NanosecondsPerSecond != 0 ? 1U : 0U);
-    return checkedAdd(whole, fraction, fact);
 }
 
 } // namespace
@@ -84,15 +55,16 @@ MediaRealtimeMediaCapacityPlanner::plan(
     auto videoUnitBytes = checkedKbitsToBytes(
         static_cast<std::uint64_t>(*video.bufferSizeKbits),
         "video VBV bytes");
-    const auto residenceNs = static_cast<std::uint64_t>(
-        deployment.latency.maximumResidence.nanoseconds());
     auto videoResidenceBytes = videoBytesPerSecond
-        ? bytesForResidence(videoBytesPerSecond.value(), residenceNs,
-                            "video residence bytes")
+        ? MediaRealtimePlanningArithmetic::bytesForResidence(
+              videoBytesPerSecond.value(),
+              deployment.latency.maximumResidence,
+              "video residence bytes")
         : videoBytesPerSecond;
     auto plannedVideoBytes = videoResidenceBytes && videoUnitBytes
-        ? checkedAdd(videoResidenceBytes.value(), videoUnitBytes.value(),
-                     "video residence and VBV bytes")
+        ? MediaRealtimePlanningArithmetic::add(
+              videoResidenceBytes.value(), videoUnitBytes.value(),
+              "video residence and VBV bytes")
         : ::media::Result<std::uint64_t>::failure(
               !videoResidenceBytes ? videoResidenceBytes.error()
                                    : videoUnitBytes.error());
@@ -139,12 +111,14 @@ MediaRealtimeMediaCapacityPlanner::plan(
             audioUnitBytes = audioBytesPerSecond.value() / plannedAudioUnits +
                 (audioBytesPerSecond.value() % plannedAudioUnits != 0 ? 1U : 0U);
         }
-        auto audioResidenceBytes = bytesForResidence(
-            audioBytesPerSecond.value(), residenceNs,
+        auto audioResidenceBytes =
+            MediaRealtimePlanningArithmetic::bytesForResidence(
+            audioBytesPerSecond.value(), deployment.latency.maximumResidence,
             "audio residence bytes");
         auto plannedAudioBytes = audioResidenceBytes
-            ? checkedAdd(audioResidenceBytes.value(), *audioUnitBytes,
-                         "audio residence and unit bytes")
+            ? MediaRealtimePlanningArithmetic::add(
+                  audioResidenceBytes.value(), *audioUnitBytes,
+                  "audio residence and unit bytes")
             : audioResidenceBytes;
         if (!plannedAudioBytes) {
             return ::media::Result<MediaRealtimeMediaCapacityPlan>::failure(
@@ -152,7 +126,7 @@ MediaRealtimeMediaCapacityPlanner::plan(
         }
         audioBytes = plannedAudioBytes.value();
     }
-    auto totalBytes = checkedAdd(
+    auto totalBytes = MediaRealtimePlanningArithmetic::add(
         videoBytes, audioBytes.value_or(0), "aggregate graph media bytes");
     if (!totalBytes || videoBytes == 0 || videoUnitBytes.value() == 0 ||
         totalBytes.value() > deployment.resources.maximumGraphMemoryBytes ||

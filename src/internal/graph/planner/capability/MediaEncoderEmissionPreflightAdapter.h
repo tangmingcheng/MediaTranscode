@@ -21,6 +21,7 @@ public:
         const AVCodecContext& context,
         const MediaEncoderRateControlPlan& contract,
         MediaRational plannedCadence,
+        MediaEncodedPacketLayout packetLayout,
         std::string authority,
         std::string backend);
 

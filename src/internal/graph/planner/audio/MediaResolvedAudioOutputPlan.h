@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/audio/MediaResolvedAudioTargetDecision.h"
+#include "internal/graph/planner/MediaPreparedAudioEncoderEmissionEnvelope.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -16,6 +17,7 @@ struct MediaSelectedAudioEncoder final {
     std::vector<int> supportedProfileIds;
     int frameSizeSamples = 0;
     int delaySamples = 0;
+    std::optional<MediaPreparedAudioEncoderEmissionEnvelope> preparedEmission;
 };
 
 class MediaResolvedAudioOutputPlan final {

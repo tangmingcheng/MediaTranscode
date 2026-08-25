@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
+#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
 
 #include <limits>
 #include <new>
@@ -13,46 +14,11 @@ namespace {
 constexpr std::uint64_t Ipv4HeaderBytes = 20;
 constexpr std::uint64_t Ipv6HeaderBytes = 40;
 constexpr std::uint64_t UdpHeaderBytes = 8;
-constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
-
-::media::Result<std::uint64_t> checkedAdd(
-    std::uint64_t left, std::uint64_t right, const char* fact)
-{
-    if (right > (std::numeric_limits<std::uint64_t>::max)() - left) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                std::string(fact) + " is not representable"));
-    }
-    return ::media::Result<std::uint64_t>::success(left + right);
-}
-
 ::media::Result<std::uint64_t> bytesForResidence(
     std::uint64_t bytesPerSecond, MediaRunningTime residence)
 {
-    const auto nanoseconds = residence.nanoseconds();
-    if (nanoseconds <= 0) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Datagram residence must be positive"));
-    }
-    const auto wholeSeconds =
-        static_cast<std::uint64_t>(nanoseconds) / NanosecondsPerSecond;
-    const auto remainder =
-        static_cast<std::uint64_t>(nanoseconds) % NanosecondsPerSecond;
-    if (wholeSeconds > (std::numeric_limits<std::uint64_t>::max)() /
-            bytesPerSecond ||
-        remainder > (std::numeric_limits<std::uint64_t>::max)() /
-            bytesPerSecond) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Datagram residence byte demand is not representable"));
-    }
-    const auto wholeBytes = wholeSeconds * bytesPerSecond;
-    const auto remainderProduct = remainder * bytesPerSecond;
-    const auto remainderBytes = remainderProduct / NanosecondsPerSecond +
-        (remainderProduct % NanosecondsPerSecond != 0 ? 1U : 0U);
-    return checkedAdd(wholeBytes, remainderBytes,
-                      "Datagram residence byte demand");
+    return MediaRealtimePlanningArithmetic::bytesForResidence(
+        bytesPerSecond, residence, "Datagram residence byte demand");
 }
 
 std::uint64_t ceilDivide(
@@ -82,7 +48,7 @@ MediaDatagramTransportPlanTemplate::create(
         facts.service.peakWireBytesPerSecond,
         facts.latency.maximumResidence);
     auto burstServiceWithinDeadline = peakServiceWithinDeadline
-        ? checkedAdd(
+        ? MediaRealtimePlanningArithmetic::add(
               facts.service.burstWireBytes,
               peakServiceWithinDeadline.value(),
               "service burst within maximum residence")
@@ -156,7 +122,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         if (!residenceDatagrams) {
             return Result::failure(residenceDatagrams.error());
         }
-        auto requiredBacklogBytes = checkedAdd(
+        auto requiredBacklogBytes = MediaRealtimePlanningArithmetic::add(
             residenceBytes.value(), m_encoding.wireTraffic.burstWireBytes,
             "Datagram backlog byte demand");
         if (!requiredBacklogBytes ||

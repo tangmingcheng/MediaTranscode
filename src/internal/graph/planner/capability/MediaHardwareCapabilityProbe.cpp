@@ -273,7 +273,8 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
 
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *encoderContext, *chain.encoder.encoderRateControl,
-        encoderFrameRate, "opened-encoder-context:" + chain.encoder.ffmpegName,
+        encoderFrameRate, *chain.encoder.encodedPacketLayout,
+        "opened-encoder-context:" + chain.encoder.ffmpegName,
         "rkmpp");
     if (!emission) {
         return unavailable(emission.error().message);
@@ -328,6 +329,7 @@ MediaHardwareCapability validateSoftwareEncoder(
     if (!packetLayout) return unavailable(packetLayout.error().message);
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *context, *chain.encoder.encoderRateControl, cadence,
+        *chain.encoder.encodedPacketLayout,
         "opened-encoder-context:" + chain.encoder.ffmpegName, "ffmpeg-software");
     if (!emission) return unavailable(emission.error().message);
     chain.encoder.preparedEmission = std::move(emission).value();
@@ -531,7 +533,8 @@ MediaHardwareCapability validateCompleteChain(
 
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         *encoderContext, *chain.encoder.encoderRateControl,
-        encoderFrameRate, "opened-encoder-context:" + chain.encoder.ffmpegName,
+        encoderFrameRate, *chain.encoder.encodedPacketLayout,
+        "opened-encoder-context:" + chain.encoder.ffmpegName,
         chain.decoder.hwaccelName);
     if (!emission) return unavailable(emission.error().message);
     chain.encoder.preparedEmission = std::move(emission).value();

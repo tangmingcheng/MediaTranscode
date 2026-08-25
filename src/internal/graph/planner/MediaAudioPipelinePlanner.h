@@ -5,6 +5,7 @@
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/planner/audio/capability/MediaAudioResamplerCapabilityProvider.h"
+#include "internal/graph/planner/MediaPreparedAudioEncoderEmissionEnvelope.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -47,6 +48,7 @@ struct MediaAudioPipelinePlan {
     std::string reason;
     std::optional<MediaSelectedAudioDecoder> selectedDecoder;
     std::optional<MediaSelectedAudioResampler> selectedResampler;
+    std::optional<MediaPreparedAudioEncoderEmissionEnvelope> preparedEmission;
 };
 
 struct MediaInputAudioStreamInfo {

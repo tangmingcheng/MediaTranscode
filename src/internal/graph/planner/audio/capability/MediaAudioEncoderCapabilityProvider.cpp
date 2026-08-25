@@ -12,12 +12,38 @@ extern "C" {
 }
 
 #include <string>
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
+
+constexpr std::int64_t BitsPerKilobit = 1000;
+constexpr std::int64_t BitsPerByte = 8;
+
+::media::Result<std::int64_t> rateBits(
+    const std::optional<int>& kilobits,
+    const char* field)
+{
+    if (!kilobits || *kilobits <= 0 ||
+        *kilobits > (std::numeric_limits<std::int64_t>::max)() /
+            BitsPerKilobit) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                std::string("audio encoder requires authoritative ") + field));
+    }
+    return ::media::Result<std::int64_t>::success(
+        static_cast<std::int64_t>(*kilobits) * BitsPerKilobit);
+}
+
+std::uint64_t ceilBytes(std::int64_t bits) noexcept
+{
+    return static_cast<std::uint64_t>(
+        bits / BitsPerByte + (bits % BitsPerByte != 0 ? 1 : 0));
+}
 
 std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
 {
@@ -95,6 +121,27 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
     context->sample_fmt = sampleFormat;
     context->time_base = AVRational{1, target.sampleRate()};
     context->profile = target.profile().ffmpegProfileId();
+    auto targetRate = rateBits(target.bitrateKbps(), "target bitrate");
+    auto maximumRate = rateBits(
+        target.maxBitrateKbps() ? target.maxBitrateKbps()
+                                : target.bitrateKbps(),
+        "maximum bitrate");
+    if (!targetRate || !maximumRate) {
+        return ::media::Result<MediaSelectedAudioEncoder>::failure(
+            !targetRate ? targetRate.error() : maximumRate.error());
+    }
+    context->bit_rate = targetRate.value();
+    context->rc_max_rate = maximumRate.value();
+    if (target.bufferSizeKbits()) {
+        auto buffer = rateBits(target.bufferSizeKbits(), "VBV");
+        if (!buffer || buffer.value() > (std::numeric_limits<int>::max)()) {
+            return ::media::Result<MediaSelectedAudioEncoder>::failure(
+                buffer ? ::media::ErrorInfo::invalidArgument(
+                             "audio encoder VBV exceeds AVCodecContext range")
+                       : buffer.error());
+        }
+        context->rc_buffer_size = static_cast<int>(buffer.value());
+    }
     if (auto status = applyChannelLayout(*context, target); !status) {
         return ::media::Result<MediaSelectedAudioEncoder>::failure(status.error());
     }
@@ -121,6 +168,41 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
             ::media::ErrorInfo::unsupported(
                 "selected audio encoder does not report bounded frame and delay facts"));
     }
+    const std::int64_t effectiveMaximum = context->rc_max_rate > 0
+        ? context->rc_max_rate : context->bit_rate;
+    if (context->bit_rate <= 0 || effectiveMaximum <= 0 ||
+        context->sample_rate <= 0) {
+        return ::media::Result<MediaSelectedAudioEncoder>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "opened audio encoder lacks effective rate and cadence readback"));
+    }
+    const auto peakBytes = ceilBytes(effectiveMaximum);
+    const auto frameSamples = static_cast<std::uint64_t>(context->frame_size);
+    const auto sampleRate = static_cast<std::uint64_t>(context->sample_rate);
+    if (peakBytes > (std::numeric_limits<std::uint64_t>::max)() /
+            frameSamples) {
+        return ::media::Result<MediaSelectedAudioEncoder>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "audio access-unit readback is not representable"));
+    }
+    const auto frameNumerator = peakBytes * frameSamples;
+    std::uint64_t maximumAccessUnit = frameNumerator / sampleRate +
+        (frameNumerator % sampleRate != 0 ? 1U : 0U);
+    if (context->codec_id == AV_CODEC_ID_AAC) {
+        constexpr std::uint64_t AacFrameLengthMaximum = 8191;
+        maximumAccessUnit = (std::max)(
+            maximumAccessUnit, AacFrameLengthMaximum);
+    }
+    const std::uint64_t burst = context->rc_buffer_size > 0
+        ? ceilBytes(context->rc_buffer_size)
+        : maximumAccessUnit;
+    verified.preparedEmission = MediaPreparedAudioEncoderEmissionEnvelope{
+        ceilBytes(context->bit_rate), peakBytes, maximumAccessUnit, burst,
+        sampleRate, frameSamples, 1, context->frame_size,
+        context->codec_id == AV_CODEC_ID_AAC
+            ? "opened-audio-context+aac-frame-length"
+            : "opened-audio-context+codec-frame",
+        encoder.name};
     verified.supportedSampleRates.push_back(target.sampleRate());
     if (target.profile().knowledge() == MediaAudioProfileKnowledge::Known) {
         verified.supportedProfileIds.push_back(target.profile().ffmpegProfileId());

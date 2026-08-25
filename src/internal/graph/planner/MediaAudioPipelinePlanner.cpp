@@ -159,6 +159,14 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
                ? "transcode_required_by_output_frame_contract"
                : "transcode_source_differs_from_resolved_output");
     plan.resolvedOutput = std::move(output).value();
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
+        if (!encoder || !encoder->preparedEmission) {
+            return ::media::Result<MediaAudioPipelinePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "audio transcode plan lacks opened encoder emission readback"));
+        }
+        plan.preparedEmission = encoder->preparedEmission;
+    }
     if (plan.branchMode == MediaBranchMode::TranscodeFrame &&
         inputInfo.selectedDecoder) {
         plan.selectedDecoder = std::move(inputInfo.selectedDecoder);
