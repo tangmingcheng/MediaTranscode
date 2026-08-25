@@ -45,21 +45,26 @@ MediaRtpWireProtocolState::MediaRtpWireProtocolState(
       clockMapper(config.clockMapper),
       ntpEpoch(config.ntpEpoch),
       senderReportSchedule(std::move(config.senderReportSchedule)),
+      projectedSenderReportSchedule(senderReportSchedule),
       cname(std::move(config.cname)),
       nextRtpSequence(config.initialRtpSequence),
       packetCount(config.initialPacketCount),
       octetCount(config.initialOctetCount),
-      maximumDatagramBytes(config.maximumDatagramBytes)
+      projectedNextRtpSequence(config.initialRtpSequence),
+      projectedPacketCount(config.initialPacketCount),
+      projectedOctetCount(config.initialOctetCount),
+      maximumDatagramBytes(config.maximumDatagramBytes),
+      maximumOutstandingDatagrams(config.maximumOutstandingDatagrams)
 {
 }
 
 MediaRtpWireCommitTransaction::MediaRtpWireCommitTransaction(
     std::shared_ptr<MediaRtpWireProtocolState> state,
-    std::unique_lock<std::mutex> protocolLock,
+    std::uint64_t reservationIdentity,
     MediaWireGlobalSequenceReservation globalReservation,
     std::vector<MediaRtpWireCommitAction> actions) noexcept
     : m_state(std::move(state)),
-      m_protocolLock(std::move(protocolLock)),
+      m_reservationIdentity(reservationIdentity),
       m_globalReservation(std::move(globalReservation)),
       m_actions(std::move(actions))
 {
@@ -67,7 +72,8 @@ MediaRtpWireCommitTransaction::MediaRtpWireCommitTransaction(
 
 MediaRtpWireCommitTransaction::~MediaRtpWireCommitTransaction() noexcept
 {
-    if (m_nextAction != m_actions.size() && m_protocolLock.owns_lock()) {
+    if (m_state && m_nextAction != m_actions.size()) {
+        std::lock_guard lock(m_state->mutex);
         m_state->poisoned = true;
     }
 }
@@ -81,8 +87,16 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
 ::media::Status MediaRtpWireCommitTransaction::commit(
     std::size_t index) noexcept
 {
-    if (!m_protocolLock.owns_lock() || index != m_nextAction ||
-        index >= m_actions.size() || m_state->poisoned) {
+    if (!m_state) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "RTP wire commit transaction is inactive"));
+    }
+    std::lock_guard lock(m_state->mutex);
+    if (index != m_nextAction || index >= m_actions.size() ||
+        m_state->poisoned || m_state->reservations.empty() ||
+        m_state->reservations.front().identity != m_reservationIdentity ||
+        m_state->reservations.front().actionCount != m_actions.size() ||
+        m_state->reservations.front().committed != index) {
         return poison(::media::ErrorInfo::internalError(
             "RTP wire commit is stale, reordered, or inactive"));
     }
@@ -129,8 +143,10 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
     auto globalCommitted = m_globalReservation.commit(index);
     if (!globalCommitted) return poison(globalCommitted.error());
     ++m_nextAction;
-    if (m_nextAction == m_actions.size() && m_protocolLock.owns_lock()) {
-        m_protocolLock.unlock();
+    ++m_state->reservations.front().committed;
+    if (m_nextAction == m_actions.size()) {
+        m_state->outstandingDatagrams -= m_actions.size();
+        m_state->reservations.pop_front();
     }
     return ::media::Status::success();
 }
@@ -138,7 +154,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
 ::media::Status MediaRtpWireCommitTransaction::poison(
     ::media::ErrorInfo error) noexcept
 {
-    if (m_protocolLock.owns_lock()) m_state->poisoned = true;
+    if (m_state) m_state->poisoned = true;
     return ::media::Status::failure(std::move(error));
 }
 

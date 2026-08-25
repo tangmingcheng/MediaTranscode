@@ -67,6 +67,7 @@ private:
     MediaBufferRef m_codec;
     MediaBufferRef m_transportPlan;
     MediaBufferRef m_stagedConfigurationAccessUnit;
+    MediaBufferRef m_pendingAccessUnit;
     MediaBufferRef m_pendingOutput;
     PendingOutputKind m_pendingOutputKind = PendingOutputKind::None;
     bool m_descriptionEmitted = false;

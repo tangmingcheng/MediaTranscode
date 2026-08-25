@@ -50,9 +50,9 @@ private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
         MediaMpegTsUdpWireDatagramMaterializerConfig config) noexcept;
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-    materializeBatchWithProtocolCommit(
+    materializeBatchReserved(
         std::span<const MediaMpegTsDatagramView> datagrams,
-        std::vector<MediaProtocolDatagramCommitLease> protocolCommits);
+        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);
 
     MediaMpegTsUdpWireDatagramMaterializerConfig m_config;
 };
@@ -73,6 +73,7 @@ struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
     std::uint16_t initialRtpSequence;
     std::uint8_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
+    std::size_t maximumOutstandingDatagrams;
     MediaRunningTime masterOrigin;
     MediaSharedNtpEpoch ntpEpoch;
     MediaRtcpSenderReportSchedule senderReportSchedule;

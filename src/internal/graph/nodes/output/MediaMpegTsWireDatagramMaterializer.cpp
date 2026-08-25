@@ -123,7 +123,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
 MediaMpegTsUdpWireDatagramMaterializer::materializeBatch(
     std::span<const MediaMpegTsDatagramView> datagrams)
 {
-    return materializeBatchWithProtocolCommit(datagrams, {});
+    return materializeBatchReserved(datagrams, nullptr);
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
@@ -137,37 +137,32 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
             "MPEG-TS UDP protocol batch generation differs"));
     }
     std::vector<MediaMpegTsDatagramView> views;
-    std::vector<MediaProtocolDatagramCommitLease> commits;
     try {
         views.reserve(protocolBatch.datagrams().size());
-        commits.reserve(protocolBatch.datagrams().size());
         for (std::size_t index = 0;
              index < protocolBatch.datagrams().size(); ++index) {
             const auto& datagram = protocolBatch.datagrams()[index];
             views.push_back(MediaMpegTsDatagramView{
                 datagram.bytes(), datagram.presentationOnMaster(),
                 datagram.canonicalRelease()});
-            auto lease = protocolBatch.takeCommitLease(index);
-            if (!lease) return Result::failure(lease.error());
-            commits.push_back(std::move(lease).value());
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS UDP protocol batch views"));
     }
-    return materializeBatchWithProtocolCommit(views, std::move(commits));
+    return materializeBatchReserved(views, &protocolBatch);
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-MediaMpegTsUdpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
+MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     std::span<const MediaMpegTsDatagramView> datagrams,
-    std::vector<MediaProtocolDatagramCommitLease> protocolCommits)
+    MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
     if (datagrams.empty() ||
-        (!protocolCommits.empty() &&
-         protocolCommits.size() != datagrams.size())) {
+        (protocolBatch &&
+         protocolBatch->datagrams().size() != datagrams.size())) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP wire materializer requires a nonempty batch"));
     }
@@ -193,6 +188,20 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
     }
     auto global = m_config.globalSequence->reserve(datagrams.size());
     if (!global) return Result::failure(global.error());
+    std::vector<MediaProtocolDatagramCommitLease> protocolCommits;
+    if (protocolBatch) {
+        try {
+            protocolCommits.reserve(datagrams.size());
+            for (std::size_t index = 0; index < datagrams.size(); ++index) {
+                auto lease = protocolBatch->takeCommitLease(index);
+                if (!lease) return Result::failure(lease.error());
+                protocolCommits.push_back(std::move(lease).value());
+            }
+        } catch (const std::bad_alloc&) {
+            return Result::failure(::media::ErrorInfo::allocationFailed(
+                "MPEG-TS UDP protocol commit transfer"));
+        }
+    }
     std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction;
     try {
         transaction =
@@ -277,7 +286,8 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
             config.initialRtpSequence,
             0,
             0,
-            config.maximumDatagramBytes});
+            config.maximumDatagramBytes,
+            config.maximumOutstandingDatagrams});
     if (!rtpMaterializer) return Result::failure(rtpMaterializer.error());
     return Result::success(MediaMpegTsRtpWireDatagramMaterializer(
         std::move(packetizer).value(),
@@ -347,13 +357,11 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
     std::vector<std::vector<std::uint8_t>> payloads;
     std::vector<std::size_t> payloadOctets;
     std::vector<MediaPacketizedRtpDatagramView> packetized;
-    std::vector<MediaProtocolDatagramCommitLease> commits;
     try {
         const auto datagrams = protocolBatch.datagrams();
         payloads.reserve(datagrams.size());
         payloadOctets.reserve(datagrams.size());
         packetized.reserve(datagrams.size());
-        commits.reserve(datagrams.size());
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
             const auto& datagram = datagrams[index];
             auto packet = m_packetizer.packetize(
@@ -361,9 +369,6 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
             if (!packet) return Result::failure(packet.error());
             payloadOctets.push_back(packet.value().payloadOctets());
             payloads.push_back(packet.value().releaseDatagram());
-            auto lease = protocolBatch.takeCommitLease(index);
-            if (!lease) return Result::failure(lease.error());
-            commits.push_back(std::move(lease).value());
         }
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
             packetized.push_back(MediaPacketizedRtpDatagramView{
@@ -375,8 +380,8 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS RTP protocol batch"));
     }
-    return m_rtpMaterializer.materializeBatchWithProtocolCommit(
-        packetized, std::move(commits));
+    return m_rtpMaterializer.materializeProtocolBatch(
+        packetized, protocolBatch);
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>

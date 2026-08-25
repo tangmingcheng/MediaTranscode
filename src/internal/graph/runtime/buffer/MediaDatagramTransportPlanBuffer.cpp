@@ -27,7 +27,8 @@ MediaDatagramTransportPlanBuffer::MediaDatagramTransportPlanBuffer(
         return ::media::Result<MediaBufferRef>::failure(activated.error());
     }
     auto sequence = MediaWireGlobalSequenceState::create(
-        planTemplate.sessionKey(), planTemplate.serviceScopeId(), generation, 1);
+        planTemplate.sessionKey(), planTemplate.serviceScopeId(), generation, 1,
+        activated.value().shaping.backlog().maximumDatagrams);
     if (!sequence) {
         return ::media::Result<MediaBufferRef>::failure(sequence.error());
     }

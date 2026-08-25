@@ -172,6 +172,7 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
             rtp->payloadType(), rtp->clockRate(), rtp->ssrc(),
             rtp->baseTimestamp(), rtp->initialSequenceNumber(),
             rtp->tsPacketsPerPayload(), rtp->maximumDatagramBytes(),
+            shaping.backlog().maximumDatagrams,
             m_authority->sharedNtpEpoch()->masterAtCapture(),
             *m_authority->sharedNtpEpoch(),
             std::move(reportSchedule).value(), rtp->cname()});
@@ -217,14 +218,17 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         }
     }
     if (!m_materializer) return processWaiting();
-    auto input = tryPopInputOptional(context, "protocol_batch");
-    if (!input) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            input.error());
+    if (!m_pendingProtocolBatch) {
+        auto input = tryPopInputOptional(context, "protocol_batch");
+        if (!input) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                input.error());
+        }
+        if (!input.value()) return processWaiting();
+        m_pendingProtocolBatch = std::move(*input.value());
     }
-    if (!input.value()) return processWaiting();
     auto* batch = dynamic_cast<MediaMpegTsProtocolDatagramBatchBuffer*>(
-        input.value()->get());
+        m_pendingProtocolBatch.get());
     if (!batch) {
         return ::media::Result<MediaNodeProcessResult>::failure(invalid(
             "MPEG-TS datagram materializer requires a protocol batch"));
@@ -238,6 +242,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             wire.error());
     }
+    m_pendingProtocolBatch.reset();
     m_pendingOutput = std::move(wire).value();
     auto emitted = emitOutput(context, "wire_batch", m_pendingOutput);
     return emitted ? processProgress() : processProgress(std::move(emitted));
@@ -251,6 +256,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
             "MPEG-TS wire batch commit differs from pending output"));
     }
     m_pendingOutput.reset();
+    m_pendingProtocolBatch.reset();
     return ::media::Status::success();
 }
 

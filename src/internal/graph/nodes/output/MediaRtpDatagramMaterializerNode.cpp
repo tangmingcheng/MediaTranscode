@@ -257,7 +257,8 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
             *m_dependencies.authority->sharedNtpEpoch(),
             std::move(schedule).value(), m_outputPlan.cname,
             initialSequence, 0, 0,
-            m_outputPlan.packetization.maximumDatagramBytes()});
+            m_outputPlan.packetization.maximumDatagramBytes(),
+            transport->plan().shaping.backlog().maximumDatagrams});
     if (!created) return ::media::Status::failure(created.error());
     m_wireMaterializer = std::move(created).value();
     return ::media::Status::success();
@@ -267,20 +268,20 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
 MediaRtpDatagramMaterializerNode::processAccessUnit(
     MediaGraphExecutionContext& context)
 {
-    MediaBufferRef input;
-    if (m_stagedConfigurationAccessUnit) {
-        input = std::move(m_stagedConfigurationAccessUnit);
-    } else {
+    if (!m_pendingAccessUnit && m_stagedConfigurationAccessUnit) {
+        m_pendingAccessUnit = std::move(m_stagedConfigurationAccessUnit);
+    }
+    if (!m_pendingAccessUnit) {
         auto popped = tryPopInputOptional(context, "scheduled");
         if (!popped) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 popped.error());
         }
         if (!popped.value()) return processWaiting();
-        input = std::move(*popped.value());
+        m_pendingAccessUnit = std::move(*popped.value());
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
-            input.get())) {
+            m_pendingAccessUnit.get())) {
         if (control->controlKind() == MediaControlBufferKind::Eof) {
             return processFinished();
         }
@@ -291,7 +292,7 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
             : processProgress();
     }
     const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
-        input.get());
+        m_pendingAccessUnit.get());
     const AVPacket* packet = scheduled
         ? FFmpegPacketView::packet(scheduled->media()) : nullptr;
     if (!scheduled || !packet || scheduled->stream() != m_outputPlan.stream ||
@@ -301,32 +302,38 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
         return ::media::Result<MediaNodeProcessResult>::failure(invalid(
             "RTP protocol materializer rejects access-unit generation, stream, packet, or timing"));
     }
-    m_packetizedBytes.clear();
-    m_packetizedPayloadOctets.clear();
-    auto mapper = MediaRtpOutputClockMapper::create(
-        m_outputPlan.clockRate, m_outputPlan.baseTimestamp,
-        m_activationFacts->masterRelease);
-    if (!mapper) {
-        return ::media::Result<MediaNodeProcessResult>::failure(mapper.error());
-    }
-    auto timestamp = mapper.value().map(scheduled->presentationOnMaster());
-    if (!timestamp) {
-        return ::media::Result<MediaNodeProcessResult>::failure(timestamp.error());
-    }
-    auto packetized = m_packetizer->writeAccessUnit(*packet, timestamp.value());
-    if (!packetized || m_packetizedBytes.empty() ||
-        m_packetizedBytes.size() != m_packetizedPayloadOctets.size()) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            packetized ? invalid("RTP packetizer emitted no complete AU batch")
-                       : packetized.error());
-    }
-    const auto initialSequence = static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(m_packetizedBytes.front()[2]) << 8) |
-        static_cast<std::uint16_t>(m_packetizedBytes.front()[3]));
-    auto wireReady = createWireMaterializer(initialSequence);
-    if (!wireReady) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            wireReady.error());
+    if (m_packetizedBytes.empty()) {
+        m_packetizedPayloadOctets.clear();
+        auto mapper = MediaRtpOutputClockMapper::create(
+            m_outputPlan.clockRate, m_outputPlan.baseTimestamp,
+            m_activationFacts->masterRelease);
+        if (!mapper) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                mapper.error());
+        }
+        auto timestamp = mapper.value().map(
+            scheduled->presentationOnMaster());
+        if (!timestamp) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                timestamp.error());
+        }
+        auto packetized = m_packetizer->writeAccessUnit(
+            *packet, timestamp.value());
+        if (!packetized || m_packetizedBytes.empty() ||
+            m_packetizedBytes.size() != m_packetizedPayloadOctets.size()) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                packetized
+                    ? invalid("RTP packetizer emitted no complete AU batch")
+                    : packetized.error());
+        }
+        const auto initialSequence = static_cast<std::uint16_t>(
+            (static_cast<std::uint16_t>(m_packetizedBytes.front()[2]) << 8) |
+            static_cast<std::uint16_t>(m_packetizedBytes.front()[3]));
+        auto wireReady = createWireMaterializer(initialSequence);
+        if (!wireReady) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                wireReady.error());
+        }
     }
     std::vector<MediaPacketizedRtpDatagramView> views;
     try {
@@ -345,6 +352,9 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
     if (!wire) {
         return ::media::Result<MediaNodeProcessResult>::failure(wire.error());
     }
+    m_pendingAccessUnit.reset();
+    m_packetizedPayloadOctets.clear();
+    m_packetizedBytes.clear();
     m_pendingOutput = std::move(wire).value();
     m_pendingOutputKind = PendingOutputKind::Wire;
     auto emitted = emitOutput(context, "wire_batch", m_pendingOutput);
@@ -451,6 +461,7 @@ void MediaRtpDatagramMaterializerNode::resetState() noexcept
     m_pendingOutputKind = PendingOutputKind::None;
     m_descriptionEmitted = false;
     m_stagedConfigurationAccessUnit.reset();
+    m_pendingAccessUnit.reset();
     m_transportPlan.reset();
     m_codec.reset();
     m_activationFacts.reset();

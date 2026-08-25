@@ -44,6 +44,7 @@ private:
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     MediaBufferRef m_protocolPlan;
     MediaBufferRef m_transportPlan;
+    MediaBufferRef m_pendingProtocolBatch;
     MediaBufferRef m_pendingOutput;
     std::optional<Materializer> m_materializer;
 };

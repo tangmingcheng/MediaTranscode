@@ -36,6 +36,7 @@ struct MediaRtpWireDatagramMaterializerConfig final {
     std::uint64_t initialPacketCount;
     std::uint64_t initialOctetCount;
     std::size_t maximumDatagramBytes;
+    std::size_t maximumOutstandingDatagrams;
 };
 
 struct MediaRtpWireDatagramMaterializerSnapshot final {
@@ -54,6 +55,7 @@ struct MediaPacketizedRtpDatagramView final {
 };
 
 class MediaRtpWireProtocolState;
+class MediaMpegTsProtocolDatagramBatchBuffer;
 
 class MediaRtpWireDatagramMaterializer final {
 public:
@@ -68,9 +70,9 @@ public:
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-    materializeBatchWithProtocolCommit(
+    materializeProtocolBatch(
         std::span<const MediaPacketizedRtpDatagramView> datagrams,
-        std::vector<MediaProtocolDatagramCommitLease> protocolCommits);
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
@@ -89,6 +91,10 @@ public:
 private:
     explicit MediaRtpWireDatagramMaterializer(
         std::shared_ptr<MediaRtpWireProtocolState> state) noexcept;
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+    materializeBatchReserved(
+        std::span<const MediaPacketizedRtpDatagramView> datagrams,
+        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);
 
     std::shared_ptr<MediaRtpWireProtocolState> m_state;
 };
