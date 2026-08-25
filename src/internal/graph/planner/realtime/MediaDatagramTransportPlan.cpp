@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 
 #include <limits>
 #include <new>
@@ -112,53 +113,13 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         const auto& deployment = m_encoding.deployment;
         const auto endpointCount = static_cast<std::uint64_t>(
             m_encoding.remoteEndpoints.size());
-        auto residenceBytes = bytesForResidence(
-            m_encoding.wireTraffic.peakWireBytesPerSecond,
-            deployment.latency.maximumResidence);
-        if (!residenceBytes) return Result::failure(residenceBytes.error());
-        auto residenceDatagrams = bytesForResidence(
-            m_encoding.wireTraffic.peakDatagramsPerSecond,
-            deployment.latency.maximumResidence);
-        if (!residenceDatagrams) {
-            return Result::failure(residenceDatagrams.error());
+        auto resourceLedger =
+            MediaRealtimeNetworkResourceLedgerPlanner::plan(
+                deployment, m_encoding.wireTraffic, endpointCount);
+        if (!resourceLedger) {
+            return Result::failure(resourceLedger.error());
         }
-        auto requiredBacklogBytes = MediaRealtimePlanningArithmetic::add(
-            residenceBytes.value(), m_encoding.wireTraffic.burstWireBytes,
-            "Datagram backlog byte demand");
-        if (!requiredBacklogBytes ||
-            requiredBacklogBytes.value() >
-                deployment.resources.maximumNetworkMemoryBytes) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "deployment network memory budget cannot admit the planned wire backlog"));
-        }
-        const auto maximumBacklogBytes = requiredBacklogBytes.value();
-        const auto maximumBacklogDatagrams = (std::max)(
-            ceilDivide(maximumBacklogBytes,
-                       m_encoding.wireTraffic.maximumWireDatagramBytes),
-            residenceDatagrams.value());
-        const auto maximumBatchBytes = (std::min)(
-            maximumBacklogBytes,
-            (std::max)(deployment.service.burstWireBytes,
-                       m_encoding.wireTraffic.maximumWireDatagramBytes));
-        const auto maximumBatchDatagrams = ceilDivide(
-            maximumBatchBytes,
-            m_encoding.wireTraffic.maximumWireDatagramBytes);
-        const auto socketHardBoundBytes =
-            deployment.resources.maximumSocketMemoryBytes / endpointCount;
-        const auto maximumEndpointPendingBytes = (std::min)(
-            socketHardBoundBytes,
-            (std::max)(m_encoding.wireTraffic.maximumWireDatagramBytes,
-                       maximumBacklogBytes / endpointCount));
-        const auto maximumEndpointPendingDatagrams = (std::max)(
-            std::uint64_t{1},
-            ceilDivide(maximumEndpointPendingBytes,
-                       m_encoding.wireTraffic.maximumWireDatagramBytes));
-        if (maximumBacklogDatagrams == 0 || maximumBatchDatagrams == 0 ||
-            socketHardBoundBytes <
-                m_encoding.wireTraffic.maximumWireDatagramBytes) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "deployment resource budgets cannot admit one Datagram per endpoint"));
-        }
+        const auto& resources = resourceLedger.value();
         std::optional<MediaDatagramTransmitEvidencePlan> evidence;
         if (deployment.observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Disabled) {
@@ -171,8 +132,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 deployment.observation.authority,
                 1,
                 deployment.observation.maximumRunDatagrams,
-                (std::min)(deployment.observation.maximumRunDatagrams,
-                           maximumBacklogDatagrams),
+                resources.maximumCorrelationEntries,
                 deployment.observation.maximumDrainResidence};
         }
         std::vector<MediaDatagramEndpointPlan> endpoints;
@@ -206,10 +166,10 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                     UdpHeaderBytes,
                     deployment.mtu.senderMaximumPayloadBytes},
                 m_encoding.wireTraffic.maximumUdpPayloadBytes,
-                maximumEndpointPendingDatagrams,
-                maximumEndpointPendingBytes,
+                resources.maximumEndpointPendingDatagrams,
+                resources.maximumEndpointPendingBytes,
                 deployment.latency.maximumResidence,
-                socketHardBoundBytes});
+                resources.socketHardBoundBytesPerEndpoint});
             localEndpoints.push_back(MediaDatagramLocalEndpointPlan{
                 remote.endpointId,
                 deployment.localPorts.addressFamily,
@@ -231,12 +191,12 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 deployment.service.burstWireBytes,
                 deployment.service.authority},
             MediaDatagramBacklogPlan{
-                maximumBacklogDatagrams,
-                maximumBacklogBytes,
+                resources.maximumBacklogDatagrams,
+                resources.maximumBacklogBytes,
                 deployment.latency.maximumResidence},
             MediaDatagramBatchPlan{
-                maximumBatchDatagrams,
-                maximumBatchBytes},
+                resources.maximumBatchDatagrams,
+                resources.maximumBatchBytes},
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue,
             MediaDatagramOrderingMode::CanonicalOrdered,
             MediaDatagramLimitFailureMode::Terminate,
