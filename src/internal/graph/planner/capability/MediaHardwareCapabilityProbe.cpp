@@ -3,6 +3,7 @@
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
+#include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
 #include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
@@ -37,7 +38,8 @@ namespace {
     MediaPipelineChainPlan& chain,
     const AVCodec& encoder,
     const AVCodecContext& openedHardwareContext,
-    AVPixelFormat surfaceFormat)
+    AVPixelFormat surfaceFormat,
+    const MediaEncoderOpenContract& openContract)
 {
     const AVPixFmtDescriptor* surfaceDescriptor =
         av_pix_fmt_desc_get(surfaceFormat);
@@ -57,17 +59,12 @@ namespace {
         return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
             "hardware encoder software-input packet-layout probe context"));
     }
-    probeContext->width = openedHardwareContext.width;
-    probeContext->height = openedHardwareContext.height;
     probeContext->pix_fmt = surfaceFormat;
     probeContext->sw_pix_fmt = surfaceFormat;
-    probeContext->time_base = openedHardwareContext.time_base;
-    probeContext->framerate = openedHardwareContext.framerate;
     probeContext->sample_aspect_ratio = openedHardwareContext.sample_aspect_ratio;
-    probeContext->max_b_frames = openedHardwareContext.max_b_frames;
 
-    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
-        *probeContext, *chain.encoder.encoderRateControl);
+    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
+        *probeContext, openContract);
     if (!applied) return ::media::Status::failure(applied.error());
 
     const int opened = avcodec_open2(probeContext.get(), &encoder, nullptr);
@@ -75,6 +72,10 @@ namespace {
         return FFmpegGraphError::statusFromCode(
             opened, "avcodec_open2(hardware encoder software-input packet-layout probe)");
     }
+    if (auto equivalent =
+            MediaEncoderOpenContractAdapter::validateEquivalentReadback(
+                openedHardwareContext, *probeContext, openContract);
+        !equivalent) return equivalent;
     return publishPacketLayout(chain, *probeContext);
 }
 
@@ -283,27 +284,16 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     if (!encoderContext) {
         return unavailable("avcodec_alloc_context3(RKMPP encoder) returned null");
     }
-    encoderContext->width =
-        options.targetWidth > 0 ? options.targetWidth : options.probeWidth;
-    encoderContext->height =
-        options.targetHeight > 0 ? options.targetHeight : options.probeHeight;
     encoderContext->pix_fmt = encoderFormat;
     encoderContext->sw_pix_fmt = encoderSurfaceFormat;
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
-    encoderContext->time_base =
-        AVRational{encoderFrameRate.den, encoderFrameRate.num};
-    encoderContext->framerate =
-        AVRational{encoderFrameRate.num, encoderFrameRate.den};
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
-    if (options.lowLatency) {
-        encoderContext->max_b_frames = 0;
+    if (!chain.encoder.encoderOpenContract) {
+        return unavailable("RKMPP encoder open contract is missing");
     }
-    if (!chain.encoder.encoderRateControl) {
-        return unavailable("RKMPP encoder emission contract is missing");
-    }
-    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
-        *encoderContext, *chain.encoder.encoderRateControl);
+    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
+        *encoderContext, *chain.encoder.encoderOpenContract);
     if (!applied) {
         return unavailable(applied.error().message);
     }
@@ -316,7 +306,8 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     auto packetLayout = publishPacketLayout(chain, *encoderContext);
     if (!packetLayout) {
         packetLayout = publishPacketLayoutThroughAdvertisedSoftwareSurface(
-            chain, *encoder, *encoderContext, encoderSurfaceFormat);
+            chain, *encoder, *encoderContext, encoderSurfaceFormat,
+            *chain.encoder.encoderOpenContract);
     }
     if (!packetLayout) return unavailable(packetLayout.error().message);
 
@@ -338,7 +329,8 @@ MediaHardwareCapability validateSoftwareEncoder(
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    if (!chain.encoder.inputFrame || !chain.encoder.encoderRateControl) {
+    if (!chain.encoder.inputFrame || !chain.encoder.encoderRateControl ||
+        !chain.encoder.encoderOpenContract) {
         return unavailable("software encoder preflight contract is missing");
     }
     const AVCodec* encoder =
@@ -353,20 +345,13 @@ MediaHardwareCapability validateSoftwareEncoder(
     }
     const auto cadence = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
-    context->width = options.targetWidth > 0
-        ? options.targetWidth : options.probeWidth;
-    context->height = options.targetHeight > 0
-        ? options.targetHeight : options.probeHeight;
     context->pix_fmt = pixelFormat(chain.encoder.inputFrame->pixelFormat);
-    context->time_base = AVRational{cadence.den, cadence.num};
-    context->framerate = AVRational{cadence.num, cadence.den};
     context->sample_aspect_ratio = AVRational{1, 1};
-    if (context->width <= 0 || context->height <= 0 ||
-        context->pix_fmt == AV_PIX_FMT_NONE || !cadence.isKnown()) {
+    if (context->pix_fmt == AV_PIX_FMT_NONE || !cadence.isKnown()) {
         return unavailable("software encoder preflight geometry is incomplete");
     }
-    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
-        *context, *chain.encoder.encoderRateControl);
+    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
+        *context, *chain.encoder.encoderOpenContract);
     if (!applied) return unavailable(applied.error().message);
     const int opened = avcodec_open2(context.get(), encoder, nullptr);
     if (opened < 0) {
@@ -492,25 +477,17 @@ MediaHardwareCapability validateCompleteChain(
     if (!encoderContext) {
         return unavailable("avcodec_alloc_context3(encoder) returned null");
     }
-    encoderContext->width = outputWidth;
-    encoderContext->height = outputHeight;
     encoderContext->pix_fmt = encoderFormat;
     encoderContext->sw_pix_fmt = surfaceFormat;
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
-    encoderContext->time_base =
-        AVRational{encoderFrameRate.den, encoderFrameRate.num};
-    encoderContext->framerate =
-        AVRational{encoderFrameRate.num, encoderFrameRate.den};
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
-    if (options.lowLatency) {
-        encoderContext->max_b_frames = 0;
+    if (!chain.encoder.encoderRateControl ||
+        !chain.encoder.encoderOpenContract) {
+        return unavailable("hardware encoder open contract is missing");
     }
-    if (!chain.encoder.encoderRateControl) {
-        return unavailable("hardware encoder emission contract is missing");
-    }
-    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
-        *encoderContext, *chain.encoder.encoderRateControl);
+    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
+        *encoderContext, *chain.encoder.encoderOpenContract);
     if (!applied) return unavailable(applied.error().message);
 
     if (device) {

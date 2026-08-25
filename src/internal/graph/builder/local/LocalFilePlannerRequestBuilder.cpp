@@ -82,6 +82,7 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
         video.rateControl, video.bitrateKbps, video.minBitrateKbps,
         video.maxBitrateKbps, video.bufferSizeKbits};
+    plannerOptions.encoderOpenRequest = video;
     plannerOptions.probeWidth = plannerOptions.targetWidth;
     plannerOptions.probeHeight = plannerOptions.targetHeight;
     if (video.frameRate.complete() && video.frameRate.numerator &&

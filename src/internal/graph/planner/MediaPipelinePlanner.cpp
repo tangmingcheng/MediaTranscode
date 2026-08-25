@@ -319,6 +319,28 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     }
     plan.selected.encoder.encoderRateControl =
         std::move(rateControl).value();
+    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
+    const int encoderWidth = options.targetWidth > 0
+        ? options.targetWidth : options.probeWidth;
+    const int encoderHeight = options.targetHeight > 0
+        ? options.targetHeight : options.probeHeight;
+    const auto& requestedOpen = options.encoderOpenRequest;
+    plan.selected.encoder.encoderOpenContract = MediaEncoderOpenContract{
+        plan.selected.encoder.ffmpegName,
+        encoderWidth,
+        encoderHeight,
+        encoderFrameRate,
+        *plan.selected.encoder.encoderRateControl,
+        requestedOpen.quality,
+        requestedOpen.preset,
+        requestedOpen.tune,
+        requestedOpen.profile,
+        requestedOpen.level,
+        requestedOpen.gop,
+        requestedOpen.bFrames,
+        requestedOpen.globalHeader,
+        options.lowLatency};
     auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
         plan.selected, options, hardwareProbe);
     if (!preflight) {

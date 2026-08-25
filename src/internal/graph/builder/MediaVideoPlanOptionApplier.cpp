@@ -180,6 +180,41 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         std::to_string(plan.privateOption->expectedNumericValue));
 }
 
+::media::Result<void> setEncoderOpenContractOptions(
+    MediaGraph& graph,
+    MediaNodeId codecResolver,
+    const MediaPipelineStagePlan& encoder)
+{
+    if (!encoder.encoderOpenContract) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner encoder-open product"));
+    }
+    const auto& plan = *encoder.encoderOpenContract;
+    const auto setOptionalInt = [&](const char* key, const std::optional<int>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, std::to_string(*value))
+            : ::media::Result<void>::success();
+    };
+    const auto setOptionalBool = [&](const char* key, const std::optional<bool>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, boolOption(*value))
+            : ::media::Result<void>::success();
+    };
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoWidth, std::to_string(plan.width)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoHeight, std::to_string(plan.height)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoFpsNum, std::to_string(plan.frameRate.num)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoFpsDen, std::to_string(plan.frameRate.den)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoPreset, plan.preset); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoProfile, plan.profile); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoTune, plan.tune); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoLevel, plan.level); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoQuality, plan.quality); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoGop, plan.gop); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoBFrames, plan.bFrames); !status) return status;
+    return setOptionalBool(MediaTranscodeOptionKey::VideoGlobalHeader, plan.globalHeader);
+}
+
 } // namespace
 
 ::media::Result<void> MediaVideoPlanOptionApplier::applySelectedPlan(
@@ -217,6 +252,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
     if (auto status = setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder); !status) return status;
     if (auto status = setEncoderRateControlOptions(
+            graph, nodes.codecResolver, chain.encoder); !status) return status;
+    if (auto status = setEncoderOpenContractOptions(
             graph, nodes.codecResolver, chain.encoder); !status) return status;
     if (auto status = setEncoderRateControlOptions(
             graph, nodes.videoEncode, chain.encoder); !status) return status;

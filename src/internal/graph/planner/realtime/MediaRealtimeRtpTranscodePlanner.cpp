@@ -208,6 +208,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
         video.rateControl, video.bitrateKbps, video.minBitrateKbps,
         video.maxBitrateKbps, video.bufferSizeKbits};
+    plannerOptions.encoderOpenRequest = video;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
         plannerOptions.targetFrameRate = MediaRational{
