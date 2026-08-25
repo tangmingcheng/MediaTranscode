@@ -104,6 +104,17 @@ struct MediaDatagramPlannedWireCost final {
                            const MediaDatagramPlannedWireCost&) = default;
 };
 
+struct MediaDatagramWireDeadlinePlan final {
+    std::uint64_t endpointId;
+    MediaRunningTime maximumResidence;
+
+    ::media::Result<MediaRunningTime> canonicalDeadline(
+        MediaRunningTime canonicalRelease) const noexcept;
+
+    friend bool operator==(const MediaDatagramWireDeadlinePlan&,
+                           const MediaDatagramWireDeadlinePlan&) = default;
+};
+
 struct MediaDatagramBacklogPlan final {
     std::uint64_t maximumDatagrams;
     std::uint64_t maximumBytes;
@@ -185,6 +196,8 @@ public:
     evidence() const noexcept;
     ::media::Result<MediaDatagramPlannedWireCost> plannedWireCost(
         std::uint64_t endpointId, std::uint64_t payloadBytes) const;
+    ::media::Result<MediaDatagramWireDeadlinePlan> wireDeadlinePlan(
+        std::uint64_t endpointId) const noexcept;
 
 private:
     explicit MediaDatagramShapingPlan(

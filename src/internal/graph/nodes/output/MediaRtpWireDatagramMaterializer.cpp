@@ -21,18 +21,6 @@ constexpr std::size_t RtpFixedHeaderBytes = 12;
 constexpr std::uint64_t MaximumProtocolCounter =
     (std::numeric_limits<std::uint64_t>::max)();
 
-::media::Status validateTimes(MediaRunningTime release,
-                              MediaRunningTime deadline)
-{
-    if (release < MediaRunningTime::fromNanoseconds(0) ||
-        deadline < release) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP wire materialization requires a non-negative ordered canonical window"));
-    }
-    return ::media::Status::success();
-}
-
 } // namespace
 
 MediaRtpWireDatagramMaterializer::MediaRtpWireDatagramMaterializer(
@@ -50,6 +38,8 @@ MediaRtpWireDatagramMaterializer::create(
         config.generation == 0 || config.rtpEndpointId == 0 ||
         config.rtcpEndpointId == 0 ||
         config.rtpEndpointId == config.rtcpEndpointId ||
+        config.rtpDeadline.endpointId != config.rtpEndpointId ||
+        config.rtcpDeadline.endpointId != config.rtcpEndpointId ||
         !config.globalSequence || config.identity.ssrc() == 0 ||
         config.clockMapper.clockRate() <= 0 ||
         config.senderReportSchedule.generation() != config.generation ||
@@ -82,12 +72,11 @@ MediaRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> packetizedRtp,
     std::size_t payloadOctets,
     MediaRunningTime presentationOnMaster,
-    MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalRelease)
 {
     const std::array<MediaPacketizedRtpDatagramView, 1> datagrams{{
         {packetizedRtp, payloadOctets, presentationOnMaster,
-         canonicalRelease, canonicalDeadline}}};
+         canonicalRelease}}};
     return materializeBatch(datagrams);
 }
 
@@ -123,10 +112,12 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
     std::vector<std::vector<std::uint8_t>> materializedRtp;
     std::vector<MediaRtpTimestamp> timestamps;
     std::vector<std::uint64_t> reservedPayloadOctets;
+    std::vector<MediaRunningTime> rtpDeadlines;
     try {
         materializedRtp.reserve(datagrams.size());
         timestamps.reserve(datagrams.size());
         reservedPayloadOctets.reserve(datagrams.size());
+        rtpDeadlines.reserve(datagrams.size());
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "RTP wire batch workspace"));
@@ -136,9 +127,9 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
         m_state->lastCommittedTimestamp;
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
         const auto& datagram = datagrams[index];
-        auto times = validateTimes(
-            datagram.canonicalRelease, datagram.canonicalDeadline);
-        if (!times) return Result::failure(times.error());
+        auto deadline = m_state->rtpDeadline.canonicalDeadline(
+            datagram.canonicalRelease);
+        if (!deadline) return Result::failure(deadline.error());
         if (datagram.bytes.size() > m_state->maximumDatagramBytes ||
             datagram.payloadOctets == 0 ||
             datagram.payloadOctets >
@@ -167,6 +158,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
             timestamps.push_back(timestamp.value());
             reservedPayloadOctets.push_back(
                 static_cast<std::uint64_t>(datagram.payloadOctets));
+            rtpDeadlines.push_back(deadline.value());
         } catch (const std::bad_alloc&) {
             return Result::failure(::media::ErrorInfo::allocationFailed(
                 "RTP wire batch materialization"));
@@ -199,6 +191,9 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
         }
         rtcpBytes = std::move(report).value();
     }
+    auto rtcpDeadline = m_state->rtcpDeadline.canonicalDeadline(
+        datagrams.front().canonicalRelease);
+    if (!rtcpDeadline) return Result::failure(rtcpDeadline.error());
 
     if (datagrams.size() > (std::numeric_limits<std::size_t>::max)() -
                                (rtcpBytes ? 1U : 0U)) {
@@ -264,7 +259,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
             *rtcpBytes,
             m_state->rtcpEndpointId,
             datagrams.front().canonicalRelease,
-            datagrams.front().canonicalDeadline,
+            rtcpDeadline.value(),
             sequence.value(),
             std::move(lease).value());
         if (!appended) return Result::failure(appended.error());
@@ -281,7 +276,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
             materializedRtp[datagramIndex],
             m_state->rtpEndpointId,
             datagrams[datagramIndex].canonicalRelease,
-            datagrams[datagramIndex].canonicalDeadline,
+            rtpDeadlines[datagramIndex],
             sequence.value(),
             std::move(lease).value());
         if (!appended) return Result::failure(appended.error());
@@ -292,13 +287,13 @@ MediaRtpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaRtpWireDatagramMaterializer::materializeTerminalReport(
     MediaRunningTime reportInstant,
-    MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalRelease)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    auto times = validateTimes(canonicalRelease, canonicalDeadline);
-    if (!times) return Result::failure(times.error());
+    auto canonicalDeadline = m_state->rtcpDeadline.canonicalDeadline(
+        canonicalRelease);
+    if (!canonicalDeadline) return Result::failure(canonicalDeadline.error());
     std::unique_lock protocolLock(m_state->mutex, std::try_to_lock);
     if (!protocolLock.owns_lock()) {
         return Result::failure(::media::ErrorInfo::wouldBlock(
@@ -360,7 +355,7 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
         datagram.value(),
         m_state->rtcpEndpointId,
         canonicalRelease,
-        canonicalDeadline,
+        canonicalDeadline.value(),
         sequence.value(),
         std::move(lease).value());
     if (!appended) return Result::failure(appended.error());

@@ -19,7 +19,6 @@ struct MediaMpegTsDatagramView final {
     std::span<const std::uint8_t> completeTsPackets;
     MediaRunningTime presentationOnMaster;
     MediaRunningTime canonicalRelease;
-    MediaRunningTime canonicalDeadline;
 };
 
 struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
@@ -27,6 +26,7 @@ struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
     std::string serviceScopeId;
     std::uint64_t generation;
     std::uint64_t endpointId;
+    MediaDatagramWireDeadlinePlan deadline;
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
     std::uint16_t tsPacketBytes;
     std::size_t maximumDatagramBytes;
@@ -39,8 +39,7 @@ public:
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline);
+        MediaRunningTime canonicalRelease);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
@@ -64,6 +63,8 @@ struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
     std::uint64_t rtcpEndpointId;
+    MediaDatagramWireDeadlinePlan rtpDeadline;
+    MediaDatagramWireDeadlinePlan rtcpDeadline;
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
     int payloadType;
     int clockRate;
@@ -86,8 +87,7 @@ public:
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> materialize(
         std::span<const std::uint8_t> completeTsPackets,
         MediaRunningTime presentationOnMaster,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline);
+        MediaRunningTime canonicalRelease);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
@@ -97,8 +97,7 @@ public:
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
         MediaRunningTime reportInstant,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline);
+        MediaRunningTime canonicalRelease);
 
     ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>
     snapshot() const noexcept;

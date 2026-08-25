@@ -118,10 +118,15 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
                 endpointId ? invalid("MPEG-TS UDP shaping endpoint is absent")
                            : endpointId.error());
         }
+        auto deadline = shaping.wireDeadlinePlan(endpointId.value());
+        if (!deadline) {
+            return ::media::Status::failure(deadline.error());
+        }
         auto created = MediaMpegTsUdpWireDatagramMaterializer::create(
             MediaMpegTsUdpWireDatagramMaterializerConfig{
                 shaping.sessionKey(), shaping.serviceScope().scopeId,
                 shaping.generation(), endpointId.value(),
+                deadline.value(),
                 transport->globalSequence(),
                 protocol->muxPlan().parameters().packetSize,
                 static_cast<std::size_t>(endpoint->maximumDatagramBytes)});
@@ -143,6 +148,12 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
         return ::media::Status::failure(invalid(
             "MPEG-TS RTP protocol and endpoint geometry differ"));
     }
+    auto rtpDeadline = shaping.wireDeadlinePlan(rtpEndpointId.value());
+    auto rtcpDeadline = shaping.wireDeadlinePlan(rtcpEndpointId.value());
+    if (!rtpDeadline || !rtcpDeadline) {
+        return ::media::Status::failure(
+            !rtpDeadline ? rtpDeadline.error() : rtcpDeadline.error());
+    }
     auto firstReport = protocol->activation().masterRelease.checkedAdd(
         rtp->senderReportInterval());
     if (!firstReport) return ::media::Status::failure(firstReport.error());
@@ -156,7 +167,8 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
         MediaMpegTsRtpWireDatagramMaterializerConfig{
             shaping.sessionKey(), shaping.serviceScope().scopeId,
             shaping.generation(), rtpEndpointId.value(),
-            rtcpEndpointId.value(), transport->globalSequence(),
+            rtcpEndpointId.value(), rtpDeadline.value(),
+            rtcpDeadline.value(), transport->globalSequence(),
             rtp->payloadType(), rtp->clockRate(), rtp->ssrc(),
             rtp->baseTimestamp(), rtp->initialSequenceNumber(),
             rtp->tsPacketsPerPayload(), rtp->maximumDatagramBytes(),

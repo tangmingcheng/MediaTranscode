@@ -38,6 +38,8 @@ MediaRtpWireProtocolState::MediaRtpWireProtocolState(
     : generation(config.generation),
       rtpEndpointId(config.rtpEndpointId),
       rtcpEndpointId(config.rtcpEndpointId),
+      rtpDeadline(config.rtpDeadline),
+      rtcpDeadline(config.rtcpDeadline),
       globalSequence(std::move(config.globalSequence)),
       identity(config.identity),
       clockMapper(config.clockMapper),

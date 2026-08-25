@@ -225,6 +225,20 @@ validateEvidence(const MediaDatagramShapingPlanEncoding& encoding)
 
 } // namespace
 
+::media::Result<MediaRunningTime>
+MediaDatagramWireDeadlinePlan::canonicalDeadline(
+    MediaRunningTime canonicalRelease) const noexcept
+{
+    using Result = ::media::Result<MediaRunningTime>;
+    if (endpointId == 0 ||
+        canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
+        maximumResidence <= MediaRunningTime::fromNanoseconds(0)) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "wire deadline requires endpoint identity, non-negative release, and positive hard residence"));
+    }
+    return canonicalRelease.checkedAdd(maximumResidence);
+}
+
 ::media::Result<MediaDatagramShapingPlan>
 MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
 {
@@ -447,6 +461,22 @@ MediaDatagramShapingPlan::plannedWireCost(
     }
     return Result::success(MediaDatagramPlannedWireCost{
         wireBytes.value(), peakDuration.value(), sustainedDuration.value()});
+}
+
+::media::Result<MediaDatagramWireDeadlinePlan>
+MediaDatagramShapingPlan::wireDeadlinePlan(
+    std::uint64_t endpointId) const noexcept
+{
+    using Result = ::media::Result<MediaDatagramWireDeadlinePlan>;
+    const auto* plannedEndpoint = endpoint(endpointId);
+    if (!plannedEndpoint) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "wire deadline endpoint is absent from the shaping plan"));
+    }
+    return Result::success(MediaDatagramWireDeadlinePlan{
+        endpointId,
+        (std::min)(plannedEndpoint->maximumResidence,
+                   m_encoding.backlog.maximumResidence)});
 }
 
 } // namespace media::ffmpeg::graph

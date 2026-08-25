@@ -224,6 +224,14 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
         return ::media::Status::failure(invalid(
             "RTP protocol and deployment endpoint geometry differ"));
     }
+    auto rtpDeadline = transport->plan().shaping.wireDeadlinePlan(
+        rtpEndpoint.value());
+    auto rtcpDeadline = transport->plan().shaping.wireDeadlinePlan(
+        rtcpEndpoint.value());
+    if (!rtpDeadline || !rtcpDeadline) {
+        return ::media::Status::failure(
+            !rtpDeadline ? rtpDeadline.error() : rtcpDeadline.error());
+    }
     auto identity = MediaRtpDatagramRewriteIdentity::create(
         m_outputPlan.packetization.payloadType(), m_outputPlan.ssrc);
     if (!identity) return ::media::Status::failure(identity.error());
@@ -243,7 +251,8 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
             transport->plan().shaping.sessionKey(),
             transport->plan().shaping.serviceScope().scopeId,
             m_activationFacts->generation, rtpEndpoint.value(),
-            rtcpEndpoint.value(), transport->globalSequence(),
+            rtcpEndpoint.value(), rtpDeadline.value(),
+            rtcpDeadline.value(), transport->globalSequence(),
             identity.value(), mapper.value(),
             *m_dependencies.authority->sharedNtpEpoch(),
             std::move(schedule).value(), m_outputPlan.cname,
@@ -325,8 +334,8 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
         for (std::size_t index = 0; index < m_packetizedBytes.size(); ++index) {
             views.push_back(MediaPacketizedRtpDatagramView{
                 m_packetizedBytes[index], m_packetizedPayloadOctets[index],
-                scheduled->presentationOnMaster(), scheduled->emitOnMaster(),
-                scheduled->dispatchOnMaster()});
+                scheduled->presentationOnMaster(),
+                scheduled->emitOnMaster()});
         }
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaNodeProcessResult>::failure(

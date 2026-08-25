@@ -3,6 +3,7 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/protocol/rtp/MediaRtpOutputClockMapper.h"
+#include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 #include "internal/graph/runtime/buffer/MediaProtocolDatagramCommitLease.h"
@@ -23,6 +24,8 @@ struct MediaRtpWireDatagramMaterializerConfig final {
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
     std::uint64_t rtcpEndpointId;
+    MediaDatagramWireDeadlinePlan rtpDeadline;
+    MediaDatagramWireDeadlinePlan rtcpDeadline;
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
     MediaRtpDatagramRewriteIdentity identity;
     MediaRtpOutputClockMapper clockMapper;
@@ -48,7 +51,6 @@ struct MediaPacketizedRtpDatagramView final {
     std::size_t payloadOctets;
     MediaRunningTime presentationOnMaster;
     MediaRunningTime canonicalRelease;
-    MediaRunningTime canonicalDeadline;
 };
 
 class MediaRtpWireProtocolState;
@@ -62,8 +64,7 @@ public:
         std::span<const std::uint8_t> packetizedRtp,
         std::size_t payloadOctets,
         MediaRunningTime presentationOnMaster,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline);
+        MediaRunningTime canonicalRelease);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
@@ -74,8 +75,7 @@ public:
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
         MediaRunningTime reportInstant,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline);
+        MediaRunningTime canonicalRelease);
 
     ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>
     snapshot() const noexcept;

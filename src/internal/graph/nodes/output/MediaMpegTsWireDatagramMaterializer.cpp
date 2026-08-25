@@ -90,6 +90,7 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
         ::media::Result<MediaMpegTsUdpWireDatagramMaterializer>;
     if (config.sessionKey.empty() || config.serviceScopeId.empty() ||
         config.generation == 0 || config.endpointId == 0 ||
+        config.deadline.endpointId != config.endpointId ||
         !config.globalSequence ||
         config.tsPacketBytes != ProjectTsPacketBytes ||
         config.maximumDatagramBytes < config.tsPacketBytes) {
@@ -111,12 +112,10 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaMpegTsUdpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalRelease)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
-        {completeTsPackets, canonicalRelease, canonicalRelease,
-         canonicalDeadline}}};
+        {completeTsPackets, canonicalRelease, canonicalRelease}}};
     return materializeBatch(datagrams);
 }
 
@@ -147,7 +146,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
             const auto& datagram = protocolBatch.datagrams()[index];
             views.push_back(MediaMpegTsDatagramView{
                 datagram.bytes(), datagram.presentationOnMaster(),
-                datagram.canonicalRelease(), datagram.canonicalDeadline()});
+                datagram.canonicalRelease()});
             auto lease = protocolBatch.takeCommitLease(index);
             if (!lease) return Result::failure(lease.error());
             commits.push_back(std::move(lease).value());
@@ -172,15 +171,25 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP wire materializer requires a nonempty batch"));
     }
+    std::vector<MediaRunningTime> deadlines;
+    try {
+        deadlines.reserve(datagrams.size());
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "MPEG-TS UDP wire deadlines"));
+    }
     for (const auto& datagram : datagrams) {
         if (datagram.completeTsPackets.empty() ||
             datagram.completeTsPackets.size() % m_config.tsPacketBytes != 0 ||
             datagram.completeTsPackets.size() > m_config.maximumDatagramBytes ||
-            datagram.canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
-            datagram.canonicalDeadline < datagram.canonicalRelease) {
+            datagram.canonicalRelease < MediaRunningTime::fromNanoseconds(0)) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "MPEG-TS UDP wire materializer requires complete TS datagrams and ordered canonical windows"));
         }
+        auto deadline = m_config.deadline.canonicalDeadline(
+            datagram.canonicalRelease);
+        if (!deadline) return Result::failure(deadline.error());
+        deadlines.push_back(deadline.value());
     }
     auto global = m_config.globalSequence->reserve(datagrams.size());
     if (!global) return Result::failure(global.error());
@@ -207,7 +216,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchWithProtocolCommit(
         auto appended = builder.append(
             datagrams[index].completeTsPackets, m_config.endpointId,
             datagrams[index].canonicalRelease,
-            datagrams[index].canonicalDeadline, sequence.value(),
+            deadlines[index], sequence.value(),
             std::move(lease).value());
         if (!appended) return Result::failure(appended.error());
     }
@@ -257,6 +266,8 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
             config.generation,
             config.rtpEndpointId,
             config.rtcpEndpointId,
+            config.rtpDeadline,
+            config.rtcpDeadline,
             std::move(config.globalSequence),
             identity.value(),
             mapper.value(),
@@ -277,12 +288,11 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
 MediaMpegTsRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
     MediaRunningTime presentationOnMaster,
-    MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalRelease)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
         {completeTsPackets, presentationOnMaster,
-         canonicalRelease, canonicalDeadline}}};
+         canonicalRelease}}};
     return materializeBatch(datagrams);
 }
 
@@ -315,8 +325,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
                 datagrams[index].presentationOnMaster,
-                datagrams[index].canonicalRelease,
-                datagrams[index].canonicalDeadline});
+                datagrams[index].canonicalRelease});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -360,8 +369,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
                 datagrams[index].presentationOnMaster(),
-                datagrams[index].canonicalRelease(),
-                datagrams[index].canonicalDeadline()});
+                datagrams[index].canonicalRelease()});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -374,11 +382,10 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaMpegTsRtpWireDatagramMaterializer::materializeTerminalReport(
     MediaRunningTime reportInstant,
-    MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalRelease)
 {
     return m_rtpMaterializer.materializeTerminalReport(
-        reportInstant, canonicalRelease, canonicalDeadline);
+        reportInstant, canonicalRelease);
 }
 
 ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>

@@ -38,6 +38,8 @@ private:
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
     std::uint64_t rtcpEndpointId;
+    MediaDatagramWireDeadlinePlan rtpDeadline;
+    MediaDatagramWireDeadlinePlan rtcpDeadline;
     std::shared_ptr<MediaWireGlobalSequenceState> globalSequence;
     MediaRtpDatagramRewriteIdentity identity;
     MediaRtpOutputClockMapper clockMapper;
