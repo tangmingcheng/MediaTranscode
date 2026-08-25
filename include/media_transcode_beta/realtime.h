@@ -140,27 +140,27 @@ typedef enum mt_beta_tx_evidence_policy {
     MT_BETA_TX_EVIDENCE_FAIL = 3
 } mt_beta_tx_evidence_policy;
 
+typedef enum mt_beta_ip_address_family {
+    MT_BETA_IP_ADDRESS_FAMILY_IPV4 = 1,
+    MT_BETA_IP_ADDRESS_FAMILY_IPV6 = 2
+} mt_beta_ip_address_family;
+
 typedef struct mt_beta_realtime_deployment {
     mt_beta_egress_scope_kind scope_kind;
     const char* scope_id;
     const char* scope_authority;
     const char* mtu_authority;
+    mt_beta_ip_address_family address_family;
     uint64_t maximum_ip_packet_bytes;
-    uint64_t ip_header_bytes;
-    uint64_t transport_header_bytes;
     uint64_t sender_maximum_payload_bytes;
     uint64_t sustained_wire_bytes_per_second;
     uint64_t peak_wire_bytes_per_second;
     uint64_t burst_wire_bytes;
     const char* service_authority;
-    uint64_t maximum_backlog_datagrams;
-    uint64_t maximum_backlog_bytes;
+    uint64_t maximum_graph_memory_bytes;
+    uint64_t maximum_network_memory_bytes;
+    uint64_t maximum_socket_memory_bytes;
     uint64_t maximum_residence_ms;
-    uint64_t maximum_batch_datagrams;
-    uint64_t maximum_batch_bytes;
-    uint64_t maximum_endpoint_pending_datagrams;
-    uint64_t maximum_endpoint_pending_bytes;
-    uint64_t socket_hard_bound_bytes;
     const char* resource_authority;
     const char* local_address;
     uint16_t local_first_port;
@@ -169,10 +169,12 @@ typedef struct mt_beta_realtime_deployment {
     uint64_t target_residence_ms;
     const char* latency_authority;
     uint64_t observation_run_datagrams;
-    uint64_t observation_correlation_entries;
     uint64_t observation_drain_residence_ms;
     mt_beta_tx_evidence_policy tx_evidence_policy;
     const char* observation_authority;
+    uint64_t receiver_transport_decode_lead_ms;
+    uint64_t receiver_startup_emission_preroll_ms;
+    const char* receiver_timing_authority;
 } mt_beta_realtime_deployment;
 
 typedef struct mt_beta_realtime_config {

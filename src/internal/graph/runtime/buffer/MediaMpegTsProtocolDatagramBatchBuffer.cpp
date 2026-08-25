@@ -94,7 +94,7 @@ MediaMpegTsProtocolDatagramBatchBuffer(std::uint64_t generation) noexcept
 MediaMpegTsProtocolDatagramBatchBuffer::create(
     std::uint64_t generation,
     MediaTsPacketCursor cursor,
-    std::uint8_t maximumPacketsPerDatagram,
+    std::uint16_t maximumPacketsPerDatagram,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline)
@@ -102,7 +102,6 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     using Result = ::media::Result<
         std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>;
     if (generation == 0 || maximumPacketsPerDatagram < 1 ||
-        maximumPacketsPerDatagram > 7 ||
         presentationOnMaster < MediaRunningTime::fromNanoseconds(0) ||
         canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
         canonicalDeadline < canonicalRelease) {

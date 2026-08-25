@@ -6,6 +6,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -19,14 +20,9 @@ struct MediaRealtimeDeploymentServiceScope final {
 };
 
 struct MediaRealtimeDeploymentResourceBudget final {
-    std::uint64_t maximumBacklogDatagrams = 0;
-    std::uint64_t maximumBacklogBytes = 0;
-    MediaRunningTime maximumResidence = MediaRunningTime::fromNanoseconds(0);
-    std::uint64_t maximumBatchDatagrams = 0;
-    std::uint64_t maximumBatchBytes = 0;
-    std::uint64_t maximumEndpointPendingDatagrams = 0;
-    std::uint64_t maximumEndpointPendingBytes = 0;
-    std::uint64_t socketHardBoundBytes = 0;
+    std::uint64_t maximumGraphMemoryBytes = 0;
+    std::uint64_t maximumNetworkMemoryBytes = 0;
+    std::uint64_t maximumSocketMemoryBytes = 0;
     std::string authority;
     friend bool operator==(const MediaRealtimeDeploymentResourceBudget&,
                            const MediaRealtimeDeploymentResourceBudget&) = default;
@@ -59,7 +55,6 @@ struct MediaRealtimeDeploymentLatencyBudget final {
 
 struct MediaRealtimeDeploymentObservationBudget final {
     std::uint64_t maximumRunDatagrams = 0;
-    std::uint64_t maximumCorrelationEntries = 0;
     MediaRunningTime maximumDrainResidence = MediaRunningTime::fromNanoseconds(0);
     MediaRealtimeTransmitEvidencePolicy evidencePolicy =
         MediaRealtimeTransmitEvidencePolicy::Unknown;
@@ -68,14 +63,43 @@ struct MediaRealtimeDeploymentObservationBudget final {
                            const MediaRealtimeDeploymentObservationBudget&) = default;
 };
 
+struct MediaRealtimeDeploymentMtuFact final {
+    MediaIpAddressFamily addressFamily = MediaIpAddressFamily::Ipv4;
+    std::string authority;
+    std::uint64_t maximumIpPacketBytes = 0;
+    std::uint64_t senderMaximumPayloadBytes = 0;
+    friend bool operator==(const MediaRealtimeDeploymentMtuFact&,
+                           const MediaRealtimeDeploymentMtuFact&) = default;
+};
+
+struct MediaRealtimeDeploymentManagedServiceFact final {
+    std::uint64_t sustainedWireBytesPerSecond = 0;
+    std::uint64_t peakWireBytesPerSecond = 0;
+    std::uint64_t burstWireBytes = 0;
+    std::string authority;
+    friend bool operator==(const MediaRealtimeDeploymentManagedServiceFact&,
+                           const MediaRealtimeDeploymentManagedServiceFact&) = default;
+};
+
+struct MediaRealtimeReceiverTimingCapability final {
+    MediaRunningTime transportDecodeLead =
+        MediaRunningTime::fromNanoseconds(0);
+    MediaRunningTime startupEmissionPreroll =
+        MediaRunningTime::fromNanoseconds(0);
+    std::string authority;
+    friend bool operator==(const MediaRealtimeReceiverTimingCapability&,
+                           const MediaRealtimeReceiverTimingCapability&) = default;
+};
+
 struct MediaRealtimeDeploymentEnvelopeEncoding final {
     MediaRealtimeDeploymentServiceScope serviceScope;
-    MediaDatagramMtuEvidence mtu;
-    MediaDatagramServiceCurvePlan service;
+    MediaRealtimeDeploymentMtuFact mtu;
+    MediaRealtimeDeploymentManagedServiceFact service;
     MediaRealtimeDeploymentResourceBudget resources;
     MediaRealtimeDeploymentLocalPortRange localPorts;
     MediaRealtimeDeploymentLatencyBudget latency;
     MediaRealtimeDeploymentObservationBudget observation;
+    std::optional<MediaRealtimeReceiverTimingCapability> receiverTiming;
     friend bool operator==(const MediaRealtimeDeploymentEnvelopeEncoding&,
                            const MediaRealtimeDeploymentEnvelopeEncoding&) = default;
 };

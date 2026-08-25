@@ -17,7 +17,7 @@ public:
         MediaRunningTime transportDecodeLead,
         MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,
-        std::uint8_t maximumPacketsPerDatagram);
+        std::uint16_t maximumPacketsPerDatagram);
     static ::media::Result<MediaProjectMpegTsOutputPlan> createAudioVideo(
         const std::string& videoCodecName,
         const MediaEncodedPacketLayout& videoPacketLayout,
@@ -25,7 +25,7 @@ public:
         MediaRunningTime transportDecodeLead,
         MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,
-        std::uint8_t maximumPacketsPerDatagram);
+        std::uint16_t maximumPacketsPerDatagram);
     static ::media::Result<MediaProjectMpegTsOutputPlan>
     fromVideoOnlyEncodedFacts(MediaTsMuxPlan muxPlan);
     static ::media::Result<MediaProjectMpegTsOutputPlan>

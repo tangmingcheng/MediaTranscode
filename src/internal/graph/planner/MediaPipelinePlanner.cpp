@@ -374,9 +374,6 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     MediaHardwareCapabilityProbe& hardwareProbe)
 {
     materializeVideoExecutionContract(selected);
-    if (options.disableHardware) {
-        return ::media::Status::success();
-    }
     if (isRkmppChain(selected)) {
         auto contractStatus = validateRkmppFrameContracts(selected, options);
         if (!contractStatus) {

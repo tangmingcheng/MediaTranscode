@@ -177,27 +177,25 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaProjectMpegTsResolvedPipelineFacts& resolvedFacts)
 {
-    if (!plan.startup.outputLeadNs) {
+    if (!plan.startup.outputLeadNs || !request.deployment ||
+        !request.deployment->encode().receiverTiming) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "MPEG-TS output requires planner-owned startup output lead"));
+                "MPEG-TS output requires planner-owned startup timing and authoritative receiver timing capability"));
     }
     if (!request.output.transport) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "MPEG-TS output requires an explicit transport"));
     }
-    std::uint8_t maximumPacketsPerDatagram = 7;
-    if (*request.output.transport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.deployment) {
-            return ::media::Result<MediaTsMuxPlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS RTP output requires deployment MTU authority"));
-        }
+    std::uint8_t maximumPacketsPerDatagram = 0;
+    if (*request.output.transport == MediaOutputTransportKind::RtpAvp ||
+        *request.output.transport == MediaOutputTransportKind::UdpDatagrams) {
         const auto maximumDatagram =
             request.deployment->encode().mtu.senderMaximumPayloadBytes;
-        auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(maximumDatagram));
+        auto packetCount = MediaTsMuxPlan::maximumPacketsPerDatagram(
+            static_cast<std::size_t>(maximumDatagram),
+            *request.output.transport);
         if (!packetCount) {
             return ::media::Result<MediaTsMuxPlan>::failure(
                 packetCount.error());
@@ -212,8 +210,8 @@ void planTsInput(MediaAvSyncPlan& plan,
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
-        *plan.startup.outputLeadNs,
-        *plan.startup.maximumInitialSkewNs,
+        request.deployment->encode().receiverTiming->transportDecodeLead,
+        request.deployment->encode().receiverTiming->startupEmissionPreroll,
         *request.output.transport,
         maximumPacketsPerDatagram);
     if (!resolvedOutput) {

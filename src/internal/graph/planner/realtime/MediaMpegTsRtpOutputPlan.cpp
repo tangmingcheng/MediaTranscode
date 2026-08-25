@@ -78,7 +78,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
     std::string cname,
     MediaRunningTime senderReportInterval,
     std::size_t maximumDatagramBytes,
-    std::uint8_t tsPacketsPerPayload,
+    std::uint16_t tsPacketsPerPayload,
     MediaMpegTsRtpSdpPlan sdp) noexcept
     : m_transport(std::move(transport)),
       m_payloadType(payloadType),
@@ -166,7 +166,7 @@ MediaMpegTsRtpOutputPlan::maximumDatagramBytes() const noexcept
     return m_maximumDatagramBytes;
 }
 
-std::uint8_t
+std::uint16_t
 MediaMpegTsRtpOutputPlan::tsPacketsPerPayload() const noexcept
 {
     return m_tsPacketsPerPayload;

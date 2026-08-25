@@ -8,6 +8,10 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+constexpr std::uint64_t Ipv4HeaderBytes = 20;
+constexpr std::uint64_t Ipv6HeaderBytes = 40;
+constexpr std::uint64_t UdpHeaderBytes = 8;
+
 bool positive(MediaRunningTime value) noexcept
 {
     return value > MediaRunningTime::fromNanoseconds(0);
@@ -32,31 +36,32 @@ MediaRealtimeDeploymentEnvelope::decode(
     const auto& latency = encoding.latency;
     const auto& observation = encoding.observation;
     const auto& localPorts = encoding.localPorts;
+    const auto ipHeaderBytes = mtu.addressFamily == MediaIpAddressFamily::Ipv4
+        ? Ipv4HeaderBytes
+        : mtu.addressFamily == MediaIpAddressFamily::Ipv6
+            ? Ipv6HeaderBytes
+            : 0;
     const bool validScope =
         (scope.kind == MediaDatagramServiceScopeKind::ManagedEgress ||
          scope.kind == MediaDatagramServiceScopeKind::ProvisionedEgress) &&
         !scope.scopeId.empty() && !scope.coverageAuthority.empty();
-    const bool validMtu = !mtu.authority.empty() &&
-        mtu.maximumIpPacketBytes > mtu.ipHeaderBytes + mtu.transportHeaderBytes &&
+    const bool validMtu = !mtu.authority.empty() && ipHeaderBytes > 0 &&
+        mtu.maximumIpPacketBytes > ipHeaderBytes + UdpHeaderBytes &&
         mtu.senderMaximumPayloadBytes > 0 &&
         mtu.senderMaximumPayloadBytes <=
-            mtu.maximumIpPacketBytes - mtu.ipHeaderBytes - mtu.transportHeaderBytes;
+            mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes;
     const bool validService = !service.authority.empty() &&
         service.sustainedWireBytesPerSecond > 0 &&
         service.peakWireBytesPerSecond >= service.sustainedWireBytesPerSecond &&
         service.burstWireBytes > 0;
     const bool validResources = !resources.authority.empty() &&
-        resources.maximumBacklogDatagrams > 0 &&
-        resources.maximumBacklogBytes > 0 && positive(resources.maximumResidence) &&
-        resources.maximumBatchDatagrams > 0 && resources.maximumBatchBytes > 0 &&
-        resources.maximumEndpointPendingDatagrams > 0 &&
-        resources.maximumEndpointPendingBytes > 0 &&
-        resources.socketHardBoundBytes >= resources.maximumEndpointPendingBytes &&
-        resources.maximumBatchDatagrams <= resources.maximumBacklogDatagrams &&
-        resources.maximumBatchBytes <= resources.maximumBacklogBytes;
+        resources.maximumGraphMemoryBytes > 0 &&
+        resources.maximumNetworkMemoryBytes > 0 &&
+        resources.maximumSocketMemoryBytes > 0;
     const auto localAddress = MediaNumericIpAddress::create(
         localPorts.addressFamily, localPorts.numericAddress);
-    const bool validLocalPorts = localAddress && localPorts.firstPort > 0 &&
+    const bool validLocalPorts = localAddress &&
+        localPorts.addressFamily == mtu.addressFamily && localPorts.firstPort > 0 &&
         localPorts.portCount > 0 && !localPorts.authority.empty() &&
         static_cast<std::uint32_t>(localPorts.firstPort) +
                 static_cast<std::uint32_t>(localPorts.portCount) - 1U <=
@@ -64,21 +69,20 @@ MediaRealtimeDeploymentEnvelope::decode(
                 (std::numeric_limits<std::uint16_t>::max)());
     const bool validLatency = !latency.authority.empty() &&
         positive(latency.targetResidence) &&
-        latency.maximumResidence >= latency.targetResidence &&
-        latency.maximumResidence <= resources.maximumResidence;
+        latency.maximumResidence >= latency.targetResidence;
     const bool validObservation = !observation.authority.empty() &&
         observation.maximumRunDatagrams > 0 &&
-        observation.maximumCorrelationEntries > 0 &&
-        observation.maximumCorrelationEntries >=
-            resources.maximumBacklogDatagrams &&
-        observation.maximumCorrelationEntries <= observation.maximumRunDatagrams &&
         positive(observation.maximumDrainResidence) &&
-        observation.maximumDrainResidence <= resources.maximumResidence &&
+        observation.maximumDrainResidence <= latency.maximumResidence &&
         observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Unknown;
+    const bool validReceiverTiming = !encoding.receiverTiming ||
+        (!encoding.receiverTiming->authority.empty() &&
+         positive(encoding.receiverTiming->transportDecodeLead) &&
+         positive(encoding.receiverTiming->startupEmissionPreroll));
     if (!validScope || !validMtu || !validService || !validResources ||
         !validLocalPorts ||
-        !validLatency || !validObservation) {
+        !validLatency || !validObservation || !validReceiverTiming) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "realtime deployment envelope requires authoritative service scope, MTU, service curve, resource, latency, and observation facts"));

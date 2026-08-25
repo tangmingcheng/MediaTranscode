@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
+#include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
 
 #include <cstdint>
 #include <optional>
@@ -11,8 +12,7 @@ namespace media::ffmpeg::graph {
 
 enum class MediaDatagramTransportExecutionKind : std::uint8_t {
     Unknown = 0,
-    UserspaceNonblocking = 1,
-    LinuxSocketTxTime = 2
+    UserspaceNonblocking = 1
 };
 
 enum class MediaDatagramProtocolEndpointRole : std::uint8_t {
@@ -52,6 +52,7 @@ struct MediaDatagramTransportPlanTemplateEncoding final {
     std::string sessionKey;
     MediaRealtimeDeploymentEnvelopeEncoding deployment;
     std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints;
+    MediaWireTrafficEnvelope wireTraffic;
 };
 
 class MediaDatagramTransportPlanTemplate final {
@@ -59,7 +60,8 @@ public:
     static ::media::Result<MediaDatagramTransportPlanTemplate> create(
         std::string sessionKey,
         const MediaRealtimeDeploymentEnvelope& deployment,
-        std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints);
+        std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints,
+        MediaWireTrafficEnvelope wireTraffic);
 
     ::media::Result<MediaDatagramTransportPlan> activate(
         std::uint64_t generation) const;

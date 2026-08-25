@@ -142,9 +142,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     case MediaDatagramTransportExecutionKind::UserspaceNonblocking:
         mode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
         break;
-    case MediaDatagramTransportExecutionKind::LinuxSocketTxTime:
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "Linux socket TXTIME requires an explicit kernel schedule product"));
     default:
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender execution mode is unknown"));
@@ -153,17 +150,21 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         mode, plan.executionAuthority, std::nullopt};
     auto shaping = plan.shaping.clone();
     if (!shaping) return ::media::Status::failure(shaping.error());
-    auto session = MediaDatagramTransmitSession::create(
-        shaping.value(), std::move(bindings), std::move(execution),
-        *m_portFactory);
-    if (!session) return ::media::Status::failure(session.error());
-
+    if (auto valid = MediaDatagramTransmitSession::validateActivation(
+            shaping.value(), bindings, execution); !valid) {
+        return valid;
+    }
     if (m_session) {
         auto now = m_clock->now();
         if (!now) return ::media::Status::failure(now.error());
         auto closed = m_session->close(now.value());
         if (!closed) return closed;
+        m_session.reset();
     }
+    auto session = MediaDatagramTransmitSession::create(
+        shaping.value(), std::move(bindings), std::move(execution),
+        *m_portFactory);
+    if (!session) return ::media::Status::failure(session.error());
     m_session = std::move(session).value();
     m_generation = plan.shaping.generation();
     m_serviceScopeId = plan.shaping.serviceScope().scopeId;

@@ -16,7 +16,7 @@ struct MediaMpegTsRtpPacketizerConfig final {
     int clockRate;
     std::uint32_t ssrc;
     std::uint32_t baseTimestamp;
-    std::uint8_t maximumTsPackets;
+    std::uint16_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
     MediaRunningTime masterOrigin;
 };

@@ -103,7 +103,6 @@ struct MaintenanceGroupGeometry final {
         binding.emission.videoInitialServiceWindow(),
         binding.emission.audioInitialServiceWindow(),
         binding.emission.maximumQueuedBytes(),
-        binding.emission.scheduledWireBytesPerSecond(),
         binding.emission.targetServiceResidence());
     if (!binding.masterClock ||
         binding.activation.generation == 0 ||

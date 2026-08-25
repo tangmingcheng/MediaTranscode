@@ -123,22 +123,17 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-scope-id",
         "--egress-scope-authority",
         "--egress-mtu-authority",
+        "--egress-address-family",
         "--egress-maximum-ip-packet-bytes",
-        "--egress-ip-header-bytes",
-        "--egress-transport-header-bytes",
         "--egress-sender-maximum-payload-bytes",
         "--egress-sustained-wire-bytes-per-second",
         "--egress-peak-wire-bytes-per-second",
         "--egress-burst-wire-bytes",
         "--egress-service-authority",
-        "--egress-maximum-backlog-datagrams",
-        "--egress-maximum-backlog-bytes",
+        "--egress-maximum-graph-memory-bytes",
+        "--egress-maximum-network-memory-bytes",
+        "--egress-maximum-socket-memory-bytes",
         "--egress-maximum-residence-ms",
-        "--egress-maximum-batch-datagrams",
-        "--egress-maximum-batch-bytes",
-        "--egress-maximum-endpoint-pending-datagrams",
-        "--egress-maximum-endpoint-pending-bytes",
-        "--egress-socket-hard-bound-bytes",
         "--egress-resource-authority",
         "--egress-local-address",
         "--egress-local-first-port",
@@ -147,10 +142,12 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-target-residence-ms",
         "--egress-latency-authority",
         "--egress-observation-run-datagrams",
-        "--egress-observation-correlation-entries",
         "--egress-observation-drain-residence-ms",
         "--egress-tx-evidence-policy",
         "--egress-observation-authority",
+        "--receiver-transport-decode-lead-ms",
+        "--receiver-startup-emission-preroll-ms",
+        "--receiver-timing-authority",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
@@ -189,11 +186,18 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
         kind,
         requiredArg(argc, argv, "--egress-scope-id"),
         requiredArg(argc, argv, "--egress-scope-authority")};
+    const std::string addressFamily = requiredArg(
+        argc, argv, "--egress-address-family");
+    const auto mtuFamily = addressFamily == "ipv4"
+        ? MediaIpAddressFamily::Ipv4
+        : addressFamily == "ipv6"
+            ? MediaIpAddressFamily::Ipv6
+            : throw std::invalid_argument(
+                  "--egress-address-family must be ipv4 or ipv6");
     encoding.mtu = {
+        mtuFamily,
         requiredArg(argc, argv, "--egress-mtu-authority"),
         requiredSizeArg(argc, argv, "--egress-maximum-ip-packet-bytes"),
-        requiredSizeArg(argc, argv, "--egress-ip-header-bytes"),
-        requiredSizeArg(argc, argv, "--egress-transport-header-bytes"),
         requiredSizeArg(argc, argv, "--egress-sender-maximum-payload-bytes")};
     encoding.service = {
         requiredSizeArg(
@@ -203,16 +207,9 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
         requiredSizeArg(argc, argv, "--egress-burst-wire-bytes"),
         requiredArg(argc, argv, "--egress-service-authority")};
     encoding.resources = {
-        requiredSizeArg(argc, argv, "--egress-maximum-backlog-datagrams"),
-        requiredSizeArg(argc, argv, "--egress-maximum-backlog-bytes"),
-        milliseconds("--egress-maximum-residence-ms"),
-        requiredSizeArg(argc, argv, "--egress-maximum-batch-datagrams"),
-        requiredSizeArg(argc, argv, "--egress-maximum-batch-bytes"),
-        requiredSizeArg(
-            argc, argv, "--egress-maximum-endpoint-pending-datagrams"),
-        requiredSizeArg(
-            argc, argv, "--egress-maximum-endpoint-pending-bytes"),
-        requiredSizeArg(argc, argv, "--egress-socket-hard-bound-bytes"),
+        requiredSizeArg(argc, argv, "--egress-maximum-graph-memory-bytes"),
+        requiredSizeArg(argc, argv, "--egress-maximum-network-memory-bytes"),
+        requiredSizeArg(argc, argv, "--egress-maximum-socket-memory-bytes"),
         requiredArg(argc, argv, "--egress-resource-authority")};
     const std::string localAddress = requiredArg(
         argc, argv, "--egress-local-address");
@@ -244,7 +241,7 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
         requiredArg(argc, argv, "--egress-local-authority")};
     encoding.latency = {
         milliseconds("--egress-target-residence-ms"),
-        encoding.resources.maximumResidence,
+        milliseconds("--egress-maximum-residence-ms"),
         requiredArg(argc, argv, "--egress-latency-authority")};
     const std::string evidencePolicy = requiredArg(
         argc, argv, "--egress-tx-evidence-policy");
@@ -262,11 +259,25 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
     }
     encoding.observation = {
         requiredSizeArg(argc, argv, "--egress-observation-run-datagrams"),
-        requiredSizeArg(
-            argc, argv, "--egress-observation-correlation-entries"),
         milliseconds("--egress-observation-drain-residence-ms"),
         parsedEvidence,
         requiredArg(argc, argv, "--egress-observation-authority")};
+    const bool hasDecodeLead = hasArg(
+        argc, argv, "--receiver-transport-decode-lead-ms");
+    const bool hasStartupPreroll = hasArg(
+        argc, argv, "--receiver-startup-emission-preroll-ms");
+    const bool hasTimingAuthority = hasArg(
+        argc, argv, "--receiver-timing-authority");
+    if (hasDecodeLead || hasStartupPreroll || hasTimingAuthority) {
+        if (!(hasDecodeLead && hasStartupPreroll && hasTimingAuthority)) {
+            throw std::invalid_argument(
+                "receiver timing capability requires decode lead, startup preroll, and authority together");
+        }
+        encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
+            milliseconds("--receiver-transport-decode-lead-ms"),
+            milliseconds("--receiver-startup-emission-preroll-ms"),
+            requiredArg(argc, argv, "--receiver-timing-authority")};
+    }
     auto envelope = MediaRealtimeDeploymentEnvelope::decode(
         std::move(encoding));
     if (!envelope) throw std::invalid_argument(envelope.error().message);

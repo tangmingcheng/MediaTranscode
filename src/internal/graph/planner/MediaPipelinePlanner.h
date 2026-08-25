@@ -6,6 +6,7 @@
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
+#include "internal/graph/planner/MediaPreparedEncoderEmissionEnvelope.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -38,6 +39,7 @@ struct MediaPipelineStagePlan {
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
     std::optional<MediaEncoderRateControlPlan> encoderRateControl;
+    std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
 
     const MediaHardwareDescriptor* frameContract() const noexcept
     {

@@ -35,17 +35,6 @@ std::string rtpUrl(const std::string& host, std::size_t port)
     return ::media::Result<int>::success(static_cast<int>(value));
 }
 
-void applyPacing(
-    MediaRealtimeScheduledRtpOutputPlanningDraft& output,
-    const MediaRealtimeDeploymentEnvelopeEncoding& deployment) noexcept
-{
-    output.writePacingEnabled = true;
-    output.writePacingBytesPerSecond = static_cast<std::int64_t>(
-        deployment.service.sustainedWireBytesPerSecond);
-    output.writePacingBurstBytes = static_cast<std::int64_t>(
-        deployment.service.burstWireBytes);
-}
-
 std::optional<int> resolvedAudioBitrateKbps(
     const MediaRealtimeRtpTranscodePlanningDraft& plan)
 {
@@ -157,10 +146,16 @@ std::optional<int> resolvedAudioBitrateKbps(
             "Realtime output policy requires the validated deployment envelope"));
     }
     const auto& deployment = request.deployment->encode();
+    constexpr std::uint64_t Ipv4HeaderBytes = 20;
+    constexpr std::uint64_t Ipv6HeaderBytes = 40;
+    constexpr std::uint64_t UdpHeaderBytes = 8;
+    const auto ipHeaderBytes =
+        deployment.mtu.addressFamily == MediaIpAddressFamily::Ipv4
+            ? Ipv4HeaderBytes
+            : Ipv6HeaderBytes;
     const std::uint64_t maximumDatagram = (std::min)(
         deployment.mtu.senderMaximumPayloadBytes,
-        deployment.mtu.maximumIpPacketBytes - deployment.mtu.ipHeaderBytes -
-            deployment.mtu.transportHeaderBytes);
+        deployment.mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes);
     auto packetSize = checkedSocketInteger(
         maximumDatagram, "planned maximum Datagram payload");
     if (!packetSize ||
@@ -181,8 +176,17 @@ std::optional<int> resolvedAudioBitrateKbps(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS output requires a resolved transport"));
         }
+        if (!deployment.receiverTiming) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS output requires authoritative receiver timing capability"));
+        }
         output.muxedOutput.transportDecodeLead =
-            deployment.latency.maximumResidence;
+            deployment.receiverTiming->transportDecodeLead;
+        output.muxedOutput.startupEmissionPreroll =
+            deployment.receiverTiming->startupEmissionPreroll;
+        output.muxedOutput.maximumDatagramBytes =
+            static_cast<std::size_t>(packetSize.value());
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
             if (!request.output.basePort) {
                 return ::media::Status::failure(
@@ -196,12 +200,7 @@ std::optional<int> resolvedAudioBitrateKbps(
             }
             output.muxedOutput.rtpTransport =
                 std::move(transport).value();
-            output.muxedOutput.maximumDatagramBytes =
-                static_cast<std::size_t>(packetSize.value());
             output.muxedOutput.sdpPath = request.output.sdpPath;
-            output.muxedOutput.scheduledWireBytesPerSecond =
-                static_cast<std::int64_t>(
-                    deployment.service.sustainedWireBytesPerSecond);
         }
         return ::media::Status::success();
     }
@@ -210,19 +209,20 @@ std::optional<int> resolvedAudioBitrateKbps(
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("Realtime output policy requires resolved video bitrate and packet size"));
     }
+    constexpr int RtpFixedHeaderBytes = 12;
+    if (packetSize.value() <= RtpFixedHeaderBytes) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "deployment MTU cannot carry an RTP payload"));
+    }
+    const int maximumRtpPayloadBytes =
+        packetSize.value() - RtpFixedHeaderBytes;
     const std::string codec = canonicalCodecName(plan.videoPlan.outputCodecName);
     if (codec == "h264" || codec == "avc" || codec == "avc1") plan.videoParameters.globalHeader = true;
 
     output.videoOutput.url = urls.video;
-    output.videoOutput.packetSize = packetSize.value();
+    output.videoOutput.packetSize = maximumRtpPayloadBytes;
     output.videoOutput.mediaId = request.mediaId;
-    applyPacing(output.videoOutput, deployment);
-    if (output.videoOutput.writePacingBurstBytes >
-            std::numeric_limits<int>::max()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP video burst exceeds integer range"));
-    }
     auto videoTransport = rtpTransport(
         request.output.host, *request.output.basePort);
     if (!videoTransport) {
@@ -238,15 +238,8 @@ std::optional<int> resolvedAudioBitrateKbps(
                     "Realtime RTP audio output requires planner-resolved positive audio bitrate"));
         }
         output.audioOutput.url = urls.audio;
-        output.audioOutput.packetSize = packetSize.value();
+        output.audioOutput.packetSize = maximumRtpPayloadBytes;
         output.audioOutput.mediaId = request.mediaId;
-        applyPacing(output.audioOutput, deployment);
-        if (output.audioOutput.writePacingBurstBytes >
-                std::numeric_limits<int>::max()) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "scheduled RTP audio burst exceeds integer range"));
-        }
         auto audioTransport = rtpTransport(
             request.output.host, *request.output.basePort + 2);
         if (!audioTransport) {

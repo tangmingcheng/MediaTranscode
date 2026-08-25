@@ -85,7 +85,7 @@ MediaTsPendingEmission::materializeProtocolBatch(
     const MediaRunningTime deadline = emission.value().latestEmissionTime();
     auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
         generation, std::move(m_cursor),
-        static_cast<std::uint8_t>(m_maximumPacketsPerDatagram),
+        static_cast<std::uint16_t>(m_maximumPacketsPerDatagram),
         m_notBefore, release, deadline);
     if (!batch) return ::media::Result<MediaBufferRef>::failure(batch.error());
     auto committed = schedule.commit(

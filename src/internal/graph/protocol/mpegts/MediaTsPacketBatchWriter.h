@@ -3,9 +3,9 @@
 #include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketCommitter.h"
 
-#include <array>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -18,7 +18,7 @@ struct MediaTsBatchWriteResult final {
 class MediaTsPacketBatchWriter final {
 public:
     static ::media::Result<MediaTsPacketBatchWriter> create(
-        std::uint8_t maximumPacketsPerDatagram,
+        std::uint16_t maximumPacketsPerDatagram,
         std::unique_ptr<MediaTsDatagramSink> sink,
         std::unique_ptr<MediaTsPacketCommitter> committer);
 
@@ -41,16 +41,17 @@ public:
     void abort() noexcept;
 
 private:
-    MediaTsPacketBatchWriter(std::uint8_t maximumPacketsPerDatagram,
+    MediaTsPacketBatchWriter(std::uint16_t maximumPacketsPerDatagram,
                              std::unique_ptr<MediaTsDatagramSink> sink,
-                             std::unique_ptr<MediaTsPacketCommitter> committer);
+                             std::unique_ptr<MediaTsPacketCommitter> committer,
+                             std::vector<std::uint8_t> datagram);
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status firstFailure() const;
 
-    std::uint8_t m_maximumPacketsPerDatagram;
+    std::uint16_t m_maximumPacketsPerDatagram;
     std::unique_ptr<MediaTsDatagramSink> m_sink;
     std::unique_ptr<MediaTsPacketCommitter> m_committer;
-    std::array<std::uint8_t, 7 * 188> m_datagram{};
+    std::vector<std::uint8_t> m_datagram;
     std::optional<::media::ErrorInfo> m_failure;
     bool m_closed = false;
 };

@@ -10,6 +10,7 @@
 
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -95,17 +96,17 @@ planSeparateRtp(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly Project MPEG-TS requires a planned output URL"));
     }
-    std::uint8_t maximumPacketsPerDatagram = 7;
-    if (outer.outputTransport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.deployment) {
-            return ::media::Result<
-                MediaProjectMpegTsRuntimeOutputPlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "VideoOnly MPEG-TS/RTP requires deployment MTU authority"));
-        }
-        auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(
-                request.deployment->encode().mtu.senderMaximumPayloadBytes));
+    if (!request.deployment || !output.muxedOutput.maximumDatagramBytes) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly MPEG-TS requires deployment MTU authority"));
+    }
+    std::uint16_t maximumPacketsPerDatagram = 0;
+    if (outer.outputTransport == MediaOutputTransportKind::RtpAvp ||
+        outer.outputTransport == MediaOutputTransportKind::UdpDatagrams) {
+        auto packetCount = MediaTsMuxPlan::maximumPacketsPerDatagram(
+            *output.muxedOutput.maximumDatagramBytes,
+            outer.outputTransport);
         if (!packetCount) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
@@ -119,7 +120,8 @@ planSeparateRtp(
             ::media::ErrorInfo::unsupported(
                 "VideoOnly Project MPEG-TS transport is unsupported"));
     }
-    if (!output.muxedOutput.transportDecodeLead) {
+    if (!output.muxedOutput.transportDecodeLead ||
+        !output.muxedOutput.startupEmissionPreroll) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly MPEG-TS output requires a planned transport decode lead"));
@@ -130,14 +132,10 @@ planSeparateRtp(
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             videoCadence.error());
     }
-    const MediaRunningTime startupEmissionPreroll =
-        videoCadence.value() < *output.muxedOutput.transportDecodeLead
-            ? videoCadence.value()
-            : *output.muxedOutput.transportDecodeLead;
     auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
         outer.videoPlan.outputCodecName, layout.value(),
         *output.muxedOutput.transportDecodeLead,
-        startupEmissionPreroll,
+        *output.muxedOutput.startupEmissionPreroll,
         outer.outputTransport, maximumPacketsPerDatagram);
     if (!protocol) {
         return ::media::Result<
@@ -190,7 +188,6 @@ planSeparateRtp(
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
         startup.byteCapacity,
-        output.muxedOutput.scheduledWireBytesPerSecond,
         request.deployment->encode().latency.targetResidence);
     if (!emission) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
@@ -360,8 +357,18 @@ MediaRealtimeVideoRuntimePlanner::plan(
     }
     auto datagramTransport = std::visit(
         [&](const auto& plannedOutput) {
-            return MediaRealtimeDatagramTransportPlanner::plan(
-                request.mediaId, *request.deployment, plannedOutput);
+            using Output = std::decay_t<decltype(plannedOutput)>;
+            if constexpr (std::is_same_v<
+                              Output,
+                              MediaProjectMpegTsRuntimeOutputPlan>) {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    request.mediaId, *request.deployment, plannedOutput,
+                    outer.videoPlan, outputFrameRate, nullptr);
+            } else {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    request.mediaId, *request.deployment, plannedOutput,
+                    outer.videoPlan, outputFrameRate);
+            }
         },
         *adapter);
     if (!datagramTransport) {

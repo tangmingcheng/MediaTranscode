@@ -8,6 +8,60 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+constexpr std::uint64_t Ipv4HeaderBytes = 20;
+constexpr std::uint64_t Ipv6HeaderBytes = 40;
+constexpr std::uint64_t UdpHeaderBytes = 8;
+constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
+
+::media::Result<std::uint64_t> checkedAdd(
+    std::uint64_t left, std::uint64_t right, const char* fact)
+{
+    if (right > (std::numeric_limits<std::uint64_t>::max)() - left) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string(fact) + " is not representable"));
+    }
+    return ::media::Result<std::uint64_t>::success(left + right);
+}
+
+::media::Result<std::uint64_t> bytesForResidence(
+    std::uint64_t bytesPerSecond, MediaRunningTime residence)
+{
+    const auto nanoseconds = residence.nanoseconds();
+    if (nanoseconds <= 0) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Datagram residence must be positive"));
+    }
+    const auto wholeSeconds =
+        static_cast<std::uint64_t>(nanoseconds) / NanosecondsPerSecond;
+    const auto remainder =
+        static_cast<std::uint64_t>(nanoseconds) % NanosecondsPerSecond;
+    if (wholeSeconds > (std::numeric_limits<std::uint64_t>::max)() /
+            bytesPerSecond ||
+        remainder > (std::numeric_limits<std::uint64_t>::max)() /
+            bytesPerSecond) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Datagram residence byte demand is not representable"));
+    }
+    const auto wholeBytes = wholeSeconds * bytesPerSecond;
+    const auto remainderProduct = remainder * bytesPerSecond;
+    const auto remainderBytes = remainderProduct / NanosecondsPerSecond +
+        (remainderProduct % NanosecondsPerSecond != 0 ? 1U : 0U);
+    return checkedAdd(wholeBytes, remainderBytes,
+                      "Datagram residence byte demand");
+}
+
+std::uint64_t ceilDivide(
+    std::uint64_t value, std::uint64_t divisor) noexcept
+{
+    return value / divisor + (value % divisor != 0 ? 1U : 0U);
+}
+
+} // namespace
 
 MediaDatagramTransportPlanTemplate::MediaDatagramTransportPlanTemplate(
     MediaDatagramTransportPlanTemplateEncoding encoding) noexcept
@@ -19,14 +73,38 @@ MediaDatagramTransportPlanTemplate::MediaDatagramTransportPlanTemplate(
 MediaDatagramTransportPlanTemplate::create(
     std::string sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
-    std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints)
+    std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints,
+    MediaWireTrafficEnvelope wireTraffic)
 {
     using Result = ::media::Result<MediaDatagramTransportPlanTemplate>;
     const auto& facts = deployment.encode();
+    auto peakServiceWithinDeadline = bytesForResidence(
+        facts.service.peakWireBytesPerSecond,
+        facts.latency.maximumResidence);
+    auto burstServiceWithinDeadline = peakServiceWithinDeadline
+        ? checkedAdd(
+              facts.service.burstWireBytes,
+              peakServiceWithinDeadline.value(),
+              "service burst within maximum residence")
+        : peakServiceWithinDeadline;
     if (sessionKey.empty() || remoteEndpoints.empty() ||
+        wireTraffic.sustainedWireBytesPerSecond == 0 ||
+        wireTraffic.peakWireBytesPerSecond <
+            wireTraffic.sustainedWireBytesPerSecond ||
+        wireTraffic.peakDatagramsPerSecond == 0 ||
+        wireTraffic.burstWireBytes == 0 ||
+        wireTraffic.maximumUdpPayloadBytes == 0 ||
+        wireTraffic.maximumWireDatagramBytes == 0 ||
+        wireTraffic.authority.empty() ||
+        facts.service.sustainedWireBytesPerSecond <
+            wireTraffic.sustainedWireBytesPerSecond ||
+        facts.service.peakWireBytesPerSecond <
+            wireTraffic.peakWireBytesPerSecond ||
+        !burstServiceWithinDeadline ||
+        burstServiceWithinDeadline.value() < wireTraffic.burstWireBytes ||
         remoteEndpoints.size() > facts.localPorts.portCount) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Datagram transport template requires a session and a reserved local port for every endpoint"));
+            "Datagram transport template requires admitted wire demand, a session, and a reserved local port for every endpoint"));
     }
     try {
         std::unordered_set<std::uint64_t> endpointIds;
@@ -48,7 +126,8 @@ MediaDatagramTransportPlanTemplate::create(
         }
         return Result::success(MediaDatagramTransportPlanTemplate(
             MediaDatagramTransportPlanTemplateEncoding{
-                std::move(sessionKey), facts, std::move(remoteEndpoints)}));
+                std::move(sessionKey), facts, std::move(remoteEndpoints),
+                std::move(wireTraffic)}));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "Datagram transport template"));
@@ -65,6 +144,55 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
     }
     try {
         const auto& deployment = m_encoding.deployment;
+        const auto endpointCount = static_cast<std::uint64_t>(
+            m_encoding.remoteEndpoints.size());
+        auto residenceBytes = bytesForResidence(
+            m_encoding.wireTraffic.peakWireBytesPerSecond,
+            deployment.latency.maximumResidence);
+        if (!residenceBytes) return Result::failure(residenceBytes.error());
+        auto residenceDatagrams = bytesForResidence(
+            m_encoding.wireTraffic.peakDatagramsPerSecond,
+            deployment.latency.maximumResidence);
+        if (!residenceDatagrams) {
+            return Result::failure(residenceDatagrams.error());
+        }
+        auto requiredBacklogBytes = checkedAdd(
+            residenceBytes.value(), m_encoding.wireTraffic.burstWireBytes,
+            "Datagram backlog byte demand");
+        if (!requiredBacklogBytes ||
+            requiredBacklogBytes.value() >
+                deployment.resources.maximumNetworkMemoryBytes) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "deployment network memory budget cannot admit the planned wire backlog"));
+        }
+        const auto maximumBacklogBytes = requiredBacklogBytes.value();
+        const auto maximumBacklogDatagrams = (std::max)(
+            ceilDivide(maximumBacklogBytes,
+                       m_encoding.wireTraffic.maximumWireDatagramBytes),
+            residenceDatagrams.value());
+        const auto maximumBatchBytes = (std::min)(
+            maximumBacklogBytes,
+            (std::max)(deployment.service.burstWireBytes,
+                       m_encoding.wireTraffic.maximumWireDatagramBytes));
+        const auto maximumBatchDatagrams = ceilDivide(
+            maximumBatchBytes,
+            m_encoding.wireTraffic.maximumWireDatagramBytes);
+        const auto socketHardBoundBytes =
+            deployment.resources.maximumSocketMemoryBytes / endpointCount;
+        const auto maximumEndpointPendingBytes = (std::min)(
+            socketHardBoundBytes,
+            (std::max)(m_encoding.wireTraffic.maximumWireDatagramBytes,
+                       maximumBacklogBytes / endpointCount));
+        const auto maximumEndpointPendingDatagrams = (std::max)(
+            std::uint64_t{1},
+            ceilDivide(maximumEndpointPendingBytes,
+                       m_encoding.wireTraffic.maximumWireDatagramBytes));
+        if (maximumBacklogDatagrams == 0 || maximumBatchDatagrams == 0 ||
+            socketHardBoundBytes <
+                m_encoding.wireTraffic.maximumWireDatagramBytes) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "deployment resource budgets cannot admit one Datagram per endpoint"));
+        }
         std::optional<MediaDatagramTransmitEvidencePlan> evidence;
         if (deployment.observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Disabled) {
@@ -77,7 +205,8 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 deployment.observation.authority,
                 1,
                 deployment.observation.maximumRunDatagrams,
-                deployment.observation.maximumCorrelationEntries,
+                (std::min)(deployment.observation.maximumRunDatagrams,
+                           maximumBacklogDatagrams),
                 deployment.observation.maximumDrainResidence};
         }
         std::vector<MediaDatagramEndpointPlan> endpoints;
@@ -103,12 +232,18 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 remote.addressFamily,
                 remote.numericAddress,
                 remote.port,
-                deployment.mtu,
-                deployment.mtu.senderMaximumPayloadBytes,
-                deployment.resources.maximumEndpointPendingDatagrams,
-                deployment.resources.maximumEndpointPendingBytes,
-                deployment.resources.maximumResidence,
-                deployment.resources.socketHardBoundBytes});
+                MediaDatagramMtuEvidence{
+                    deployment.mtu.authority,
+                    deployment.mtu.maximumIpPacketBytes,
+                    deployment.mtu.addressFamily == MediaIpAddressFamily::Ipv4
+                        ? Ipv4HeaderBytes : Ipv6HeaderBytes,
+                    UdpHeaderBytes,
+                    deployment.mtu.senderMaximumPayloadBytes},
+                m_encoding.wireTraffic.maximumUdpPayloadBytes,
+                maximumEndpointPendingDatagrams,
+                maximumEndpointPendingBytes,
+                deployment.latency.maximumResidence,
+                socketHardBoundBytes});
             localEndpoints.push_back(MediaDatagramLocalEndpointPlan{
                 remote.endpointId,
                 deployment.localPorts.addressFamily,
@@ -124,14 +259,18 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 deployment.serviceScope.coverageAuthority,
                 std::move(endpointCoverage)},
             std::move(endpoints),
-            deployment.service,
+            MediaDatagramServiceCurvePlan{
+                deployment.service.sustainedWireBytesPerSecond,
+                deployment.service.peakWireBytesPerSecond,
+                deployment.service.burstWireBytes,
+                deployment.service.authority},
             MediaDatagramBacklogPlan{
-                deployment.resources.maximumBacklogDatagrams,
-                deployment.resources.maximumBacklogBytes,
-                deployment.resources.maximumResidence},
+                maximumBacklogDatagrams,
+                maximumBacklogBytes,
+                deployment.latency.maximumResidence},
             MediaDatagramBatchPlan{
-                deployment.resources.maximumBatchDatagrams,
-                deployment.resources.maximumBatchBytes},
+                maximumBatchDatagrams,
+                maximumBatchBytes},
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue,
             MediaDatagramOrderingMode::CanonicalOrdered,
             MediaDatagramLimitFailureMode::Terminate,

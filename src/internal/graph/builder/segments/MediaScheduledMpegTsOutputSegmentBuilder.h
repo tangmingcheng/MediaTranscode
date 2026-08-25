@@ -22,7 +22,6 @@ struct MediaScheduledMpegTsOutputSegmentOptions final {
 struct MediaScheduledMpegTsOutputSegmentResult final {
     MediaNodeId planSource;
     MediaNodeId adapter;
-    MediaNodeId udpOutput;
     MediaNodeId mux;
     MediaNodeId scheduledDatagramSender;
     MediaNodeId rtpSdpPublisher;

@@ -18,7 +18,6 @@ public:
         MediaRunningTime videoAccessUnitCadence,
         std::optional<MediaRunningTime> audioAccessUnitCadence,
         std::uint64_t maximumQueuedBytes,
-        std::optional<std::int64_t> scheduledWireBytesPerSecond,
         MediaRunningTime targetServiceResidence);
 
     MediaRunningTime accessUnitWindow() const noexcept;
@@ -32,8 +31,6 @@ public:
     audioInitialServiceWindow() const noexcept;
     MediaRunningTime targetServiceResidence() const noexcept;
     std::uint64_t maximumQueuedBytes() const noexcept;
-    const std::optional<std::int64_t>&
-    scheduledWireBytesPerSecond() const noexcept;
 
     friend bool operator==(const MediaTsDatagramEmissionPlan&,
                            const MediaTsDatagramEmissionPlan&) = default;
@@ -48,8 +45,7 @@ private:
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes,
         bool scheduledDatagramOutput,
-        std::uint64_t maximumQueuedBytes,
-        std::optional<std::int64_t> scheduledWireBytesPerSecond) noexcept;
+        std::uint64_t maximumQueuedBytes) noexcept;
 
     MediaRunningTime m_accessUnitWindow;
     MediaRunningTime m_videoInitialServiceWindow;
@@ -60,7 +56,6 @@ private:
     std::size_t m_perDatagramOverheadBytes;
     bool m_scheduledDatagramOutput;
     std::uint64_t m_maximumQueuedBytes;
-    std::optional<std::int64_t> m_scheduledWireBytesPerSecond;
 };
 
 } // namespace media::ffmpeg::graph

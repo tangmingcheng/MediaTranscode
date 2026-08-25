@@ -49,7 +49,7 @@ MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
 {
     if (config.payloadType != Mp2tStaticPayloadType ||
         config.clockRate != Mp2tClockRate || config.ssrc == 0 ||
-        config.maximumTsPackets < 1 || config.maximumTsPackets > 7 ||
+        config.maximumTsPackets < 1 ||
         config.maximumDatagramBytes < RtpHeaderBytes + TsPacketBytes ||
         static_cast<std::size_t>(config.maximumTsPackets) >
             (config.maximumDatagramBytes - RtpHeaderBytes) / TsPacketBytes) {

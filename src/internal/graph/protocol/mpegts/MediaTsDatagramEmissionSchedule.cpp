@@ -574,10 +574,8 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
     }
     const MediaRunningTime serviceWindow = (std::min)(
         remainingWindow.value(), *plannedServiceWindow);
-    auto selectedRate = scheduledOutput
-        ? ::media::Result<std::int64_t>::success(
-              *m_state->plan.scheduledWireBytesPerSecond())
-        : wireRateForWindow(totalWire.value(), serviceWindow);
+    auto selectedRate = wireRateForWindow(
+        totalWire.value(), serviceWindow);
     if (!selectedRate) return Result::failure(selectedRate.error());
     auto fullReservation = reserveContinuousTimeline(
         *m_state, serviceStart, totalWire.value(), selectedRate.value());
@@ -686,7 +684,20 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
         : notBefore;
     std::int64_t selectedRate = 0;
     if (scheduledReservation) {
-        selectedRate = *m_state->plan.scheduledWireBytesPerSecond();
+        auto maintenanceWindow = completionDeadline.checkedSubtract(
+            serviceStart);
+        auto maintenanceRate = maintenanceWindow &&
+                maintenanceWindow.value().nanoseconds() > 0
+            ? wireRateForWindow(totalWire.value(), maintenanceWindow.value())
+            : ::media::Result<std::int64_t>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "MPEG-TS maintenance has no receiver timing window"));
+        if (!maintenanceRate) {
+            return ::media::Status::failure(maintenanceRate.error());
+        }
+        selectedRate = m_state->activeAccessUnit
+            ? m_state->activeAccessUnit->selectedWireBytesPerSecond
+            : maintenanceRate.value();
         if (m_state->activeAccessUnit) {
             const auto& active = *m_state->activeAccessUnit;
             if (active.committedWireBytes > active.totalWireBytes) {

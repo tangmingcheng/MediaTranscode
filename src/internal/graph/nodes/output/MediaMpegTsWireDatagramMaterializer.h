@@ -71,7 +71,7 @@ struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
     std::uint32_t ssrc;
     std::uint32_t baseTimestamp;
     std::uint16_t initialRtpSequence;
-    std::uint8_t maximumTsPackets;
+    std::uint16_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
     MediaDatagramBatchPlan batchPlan;

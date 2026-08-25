@@ -194,7 +194,7 @@ MediaProjectMpegTsOutputPlan::createVideoOnly(
     MediaRunningTime transportDecodeLead,
     MediaRunningTime startupEmissionPreroll,
     MediaOutputTransportKind transportKind,
-    std::uint8_t maximumPacketsPerDatagram)
+    std::uint16_t maximumPacketsPerDatagram)
 {
     auto codec = videoCodec(videoCodecName);
     auto videoInput = codec
@@ -238,7 +238,7 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
     MediaRunningTime transportDecodeLead,
     MediaRunningTime startupEmissionPreroll,
     MediaOutputTransportKind transportKind,
-    std::uint8_t maximumPacketsPerDatagram)
+    std::uint16_t maximumPacketsPerDatagram)
 {
     auto codec = videoCodec(videoCodecName);
     if (!codec || audioOutput.codecName() != "aac" ||

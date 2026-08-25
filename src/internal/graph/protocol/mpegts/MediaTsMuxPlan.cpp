@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -10,7 +11,6 @@ namespace {
 constexpr std::uint16_t MinimumAssignablePid = 0x0020;
 constexpr std::uint16_t NullPid = 0x1FFF;
 constexpr std::size_t RtpFixedHeaderBytes = 12;
-constexpr std::size_t MaximumTsPacketsPerDatagram = 7;
 
 ::media::Result<MediaTsMuxPlan> invalid(const char* reason)
 {
@@ -58,26 +58,41 @@ bool validContinuitySeeds(
 
 } // namespace
 
-::media::Result<std::uint8_t>
+::media::Result<std::uint16_t>
 MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
     std::size_t maximumDatagramBytes)
 {
-    if (maximumDatagramBytes <= RtpFixedHeaderBytes) {
-        return ::media::Result<std::uint8_t>::failure(
+    return maximumPacketsPerDatagram(
+        maximumDatagramBytes, MediaOutputTransportKind::RtpAvp);
+}
+
+::media::Result<std::uint16_t>
+MediaTsMuxPlan::maximumPacketsPerDatagram(
+    std::size_t maximumUdpPayloadBytes,
+    MediaOutputTransportKind transportKind)
+{
+    const auto protocolHeaderBytes =
+        transportKind == MediaOutputTransportKind::RtpAvp
+            ? RtpFixedHeaderBytes
+            : transportKind == MediaOutputTransportKind::UdpDatagrams
+                ? std::size_t{0}
+                : maximumUdpPayloadBytes;
+    if (maximumUdpPayloadBytes <= protocolHeaderBytes) {
+        return ::media::Result<std::uint16_t>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS RTP datagram cannot carry one complete TS packet"));
+                "MPEG-TS datagram cannot carry one complete TS packet"));
     }
     const auto payloadCapacity =
-        maximumDatagramBytes - RtpFixedHeaderBytes;
+        maximumUdpPayloadBytes - protocolHeaderBytes;
     const auto packetCount = payloadCapacity / std::size_t{188};
-    if (packetCount == 0) {
-        return ::media::Result<std::uint8_t>::failure(
+    if (packetCount == 0 ||
+        packetCount > (std::numeric_limits<std::uint16_t>::max)()) {
+        return ::media::Result<std::uint16_t>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS RTP payload would fragment a TS packet"));
+                "MPEG-TS packet geometry is outside the protocol plan range"));
     }
-    return ::media::Result<std::uint8_t>::success(
-        static_cast<std::uint8_t>(
-            (std::min)(packetCount, MaximumTsPacketsPerDatagram)));
+    return ::media::Result<std::uint16_t>::success(
+        static_cast<std::uint16_t>(packetCount));
 }
 
 ::media::Result<MediaTsMuxPlan> MediaTsMuxPlan::create(
@@ -149,7 +164,6 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         (videoOnly && !validContinuitySeeds(videoOnly->continuity)) ||
         (audioVideo && !validContinuitySeeds(audioVideo->continuity)) ||
         parameters.maximumPacketsPerDatagram < 1 ||
-        parameters.maximumPacketsPerDatagram > 7 ||
         !validTransportKind(parameters.transportKind)) {
         return invalid("contains an invalid transport contract");
     }

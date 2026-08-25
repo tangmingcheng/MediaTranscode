@@ -46,6 +46,10 @@ public:
         std::vector<MediaDatagramTransmitEndpointBinding> bindings,
         MediaDatagramTransmitExecutionPlan execution,
         MediaDatagramTransmitPortFactory& portFactory);
+    static ::media::Status validateActivation(
+        const MediaDatagramShapingPlan& plan,
+        const std::vector<MediaDatagramTransmitEndpointBinding>& bindings,
+        const MediaDatagramTransmitExecutionPlan& execution);
 
     MediaDatagramTransmitSubmitResult trySubmitNew(
         std::uint64_t endpointId,

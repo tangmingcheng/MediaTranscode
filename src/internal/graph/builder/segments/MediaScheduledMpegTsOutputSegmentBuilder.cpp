@@ -28,7 +28,6 @@ struct CommonPlan final {
     MediaProtocolOutputSessionKey sessionKey;
     MediaTranscodeStreamSet streamSet;
     const MediaProjectMpegTsRuntimeOutputPlan& output;
-    const MediaGraphQueueParameters& queues;
     const MediaRealtimeEdgePolicySet& edgePolicies;
     const MediaDatagramTransportPlanTemplate& datagramTransport;
 };
@@ -120,7 +119,6 @@ struct CommonPlan final {
             "Scheduled MPEG-TS output rejects duplicate output authority"));
     }
 
-    MediaNodeId udpOutput = MediaNodeId::invalid();
     MediaNodeId mux = MediaNodeId::invalid();
     MediaNodeId scheduledDatagramSender = MediaNodeId::invalid();
     MediaNodeId rtpSdpPublisher = MediaNodeId::invalid();
@@ -304,7 +302,7 @@ struct CommonPlan final {
         if (!connected) return Result::failure(connected.error());
     }
     return Result::success(
-        {planSource, adapter, udpOutput, mux,
+        {planSource, adapter, mux,
          scheduledDatagramSender, rtpSdpPublisher});
 }
 
@@ -334,7 +332,7 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
                    MediaTranscodeStreamSet::AudioVideo,
                    std::get<MediaProjectMpegTsRuntimeOutputPlan>(
                        plan.protocolOutput),
-                   plan.queues, plan.edgePolicies,
+                   plan.edgePolicies,
                    plan.datagramTransport});
 }
 
@@ -357,7 +355,7 @@ MediaScheduledMpegTsOutputSegmentBuilder::buildVideoOnly(
                       options.videoCodec, std::nullopt,
                       options.scheduledVideo},
         CommonPlan{plan.sessionKey, MediaTranscodeStreamSet::VideoOnly,
-                   *output, plan.queues, plan.edgePolicies,
+                   *output, plan.edgePolicies,
                    plan.datagramTransport});
 }
 

@@ -1,31 +1,42 @@
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 
 #include <algorithm>
+#include <new>
 
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaTsPacketBatchWriter> MediaTsPacketBatchWriter::create(
-    std::uint8_t maximumPacketsPerDatagram,
+    std::uint16_t maximumPacketsPerDatagram,
     std::unique_ptr<MediaTsDatagramSink> sink,
     std::unique_ptr<MediaTsPacketCommitter> committer)
 {
-    if (!sink || !committer || maximumPacketsPerDatagram < 1 ||
-        maximumPacketsPerDatagram > 7) {
+    if (!sink || !committer || maximumPacketsPerDatagram < 1) {
         return ::media::Result<MediaTsPacketBatchWriter>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS batch writer binding is invalid"));
     }
-    return ::media::Result<MediaTsPacketBatchWriter>::success(
-        MediaTsPacketBatchWriter(
-            maximumPacketsPerDatagram, std::move(sink), std::move(committer)));
+    try {
+        std::vector<std::uint8_t> datagram(
+            static_cast<std::size_t>(maximumPacketsPerDatagram) * 188U);
+        return ::media::Result<MediaTsPacketBatchWriter>::success(
+            MediaTsPacketBatchWriter(
+                maximumPacketsPerDatagram, std::move(sink),
+                std::move(committer), std::move(datagram)));
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaTsPacketBatchWriter>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "MPEG-TS batch writer Datagram storage"));
+    }
 }
 
 MediaTsPacketBatchWriter::MediaTsPacketBatchWriter(
-    std::uint8_t maximumPacketsPerDatagram,
+    std::uint16_t maximumPacketsPerDatagram,
     std::unique_ptr<MediaTsDatagramSink> sink,
-    std::unique_ptr<MediaTsPacketCommitter> committer)
+    std::unique_ptr<MediaTsPacketCommitter> committer,
+    std::vector<std::uint8_t> datagram)
     : m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
       m_sink(std::move(sink)),
-      m_committer(std::move(committer))
+      m_committer(std::move(committer)),
+      m_datagram(std::move(datagram))
 {
 }
 

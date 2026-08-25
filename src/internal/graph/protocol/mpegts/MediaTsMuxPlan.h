@@ -82,7 +82,7 @@ struct MediaTsMuxPlanParameters final {
     MediaRunningTime transportDecodeLead;
     MediaRunningTime startupEmissionPreroll;
     std::uint16_t packetSize;
-    std::uint8_t maximumPacketsPerDatagram;
+    std::uint16_t maximumPacketsPerDatagram;
     MediaOutputTransportKind transportKind;
     friend bool operator==(const MediaTsMuxPlanParameters&,
                            const MediaTsMuxPlanParameters&) = default;
@@ -92,8 +92,11 @@ class MediaTsMuxPlan final {
 public:
     static ::media::Result<MediaTsMuxPlan> create(
         MediaTsMuxPlanParameters parameters);
-    static ::media::Result<std::uint8_t> maximumPacketsPerRtpDatagram(
+    static ::media::Result<std::uint16_t> maximumPacketsPerRtpDatagram(
         std::size_t maximumDatagramBytes);
+    static ::media::Result<std::uint16_t> maximumPacketsPerDatagram(
+        std::size_t maximumUdpPayloadBytes,
+        MediaOutputTransportKind transportKind);
 
     const MediaTsMuxPlanParameters& parameters() const noexcept;
     const MediaTsVideoOnlyProgramPlan* videoOnlyProgram() const noexcept;

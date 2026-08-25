@@ -490,7 +490,6 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         auto emission = MediaTsDatagramEmissionPlan::create(
             accepted.value().muxPlan(), videoCadence.value(),
             audioCadence.value(), maximumQueuedBytes,
-            output.muxedOutput.scheduledWireBytesPerSecond,
             request.deployment->encode().latency.targetResidence);
         if (!emission) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -525,8 +524,18 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     const MediaAvSyncGroupKey groupKey("realtime.av");
     auto datagramTransport = std::visit(
         [&](const auto& selectedOutput) {
-            return MediaRealtimeDatagramTransportPlanner::plan(
-                groupKey.value(), *request.deployment, selectedOutput);
+            using Output = std::decay_t<decltype(selectedOutput)>;
+            if constexpr (std::is_same_v<
+                              Output,
+                              MediaProjectMpegTsRuntimeOutputPlan>) {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    groupKey.value(), *request.deployment, selectedOutput,
+                    outer.videoPlan, outputFrameRate, &audio);
+            } else {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    groupKey.value(), *request.deployment, selectedOutput,
+                    outer.videoPlan, outputFrameRate, audio);
+            }
         },
         *protocolOutput);
     if (!datagramTransport) {

@@ -605,14 +605,6 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             ::media::ErrorInfo::invalidArgument(
                 "detected RTP video signaling is valid only for raw RTP input"));
     }
-    auto selectedQueues = MediaRealtimeQueueCapacityPlanner::plan(
-        *requestedOptions.deployment);
-    if (!selectedQueues) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            selectedQueues.error());
-    }
-    options.parameters.queues = std::move(selectedQueues).value();
-
     auto outputUrls = MediaRealtimeOutputPolicyPlanner::planUrls(options);
     if (!outputUrls) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputUrls.error());
@@ -740,6 +732,46 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             }
             audioPlan.emplace(std::move(plannedAudio).value());
         }
+    }
+
+    MediaRational outputFrameRate;
+    if (rawInput) {
+        outputFrameRate = rawInput->video.frameRate;
+    } else if (preparedInput) {
+        outputFrameRate = preparedInput->video.frameRate;
+    }
+    if (videoParameters.frameRate.complete() &&
+        videoParameters.frameRate.numerator &&
+        videoParameters.frameRate.denominator) {
+        outputFrameRate = MediaRational{
+            *videoParameters.frameRate.numerator,
+            *videoParameters.frameRate.denominator};
+    }
+    std::optional<int> audioAccessUnitSamples;
+    std::optional<int> audioSampleRate;
+    if (audioPlan && audioPlan->resolvedOutput) {
+        audioAccessUnitSamples =
+            audioPlan->resolvedOutput->codecFrameSamples();
+        audioSampleRate = audioPlan->resolvedOutput->sampleRate();
+    }
+    auto selectedQueues = MediaRealtimeQueueCapacityPlanner::plan(
+        *requestedOptions.deployment, outputFrameRate,
+        audioAccessUnitSamples, audioSampleRate);
+    if (!selectedQueues) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+            selectedQueues.error());
+    }
+    options.parameters.queues = std::move(selectedQueues).value();
+    options.parameters.video = videoParameters;
+    if (audioPlan && audioPlan->resolvedOutput) {
+        const auto& resolvedAudio = *audioPlan->resolvedOutput;
+        options.parameters.audio.bitrateKbps = resolvedAudio.bitrateKbps();
+        options.parameters.audio.minBitrateKbps = resolvedAudio.minBitrateKbps();
+        options.parameters.audio.maxBitrateKbps = resolvedAudio.maxBitrateKbps();
+        options.parameters.audio.bufferSizeKbits =
+            resolvedAudio.bufferSizeKbits();
+        options.parameters.audio.sampleRate = resolvedAudio.sampleRate();
+        options.parameters.audio.channels = resolvedAudio.channels();
     }
 
     MediaRealtimeRtpTranscodePlanningDraft plan;
@@ -886,19 +918,6 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             options, outputUrls.value(), plan, output);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
-    }
-    MediaRational outputFrameRate;
-    if (rawInput) {
-        outputFrameRate = rawInput->video.frameRate;
-    } else if (preparedInput) {
-        outputFrameRate = preparedInput->video.frameRate;
-    }
-    if (plan.videoParameters.frameRate.complete() &&
-        plan.videoParameters.frameRate.numerator &&
-        plan.videoParameters.frameRate.denominator) {
-        outputFrameRate = MediaRational{
-            *plan.videoParameters.frameRate.numerator,
-            *plan.videoParameters.frameRate.denominator};
     }
     std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(options) &&

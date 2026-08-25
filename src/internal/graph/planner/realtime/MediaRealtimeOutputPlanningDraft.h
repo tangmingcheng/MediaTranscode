@@ -15,9 +15,6 @@ struct MediaRealtimeScheduledRtpOutputPlanningDraft final {
     std::string url;
     int packetSize;
     std::string mediaId;
-    bool writePacingEnabled = false;
-    std::int64_t writePacingBytesPerSecond = 0;
-    std::int64_t writePacingBurstBytes = 0;
     std::optional<MediaRtpRemoteEndpointPair> scheduledTransport;
     std::optional<MediaScheduledRtpPacketizationPlan> scheduledPacketization;
 };
@@ -28,8 +25,8 @@ struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::optional<MediaRtpRemoteEndpointPair> rtpTransport;
     std::optional<std::size_t> maximumDatagramBytes;
     std::string sdpPath;
-    std::optional<std::int64_t> scheduledWireBytesPerSecond;
     std::optional<MediaRunningTime> transportDecodeLead;
+    std::optional<MediaRunningTime> startupEmissionPreroll;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {

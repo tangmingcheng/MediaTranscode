@@ -45,7 +45,7 @@ public:
     const std::string& cname() const noexcept;
     MediaRunningTime senderReportInterval() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
-    std::uint8_t tsPacketsPerPayload() const noexcept;
+    std::uint16_t tsPacketsPerPayload() const noexcept;
     const MediaMpegTsRtpSdpPlan& sdp() const noexcept;
 
 private:
@@ -59,7 +59,7 @@ private:
         std::string cname,
         MediaRunningTime senderReportInterval,
         std::size_t maximumDatagramBytes,
-        std::uint8_t tsPacketsPerPayload,
+        std::uint16_t tsPacketsPerPayload,
         MediaMpegTsRtpSdpPlan sdp) noexcept;
 
     MediaRtpRemoteEndpointPair m_transport;
@@ -71,7 +71,7 @@ private:
     std::string m_cname;
     MediaRunningTime m_senderReportInterval;
     std::size_t m_maximumDatagramBytes;
-    std::uint8_t m_tsPacketsPerPayload;
+    std::uint16_t m_tsPacketsPerPayload;
     MediaMpegTsRtpSdpPlan m_sdp;
 };
 

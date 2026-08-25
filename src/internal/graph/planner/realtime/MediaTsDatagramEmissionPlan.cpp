@@ -19,7 +19,6 @@ MediaTsDatagramEmissionPlan::create(
     MediaRunningTime videoAccessUnitCadence,
     std::optional<MediaRunningTime> audioAccessUnitCadence,
     std::uint64_t maximumQueuedBytes,
-    std::optional<std::int64_t> scheduledWireBytesPerSecond,
     MediaRunningTime targetServiceResidence)
 {
     const auto& mux = muxPlan.parameters();
@@ -44,10 +43,6 @@ MediaTsDatagramEmissionPlan::create(
          audioAccessUnitCadence->nanoseconds() <= 0) ||
          maximumPayloadBytes == 0 ||
         maximumQueuedBytes == 0 ||
-        ((mux.transportKind == MediaOutputTransportKind::RtpAvp) !=
-         scheduledWireBytesPerSecond.has_value()) ||
-        (scheduledWireBytesPerSecond &&
-         *scheduledWireBytesPerSecond <= 0) ||
         maximumPayloadBytes >
             (std::numeric_limits<std::size_t>::max)() -
                 perDatagramOverheadBytes) {
@@ -67,8 +62,7 @@ MediaTsDatagramEmissionPlan::create(
             mux.packetSize,
             maximumPayloadBytes, perDatagramOverheadBytes,
             mux.transportKind == MediaOutputTransportKind::RtpAvp,
-            maximumQueuedBytes,
-            scheduledWireBytesPerSecond));
+            maximumQueuedBytes));
 }
 
 MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
@@ -80,8 +74,7 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     std::size_t maximumPayloadBytes,
     std::size_t perDatagramOverheadBytes,
     bool scheduledDatagramOutput,
-    std::uint64_t maximumQueuedBytes,
-    std::optional<std::int64_t> scheduledWireBytesPerSecond) noexcept
+    std::uint64_t maximumQueuedBytes) noexcept
     : m_accessUnitWindow(accessUnitWindow)
     , m_videoInitialServiceWindow(videoInitialServiceWindow)
     , m_audioInitialServiceWindow(std::move(audioInitialServiceWindow))
@@ -91,7 +84,6 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     , m_perDatagramOverheadBytes(perDatagramOverheadBytes)
     , m_scheduledDatagramOutput(scheduledDatagramOutput)
     , m_maximumQueuedBytes(maximumQueuedBytes)
-    , m_scheduledWireBytesPerSecond(scheduledWireBytesPerSecond)
 {
 }
 
@@ -148,12 +140,6 @@ MediaTsDatagramEmissionPlan::targetServiceResidence() const noexcept
 std::uint64_t MediaTsDatagramEmissionPlan::maximumQueuedBytes() const noexcept
 {
     return m_maximumQueuedBytes;
-}
-
-const std::optional<std::int64_t>&
-MediaTsDatagramEmissionPlan::scheduledWireBytesPerSecond() const noexcept
-{
-    return m_scheduledWireBytesPerSecond;
 }
 
 } // namespace media::ffmpeg::graph

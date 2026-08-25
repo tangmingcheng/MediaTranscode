@@ -81,23 +81,17 @@ template <typename Value>
              put("scope.kind", static_cast<unsigned>(d.serviceScope.kind)),
              set(graph, nodeId, key("scope.id"), d.serviceScope.scopeId),
              set(graph, nodeId, key("scope.authority"), d.serviceScope.coverageAuthority),
+             put("mtu.family", static_cast<unsigned>(d.mtu.addressFamily)),
              put("mtu.ip_bytes", d.mtu.maximumIpPacketBytes),
-             put("mtu.ip_header_bytes", d.mtu.ipHeaderBytes),
-             put("mtu.transport_header_bytes", d.mtu.transportHeaderBytes),
              put("mtu.payload_bytes", d.mtu.senderMaximumPayloadBytes),
              set(graph, nodeId, key("mtu.authority"), d.mtu.authority),
              put("service.sustained_bps", d.service.sustainedWireBytesPerSecond),
              put("service.peak_bps", d.service.peakWireBytesPerSecond),
              put("service.burst_bytes", d.service.burstWireBytes),
              set(graph, nodeId, key("service.authority"), d.service.authority),
-             put("resources.backlog_datagrams", d.resources.maximumBacklogDatagrams),
-             put("resources.backlog_bytes", d.resources.maximumBacklogBytes),
-             put("resources.residence_ns", d.resources.maximumResidence.nanoseconds()),
-             put("resources.batch_datagrams", d.resources.maximumBatchDatagrams),
-             put("resources.batch_bytes", d.resources.maximumBatchBytes),
-             put("resources.endpoint_datagrams", d.resources.maximumEndpointPendingDatagrams),
-             put("resources.endpoint_bytes", d.resources.maximumEndpointPendingBytes),
-             put("resources.socket_bytes", d.resources.socketHardBoundBytes),
+             put("resources.graph_bytes", d.resources.maximumGraphMemoryBytes),
+             put("resources.network_bytes", d.resources.maximumNetworkMemoryBytes),
+             put("resources.socket_bytes", d.resources.maximumSocketMemoryBytes),
              set(graph, nodeId, key("resources.authority"), d.resources.authority),
              put("local.family", static_cast<unsigned>(d.localPorts.addressFamily)),
              set(graph, nodeId, key("local.address"), d.localPorts.numericAddress),
@@ -108,10 +102,23 @@ template <typename Value>
              put("latency.maximum_ns", d.latency.maximumResidence.nanoseconds()),
              set(graph, nodeId, key("latency.authority"), d.latency.authority),
              put("observation.run_datagrams", d.observation.maximumRunDatagrams),
-             put("observation.correlation_entries", d.observation.maximumCorrelationEntries),
              put("observation.drain_ns", d.observation.maximumDrainResidence.nanoseconds()),
              put("observation.policy", static_cast<unsigned>(d.observation.evidencePolicy)),
              set(graph, nodeId, key("observation.authority"), d.observation.authority),
+             put("receiver.present", d.receiverTiming ? 1 : 0),
+             put("receiver.decode_lead_ns", d.receiverTiming
+                 ? d.receiverTiming->transportDecodeLead.nanoseconds() : 0),
+             put("receiver.startup_preroll_ns", d.receiverTiming
+                 ? d.receiverTiming->startupEmissionPreroll.nanoseconds() : 0),
+             set(graph, nodeId, key("receiver.authority"), d.receiverTiming
+                 ? d.receiverTiming->authority : std::string("none")),
+             put("wire.sustained_bps", encoding.wireTraffic.sustainedWireBytesPerSecond),
+             put("wire.peak_bps", encoding.wireTraffic.peakWireBytesPerSecond),
+             put("wire.peak_datagrams", encoding.wireTraffic.peakDatagramsPerSecond),
+             put("wire.burst_bytes", encoding.wireTraffic.burstWireBytes),
+             put("wire.udp_payload_bytes", encoding.wireTraffic.maximumUdpPayloadBytes),
+             put("wire.datagram_bytes", encoding.wireTraffic.maximumWireDatagramBytes),
+             set(graph, nodeId, key("wire.authority"), encoding.wireTraffic.authority),
              put("endpoint_count", encoding.remoteEndpoints.size())}) {
         if (!status) return status;
     }
@@ -142,22 +149,16 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto scopeKind = parse<std::uint8_t>(node.options, key("scope.kind"));
     auto scopeId = required(node.options, key("scope.id"));
     auto scopeAuthority = required(node.options, key("scope.authority"));
+    auto mtuFamily = parse<std::uint8_t>(node.options, key("mtu.family"));
     auto mtuIp = parse<std::uint64_t>(node.options, key("mtu.ip_bytes"));
-    auto mtuIpHeader = parse<std::uint64_t>(node.options, key("mtu.ip_header_bytes"));
-    auto mtuTransport = parse<std::uint64_t>(node.options, key("mtu.transport_header_bytes"));
     auto mtuPayload = parse<std::uint64_t>(node.options, key("mtu.payload_bytes"));
     auto mtuAuthority = required(node.options, key("mtu.authority"));
     auto sustained = parse<std::uint64_t>(node.options, key("service.sustained_bps"));
     auto peak = parse<std::uint64_t>(node.options, key("service.peak_bps"));
     auto burst = parse<std::uint64_t>(node.options, key("service.burst_bytes"));
     auto serviceAuthority = required(node.options, key("service.authority"));
-    auto backlogDatagrams = parse<std::uint64_t>(node.options, key("resources.backlog_datagrams"));
-    auto backlogBytes = parse<std::uint64_t>(node.options, key("resources.backlog_bytes"));
-    auto residence = parse<std::int64_t>(node.options, key("resources.residence_ns"));
-    auto batchDatagrams = parse<std::uint64_t>(node.options, key("resources.batch_datagrams"));
-    auto batchBytes = parse<std::uint64_t>(node.options, key("resources.batch_bytes"));
-    auto endpointDatagrams = parse<std::uint64_t>(node.options, key("resources.endpoint_datagrams"));
-    auto endpointBytes = parse<std::uint64_t>(node.options, key("resources.endpoint_bytes"));
+    auto graphBytes = parse<std::uint64_t>(node.options, key("resources.graph_bytes"));
+    auto networkBytes = parse<std::uint64_t>(node.options, key("resources.network_bytes"));
     auto socketBytes = parse<std::uint64_t>(node.options, key("resources.socket_bytes"));
     auto resourcesAuthority = required(node.options, key("resources.authority"));
     auto localFamily = parse<std::uint8_t>(node.options, key("local.family"));
@@ -169,47 +170,69 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto maximumLatency = parse<std::int64_t>(node.options, key("latency.maximum_ns"));
     auto latencyAuthority = required(node.options, key("latency.authority"));
     auto runDatagrams = parse<std::uint64_t>(node.options, key("observation.run_datagrams"));
-    auto correlations = parse<std::uint64_t>(node.options, key("observation.correlation_entries"));
     auto drain = parse<std::int64_t>(node.options, key("observation.drain_ns"));
     auto evidencePolicy = parse<std::uint8_t>(node.options, key("observation.policy"));
     auto observationAuthority = required(node.options, key("observation.authority"));
+    auto receiverPresent = parse<std::uint8_t>(node.options, key("receiver.present"));
+    auto receiverDecodeLead = parse<std::int64_t>(node.options, key("receiver.decode_lead_ns"));
+    auto receiverPreroll = parse<std::int64_t>(node.options, key("receiver.startup_preroll_ns"));
+    auto receiverAuthority = required(node.options, key("receiver.authority"));
+    auto wireSustained = parse<std::uint64_t>(node.options, key("wire.sustained_bps"));
+    auto wirePeak = parse<std::uint64_t>(node.options, key("wire.peak_bps"));
+    auto wirePackets = parse<std::uint64_t>(node.options, key("wire.peak_datagrams"));
+    auto wireBurst = parse<std::uint64_t>(node.options, key("wire.burst_bytes"));
+    auto wirePayload = parse<std::uint64_t>(node.options, key("wire.udp_payload_bytes"));
+    auto wireDatagram = parse<std::uint64_t>(node.options, key("wire.datagram_bytes"));
+    auto wireAuthority = required(node.options, key("wire.authority"));
     auto endpointCount = parse<std::size_t>(node.options, key("endpoint_count"));
 #define REQUIRE_VALUE(name) if (!(name)) return Result::failure((name).error())
     REQUIRE_VALUE(session); REQUIRE_VALUE(scopeKind); REQUIRE_VALUE(scopeId);
-    REQUIRE_VALUE(scopeAuthority); REQUIRE_VALUE(mtuIp); REQUIRE_VALUE(mtuIpHeader);
-    REQUIRE_VALUE(mtuTransport); REQUIRE_VALUE(mtuPayload); REQUIRE_VALUE(mtuAuthority);
+    REQUIRE_VALUE(scopeAuthority); REQUIRE_VALUE(mtuFamily); REQUIRE_VALUE(mtuIp);
+    REQUIRE_VALUE(mtuPayload); REQUIRE_VALUE(mtuAuthority);
     REQUIRE_VALUE(sustained); REQUIRE_VALUE(peak); REQUIRE_VALUE(burst);
-    REQUIRE_VALUE(serviceAuthority); REQUIRE_VALUE(backlogDatagrams);
-    REQUIRE_VALUE(backlogBytes); REQUIRE_VALUE(residence); REQUIRE_VALUE(batchDatagrams);
-    REQUIRE_VALUE(batchBytes); REQUIRE_VALUE(endpointDatagrams); REQUIRE_VALUE(endpointBytes);
+    REQUIRE_VALUE(serviceAuthority); REQUIRE_VALUE(graphBytes);
+    REQUIRE_VALUE(networkBytes);
     REQUIRE_VALUE(socketBytes); REQUIRE_VALUE(resourcesAuthority); REQUIRE_VALUE(localFamily);
     REQUIRE_VALUE(localAddress); REQUIRE_VALUE(firstPort); REQUIRE_VALUE(portCount);
     REQUIRE_VALUE(localAuthority); REQUIRE_VALUE(targetLatency); REQUIRE_VALUE(maximumLatency);
-    REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(runDatagrams); REQUIRE_VALUE(correlations);
+    REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(runDatagrams);
     REQUIRE_VALUE(drain); REQUIRE_VALUE(evidencePolicy); REQUIRE_VALUE(observationAuthority);
+    REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
+    REQUIRE_VALUE(receiverPreroll); REQUIRE_VALUE(receiverAuthority);
+    REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
+    REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
+    REQUIRE_VALUE(wireAuthority);
     REQUIRE_VALUE(endpointCount);
 #undef REQUIRE_VALUE
     MediaRealtimeDeploymentEnvelopeEncoding deployment{
         {static_cast<MediaDatagramServiceScopeKind>(scopeKind.value()),
          std::move(scopeId).value(), std::move(scopeAuthority).value()},
-        {std::move(mtuAuthority).value(), mtuIp.value(), mtuIpHeader.value(),
-         mtuTransport.value(), mtuPayload.value()},
+        {static_cast<MediaIpAddressFamily>(mtuFamily.value()),
+         std::move(mtuAuthority).value(), mtuIp.value(), mtuPayload.value()},
         {sustained.value(), peak.value(), burst.value(),
          std::move(serviceAuthority).value()},
-        {backlogDatagrams.value(), backlogBytes.value(),
-         MediaRunningTime::fromNanoseconds(residence.value()), batchDatagrams.value(),
-         batchBytes.value(), endpointDatagrams.value(), endpointBytes.value(),
-         socketBytes.value(), std::move(resourcesAuthority).value()},
+        {graphBytes.value(), networkBytes.value(), socketBytes.value(),
+         std::move(resourcesAuthority).value()},
         {static_cast<MediaIpAddressFamily>(localFamily.value()),
          std::move(localAddress).value(), firstPort.value(), portCount.value(),
          std::move(localAuthority).value()},
         {MediaRunningTime::fromNanoseconds(targetLatency.value()),
          MediaRunningTime::fromNanoseconds(maximumLatency.value()),
          std::move(latencyAuthority).value()},
-        {runDatagrams.value(), correlations.value(),
+        {runDatagrams.value(),
          MediaRunningTime::fromNanoseconds(drain.value()),
          static_cast<MediaRealtimeTransmitEvidencePolicy>(evidencePolicy.value()),
-         std::move(observationAuthority).value()}};
+         std::move(observationAuthority).value()},
+        std::nullopt};
+    if (receiverPresent.value() == 1) {
+        deployment.receiverTiming = MediaRealtimeReceiverTimingCapability{
+            MediaRunningTime::fromNanoseconds(receiverDecodeLead.value()),
+            MediaRunningTime::fromNanoseconds(receiverPreroll.value()),
+            std::move(receiverAuthority).value()};
+    } else if (receiverPresent.value() != 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "receiver timing presence flag is invalid"));
+    }
     auto decodedDeployment = MediaRealtimeDeploymentEnvelope::decode(
         std::move(deployment));
     if (!decodedDeployment) return Result::failure(decodedDeployment.error());
@@ -236,7 +259,11 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     }
     return MediaDatagramTransportPlanTemplate::create(
         std::move(session).value(), decodedDeployment.value(),
-        std::move(endpoints));
+        std::move(endpoints),
+        MediaWireTrafficEnvelope{
+            wireSustained.value(), wirePeak.value(), wirePackets.value(),
+            wireBurst.value(), wirePayload.value(), wireDatagram.value(),
+            std::move(wireAuthority).value()});
 }
 
 } // namespace media::ffmpeg::graph

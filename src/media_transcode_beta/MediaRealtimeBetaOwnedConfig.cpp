@@ -156,20 +156,27 @@ copyDeployment(const mt_beta_realtime_deployment& source)
     MediaRealtimeDeploymentEnvelopeEncoding encoding;
     encoding.serviceScope = {
         scope, source.scope_id, source.scope_authority};
+    if (source.address_family != MT_BETA_IP_ADDRESS_FAMILY_IPV4 &&
+        source.address_family != MT_BETA_IP_ADDRESS_FAMILY_IPV6) {
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "deployment address family must be IPv4 or IPv6"));
+    }
+    const auto mtuAddressFamily =
+        source.address_family == MT_BETA_IP_ADDRESS_FAMILY_IPV4
+            ? MediaIpAddressFamily::Ipv4
+            : MediaIpAddressFamily::Ipv6;
     encoding.mtu = {
-        source.mtu_authority, source.maximum_ip_packet_bytes,
-        source.ip_header_bytes, source.transport_header_bytes,
-        source.sender_maximum_payload_bytes};
+        mtuAddressFamily, source.mtu_authority,
+        source.maximum_ip_packet_bytes, source.sender_maximum_payload_bytes};
     encoding.service = {
         source.sustained_wire_bytes_per_second,
         source.peak_wire_bytes_per_second, source.burst_wire_bytes,
         source.service_authority};
     encoding.resources = {
-        source.maximum_backlog_datagrams, source.maximum_backlog_bytes,
-        maximumResidence.value(), source.maximum_batch_datagrams,
-        source.maximum_batch_bytes,
-        source.maximum_endpoint_pending_datagrams,
-        source.maximum_endpoint_pending_bytes, source.socket_hard_bound_bytes,
+        source.maximum_graph_memory_bytes,
+        source.maximum_network_memory_bytes,
+        source.maximum_socket_memory_bytes,
         source.resource_authority};
     auto localAddress = parseNumericAddress(source.local_address);
     if (!localAddress) {
@@ -194,9 +201,31 @@ copyDeployment(const mt_beta_realtime_deployment& source)
     }
     encoding.observation = {
         source.observation_run_datagrams,
-        source.observation_correlation_entries, drainResidence.value(),
+        drainResidence.value(),
         evidencePolicy,
         source.observation_authority};
+    const bool hasReceiverTiming = source.receiver_timing_authority != nullptr ||
+        source.receiver_transport_decode_lead_ms != 0 ||
+        source.receiver_startup_emission_preroll_ms != 0;
+    if (hasReceiverTiming) {
+        if (auto valid = requireText(
+                source.receiver_timing_authority,
+                "receiver timing authority"); !valid) {
+            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+                valid.error());
+        }
+        auto decodeLead = runningMilliseconds(
+            source.receiver_transport_decode_lead_ms);
+        auto startupPreroll = runningMilliseconds(
+            source.receiver_startup_emission_preroll_ms);
+        if (!decodeLead || !startupPreroll) {
+            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+                !decodeLead ? decodeLead.error() : startupPreroll.error());
+        }
+        encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
+            decodeLead.value(), startupPreroll.value(),
+            source.receiver_timing_authority};
+    }
     return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));
 }
 

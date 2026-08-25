@@ -48,7 +48,7 @@ public:
         std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>
     create(std::uint64_t generation,
            MediaTsPacketCursor cursor,
-           std::uint8_t maximumPacketsPerDatagram,
+           std::uint16_t maximumPacketsPerDatagram,
            MediaRunningTime presentationOnMaster,
            MediaRunningTime canonicalRelease,
            MediaRunningTime canonicalDeadline);

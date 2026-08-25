@@ -4,6 +4,7 @@
 #include <limits>
 #include <new>
 #include <utility>
+#include <unordered_set>
 
 namespace media::ffmpeg::graph {
 
@@ -21,6 +22,42 @@ MediaDatagramTransmitSession::MediaDatagramTransmitSession(
 MediaDatagramTransmitSession::~MediaDatagramTransmitSession() noexcept
 {
     closePorts();
+}
+
+::media::Status MediaDatagramTransmitSession::validateActivation(
+    const MediaDatagramShapingPlan& plan,
+    const std::vector<MediaDatagramTransmitEndpointBinding>& bindings,
+    const MediaDatagramTransmitExecutionPlan& execution)
+{
+    if ((execution.mode !=
+             MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
+         execution.mode !=
+             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
+        execution.authority.empty() ||
+        bindings.size() != plan.endpoints().size() ||
+        (execution.mode ==
+             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
+            execution.kernelSchedule.has_value()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "invalid explicit Datagram transmit activation plan"));
+    }
+    try {
+        std::unordered_set<std::uint64_t> ids;
+        ids.reserve(bindings.size());
+        for (const auto& binding : bindings) {
+            if (binding.endpointId == 0 ||
+                !ids.insert(binding.endpointId).second ||
+                !plan.endpoint(binding.endpointId)) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Datagram transmit activation bindings do not match the shaping plan"));
+            }
+        }
+        return ::media::Status::success();
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "Datagram transmit activation validation"));
+    }
 }
 
 ::media::Result<std::unique_ptr<MediaDatagramTransmitSession>>

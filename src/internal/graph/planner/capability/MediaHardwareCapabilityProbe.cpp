@@ -2,6 +2,7 @@
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -104,7 +105,7 @@ bool decoderSupportsDevice(const AVCodec& decoder,
 }
 
 MediaHardwareCapability validateInternallyManagedRkmppChain(
-    const MediaPipelineChainPlan& chain,
+    MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
     if (!chain.decoder.outputFrame || !chain.encoder.inputFrame) {
@@ -242,6 +243,14 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     if (options.lowLatency) {
         encoderContext->max_b_frames = 0;
     }
+    if (!chain.encoder.encoderRateControl) {
+        return unavailable("RKMPP encoder emission contract is missing");
+    }
+    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
+        *encoderContext, *chain.encoder.encoderRateControl);
+    if (!applied) {
+        return unavailable(applied.error().message);
+    }
     const int encoderOpened = avcodec_open2(encoderContext.get(), encoder, nullptr);
     if (encoderOpened < 0) {
         return ffmpegUnavailable(
@@ -249,16 +258,75 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
             encoderOpened);
     }
 
+    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
+        *encoderContext, *chain.encoder.encoderRateControl,
+        encoderFrameRate, "opened-encoder-context:" + chain.encoder.ffmpegName,
+        "rkmpp");
+    if (!emission) {
+        return unavailable(emission.error().message);
+    }
+    chain.encoder.preparedEmission = std::move(emission).value();
     return {true, chain.filterActive
                       ? "internally managed RKMPP codecs and planned RGA graph negotiated"
                       : "internally managed RKMPP codecs opened without a filter"};
 }
 
-MediaHardwareCapability validateCompleteChain(
-    const MediaPipelineChainPlan& chain,
+MediaHardwareCapability validateSoftwareEncoder(
+    MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    if (!chain.allHardware || !chain.sameHardwareDevice) {
+    if (!chain.encoder.inputFrame || !chain.encoder.encoderRateControl) {
+        return unavailable("software encoder preflight contract is missing");
+    }
+    const AVCodec* encoder =
+        avcodec_find_encoder_by_name(chain.encoder.ffmpegName.c_str());
+    if (!encoder) {
+        return unavailable("planned encoder is unavailable: " +
+                           chain.encoder.ffmpegName);
+    }
+    auto context = ::media::ffmpeg::makeCodecContext(encoder);
+    if (!context) {
+        return unavailable("avcodec_alloc_context3(software encoder) returned null");
+    }
+    const auto cadence = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
+    context->width = options.targetWidth > 0
+        ? options.targetWidth : options.probeWidth;
+    context->height = options.targetHeight > 0
+        ? options.targetHeight : options.probeHeight;
+    context->pix_fmt = pixelFormat(chain.encoder.inputFrame->pixelFormat);
+    context->time_base = AVRational{cadence.den, cadence.num};
+    context->framerate = AVRational{cadence.num, cadence.den};
+    context->sample_aspect_ratio = AVRational{1, 1};
+    if (context->width <= 0 || context->height <= 0 ||
+        context->pix_fmt == AV_PIX_FMT_NONE || !cadence.isKnown()) {
+        return unavailable("software encoder preflight geometry is incomplete");
+    }
+    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
+        *context, *chain.encoder.encoderRateControl);
+    if (!applied) return unavailable(applied.error().message);
+    const int opened = avcodec_open2(context.get(), encoder, nullptr);
+    if (opened < 0) {
+        return ffmpegUnavailable(
+            "avcodec_open2(software encoder " + chain.encoder.ffmpegName + ")",
+            opened);
+    }
+    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
+        *context, *chain.encoder.encoderRateControl, cadence,
+        "opened-encoder-context:" + chain.encoder.ffmpegName, "ffmpeg-software");
+    if (!emission) return unavailable(emission.error().message);
+    chain.encoder.preparedEmission = std::move(emission).value();
+    return {true, "software encoder opened with effective emission readback"};
+}
+
+MediaHardwareCapability validateCompleteChain(
+    MediaPipelineChainPlan& chain,
+    const MediaPipelinePlannerOptions& options)
+{
+    if (!chain.allHardware) {
+        return validateSoftwareEncoder(chain, options);
+    }
+    if (!chain.sameHardwareDevice) {
         return unavailable(
             "hardware chain validation requires one hardware device across all active stages");
     }
@@ -372,6 +440,12 @@ MediaHardwareCapability validateCompleteChain(
     if (options.lowLatency) {
         encoderContext->max_b_frames = 0;
     }
+    if (!chain.encoder.encoderRateControl) {
+        return unavailable("hardware encoder emission contract is missing");
+    }
+    auto applied = MediaEncoderEmissionPreflightAdapter::applyBeforeOpen(
+        *encoderContext, *chain.encoder.encoderRateControl);
+    if (!applied) return unavailable(applied.error().message);
 
     if (device) {
         encoderContext->hw_device_ctx = av_buffer_ref(device.get());
@@ -438,6 +512,13 @@ MediaHardwareCapability validateCompleteChain(
             encoderOpened);
     }
 
+    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
+        *encoderContext, *chain.encoder.encoderRateControl,
+        encoderFrameRate, "opened-encoder-context:" + chain.encoder.ffmpegName,
+        chain.decoder.hwaccelName);
+    if (!emission) return unavailable(emission.error().message);
+    chain.encoder.preparedEmission = std::move(emission).value();
+
     return {true, "decoder/filter/encoder chain opened and negotiated"};
 }
 
@@ -502,6 +583,13 @@ MediaHardwareCapabilityProbe::MediaHardwareCapabilityProbe(
             ::media::ErrorInfo::hardwareUnavailable(
                 "hardware candidate " + chain.label + " failed validation: " +
                 capability.reason));
+    }
+    if (!chain.encoder.preparedEmission ||
+        chain.encoder.preparedEmission->authority.empty() ||
+        chain.encoder.preparedEmission->backend.empty()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "encoder preflight succeeded without effective emission readback"));
     }
     return ::media::Status::success();
 }
