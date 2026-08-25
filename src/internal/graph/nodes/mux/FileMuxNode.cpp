@@ -347,8 +347,13 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
         return terminalResult();
     }
     if (polled.value().output) {
-        auto emitted = remember(pushToAllOutputs(
-            context, polled.value().output));
+        auto emitted = pushToAllOutputs(context, polled.value().output);
+        if (!emitted &&
+            emitted.error().code == ::media::ErrorCode::WouldBlock) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                emitted.error());
+        }
+        emitted = remember(std::move(emitted));
         return emitted ? processProgress() : terminalResult();
     }
     if (polled.value().progressed) {

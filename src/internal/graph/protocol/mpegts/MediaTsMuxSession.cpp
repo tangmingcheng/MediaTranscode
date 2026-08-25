@@ -504,8 +504,24 @@ MediaTsMuxSession::advanceThroughAvailable(
                 "MPEG-TS mux session advance exceeded the maximum PCR gap"));
         }
     }
+    auto packetCount = materializeMaintenanceThrough(
+        emitOnMaster, availableThrough);
+    if (!packetCount) {
+        return ::media::Result<AdvanceResult>::failure(packetCount.error());
+    }
+    m_lastAdvance = emitOnMaster;
+    const auto deadline = m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi;
+    return ::media::Result<AdvanceResult>::success(
+        AdvanceResult{deadline, packetCount.value()});
+}
+
+::media::Result<std::size_t>
+MediaTsMuxSession::materializeMaintenanceThrough(
+    MediaRunningTime through,
+    MediaRunningTime availableThrough)
+{
     std::size_t packetCount = 0;
-    while (m_nextPcr <= emitOnMaster || m_nextPsi <= emitOnMaster) {
+    while (m_nextPcr <= through || m_nextPsi <= through) {
         const MediaRunningTime deadline =
             m_nextPsi < m_nextPcr ? m_nextPsi : m_nextPcr;
         const bool psiDue = m_nextPsi == deadline;
@@ -513,26 +529,29 @@ MediaTsMuxSession::advanceThroughAvailable(
         auto written = writeDueMaintenance(
             psiDue, pcrDue, deadline, availableThrough);
         if (!written) {
-            return ::media::Result<AdvanceResult>::failure(written.error());
+            return ::media::Result<std::size_t>::failure(written.error());
         }
         auto count = checkedPacketCount(packetCount, written.value());
-        if (!count) return advanceFailure(count.error());
+        if (!count) {
+            return ::media::Result<std::size_t>::failure(count.error());
+        }
         packetCount = count.value();
         if (psiDue) {
             auto next = m_nextPsi.checkedAdd(m_plan.parameters().psiRepeatInterval);
-            if (!next) return advanceFailure(next.error());
+            if (!next) {
+                return ::media::Result<std::size_t>::failure(next.error());
+            }
             m_nextPsi = next.value();
         }
         if (pcrDue) {
             auto next = m_nextPcr.checkedAdd(m_plan.clockPolicy().pcrInterval);
-            if (!next) return advanceFailure(next.error());
+            if (!next) {
+                return ::media::Result<std::size_t>::failure(next.error());
+            }
             m_nextPcr = next.value();
         }
     }
-    m_lastAdvance = emitOnMaster;
-    const auto deadline = m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi;
-    return ::media::Result<AdvanceResult>::success(
-        AdvanceResult{deadline, packetCount});
+    return ::media::Result<std::size_t>::success(packetCount);
 }
 
 ::media::Result<MediaTsMuxSession::AdvanceResult>

@@ -77,6 +77,9 @@ private:
     ::media::Result<AdvanceResult> advanceThroughAvailable(
         MediaRunningTime emitOnMaster,
         MediaRunningTime availableThrough);
+    ::media::Result<std::size_t> materializeMaintenanceThrough(
+        MediaRunningTime deadline,
+        MediaRunningTime availableThrough);
     ::media::Status completePending();
     ::media::Status poison(::media::ErrorInfo error);
     ::media::Status stateFailure(const char* action);

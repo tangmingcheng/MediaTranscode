@@ -374,8 +374,13 @@ struct ContinuousTimelineReservation final {
         active.committedWireBytes + wire.value();
     const std::int64_t selectedRate =
         active.selectedWireBytesPerSecond;
-    auto timeline = reserveContinuousTimeline(
-        state, active.timelineAvailableAt, wire.value(), selectedRate);
+    auto timeline = state.plan.usesScheduledDatagramOutput()
+        ? ::media::Result<ContinuousTimelineReservation>::success(
+              ContinuousTimelineReservation{
+                  active.timelineAvailableAt,
+                  MediaRunningTime::fromNanoseconds(0)})
+        : reserveContinuousTimeline(
+              state, active.timelineAvailableAt, wire.value(), selectedRate);
     auto plannedWait = active.timelineAvailableAt.checkedSubtract(
         active.emitOnMaster);
     if (!timeline || !plannedWait ||
@@ -564,21 +569,26 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
             ? std::optional<MediaRunningTime>(
                   m_state->plan.videoInitialServiceWindow())
             : m_state->plan.audioInitialServiceWindow();
-    if (!remainingWindow || remainingWindow.value().nanoseconds() <= 0 ||
-        !plannedServiceWindow) {
-        return Result::failure(
-            remainingWindow
-                ? ::media::ErrorInfo::invalidArgument(
-                      "MPEG-TS access unit has no transport service window")
-                : remainingWindow.error());
+    if (!remainingWindow) return Result::failure(remainingWindow.error());
+    if (remainingWindow.value().nanoseconds() <= 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS access unit has no transport service window"));
+    }
+    if (!plannedServiceWindow) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS access unit has no planned service window"));
     }
     const MediaRunningTime serviceWindow = (std::min)(
         remainingWindow.value(), *plannedServiceWindow);
     auto selectedRate = wireRateForWindow(
         totalWire.value(), serviceWindow);
     if (!selectedRate) return Result::failure(selectedRate.error());
-    auto fullReservation = reserveContinuousTimeline(
-        *m_state, serviceStart, totalWire.value(), selectedRate.value());
+    auto fullReservation = scheduledOutput
+        ? ::media::Result<ContinuousTimelineReservation>::success(
+              ContinuousTimelineReservation{
+                  serviceStart, MediaRunningTime::fromNanoseconds(0)})
+        : reserveContinuousTimeline(
+              *m_state, serviceStart, totalWire.value(), selectedRate.value());
     if (!fullReservation) {
         return Result::failure(fullReservation.error());
     }
@@ -689,9 +699,27 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
         auto maintenanceRate = maintenanceWindow &&
                 maintenanceWindow.value().nanoseconds() > 0
             ? wireRateForWindow(totalWire.value(), maintenanceWindow.value())
-            : ::media::Result<std::int64_t>::failure(
-                  ::media::ErrorInfo::invalidArgument(
-                      "MPEG-TS maintenance has no receiver timing window"));
+            : [&]() {
+                  std::ostringstream message;
+                  message << "MPEG-TS maintenance has no receiver timing window"
+                          << "; not_before_ns=" << notBefore.nanoseconds()
+                          << "; parent_available_ns="
+                          << parentAvailableAt.nanoseconds()
+                          << "; service_start_ns="
+                          << serviceStart.nanoseconds()
+                          << "; completion_deadline_ns="
+                          << completionDeadline.nanoseconds()
+                          << "; access_unit_active="
+                          << (m_state->activeAccessUnit ? 1 : 0)
+                          << "; schedule_available_ns="
+                          << m_state->availableAt.nanoseconds()
+                          << "; target_residence_ns="
+                          << m_state->plan.targetServiceResidence().nanoseconds()
+                          << "; access_unit_window_ns="
+                          << m_state->plan.accessUnitWindow().nanoseconds();
+                  return ::media::Result<std::int64_t>::failure(
+                      ::media::ErrorInfo::invalidArgument(message.str()));
+              }();
         if (!maintenanceRate) {
             return ::media::Status::failure(maintenanceRate.error());
         }
@@ -711,8 +739,10 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
                         "MPEG-TS maintenance and access-unit service contracts differ"));
             }
         }
-        auto groupReservation = reserveContinuousTimeline(
-            *m_state, serviceStart, totalWire.value(), selectedRate);
+        auto groupReservation =
+            ::media::Result<ContinuousTimelineReservation>::success(
+                ContinuousTimelineReservation{
+                    serviceStart, MediaRunningTime::fromNanoseconds(0)});
         if (!groupReservation ||
             groupReservation.value().completion > completionDeadline) {
             return ::media::Status::failure(
@@ -756,13 +786,9 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
     const MediaRunningTime serviceStart = group.timelineAvailableAt;
     const std::uint64_t nextCommittedWireBytes =
         group.committedWireBytes + wire.value();
-    auto timeline = group.scheduledReservation
-        ? reserveContinuousTimeline(
-              *m_state, serviceStart, wire.value(),
-              group.selectedWireBytesPerSecond)
-        : ::media::Result<ContinuousTimelineReservation>::success(
-              ContinuousTimelineReservation{
-                  serviceStart, MediaRunningTime::fromNanoseconds(0)});
+    auto timeline = ::media::Result<ContinuousTimelineReservation>::success(
+        ContinuousTimelineReservation{
+            serviceStart, MediaRunningTime::fromNanoseconds(0)});
     auto plannedWait = serviceStart.checkedSubtract(group.notBefore);
     if (!wire || wire.value() >
             static_cast<std::uint64_t>(
