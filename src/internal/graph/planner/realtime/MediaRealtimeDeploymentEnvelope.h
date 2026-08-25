@@ -84,8 +84,6 @@ struct MediaRealtimeDeploymentManagedServiceFact final {
 struct MediaRealtimeReceiverTimingCapability final {
     MediaRunningTime transportDecodeLead =
         MediaRunningTime::fromNanoseconds(0);
-    MediaRunningTime startupEmissionPreroll =
-        MediaRunningTime::fromNanoseconds(0);
     std::string authority;
     friend bool operator==(const MediaRealtimeReceiverTimingCapability&,
                            const MediaRealtimeReceiverTimingCapability&) = default;

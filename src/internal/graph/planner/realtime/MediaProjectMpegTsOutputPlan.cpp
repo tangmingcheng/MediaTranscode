@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 
+#include "internal/graph/planner/realtime/MediaTsReceiverTimingPlanner.h"
+
 #include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -20,7 +22,6 @@ constexpr std::int64_t ProjectPsiRepeatIntervalNs = 100'000'000;
 constexpr std::uint8_t ProjectH264StreamType = 0x1B;
 constexpr std::uint8_t ProjectHevcStreamType = 0x24;
 constexpr std::uint8_t ProjectAacStreamType = 0x0F;
-constexpr std::int64_t ProjectPcrIntervalNs = 20'000'000;
 constexpr std::int64_t ProjectMaximumPcrGapNs = 100'000'000;
 constexpr std::int64_t ProjectMaximumPcrJitterNs = 5'000'000;
 constexpr int ProjectClockTimeBaseNumerator = 1;
@@ -42,7 +43,7 @@ constexpr MediaTsAudioVideoContinuitySeeds ProjectAvContinuitySeeds{
             ProjectPsiRepeatIntervalNs ||
         parameters.parameterSetPolicy !=
             MediaTsParameterSetPolicy::BeforeRandomAccess ||
-        parameters.clock.pcrInterval.nanoseconds() != ProjectPcrIntervalNs ||
+        parameters.clock.pcrInterval != MediaTsReceiverTimingPlanner::pcrInterval() ||
         parameters.clock.maximumPcrGap.nanoseconds() !=
             ProjectMaximumPcrGapNs ||
         parameters.clock.maximumPcrJitter.nanoseconds() !=
@@ -216,7 +217,7 @@ MediaProjectMpegTsOutputPlan::createVideoOnly(
         videoInput.value(),
         MediaTsParameterSetPolicy::BeforeRandomAccess,
         MediaTsOutputClockPolicy{
-            MediaRunningTime::fromNanoseconds(ProjectPcrIntervalNs),
+            MediaTsReceiverTimingPlanner::pcrInterval(),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
             ProjectClockTimeBaseNumerator,
@@ -270,7 +271,7 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
         videoInput.value(),
         MediaTsParameterSetPolicy::BeforeRandomAccess,
         MediaTsOutputClockPolicy{
-            MediaRunningTime::fromNanoseconds(ProjectPcrIntervalNs),
+            MediaTsReceiverTimingPlanner::pcrInterval(),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
             ProjectClockTimeBaseNumerator,

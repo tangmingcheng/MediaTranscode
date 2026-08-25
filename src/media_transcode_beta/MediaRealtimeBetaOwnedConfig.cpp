@@ -205,8 +205,7 @@ copyDeployment(const mt_beta_realtime_deployment& source)
         evidencePolicy,
         source.observation_authority};
     const bool hasReceiverTiming = source.receiver_timing_authority != nullptr ||
-        source.receiver_transport_decode_lead_ms != 0 ||
-        source.receiver_startup_emission_preroll_ms != 0;
+        source.receiver_transport_decode_lead_ms != 0;
     if (hasReceiverTiming) {
         if (auto valid = requireText(
                 source.receiver_timing_authority,
@@ -216,14 +215,12 @@ copyDeployment(const mt_beta_realtime_deployment& source)
         }
         auto decodeLead = runningMilliseconds(
             source.receiver_transport_decode_lead_ms);
-        auto startupPreroll = runningMilliseconds(
-            source.receiver_startup_emission_preroll_ms);
-        if (!decodeLead || !startupPreroll) {
+        if (!decodeLead) {
             return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                !decodeLead ? decodeLead.error() : startupPreroll.error());
+                decodeLead.error());
         }
         encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
-            decodeLead.value(), startupPreroll.value(),
+            decodeLead.value(),
             source.receiver_timing_authority};
     }
     return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));

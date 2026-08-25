@@ -5,6 +5,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/planner/realtime/MediaTsReceiverTimingPlanner.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <cstdint>
@@ -207,11 +208,32 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::unsupported(
                 "MPEG-TS output transport is unsupported"));
     }
+    if (!request.parameters.video.frameRate.complete() ||
+        !request.parameters.video.frameRate.numerator ||
+        !request.parameters.video.frameRate.denominator) {
+        return ::media::Result<MediaTsMuxPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS receiver timing requires prepared video cadence"));
+    }
+    auto audioCadence = MediaRunningTime::checkedFromTicks(
+        resolvedFacts.audioOutput.codecFrameSamples(), 1,
+        resolvedFacts.audioOutput.sampleRate());
+    auto preroll = audioCadence
+        ? MediaTsReceiverTimingPlanner::startupEmissionPreroll(
+              request.deployment->encode().receiverTiming->transportDecodeLead,
+              MediaRational{
+                  *request.parameters.video.frameRate.numerator,
+                  *request.parameters.video.frameRate.denominator},
+              audioCadence.value())
+        : ::media::Result<MediaRunningTime>::failure(audioCadence.error());
+    if (!preroll) {
+        return ::media::Result<MediaTsMuxPlan>::failure(preroll.error());
+    }
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
         request.deployment->encode().receiverTiming->transportDecodeLead,
-        request.deployment->encode().receiverTiming->startupEmissionPreroll,
+        preroll.value(),
         *request.output.transport,
         maximumPacketsPerDatagram);
     if (!resolvedOutput) {

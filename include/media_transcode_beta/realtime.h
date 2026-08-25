@@ -173,7 +173,6 @@ typedef struct mt_beta_realtime_deployment {
     mt_beta_tx_evidence_policy tx_evidence_policy;
     const char* observation_authority;
     uint64_t receiver_transport_decode_lead_ms;
-    uint64_t receiver_startup_emission_preroll_ms;
     const char* receiver_timing_authority;
 } mt_beta_realtime_deployment;
 

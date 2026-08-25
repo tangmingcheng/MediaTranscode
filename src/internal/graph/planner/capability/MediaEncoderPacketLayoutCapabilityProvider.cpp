@@ -19,6 +19,13 @@ namespace {
 
 using LayoutResult = ::media::Result<MediaEncodedPacketLayout>;
 
+void clearFrameBuffers(AVFrame& frame) noexcept
+{
+    for (AVBufferRef* buffer : frame.buf) {
+        if (buffer) std::memset(buffer->data, 0, buffer->size);
+    }
+}
+
 bool startsWithStartCode(std::span<const std::uint8_t> bytes) noexcept
 {
     return bytes.size() >= 3 && bytes[0] == 0 && bytes[1] == 0 &&
@@ -125,9 +132,7 @@ LayoutResult encodeProbeFrame(AVCodecContext& context)
                     softwareAllocated,
                     "allocate encoder packet-layout software probe frame").error());
             }
-            for (AVBufferRef* buffer : software->buf) {
-                if (buffer) std::memset(buffer->data, 0, buffer->size);
-            }
+            clearFrameBuffers(*software);
             allocated = av_hwframe_transfer_data(frame.get(), software.get(), 0);
         }
     } else {
@@ -137,6 +142,10 @@ LayoutResult encodeProbeFrame(AVCodecContext& context)
                 "opened encoder has no probeable frame allocation contract"));
         }
         allocated = av_frame_get_buffer(frame.get(), 32);
+        if (allocated >= 0) {
+            allocated = av_frame_make_writable(frame.get());
+        }
+        if (allocated >= 0) clearFrameBuffers(*frame);
     }
     if (allocated < 0) {
         return LayoutResult::failure(FFmpegGraphError::statusFromCode(

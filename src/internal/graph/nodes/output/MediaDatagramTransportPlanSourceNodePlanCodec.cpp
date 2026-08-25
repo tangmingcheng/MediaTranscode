@@ -108,8 +108,6 @@ template <typename Value>
              put("receiver.present", d.receiverTiming ? 1 : 0),
              put("receiver.decode_lead_ns", d.receiverTiming
                  ? d.receiverTiming->transportDecodeLead.nanoseconds() : 0),
-             put("receiver.startup_preroll_ns", d.receiverTiming
-                 ? d.receiverTiming->startupEmissionPreroll.nanoseconds() : 0),
              set(graph, nodeId, key("receiver.authority"), d.receiverTiming
                  ? d.receiverTiming->authority : std::string("none")),
              put("wire.sustained_bps", encoding.wireTraffic.sustainedWireBytesPerSecond),
@@ -175,7 +173,6 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto observationAuthority = required(node.options, key("observation.authority"));
     auto receiverPresent = parse<std::uint8_t>(node.options, key("receiver.present"));
     auto receiverDecodeLead = parse<std::int64_t>(node.options, key("receiver.decode_lead_ns"));
-    auto receiverPreroll = parse<std::int64_t>(node.options, key("receiver.startup_preroll_ns"));
     auto receiverAuthority = required(node.options, key("receiver.authority"));
     auto wireSustained = parse<std::uint64_t>(node.options, key("wire.sustained_bps"));
     auto wirePeak = parse<std::uint64_t>(node.options, key("wire.peak_bps"));
@@ -198,7 +195,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(runDatagrams);
     REQUIRE_VALUE(drain); REQUIRE_VALUE(evidencePolicy); REQUIRE_VALUE(observationAuthority);
     REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
-    REQUIRE_VALUE(receiverPreroll); REQUIRE_VALUE(receiverAuthority);
+    REQUIRE_VALUE(receiverAuthority);
     REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
     REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
     REQUIRE_VALUE(wireAuthority);
@@ -227,7 +224,6 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     if (receiverPresent.value() == 1) {
         deployment.receiverTiming = MediaRealtimeReceiverTimingCapability{
             MediaRunningTime::fromNanoseconds(receiverDecodeLead.value()),
-            MediaRunningTime::fromNanoseconds(receiverPreroll.value()),
             std::move(receiverAuthority).value()};
     } else if (receiverPresent.value() != 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(

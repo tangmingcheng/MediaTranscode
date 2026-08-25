@@ -1,4 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+
+#include "internal/graph/planner/realtime/MediaTsReceiverTimingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
@@ -183,8 +185,38 @@ std::optional<int> resolvedAudioBitrateKbps(
         }
         output.muxedOutput.transportDecodeLead =
             deployment.receiverTiming->transportDecodeLead;
-        output.muxedOutput.startupEmissionPreroll =
-            deployment.receiverTiming->startupEmissionPreroll;
+        if (!plan.videoParameters.frameRate.complete() ||
+            !plan.videoParameters.frameRate.numerator ||
+            !plan.videoParameters.frameRate.denominator) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS receiver timing requires prepared video cadence"));
+        }
+        std::optional<MediaRunningTime> audioCadence;
+        if (plan.audioPlan && plan.audioPlan->preparedEmission) {
+            const auto& audio = *plan.audioPlan->preparedEmission;
+            if (audio.accessUnitsPerSecondNumerator >
+                    static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+                audio.accessUnitsPerSecondDenominator >
+                    static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "prepared audio cadence exceeds the timing numeric range"));
+            }
+            auto cadence = MediaRunningTime::checkedFromTicks(
+                1,
+                static_cast<int>(audio.accessUnitsPerSecondDenominator),
+                static_cast<int>(audio.accessUnitsPerSecondNumerator));
+            if (!cadence) return ::media::Status::failure(cadence.error());
+            audioCadence = cadence.value();
+        }
+        auto preroll = MediaTsReceiverTimingPlanner::startupEmissionPreroll(
+            deployment.receiverTiming->transportDecodeLead,
+            MediaRational{*plan.videoParameters.frameRate.numerator,
+                          *plan.videoParameters.frameRate.denominator},
+            audioCadence);
+        if (!preroll) return ::media::Status::failure(preroll.error());
+        output.muxedOutput.startupEmissionPreroll = preroll.value();
         output.muxedOutput.maximumDatagramBytes =
             static_cast<std::size_t>(packetSize.value());
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {

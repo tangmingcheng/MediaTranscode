@@ -11,6 +11,10 @@ namespace {
 constexpr std::uint64_t Ipv4HeaderBytes = 20;
 constexpr std::uint64_t Ipv6HeaderBytes = 40;
 constexpr std::uint64_t UdpHeaderBytes = 8;
+constexpr std::uint64_t MaximumUdpLength = 65'535;
+constexpr std::uint64_t MaximumIpv4PacketBytes = 65'535;
+constexpr std::uint64_t MaximumIpv6PacketBytesWithoutJumbogram =
+    MaximumUdpLength + Ipv6HeaderBytes;
 
 bool positive(MediaRunningTime value) noexcept
 {
@@ -46,8 +50,13 @@ MediaRealtimeDeploymentEnvelope::decode(
          scope.kind == MediaDatagramServiceScopeKind::ProvisionedEgress) &&
         !scope.scopeId.empty() && !scope.coverageAuthority.empty();
     const bool validMtu = !mtu.authority.empty() && ipHeaderBytes > 0 &&
+        mtu.maximumIpPacketBytes <=
+            (mtu.addressFamily == MediaIpAddressFamily::Ipv4
+                 ? MaximumIpv4PacketBytes
+                 : MaximumIpv6PacketBytesWithoutJumbogram) &&
         mtu.maximumIpPacketBytes > ipHeaderBytes + UdpHeaderBytes &&
         mtu.senderMaximumPayloadBytes > 0 &&
+        mtu.senderMaximumPayloadBytes <= MaximumUdpLength - UdpHeaderBytes &&
         mtu.senderMaximumPayloadBytes <=
             mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes;
     const bool validService = !service.authority.empty() &&
@@ -78,8 +87,7 @@ MediaRealtimeDeploymentEnvelope::decode(
             MediaRealtimeTransmitEvidencePolicy::Unknown;
     const bool validReceiverTiming = !encoding.receiverTiming ||
         (!encoding.receiverTiming->authority.empty() &&
-         positive(encoding.receiverTiming->transportDecodeLead) &&
-         positive(encoding.receiverTiming->startupEmissionPreroll));
+         positive(encoding.receiverTiming->transportDecodeLead));
     if (!validScope || !validMtu || !validService || !validResources ||
         !validLocalPorts ||
         !validLatency || !validObservation || !validReceiverTiming) {

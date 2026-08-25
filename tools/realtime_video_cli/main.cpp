@@ -146,7 +146,6 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-tx-evidence-policy",
         "--egress-observation-authority",
         "--receiver-transport-decode-lead-ms",
-        "--receiver-startup-emission-preroll-ms",
         "--receiver-timing-authority",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
@@ -264,18 +263,15 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
         requiredArg(argc, argv, "--egress-observation-authority")};
     const bool hasDecodeLead = hasArg(
         argc, argv, "--receiver-transport-decode-lead-ms");
-    const bool hasStartupPreroll = hasArg(
-        argc, argv, "--receiver-startup-emission-preroll-ms");
     const bool hasTimingAuthority = hasArg(
         argc, argv, "--receiver-timing-authority");
-    if (hasDecodeLead || hasStartupPreroll || hasTimingAuthority) {
-        if (!(hasDecodeLead && hasStartupPreroll && hasTimingAuthority)) {
+    if (hasDecodeLead || hasTimingAuthority) {
+        if (!(hasDecodeLead && hasTimingAuthority)) {
             throw std::invalid_argument(
-                "receiver timing capability requires decode lead, startup preroll, and authority together");
+                "receiver timing capability requires decode lead and authority together");
         }
         encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
             milliseconds("--receiver-transport-decode-lead-ms"),
-            milliseconds("--receiver-startup-emission-preroll-ms"),
             requiredArg(argc, argv, "--receiver-timing-authority")};
     }
     auto envelope = MediaRealtimeDeploymentEnvelope::decode(
