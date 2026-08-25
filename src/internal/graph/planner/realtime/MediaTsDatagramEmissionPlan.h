@@ -25,7 +25,6 @@ public:
     std::size_t maximumPayloadBytes() const noexcept;
     std::size_t perDatagramOverheadBytes() const noexcept;
     std::size_t maximumWireDatagramBytes() const noexcept;
-    bool usesScheduledDatagramOutput() const noexcept;
     MediaRunningTime videoInitialServiceWindow() const noexcept;
     const std::optional<MediaRunningTime>&
     audioInitialServiceWindow() const noexcept;
@@ -44,7 +43,6 @@ private:
         std::size_t packetSizeBytes,
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes,
-        bool scheduledDatagramOutput,
         std::uint64_t maximumQueuedBytes) noexcept;
 
     MediaRunningTime m_accessUnitWindow;
@@ -54,7 +52,6 @@ private:
     std::size_t m_packetSizeBytes;
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;
-    bool m_scheduledDatagramOutput;
     std::uint64_t m_maximumQueuedBytes;
 };
 

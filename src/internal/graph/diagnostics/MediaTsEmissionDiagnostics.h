@@ -23,8 +23,6 @@ struct MediaTsEmissionSnapshot final {
     std::uint64_t accessUnits = 0;
     std::int64_t currentSchedulingDebtNanoseconds = 0;
     std::int64_t maximumSchedulingDebtNanoseconds = 0;
-    std::int64_t selectedWireBytesPerSecond = 0;
-    std::int64_t maximumSelectedWireBytesPerSecond = 0;
 };
 
 class MediaTsEmissionDiagnostics final {

@@ -183,8 +183,7 @@ MediaTsPendingEmission::emitPrepared(
     const MediaRunningTime plannedWait = m_emission->plannedWait();
     const std::size_t wireBytes = m_emission->wireBytes();
     auto window = MediaTsDatagramEnqueueWindow::create(
-        selectedDeadline, m_emission->latestEmissionTime(),
-        m_emission->serviceDuration());
+        selectedDeadline, m_emission->latestEmissionTime());
     if (!window) {
         return ::media::Result<MediaTsBatchWriteResult>::failure(
             window.error());

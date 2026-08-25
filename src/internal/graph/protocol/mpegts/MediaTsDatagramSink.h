@@ -13,38 +13,30 @@ class MediaTsDatagramEnqueueWindow final {
 public:
     static ::media::Result<MediaTsDatagramEnqueueWindow> create(
         MediaRunningTime notBefore,
-        MediaRunningTime deadline,
-        MediaRunningTime serviceDuration)
+        MediaRunningTime deadline)
     {
-        if (deadline < notBefore ||
-            serviceDuration < MediaRunningTime::fromNanoseconds(0)) {
+        if (deadline < notBefore) {
             return ::media::Result<MediaTsDatagramEnqueueWindow>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS datagram enqueue window is inverted"));
         }
         return ::media::Result<MediaTsDatagramEnqueueWindow>::success(
             MediaTsDatagramEnqueueWindow(
-                notBefore, deadline, serviceDuration));
+                notBefore, deadline));
     }
 
     MediaRunningTime notBefore() const noexcept { return m_notBefore; }
     MediaRunningTime deadline() const noexcept { return m_deadline; }
-    MediaRunningTime serviceDuration() const noexcept {
-        return m_serviceDuration;
-    }
 
 private:
     MediaTsDatagramEnqueueWindow(
         MediaRunningTime notBefore,
-        MediaRunningTime deadline,
-        MediaRunningTime serviceDuration) noexcept
+        MediaRunningTime deadline) noexcept
         : m_notBefore(notBefore),
-          m_deadline(deadline),
-          m_serviceDuration(serviceDuration) {}
+          m_deadline(deadline) {}
 
     MediaRunningTime m_notBefore;
     MediaRunningTime m_deadline;
-    MediaRunningTime m_serviceDuration;
 };
 
 class MediaTsDatagramSink {

@@ -61,7 +61,6 @@ MediaTsDatagramEmissionPlan::create(
             targetServiceResidence,
             mux.packetSize,
             maximumPayloadBytes, perDatagramOverheadBytes,
-            mux.transportKind == MediaOutputTransportKind::RtpAvp,
             maximumQueuedBytes));
 }
 
@@ -73,7 +72,6 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     std::size_t packetSizeBytes,
     std::size_t maximumPayloadBytes,
     std::size_t perDatagramOverheadBytes,
-    bool scheduledDatagramOutput,
     std::uint64_t maximumQueuedBytes) noexcept
     : m_accessUnitWindow(accessUnitWindow)
     , m_videoInitialServiceWindow(videoInitialServiceWindow)
@@ -82,7 +80,6 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     , m_packetSizeBytes(packetSizeBytes)
     , m_maximumPayloadBytes(maximumPayloadBytes)
     , m_perDatagramOverheadBytes(perDatagramOverheadBytes)
-    , m_scheduledDatagramOutput(scheduledDatagramOutput)
     , m_maximumQueuedBytes(maximumQueuedBytes)
 {
 }
@@ -112,11 +109,6 @@ std::size_t
 MediaTsDatagramEmissionPlan::maximumWireDatagramBytes() const noexcept
 {
     return m_maximumPayloadBytes + m_perDatagramOverheadBytes;
-}
-
-bool MediaTsDatagramEmissionPlan::usesScheduledDatagramOutput() const noexcept
-{
-    return m_scheduledDatagramOutput;
 }
 
 MediaRunningTime

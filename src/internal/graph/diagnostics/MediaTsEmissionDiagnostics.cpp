@@ -68,11 +68,6 @@ void MediaTsEmissionDiagnostics::recordAccessUnitDecision(
     m_snapshot.maximumSchedulingDebtNanoseconds = (std::max)(
         m_snapshot.maximumSchedulingDebtNanoseconds,
         m_snapshot.currentSchedulingDebtNanoseconds);
-    m_snapshot.selectedWireBytesPerSecond =
-        decision.selectedWireBytesPerSecond;
-    m_snapshot.maximumSelectedWireBytesPerSecond = (std::max)(
-        m_snapshot.maximumSelectedWireBytesPerSecond,
-        decision.selectedWireBytesPerSecond);
 }
 
 void MediaTsEmissionDiagnostics::recordAccessUnitCompleted() noexcept
@@ -135,10 +130,6 @@ void MediaTsEmissionDiagnostics::logSnapshot(
         << m_snapshot.currentSchedulingDebtNanoseconds
         << " maximum_scheduling_debt_ns="
         << m_snapshot.maximumSchedulingDebtNanoseconds
-        << " selected_wire_bytes_per_second="
-        << m_snapshot.selectedWireBytesPerSecond
-        << " maximum_selected_wire_bytes_per_second="
-        << m_snapshot.maximumSelectedWireBytesPerSecond
         << " exit_reason=" << exitReason;
     mediaGraphDiagnosticLog(
         stage == "final"
