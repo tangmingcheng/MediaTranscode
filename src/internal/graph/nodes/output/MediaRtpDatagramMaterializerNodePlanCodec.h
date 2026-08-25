@@ -7,7 +7,7 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaDecodedScheduledRtpSenderNodePlan final {
+struct MediaDecodedRtpDatagramMaterializerNodePlan final {
     MediaProtocolOutputSessionKey sessionKey;
     MediaTranscodeStreamSet streamSet;
     MediaScheduledRtpOutputPlan output;
@@ -24,7 +24,7 @@ public:
         const MediaScheduledRtpOutputPlan& output,
         const MediaSeparateRtpSdpRuntimePlan& sdp);
 
-    static ::media::Result<MediaDecodedScheduledRtpSenderNodePlan> decode(
+    static ::media::Result<MediaDecodedRtpDatagramMaterializerNodePlan> decode(
         const MediaNode& node);
 
 private:

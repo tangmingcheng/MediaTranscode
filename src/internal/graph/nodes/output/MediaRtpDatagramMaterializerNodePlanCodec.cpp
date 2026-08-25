@@ -194,11 +194,11 @@ template <typename Unsigned>
     });
 }
 
-::media::Result<MediaDecodedScheduledRtpSenderNodePlan>
+::media::Result<MediaDecodedRtpDatagramMaterializerNodePlan>
 MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
 {
     using DecodedResult =
-        ::media::Result<MediaDecodedScheduledRtpSenderNodePlan>;
+        ::media::Result<MediaDecodedRtpDatagramMaterializerNodePlan>;
     if (node.kind != MediaNodeKind::RtpDatagramMaterializer ||
         !hasExactOptionKeys(node.options)) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
@@ -373,7 +373,7 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         sdpCname.value(),
         MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
         MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration};
-    return DecodedResult::success(MediaDecodedScheduledRtpSenderNodePlan{
+    return DecodedResult::success(MediaDecodedRtpDatagramMaterializerNodePlan{
         std::move(sessionKey), std::move(streamSet).value(),
         std::move(output), std::move(sdp)});
 }
