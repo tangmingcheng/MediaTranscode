@@ -203,7 +203,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             MediaDatagramNetworkMemoryPlan{
                 deployment.resources.maximumNetworkMemoryBytes,
                 resources.admittedNetworkBytes,
-                deployment.resources.maximumSocketMemoryBytes},
+                resources.admittedSocketBytes},
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue,
             MediaDatagramOrderingMode::CanonicalOrdered,
             MediaDatagramLimitFailureMode::Terminate,

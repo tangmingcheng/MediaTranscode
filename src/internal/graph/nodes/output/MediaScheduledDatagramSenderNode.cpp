@@ -179,6 +179,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_serviceScopeId = plan.shaping.serviceScope().scopeId;
     m_executionMode = mode;
     m_wireOverheadBytes.clear();
+    m_endpointIds.clear();
+    m_endpointDatagrams.clear();
+    m_endpointBytes.clear();
     for (const auto& endpoint : plan.shaping.endpoints()) {
         m_endpointIds.push_back(endpoint.endpointId);
         m_endpointDatagrams.emplace(endpoint.endpointId, 0);
