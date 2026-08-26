@@ -16,7 +16,7 @@ namespace {
 
 constexpr std::string_view Owner = "MediaRtpDatagramMaterializerNodePlanCodec";
 constexpr const char* NodeName = "MediaRtpDatagramMaterializerNode";
-constexpr std::array<const char*, 33> OptionKeys{
+constexpr std::array<const char*, 41> OptionKeys{
     "scheduled_rtp.session",
     "scheduled_rtp.stream_set",
     "scheduled_rtp.stream",
@@ -41,7 +41,15 @@ constexpr std::array<const char*, 33> OptionKeys{
     "scheduled_rtp.clock_rate",
     "scheduled_rtp.cname",
     "scheduled_rtp.sender_lead_ns",
-    "scheduled_rtp.sender_report_interval_ns",
+    "scheduled_rtp.rtcp_steady_base_interval_ns",
+    "scheduled_rtp.rtcp.initial_interval_ns",
+    "scheduled_rtp.rtcp.minimum_admission_interval_ns",
+    "scheduled_rtp.rtcp.maximum_session_members",
+    "scheduled_rtp.rtcp.active_senders",
+    "scheduled_rtp.rtcp.session_bandwidth_bytes_per_second",
+    "scheduled_rtp.rtcp.compound_packet_bytes",
+    "scheduled_rtp.rtcp.membership_authority",
+    "scheduled_rtp.rtcp.bandwidth_authority",
     "scheduled_rtp.sdp.path",
     "scheduled_rtp.sdp.origin_username",
     "scheduled_rtp.sdp.session_name",
@@ -204,8 +212,24 @@ template <typename Unsigned>
         {"scheduled_rtp.cname", output.cname},
         {"scheduled_rtp.sender_lead_ns",
              std::to_string(output.senderLead.nanoseconds())},
-        {"scheduled_rtp.sender_report_interval_ns",
-             std::to_string(output.senderReportInterval.nanoseconds())},
+        {"scheduled_rtp.rtcp_steady_base_interval_ns",
+             std::to_string(output.rtcpReporting.steadyBaseInterval().nanoseconds())},
+        {"scheduled_rtp.rtcp.initial_interval_ns", std::to_string(
+             output.rtcpReporting.initialBaseInterval().nanoseconds())},
+        {"scheduled_rtp.rtcp.minimum_admission_interval_ns", std::to_string(
+             output.rtcpReporting.minimumAdmissionInterval().nanoseconds())},
+        {"scheduled_rtp.rtcp.maximum_session_members", std::to_string(
+             output.rtcpReporting.facts().maximumSessionMembers)},
+        {"scheduled_rtp.rtcp.active_senders", std::to_string(
+             output.rtcpReporting.facts().activeSenders)},
+        {"scheduled_rtp.rtcp.session_bandwidth_bytes_per_second", std::to_string(
+             output.rtcpReporting.facts().sessionBandwidthBytesPerSecond)},
+        {"scheduled_rtp.rtcp.compound_packet_bytes", std::to_string(
+             output.rtcpReporting.facts().compoundPacketBytes)},
+        {"scheduled_rtp.rtcp.membership_authority",
+             output.rtcpReporting.facts().membershipAuthority},
+        {"scheduled_rtp.rtcp.bandwidth_authority",
+             output.rtcpReporting.facts().bandwidthAuthority},
         {"scheduled_rtp.sdp.path", sdp.path},
         {"scheduled_rtp.sdp.origin_username", sdp.originUsername},
         {"scheduled_rtp.sdp.session_name", sdp.sessionName},
@@ -388,7 +412,27 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
     auto senderLead = requiredPositiveInt64NodeOption(
         &node.options, NodeName, "scheduled_rtp.sender_lead_ns");
     auto reportInterval = requiredPositiveInt64NodeOption(
-        &node.options, NodeName, "scheduled_rtp.sender_report_interval_ns");
+        &node.options, NodeName, "scheduled_rtp.rtcp_steady_base_interval_ns");
+    auto initialInterval = requiredPositiveInt64NodeOption(
+        &node.options, NodeName, "scheduled_rtp.rtcp.initial_interval_ns");
+    auto admissionInterval = requiredPositiveInt64NodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.rtcp.minimum_admission_interval_ns");
+    auto maximumMembers = parseUnsigned<std::uint32_t>(
+        node.options, "scheduled_rtp.rtcp.maximum_session_members");
+    auto activeSenders = parseUnsigned<std::uint32_t>(
+        node.options, "scheduled_rtp.rtcp.active_senders");
+    auto sessionBandwidth = parseUnsigned<std::uint64_t>(
+        node.options,
+        "scheduled_rtp.rtcp.session_bandwidth_bytes_per_second");
+    auto compoundBytes = parseUnsigned<std::uint64_t>(
+        node.options, "scheduled_rtp.rtcp.compound_packet_bytes");
+    auto membershipAuthority = requiredNodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.rtcp.membership_authority");
+    auto bandwidthAuthority = requiredNodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.rtcp.bandwidth_authority");
     auto sdpPath = requiredNodeOption(
         &node.options, NodeName, "scheduled_rtp.sdp.path");
     auto originUsername = requiredNodeOption(
@@ -407,7 +451,10 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         &node.options, NodeName,
         "scheduled_rtp.sdp.session_version_policy");
     if (!ssrc || !baseTimestamp || !clockRate || !cname || !senderLead ||
-        !reportInterval || !sdpPath || !originUsername || !sessionName ||
+        !reportInterval || !initialInterval || !admissionInterval ||
+        !maximumMembers || !activeSenders || !sessionBandwidth ||
+        !compoundBytes || !membershipAuthority || !bandwidthAuthority ||
+        !sdpPath || !originUsername || !sessionName ||
         !originFamily || !originAddress || !sdpCname || !sessionIdPolicy ||
         !sessionVersionPolicy) {
         const ::media::ErrorInfo error = !ssrc ? ssrc.error()
@@ -416,6 +463,14 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
             : !cname ? cname.error()
             : !senderLead ? senderLead.error()
             : !reportInterval ? reportInterval.error()
+            : !initialInterval ? initialInterval.error()
+            : !admissionInterval ? admissionInterval.error()
+            : !maximumMembers ? maximumMembers.error()
+            : !activeSenders ? activeSenders.error()
+            : !sessionBandwidth ? sessionBandwidth.error()
+            : !compoundBytes ? compoundBytes.error()
+            : !membershipAuthority ? membershipAuthority.error()
+            : !bandwidthAuthority ? bandwidthAuthority.error()
             : !sdpPath ? sdpPath.error()
             : !originUsername ? originUsername.error()
             : !sessionName ? sessionName.error()
@@ -442,6 +497,15 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP sender requires a valid session and matching stream set"));
     }
+    auto reporting = MediaRtcpReportingPolicy::create(
+        {maximumMembers.value(), activeSenders.value(),
+         sessionBandwidth.value(), compoundBytes.value(),
+         membershipAuthority.value(), bandwidthAuthority.value()},
+        MediaRunningTime::fromNanoseconds(initialInterval.value()),
+        MediaRunningTime::fromNanoseconds(reportInterval.value()),
+        MediaRunningTime::fromNanoseconds(admissionInterval.value()),
+        "RFC 3550 sections 6.2 and 6.3.1");
+    if (!reporting) return DecodedResult::failure(reporting.error());
     MediaScheduledRtpOutputPlan output{
         stream,
         std::move(transport).value(),
@@ -451,7 +515,7 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         clockRate.value(),
         cname.value(),
         MediaRunningTime::fromNanoseconds(senderLead.value()),
-        MediaRunningTime::fromNanoseconds(reportInterval.value())};
+        std::move(reporting).value()};
     MediaSeparateRtpSdpRuntimePlan sdp{
         sdpPath.value(),
         originUsername.value(),

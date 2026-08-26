@@ -149,7 +149,6 @@ void planRtpOutput(MediaAvSyncPlan& plan,
             groupIdentity + ".audio.timestamp");
     plan.rtpOutput->audioOutput.cname = cname;
     plan.rtpOutput->output.useSharedNtpEpoch = true;
-    plan.rtpOutput->output.senderReportIntervalNs = runningTime(Second);
 }
 
 void planTsInput(MediaAvSyncPlan& plan,

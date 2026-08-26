@@ -1046,7 +1046,8 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, output, options, std::move(avSync).value(), outputFrameRate);
+            plan, output, options, std::move(avSync).value(), outputFrameRate,
+            emission.value());
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
@@ -1102,7 +1103,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,
-            outputFrameRate);
+            outputFrameRate, emission.value());
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());

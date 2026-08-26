@@ -93,9 +93,13 @@ MediaRealtimeDeploymentEnvelope::decode(
     const bool validReceiverTiming = !encoding.receiverTiming ||
         (!encoding.receiverTiming->authority.empty() &&
          positive(encoding.receiverTiming->transportDecodeLead));
+    const bool validRtcpSession = !encoding.rtcpSession ||
+        (encoding.rtcpSession->maximumSessionMembers >= 2 &&
+         !encoding.rtcpSession->authority.empty());
     if (!validScope || !validMtu || !validService || !validResources ||
         !validLocalPorts ||
-        !validLatency || !validObservation || !validReceiverTiming) {
+        !validLatency || !validObservation || !validReceiverTiming ||
+        !validRtcpSession) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "realtime deployment envelope requires authoritative service scope, MTU, service curve, resource, latency, and observation facts"));

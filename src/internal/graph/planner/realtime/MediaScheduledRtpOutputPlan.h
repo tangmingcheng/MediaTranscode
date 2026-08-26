@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpRemoteEndpointPair.h"
+#include "internal/graph/protocol/rtp/MediaRtcpReportingPolicy.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
@@ -20,7 +21,7 @@ struct MediaScheduledRtpOutputPlan final {
     int clockRate;
     std::string cname;
     MediaRunningTime senderLead;
-    MediaRunningTime senderReportInterval;
+    MediaRtcpReportingPolicy rtcpReporting;
     friend bool operator==(const MediaScheduledRtpOutputPlan&,
                            const MediaScheduledRtpOutputPlan&) = default;
 };

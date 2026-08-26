@@ -133,15 +133,10 @@ namespace {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
             mapper.error());
     }
-    auto firstReport = activation.masterRelease.checkedAdd(
-        outputPlan.senderReportInterval);
-    if (!firstReport) {
-        return ::media::Result<ScheduledRtpSenderConfig>::failure(
-            firstReport.error());
-    }
     auto reportSchedule = MediaRtcpSenderReportSchedule::create(
-        firstReport.value(), outputPlan.senderReportInterval,
-        outputPlan.senderReportInterval, activation.generation);
+        activation.masterRelease, outputPlan.rtcpReporting,
+        outputPlan.rtcpReporting.steadyBaseInterval(), activation.generation,
+        outputPlan.ssrc);
     if (!reportSchedule) {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
             reportSchedule.error());

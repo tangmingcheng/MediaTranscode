@@ -135,7 +135,7 @@ namespace media::ffmpeg::graph {
             output->video.senderLead != runtime.scheduling.activationLead ||
             output->video.senderLead != runtime.scheduling.transportLead ||
             output->video.senderLead <= MediaRunningTime::fromNanoseconds(0) ||
-            output->video.senderReportInterval <=
+            output->video.rtcpReporting.steadyBaseInterval() <=
                 MediaRunningTime::fromNanoseconds(0) ||
             output->video.clockRate != 90'000 ||
             output->video.ssrc == 0 || output->video.cname.empty() ||

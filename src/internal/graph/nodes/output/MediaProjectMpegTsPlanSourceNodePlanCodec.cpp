@@ -52,6 +52,22 @@ constexpr const char* ReleaseJitterAuthorityKey =
     "project_mpeg_ts_plan.timing.release_jitter_authority";
 constexpr const char* ReleaseJitterSourceKey =
     "project_mpeg_ts_plan.timing.release_jitter_source";
+constexpr const char* RtcpInitialIntervalKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.initial_interval_ns";
+constexpr const char* RtcpAdmissionIntervalKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.minimum_admission_interval_ns";
+constexpr const char* RtcpMembersKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.maximum_session_members";
+constexpr const char* RtcpSendersKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.active_senders";
+constexpr const char* RtcpBandwidthKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.session_bandwidth_bytes_per_second";
+constexpr const char* RtcpCompoundBytesKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.compound_packet_bytes";
+constexpr const char* RtcpMembershipAuthorityKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.membership_authority";
+constexpr const char* RtcpBandwidthAuthorityKey =
+    "project_mpeg_ts_plan.transport.rtp.rtcp.bandwidth_authority";
 constexpr std::size_t VideoOnlyMuxFieldCount = 27;
 constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
@@ -74,7 +90,7 @@ constexpr std::array<const char*, 21> UdpKeys{
     PsiAuthorityKey, PsiSourceKey,
     ReleaseJitterAuthorityKey, ReleaseJitterSourceKey};
 
-constexpr std::array<const char*, 38> RtpKeys{
+constexpr std::array<const char*, 46> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -89,7 +105,7 @@ constexpr std::array<const char*, 38> RtpKeys{
     "project_mpeg_ts_plan.transport.rtp.ssrc",
     "project_mpeg_ts_plan.transport.rtp.base_timestamp",
     "project_mpeg_ts_plan.transport.rtp.cname",
-    "project_mpeg_ts_plan.transport.rtp.sender_report_interval_ns",
+    "project_mpeg_ts_plan.transport.rtp.rtcp_steady_base_interval_ns",
     "project_mpeg_ts_plan.transport.rtp.ts_packets_per_payload",
     "project_mpeg_ts_plan.transport.rtp.sdp.path",
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_username",
@@ -108,7 +124,11 @@ constexpr std::array<const char*, 38> RtpKeys{
     PcrIntervalAuthorityKey, PcrIntervalSourceKey,
     PcrGapAuthorityKey, PcrGapSourceKey,
     PsiAuthorityKey, PsiSourceKey,
-    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey};
+    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey,
+    RtcpInitialIntervalKey, RtcpAdmissionIntervalKey,
+    RtcpMembersKey, RtcpSendersKey, RtcpBandwidthKey,
+    RtcpCompoundBytesKey, RtcpMembershipAuthorityKey,
+    RtcpBandwidthAuthorityKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -512,7 +532,7 @@ bool sameRtpOutput(
         left.baseTimestamp() == right.baseTimestamp() &&
         left.initialSequenceNumber() == right.initialSequenceNumber() &&
         left.cname() == right.cname() &&
-        left.senderReportInterval() == right.senderReportInterval() &&
+        left.rtcpReporting() == right.rtcpReporting() &&
         left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
         left.tsPacketsPerPayload() == right.tsPacketsPerPayload() &&
         leftSdp.path == rightSdp.path &&
@@ -644,7 +664,7 @@ bool sameProtocol(
         {RtpKeys[12], std::to_string(rtp.baseTimestamp())},
         {RtpKeys[13], rtp.cname()},
         {RtpKeys[14],
-            std::to_string(rtp.senderReportInterval().nanoseconds())},
+            std::to_string(rtp.rtcpReporting().steadyBaseInterval().nanoseconds())},
         {RtpKeys[15], std::to_string(rtp.tsPacketsPerPayload())},
         {RtpKeys[16], rtp.sdp().path},
         {RtpKeys[17], rtp.sdp().originUsername},
@@ -682,7 +702,23 @@ bool sameProtocol(
          {ReleaseJitterAuthorityKey,
           output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().authority},
          {ReleaseJitterSourceKey, std::to_string(static_cast<unsigned>(
-              output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().source))}});
+              output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().source))},
+         {RtcpInitialIntervalKey, std::to_string(
+              rtp.rtcpReporting().initialBaseInterval().nanoseconds())},
+         {RtcpAdmissionIntervalKey, std::to_string(
+              rtp.rtcpReporting().minimumAdmissionInterval().nanoseconds())},
+         {RtcpMembersKey, std::to_string(
+              rtp.rtcpReporting().facts().maximumSessionMembers)},
+         {RtcpSendersKey, std::to_string(
+              rtp.rtcpReporting().facts().activeSenders)},
+         {RtcpBandwidthKey, std::to_string(
+              rtp.rtcpReporting().facts().sessionBandwidthBytesPerSecond)},
+         {RtcpCompoundBytesKey, std::to_string(
+              rtp.rtcpReporting().facts().compoundPacketBytes)},
+         {RtcpMembershipAuthorityKey,
+              rtp.rtcpReporting().facts().membershipAuthority},
+         {RtcpBandwidthAuthorityKey,
+              rtp.rtcpReporting().facts().bandwidthAuthority}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -792,6 +828,22 @@ bool sameProtocol(
         &node.options, Owner, RtpKeys[13]);
     auto reportInterval = requiredPositiveInt64NodeOption(
         &node.options, Owner, RtpKeys[14]);
+    auto initialInterval = requiredPositiveInt64NodeOption(
+        &node.options, Owner, RtcpInitialIntervalKey);
+    auto admissionInterval = requiredPositiveInt64NodeOption(
+        &node.options, Owner, RtcpAdmissionIntervalKey);
+    auto maximumMembers = parseUnsignedOption<std::uint32_t>(
+        node.options, RtcpMembersKey, false);
+    auto activeSenders = parseUnsignedOption<std::uint32_t>(
+        node.options, RtcpSendersKey, false);
+    auto sessionBandwidth = parseUnsignedOption<std::uint64_t>(
+        node.options, RtcpBandwidthKey, false);
+    auto compoundBytes = parseUnsignedOption<std::uint64_t>(
+        node.options, RtcpCompoundBytesKey, false);
+    auto membershipAuthority = requiredNodeOption(
+        &node.options, Owner, RtcpMembershipAuthorityKey);
+    auto bandwidthAuthority = requiredNodeOption(
+        &node.options, Owner, RtcpBandwidthAuthorityKey);
     auto packetCount = parseUnsignedOption<std::uint8_t>(
         node.options, RtpKeys[15], false);
     auto sdpPath = requiredNodeOption(
@@ -807,7 +859,10 @@ bool sameProtocol(
         &node.options, Owner, RtpKeys[21]);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
         !initialSequenceNumber ||
-        !cname || !reportInterval || !packetCount || !sdpPath ||
+        !cname || !reportInterval || !initialInterval ||
+        !admissionInterval || !maximumMembers || !activeSenders ||
+        !sessionBandwidth || !compoundBytes || !membershipAuthority ||
+        !bandwidthAuthority || !packetCount || !sdpPath ||
         !originUsername || !sessionName || !originFamily ||
         !originAddress || !sdpCname) {
         const ::media::ErrorInfo error =
@@ -818,6 +873,14 @@ bool sameProtocol(
             !initialSequenceNumber ? initialSequenceNumber.error() :
             !cname ? cname.error() :
             !reportInterval ? reportInterval.error() :
+            !initialInterval ? initialInterval.error() :
+            !admissionInterval ? admissionInterval.error() :
+            !maximumMembers ? maximumMembers.error() :
+            !activeSenders ? activeSenders.error() :
+            !sessionBandwidth ? sessionBandwidth.error() :
+            !compoundBytes ? compoundBytes.error() :
+            !membershipAuthority ? membershipAuthority.error() :
+            !bandwidthAuthority ? bandwidthAuthority.error() :
             !packetCount ? packetCount.error() :
             !sdpPath ? sdpPath.error() :
             !originUsername ? originUsername.error() :
@@ -827,10 +890,18 @@ bool sameProtocol(
             sdpCname.error();
         return Result::failure(error);
     }
+    auto reporting = MediaRtcpReportingPolicy::create(
+        {maximumMembers.value(), activeSenders.value(),
+         sessionBandwidth.value(), compoundBytes.value(),
+         membershipAuthority.value(), bandwidthAuthority.value()},
+        MediaRunningTime::fromNanoseconds(initialInterval.value()),
+        MediaRunningTime::fromNanoseconds(reportInterval.value()),
+        MediaRunningTime::fromNanoseconds(admissionInterval.value()),
+        "RFC 3550 sections 6.2 and 6.3.1");
+    if (!reporting) return Result::failure(reporting.error());
     auto rtp = MediaMpegTsRtpOutputPlan::create(
         std::move(transport).value(), maximumDatagram.value(), sdpPath.value(),
-        originUsername.value(),
-        MediaRunningTime::fromNanoseconds(reportInterval.value()));
+        originUsername.value(), std::move(reporting).value());
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
     auto emission = decodeEmission(node.options, protocol.muxPlan());

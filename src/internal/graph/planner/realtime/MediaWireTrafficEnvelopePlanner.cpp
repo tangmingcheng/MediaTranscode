@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
 #include "internal/graph/planner/realtime/MediaWireBurstGeometry.h"
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
 #include <algorithm>
 #include <string>
@@ -21,8 +22,6 @@ constexpr std::uint64_t TsPayloadBytes = 184;
 constexpr std::uint64_t VideoPesHeaderBytes = 19;
 constexpr std::uint64_t AudioPesAndAdtsHeaderBytes = 21;
 constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
-constexpr std::uint64_t RtcpSenderReportBytes = 28;
-constexpr std::uint64_t RtcpByeBytes = 8;
 
 ::media::Result<std::uint64_t> add(
     std::uint64_t left, std::uint64_t right, const char* fact)
@@ -56,12 +55,7 @@ std::uint64_t ipHeaderBytes(
 ::media::Result<std::uint64_t> rtcpCompoundBytes(
     std::size_t cnameBytes)
 {
-    auto sdes = add(4U + 4U + 2U + 1U,
-                    static_cast<std::uint64_t>(cnameBytes),
-                    "RTCP SDES bytes");
-    if (!sdes) return sdes;
-    const auto paddedSdes = (sdes.value() + 3U) & ~std::uint64_t{3};
-    return add(RtcpSenderReportBytes, paddedSdes, "RTCP compound bytes");
+    return MediaRtcpWireGeometry::compoundPayloadBytes(cnameBytes);
 }
 
 struct WireDemand final {
@@ -156,10 +150,10 @@ template <typename Emission>
 ::media::Result<WireDemand> addRtcp(
     WireDemand demand,
     std::string_view cname,
-    MediaRunningTime senderReportInterval)
+    const MediaRtcpReportingPolicy& reporting)
 {
     auto compound = rtcpCompoundBytes(cname.size());
-    const auto intervalNs = senderReportInterval.nanoseconds();
+    const auto intervalNs = reporting.minimumAdmissionInterval().nanoseconds();
     auto rate = compound && intervalNs > 0
         ? ceilScale(compound.value(), NanosecondsPerSecond,
                     static_cast<std::uint64_t>(intervalNs), "RTCP rate")
@@ -175,12 +169,12 @@ template <typename Emission>
     auto peak = add(demand.peakPayload, rate.value(),
                     "RTP and RTCP peak bytes");
     auto burst = add(demand.burstPayload,
-                     compound.value() + RtcpByeBytes,
+                     compound.value() + MediaRtcpWireGeometry::byePayloadBytes(),
                      "RTP and RTCP burst bytes");
     auto packets = add(demand.packetsPerSecond, 1U,
                        "RTP and RTCP packet rate");
     auto burstDiscreteDatagrams = add(
-        demand.burstDiscreteDatagrams, 1U,
+        demand.burstDiscreteDatagrams, 2U,
         "RTP and RTCP discrete burst datagrams");
     if (!sustained || !peak || !burst || !packets ||
         !burstDiscreteDatagrams) {
@@ -469,7 +463,7 @@ MediaWireTrafficEnvelopePlanner::plan(
     auto video = elementaryDemand(emission.video, output.video);
     auto withRtcp = video
         ? addRtcp(video.value(), output.video.cname,
-                  output.video.senderReportInterval)
+                  output.video.rtcpReporting)
         : video;
     return withRtcp
         ? finish(deployment, withRtcp.value(),
@@ -494,11 +488,11 @@ MediaWireTrafficEnvelopePlanner::plan(
     auto audio = elementaryDemand(*emission.audio, output.audio);
     auto videoRtcp = video
         ? addRtcp(video.value(), output.video.cname,
-                  output.video.senderReportInterval)
+                  output.video.rtcpReporting)
         : video;
     auto audioRtcp = audio
         ? addRtcp(audio.value(), output.audio.cname,
-                  output.audio.senderReportInterval)
+                  output.audio.rtcpReporting)
         : audio;
     auto combined = videoRtcp && audioRtcp
         ? combine(videoRtcp.value(), audioRtcp.value())
@@ -527,7 +521,7 @@ MediaWireTrafficEnvelopePlanner::plan(
     }
     if (rtp) {
         auto rtcp = addRtcp(
-            demand.value(), rtp->cname(), rtp->senderReportInterval());
+            demand.value(), rtp->cname(), rtp->rtcpReporting());
         if (!rtcp) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 rtcp.error());

@@ -7,6 +7,10 @@
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <optional>
@@ -16,8 +20,6 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-
-constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 
 ::media::Result<MediaRealtimeEdgePolicySet> planBoundedEdgePolicies(
     const MediaRealtimeRtpTranscodePlanningDraft& outer,
@@ -199,7 +201,9 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
     MediaRealtimeScheduledRtpOutputPlanningDraft& plannedOutput,
     const MediaAvSyncRtpOutputStreamPlan& synchronization,
     MediaRunningTime senderLead,
-    MediaRunningTime senderReportInterval)
+    const MediaRealtimeDeploymentEnvelope& deployment,
+    std::uint64_t sessionBandwidthBytesPerSecond,
+    std::string bandwidthAuthority)
 {
     if (!synchronization.payloadType || !synchronization.ssrc ||
         !synchronization.baseTimestamp || !synchronization.clockRate ||
@@ -209,6 +213,21 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
         return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "scheduled RTP output requires complete protocol planning facts"));
+    }
+    const auto& endpoint = plannedOutput.scheduledTransport->remoteRtpEndpoint();
+    auto address = MediaNumericIpAddress::create(
+        endpoint.addressFamily(), endpoint.numericAddress());
+    auto compoundWire = MediaRtcpWireGeometry::compoundWireBytes(
+        synchronization.cname->size(), endpoint.addressFamily());
+    auto reporting = address && compoundWire
+        ? MediaRtcpReportingPolicyPlanner::plan(
+              deployment, address.value(), sessionBandwidthBytesPerSecond,
+              std::move(bandwidthAuthority), compoundWire.value())
+        : ::media::Result<MediaRtcpReportingPolicy>::failure(
+              !address ? address.error() : compoundWire.error());
+    if (!reporting) {
+        return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
+            reporting.error());
     }
     return ::media::Result<MediaScheduledRtpOutputPlan>::success(
         MediaScheduledRtpOutputPlan{
@@ -220,7 +239,7 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
             *synchronization.clockRate,
             *synchronization.cname,
             senderLead,
-            senderReportInterval});
+            std::move(reporting).value()});
 }
 
 ::media::Result<MediaSeparateRtpSdpRuntimePlan> scheduledSdp(
@@ -265,7 +284,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeOutputPlanningDraft& output,
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaAvSyncPlan synchronization,
-    MediaRational outputFrameRate)
+    MediaRational outputFrameRate,
+    const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
     if (!outer.audioPlan) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -351,7 +371,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
             outer.outputTransport != MediaOutputTransportKind::RtpAvp ||
             !synchronization.startup.outputLeadNs ||
-            !synchronization.rtpOutput->output.senderReportIntervalNs ||
+            !request.deployment || !preparedEmission.audio ||
             output.sdp.path.empty() || !audio.resolvedOutput) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -362,13 +382,17 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             output.videoOutput,
             synchronization.rtpOutput->videoOutput,
             *synchronization.startup.outputLeadNs,
-            *synchronization.rtpOutput->output.senderReportIntervalNs);
+            *request.deployment,
+            preparedEmission.video.sustainedPayloadBytesPerSecond,
+            preparedEmission.video.authority);
         auto audio = scheduledRtpOutput(
             MediaScheduledStream::Audio,
             output.audioOutput,
             synchronization.rtpOutput->audioOutput,
             *synchronization.startup.outputLeadNs,
-            *synchronization.rtpOutput->output.senderReportIntervalNs);
+            *request.deployment,
+            preparedEmission.audio->sustainedPayloadBytesPerSecond,
+            preparedEmission.audio->authority);
         if (!video || !audio) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 video ? audio.error() : video.error());
@@ -459,12 +483,41 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP output requires complete planned transport facts"));
             }
+            auto sessionBandwidth = preparedEmission.audio
+                ? MediaRealtimePlanningArithmetic::add(
+                      preparedEmission.video.sustainedPayloadBytesPerSecond,
+                      preparedEmission.audio->sustainedPayloadBytesPerSecond,
+                      "MPEG-TS RTP session media bandwidth")
+                : ::media::Result<std::uint64_t>::success(
+                      preparedEmission.video.sustainedPayloadBytesPerSecond);
+            const auto& endpoint =
+                output.muxedOutput.rtpTransport->remoteRtpEndpoint();
+            auto address = MediaNumericIpAddress::create(
+                endpoint.addressFamily(), endpoint.numericAddress());
+            const auto cname = MediaRtpOutputIdentityPlanner::cname(
+                output.muxedOutput.mediaId);
+            auto compoundWire = MediaRtcpWireGeometry::compoundWireBytes(
+                cname.size(), endpoint.addressFamily());
+            auto reporting = sessionBandwidth && address && compoundWire
+                ? MediaRtcpReportingPolicyPlanner::plan(
+                      *request.deployment, address.value(),
+                      sessionBandwidth.value(),
+                      preparedEmission.video.authority + "+" +
+                          preparedEmission.audio->authority,
+                      compoundWire.value())
+                : ::media::Result<MediaRtcpReportingPolicy>::failure(
+                      !sessionBandwidth ? sessionBandwidth.error() :
+                      !address ? address.error() : compoundWire.error());
+            if (!reporting) {
+                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                    reporting.error());
+            }
             auto rtp = MediaMpegTsRtpOutputPlan::create(
                 std::move(*output.muxedOutput.rtpTransport),
                 *output.muxedOutput.maximumDatagramBytes,
                 output.muxedOutput.sdpPath,
                 output.muxedOutput.mediaId,
-                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));
+                std::move(reporting).value());
             if (!rtp ||
                 rtp.value().tsPacketsPerPayload() !=
                     accepted.value().muxPlan().parameters()

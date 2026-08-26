@@ -117,6 +117,11 @@ template <typename Value>
                  ? d.receiverTiming->transportDecodeLead.nanoseconds() : 0),
              set(graph, nodeId, key("receiver.authority"), d.receiverTiming
                  ? d.receiverTiming->authority : std::string("none")),
+             put("rtcp_session.present", d.rtcpSession ? 1 : 0),
+             put("rtcp_session.maximum_members", d.rtcpSession
+                 ? d.rtcpSession->maximumSessionMembers : 0),
+             set(graph, nodeId, key("rtcp_session.authority"), d.rtcpSession
+                 ? d.rtcpSession->authority : std::string("none")),
              put("wire.sustained_bps", encoding.wireTraffic.sustainedWireBytesPerSecond),
              put("wire.peak_bps", encoding.wireTraffic.peakWireBytesPerSecond),
              put("wire.peak_datagrams", encoding.wireTraffic.peakDatagramsPerSecond),
@@ -189,6 +194,12 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto receiverPresent = parse<std::uint8_t>(node.options, key("receiver.present"));
     auto receiverDecodeLead = parse<std::int64_t>(node.options, key("receiver.decode_lead_ns"));
     auto receiverAuthority = required(node.options, key("receiver.authority"));
+    auto rtcpSessionPresent = parse<std::uint8_t>(
+        node.options, key("rtcp_session.present"));
+    auto rtcpSessionMembers = parse<std::uint32_t>(
+        node.options, key("rtcp_session.maximum_members"));
+    auto rtcpSessionAuthority = required(
+        node.options, key("rtcp_session.authority"));
     auto wireSustained = parse<std::uint64_t>(node.options, key("wire.sustained_bps"));
     auto wirePeak = parse<std::uint64_t>(node.options, key("wire.peak_bps"));
     auto wirePackets = parse<std::uint64_t>(node.options, key("wire.peak_datagrams"));
@@ -215,6 +226,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(drain); REQUIRE_VALUE(evidencePolicy); REQUIRE_VALUE(observationAuthority);
     REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
     REQUIRE_VALUE(receiverAuthority);
+    REQUIRE_VALUE(rtcpSessionPresent); REQUIRE_VALUE(rtcpSessionMembers);
+    REQUIRE_VALUE(rtcpSessionAuthority);
     REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
     REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wireBurstDatagrams);
     REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
@@ -252,6 +265,15 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     } else if (receiverPresent.value() != 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "receiver timing presence flag is invalid"));
+    }
+    if (rtcpSessionPresent.value() == 1) {
+        deployment.rtcpSession = MediaRealtimeRtcpSessionCapability{
+            rtcpSessionMembers.value(),
+            std::move(rtcpSessionAuthority).value()};
+    } else if (rtcpSessionPresent.value() != 0 ||
+               rtcpSessionMembers.value() != 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTCP session capability presence is invalid"));
     }
     auto decodedDeployment = MediaRealtimeDeploymentEnvelope::decode(
         std::move(deployment));

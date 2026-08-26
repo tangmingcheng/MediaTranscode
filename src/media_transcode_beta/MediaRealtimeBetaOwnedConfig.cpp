@@ -252,6 +252,24 @@ copyDeployment(const mt_beta_realtime_deployment& source)
             decodeLead.value(),
             source.receiver_timing_authority};
     }
+    const bool hasRtcpSession = source.rtcp_session_authority != nullptr ||
+        source.maximum_rtcp_session_members != 0;
+    if (hasRtcpSession) {
+        if (source.maximum_rtcp_session_members < 2) {
+            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTCP session maximum members must be at least two"));
+        }
+        if (auto valid = requireText(
+                source.rtcp_session_authority,
+                "RTCP session authority"); !valid) {
+            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+                valid.error());
+        }
+        encoding.rtcpSession = MediaRealtimeRtcpSessionCapability{
+            source.maximum_rtcp_session_members,
+            source.rtcp_session_authority};
+    }
     return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "media_transcode/Result.h"
 
 namespace media::ffmpeg::graph {
@@ -16,7 +17,8 @@ public:
         MediaRealtimeOutputPlanningDraft output,
         const MediaRealtimeRtpTranscodeRequest& request,
         MediaRational sourceTimeBase,
-        MediaRational outputFrameRate);
+        MediaRational outputFrameRate,
+        const MediaPreparedRealtimeEmissionSet& preparedEmission);
 
 private:
     MediaRealtimeVideoRuntimePlanner() = delete;

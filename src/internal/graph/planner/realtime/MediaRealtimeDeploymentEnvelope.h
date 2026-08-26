@@ -100,6 +100,13 @@ struct MediaRealtimeReceiverTimingCapability final {
                            const MediaRealtimeReceiverTimingCapability&) = default;
 };
 
+struct MediaRealtimeRtcpSessionCapability final {
+    std::uint32_t maximumSessionMembers = 0;
+    std::string authority;
+    friend bool operator==(const MediaRealtimeRtcpSessionCapability&,
+                           const MediaRealtimeRtcpSessionCapability&) = default;
+};
+
 struct MediaRealtimeDeploymentEnvelopeEncoding final {
     MediaRealtimeDeploymentServiceScope serviceScope;
     MediaRealtimeDeploymentMtuFact mtu;
@@ -109,6 +116,7 @@ struct MediaRealtimeDeploymentEnvelopeEncoding final {
     MediaRealtimeDeploymentLatencyBudget latency;
     MediaRealtimeDeploymentObservationBudget observation;
     std::optional<MediaRealtimeReceiverTimingCapability> receiverTiming;
+    std::optional<MediaRealtimeRtcpSessionCapability> rtcpSession;
     friend bool operator==(const MediaRealtimeDeploymentEnvelopeEncoding&,
                            const MediaRealtimeDeploymentEnvelopeEncoding&) = default;
 };

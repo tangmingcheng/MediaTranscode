@@ -87,11 +87,11 @@ bool validRtpStream(
         candidate.cname == *synchronization.cname &&
         runtime.synchronization.startup.outputLeadNs &&
         runtime.synchronization.rtpOutput &&
-        runtime.synchronization.rtpOutput->output.senderReportIntervalNs &&
         candidate.senderLead ==
             *runtime.synchronization.startup.outputLeadNs &&
-        candidate.senderReportInterval ==
-            *runtime.synchronization.rtpOutput->output.senderReportIntervalNs;
+        candidate.rtcpReporting.steadyBaseInterval().nanoseconds() > 0 &&
+        candidate.rtcpReporting.minimumAdmissionInterval() <=
+            candidate.rtcpReporting.initialBaseInterval();
 }
 
 ::media::Status validateSeparateRtpOutput(
@@ -258,10 +258,10 @@ bool validRtpStream(
         rtp->initialSequenceNumber() !=
             MediaRtpOutputIdentityPlanner::stableSequenceNumber(
                 rtp->sdp().originUsername + ".output.mp2t.sequence") ||
-        rtp->senderReportInterval() <=
+        rtp->rtcpReporting().steadyBaseInterval() <=
             MediaRunningTime::fromNanoseconds(0) ||
         !runtime.synchronization.recovery.reacquisitionTimeoutNs ||
-        rtp->senderReportInterval() >=
+        rtp->rtcpReporting().steadyBaseInterval() >=
             *runtime.synchronization.recovery.reacquisitionTimeoutNs ||
         rtp->maximumDatagramBytes() >
             static_cast<std::size_t>(

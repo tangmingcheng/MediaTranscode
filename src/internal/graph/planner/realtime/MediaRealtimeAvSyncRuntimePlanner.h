@@ -4,6 +4,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 
 namespace media::ffmpeg::graph {
 
@@ -18,7 +19,8 @@ public:
         MediaRealtimeOutputPlanningDraft& output,
         const MediaRealtimeRtpTranscodeRequest& request,
         MediaAvSyncPlan synchronization,
-        MediaRational outputFrameRate);
+        MediaRational outputFrameRate,
+        const MediaPreparedRealtimeEmissionSet& preparedEmission);
 
 };
 

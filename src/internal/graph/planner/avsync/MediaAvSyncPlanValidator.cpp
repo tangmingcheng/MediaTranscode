@@ -409,10 +409,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !validRtpOutputStream(rtp.audioOutput) ||
         *rtp.videoOutput.ssrc == *rtp.audioOutput.ssrc ||
         *rtp.videoOutput.cname != *rtp.audioOutput.cname ||
-        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch ||
-        !positive(rtp.output.senderReportIntervalNs) ||
-        *rtp.output.senderReportIntervalNs >=
-            *plan.recovery.reacquisitionTimeoutNs) {
+        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch) {
         return invalid("RTP output identities, CNAME, or sender report policy");
     }
     return ::media::Status::success();

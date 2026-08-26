@@ -150,6 +150,8 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-observation-authority",
         "--receiver-transport-decode-lead-ms",
         "--receiver-timing-authority",
+        "--receiver-maximum-rtcp-session-members",
+        "--receiver-rtcp-session-authority",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
@@ -293,6 +295,26 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
         encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
             milliseconds("--receiver-transport-decode-lead-ms"),
             requiredArg(argc, argv, "--receiver-timing-authority")};
+    }
+    const bool hasRtcpMembers = hasArg(
+        argc, argv, "--receiver-maximum-rtcp-session-members");
+    const bool hasRtcpAuthority = hasArg(
+        argc, argv, "--receiver-rtcp-session-authority");
+    if (hasRtcpMembers || hasRtcpAuthority) {
+        if (!(hasRtcpMembers && hasRtcpAuthority)) {
+            throw std::invalid_argument(
+                "RTCP session capability requires maximum members and authority together");
+        }
+        const auto members = requiredSizeArg(
+            argc, argv, "--receiver-maximum-rtcp-session-members");
+        if (members < 2 || members > static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
+            throw std::invalid_argument(
+                "RTCP maximum session members must be within 2..uint32_max");
+        }
+        encoding.rtcpSession = MediaRealtimeRtcpSessionCapability{
+            static_cast<std::uint32_t>(members),
+            requiredArg(argc, argv, "--receiver-rtcp-session-authority")};
     }
     auto envelope = MediaRealtimeDeploymentEnvelope::decode(
         std::move(encoding));

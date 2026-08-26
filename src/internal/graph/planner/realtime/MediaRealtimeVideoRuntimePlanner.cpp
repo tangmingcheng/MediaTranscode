@@ -5,8 +5,10 @@
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
 #include <limits>
 #include <optional>
@@ -18,7 +20,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
-constexpr std::int64_t SenderReportIntervalNs = 1'000'000'000;
 constexpr int VideoRtpPayloadType = 96;
 constexpr int VideoRtpClockRate = 90'000;
 constexpr std::uint64_t InitialVideoGeneration = 1;
@@ -26,7 +27,8 @@ constexpr std::uint64_t InitialVideoGeneration = 1;
 ::media::Result<MediaVideoOnlySeparateRtpOutputRuntimePlan>
 planSeparateRtp(
     MediaRealtimeOutputPlanningDraft& output,
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaPreparedEncoderEmissionEnvelope& preparedEmission)
 {
     if (!output.videoOutput.scheduledTransport ||
         !output.videoOutput.scheduledPacketization ||
@@ -48,6 +50,23 @@ planSeparateRtp(
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             sdpIdentity.error());
     }
+    auto remoteAddress = MediaNumericIpAddress::create(
+        endpoint.addressFamily(), endpoint.numericAddress());
+    auto compoundWireBytes = MediaRtcpWireGeometry::compoundWireBytes(
+        cname.size(), endpoint.addressFamily());
+    auto rtcpPolicy = remoteAddress && compoundWireBytes
+        ? MediaRtcpReportingPolicyPlanner::plan(
+              *request.deployment, remoteAddress.value(),
+              preparedEmission.sustainedPayloadBytesPerSecond,
+              preparedEmission.authority,
+              compoundWireBytes.value())
+        : ::media::Result<MediaRtcpReportingPolicy>::failure(
+              !remoteAddress ? remoteAddress.error() : compoundWireBytes.error());
+    if (!rtcpPolicy) {
+        return ::media::Result<
+            MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
+                rtcpPolicy.error());
+    }
     MediaSeparateRtpSdpRuntimePlan sdp{
         output.sdp.path,
         identity,
@@ -68,7 +87,7 @@ planSeparateRtp(
         VideoRtpClockRate,
         cname,
         request.deployment->encode().latency.maximumResidence,
-        MediaRunningTime::fromNanoseconds(SenderReportIntervalNs)};
+        std::move(rtcpPolicy).value()};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
         MediaVideoOnlySeparateRtpOutputRuntimePlan{
@@ -81,7 +100,8 @@ planSeparateRtp(
     MediaRealtimeOutputPlanningDraft& output,
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaRational outputFrameRate,
-    const MediaRealtimeVideoStartupPlan& startup)
+    const MediaRealtimeVideoStartupPlan& startup,
+    const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
@@ -168,12 +188,30 @@ planSeparateRtp(
                 ::media::ErrorInfo::notInitialized(
                     "VideoOnly MPEG-TS/RTP requires complete RTP and SDP facts"));
         }
+        const auto& endpoint = output.muxedOutput.rtpTransport->remoteRtpEndpoint();
+        auto remoteAddress = MediaNumericIpAddress::create(
+            endpoint.addressFamily(), endpoint.numericAddress());
+        const auto cname = MediaRtpOutputIdentityPlanner::cname(request.mediaId);
+        auto compoundWireBytes = MediaRtcpWireGeometry::compoundWireBytes(
+            cname.size(), endpoint.addressFamily());
+        const auto& prepared = preparedEmission.video;
+        auto rtcpPolicy = remoteAddress && compoundWireBytes
+            ? MediaRtcpReportingPolicyPlanner::plan(
+                  *request.deployment, remoteAddress.value(),
+                  prepared.sustainedPayloadBytesPerSecond,
+                  prepared.authority, compoundWireBytes.value())
+            : ::media::Result<MediaRtcpReportingPolicy>::failure(
+                  !remoteAddress ? remoteAddress.error() : compoundWireBytes.error());
+        if (!rtcpPolicy) {
+            return ::media::Result<
+                MediaProjectMpegTsRuntimeOutputPlan>::failure(
+                    rtcpPolicy.error());
+        }
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
             *output.muxedOutput.maximumDatagramBytes,
             output.muxedOutput.sdpPath,
-            request.mediaId,
-            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
+            request.mediaId, std::move(rtcpPolicy).value());
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<
@@ -261,7 +299,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
     MediaRealtimeOutputPlanningDraft output,
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaRational sourceTimeBase,
-    MediaRational outputFrameRate)
+    MediaRational outputFrameRate,
+    const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
     if (!sourceTimeBase.isKnown() || sourceTimeBase.num <= 0 ||
         sourceTimeBase.den <= 0 || !outputFrameRate.isKnown() ||
@@ -320,7 +359,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
     std::optional<MediaRunningTime> activationOutputLead;
     std::optional<MediaRunningTime> transportLead;
     if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
-        auto planned = planSeparateRtp(output, request);
+        auto planned = planSeparateRtp(
+            output, request, preparedEmission.video);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
@@ -333,7 +373,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
     } else if (outer.outputLayout ==
                RealtimeOutputStreamLayout::MuxedTransportStream) {
         auto planned = planProjectMpegTs(
-            outer, output, request, outputFrameRate, startup.value());
+            outer, output, request, outputFrameRate, startup.value(),
+            preparedEmission);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());

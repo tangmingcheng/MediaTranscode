@@ -238,12 +238,10 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
         m_outputPlan.clockRate, m_outputPlan.baseTimestamp,
         m_activationFacts->masterRelease);
     if (!mapper) return ::media::Status::failure(mapper.error());
-    auto firstReport = m_activationFacts->masterRelease.checkedAdd(
-        m_outputPlan.senderReportInterval);
-    if (!firstReport) return ::media::Status::failure(firstReport.error());
     auto schedule = MediaRtcpSenderReportSchedule::create(
-        firstReport.value(), m_outputPlan.senderReportInterval,
-        endpoint->maximumResidence, m_activationFacts->generation);
+        m_activationFacts->masterRelease, m_outputPlan.rtcpReporting,
+        endpoint->maximumResidence, m_activationFacts->generation,
+        m_outputPlan.ssrc);
     if (!schedule) return ::media::Status::failure(schedule.error());
     auto created = MediaRtpWireDatagramMaterializer::create(
         MediaRtpWireDatagramMaterializerConfig{

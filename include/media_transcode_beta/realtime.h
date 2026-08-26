@@ -182,6 +182,8 @@ typedef struct mt_beta_realtime_deployment {
     const char* observation_authority;
     uint64_t receiver_transport_decode_lead_ms;
     const char* receiver_timing_authority;
+    uint32_t maximum_rtcp_session_members;
+    const char* rtcp_session_authority;
 } mt_beta_realtime_deployment;
 
 typedef struct mt_beta_realtime_config {

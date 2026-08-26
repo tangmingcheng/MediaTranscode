@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpRemoteEndpointPair.h"
+#include "internal/graph/protocol/rtp/MediaRtcpReportingPolicy.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -26,7 +27,7 @@ public:
         std::size_t maximumDatagramBytes,
         std::string sdpPath,
         std::string sessionIdentity,
-        MediaRunningTime senderReportInterval);
+        MediaRtcpReportingPolicy rtcpReporting);
 
     MediaMpegTsRtpOutputPlan(MediaMpegTsRtpOutputPlan&&) noexcept = default;
     MediaMpegTsRtpOutputPlan& operator=(
@@ -43,7 +44,7 @@ public:
     std::uint32_t baseTimestamp() const noexcept;
     std::uint16_t initialSequenceNumber() const noexcept;
     const std::string& cname() const noexcept;
-    MediaRunningTime senderReportInterval() const noexcept;
+    const MediaRtcpReportingPolicy& rtcpReporting() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
     std::uint16_t tsPacketsPerPayload() const noexcept;
     const MediaMpegTsRtpSdpPlan& sdp() const noexcept;
@@ -57,7 +58,7 @@ private:
         std::uint32_t baseTimestamp,
         std::uint16_t initialSequenceNumber,
         std::string cname,
-        MediaRunningTime senderReportInterval,
+        MediaRtcpReportingPolicy rtcpReporting,
         std::size_t maximumDatagramBytes,
         std::uint16_t tsPacketsPerPayload,
         MediaMpegTsRtpSdpPlan sdp) noexcept;
@@ -69,7 +70,7 @@ private:
     std::uint32_t m_baseTimestamp;
     std::uint16_t m_initialSequenceNumber;
     std::string m_cname;
-    MediaRunningTime m_senderReportInterval;
+    MediaRtcpReportingPolicy m_rtcpReporting;
     std::size_t m_maximumDatagramBytes;
     std::uint16_t m_tsPacketsPerPayload;
     MediaMpegTsRtpSdpPlan m_sdp;

@@ -155,12 +155,10 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
         return ::media::Status::failure(
             !rtpDeadline ? rtpDeadline.error() : rtcpDeadline.error());
     }
-    auto firstReport = protocol->activation().masterRelease.checkedAdd(
-        rtp->senderReportInterval());
-    if (!firstReport) return ::media::Status::failure(firstReport.error());
     auto reportSchedule = MediaRtcpSenderReportSchedule::create(
-        firstReport.value(), rtp->senderReportInterval(),
-        endpoint->maximumResidence, protocol->activation().generation);
+        protocol->activation().masterRelease, rtp->rtcpReporting(),
+        endpoint->maximumResidence, protocol->activation().generation,
+        rtp->ssrc());
     if (!reportSchedule) {
         return ::media::Status::failure(reportSchedule.error());
     }
