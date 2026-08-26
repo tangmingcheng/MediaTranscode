@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 
 extern "C" {
@@ -84,6 +85,7 @@ void HardwareTransferNode::resetRuntimeState() noexcept
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
     m_direction = Direction::None;
+    m_pendingInput.reset();
     m_forwardedFrames = 0;
     m_downloads = 0;
     m_uploads = 0;
@@ -104,20 +106,23 @@ void HardwareTransferNode::logSummary() const
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
-    auto input = tryPopFirstInputOptional(context);
-    if (!input) {
-        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
-    }
-    if (!input.value()) {
-        MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
-        if (frameInput && frameInput->closed()) {
-            m_terminals.markClosed("frame");
-            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    MediaBufferRef buffer = m_pendingInput;
+    if (!buffer) {
+        auto input = tryPopFirstInputOptional(context);
+        if (!input) {
+            return ::media::Result<MediaNodeProcessResult>::failure(input.error());
         }
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        if (!input.value()) {
+            MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
+            if (frameInput && frameInput->closed()) {
+                m_terminals.markClosed("frame");
+                return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+            }
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        }
+        buffer = std::move(*input.value());
     }
 
-    const MediaBufferRef& buffer = *input.value();
     if (!m_firstInputDiagnosticEmitted) {
         transferLog(MediaGraphDiagnosticLevel::State,
                     "trace stage=first_input " +
@@ -141,10 +146,15 @@ void HardwareTransferNode::logSummary() const
             eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
-    auto transferStatus = transferOrForward(context, buffer);
+    m_pendingInput = buffer;
+    auto transferStatus = transferOrForward(context, m_pendingInput);
     if (!transferStatus) {
+        if (pendingOutputBufferCount() != 0) {
+            m_pendingInput.reset();
+        }
         return ::media::Result<MediaNodeProcessResult>::failure(transferStatus.error());
     }
+    m_pendingInput.reset();
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
@@ -216,6 +226,11 @@ void HardwareTransferNode::logSummary() const
                                                             const MediaBufferRef& buffer,
                                                             const AVFrame* sourceFrame)
 {
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
+    if (!reservation) {
+        return ::media::Status::failure(reservation.error());
+    }
     auto softwareFrame = ::media::ffmpeg::makeFrame();
     if (!softwareFrame) {
         return ::media::Status::failure(
@@ -236,6 +251,22 @@ void HardwareTransferNode::logSummary() const
     auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video);
     if (!output) {
         return ::media::Status::failure(output.error());
+    }
+    const AVFrame* transferredFrame = FFmpegFrameView::frame(output.value());
+    auto footprint = transferredFrame
+        ? MediaFramePayloadFootprint::logicalBytes(
+              *transferredFrame, MediaStreamKind::Video)
+        : ::media::Result<std::uint64_t>::failure(
+              ::media::ErrorInfo::invalidArgument(
+                  "HardwareTransferNode wrapped frame is unavailable"));
+    if (!footprint) return ::media::Status::failure(footprint.error());
+    if (auto status = reservation.value().shrinkToActual(
+            footprint.value()); !status) {
+        return status;
+    }
+    if (auto status = reservation.value().attachTo(*output.value());
+        !status) {
+        return status;
     }
 
     output.value()->setTimeDescriptor(buffer->timeDescriptor());

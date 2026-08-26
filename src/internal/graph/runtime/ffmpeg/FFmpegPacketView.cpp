@@ -31,6 +31,20 @@ FFmpegPacketView::canonicalLineage(const MediaBufferRef& buffer) noexcept
     return canonical ? canonical->lineage() : nullptr;
 }
 
+const std::shared_ptr<MediaGraphPayloadCreditLease>&
+FFmpegPacketView::payloadCredit(const MediaBufferRef& buffer) noexcept
+{
+    if (const auto* canonical =
+            dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(buffer.get())) {
+        return payloadCredit(canonical->media());
+    }
+    if (const auto* encoded =
+            dynamic_cast<const MediaEncodedAudioLineageBuffer*>(buffer.get())) {
+        return payloadCredit(encoded->media());
+    }
+    return buffer->payloadCredit();
+}
+
 bool FFmpegPacketView::isPacket(const MediaBufferRef& buffer) noexcept
 {
     return packet(buffer) != nullptr;

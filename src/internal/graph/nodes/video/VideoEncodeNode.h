@@ -15,6 +15,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaGraphPayloadCreditLease;
+
 class VideoEncodeLineageState final : public MediaVideoLineageState {
 public:
     VideoEncodeLineageState(
@@ -29,6 +31,7 @@ public:
     bool flushSent = false;
     MediaBufferRef flushBuffer;
     ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     std::set<std::uint64_t> lineageGenerations;
     AVBufferRef* pendingSubmissionLineage = nullptr;

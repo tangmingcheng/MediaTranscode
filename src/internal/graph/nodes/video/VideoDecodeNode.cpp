@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
@@ -65,6 +66,7 @@ void VideoDecodeLineageState::clearLineageStorage() noexcept
     flushSent = false;
     flushBuffer.reset();
     pendingPacket.reset();
+    pendingPayloadCredit.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
 }
@@ -174,13 +176,29 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
 ::media::Status VideoDecodeNode::attachPendingLineage()
 {
-    if (!m_lineageRegistry) return ::media::Status::success();
-    if (!m_lineageState->pendingLineage || !m_lineageState->pendingPacket ||
-        m_lineageState->pendingPacket->opaque_ref)
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("VideoDecodeNode requires one unowned canonical packet lineage"));
-    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
-    if (!token) return ::media::Status::failure(token.error());
-    auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
+    if (!m_lineageState->pendingPacket ||
+        m_lineageState->pendingPacket->opaque_ref ||
+        !m_lineageState->pendingPayloadCredit) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoDecodeNode requires one unowned packet payload credit"));
+    }
+    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
+        ? [&]() -> ::media::Result<AVBufferRef*> {
+              if (!m_lineageState->pendingLineage) {
+                  return ::media::Result<AVBufferRef*>::failure(
+                      ::media::ErrorInfo::invalidArgument(
+                          "VideoDecodeNode requires canonical packet lineage"));
+              }
+              auto token = m_lineageRegistry->submit(
+                  m_lineageState->pendingLineage);
+              return token
+                  ? makeMediaFfmpegCodecOpaque(
+                        std::move(token).value(),
+                        m_lineageState->pendingPayloadCredit)
+                  : ::media::Result<AVBufferRef*>::failure(token.error());
+          }()
+        : makeMediaFfmpegCodecOpaque(
+              m_lineageState->pendingPayloadCredit);
     if (!opaque) return ::media::Status::failure(opaque.error());
     if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
         m_lineageState->pendingPacket->opaque_ref = opaque.value();
@@ -192,9 +210,12 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         }
         m_lineageState->pendingSubmissionLineage = opaque.value();
     }
-    m_lineageState->lineageGenerations.insert(
-        m_lineageState->pendingLineage->generation);
+    if (m_lineageState->pendingLineage) {
+        m_lineageState->lineageGenerations.insert(
+            m_lineageState->pendingLineage->generation);
+    }
     m_lineageState->pendingLineage.reset();
+    m_lineageState->pendingPayloadCredit.reset();
     return ::media::Status::success();
 }
 
@@ -264,6 +285,12 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected packet buffer"));
     }
+    const auto& inputPayloadCredit = FFmpegPacketView::payloadCredit(buffer);
+    if (!inputPayloadCredit) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoDecodeNode input packet lacks payload credit ownership"));
+    }
     if (!m_firstPacketDiagnosticEmitted) {
         std::ostringstream out;
         out << "video_decode_trace stage=first_packet pts=" << packet->pts
@@ -308,6 +335,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     }
 
     m_lineageState->pendingPacket = std::move(pendingPacket);
+    m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     m_lineageState->pendingLineage = std::move(pendingLineage);
 
     return submitPendingPacket(context);
@@ -316,7 +344,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> VideoDecodeNode::submitPendingPacket(
     MediaGraphExecutionContext& context)
 {
-    if (m_lineageRegistry && !m_lineageState->pendingPacket->opaque_ref &&
+    if (!m_lineageState->pendingPacket->opaque_ref &&
         !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));
@@ -359,6 +387,11 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 ::media::Result<bool> VideoDecodeNode::receiveFrames(MediaGraphExecutionContext& context)
 {
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
+        if (!reservation) {
+            return ::media::Result<bool>::failure(reservation.error());
+        }
         auto frame = ::media::ffmpeg::makeFrame();
         if (!frame) {
             return ::media::Result<bool>::failure(
@@ -416,6 +449,24 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
+        }
+        const AVFrame* receivedFrame = FFmpegFrameView::frame(buffer.value());
+        auto footprint = receivedFrame
+            ? MediaFramePayloadFootprint::logicalBytes(
+                  *receivedFrame, MediaStreamKind::Video)
+            : ::media::Result<std::uint64_t>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "VideoDecodeNode wrapped frame is unavailable"));
+        if (!footprint) {
+            return ::media::Result<bool>::failure(footprint.error());
+        }
+        if (auto status = reservation.value().shrinkToActual(
+                footprint.value()); !status) {
+            return ::media::Result<bool>::failure(status.error());
+        }
+        if (auto status = reservation.value().attachTo(*buffer.value());
+            !status) {
+            return ::media::Result<bool>::failure(status.error());
         }
 
         MediaBufferRef output = buffer.value();

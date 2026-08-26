@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 
@@ -58,6 +59,7 @@ void VideoFilterLineageState::clearGenerationLineage() noexcept
     terminalPending = false;
     terminalIsEof = false;
     pendingFrame.reset();
+    pendingPayloadCredit.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
     lastSubmittedPts = AV_NOPTS_VALUE;
@@ -563,6 +565,11 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
+    const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
+    if (!inputPayloadCredit) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "VideoFilterNode input frame lacks payload credit ownership"));
+    }
     if (!m_inputContract) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("VideoFilterNode input frame contract is not bound"));
@@ -589,34 +596,52 @@ void VideoFilterNode::resetRuntimeState() noexcept
         }
     }
     m_lineageState->pendingFrame = std::move(pendingFrame);
+    m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     m_lineageState->pendingLineage = std::move(pendingLineage);
     return submitPendingFrame(context);
 }
 
 ::media::Status VideoFilterNode::attachPendingLineage()
 {
-    if (!m_lineageRegistry) return ::media::Status::success();
-    if (!m_lineageState->pendingFrame || !m_lineageState->pendingLineage ||
-        m_lineageState->pendingFrame->opaque_ref) {
+    if (!m_lineageState->pendingFrame ||
+        m_lineageState->pendingFrame->opaque_ref ||
+        !m_lineageState->pendingPayloadCredit) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "VideoFilterNode requires one unowned pending frame lineage"));
+                "VideoFilterNode requires one unowned frame payload credit"));
     }
-    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
-    if (!token) return ::media::Status::failure(token.error());
-    auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
+    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
+        ? [&]() -> ::media::Result<AVBufferRef*> {
+              if (!m_lineageState->pendingLineage) {
+                  return ::media::Result<AVBufferRef*>::failure(
+                      ::media::ErrorInfo::invalidArgument(
+                          "VideoFilterNode requires canonical frame lineage"));
+              }
+              auto token = m_lineageRegistry->submit(
+                  m_lineageState->pendingLineage);
+              return token
+                  ? makeMediaFfmpegCodecOpaque(
+                        std::move(token).value(),
+                        m_lineageState->pendingPayloadCredit)
+                  : ::media::Result<AVBufferRef*>::failure(token.error());
+          }()
+        : makeMediaFfmpegCodecOpaque(
+              m_lineageState->pendingPayloadCredit);
     if (!opaque) return ::media::Status::failure(opaque.error());
     m_lineageState->pendingFrame->opaque_ref = opaque.value();
-    m_lineageState->lineageGenerations.insert(
-        m_lineageState->pendingLineage->generation);
+    if (m_lineageState->pendingLineage) {
+        m_lineageState->lineageGenerations.insert(
+            m_lineageState->pendingLineage->generation);
+    }
     m_lineageState->pendingLineage.reset();
+    m_lineageState->pendingPayloadCredit.reset();
     return ::media::Status::success();
 }
 
 ::media::Status VideoFilterNode::submitPendingFrame(
     MediaGraphExecutionContext& context)
 {
-    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref) {
+    if (!m_lineageState->pendingFrame->opaque_ref) {
         auto attached = attachPendingLineage();
         if (!attached) return attached;
     }
@@ -656,6 +681,11 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
+        if (!reservation) {
+            return ::media::Status::failure(reservation.error());
+        }
         auto frame = ::media::ffmpeg::makeFrame();
         if (!frame) {
             return ::media::Status::failure(
@@ -681,7 +711,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
             return rescaleStatus;
         }
 
-        auto emitStatus = emitFrame(context, std::move(frame));
+        auto emitStatus = emitFrame(
+            context, std::move(frame), std::move(reservation).value());
         if (!emitStatus) {
             return emitStatus;
         }
@@ -690,7 +721,10 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 }
 
-::media::Status VideoFilterNode::emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame)
+::media::Status VideoFilterNode::emitFrame(
+    MediaGraphExecutionContext& context,
+    ::media::ffmpeg::FramePtr frame,
+    MediaGraphPayloadReservation reservation)
 {
     if (!m_outputContract) {
         return ::media::Status::failure(
@@ -714,6 +748,21 @@ void VideoFilterNode::resetRuntimeState() noexcept
     auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
+    }
+    const AVFrame* emittedFrame = FFmpegFrameView::frame(buffer.value());
+    auto footprint = emittedFrame
+        ? MediaFramePayloadFootprint::logicalBytes(
+              *emittedFrame, MediaStreamKind::Video)
+        : ::media::Result<std::uint64_t>::failure(
+              ::media::ErrorInfo::invalidArgument(
+                  "VideoFilterNode wrapped frame is unavailable"));
+    if (!footprint) return ::media::Status::failure(footprint.error());
+    if (auto status = reservation.shrinkToActual(footprint.value());
+        !status) {
+        return status;
+    }
+    if (auto status = reservation.attachTo(*buffer.value()); !status) {
+        return status;
     }
 
     MediaTimeDescriptor timeDescriptor;

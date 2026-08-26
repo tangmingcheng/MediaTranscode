@@ -46,6 +46,7 @@ private:
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
     Direction m_direction = Direction::None;
+    MediaBufferRef m_pendingInput;
     std::uint64_t m_forwardedFrames = 0;
     std::uint64_t m_downloads = 0;
     std::uint64_t m_uploads = 0;

@@ -95,6 +95,7 @@ void VideoEncodeLineageState::clearLineageStorage() noexcept
     flushSent = false;
     flushBuffer.reset();
     pendingFrame.reset();
+    pendingPayloadCredit.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
     generationStartPending = true;
@@ -284,13 +285,29 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
 ::media::Status VideoEncodeNode::attachPendingLineage()
 {
-    if (!m_lineageRegistry) return ::media::Status::success();
-    if (!m_lineageState->pendingLineage || !m_lineageState->pendingFrame ||
-        m_lineageState->pendingFrame->opaque_ref)
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("VideoEncodeNode requires one unowned canonical frame lineage"));
-    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
-    if (!token) return ::media::Status::failure(token.error());
-    auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
+    if (!m_lineageState->pendingFrame ||
+        m_lineageState->pendingFrame->opaque_ref ||
+        !m_lineageState->pendingPayloadCredit) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoEncodeNode requires one unowned frame payload credit"));
+    }
+    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
+        ? [&]() -> ::media::Result<AVBufferRef*> {
+              if (!m_lineageState->pendingLineage) {
+                  return ::media::Result<AVBufferRef*>::failure(
+                      ::media::ErrorInfo::invalidArgument(
+                          "VideoEncodeNode requires canonical frame lineage"));
+              }
+              auto token = m_lineageRegistry->submit(
+                  m_lineageState->pendingLineage);
+              return token
+                  ? makeMediaFfmpegCodecOpaque(
+                        std::move(token).value(),
+                        m_lineageState->pendingPayloadCredit)
+                  : ::media::Result<AVBufferRef*>::failure(token.error());
+          }()
+        : makeMediaFfmpegCodecOpaque(
+              m_lineageState->pendingPayloadCredit);
     if (!opaque) return ::media::Status::failure(opaque.error());
     if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
         m_lineageState->pendingFrame->opaque_ref = opaque.value();
@@ -302,9 +319,12 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         }
         m_lineageState->pendingSubmissionLineage = opaque.value();
     }
-    m_lineageState->lineageGenerations.insert(
-        m_lineageState->pendingLineage->generation);
+    if (m_lineageState->pendingLineage) {
+        m_lineageState->lineageGenerations.insert(
+            m_lineageState->pendingLineage->generation);
+    }
     m_lineageState->pendingLineage.reset();
+    m_lineageState->pendingPayloadCredit.reset();
     return ::media::Status::success();
 }
 
@@ -396,6 +416,12 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
     }
+    const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
+    if (!inputPayloadCredit) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoEncodeNode input frame lacks payload credit ownership"));
+    }
 
     if (!m_inputContract) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -450,6 +476,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     }
 
     m_lineageState->pendingFrame = std::move(pendingFrame);
+    m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     m_lineageState->pendingLineage = std::move(pendingLineage);
 
     return submitPendingFrame(context);
@@ -478,7 +505,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             encodeLog(MediaGraphDiagnosticLevel::State, out.str());
         }
     }
-    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref &&
+    if (!m_lineageState->pendingFrame->opaque_ref &&
         !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));

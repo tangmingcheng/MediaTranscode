@@ -34,6 +34,9 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
     case MediaNodeKind::Demux:
     case MediaNodeKind::MpegTsDemux:
     case MediaNodeKind::PacketNormalize:
+    case MediaNodeKind::VideoDecode:
+    case MediaNodeKind::HardwareTransfer:
+    case MediaNodeKind::VideoFilter:
     case MediaNodeKind::VideoEncode:
     case MediaNodeKind::AudioEncode:
         return true;
