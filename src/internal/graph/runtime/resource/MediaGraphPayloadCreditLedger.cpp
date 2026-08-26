@@ -52,9 +52,9 @@ MediaGraphPayloadCreditLease& MediaGraphPayloadCreditLease::operator=(
 ::media::Status MediaGraphPayloadCreditLease::shrinkTo(
     std::uint64_t bytes) noexcept
 {
-    if (!m_state || bytes == 0 || bytes > m_bytes) {
+    if (!m_state || bytes > m_bytes) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "graph payload credit lease only permits a positive shrink"));
+            "graph payload credit lease only permits shrinking"));
     }
     std::shared_ptr<MediaGraphPayloadCreditReleaseObserver> observer;
     {
@@ -123,7 +123,7 @@ MediaGraphPayloadCreditLedger::create(MediaGraphPayloadCreditPlan plan)
 MediaGraphPayloadCreditLedger::tryReserve(std::uint64_t bytes) noexcept
 {
     using Result = ::media::Result<MediaGraphPayloadCreditLease>;
-    if (bytes == 0 || bytes > m_plan.maximumUnitBytes) {
+    if (bytes > m_plan.maximumUnitBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "graph payload credit reservation exceeds its unit contract"));
     }

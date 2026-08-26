@@ -7,6 +7,8 @@
 #include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <sstream>
+#include <algorithm>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -108,6 +110,43 @@ std::shared_ptr<MediaGraphPayloadCreditLedger>
 MediaGraphExecutionContext::payloadCreditLedger() const noexcept
 {
     return m_payloadCreditLedger;
+}
+
+::media::Result<MediaGraphPayloadReservation>
+MediaGraphExecutionContext::reservePayload(
+    MediaNodeId producer,
+    MediaStreamKind streamKind,
+    MediaPayloadKind payloadKind) noexcept
+{
+    using Result = ::media::Result<MediaGraphPayloadReservation>;
+    if (!m_payloadCreditLedger) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "runtime graph has no activated payload credit ledger"));
+    }
+    const auto& strategies = m_payloadCreditLedger->plan().producers;
+    const auto found = std::find_if(
+        strategies.begin(), strategies.end(), [&](const auto& strategy) {
+            return strategy.nodeId == producer &&
+                strategy.streamKind == streamKind &&
+                strategy.payloadKind == payloadKind;
+        });
+    if (found == strategies.end()) {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "runtime payload producer is absent from the final DAG registry"));
+    }
+    const std::uint64_t reservedBytes = found->accounting ==
+            MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject
+        ? found->maximumReservationBytes : 0;
+    auto lease = m_payloadCreditLedger->tryReserve(reservedBytes);
+    if (!lease) return Result::failure(lease.error());
+    try {
+        return Result::success(MediaGraphPayloadReservation(
+            found->accounting, found->maximumReservationBytes,
+            std::move(lease).value()));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "runtime payload reservation identity"));
+    }
 }
 
 void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) noexcept

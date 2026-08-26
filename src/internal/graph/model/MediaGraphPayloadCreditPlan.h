@@ -27,6 +27,7 @@ struct MediaGraphPayloadProducerStrategy final {
     MediaGraphPayloadAllocationAccounting accounting =
         MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
     std::uint64_t maximumReservationBytes = 0;
+    bool runtimeIntegrated = false;
     std::string authority;
 
     bool valid() const noexcept
@@ -34,6 +35,20 @@ struct MediaGraphPayloadProducerStrategy final {
         return nodeId.isValid() && streamKind != MediaStreamKind::Unknown &&
             payloadKind != MediaPayloadKind::Unknown &&
             maximumReservationBytes > 0 && !authority.empty();
+    }
+};
+
+struct MediaGraphPayloadProducerRequirement final {
+    MediaNodeId nodeId;
+    MediaStreamKind streamKind = MediaStreamKind::Unknown;
+    MediaPayloadKind payloadKind = MediaPayloadKind::Unknown;
+    std::string missingAuthority;
+
+    bool valid() const noexcept
+    {
+        return nodeId.isValid() && streamKind != MediaStreamKind::Unknown &&
+            payloadKind != MediaPayloadKind::Unknown &&
+            !missingAuthority.empty();
     }
 };
 
@@ -46,24 +61,36 @@ struct MediaGraphPayloadCreditPlan final {
         MediaGraphPayloadCreditIntegration::Incomplete;
     std::string authority;
     std::vector<MediaGraphPayloadProducerStrategy> producers;
+    std::vector<MediaGraphPayloadProducerRequirement> missingProducers;
 
     bool isStructurallyValid() const noexcept
     {
-        return maximumBytes > 0 && maximumObjects > 0 &&
-            maximumUnitBytes > 0 && maximumUnitBytes <= maximumBytes &&
-            producerStrategyVersion > 0 && !authority.empty() &&
-            !producers.empty();
+        if (maximumBytes == 0 || maximumObjects == 0 ||
+            maximumUnitBytes > maximumBytes ||
+            producerStrategyVersion == 0 || authority.empty() ||
+            (producers.empty() && missingProducers.empty())) {
+            return false;
+        }
+        for (const auto& producer : producers) {
+            if (!producer.valid()) return false;
+        }
+        for (const auto& missing : missingProducers) {
+            if (!missing.valid()) return false;
+        }
+        return true;
     }
 
     bool isCompleteAndValid() const noexcept
     {
         if (!isStructurallyValid() ||
-            integration != MediaGraphPayloadCreditIntegration::Complete) {
+            integration != MediaGraphPayloadCreditIntegration::Complete ||
+            !missingProducers.empty()) {
             return false;
         }
         for (std::size_t index = 0; index < producers.size(); ++index) {
             if (!producers[index].valid() ||
-                producers[index].maximumReservationBytes > maximumUnitBytes) {
+                producers[index].maximumReservationBytes > maximumUnitBytes ||
+                !producers[index].runtimeIntegrated) {
                 return false;
             }
             for (std::size_t previous = 0; previous < index; ++previous) {

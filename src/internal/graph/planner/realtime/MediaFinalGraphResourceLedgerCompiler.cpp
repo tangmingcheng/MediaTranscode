@@ -430,7 +430,7 @@ MediaFinalGraphResourceLedgerCompiler::compile(
         ledger.admittedGraphPayloadAndReservedStorageBytes;
     auto payloadPlan = MediaGraphPayloadProducerRegistryCompiler::compile(
         graph, planningLedger, availablePayloadBytes,
-        maximumPayloadObjects, false);
+        maximumPayloadObjects);
     if (!payloadPlan) return Result::failure(payloadPlan.error());
     ledger.payloadCreditPlan = std::move(payloadPlan).value();
     return Result::success(std::move(ledger));

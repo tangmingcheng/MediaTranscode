@@ -15,8 +15,7 @@ public:
         const MediaGraph& graph,
         const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
         std::uint64_t availablePayloadBytes,
-        std::uint64_t maximumPayloadObjects,
-        bool runtimeIntegrationComplete);
+        std::uint64_t maximumPayloadObjects);
 
 private:
     MediaGraphPayloadProducerRegistryCompiler() = delete;

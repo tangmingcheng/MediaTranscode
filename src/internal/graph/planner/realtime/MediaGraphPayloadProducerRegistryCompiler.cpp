@@ -27,10 +27,28 @@ bool allocatesPayload(MediaNodeKind kind) noexcept
     }
 }
 
+bool runtimeIntegrated(MediaNodeKind kind) noexcept
+{
+    switch (kind) {
+    case MediaNodeKind::VideoEncode:
+    case MediaNodeKind::AudioEncode:
+        return true;
+    default:
+        return false;
+    }
+}
+
 ::media::Result<std::uint64_t> maximumBytes(
+    MediaNodeKind producerKind,
     const MediaEdge& edge,
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
+    if (producerKind != MediaNodeKind::VideoEncode &&
+        producerKind != MediaNodeKind::AudioEncode) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::unsupported(
+                "producer registry lacks an authoritative source allocation bound"));
+    }
     if (edge.payloadKind == MediaPayloadKind::Packet &&
         edge.streamKind == MediaStreamKind::Video) {
         return ::media::Result<std::uint64_t>::success(
@@ -67,6 +85,15 @@ bool sameKey(
         strategy.payloadKind == edge.payloadKind;
 }
 
+bool sameKey(
+    const MediaGraphPayloadProducerRequirement& requirement,
+    const MediaEdge& edge) noexcept
+{
+    return requirement.nodeId == edge.from.nodeId &&
+        requirement.streamKind == edge.streamKind &&
+        requirement.payloadKind == edge.payloadKind;
+}
+
 } // namespace
 
 ::media::Result<MediaGraphPayloadCreditPlan>
@@ -74,8 +101,7 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
     const MediaGraph& graph,
     const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
     std::uint64_t availablePayloadBytes,
-    std::uint64_t maximumPayloadObjects,
-    bool runtimeIntegrationComplete)
+    std::uint64_t maximumPayloadObjects)
 {
     using Result = ::media::Result<MediaGraphPayloadCreditPlan>;
     if (availablePayloadBytes == 0 || maximumPayloadObjects == 0) {
@@ -86,9 +112,7 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
     plan.maximumBytes = availablePayloadBytes;
     plan.maximumObjects = maximumPayloadObjects;
     plan.producerStrategyVersion = 1;
-    plan.integration = runtimeIntegrationComplete
-        ? MediaGraphPayloadCreditIntegration::Complete
-        : MediaGraphPayloadCreditIntegration::Incomplete;
+    plan.integration = MediaGraphPayloadCreditIntegration::Complete;
     plan.authority =
         "final-dag-producer-registry+prepared-emission+global-payload-budget";
     try {
@@ -109,11 +133,24 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
                         })) {
                     continue;
                 }
-                auto bound = maximumBytes(edge, planningLedger);
-                if (!bound || bound.value() == 0 ||
+                auto bound = maximumBytes(node.kind, edge, planningLedger);
+                if (!bound) {
+                    if (!std::any_of(
+                            plan.missingProducers.begin(),
+                            plan.missingProducers.end(),
+                            [&](const auto& requirement) {
+                                return sameKey(requirement, edge);
+                            })) {
+                        plan.missingProducers.push_back(
+                            MediaGraphPayloadProducerRequirement{
+                                node.id, edge.streamKind, edge.payloadKind,
+                                bound.error().message});
+                    }
+                    continue;
+                }
+                if (bound.value() == 0 ||
                     bound.value() > availablePayloadBytes) {
                     return Result::failure(
-                        !bound ? bound.error() :
                         ::media::ErrorInfo::invalidArgument(
                             "single producer payload exceeds the global credit pool"));
                 }
@@ -128,6 +165,7 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
                         : MediaGraphPayloadAllocationAccounting::
                               EngineManagedBytesAndObject,
                     bound.value(),
+                    runtimeIntegrated(node.kind),
                     deviceBacked
                         ? "prepared-logical-frame-bound+device-bytes-observed-only"
                         : "prepared-emission-or-frame-footprint-bound"});
@@ -142,6 +180,13 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "payload producer registry"));
+    }
+    if (!plan.missingProducers.empty() || std::any_of(
+            plan.producers.begin(), plan.producers.end(),
+            [](const auto& strategy) {
+                return !strategy.runtimeIntegrated;
+            })) {
+        plan.integration = MediaGraphPayloadCreditIntegration::Incomplete;
     }
     if (!plan.isStructurallyValid()) {
         return Result::failure(::media::ErrorInfo::notInitialized(

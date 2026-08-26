@@ -593,6 +593,15 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 ::media::Result<bool> VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)
 {
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Video, MediaPayloadKind::Packet);
+        if (!reservation) {
+            if (reservation.error().code == ::media::ErrorCode::WouldBlock &&
+                !m_lineageState->flushPending) {
+                m_lineageState->receivePending = true;
+            }
+            return ::media::Result<bool>::failure(reservation.error());
+        }
         auto packet = ::media::ffmpeg::makePacket();
         if (!packet) {
             return ::media::Result<bool>::failure(
@@ -660,6 +669,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video, std::nullopt);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
+        }
+        const auto footprint = buffer.value()->payloadFootprintBytes();
+        if (!footprint || *footprint == 0) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "VideoEncodeNode packet lacks an exact payload footprint"));
+        }
+        if (auto status = reservation.value().shrinkToActual(*footprint);
+            !status) {
+            return ::media::Result<bool>::failure(status.error());
+        }
+        if (auto status = reservation.value().attachTo(*buffer.value());
+            !status) {
+            return ::media::Result<bool>::failure(status.error());
         }
 
         MediaTimeDescriptor timeDescriptor;

@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/channel/MediaChannelRegistry.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 #include "internal/graph/runtime/context/MediaAvSyncGroupRegistry.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "media_transcode/Result.h"
 
 #include <vector>
@@ -66,6 +67,10 @@ public:
         const MediaAvSyncGroupKey& key) const noexcept;
     std::shared_ptr<MediaGraphPayloadCreditLedger> payloadCreditLedger()
         const noexcept;
+    ::media::Result<MediaGraphPayloadReservation> reservePayload(
+        MediaNodeId producer,
+        MediaStreamKind streamKind,
+        MediaPayloadKind payloadKind) noexcept;
 
 private:
     ::media::Status buildChannels(const MediaGraph& graph);
