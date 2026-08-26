@@ -192,8 +192,24 @@ MediaGraphExecutionContext::reservePayloadBatch(
         return Result::failure(::media::ErrorInfo::unsupported(
             "runtime payload producer is absent from the final DAG registry"));
     }
-    const bool accountsBytes = selected->accounting ==
-        MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
+    if (selected->payloadKind == MediaPayloadKind::Frame &&
+        !selected->frameCredit) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "runtime frame producer lacks its typed credit contract"));
+    }
+    const bool accountsBytes = selected->payloadKind == MediaPayloadKind::Frame
+        ? selected->frameCredit->allocationScope ==
+            MediaFrameCreditAllocationScope::EngineLogicalBytes
+        : selected->accounting ==
+            MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
+    const auto expectedAccounting = accountsBytes
+        ? MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject
+        : MediaGraphPayloadAllocationAccounting::
+            ObservedOnlyExternalBytesAndEngineManagedObject;
+    if (selected->accounting != expectedAccounting) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "runtime payload producer accounting conflicts with its typed frame contract"));
+    }
     const std::uint64_t defaultBytes = accountsBytes
         ? selected->maximumReservationBytes : 0;
     std::vector<std::uint64_t> ledgerBytes;

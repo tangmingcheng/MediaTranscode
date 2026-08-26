@@ -3,7 +3,9 @@
 #include "internal/graph/runtime/backpressure/MediaBackpressureController.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeMetrics.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,7 @@ struct MediaGraphRuntimeReport {
     MediaGraphRuntimeMetrics metrics;
     MediaBackpressureReport backpressure;
     std::vector<MediaDroppedEdgeReport> droppedEdges;
+    std::optional<MediaGraphPayloadCreditSnapshot> payloadCredits;
 
     std::string summary() const;
 };

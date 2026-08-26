@@ -35,6 +35,23 @@ std::string MediaGraphRuntimeReport::summary() const
            ", encodedPacketsPushed=" + std::to_string(metrics.encodedPacketsPushed) +
            ", encodedPacketsPopped=" + std::to_string(metrics.encodedPacketsPopped) +
            ", backpressureItems=" + std::to_string(backpressure.decisions.size());
+    if (payloadCredits) {
+        result +=
+            ", graphPayloadCurrentBytes=" +
+                std::to_string(payloadCredits->currentBytes) +
+            ", graphPayloadHighWaterBytes=" +
+                std::to_string(payloadCredits->highWaterBytes) +
+            ", graphPayloadCurrentObjects=" +
+                std::to_string(payloadCredits->currentObjects) +
+            ", graphPayloadHighWaterObjects=" +
+                std::to_string(payloadCredits->highWaterObjects) +
+            ", graphPayloadReservations=" +
+                std::to_string(payloadCredits->reservations) +
+            ", graphPayloadReleases=" +
+                std::to_string(payloadCredits->releases) +
+            ", graphPayloadPressureFailures=" +
+                std::to_string(payloadCredits->pressureFailures);
+    }
     if (!droppedEdges.empty()) {
         result += ", droppedEdges=";
         for (std::size_t index = 0; index < droppedEdges.size(); ++index) {
@@ -135,6 +152,9 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     }
 
     report.backpressure = MediaBackpressureController::inspect(runtime.context());
+    if (const auto ledger = runtime.context().payloadCreditLedger()) {
+        report.payloadCredits = ledger->snapshot();
+    }
     return report;
 }
 

@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,21 +26,66 @@ enum class MediaGraphPayloadAllocationAccounting : std::uint8_t {
     ObservedOnlyExternalBytesAndEngineManagedObject = 2
 };
 
+enum class MediaFrameCreditAllocationScope : std::uint8_t {
+    EngineLogicalBytes = 1,
+    ExternalDeviceObservedOnly = 2
+};
+
+struct MediaFrameCreditContract final {
+    MediaFrameCreditAllocationScope allocationScope =
+        MediaFrameCreditAllocationScope::EngineLogicalBytes;
+    std::uint64_t maximumLogicalBytes = 0;
+    std::uint64_t maximumObjectsPerAllocation = 0;
+    std::string authority;
+
+    bool valid() const noexcept
+    {
+        return maximumLogicalBytes > 0 &&
+            maximumObjectsPerAllocation == 1 && !authority.empty();
+    }
+
+    std::uint64_t reservedBytes() const noexcept
+    {
+        return allocationScope ==
+                MediaFrameCreditAllocationScope::EngineLogicalBytes
+            ? maximumLogicalBytes : 0;
+    }
+};
+
 struct MediaGraphPayloadProducerStrategy final {
     MediaNodeId nodeId;
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
     MediaPayloadKind payloadKind = MediaPayloadKind::Unknown;
     MediaGraphPayloadAllocationAccounting accounting =
         MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
+    std::optional<MediaFrameCreditContract> frameCredit;
     std::uint64_t maximumReservationBytes = 0;
     bool runtimeIntegrated = false;
     std::string authority;
 
     bool valid() const noexcept
     {
+        const bool frameContractValid = payloadKind == MediaPayloadKind::Frame
+            ? frameCredit && frameCredit->valid() &&
+                frameCredit->maximumLogicalBytes == maximumReservationBytes &&
+                accounting == (frameCredit->allocationScope ==
+                        MediaFrameCreditAllocationScope::EngineLogicalBytes
+                    ? MediaGraphPayloadAllocationAccounting::
+                        EngineManagedBytesAndObject
+                    : MediaGraphPayloadAllocationAccounting::
+                        ObservedOnlyExternalBytesAndEngineManagedObject)
+            : !frameCredit;
         return nodeId.isValid() && streamKind != MediaStreamKind::Unknown &&
             payloadKind != MediaPayloadKind::Unknown &&
-            maximumReservationBytes > 0 && !authority.empty();
+            frameContractValid && maximumReservationBytes > 0 &&
+            !authority.empty();
+    }
+
+    std::uint64_t maximumReservedBytes() const noexcept
+    {
+        return accounting == MediaGraphPayloadAllocationAccounting::
+                EngineManagedBytesAndObject
+            ? maximumReservationBytes : 0;
     }
 };
 
@@ -71,7 +117,7 @@ struct MediaGraphPayloadCreditPlan final {
     bool isStructurallyValid() const noexcept
     {
         if (maximumBytes == 0 || maximumObjects == 0 ||
-            maximumUnitBytes > maximumBytes ||
+            maximumUnitBytes == 0 ||
             producerStrategyVersion == 0 || authority.empty() ||
             (producers.empty() && missingProducers.empty())) {
             return false;
@@ -94,7 +140,7 @@ struct MediaGraphPayloadCreditPlan final {
         }
         for (std::size_t index = 0; index < producers.size(); ++index) {
             if (!producers[index].valid() ||
-                producers[index].maximumReservationBytes > maximumUnitBytes ||
+                producers[index].maximumReservedBytes() > maximumUnitBytes ||
                 !producers[index].runtimeIntegrated) {
                 return false;
             }
