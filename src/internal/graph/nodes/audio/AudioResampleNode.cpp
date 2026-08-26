@@ -5,6 +5,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/buffer/MediaAudioCorrectionBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
@@ -467,8 +468,27 @@ void AudioResampleNode::resetRuntimeState() noexcept
         auto cloned = FFmpegBufferFactory::cloneFrame(
             inputFrame, MediaStreamKind::Audio);
         if (!cloned) return ::media::Status::failure(cloned.error());
+        const auto& inheritedCredit =
+            FFmpegFrameView::payloadCredit(m_pendingInput->buffer);
+        if (!inheritedCredit && context.payloadCreditsRequired()) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "AudioResampleNode alias input lacks payload credit"));
+        }
+        if (inheritedCredit) {
+            if (auto status = cloned.value()->attachPayloadCredit(inheritedCredit);
+                !status) return status;
+        }
+        std::optional<MediaGraphPayloadReservation> nonRealtimeReservation;
+        if (!inheritedCredit) {
+            auto reservation = context.reservePayload(
+                nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
+            if (!reservation) return ::media::Status::failure(reservation.error());
+            nonRealtimeReservation.emplace(std::move(reservation).value());
+        }
         m_pendingInput.reset();
-        if (auto status = stampAndQueue(cloned.value(), inputFrame->pts, srcTb); !status) {
+        if (auto status = stampAndQueue(
+                cloned.value(), inputFrame->pts, srcTb,
+                std::move(nonRealtimeReservation)); !status) {
             return status;
         }
         return emitNextPending(context);
@@ -542,12 +562,25 @@ void AudioResampleNode::resetRuntimeState() noexcept
 ::media::Status AudioResampleNode::stampAndQueue(
     MediaBufferRef outputBuffer,
     std::int64_t inputPts,
-    AVRational srcTb)
+    AVRational srcTb,
+    std::optional<MediaGraphPayloadReservation> reservation)
 {
     const AVRational dstTb { 1, codecContext()->sample_rate };
     AVFrame* outputFrame = FFmpegFrameView::writableFrame(outputBuffer);
     if (!outputFrame) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode output frame is invalid"));
+    }
+    auto footprint = MediaFramePayloadFootprint::logicalBytes(
+        *outputFrame, MediaStreamKind::Audio);
+    if (!footprint) return ::media::Status::failure(footprint.error());
+    if (reservation) {
+        if (auto status = reservation->shrinkToActual(footprint.value()); !status)
+            return status;
+        if (auto status = reservation->attachTo(*outputBuffer); !status)
+            return status;
+    } else if (!FFmpegFrameView::payloadCredit(outputBuffer)) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "AudioResampleNode alias output lacks inherited payload credit"));
     }
     auto pts = m_nextOutputPts != AV_NOPTS_VALUE
         ? ::media::Result<int64_t>::success(m_nextOutputPts)
@@ -595,6 +628,9 @@ void AudioResampleNode::resetRuntimeState() noexcept
     std::int64_t inputPts,
     AVRational srcTb)
 {
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
+    if (!reservation) return ::media::Status::failure(reservation.error());
     auto correctionWindow = m_correctionExecutor->prepare(
         m_swr.get(), m_outputSampleIndex);
     if (!correctionWindow) {
@@ -629,7 +665,10 @@ void AudioResampleNode::resetRuntimeState() noexcept
     auto wrapped = FFmpegBufferFactory::wrapFrame(
         std::move(converted.output), MediaStreamKind::Audio);
     if (!wrapped) return ::media::Status::failure(wrapped.error());
-    if (auto status = stampAndQueue(wrapped.value(), inputPts, srcTb); !status) {
+    if (auto status = stampAndQueue(
+            wrapped.value(), inputPts, srcTb,
+            std::optional<MediaGraphPayloadReservation>(
+                std::move(reservation).value())); !status) {
         return status;
     }
     return emitNextPending(context);
@@ -639,6 +678,9 @@ void AudioResampleNode::resetRuntimeState() noexcept
     MediaGraphExecutionContext& context,
     bool correctionWindowRequired)
 {
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
+    if (!reservation) return ::media::Status::failure(reservation.error());
     if (!codecContext()) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "AudioResampleNode drain requires encoder context"));
@@ -686,7 +728,9 @@ void AudioResampleNode::resetRuntimeState() noexcept
     if (!wrapped) return ::media::Status::failure(wrapped.error());
     const AVRational dstTb {1, codecContext()->sample_rate};
     if (auto status = stampAndQueue(
-            wrapped.value(), AV_NOPTS_VALUE, dstTb); !status) {
+            wrapped.value(), AV_NOPTS_VALUE, dstTb,
+            std::optional<MediaGraphPayloadReservation>(
+                std::move(reservation).value())); !status) {
         return status;
     }
     return emitNextPending(context);

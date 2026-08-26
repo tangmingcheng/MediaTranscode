@@ -39,6 +39,9 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoFilter:
     case MediaNodeKind::VideoEncode:
     case MediaNodeKind::AudioEncode:
+    case MediaNodeKind::AudioDecode:
+    case MediaNodeKind::AudioStartupTrim:
+    case MediaNodeKind::AudioResample:
         return true;
     default:
         return false;

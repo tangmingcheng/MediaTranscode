@@ -13,6 +13,7 @@
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
 #include "internal/graph/sync/lineage/MediaAudioSampleProjection.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 
 #include <cstdint>
 #include <deque>
@@ -62,7 +63,8 @@ private:
     ::media::Status emitNextPending(MediaGraphExecutionContext& context);
     ::media::Status stampAndQueue(MediaBufferRef outputBuffer,
                                   std::int64_t inputPts,
-                                  AVRational sourceTimeBase);
+                                  AVRational sourceTimeBase,
+                                  std::optional<MediaGraphPayloadReservation> reservation);
     ::media::Status finishBypassLineage();
     ::media::Status settleLineageResidue(
         AudioSwrResamplerExhausted exhaustionProof);

@@ -9,6 +9,7 @@
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <deque>
 #include <optional>
@@ -27,6 +28,7 @@ public:
 
     bool receivePending = false;
     ::media::ffmpeg::PacketPtr pendingPacket;
+    std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     MediaAudioIntervalAccumulator intervals;
     std::optional<AudioDecoderDiscardPaddingProof> discardPaddingProof;
     std::optional<MediaAudioPlaybackOrigin> activeOrigin;
