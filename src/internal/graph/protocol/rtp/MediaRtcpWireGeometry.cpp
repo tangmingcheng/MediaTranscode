@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 namespace media::ffmpeg::graph {
 
@@ -9,19 +9,19 @@ namespace media::ffmpeg::graph {
 {
     constexpr std::uint64_t SenderReportBytes = 28;
     constexpr std::uint64_t SdesFixedBytes = 10;
-    auto raw = MediaRealtimePlanningArithmetic::add(
+    auto raw = MediaCheckedArithmetic::add(
         SdesFixedBytes, static_cast<std::uint64_t>(cnameBytes),
         "RTCP SDES bytes");
     auto padded = raw
-        ? MediaRealtimePlanningArithmetic::ceilScale(
+        ? MediaCheckedArithmetic::ceilScale(
               raw.value(), 1, 4, "RTCP SDES words")
         : raw;
     auto paddedBytes = padded
-        ? MediaRealtimePlanningArithmetic::multiply(
+        ? MediaCheckedArithmetic::multiply(
               padded.value(), 4, "RTCP padded SDES bytes")
         : padded;
     return paddedBytes
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               SenderReportBytes, paddedBytes.value(), "RTCP compound bytes")
         : paddedBytes;
 }
@@ -38,7 +38,7 @@ namespace media::ffmpeg::graph {
         : addressFamily == MediaIpAddressFamily::Ipv6
             ? Ipv6HeaderBytes : 0;
     return payload && ipHeader != 0
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               payload.value(), ipHeader + UdpHeaderBytes,
               "RTCP compound wire bytes")
         : ::media::Result<std::uint64_t>::failure(

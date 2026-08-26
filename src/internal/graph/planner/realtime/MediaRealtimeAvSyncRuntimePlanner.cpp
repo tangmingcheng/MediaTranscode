@@ -9,7 +9,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
@@ -484,7 +484,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                         "MPEG-TS RTP output requires complete planned transport facts"));
             }
             auto sessionBandwidth = preparedEmission.audio
-                ? MediaRealtimePlanningArithmetic::add(
+                ? MediaCheckedArithmetic::add(
                       preparedEmission.video.sustainedPayloadBytesPerSecond,
                       preparedEmission.audio->sustainedPayloadBytesPerSecond,
                       "MPEG-TS RTP session media bandwidth")

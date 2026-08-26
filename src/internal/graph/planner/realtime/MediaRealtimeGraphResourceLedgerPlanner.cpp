@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <limits>
 #include <new>
 #include <utility>
@@ -21,15 +21,15 @@ constexpr std::uint64_t RetainLatestItemCount = 1;
             ::media::ErrorInfo::invalidArgument(
                 "graph resource residence must be positive"));
     }
-    auto scaledDenominator = MediaRealtimePlanningArithmetic::multiply(
+    auto scaledDenominator = MediaCheckedArithmetic::multiply(
         denominator, 1'000'000'000ULL, fact);
     auto inWindow = scaledDenominator
-        ? MediaRealtimePlanningArithmetic::ceilScale(
+        ? MediaCheckedArithmetic::ceilScale(
               static_cast<std::uint64_t>(residence.nanoseconds()), numerator,
               scaledDenominator.value(), fact)
         : scaledDenominator;
     return inWindow
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               inWindow.value(), 1U, fact)
         : inWindow;
 }
@@ -42,16 +42,16 @@ constexpr std::uint64_t RetainLatestItemCount = 1;
             ::media::ErrorInfo::notInitialized(
                 "graph resource ledger requires prepared output dimensions"));
     }
-    auto pixels = MediaRealtimePlanningArithmetic::multiply(
+    auto pixels = MediaCheckedArithmetic::multiply(
         static_cast<std::uint64_t>(width),
         static_cast<std::uint64_t>(height), "video surface pixels");
     if (!pixels) return pixels;
     if (pixelFormat == "nv12" || pixelFormat == "yuv420p") {
-        return MediaRealtimePlanningArithmetic::ceilScale(
+        return MediaCheckedArithmetic::ceilScale(
             pixels.value(), 3U, 2U, "8-bit 4:2:0 surface bytes");
     }
     if (pixelFormat == "p010le" || pixelFormat == "yuv420p10le") {
-        return MediaRealtimePlanningArithmetic::multiply(
+        return MediaCheckedArithmetic::multiply(
             pixels.value(), 3U, "10-bit 4:2:0 surface bytes");
     }
     return ::media::Result<std::uint64_t>::failure(
@@ -104,12 +104,12 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
     auto surfaceUnitBytes = logicalSurfaceBytes(
         outputWidth, outputHeight, surfacePixelFormat);
     auto videoPacketBytes = videoUnits
-        ? MediaRealtimePlanningArithmetic::multiply(
+        ? MediaCheckedArithmetic::multiply(
               videoUnits.value(), emission.video.maximumAccessUnitPayloadBytes,
               "encoded video ledger bytes")
         : videoUnits;
     auto surfaceBytes = videoUnits && surfaceUnitBytes
-        ? MediaRealtimePlanningArithmetic::multiply(
+        ? MediaCheckedArithmetic::multiply(
               videoUnits.value(), surfaceUnitBytes.value(),
               "video surface ledger bytes")
         : (!videoUnits ? videoUnits : surfaceUnitBytes);
@@ -132,7 +132,7 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
             emission.audio->accessUnitsPerSecondDenominator,
             residence, "audio residence units");
         auto bytes = units
-            ? MediaRealtimePlanningArithmetic::multiply(
+            ? MediaCheckedArithmetic::multiply(
                   units.value(),
                   emission.audio->maximumAccessUnitPayloadBytes,
                   "encoded audio ledger bytes")
@@ -148,12 +148,12 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
         audioBytes = bytes.value();
     }
 
-    auto packetItems = MediaRealtimePlanningArithmetic::add(
+    auto packetItems = MediaCheckedArithmetic::add(
         videoUnits.value(), audioUnitCount, "aggregate packet items");
-    auto ownedPayload = MediaRealtimePlanningArithmetic::add(
+    auto ownedPayload = MediaCheckedArithmetic::add(
         videoPacketBytes.value(), audioBytes, "shared encoded payload bytes");
     auto withSurfaces = ownedPayload
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               ownedPayload.value(), surfaceBytes.value(),
               "media payload and surface bytes")
         : ownedPayload;

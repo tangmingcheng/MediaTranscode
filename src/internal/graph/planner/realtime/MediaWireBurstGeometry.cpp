@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaWireBurstGeometry.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 namespace media::ffmpeg::graph {
 
@@ -17,13 +17,13 @@ namespace media::ffmpeg::graph {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire burst geometry requires positive payload, datagram, MTU, and header facts"));
     }
-    auto authoritativeDatagramCount = MediaRealtimePlanningArithmetic::add(
+    auto authoritativeDatagramCount = MediaCheckedArithmetic::add(
         payloadDatagramCount, discreteDatagramCount,
         "wire burst aggregate datagrams");
     if (!authoritativeDatagramCount) {
         return Result::failure(authoritativeDatagramCount.error());
     }
-    auto minimumDatagrams = MediaRealtimePlanningArithmetic::ceilScale(
+    auto minimumDatagrams = MediaCheckedArithmetic::ceilScale(
         udpPayloadBytes, 1U, maximumUdpPayloadBytes,
         "wire burst minimum datagrams");
     if (!minimumDatagrams) {
@@ -33,11 +33,11 @@ namespace media::ffmpeg::graph {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire burst datagram contract understates payload geometry"));
     }
-    auto headerBytes = MediaRealtimePlanningArithmetic::multiply(
+    auto headerBytes = MediaCheckedArithmetic::multiply(
         authoritativeDatagramCount.value(), networkHeaderBytes,
         "wire burst network headers");
     auto wireBytes = headerBytes
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               udpPayloadBytes, headerBytes.value(), "wire burst bytes")
         : headerBytes;
     if (!wireBytes) {

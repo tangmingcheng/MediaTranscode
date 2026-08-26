@@ -1,7 +1,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 
 #include <limits>
@@ -18,8 +18,9 @@ constexpr std::uint64_t UdpHeaderBytes = 8;
 ::media::Result<std::uint64_t> bytesForResidence(
     std::uint64_t bytesPerSecond, MediaRunningTime residence)
 {
-    return MediaRealtimePlanningArithmetic::bytesForResidence(
-        bytesPerSecond, residence, "Datagram residence byte demand");
+    return MediaCheckedArithmetic::bytesForResidence(
+        bytesPerSecond, residence.nanoseconds(),
+        "Datagram residence byte demand");
 }
 
 std::uint64_t ceilDivide(
@@ -49,7 +50,7 @@ MediaDatagramTransportPlanTemplate::create(
         facts.service.peakWireBytesPerSecond,
         facts.latency.maximumResidence);
     auto burstServiceWithinDeadline = peakServiceWithinDeadline
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               facts.service.burstWireBytes,
               peakServiceWithinDeadline.value(),
               "service burst within maximum residence")

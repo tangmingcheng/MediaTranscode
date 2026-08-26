@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -43,18 +43,18 @@ MediaRtcpReportingPolicyPlanner::plan(
         members = encoded.rtcpSession->maximumSessionMembers;
         membershipAuthority = encoded.rtcpSession->authority;
     }
-    auto rtcpBandwidth = MediaRealtimePlanningArithmetic::ceilScale(
+    auto rtcpBandwidth = MediaCheckedArithmetic::ceilScale(
         sessionBandwidthBytesPerSecond, RtcpBandwidthPercent, 100,
         "RTCP session bandwidth share");
     auto senderBandwidth = rtcpBandwidth
-        ? MediaRealtimePlanningArithmetic::ceilScale(
+        ? MediaCheckedArithmetic::ceilScale(
               rtcpBandwidth.value(), SenderBandwidthPercent, 100,
               "RTCP sender bandwidth share")
         : rtcpBandwidth;
-    auto memberBytes = MediaRealtimePlanningArithmetic::multiply(
+    auto memberBytes = MediaCheckedArithmetic::multiply(
         compoundPacketBytes, members, "RTCP member-weighted compound bytes");
     auto nominalNs = senderBandwidth && memberBytes
-        ? MediaRealtimePlanningArithmetic::ceilScale(
+        ? MediaCheckedArithmetic::ceilScale(
               memberBytes.value(), NanosecondsPerSecond,
               senderBandwidth.value(), "RTCP deterministic interval")
         : (!senderBandwidth ? senderBandwidth : memberBytes);
@@ -71,12 +71,12 @@ MediaRtcpReportingPolicyPlanner::plan(
         nominal, MediaRunningTime::fromNanoseconds(InitialMinimumIntervalNs));
     const auto steady = (std::max)(
         nominal, MediaRunningTime::fromNanoseconds(SteadyMinimumIntervalNs));
-    auto randomizedLower = MediaRealtimePlanningArithmetic::ceilScale(
+    auto randomizedLower = MediaCheckedArithmetic::ceilScale(
         static_cast<std::uint64_t>(initial.nanoseconds()),
         RandomizationLowerNumerator, RandomizationDenominator,
         "RTCP initial randomization lower bound");
     auto compensatedLower = randomizedLower
-        ? MediaRealtimePlanningArithmetic::ceilScale(
+        ? MediaCheckedArithmetic::ceilScale(
               randomizedLower.value(), CompensationNumerator,
               CompensationDenominator,
               "RTCP interval compensation lower bound")

@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelopePlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/planner/realtime/MediaWireBurstGeometry.h"
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
@@ -26,13 +26,13 @@ constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
 ::media::Result<std::uint64_t> add(
     std::uint64_t left, std::uint64_t right, const char* fact)
 {
-    return MediaRealtimePlanningArithmetic::add(left, right, fact);
+    return MediaCheckedArithmetic::add(left, right, fact);
 }
 
 ::media::Result<std::uint64_t> multiply(
     std::uint64_t left, std::uint64_t right, const char* fact)
 {
-    return MediaRealtimePlanningArithmetic::multiply(left, right, fact);
+    return MediaCheckedArithmetic::multiply(left, right, fact);
 }
 
 ::media::Result<std::uint64_t> ceilScale(
@@ -41,7 +41,7 @@ constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
     std::uint64_t denominator,
     const char* fact)
 {
-    return MediaRealtimePlanningArithmetic::ceilScale(
+    return MediaCheckedArithmetic::ceilScale(
         value, numerator, denominator, fact);
 }
 

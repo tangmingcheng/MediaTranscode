@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/runtime/buffer/MediaScheduledWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitEvidenceCollector.h"
 
@@ -33,7 +33,7 @@ struct EvidenceEntryGeometry final {
 ::media::Result<std::uint64_t> containers(
     std::uint64_t count, std::uint64_t bytesPerItem, const char* fact)
 {
-    return MediaRealtimePlanningArithmetic::multiply(
+    return MediaCheckedArithmetic::multiply(
         count, bytesPerItem, fact);
 }
 
@@ -50,14 +50,16 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         return Result::failure(::media::ErrorInfo::notInitialized(
             "network ledger requires endpoint and wire geometry"));
     }
-    auto residenceBytes = MediaRealtimePlanningArithmetic::bytesForResidence(
-        wire.peakWireBytesPerSecond, deployment.latency.maximumResidence,
+    auto residenceBytes = MediaCheckedArithmetic::bytesForResidence(
+        wire.peakWireBytesPerSecond,
+        deployment.latency.maximumResidence.nanoseconds(),
         "network residence payload");
-    auto residenceDatagrams = MediaRealtimePlanningArithmetic::bytesForResidence(
-        wire.peakDatagramsPerSecond, deployment.latency.maximumResidence,
+    auto residenceDatagrams = MediaCheckedArithmetic::bytesForResidence(
+        wire.peakDatagramsPerSecond,
+        deployment.latency.maximumResidence.nanoseconds(),
         "network residence datagrams");
     auto backlogBytes = residenceBytes
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               residenceBytes.value(), wire.burstWireBytes,
               "network backlog payload")
         : residenceBytes;
@@ -112,7 +114,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         backlogDatagrams, backlogContainerUnit, "backlog containers");
     auto batchContainers = containers(
         batchDatagrams, batchContainerUnit, "batch containers");
-    auto endpointItems = MediaRealtimePlanningArithmetic::multiply(
+    auto endpointItems = MediaCheckedArithmetic::multiply(
         endpointPendingDatagrams, endpointCount,
         "endpoint pending container count");
     auto endpointContainers = endpointItems
@@ -122,26 +124,26 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     auto evidenceContainers = containers(
         correlationEntries, evidenceUnit, "evidence correlation containers");
     auto withBacklogContainers = backlogContainers
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               backlogBytes.value(), backlogContainers.value(),
               "backlog payload and containers")
         : backlogContainers;
     auto withBatch = withBacklogContainers && batchContainers
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               withBacklogContainers.value(), batchContainers.value(),
               "network batch containers")
         : (!withBacklogContainers ? withBacklogContainers : batchContainers);
     auto withEndpoints = withBatch && endpointContainers
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               withBatch.value(), endpointContainers.value(),
               "network endpoint containers")
         : (!withBatch ? withBatch : endpointContainers);
     auto networkBytes = withEndpoints && evidenceContainers
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               withEndpoints.value(), evidenceContainers.value(),
               "network evidence containers")
         : (!withEndpoints ? withEndpoints : evidenceContainers);
-    auto socketBytes = MediaRealtimePlanningArithmetic::multiply(
+    auto socketBytes = MediaCheckedArithmetic::multiply(
         socketPerEndpoint, endpointCount, "aggregate socket kernel buffers");
     if (!networkBytes || !socketBytes ||
         networkBytes.value() >
@@ -217,7 +219,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
                 ::media::ErrorInfo::invalidArgument(
                     "network ledger entry item count is zero"));
         }
-        auto next = MediaRealtimePlanningArithmetic::add(
+        auto next = MediaCheckedArithmetic::add(
             entry.chargedToSocketBudget ? socket : network,
             entry.bytes, "network ledger validation");
         if (!next) return ::media::Status::failure(next.error());

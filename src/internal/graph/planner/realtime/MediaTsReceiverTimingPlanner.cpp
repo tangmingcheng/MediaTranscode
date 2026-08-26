@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaTsReceiverTimingPlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -28,7 +28,7 @@ constexpr const char* InteropPsiAuthority =
             ::media::ErrorInfo::notInitialized(
                 "TS receiver timing requires prepared video cadence"));
     }
-    auto nanoseconds = MediaRealtimePlanningArithmetic::ceilScale(
+    auto nanoseconds = MediaCheckedArithmetic::ceilScale(
         static_cast<std::uint64_t>(cadence.den), NanosecondsPerSecond,
         static_cast<std::uint64_t>(cadence.num),
         "TS prepared video cadence");

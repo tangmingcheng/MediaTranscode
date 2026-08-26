@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/network/MediaDatagramServiceShaper.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -10,58 +11,6 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-
-struct UInt128 final {
-    std::uint64_t high = 0;
-    std::uint64_t low = 0;
-    friend constexpr bool operator>=(UInt128 lhs, UInt128 rhs) noexcept
-    {
-        return lhs.high > rhs.high ||
-               (lhs.high == rhs.high && lhs.low >= rhs.low);
-    }
-};
-
-constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
-{
-    const std::uint64_t lhsLow = static_cast<std::uint32_t>(lhs);
-    const std::uint64_t lhsHigh = lhs >> 32;
-    const std::uint64_t rhsLow = static_cast<std::uint32_t>(rhs);
-    const std::uint64_t rhsHigh = rhs >> 32;
-    const std::uint64_t lowProduct = lhsLow * rhsLow;
-    const std::uint64_t firstCross = lhsHigh * rhsLow + (lowProduct >> 32);
-    const std::uint64_t secondCross =
-        lhsLow * rhsHigh + static_cast<std::uint32_t>(firstCross);
-    return {lhsHigh * rhsHigh + (firstCross >> 32) + (secondCross >> 32),
-            (secondCross << 32) + static_cast<std::uint32_t>(lowProduct)};
-}
-
-::media::Result<MediaRunningTime> ceilingDuration(
-    std::uint64_t bytes, std::uint64_t bytesPerSecond)
-{
-    using Result = ::media::Result<MediaRunningTime>;
-    if (bytes == 0 || bytesPerSecond == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "service shaper requires nonzero wire facts"));
-    }
-    constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
-    const auto required = multiply(bytes, NanosecondsPerSecond);
-    if (!(multiply(static_cast<std::uint64_t>(
-                       (std::numeric_limits<std::int64_t>::max)()),
-                   bytesPerSecond) >= required)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "service shaper burst duration is not representable"));
-    }
-    std::uint64_t first = 1;
-    std::uint64_t last = static_cast<std::uint64_t>(
-        (std::numeric_limits<std::int64_t>::max)());
-    while (first < last) {
-        const auto middle = first + (last - first) / 2;
-        if (multiply(middle, bytesPerSecond) >= required) last = middle;
-        else first = middle + 1;
-    }
-    return Result::success(MediaRunningTime::fromNanoseconds(
-        static_cast<std::int64_t>(first)));
-}
 
 bool sameRuntimeContract(const MediaDatagramShapingPlan& lhs,
                          const MediaDatagramShapingPlan& rhs) noexcept
@@ -98,13 +47,15 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
 {
     using Result =
         ::media::Result<std::unique_ptr<MediaDatagramServiceShaper>>;
-    auto burstDuration = ceilingDuration(
+    auto burstDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
         plan.serviceCurve().burstWireBytes,
-        plan.serviceCurve().sustainedWireBytesPerSecond);
-    if (!burstDuration) return Result::failure(burstDuration.error());
+        plan.serviceCurve().sustainedWireBytesPerSecond,
+        "service shaper burst duration");
+    if (!burstDurationNs) return Result::failure(burstDurationNs.error());
     auto result = std::unique_ptr<MediaDatagramServiceShaper>(
         new (std::nothrow) MediaDatagramServiceShaper(
-            std::move(plan), burstDuration.value()));
+            std::move(plan), MediaRunningTime::fromNanoseconds(
+                                 burstDurationNs.value())));
     if (!result) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaDatagramServiceShaper"));

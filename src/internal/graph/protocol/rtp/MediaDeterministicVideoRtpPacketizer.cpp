@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -232,16 +232,16 @@ MediaDeterministicVideoRtpPacketizer::maximumDatagramsPerAccessUnit(
     // capacity of access-unit bytes. Prefix bytes already present in Annex-B
     // or length-prefixed input cover each two-byte aggregation length field.
     const auto fragments =
-        MediaRealtimePlanningArithmetic::ceilScale(
+        MediaCheckedArithmetic::ceilScale(
             maximumAccessUnitBytes, 1U,
             static_cast<std::uint64_t>(maximumRtpPayloadBytes) - fuHeader,
             "deterministic video RTP access-unit fragments");
     if (!fragments) return fragments;
-    auto doubled = MediaRealtimePlanningArithmetic::multiply(
+    auto doubled = MediaCheckedArithmetic::multiply(
         fragments.value(), 2U,
         "deterministic video RTP aggregation bound");
     return doubled
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               doubled.value(), 1U,
               "deterministic video RTP terminal payload")
         : doubled;

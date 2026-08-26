@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtpAccessUnitEmissionContract.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
 
@@ -15,7 +15,7 @@ constexpr std::uint64_t RtpHeaderBytes = 12;
     std::uint64_t maximumAccessUnitBytes,
     std::uint64_t maximumRtpPayloadBytes)
 {
-    auto lengthBytes = MediaRealtimePlanningArithmetic::add(
+    auto lengthBytes = MediaCheckedArithmetic::add(
         maximumAccessUnitBytes / 255U, 1U,
         "AAC LATM PayloadLengthInfo bytes");
     if (!lengthBytes || lengthBytes.value() >= maximumRtpPayloadBytes) {
@@ -27,11 +27,11 @@ constexpr std::uint64_t RtpHeaderBytes = 12;
     const auto firstPayload = maximumRtpPayloadBytes - lengthBytes.value();
     const auto remainder = maximumAccessUnitBytes > firstPayload
         ? maximumAccessUnitBytes - firstPayload : 0U;
-    auto trailing = MediaRealtimePlanningArithmetic::ceilScale(
+    auto trailing = MediaCheckedArithmetic::ceilScale(
         remainder, 1U, maximumRtpPayloadBytes,
         "AAC LATM trailing RTP datagrams");
     return trailing
-        ? MediaRealtimePlanningArithmetic::add(
+        ? MediaCheckedArithmetic::add(
               trailing.value(), 1U, "AAC LATM first RTP datagram")
         : trailing;
 }

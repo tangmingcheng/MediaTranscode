@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -10,35 +11,6 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-
-struct UInt128 final {
-    std::uint64_t high = 0;
-    std::uint64_t low = 0;
-
-    friend constexpr bool operator>=(UInt128 lhs, UInt128 rhs) noexcept
-    {
-        return lhs.high > rhs.high ||
-               (lhs.high == rhs.high && lhs.low >= rhs.low);
-    }
-};
-
-constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
-{
-    const std::uint64_t lhsLow = static_cast<std::uint32_t>(lhs);
-    const std::uint64_t lhsHigh = lhs >> 32;
-    const std::uint64_t rhsLow = static_cast<std::uint32_t>(rhs);
-    const std::uint64_t rhsHigh = rhs >> 32;
-
-    const std::uint64_t lowProduct = lhsLow * rhsLow;
-    const std::uint64_t firstCross = lhsHigh * rhsLow + (lowProduct >> 32);
-    const std::uint64_t firstCrossLow = static_cast<std::uint32_t>(firstCross);
-    const std::uint64_t firstCrossHigh = firstCross >> 32;
-    const std::uint64_t secondCross = lhsLow * rhsHigh + firstCrossLow;
-
-    return UInt128{lhsHigh * rhsHigh + firstCrossHigh + (secondCross >> 32),
-                   (secondCross << 32) +
-                       static_cast<std::uint32_t>(lowProduct)};
-}
 
 ::media::Result<std::uint64_t> checkedWireBytes(
     const MediaDatagramEndpointPlan& endpoint,
@@ -59,41 +31,6 @@ constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
     }
     return Result::success(
         ipPacketBytes + endpoint.mtuEvidence.transportHeaderBytes);
-}
-
-::media::Result<MediaRunningTime> checkedCeilingDuration(
-    std::uint64_t wireBytes,
-    std::uint64_t wireBytesPerSecond)
-{
-    using Result = ::media::Result<MediaRunningTime>;
-    if (wireBytes == 0 || wireBytesPerSecond == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram wire duration requires bytes and a wire rate"));
-    }
-
-    constexpr std::uint64_t nanosecondsPerSecond = 1'000'000'000;
-    const auto requiredService = multiply(wireBytes, nanosecondsPerSecond);
-    const auto maximumDuration = multiply(
-        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()),
-        wireBytesPerSecond);
-    if (!(maximumDuration >= requiredService)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram wire duration is not representable"));
-    }
-
-    std::uint64_t first = 1;
-    std::uint64_t last =
-        static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
-    while (first < last) {
-        const auto middle = first + (last - first) / 2;
-        if (multiply(middle, wireBytesPerSecond) >= requiredService) {
-            last = middle;
-        } else {
-            first = middle + 1;
-        }
-    }
-    return Result::success(
-        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(first)));
 }
 
 ::media::Status validateMtuEvidence(const MediaDatagramEndpointPlan& endpoint)
@@ -470,18 +407,22 @@ MediaDatagramShapingPlan::plannedWireCost(
 
     auto wireBytes = checkedWireBytes(*plannedEndpoint, payloadBytes);
     if (!wireBytes) return Result::failure(wireBytes.error());
-    auto peakDuration = checkedCeilingDuration(
+    auto peakDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
         wireBytes.value(),
-        m_encoding.serviceCurve.peakWireBytesPerSecond);
-    if (!peakDuration) return Result::failure(peakDuration.error());
-    auto sustainedDuration = checkedCeilingDuration(
+        m_encoding.serviceCurve.peakWireBytesPerSecond,
+        "datagram peak wire duration");
+    if (!peakDurationNs) return Result::failure(peakDurationNs.error());
+    auto sustainedDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
         wireBytes.value(),
-        m_encoding.serviceCurve.sustainedWireBytesPerSecond);
-    if (!sustainedDuration) {
-        return Result::failure(sustainedDuration.error());
+        m_encoding.serviceCurve.sustainedWireBytesPerSecond,
+        "datagram sustained wire duration");
+    if (!sustainedDurationNs) {
+        return Result::failure(sustainedDurationNs.error());
     }
     return Result::success(MediaDatagramPlannedWireCost{
-        wireBytes.value(), peakDuration.value(), sustainedDuration.value()});
+        wireBytes.value(),
+        MediaRunningTime::fromNanoseconds(peakDurationNs.value()),
+        MediaRunningTime::fromNanoseconds(sustainedDurationNs.value())});
 }
 
 ::media::Result<MediaDatagramWireDeadlinePlan>

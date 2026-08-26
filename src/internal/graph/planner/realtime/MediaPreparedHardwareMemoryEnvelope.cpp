@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaPreparedHardwareMemoryEnvelope.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 namespace media::ffmpeg::graph {
 
@@ -22,18 +22,18 @@ namespace media::ffmpeg::graph {
                 ::media::ErrorInfo::notInitialized(
                     "prepared hardware allocation lacks a hard bound or authority"));
         }
-        auto surfaceBytes = MediaRealtimePlanningArithmetic::multiply(
+        auto surfaceBytes = MediaCheckedArithmetic::multiply(
             allocation.maximumPoolSurfaces,
             allocation.allocationBytesPerSurface,
             "hardware surface allocation bytes");
         auto allocationBytes = surfaceBytes
-            ? MediaRealtimePlanningArithmetic::add(
+            ? MediaCheckedArithmetic::add(
                   surfaceBytes.value(),
                   allocation.maximumDriverOverheadBytes,
                   "hardware allocation and driver overhead")
             : surfaceBytes;
         auto total = allocationBytes
-            ? MediaRealtimePlanningArithmetic::add(
+            ? MediaCheckedArithmetic::add(
                   accounted, allocationBytes.value(),
                   "prepared hardware memory total")
             : allocationBytes;

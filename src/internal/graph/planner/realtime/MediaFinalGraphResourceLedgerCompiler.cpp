@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
-#include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <algorithm>
 #include <charconv>
 #include <map>
@@ -11,7 +11,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-using Arithmetic = MediaRealtimePlanningArithmetic;
+using Arithmetic = MediaCheckedArithmetic;
 
 bool productionRealtimeNode(MediaNodeKind kind) noexcept
 {
