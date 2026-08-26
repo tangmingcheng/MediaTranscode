@@ -1,9 +1,12 @@
 #include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/sync/MediaOutputSchedule.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
+
+#include <sstream>
 
 namespace media::ffmpeg::graph {
 
@@ -398,6 +401,12 @@ MediaVideoOutputSchedulerNode::onProcess(
             ::media::ErrorInfo::internalError(
                 "VideoOnly scheduler failed to materialize scheduled AU"));
     }
+    auto ready = m_authority->now();
+    if (!ready) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ready.error());
+    }
+    recordEncodedReady(*unit, ready.value());
     m_pendingDeadline = unit->emitOnMaster();
     m_pendingScheduled = std::move(scheduled).value();
     return emitPending(context);
@@ -406,6 +415,7 @@ MediaVideoOutputSchedulerNode::onProcess(
 ::media::Status MediaVideoOutputSchedulerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    emitDiagnostics("stopped");
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -413,9 +423,75 @@ MediaVideoOutputSchedulerNode::onProcess(
 void MediaVideoOutputSchedulerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    emitDiagnostics("aborted");
     if (m_authority) m_authority->markAborted();
     resetState();
     FFmpegNodeRuntime::abort(context);
+}
+
+void MediaVideoOutputSchedulerNode::recordEncodedReady(
+    const MediaScheduledAccessUnit& unit,
+    MediaRunningTime ready) noexcept
+{
+    const auto afterEmit = ready.checkedSubtract(unit.emitOnMaster());
+    if (!afterEmit ||
+        afterEmit.value().nanoseconds() <=
+            m_maximumEncodedReadyAfterEmitNanoseconds) {
+        return;
+    }
+    m_maximumEncodedReadyAfterEmitNanoseconds =
+        afterEmit.value().nanoseconds();
+    m_worstEncodedReadyNanoseconds = ready.nanoseconds();
+    m_worstEncodedEmitNanoseconds = unit.emitOnMaster().nanoseconds();
+    m_worstEncodedDispatchNanoseconds =
+        unit.dispatchOnMaster().nanoseconds();
+    if (m_masterRelease) {
+        const auto afterMasterRelease = ready.checkedSubtract(*m_masterRelease);
+        m_worstEncodedReadyAfterMasterReleaseNanoseconds = afterMasterRelease
+            ? afterMasterRelease.value().nanoseconds() : 0;
+    }
+    if (m_sourceStart) {
+        const auto dtsDelta = unit.canonicalDispatch().checkedSubtract(
+            *m_sourceStart);
+        m_worstEncodedDtsDeltaNanoseconds = dtsDelta
+            ? dtsDelta.value().nanoseconds() : 0;
+    }
+    m_worstEncodedDts = unit.media()->dts();
+    m_worstEncodedSequence = unit.sourceSequence().value();
+}
+
+void MediaVideoOutputSchedulerNode::emitDiagnostics(
+    const char* stage) noexcept
+{
+    if (m_diagnosticsEmitted) return;
+    m_diagnosticsEmitted = true;
+    try {
+        std::ostringstream out;
+        out << "video_output_scheduler stage=" << stage
+            << " activation_lead_ns=" << m_activationLead.nanoseconds()
+            << " transport_lead_ns=" << m_transportLead.nanoseconds()
+            << " source_start_ns="
+            << (m_sourceStart ? m_sourceStart->nanoseconds() : 0)
+            << " master_release_ns="
+            << (m_masterRelease ? m_masterRelease->nanoseconds() : 0)
+            << " maximum_encoded_ready_after_emit_ns="
+            << (m_worstEncodedSequence == 0
+                    ? 0 : m_maximumEncodedReadyAfterEmitNanoseconds)
+            << " worst_ready_ns=" << m_worstEncodedReadyNanoseconds
+            << " worst_emit_ns=" << m_worstEncodedEmitNanoseconds
+            << " worst_dispatch_ns=" << m_worstEncodedDispatchNanoseconds
+            << " worst_ready_after_master_release_ns="
+            << m_worstEncodedReadyAfterMasterReleaseNanoseconds
+            << " worst_packet_dts_delta_ns="
+            << m_worstEncodedDtsDeltaNanoseconds
+            << " worst_packet_dts=" << m_worstEncodedDts
+            << " worst_source_sequence=" << m_worstEncodedSequence;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::Summary,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            out.str());
+    } catch (...) {
+    }
 }
 
 void MediaVideoOutputSchedulerNode::resetState() noexcept
@@ -442,6 +518,16 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_masterRelease.reset();
     m_lastDispatch.reset();
     m_nextSequence = 1;
+    m_maximumEncodedReadyAfterEmitNanoseconds =
+        (std::numeric_limits<std::int64_t>::min)();
+    m_worstEncodedReadyNanoseconds = 0;
+    m_worstEncodedEmitNanoseconds = 0;
+    m_worstEncodedDispatchNanoseconds = 0;
+    m_worstEncodedReadyAfterMasterReleaseNanoseconds = 0;
+    m_worstEncodedDtsDeltaNanoseconds = 0;
+    m_worstEncodedDts = 0;
+    m_worstEncodedSequence = 0;
+    m_diagnosticsEmitted = false;
 }
 
 } // namespace media::ffmpeg::graph

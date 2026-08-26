@@ -140,8 +140,24 @@ MediaDatagramServiceShaper::shape(
     auto previousRelease = m_previousCanonicalRelease;
     auto previousDeadline = m_previousCanonicalDeadline;
     auto previousSequence = m_previousGlobalSequence;
+    const auto& batchFirst = batch.m_datagrams.front().m_descriptor;
+    const auto& batchLast = batch.m_datagrams.back().m_descriptor;
     for (const auto& datagram : batch.m_datagrams) {
         const auto& wire = datagram.m_descriptor;
+        const auto arrivalAfterRelease = now.checkedSubtract(
+            wire.canonicalRelease);
+        if (arrivalAfterRelease &&
+            arrivalAfterRelease.value().nanoseconds() >
+                m_telemetry.maximumArrivalAfterReleaseNanoseconds) {
+            m_telemetry.maximumArrivalAfterReleaseNanoseconds =
+                arrivalAfterRelease.value().nanoseconds();
+            m_telemetry.worstArrivalGlobalSequence = wire.globalSequence;
+            m_telemetry.worstArrivalReleaseNanoseconds =
+                wire.canonicalRelease.nanoseconds();
+            m_telemetry.worstArrivalDeadlineNanoseconds =
+                wire.canonicalDeadline.nanoseconds();
+            m_telemetry.worstArrivalNowNanoseconds = now.nanoseconds();
+        }
         if ((previousSequence && wire.globalSequence <= *previousSequence) ||
             (previousRelease && wire.canonicalRelease < *previousRelease) ||
             (previousDeadline && wire.canonicalDeadline < *previousDeadline)) {
@@ -236,7 +252,18 @@ MediaDatagramServiceShaper::shape(
                 << " backlog_deadline_ns="
                 << backlogDeadline.value().nanoseconds()
                 << " enqueue_not_after_ns="
-                << enqueueNotAfter.nanoseconds();
+                << enqueueNotAfter.nanoseconds()
+                << " batch_datagrams=" << batch.m_datagrams.size()
+                << " batch_first_sequence=" << batchFirst.globalSequence
+                << " batch_last_sequence=" << batchLast.globalSequence
+                << " batch_first_release_ns="
+                << batchFirst.canonicalRelease.nanoseconds()
+                << " batch_last_release_ns="
+                << batchLast.canonicalRelease.nanoseconds()
+                << " batch_first_deadline_ns="
+                << batchFirst.canonicalDeadline.nanoseconds()
+                << " batch_last_deadline_ns="
+                << batchLast.canonicalDeadline.nanoseconds();
             return Result::failure(
                 ::media::ErrorInfo::invalidArgument(message.str()));
         }
@@ -339,6 +366,17 @@ MediaDatagramServiceShaper::shape(
     m_telemetry.admittedPayloadBytes += batchPayloadBytes;
     m_telemetry.admittedWireBytes += batchWireBytes;
     m_telemetry.maximumDebtDelayNanoseconds = maximumDebtDelayNanoseconds;
+    m_telemetry.lastAdmittedBatchFirstSequence = batchFirst.globalSequence;
+    m_telemetry.lastAdmittedBatchLastSequence = batchLast.globalSequence;
+    m_telemetry.lastAdmittedBatchFirstReleaseNanoseconds =
+        batchFirst.canonicalRelease.nanoseconds();
+    m_telemetry.lastAdmittedBatchLastReleaseNanoseconds =
+        batchLast.canonicalRelease.nanoseconds();
+    m_telemetry.lastAdmittedBatchFirstDeadlineNanoseconds =
+        batchFirst.canonicalDeadline.nanoseconds();
+    m_telemetry.lastAdmittedBatchLastDeadlineNanoseconds =
+        batchLast.canonicalDeadline.nanoseconds();
+    m_telemetry.lastAdmittedBatchArrivalNanoseconds = now.nanoseconds();
 
     m_pending = std::move(pending);
     m_peakAvailable = peakAvailable;

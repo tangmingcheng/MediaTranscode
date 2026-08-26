@@ -6,10 +6,13 @@
 
 #include <cstdint>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <optional>
 
 namespace media::ffmpeg::graph {
+
+class MediaScheduledAccessUnit;
 
 class MediaVideoOutputSchedulerNode final : public FFmpegNodeRuntime {
 public:
@@ -36,6 +39,10 @@ private:
     ::media::Result<MediaBufferRef> schedule(MediaBufferRef media);
     ::media::Result<MediaNodeProcessResult> emitPending(
         MediaGraphExecutionContext& context);
+    void recordEncodedReady(
+        const MediaScheduledAccessUnit& unit,
+        MediaRunningTime ready) noexcept;
+    void emitDiagnostics(const char* stage) noexcept;
     void resetState() noexcept;
 
     std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority> m_authority;
@@ -64,6 +71,16 @@ private:
     std::optional<MediaRunningTime> m_masterRelease;
     std::optional<MediaRunningTime> m_lastDispatch;
     std::uint64_t m_nextSequence = 1;
+    std::int64_t m_maximumEncodedReadyAfterEmitNanoseconds =
+        (std::numeric_limits<std::int64_t>::min)();
+    std::int64_t m_worstEncodedReadyNanoseconds = 0;
+    std::int64_t m_worstEncodedEmitNanoseconds = 0;
+    std::int64_t m_worstEncodedDispatchNanoseconds = 0;
+    std::int64_t m_worstEncodedReadyAfterMasterReleaseNanoseconds = 0;
+    std::int64_t m_worstEncodedDtsDeltaNanoseconds = 0;
+    std::int64_t m_worstEncodedDts = 0;
+    std::uint64_t m_worstEncodedSequence = 0;
+    bool m_diagnosticsEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

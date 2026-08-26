@@ -70,6 +70,47 @@ void MediaTsEmissionDiagnostics::recordAccessUnitDecision(
         m_snapshot.currentSchedulingDebtNanoseconds);
 }
 
+void MediaTsEmissionDiagnostics::recordAccessUnitReady(
+    MediaRunningTime ready,
+    MediaRunningTime emit,
+    MediaRunningTime dispatch) noexcept
+{
+    const auto afterEmit = ready.checkedSubtract(emit);
+    const auto afterDispatch = ready.checkedSubtract(dispatch);
+    if (!afterEmit || !afterDispatch ||
+        afterEmit.value().nanoseconds() <=
+            m_snapshot.maximumMuxInputAfterEmitNanoseconds) {
+        return;
+    }
+    m_snapshot.maximumMuxInputAfterEmitNanoseconds =
+        afterEmit.value().nanoseconds();
+    m_snapshot.maximumMuxInputAfterDispatchNanoseconds =
+        afterDispatch.value().nanoseconds();
+    m_snapshot.worstMuxInputReadyNanoseconds = ready.nanoseconds();
+    m_snapshot.worstMuxInputEmitNanoseconds = emit.nanoseconds();
+    m_snapshot.worstMuxInputDispatchNanoseconds = dispatch.nanoseconds();
+}
+
+void MediaTsEmissionDiagnostics::recordProtocolBatchProduced(
+    MediaRunningTime produced,
+    MediaRunningTime release,
+    MediaRunningTime deadline,
+    std::uint64_t datagrams) noexcept
+{
+    const auto afterRelease = produced.checkedSubtract(release);
+    if (!afterRelease ||
+        afterRelease.value().nanoseconds() <=
+            m_snapshot.maximumProtocolBatchProducedAfterReleaseNanoseconds) {
+        return;
+    }
+    m_snapshot.maximumProtocolBatchProducedAfterReleaseNanoseconds =
+        afterRelease.value().nanoseconds();
+    m_snapshot.worstProtocolBatchProducedNanoseconds = produced.nanoseconds();
+    m_snapshot.worstProtocolBatchReleaseNanoseconds = release.nanoseconds();
+    m_snapshot.worstProtocolBatchDeadlineNanoseconds = deadline.nanoseconds();
+    m_snapshot.worstProtocolBatchDatagrams = datagrams;
+}
+
 void MediaTsEmissionDiagnostics::recordAccessUnitCompleted() noexcept
 {
     m_snapshot.currentSchedulingDebtNanoseconds = 0;
@@ -130,6 +171,26 @@ void MediaTsEmissionDiagnostics::logSnapshot(
         << m_snapshot.currentSchedulingDebtNanoseconds
         << " maximum_scheduling_debt_ns="
         << m_snapshot.maximumSchedulingDebtNanoseconds
+        << " maximum_mux_input_after_emit_ns="
+        << m_snapshot.maximumMuxInputAfterEmitNanoseconds
+        << " maximum_mux_input_after_dispatch_ns="
+        << m_snapshot.maximumMuxInputAfterDispatchNanoseconds
+        << " worst_mux_input_ready_ns="
+        << m_snapshot.worstMuxInputReadyNanoseconds
+        << " worst_mux_input_emit_ns="
+        << m_snapshot.worstMuxInputEmitNanoseconds
+        << " worst_mux_input_dispatch_ns="
+        << m_snapshot.worstMuxInputDispatchNanoseconds
+        << " maximum_protocol_batch_produced_after_release_ns="
+        << m_snapshot.maximumProtocolBatchProducedAfterReleaseNanoseconds
+        << " worst_protocol_batch_produced_ns="
+        << m_snapshot.worstProtocolBatchProducedNanoseconds
+        << " worst_protocol_batch_release_ns="
+        << m_snapshot.worstProtocolBatchReleaseNanoseconds
+        << " worst_protocol_batch_deadline_ns="
+        << m_snapshot.worstProtocolBatchDeadlineNanoseconds
+        << " worst_protocol_batch_datagrams="
+        << m_snapshot.worstProtocolBatchDatagrams
         << " exit_reason=" << exitReason;
     mediaGraphDiagnosticLog(
         stage == "final"

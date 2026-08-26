@@ -560,6 +560,8 @@ MediaTsMuxSession::writeAccessUnit(
     const MediaTsAccessUnitView& unit,
     MediaRunningTime actualMasterNow)
 {
+    m_emissionDiagnostics.recordAccessUnitReady(
+        actualMasterNow, unit.emitOnMaster, unit.dispatchOnMaster);
     if (m_pendingEmission) {
         return advanceFailure(invalid(
             "MPEG-TS mux session rejects a second access unit while emission is pending"));
@@ -739,6 +741,21 @@ bool MediaTsMuxSession::hasScheduledBatch() const noexcept
     }
     MediaBufferRef batch = std::move(m_protocolBatches.front());
     m_protocolBatches.pop_front();
+    const auto* protocolBatch =
+        dynamic_cast<const MediaMpegTsProtocolDatagramBatchBuffer*>(
+            batch.get());
+    auto produced = m_masterClock->now();
+    if (!protocolBatch || protocolBatch->datagrams().empty() || !produced) {
+        return ::media::Result<MediaBufferRef>::failure(
+            !produced
+                ? produced.error()
+                : ::media::ErrorInfo::internalError(
+                      "MPEG-TS mux session produced an invalid protocol batch"));
+    }
+    const auto& first = protocolBatch->datagrams().front();
+    m_emissionDiagnostics.recordProtocolBatchProduced(
+        produced.value(), first.canonicalRelease(),
+        first.canonicalDeadline(), protocolBatch->datagrams().size());
     return ::media::Result<MediaBufferRef>::success(std::move(batch));
 }
 

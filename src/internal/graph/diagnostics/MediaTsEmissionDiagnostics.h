@@ -23,6 +23,16 @@ struct MediaTsEmissionSnapshot final {
     std::uint64_t accessUnits = 0;
     std::int64_t currentSchedulingDebtNanoseconds = 0;
     std::int64_t maximumSchedulingDebtNanoseconds = 0;
+    std::int64_t maximumMuxInputAfterEmitNanoseconds = 0;
+    std::int64_t maximumMuxInputAfterDispatchNanoseconds = 0;
+    std::int64_t worstMuxInputReadyNanoseconds = 0;
+    std::int64_t worstMuxInputEmitNanoseconds = 0;
+    std::int64_t worstMuxInputDispatchNanoseconds = 0;
+    std::int64_t maximumProtocolBatchProducedAfterReleaseNanoseconds = 0;
+    std::int64_t worstProtocolBatchProducedNanoseconds = 0;
+    std::int64_t worstProtocolBatchReleaseNanoseconds = 0;
+    std::int64_t worstProtocolBatchDeadlineNanoseconds = 0;
+    std::uint64_t worstProtocolBatchDatagrams = 0;
 };
 
 class MediaTsEmissionDiagnostics final {
@@ -36,6 +46,15 @@ public:
     void recordPressureFailure() noexcept;
     void recordAccessUnitDecision(
         const MediaTsAccessUnitEmissionDecision& decision) noexcept;
+    void recordAccessUnitReady(
+        MediaRunningTime ready,
+        MediaRunningTime emit,
+        MediaRunningTime dispatch) noexcept;
+    void recordProtocolBatchProduced(
+        MediaRunningTime produced,
+        MediaRunningTime release,
+        MediaRunningTime deadline,
+        std::uint64_t datagrams) noexcept;
     void recordAccessUnitCompleted() noexcept;
 
     const MediaTsEmissionSnapshot& snapshot() const noexcept;

@@ -64,6 +64,30 @@ void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
                 << " admitted_wire_bytes=" << telemetry.admittedWireBytes
                 << " maximum_debt_delay_ns="
                 << telemetry.maximumDebtDelayNanoseconds
+                << " maximum_arrival_after_release_ns="
+                << telemetry.maximumArrivalAfterReleaseNanoseconds
+                << " worst_arrival_global_sequence="
+                << telemetry.worstArrivalGlobalSequence
+                << " worst_arrival_release_ns="
+                << telemetry.worstArrivalReleaseNanoseconds
+                << " worst_arrival_deadline_ns="
+                << telemetry.worstArrivalDeadlineNanoseconds
+                << " worst_arrival_now_ns="
+                << telemetry.worstArrivalNowNanoseconds
+                << " last_admitted_batch_first_sequence="
+                << telemetry.lastAdmittedBatchFirstSequence
+                << " last_admitted_batch_last_sequence="
+                << telemetry.lastAdmittedBatchLastSequence
+                << " last_admitted_batch_first_release_ns="
+                << telemetry.lastAdmittedBatchFirstReleaseNanoseconds
+                << " last_admitted_batch_last_release_ns="
+                << telemetry.lastAdmittedBatchLastReleaseNanoseconds
+                << " last_admitted_batch_first_deadline_ns="
+                << telemetry.lastAdmittedBatchFirstDeadlineNanoseconds
+                << " last_admitted_batch_last_deadline_ns="
+                << telemetry.lastAdmittedBatchLastDeadlineNanoseconds
+                << " last_admitted_batch_arrival_ns="
+                << telemetry.lastAdmittedBatchArrivalNanoseconds
                 << " service_curve_violations="
                 << telemetry.serviceCurveViolations
                 << " deadline_misses=" << telemetry.deadlineMisses

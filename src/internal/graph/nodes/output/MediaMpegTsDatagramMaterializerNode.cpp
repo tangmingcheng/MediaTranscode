@@ -1,11 +1,13 @@
 #include "internal/graph/nodes/output/MediaMpegTsDatagramMaterializerNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include <new>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -249,6 +251,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             wire.error());
     }
+    recordMaterialized(wire.value(), materializedAt.value());
     try {
         for (auto& partition : wire.value()) {
             m_pendingOutputs.push_back(std::move(partition));
@@ -282,6 +285,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
 ::media::Status MediaMpegTsDatagramMaterializerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    emitDiagnostics("stopped");
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -289,8 +293,60 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
 void MediaMpegTsDatagramMaterializerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    emitDiagnostics("aborted");
     resetState();
     FFmpegNodeRuntime::abort(context);
+}
+
+void MediaMpegTsDatagramMaterializerNode::recordMaterialized(
+    const MediaWireDatagramBatchCollection& batches,
+    MediaRunningTime materializedAt) noexcept
+{
+    for (const auto& batch : batches) {
+        if (!batch) continue;
+        for (const auto& datagram : batch->datagrams()) {
+            const auto afterRelease = materializedAt.checkedSubtract(
+                datagram.canonicalRelease());
+            if (!afterRelease ||
+                afterRelease.value().nanoseconds() <=
+                    m_maximumMaterializedAfterReleaseNanoseconds) {
+                continue;
+            }
+            m_maximumMaterializedAfterReleaseNanoseconds =
+                afterRelease.value().nanoseconds();
+            m_worstMaterializedAtNanoseconds = materializedAt.nanoseconds();
+            m_worstCanonicalReleaseNanoseconds =
+                datagram.canonicalRelease().nanoseconds();
+            m_worstCanonicalDeadlineNanoseconds =
+                datagram.canonicalDeadline().nanoseconds();
+            m_worstGlobalSequence = datagram.globalSequence();
+        }
+    }
+}
+
+void MediaMpegTsDatagramMaterializerNode::emitDiagnostics(
+    const char* stage) noexcept
+{
+    if (m_diagnosticsEmitted) return;
+    m_diagnosticsEmitted = true;
+    try {
+        std::ostringstream out;
+        out << "mpegts_wire_materializer stage=" << stage
+            << " maximum_materialized_after_release_ns="
+            << m_maximumMaterializedAfterReleaseNanoseconds
+            << " worst_materialized_at_ns="
+            << m_worstMaterializedAtNanoseconds
+            << " worst_release_ns="
+            << m_worstCanonicalReleaseNanoseconds
+            << " worst_deadline_ns="
+            << m_worstCanonicalDeadlineNanoseconds
+            << " worst_global_sequence=" << m_worstGlobalSequence;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::Summary,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            out.str());
+    } catch (...) {
+    }
 }
 
 void MediaMpegTsDatagramMaterializerNode::resetState() noexcept
@@ -300,6 +356,12 @@ void MediaMpegTsDatagramMaterializerNode::resetState() noexcept
     m_materializer.reset();
     m_transportPlan.reset();
     m_protocolPlan.reset();
+    m_maximumMaterializedAfterReleaseNanoseconds = 0;
+    m_worstMaterializedAtNanoseconds = 0;
+    m_worstCanonicalReleaseNanoseconds = 0;
+    m_worstCanonicalDeadlineNanoseconds = 0;
+    m_worstGlobalSequence = 0;
+    m_diagnosticsEmitted = false;
 }
 
 } // namespace media::ffmpeg::graph
