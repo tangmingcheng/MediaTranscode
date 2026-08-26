@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
@@ -164,6 +165,7 @@ struct MediaRealtimeRtpInputNodePlan final {
     std::optional<bool> requiresPreparedInput;
     std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
     std::optional<MediaRtpDepacketizerConfig> rtpDepacketizer;
+    std::optional<MediaPreparedRtpAccessUnitEnvelope> rtpAccessUnitEnvelope;
     std::optional<MediaRealtimeTsInputPlan> mpegTs;
 };
 

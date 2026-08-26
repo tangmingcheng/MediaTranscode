@@ -1,49 +1,9 @@
 #include "internal/graph/protocol/rtp/depacketizer/MediaAacRtpDepacketizer.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 
 #include <limits>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-struct AacAuHeader final {
-    std::size_t size;
-    uint64_t index;
-};
-
-::media::Result<std::vector<AacAuHeader>> parseAuHeaders(const std::vector<uint8_t>& payload)
-{
-    if (payload.size() < 4) return ::media::Result<std::vector<AacAuHeader>>::failure(
-        ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC RTP payload is truncated"));
-    const std::size_t headerBits = (static_cast<std::size_t>(payload[0]) << 8) | payload[1];
-    if (headerBits == 0 || (headerBits % 16) != 0) return ::media::Result<std::vector<AacAuHeader>>::failure(
-        ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC AU headers must use complete planned 16-bit headers"));
-    const std::size_t headerCount = headerBits / 16;
-    const std::size_t headerBytes = headerBits / 8;
-    if (headerBytes > payload.size() - 2) return ::media::Result<std::vector<AacAuHeader>>::failure(
-        ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC AU header section is truncated"));
-
-    std::vector<AacAuHeader> headers;
-    headers.reserve(headerCount);
-    for (std::size_t index = 0; index < headerCount; ++index) {
-        const std::size_t offset = 2 + index * 2;
-        const uint16_t bits = static_cast<uint16_t>((static_cast<uint16_t>(payload[offset]) << 8) | payload[offset + 1]);
-        const std::size_t auSize = bits >> 3;
-        const uint8_t indexField = static_cast<uint8_t>(bits & 0x07);
-        if (auSize == 0) return ::media::Result<std::vector<AacAuHeader>>::failure(
-            ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC AU size is zero"));
-        uint64_t auIndex = indexField;
-        if (!headers.empty()) {
-            const uint64_t increment = static_cast<uint64_t>(indexField) + 1;
-            if (headers.back().index > std::numeric_limits<uint64_t>::max() - increment) return ::media::Result<std::vector<AacAuHeader>>::failure(
-                ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC expanded AU index overflows"));
-            auIndex = headers.back().index + increment;
-        }
-        headers.push_back(AacAuHeader{auSize, auIndex});
-    }
-    return ::media::Result<std::vector<AacAuHeader>>::success(std::move(headers));
-}
-
-} // namespace
 
 MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config)
     : m_config(std::move(config))
@@ -54,11 +14,11 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
 {
     if (packet.payloadType != m_config.payloadType) return ::media::Result<MediaRtpDepacketizerResult>::failure(
         ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC RTP payload type changed"));
-    auto headers = parseAuHeaders(packet.payload);
-    if (!headers) return ::media::Result<MediaRtpDepacketizerResult>::failure(headers.error());
-    const std::size_t payloadOffset = 2 + headers.value().size() * 2;
-    const std::size_t payloadBytes =
-        packet.payload.size() - payloadOffset;
+    auto headerPlan = MediaAacRtpAuHeaderPlanner::plan(packet.payload);
+    if (!headerPlan) return ::media::Result<MediaRtpDepacketizerResult>::failure(headerPlan.error());
+    const auto& headers = headerPlan.value().accessUnits;
+    const std::size_t payloadOffset = headerPlan.value().payloadOffset;
+    const std::size_t payloadBytes = headerPlan.value().payloadBytes;
 
     if (m_fragmentedAccessUnit) {
         auto& fragmented = *m_fragmentedAccessUnit;
@@ -66,9 +26,9 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
             packet.sequenceNumber ==
             static_cast<std::uint16_t>(
                 fragmented.lastSequenceNumber + 1);
-        if (headers.value().size() != 1 ||
-            headers.value().front().size != fragmented.expectedSize ||
-            headers.value().front().index != fragmented.index ||
+        if (headers.size() != 1 ||
+            headers.front().size != fragmented.expectedSize ||
+            headers.front().index != fragmented.index ||
             packet.timestamp != fragmented.timestamp ||
             !consecutive ||
             payloadBytes >
@@ -116,22 +76,17 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
             std::move(result));
     }
 
-    std::size_t totalAuBytes = 0;
-    for (const AacAuHeader& header : headers.value()) {
-        if (header.size > std::numeric_limits<std::size_t>::max() - totalAuBytes) return ::media::Result<MediaRtpDepacketizerResult>::failure(
-            ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC aggregate size overflow"));
-        totalAuBytes += header.size;
-    }
+    const std::size_t totalAuBytes = headerPlan.value().totalAccessUnitBytes;
     if (totalAuBytes > payloadBytes) {
-        if (headers.value().size() != 1 || packet.marker ||
+        if (headers.size() != 1 || packet.marker ||
             payloadBytes == 0) {
             return ::media::Result<MediaRtpDepacketizerResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "AAC MPEG4-GENERIC fragmented AU start is invalid"));
         }
         m_fragmentedAccessUnit.emplace(FragmentedAccessUnit{
-            headers.value().front().size,
-            headers.value().front().index,
+            headers.front().size,
+            headers.front().index,
             packet.timestamp,
             packet.sequenceNumber,
             std::vector<std::uint8_t>(
@@ -145,10 +100,10 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
     }
 
     MediaRtpDepacketizerResult result;
-    result.accessUnits.reserve(headers.value().size());
+    result.accessUnits.reserve(headers.size());
     std::size_t offset = payloadOffset;
-    const uint64_t firstIndex = headers.value().front().index;
-    for (const AacAuHeader& header : headers.value()) {
+    const uint64_t firstIndex = headers.front().index;
+    for (const MediaAacRtpAuHeader& header : headers) {
         std::vector<uint8_t> bytes(packet.payload.begin() + offset, packet.payload.begin() + offset + header.size);
         const uint64_t relativeIndex = header.index - firstIndex;
         const uint64_t duration = static_cast<uint64_t>(m_config.accessUnitDurationRtpTicks);

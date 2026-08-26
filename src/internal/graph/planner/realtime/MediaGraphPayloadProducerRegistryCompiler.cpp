@@ -30,6 +30,7 @@ bool allocatesPayload(MediaNodeKind kind) noexcept
 bool runtimeIntegrated(MediaNodeKind kind) noexcept
 {
     switch (kind) {
+    case MediaNodeKind::RawRtpInput:
     case MediaNodeKind::Demux:
     case MediaNodeKind::MpegTsDemux:
     case MediaNodeKind::PacketNormalize:
@@ -46,7 +47,8 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
     const MediaEdge& edge,
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
-    if (producerKind == MediaNodeKind::Demux ||
+    if (producerKind == MediaNodeKind::RawRtpInput ||
+        producerKind == MediaNodeKind::Demux ||
         producerKind == MediaNodeKind::MpegTsDemux ||
         producerKind == MediaNodeKind::PacketNormalize) {
         if (!ledger.preparedInputPayload ||
@@ -55,7 +57,9 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
                 ::media::ErrorInfo::unsupported(
                     "producer registry lacks a prepared input allocation envelope"));
         }
-        const auto expectedSource = producerKind == MediaNodeKind::Demux
+        const auto expectedSource = producerKind == MediaNodeKind::RawRtpInput
+            ? MediaPreparedInputPayloadSource::RawRtpAccessUnit
+            : producerKind == MediaNodeKind::Demux
             ? MediaPreparedInputPayloadSource::GenericDemuxPacket
             : producerKind == MediaNodeKind::MpegTsDemux
                 ? MediaPreparedInputPayloadSource::MpegTsPesPacket
@@ -122,7 +126,8 @@ std::string allocationAuthority(
     const MediaRealtimeGraphResourceLedgerPlan& ledger,
     bool deviceBacked)
 {
-    if ((producerKind == MediaNodeKind::Demux ||
+    if ((producerKind == MediaNodeKind::RawRtpInput ||
+         producerKind == MediaNodeKind::Demux ||
          producerKind == MediaNodeKind::MpegTsDemux ||
          producerKind == MediaNodeKind::PacketNormalize) &&
         ledger.preparedInputPayload) {

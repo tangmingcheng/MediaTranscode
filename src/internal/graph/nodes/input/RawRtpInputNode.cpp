@@ -6,15 +6,18 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 #include "internal/graph/time/MediaSteadyClock.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 #include <chrono>
 #include <algorithm>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -95,6 +98,16 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         MediaBufferRef packet = std::move(m_packets.front());
         m_packets.pop_front();
         return processProgress(emitOutput(context, "packet", packet));
+    }
+    if (!m_pendingRtpPackets.empty()) {
+        if (auto status = drainPendingRtpPackets(context); !status) {
+            return processProgress(status);
+        }
+        if (!m_packets.empty()) {
+            MediaBufferRef packet = std::move(m_packets.front());
+            m_packets.pop_front();
+            return processProgress(emitOutput(context, "packet", packet));
+        }
     }
     const auto now = std::chrono::steady_clock::now();
     const std::int64_t nowNs = mediaSteadyClockNowNs();
@@ -285,9 +298,19 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto channels = requiredNonNegativeIntNodeOption(options, "RawRtpInputNode", "rtp.channels");
     auto accessUnitDuration = requiredNonNegativeIntNodeOption(
         options, "RawRtpInputNode", "rtp.access_unit_duration_ticks");
+    auto maximumAccessUnitBytes = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.maximum_access_unit_bytes");
+    auto maximumAccessUnitsPerPush = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.maximum_access_units_per_push");
+    auto accessUnitSizeAuthority = requiredNodeOption(
+        options, "RawRtpInputNode", "rtp.access_unit_size_authority");
+    auto accessUnitCompletionAuthority = requiredNodeOption(
+        options, "RawRtpInputNode", "rtp.access_unit_completion_authority");
     if (!family || !address || !rtpPort || !rtcpPort || !payloadType || !clockRate || !receiveBuffer ||
         !datagramBytes || !reorderWindow || !reorderDelay || !readTimeout || !requireSr || !requireCname ||
-        !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration) {
+        !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration ||
+        !maximumAccessUnitBytes || !maximumAccessUnitsPerPush ||
+        !accessUnitSizeAuthority || !accessUnitCompletionAuthority) {
         const ::media::ErrorInfo* error = nullptr;
         if (!family) error = &family.error(); else if (!address) error = &address.error(); else if (!rtpPort) error = &rtpPort.error();
         else if (!rtcpPort) error = &rtcpPort.error(); else if (!payloadType) error = &payloadType.error(); else if (!clockRate) error = &clockRate.error();
@@ -298,7 +321,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         else if (!maximumExtrapolation) error = &maximumExtrapolation.error();
         else if (!compositionMode) error = &compositionMode.error(); else if (!streamKind) error = &streamKind.error(); else if (!codec) error = &codec.error();
         else if (!fmtp) error = &fmtp.error();
-        else if (!channels) error = &channels.error(); else error = &accessUnitDuration.error();
+        else if (!channels) error = &channels.error();
+        else if (!accessUnitDuration) error = &accessUnitDuration.error();
+        else if (!maximumAccessUnitBytes) error = &maximumAccessUnitBytes.error();
+        else if (!maximumAccessUnitsPerPush) error = &maximumAccessUnitsPerPush.error();
+        else if (!accessUnitSizeAuthority) error = &accessUnitSizeAuthority.error();
+        else error = &accessUnitCompletionAuthority.error();
         return ::media::Status::failure(*error);
     }
     auto rtcpComposition = parseMediaRtcpCompositionMode(compositionMode.value());
@@ -319,6 +347,15 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     m_config = MediaRtpDepacketizerConfig{
         streamKind.value(), codec.value(), fmtp.value(),
         static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(), accessUnitDuration.value()};
+    m_accessUnitEnvelope = MediaPreparedRtpAccessUnitEnvelope{
+        m_config.streamKind, m_config.codecName,
+        static_cast<std::uint64_t>(maximumAccessUnitBytes.value()),
+        static_cast<std::uint64_t>(maximumAccessUnitsPerPush.value()),
+        accessUnitSizeAuthority.value(),
+        accessUnitCompletionAuthority.value()};
+    if (auto status = m_accessUnitEnvelope.validate(); !status) {
+        return status;
+    }
     auto depacketizer = MediaRtpDepacketizerFactory::create(m_config);
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
@@ -505,6 +542,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 " generation_after=" +
                 std::to_string(m_clockTracker->generation()));
         m_depacketizer->discontinuity(discontinuity.reason);
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
         if (context.findOutputChannel(nodeId(), "event")) {
             m_events.emplace_back(
                 "event",
@@ -512,14 +551,114 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                     discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
     }
-    for (const MediaRtpPacket& packet : reordered.packets) {
-        auto depacketized = m_depacketizer->push(packet);
-        if (!depacketized) return ::media::Status::failure(depacketized.error());
-        for (MediaRtpAccessUnit& unit : depacketized.value().accessUnits) {
+    for (MediaRtpPacket& packet : reordered.packets) {
+        m_pendingRtpPackets.push_back(std::move(packet));
+    }
+    return drainPendingRtpPackets(context);
+}
+
+::media::Status RawRtpInputNode::drainPendingRtpPackets(
+    MediaGraphExecutionContext& context)
+{
+    while (!m_pendingRtpPackets.empty()) {
+        if (auto status = processPendingRtpPacket(
+                context, m_pendingRtpPackets.front()); !status) {
+            return status;
+        }
+        m_pendingRtpPackets.pop_front();
+    }
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::processPendingRtpPacket(
+    MediaGraphExecutionContext& context,
+    const MediaRtpPacket& packet)
+{
+    const std::string codec = lowercaseAscii(m_config.codecName);
+    if ((codec == "h264" || codec == "hevc") &&
+        m_reservedAccessUnitTimestamp &&
+        *m_reservedAccessUnitTimestamp != packet.timestamp) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+    }
+
+    if (m_pendingPayloadReservations.empty()) {
+        std::vector<std::uint64_t> reservationBytes;
+        try {
+            if (codec == "aac") {
+                auto headerPlan = MediaAacRtpAuHeaderPlanner::plan(
+                    packet.payload);
+                if (!headerPlan) {
+                    return ::media::Status::failure(headerPlan.error());
+                }
+                if (headerPlan.value().accessUnits.size() >
+                    m_accessUnitEnvelope.maximumAccessUnitsPerPush) {
+                    return ::media::Status::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "AAC RTP push exceeds its prepared completion bound"));
+                }
+                reservationBytes.reserve(
+                    headerPlan.value().accessUnits.size());
+                for (const auto& accessUnit :
+                     headerPlan.value().accessUnits) {
+                    reservationBytes.push_back(accessUnit.size);
+                }
+            } else if (codec == "opus") {
+                reservationBytes.push_back(packet.payload.size());
+            } else {
+                reservationBytes.push_back(
+                    m_accessUnitEnvelope.maximumAccessUnitBytes);
+                m_reservedAccessUnitTimestamp = packet.timestamp;
+            }
+        } catch (const std::bad_alloc&) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "RTP payload credit request"));
+        }
+        auto reservations = context.reservePayloadBatch(
+            nodeId(), m_config.streamKind, MediaPayloadKind::Packet,
+            reservationBytes);
+        if (!reservations) {
+            m_reservedAccessUnitTimestamp.reset();
+            return ::media::Status::failure(reservations.error());
+        }
+        m_pendingPayloadReservations = std::move(reservations).value();
+    }
+
+    auto depacketized = m_depacketizer->push(packet);
+    if (!depacketized) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        return ::media::Status::failure(depacketized.error());
+    }
+    auto& accessUnits = depacketized.value().accessUnits;
+    if (accessUnits.size() >
+            m_accessUnitEnvelope.maximumAccessUnitsPerPush ||
+        (!accessUnits.empty() &&
+         accessUnits.size() != m_pendingPayloadReservations.size())) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP depacketizer completion conflicts with its prepared payload reservation"));
+    }
+    if (!accessUnits.empty()) {
+        for (std::size_t index = 0; index < accessUnits.size(); ++index) {
+            MediaRtpAccessUnit& unit = accessUnits[index];
             const bool depacketizedKey =
                 (unit.packet->flags & AV_PKT_FLAG_KEY) != 0;
+            const auto actualBytes =
+                static_cast<std::uint64_t>(unit.packet->size);
             auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind, std::nullopt);
             if (!buffer) return ::media::Status::failure(buffer.error());
+            if (auto status = m_pendingPayloadReservations[index]
+                    .shrinkToActual(actualBytes); !status) {
+                return status;
+            }
+            if (auto status = m_pendingPayloadReservations[index]
+                    .attachTo(*buffer.value()); !status) {
+                return status;
+            }
             if (m_config.streamKind == MediaStreamKind::Video &&
                 depacketizedKey && !m_keyTraceEmitted) {
                 m_keyTraceEmitted = true;
@@ -541,6 +680,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             buffer.value()->setFormatDescriptor(std::move(format));
             m_packets.push_back(std::move(buffer).value());
         }
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+    } else if (packet.marker) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
     }
     return ::media::Status::success();
 }
@@ -683,6 +827,10 @@ void RawRtpInputNode::resetState() noexcept
     m_clockTracker.reset();
     m_clockSchedule.reset();
     m_config = {};
+    m_accessUnitEnvelope = {};
+    m_pendingRtpPackets.clear();
+    m_pendingPayloadReservations.clear();
+    m_reservedAccessUnitTimestamp.reset();
     m_streamSnapshot.reset();
     m_packets.clear();
     m_events.clear();

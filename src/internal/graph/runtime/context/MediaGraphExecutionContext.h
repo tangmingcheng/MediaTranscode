@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <memory>
+#include <span>
 #include <unordered_map>
 
 namespace media::ffmpeg::graph {
@@ -71,6 +72,12 @@ public:
         MediaNodeId producer,
         MediaStreamKind streamKind,
         MediaPayloadKind payloadKind) noexcept;
+    ::media::Result<std::vector<MediaGraphPayloadReservation>>
+    reservePayloadBatch(
+        MediaNodeId producer,
+        MediaStreamKind streamKind,
+        MediaPayloadKind payloadKind,
+        std::span<const std::uint64_t> actualBytes) noexcept;
 
 private:
     ::media::Status buildChannels(const MediaGraph& graph);

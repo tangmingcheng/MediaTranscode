@@ -122,31 +122,73 @@ MediaGraphPayloadCreditLedger::create(MediaGraphPayloadCreditPlan plan)
 ::media::Result<MediaGraphPayloadCreditLease>
 MediaGraphPayloadCreditLedger::tryReserve(std::uint64_t bytes) noexcept
 {
-    using Result = ::media::Result<MediaGraphPayloadCreditLease>;
-    if (bytes > m_plan.maximumUnitBytes) {
+    auto batch = tryReserveBatch(std::span<const std::uint64_t>(&bytes, 1));
+    if (!batch) {
+        return ::media::Result<MediaGraphPayloadCreditLease>::failure(
+            batch.error());
+    }
+    auto leases = std::move(batch).value();
+    return ::media::Result<MediaGraphPayloadCreditLease>::success(
+        std::move(leases.front()));
+}
+
+::media::Result<std::vector<MediaGraphPayloadCreditLease>>
+MediaGraphPayloadCreditLedger::tryReserveBatch(
+    std::span<const std::uint64_t> bytes) noexcept
+{
+    using Result =
+        ::media::Result<std::vector<MediaGraphPayloadCreditLease>>;
+    if (bytes.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "graph payload credit reservation exceeds its unit contract"));
+            "graph payload credit batch reservation is empty"));
     }
-    std::lock_guard lock(m_state->mutex);
-    const bool bytePressure = bytes > m_plan.maximumBytes ||
-        m_state->snapshot.currentBytes > m_plan.maximumBytes - bytes;
-    const bool objectPressure =
-        m_state->snapshot.currentObjects >= m_plan.maximumObjects;
-    if (bytePressure || objectPressure) {
-        ++m_state->snapshot.pressureFailures;
-        return Result::failure(::media::ErrorInfo::wouldBlock(
-            "graph payload credit ledger is at its planner hard bound"));
+    std::uint64_t totalBytes = 0;
+    for (const auto value : bytes) {
+        if (value > m_plan.maximumUnitBytes) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "graph payload credit reservation exceeds its unit contract"));
+        }
+        if (value > (std::numeric_limits<std::uint64_t>::max)() - totalBytes) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "graph payload credit batch byte total is not representable"));
+        }
+        totalBytes += value;
     }
-    m_state->snapshot.currentBytes += bytes;
-    ++m_state->snapshot.currentObjects;
-    m_state->snapshot.highWaterBytes = (std::max)(
-        m_state->snapshot.highWaterBytes,
-        m_state->snapshot.currentBytes);
-    m_state->snapshot.highWaterObjects = (std::max)(
-        m_state->snapshot.highWaterObjects,
-        m_state->snapshot.currentObjects);
-    ++m_state->snapshot.reservations;
-    return Result::success(MediaGraphPayloadCreditLease(m_state, bytes));
+    std::vector<MediaGraphPayloadCreditLease> leases;
+    try {
+        leases.reserve(bytes.size());
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "graph payload credit batch lease identities"));
+    }
+    {
+        std::lock_guard lock(m_state->mutex);
+        const auto objectCount = static_cast<std::uint64_t>(bytes.size());
+        const bool bytePressure = totalBytes > m_plan.maximumBytes ||
+            m_state->snapshot.currentBytes >
+                m_plan.maximumBytes - totalBytes;
+        const bool objectPressure = objectCount > m_plan.maximumObjects ||
+            m_state->snapshot.currentObjects >
+                m_plan.maximumObjects - objectCount;
+        if (bytePressure || objectPressure) {
+            ++m_state->snapshot.pressureFailures;
+            return Result::failure(::media::ErrorInfo::wouldBlock(
+                "graph payload credit ledger is at its planner hard bound"));
+        }
+        for (const auto value : bytes) {
+            leases.push_back(MediaGraphPayloadCreditLease(m_state, value));
+        }
+        m_state->snapshot.currentBytes += totalBytes;
+        m_state->snapshot.currentObjects += objectCount;
+        m_state->snapshot.highWaterBytes = (std::max)(
+            m_state->snapshot.highWaterBytes,
+            m_state->snapshot.currentBytes);
+        m_state->snapshot.highWaterObjects = (std::max)(
+            m_state->snapshot.highWaterObjects,
+            m_state->snapshot.currentObjects);
+        m_state->snapshot.reservations += objectCount;
+    }
+    return Result::success(std::move(leases));
 }
 
 MediaGraphPayloadCreditSnapshot

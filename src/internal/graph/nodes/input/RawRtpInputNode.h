@@ -7,13 +7,17 @@
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressBatch.h"
 
 #include <deque>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -42,6 +46,11 @@ private:
     ::media::Status processReordered(MediaGraphExecutionContext& context,
                                      MediaRtpReorderResult reordered,
                                      std::uint64_t generationBeforeObservation);
+    ::media::Status drainPendingRtpPackets(
+        MediaGraphExecutionContext& context);
+    ::media::Status processPendingRtpPacket(
+        MediaGraphExecutionContext& context,
+        const MediaRtpPacket& packet);
     ::media::Status queueClockEvidence(MediaGraphExecutionContext& context,
                                        std::int64_t observedAtNs);
     ::media::Status queueClockTransition(MediaGraphExecutionContext& context,
@@ -65,6 +74,10 @@ private:
     std::unique_ptr<MediaRtcpSenderReportTracker> m_clockTracker;
     std::unique_ptr<MediaRtpClockObservationSchedule> m_clockSchedule;
     MediaRtpDepacketizerConfig m_config;
+    MediaPreparedRtpAccessUnitEnvelope m_accessUnitEnvelope;
+    std::deque<MediaRtpPacket> m_pendingRtpPackets;
+    std::vector<MediaGraphPayloadReservation> m_pendingPayloadReservations;
+    std::optional<std::uint32_t> m_reservedAccessUnitTimestamp;
     MediaBufferRef m_streamSnapshot;
     std::deque<MediaBufferRef> m_packets;
     std::deque<std::pair<std::string, MediaBufferRef>> m_events;

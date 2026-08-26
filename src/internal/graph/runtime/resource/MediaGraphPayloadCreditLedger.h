@@ -5,7 +5,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -60,6 +62,8 @@ public:
 
     ::media::Result<MediaGraphPayloadCreditLease> tryReserve(
         std::uint64_t bytes) noexcept;
+    ::media::Result<std::vector<MediaGraphPayloadCreditLease>> tryReserveBatch(
+        std::span<const std::uint64_t> bytes) noexcept;
     void setReleaseObserver(
         std::weak_ptr<MediaGraphPayloadCreditReleaseObserver> observer) noexcept;
     MediaGraphPayloadCreditSnapshot snapshot() const noexcept;

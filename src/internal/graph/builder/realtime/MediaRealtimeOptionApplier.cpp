@@ -56,11 +56,13 @@ const char* boolOption(bool value) noexcept
     if (!plan.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
-    if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value()) {
+    if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value() ||
+        plan.rtpTransport.has_value() != plan.rtpAccessUnitEnvelope.has_value()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("raw RTP input requires transport and depacketizer plans together"));
     }
-    if (plan.rtpTransport && plan.rtpDepacketizer) {
+    if (plan.rtpTransport && plan.rtpDepacketizer &&
+        plan.rtpAccessUnitEnvelope) {
         if (!plan.requiresPreparedInput) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -68,6 +70,14 @@ const char* boolOption(bool value) noexcept
         }
         const auto& transport = *plan.rtpTransport;
         const auto& depacketizer = *plan.rtpDepacketizer;
+        const auto& accessUnitEnvelope = *plan.rtpAccessUnitEnvelope;
+        if (auto status = accessUnitEnvelope.validate(); !status ||
+            accessUnitEnvelope.streamKind != depacketizer.streamKind ||
+            accessUnitEnvelope.codecName != depacketizer.codecName) {
+            return ::media::Result<void>::failure(
+                !status ? status.error() : ::media::ErrorInfo::invalidArgument(
+                    "raw RTP access-unit envelope conflicts with depacketizer"));
+        }
         const auto set = [&](const char* key, std::string value) {
             return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, std::move(value));
         };
@@ -140,6 +150,10 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;
         if (auto status = set("rtp.channels", std::to_string(depacketizer.channels)); !status) return status;
         if (auto status = set("rtp.access_unit_duration_ticks", std::to_string(depacketizer.accessUnitDurationRtpTicks)); !status) return status;
+        if (auto status = set("rtp.maximum_access_unit_bytes", std::to_string(accessUnitEnvelope.maximumAccessUnitBytes)); !status) return status;
+        if (auto status = set("rtp.maximum_access_units_per_push", std::to_string(accessUnitEnvelope.maximumAccessUnitsPerPush)); !status) return status;
+        if (auto status = set("rtp.access_unit_size_authority", accessUnitEnvelope.sizeAuthority); !status) return status;
+        if (auto status = set("rtp.access_unit_completion_authority", accessUnitEnvelope.completionAuthority); !status) return status;
     } else if (plan.requiresPreparedInput) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(

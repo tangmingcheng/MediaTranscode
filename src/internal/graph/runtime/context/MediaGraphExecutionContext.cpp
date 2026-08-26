@@ -118,7 +118,26 @@ MediaGraphExecutionContext::reservePayload(
     MediaStreamKind streamKind,
     MediaPayloadKind payloadKind) noexcept
 {
-    using Result = ::media::Result<MediaGraphPayloadReservation>;
+    auto strategy = reservePayloadBatch(
+        producer, streamKind, payloadKind, {});
+    if (!strategy) {
+        return ::media::Result<MediaGraphPayloadReservation>::failure(
+            strategy.error());
+    }
+    auto reservations = std::move(strategy).value();
+    return ::media::Result<MediaGraphPayloadReservation>::success(
+        std::move(reservations.front()));
+}
+
+::media::Result<std::vector<MediaGraphPayloadReservation>>
+MediaGraphExecutionContext::reservePayloadBatch(
+    MediaNodeId producer,
+    MediaStreamKind streamKind,
+    MediaPayloadKind payloadKind,
+    std::span<const std::uint64_t> actualBytes) noexcept
+{
+    using Result =
+        ::media::Result<std::vector<MediaGraphPayloadReservation>>;
     if (!m_payloadCreditLedger) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "runtime graph has no activated payload credit ledger"));
@@ -141,18 +160,42 @@ MediaGraphExecutionContext::reservePayload(
         return Result::failure(::media::ErrorInfo::unsupported(
             "runtime payload producer is absent from the final DAG registry"));
     }
-    const std::uint64_t reservedBytes = selected->accounting ==
-            MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject
+    const bool accountsBytes = selected->accounting ==
+        MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
+    const std::uint64_t defaultBytes = accountsBytes
         ? selected->maximumReservationBytes : 0;
-    auto lease = m_payloadCreditLedger->tryReserve(reservedBytes);
-    if (!lease) return Result::failure(lease.error());
+    std::vector<std::uint64_t> ledgerBytes;
     try {
-        return Result::success(MediaGraphPayloadReservation(
-            selected->accounting, selected->maximumReservationBytes,
-            std::move(lease).value()));
+        ledgerBytes.reserve(actualBytes.empty() ? 1 : actualBytes.size());
+        if (actualBytes.empty()) {
+            ledgerBytes.push_back(defaultBytes);
+        } else {
+            for (const auto bytes : actualBytes) {
+                if (bytes == 0 || bytes > selected->maximumReservationBytes) {
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "runtime payload batch exceeds its prepared single-unit bound"));
+                }
+                ledgerBytes.push_back(accountsBytes ? bytes : 0);
+            }
+        }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
-            "runtime payload reservation identity"));
+            "runtime payload batch credit request"));
+    }
+    auto leases = m_payloadCreditLedger->tryReserveBatch(ledgerBytes);
+    if (!leases) return Result::failure(leases.error());
+    try {
+        std::vector<MediaGraphPayloadReservation> reservations;
+        reservations.reserve(leases.value().size());
+        for (auto& lease : leases.value()) {
+            reservations.emplace_back(
+                selected->accounting, selected->maximumReservationBytes,
+                std::move(lease));
+        }
+        return Result::success(std::move(reservations));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "runtime payload reservation identities"));
     }
 }
 

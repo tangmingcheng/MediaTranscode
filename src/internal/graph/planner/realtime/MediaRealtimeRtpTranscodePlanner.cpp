@@ -832,6 +832,31 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         }
         resourceLedger.value().preparedInputPayload =
             std::move(inputPayload);
+    } else if (rawInput) {
+        MediaPreparedInputPayloadEnvelope inputPayload{
+            MediaPreparedInputPayloadSource::RawRtpAccessUnit,
+            rawInput->videoAccessUnitEnvelope.maximumAccessUnitsPerPush,
+            rawInput->videoAccessUnitEnvelope.completionAuthority,
+            {{MediaStreamKind::Video,
+              rawInput->videoAccessUnitEnvelope.maximumAccessUnitBytes,
+              rawInput->videoAccessUnitEnvelope.sizeAuthority}}};
+        if (rawInput->audioAccessUnitEnvelope) {
+            inputPayload.maximumPayloadsPerInputCompletion = (std::max)(
+                inputPayload.maximumPayloadsPerInputCompletion,
+                rawInput->audioAccessUnitEnvelope->maximumAccessUnitsPerPush);
+            inputPayload.completionAuthority += "+" +
+                rawInput->audioAccessUnitEnvelope->completionAuthority;
+            inputPayload.streams.push_back(MediaPreparedInputPayloadBound{
+                MediaStreamKind::Audio,
+                rawInput->audioAccessUnitEnvelope->maximumAccessUnitBytes,
+                rawInput->audioAccessUnitEnvelope->sizeAuthority});
+        }
+        if (auto status = inputPayload.validate(); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        resourceLedger.value().preparedInputPayload =
+            std::move(inputPayload);
     }
     options.parameters.queues = resourceLedger.value().queues;
     options.parameters.video = videoParameters;

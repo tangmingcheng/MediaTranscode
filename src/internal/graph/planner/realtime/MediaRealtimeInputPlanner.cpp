@@ -541,6 +541,7 @@ void fillNodePlan(
     std::string sdpText,
     std::optional<MediaRealtimeRtpTransportPlan> transport,
     std::optional<MediaRtpDepacketizerConfig> depacketizer,
+    std::optional<MediaPreparedRtpAccessUnitEnvelope> accessUnitEnvelope,
     MediaRealtimeRtpInputNodePlan& node)
 {
     node.url = std::move(url);
@@ -554,6 +555,7 @@ void fillNodePlan(
     node.mediaId = request.mediaId;
     node.rtpTransport = std::move(transport);
     node.rtpDepacketizer = std::move(depacketizer);
+    node.rtpAccessUnitEnvelope = std::move(accessUnitEnvelope);
 }
 
 } // namespace
@@ -614,6 +616,16 @@ void fillNodePlan(
             videoDepacketizer.error());
     }
     result.videoDepacketizer = std::move(videoDepacketizer).value();
+    auto videoAccessUnitEnvelope =
+        MediaPreparedRtpAccessUnitEnvelopePlanner::plan(
+            result.videoDepacketizer,
+            static_cast<std::uint64_t>(result.videoTransport.maximumDatagramBytes));
+    if (!videoAccessUnitEnvelope) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+            videoAccessUnitEnvelope.error());
+    }
+    result.videoAccessUnitEnvelope =
+        std::move(videoAccessUnitEnvelope).value();
 
     if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, request.input.audioRtp);
@@ -699,6 +711,17 @@ void fillNodePlan(
                 audioDepacketizer.error());
         }
         result.audioDepacketizer = std::move(audioDepacketizer).value();
+        auto audioAccessUnitEnvelope =
+            MediaPreparedRtpAccessUnitEnvelopePlanner::plan(
+                *result.audioDepacketizer,
+                static_cast<std::uint64_t>(
+                    result.audioTransport->maximumDatagramBytes));
+        if (!audioAccessUnitEnvelope) {
+            return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+                audioAccessUnitEnvelope.error());
+        }
+        result.audioAccessUnitEnvelope =
+            std::move(audioAccessUnitEnvelope).value();
     }
     return ::media::Result<MediaRealtimeRawInputPlan>::success(std::move(result));
 }
@@ -713,11 +736,15 @@ void MediaRealtimeInputPlanner::applyNodePlans(
                  raw ? raw->videoSdp : std::string{},
                  raw ? std::optional<MediaRealtimeRtpTransportPlan>(raw->videoTransport) : std::nullopt,
                  raw ? std::optional<MediaRtpDepacketizerConfig>(raw->videoDepacketizer) : std::nullopt,
+                 raw ? std::optional<MediaPreparedRtpAccessUnitEnvelope>(
+                           raw->videoAccessUnitEnvelope)
+                     : std::nullopt,
                  plan.input);
     if (raw && raw->audio) {
         MediaRealtimeRtpInputNodePlan audioInput;
         fillNodePlan(request, raw->audioUrl, raw->audioSdp,
                      raw->audioTransport, raw->audioDepacketizer,
+                     raw->audioAccessUnitEnvelope,
                      audioInput);
         plan.isolatedAudioInput = std::move(audioInput);
     }
