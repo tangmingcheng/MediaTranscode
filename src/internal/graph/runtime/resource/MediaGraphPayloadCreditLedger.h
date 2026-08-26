@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -7,13 +8,6 @@
 #include <string>
 
 namespace media::ffmpeg::graph {
-
-struct MediaGraphPayloadCreditPlan final {
-    std::uint64_t maximumBytes;
-    std::uint64_t maximumObjects;
-    std::uint64_t maximumUnitBytes;
-    std::string authority;
-};
 
 struct MediaGraphPayloadCreditSnapshot final {
     std::uint64_t currentBytes = 0;

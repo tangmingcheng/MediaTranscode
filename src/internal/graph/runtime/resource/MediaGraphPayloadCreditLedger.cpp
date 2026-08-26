@@ -104,9 +104,7 @@ MediaGraphPayloadCreditLedger::create(MediaGraphPayloadCreditPlan plan)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaGraphPayloadCreditLedger>>;
-    if (plan.maximumBytes == 0 || plan.maximumObjects == 0 ||
-        plan.maximumUnitBytes == 0 ||
-        plan.maximumUnitBytes > plan.maximumBytes || plan.authority.empty()) {
+    if (!plan.isCompleteAndValid()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "graph payload credit plan requires bounded bytes, objects, unit, and authority"));
     }

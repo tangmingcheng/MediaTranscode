@@ -3,6 +3,8 @@
 #include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/context/MediaGraphPayloadCreditWakeupHub.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <sstream>
 #include <string>
@@ -42,6 +44,29 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         return orderStatus;
     }
 
+    if (graph.payloadCreditPlan()) {
+        if (!graph.payloadCreditPlan()->isCompleteAndValid()) {
+            reset();
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "MediaGraphExecutionContext rejects an incomplete payload credit producer registry"));
+        }
+        auto ledger = MediaGraphPayloadCreditLedger::create(
+            *graph.payloadCreditPlan());
+        if (!ledger) {
+            reset();
+            return ::media::Status::failure(ledger.error());
+        }
+        m_payloadCreditLedger = std::move(ledger).value();
+        m_payloadCreditWakeupHub =
+            std::make_shared<MediaGraphPayloadCreditWakeupHub>();
+        for (const auto& [node, wakeup] : m_nodeWakeups) {
+            (void)node;
+            m_payloadCreditWakeupHub->add(wakeup);
+        }
+        m_payloadCreditLedger->setReleaseObserver(
+            m_payloadCreditWakeupHub);
+    }
+
     m_graph = &graph;
     m_compiled = true;
 
@@ -70,10 +95,19 @@ void MediaGraphExecutionContext::reset()
     shutdownAvSyncGroups();
     m_graph = nullptr;
     m_channels.clear();
+    if (m_payloadCreditWakeupHub) m_payloadCreditWakeupHub->interrupt();
+    m_payloadCreditLedger.reset();
+    m_payloadCreditWakeupHub.reset();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+}
+
+std::shared_ptr<MediaGraphPayloadCreditLedger>
+MediaGraphExecutionContext::payloadCreditLedger() const noexcept
+{
+    return m_payloadCreditLedger;
 }
 
 void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) noexcept

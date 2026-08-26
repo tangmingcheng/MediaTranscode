@@ -7,12 +7,14 @@
 #include "internal/graph/model/MediaEdgeKind.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
 
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -88,6 +90,9 @@ public:
     bool empty() const;
     std::size_t nodeCount() const;
     std::size_t edgeCount() const;
+    bool setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan);
+    const std::optional<MediaGraphPayloadCreditPlan>& payloadCreditPlan()
+        const noexcept;
 
 private:
     MediaPortId addPort(MediaNodeId nodeId,
@@ -109,6 +114,7 @@ private:
 private:
     std::vector<MediaNode> m_nodes;
     std::vector<MediaEdge> m_edges;
+    std::optional<MediaGraphPayloadCreditPlan> m_payloadCreditPlan;
 
     uint32_t m_nextNodeId = 1;
     uint32_t m_nextPortId = 1;
