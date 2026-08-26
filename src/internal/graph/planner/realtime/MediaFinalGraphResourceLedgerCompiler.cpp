@@ -6,6 +6,7 @@
 #include <map>
 #include <new>
 #include <optional>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -389,8 +390,40 @@ MediaFinalGraphResourceLedgerCompiler::compile(
     }
     if (ledger.admittedGraphPayloadAndReservedStorageBytes >
         ledger.maximumGraphPayloadAndReservedStorageBytes) {
+        const auto maximumPayload = std::max_element(
+            ledger.entries.begin(), ledger.entries.end(),
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.payloadBytes < rhs.payloadBytes;
+            });
+        const auto maximumObjects = std::max_element(
+            ledger.entries.begin(), ledger.entries.end(),
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.maximumBufferObjects < rhs.maximumBufferObjects;
+            });
+        std::ostringstream message;
+        message
+            << "engine-managed graph memory budget cannot admit the final DAG retention ledger"
+            << " required_payload_and_reserved_bytes="
+            << ledger.admittedGraphPayloadAndReservedStorageBytes
+            << " budget_payload_and_reserved_bytes="
+            << ledger.maximumGraphPayloadAndReservedStorageBytes
+            << " entries=" << ledger.entries.size();
+        if (maximumPayload != ledger.entries.end()) {
+            message << " maximum_payload_owner=" << maximumPayload->owner
+                    << " maximum_payload_bytes="
+                    << maximumPayload->payloadBytes
+                    << " maximum_payload_authority="
+                    << maximumPayload->authority;
+        }
+        if (maximumObjects != ledger.entries.end()) {
+            message << " maximum_objects_owner=" << maximumObjects->owner
+                    << " maximum_buffer_objects="
+                    << maximumObjects->maximumBufferObjects
+                    << " maximum_objects_authority="
+                    << maximumObjects->authority;
+        }
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "engine-managed graph memory budget cannot admit the final DAG retention ledger"));
+            message.str()));
     }
     return Result::success(std::move(ledger));
 }
