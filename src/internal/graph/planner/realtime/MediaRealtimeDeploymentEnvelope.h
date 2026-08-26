@@ -57,6 +57,9 @@ struct MediaRealtimeDeploymentLatencyBudget final {
     MediaRunningTime targetResidence = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime maximumResidence = MediaRunningTime::fromNanoseconds(0);
     std::string authority;
+    MediaRunningTime maximumReleaseJitter =
+        MediaRunningTime::fromNanoseconds(0);
+    std::string releaseJitterAuthority;
     friend bool operator==(const MediaRealtimeDeploymentLatencyBudget&,
                            const MediaRealtimeDeploymentLatencyBudget&) = default;
 };

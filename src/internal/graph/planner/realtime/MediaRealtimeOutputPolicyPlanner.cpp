@@ -210,13 +210,25 @@ std::optional<int> resolvedAudioBitrateKbps(
             if (!cadence) return ::media::Status::failure(cadence.error());
             audioCadence = cadence.value();
         }
+        auto timing = MediaTsReceiverTimingPlanner::plan(
+            deployment.receiverTiming->transportDecodeLead,
+            deployment.receiverTiming->authority,
+            deployment.latency.targetResidence,
+            deployment.latency.maximumResidence,
+            deployment.latency.maximumReleaseJitter,
+            deployment.latency.releaseJitterAuthority,
+            MediaRational{*plan.videoParameters.frameRate.numerator,
+                          *plan.videoParameters.frameRate.denominator},
+            audioCadence);
+        if (!timing) return ::media::Status::failure(timing.error());
         auto preroll = MediaTsReceiverTimingPlanner::startupEmissionPreroll(
             deployment.receiverTiming->transportDecodeLead,
             MediaRational{*plan.videoParameters.frameRate.numerator,
                           *plan.videoParameters.frameRate.denominator},
-            audioCadence);
+            audioCadence, timing.value());
         if (!preroll) return ::media::Status::failure(preroll.error());
         output.muxedOutput.startupEmissionPreroll = preroll.value();
+        output.muxedOutput.timingPolicy = std::move(timing).value();
         output.muxedOutput.maximumDatagramBytes =
             static_cast<std::size_t>(packetSize.value());
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {

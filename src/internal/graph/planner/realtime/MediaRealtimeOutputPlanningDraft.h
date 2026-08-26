@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
+#include "internal/graph/protocol/mpegts/MediaMpegTsTimingPolicy.h"
 #include "internal/graph/protocol/rtp/MediaRtpRemoteEndpointPair.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -27,6 +28,7 @@ struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::string sdpPath;
     std::optional<MediaRunningTime> transportDecodeLead;
     std::optional<MediaRunningTime> startupEmissionPreroll;
+    std::optional<MediaMpegTsTimingPolicy> timingPolicy;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {

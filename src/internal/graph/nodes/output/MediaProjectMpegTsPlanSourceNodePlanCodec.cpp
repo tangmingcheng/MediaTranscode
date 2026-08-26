@@ -36,10 +36,26 @@ constexpr const char* EmissionTargetServiceResidenceKey =
     "project_mpeg_ts_plan.emission.target_service_residence_ns";
 constexpr const char* ScheduledBatchMaximumBytesKey =
     "project_mpeg_ts_plan.scheduled_batch.maximum_payload_bytes";
+constexpr const char* PcrIntervalAuthorityKey =
+    "project_mpeg_ts_plan.timing.pcr_interval_authority";
+constexpr const char* PcrIntervalSourceKey =
+    "project_mpeg_ts_plan.timing.pcr_interval_source";
+constexpr const char* PcrGapAuthorityKey =
+    "project_mpeg_ts_plan.timing.pcr_gap_authority";
+constexpr const char* PcrGapSourceKey =
+    "project_mpeg_ts_plan.timing.pcr_gap_source";
+constexpr const char* PsiAuthorityKey =
+    "project_mpeg_ts_plan.timing.psi_authority";
+constexpr const char* PsiSourceKey =
+    "project_mpeg_ts_plan.timing.psi_source";
+constexpr const char* ReleaseJitterAuthorityKey =
+    "project_mpeg_ts_plan.timing.release_jitter_authority";
+constexpr const char* ReleaseJitterSourceKey =
+    "project_mpeg_ts_plan.timing.release_jitter_source";
 constexpr std::size_t VideoOnlyMuxFieldCount = 27;
 constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
-constexpr std::array<const char*, 13> UdpKeys{
+constexpr std::array<const char*, 21> UdpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -52,9 +68,13 @@ constexpr std::array<const char*, 13> UdpKeys{
     EmissionAudioWindowKey,
     EmissionMaximumQueuedBytesKey,
     EmissionTargetServiceResidenceKey,
-    ScheduledBatchMaximumBytesKey};
+    ScheduledBatchMaximumBytesKey,
+    PcrIntervalAuthorityKey, PcrIntervalSourceKey,
+    PcrGapAuthorityKey, PcrGapSourceKey,
+    PsiAuthorityKey, PsiSourceKey,
+    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey};
 
-constexpr std::array<const char*, 30> RtpKeys{
+constexpr std::array<const char*, 38> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -84,7 +104,11 @@ constexpr std::array<const char*, 30> RtpKeys{
     EmissionAudioWindowKey,
     EmissionMaximumQueuedBytesKey,
     EmissionTargetServiceResidenceKey,
-    ScheduledBatchMaximumBytesKey};
+    ScheduledBatchMaximumBytesKey,
+    PcrIntervalAuthorityKey, PcrIntervalSourceKey,
+    PcrGapAuthorityKey, PcrGapSourceKey,
+    PsiAuthorityKey, PsiSourceKey,
+    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -216,15 +240,15 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
             << p.transportStreamId << ',' << p.programNumber << ','
             << p.patPid << ',' << p.programMapPid << ','
             << static_cast<unsigned>(p.tableVersion) << ','
-            << p.psiRepeatInterval.nanoseconds() << ','
+            << p.timing.psiRepeatInterval().value.nanoseconds() << ','
             << static_cast<unsigned>(p.video.layout()) << ','
             << static_cast<unsigned>(p.video.nalLengthBytes()) << ','
             << static_cast<unsigned>(p.parameterSetPolicy) << ','
-            << p.clock.pcrInterval.nanoseconds() << ','
-            << p.clock.maximumPcrGap.nanoseconds() << ','
-            << p.clock.maximumPcrJitter.nanoseconds() << ','
-            << p.clock.timestampTimeBaseNumerator << ','
-            << p.clock.timestampTimeBaseDenominator << ','
+            << p.timing.pcrInterval().value.nanoseconds() << ','
+            << p.timing.maximumPcrGap().value.nanoseconds() << ','
+            << p.timing.maximumReleaseJitter().value.nanoseconds() << ','
+            << p.timing.timestampTimeBaseNumerator() << ','
+            << p.timing.timestampTimeBaseDenominator() << ','
             << p.transportDecodeLead.nanoseconds() << ','
             << p.startupEmissionPreroll.nanoseconds() << ','
             << p.packetSize << ','
@@ -256,7 +280,8 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
     return encoded.str();
 }
 
-::media::Result<MediaTsMuxPlan> decodeMux(std::string_view text)
+::media::Result<MediaTsMuxPlan> decodeMux(
+    std::string_view text, const MediaNodeOptions& options)
 {
     auto parsed = parseMuxFields(text);
     if (!parsed) {
@@ -355,20 +380,53 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
     if (!video) {
         return ::media::Result<MediaTsMuxPlan>::failure(video.error());
     }
+    auto pcrIntervalAuthority = requiredNodeOption(
+        &options, Owner, PcrIntervalAuthorityKey);
+    auto pcrIntervalSource = parseUnsignedOption<std::uint8_t>(
+        options, PcrIntervalSourceKey, false);
+    auto pcrGapAuthority = requiredNodeOption(
+        &options, Owner, PcrGapAuthorityKey);
+    auto pcrGapSource = parseUnsignedOption<std::uint8_t>(
+        options, PcrGapSourceKey, false);
+    auto psiAuthority = requiredNodeOption(&options, Owner, PsiAuthorityKey);
+    auto psiSource = parseUnsignedOption<std::uint8_t>(
+        options, PsiSourceKey, false);
+    auto jitterAuthority = requiredNodeOption(
+        &options, Owner, ReleaseJitterAuthorityKey);
+    auto jitterSource = parseUnsignedOption<std::uint8_t>(
+        options, ReleaseJitterSourceKey, false);
+    if (!pcrIntervalAuthority || !pcrIntervalSource || !pcrGapAuthority ||
+        !pcrGapSource || !psiAuthority || !psiSource || !jitterAuthority ||
+        !jitterSource) {
+        return ::media::Result<MediaTsMuxPlan>::failure(
+            !pcrIntervalAuthority ? pcrIntervalAuthority.error() :
+            !pcrIntervalSource ? pcrIntervalSource.error() :
+            !pcrGapAuthority ? pcrGapAuthority.error() :
+            !pcrGapSource ? pcrGapSource.error() :
+            !psiAuthority ? psiAuthority.error() :
+            !psiSource ? psiSource.error() :
+            !jitterAuthority ? jitterAuthority.error() : jitterSource.error());
+    }
+    auto timing = MediaMpegTsTimingPolicy::create(
+        {MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[10])),
+         std::move(pcrIntervalAuthority).value(),
+         static_cast<MediaMpegTsTimingConstraintSource>(pcrIntervalSource.value())},
+        {MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[11])),
+         std::move(pcrGapAuthority).value(),
+         static_cast<MediaMpegTsTimingConstraintSource>(pcrGapSource.value())},
+        {MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[6])),
+         std::move(psiAuthority).value(),
+         static_cast<MediaMpegTsTimingConstraintSource>(psiSource.value())},
+        {MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[12])),
+         std::move(jitterAuthority).value(),
+         static_cast<MediaMpegTsTimingConstraintSource>(jitterSource.value())},
+        timeNumerator.value(), timeDenominator.value());
+    if (!timing) return ::media::Result<MediaTsMuxPlan>::failure(timing.error());
     return MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         tsid.value(), programNumber.value(), pat.value(), pmt.value(),
-        table.value(),
-        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[6])),
+        table.value(), std::move(timing).value(),
         std::move(programPlan), std::move(video).value(),
         static_cast<MediaTsParameterSetPolicy>(f[9]),
-        MediaTsOutputClockPolicy{
-            MediaRunningTime::fromNanoseconds(
-                static_cast<std::int64_t>(f[10])),
-            MediaRunningTime::fromNanoseconds(
-                static_cast<std::int64_t>(f[11])),
-            MediaRunningTime::fromNanoseconds(
-                static_cast<std::int64_t>(f[12])),
-            timeNumerator.value(), timeDenominator.value()},
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[15])),
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[16])),
         packetSize.value(), maxPackets.value(),
@@ -516,9 +574,25 @@ bool sameProtocol(
                    : 0)},
          {EmissionMaximumQueuedBytesKey, std::to_string(
               output.emission.maximumQueuedBytes())},
-         {EmissionTargetServiceResidenceKey, std::to_string(
+        {EmissionTargetServiceResidenceKey, std::to_string(
               output.emission.targetServiceResidence().nanoseconds())},
-          {ScheduledBatchMaximumBytesKey, "0"}});
+        {ScheduledBatchMaximumBytesKey, "0"},
+        {PcrIntervalAuthorityKey,
+         output.protocol.muxPlan().timingPolicy().pcrInterval().authority},
+        {PcrIntervalSourceKey, std::to_string(static_cast<unsigned>(
+             output.protocol.muxPlan().timingPolicy().pcrInterval().source))},
+        {PcrGapAuthorityKey,
+         output.protocol.muxPlan().timingPolicy().maximumPcrGap().authority},
+        {PcrGapSourceKey, std::to_string(static_cast<unsigned>(
+             output.protocol.muxPlan().timingPolicy().maximumPcrGap().source))},
+        {PsiAuthorityKey,
+         output.protocol.muxPlan().timingPolicy().psiRepeatInterval().authority},
+        {PsiSourceKey, std::to_string(static_cast<unsigned>(
+             output.protocol.muxPlan().timingPolicy().psiRepeatInterval().source))},
+        {ReleaseJitterAuthorityKey,
+         output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().authority},
+        {ReleaseJitterSourceKey, std::to_string(static_cast<unsigned>(
+             output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().source))}});
 }
 
 ::media::Status applyRtp(
@@ -592,7 +666,23 @@ bool sameProtocol(
          {EmissionTargetServiceResidenceKey, std::to_string(
               output.emission.targetServiceResidence().nanoseconds())},
          {ScheduledBatchMaximumBytesKey,
-          std::to_string(output.scheduledBatchMaximumBytes)}});
+          std::to_string(output.scheduledBatchMaximumBytes)},
+         {PcrIntervalAuthorityKey,
+          output.protocol.muxPlan().timingPolicy().pcrInterval().authority},
+         {PcrIntervalSourceKey, std::to_string(static_cast<unsigned>(
+              output.protocol.muxPlan().timingPolicy().pcrInterval().source))},
+         {PcrGapAuthorityKey,
+          output.protocol.muxPlan().timingPolicy().maximumPcrGap().authority},
+         {PcrGapSourceKey, std::to_string(static_cast<unsigned>(
+              output.protocol.muxPlan().timingPolicy().maximumPcrGap().source))},
+         {PsiAuthorityKey,
+          output.protocol.muxPlan().timingPolicy().psiRepeatInterval().authority},
+         {PsiSourceKey, std::to_string(static_cast<unsigned>(
+              output.protocol.muxPlan().timingPolicy().psiRepeatInterval().source))},
+         {ReleaseJitterAuthorityKey,
+          output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().authority},
+         {ReleaseJitterSourceKey, std::to_string(static_cast<unsigned>(
+              output.protocol.muxPlan().timingPolicy().maximumReleaseJitter().source))}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -855,7 +945,7 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto streamSet = MediaTranscodeStreamSetCodec::decode(
         streamSetText.value());
     if (!streamSet) return Result::failure(streamSet.error());
-    auto mux = decodeMux(muxText.value());
+    auto mux = decodeMux(muxText.value(), node.options);
     if (!session.valid() || !mux) {
         return Result::failure(
             mux ? ::media::ErrorInfo::invalidArgument(

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaOutputTransportKind.h"
-#include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
+#include "internal/graph/protocol/mpegts/MediaMpegTsTimingPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsVideoElementaryStreamContract.h"
 #include "media_transcode/Result.h"
 
@@ -74,11 +74,10 @@ struct MediaTsMuxPlanParameters final {
     std::uint16_t patPid;
     std::uint16_t programMapPid;
     std::uint8_t tableVersion;
-    MediaRunningTime psiRepeatInterval;
+    MediaMpegTsTimingPolicy timing;
     MediaTsProgramPlan program;
     MediaTsVideoElementaryStreamContract video;
     MediaTsParameterSetPolicy parameterSetPolicy;
-    MediaTsOutputClockPolicy clock;
     MediaRunningTime transportDecodeLead;
     MediaRunningTime startupEmissionPreroll;
     std::uint16_t packetSize;
@@ -105,6 +104,7 @@ public:
     std::uint16_t pcrPid() const noexcept;
     std::uint8_t videoStreamType() const noexcept;
     const MediaTsOutputClockPolicy& clockPolicy() const noexcept;
+    const MediaMpegTsTimingPolicy& timingPolicy() const noexcept;
     MediaRunningTime transportDecodeLead() const noexcept;
     MediaRunningTime startupEmissionPreroll() const noexcept;
 
@@ -112,6 +112,7 @@ private:
     explicit MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept;
 
     MediaTsMuxPlanParameters m_parameters;
+    MediaTsOutputClockPolicy m_clockPolicy;
 };
 
 } // namespace media::ffmpeg::graph

@@ -121,7 +121,8 @@ planSeparateRtp(
                 "VideoOnly Project MPEG-TS transport is unsupported"));
     }
     if (!output.muxedOutput.transportDecodeLead ||
-        !output.muxedOutput.startupEmissionPreroll) {
+        !output.muxedOutput.startupEmissionPreroll ||
+        !output.muxedOutput.timingPolicy) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly MPEG-TS output requires a planned transport decode lead"));
@@ -134,6 +135,7 @@ planSeparateRtp(
     }
     auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
         outer.videoPlan.outputCodecName, layout.value(),
+        *output.muxedOutput.timingPolicy,
         *output.muxedOutput.transportDecodeLead,
         *output.muxedOutput.startupEmissionPreroll,
         outer.outputTransport, maximumPacketsPerDatagram);

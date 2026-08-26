@@ -248,7 +248,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         packetCounts.push_back(patPackets.value());
         packetCounts.push_back(pmtPackets.value());
         auto psiCompletion = deadline.checkedAdd(
-            m_plan.parameters().psiRepeatInterval);
+            m_plan.timingPolicy().psiRepeatInterval().value);
         if (!psiCompletion) {
             return ::media::Result<std::size_t>::failure(
                 poison(psiCompletion.error()).error());
@@ -537,7 +537,8 @@ MediaTsMuxSession::materializeMaintenanceThrough(
         }
         packetCount = count.value();
         if (psiDue) {
-            auto next = m_nextPsi.checkedAdd(m_plan.parameters().psiRepeatInterval);
+            auto next = m_nextPsi.checkedAdd(
+                m_plan.timingPolicy().psiRepeatInterval().value);
             if (!next) {
                 return ::media::Result<std::size_t>::failure(next.error());
             }

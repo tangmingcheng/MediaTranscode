@@ -14,6 +14,7 @@ public:
     static ::media::Result<MediaProjectMpegTsOutputPlan> createVideoOnly(
         const std::string& videoCodecName,
         const MediaEncodedPacketLayout& videoPacketLayout,
+        MediaMpegTsTimingPolicy timingPolicy,
         MediaRunningTime transportDecodeLead,
         MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,
@@ -22,6 +23,7 @@ public:
         const std::string& videoCodecName,
         const MediaEncodedPacketLayout& videoPacketLayout,
         const MediaResolvedAudioOutputPlan& audioOutput,
+        MediaMpegTsTimingPolicy timingPolicy,
         MediaRunningTime transportDecodeLead,
         MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,

@@ -218,20 +218,35 @@ void planTsInput(MediaAvSyncPlan& plan,
     auto audioCadence = MediaRunningTime::checkedFromTicks(
         resolvedFacts.audioOutput.codecFrameSamples(), 1,
         resolvedFacts.audioOutput.sampleRate());
-    auto preroll = audioCadence
-        ? MediaTsReceiverTimingPlanner::startupEmissionPreroll(
-              request.deployment->encode().receiverTiming->transportDecodeLead,
+    const auto& deployment = request.deployment->encode();
+    auto timing = audioCadence
+        ? MediaTsReceiverTimingPlanner::plan(
+              deployment.receiverTiming->transportDecodeLead,
+              deployment.receiverTiming->authority,
+              deployment.latency.targetResidence,
+              deployment.latency.maximumResidence,
+              deployment.latency.maximumReleaseJitter,
+              deployment.latency.releaseJitterAuthority,
               MediaRational{
                   *request.parameters.video.frameRate.numerator,
                   *request.parameters.video.frameRate.denominator},
               audioCadence.value())
-        : ::media::Result<MediaRunningTime>::failure(audioCadence.error());
+        : ::media::Result<MediaMpegTsTimingPolicy>::failure(
+              audioCadence.error());
+    auto preroll = timing
+        ? MediaTsReceiverTimingPlanner::startupEmissionPreroll(
+              deployment.receiverTiming->transportDecodeLead,
+              MediaRational{
+                  *request.parameters.video.frameRate.numerator,
+                  *request.parameters.video.frameRate.denominator},
+              audioCadence.value(), timing.value())
+        : ::media::Result<MediaRunningTime>::failure(timing.error());
     if (!preroll) {
         return ::media::Result<MediaTsMuxPlan>::failure(preroll.error());
     }
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
-        resolvedFacts.audioOutput,
+        resolvedFacts.audioOutput, std::move(timing).value(),
         request.deployment->encode().receiverTiming->transportDecodeLead,
         preroll.value(),
         *request.output.transport,

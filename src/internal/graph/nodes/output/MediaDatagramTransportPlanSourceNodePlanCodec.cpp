@@ -104,6 +104,10 @@ template <typename Value>
              put("latency.target_ns", d.latency.targetResidence.nanoseconds()),
              put("latency.maximum_ns", d.latency.maximumResidence.nanoseconds()),
              set(graph, nodeId, key("latency.authority"), d.latency.authority),
+             put("latency.release_jitter_ns",
+                 d.latency.maximumReleaseJitter.nanoseconds()),
+             set(graph, nodeId, key("latency.release_jitter_authority"),
+                 d.latency.releaseJitterAuthority),
              put("observation.run_datagrams", d.observation.maximumRunDatagrams),
              put("observation.drain_ns", d.observation.maximumDrainResidence.nanoseconds()),
              put("observation.policy", static_cast<unsigned>(d.observation.evidencePolicy)),
@@ -174,6 +178,10 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto targetLatency = parse<std::int64_t>(node.options, key("latency.target_ns"));
     auto maximumLatency = parse<std::int64_t>(node.options, key("latency.maximum_ns"));
     auto latencyAuthority = required(node.options, key("latency.authority"));
+    auto releaseJitter = parse<std::int64_t>(
+        node.options, key("latency.release_jitter_ns"));
+    auto releaseJitterAuthority = required(
+        node.options, key("latency.release_jitter_authority"));
     auto runDatagrams = parse<std::uint64_t>(node.options, key("observation.run_datagrams"));
     auto drain = parse<std::int64_t>(node.options, key("observation.drain_ns"));
     auto evidencePolicy = parse<std::uint8_t>(node.options, key("observation.policy"));
@@ -202,7 +210,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(socketBytes); REQUIRE_VALUE(resourcesAuthority); REQUIRE_VALUE(localFamily);
     REQUIRE_VALUE(localAddress); REQUIRE_VALUE(firstPort); REQUIRE_VALUE(portCount);
     REQUIRE_VALUE(localAuthority); REQUIRE_VALUE(targetLatency); REQUIRE_VALUE(maximumLatency);
-    REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(runDatagrams);
+    REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(releaseJitter);
+    REQUIRE_VALUE(releaseJitterAuthority); REQUIRE_VALUE(runDatagrams);
     REQUIRE_VALUE(drain); REQUIRE_VALUE(evidencePolicy); REQUIRE_VALUE(observationAuthority);
     REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
     REQUIRE_VALUE(receiverAuthority);
@@ -228,7 +237,9 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
          std::move(localAuthority).value()},
         {MediaRunningTime::fromNanoseconds(targetLatency.value()),
          MediaRunningTime::fromNanoseconds(maximumLatency.value()),
-         std::move(latencyAuthority).value()},
+         std::move(latencyAuthority).value(),
+         MediaRunningTime::fromNanoseconds(releaseJitter.value()),
+         std::move(releaseJitterAuthority).value()},
         {runDatagrams.value(),
          MediaRunningTime::fromNanoseconds(drain.value()),
          static_cast<MediaRealtimeTransmitEvidencePolicy>(evidencePolicy.value()),

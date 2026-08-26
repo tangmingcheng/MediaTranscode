@@ -18,12 +18,9 @@ constexpr std::uint16_t ProjectProgramMapPid = 0x0100;
 constexpr std::uint16_t ProjectVideoPid = 0x0101;
 constexpr std::uint16_t ProjectAudioPid = 0x0102;
 constexpr std::uint8_t ProjectTableVersion = 0;
-constexpr std::int64_t ProjectPsiRepeatIntervalNs = 100'000'000;
 constexpr std::uint8_t ProjectH264StreamType = 0x1B;
 constexpr std::uint8_t ProjectHevcStreamType = 0x24;
 constexpr std::uint8_t ProjectAacStreamType = 0x0F;
-constexpr std::int64_t ProjectMaximumPcrGapNs = 100'000'000;
-constexpr std::int64_t ProjectMaximumPcrJitterNs = 5'000'000;
 constexpr int ProjectClockTimeBaseNumerator = 1;
 constexpr int ProjectClockTimeBaseDenominator = 90'000;
 constexpr std::uint16_t ProjectPacketSize = 188;
@@ -39,18 +36,11 @@ constexpr MediaTsAudioVideoContinuitySeeds ProjectAvContinuitySeeds{
         parameters.patPid != ProjectPatPid ||
         parameters.programMapPid != ProjectProgramMapPid ||
         parameters.tableVersion != ProjectTableVersion ||
-        parameters.psiRepeatInterval.nanoseconds() !=
-            ProjectPsiRepeatIntervalNs ||
         parameters.parameterSetPolicy !=
             MediaTsParameterSetPolicy::BeforeRandomAccess ||
-        parameters.clock.pcrInterval != MediaTsReceiverTimingPlanner::pcrInterval() ||
-        parameters.clock.maximumPcrGap.nanoseconds() !=
-            ProjectMaximumPcrGapNs ||
-        parameters.clock.maximumPcrJitter.nanoseconds() !=
-            ProjectMaximumPcrJitterNs ||
-        parameters.clock.timestampTimeBaseNumerator !=
+        parameters.timing.timestampTimeBaseNumerator() !=
             ProjectClockTimeBaseNumerator ||
-        parameters.clock.timestampTimeBaseDenominator !=
+        parameters.timing.timestampTimeBaseDenominator() !=
             ProjectClockTimeBaseDenominator ||
         parameters.startupEmissionPreroll.nanoseconds() <= 0 ||
         parameters.startupEmissionPreroll >
@@ -192,6 +182,7 @@ std::uint8_t videoStreamType(MediaTsVideoCodec codec) noexcept
 MediaProjectMpegTsOutputPlan::createVideoOnly(
     const std::string& videoCodecName,
     const MediaEncodedPacketLayout& videoPacketLayout,
+    MediaMpegTsTimingPolicy timingPolicy,
     MediaRunningTime transportDecodeLead,
     MediaRunningTime startupEmissionPreroll,
     MediaOutputTransportKind transportKind,
@@ -209,19 +200,13 @@ MediaProjectMpegTsOutputPlan::createVideoOnly(
     auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         ProjectTransportStreamId, ProjectProgramNumber, ProjectPatPid,
         ProjectProgramMapPid, ProjectTableVersion,
-        MediaRunningTime::fromNanoseconds(ProjectPsiRepeatIntervalNs),
+        std::move(timingPolicy),
         MediaTsVideoOnlyProgramPlan{
             ProjectVideoPid, ProjectVideoPid,
             videoInput.value().streamType(),
             ProjectVideoContinuitySeeds},
         videoInput.value(),
         MediaTsParameterSetPolicy::BeforeRandomAccess,
-        MediaTsOutputClockPolicy{
-            MediaTsReceiverTimingPlanner::pcrInterval(),
-            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
-            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
-            ProjectClockTimeBaseNumerator,
-            ProjectClockTimeBaseDenominator},
         transportDecodeLead, startupEmissionPreroll, ProjectPacketSize,
         maximumPacketsPerDatagram, transportKind});
     if (!mux) {
@@ -236,6 +221,7 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
     const std::string& videoCodecName,
     const MediaEncodedPacketLayout& videoPacketLayout,
     const MediaResolvedAudioOutputPlan& audioOutput,
+    MediaMpegTsTimingPolicy timingPolicy,
     MediaRunningTime transportDecodeLead,
     MediaRunningTime startupEmissionPreroll,
     MediaOutputTransportKind transportKind,
@@ -263,19 +249,13 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
     auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         ProjectTransportStreamId, ProjectProgramNumber, ProjectPatPid,
         ProjectProgramMapPid, ProjectTableVersion,
-        MediaRunningTime::fromNanoseconds(ProjectPsiRepeatIntervalNs),
+        std::move(timingPolicy),
         MediaTsAudioVideoProgramPlan{
             ProjectVideoPid, ProjectAudioPid, ProjectVideoPid,
             videoInput.value().streamType(), ProjectAacStreamType, aac.value(),
             ProjectAvContinuitySeeds, audioOutput.codecFrameSamples()},
         videoInput.value(),
         MediaTsParameterSetPolicy::BeforeRandomAccess,
-        MediaTsOutputClockPolicy{
-            MediaTsReceiverTimingPlanner::pcrInterval(),
-            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
-            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
-            ProjectClockTimeBaseNumerator,
-            ProjectClockTimeBaseDenominator},
         transportDecodeLead, startupEmissionPreroll, ProjectPacketSize,
         maximumPacketsPerDatagram, transportKind});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());

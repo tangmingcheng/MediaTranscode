@@ -174,6 +174,8 @@ typedef struct mt_beta_realtime_deployment {
     const char* local_authority;
     uint64_t target_residence_ms;
     const char* latency_authority;
+    uint64_t maximum_release_jitter_ms;
+    const char* release_jitter_authority;
     uint64_t observation_run_datagrams;
     uint64_t observation_drain_residence_ms;
     mt_beta_tx_evidence_policy tx_evidence_policy;

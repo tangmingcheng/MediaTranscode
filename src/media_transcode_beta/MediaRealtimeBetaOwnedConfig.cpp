@@ -203,9 +203,22 @@ copyDeployment(const mt_beta_realtime_deployment& source)
         localAddress.value().addressFamily(), source.local_address,
         source.local_first_port, source.local_port_count,
         source.local_authority};
+    auto maximumReleaseJitter = runningMilliseconds(
+        source.maximum_release_jitter_ms);
+    if (!maximumReleaseJitter) {
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            maximumReleaseJitter.error());
+    }
+    if (auto valid = requireText(
+            source.release_jitter_authority,
+            "release jitter authority"); !valid) {
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            valid.error());
+    }
     encoding.latency = {
         targetResidence.value(), maximumResidence.value(),
-        source.latency_authority};
+        source.latency_authority, maximumReleaseJitter.value(),
+        source.release_jitter_authority};
     MediaRealtimeTransmitEvidencePolicy evidencePolicy =
         MediaRealtimeTransmitEvidencePolicy::Unknown;
     if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_DISABLED) {

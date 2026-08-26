@@ -125,8 +125,9 @@ MediaTsMuxPlan::maximumPacketsPerDatagram(
         return invalid("requires distinct PMT/ES PIDs and an ES PCR PID");
     }
     if (parameters.tableVersion > 31 ||
-        parameters.psiRepeatInterval.nanoseconds() <= 0 ||
-        parameters.psiRepeatInterval <= parameters.clock.pcrInterval) {
+        parameters.timing.psiRepeatInterval().value.nanoseconds() <= 0 ||
+        parameters.timing.psiRepeatInterval().value <=
+            parameters.timing.pcrInterval().value) {
         return invalid("contains an invalid PSI cadence or version");
     }
     const std::uint8_t programVideoStreamType = videoOnly
@@ -148,12 +149,13 @@ MediaTsMuxPlan::maximumPacketsPerDatagram(
          audioVideo->maximumAudioAccessUnitSamples <= 0)) {
         return invalid("contains an invalid AAC ADTS contract");
     }
-    if (parameters.clock.pcrInterval.nanoseconds() <= 0 ||
-        parameters.clock.maximumPcrGap <= parameters.clock.pcrInterval ||
-        parameters.clock.maximumPcrJitter.nanoseconds() <= 0 ||
-        parameters.clock.maximumPcrJitter >= parameters.clock.pcrInterval ||
-        parameters.clock.timestampTimeBaseNumerator != 1 ||
-        parameters.clock.timestampTimeBaseDenominator != 90'000) {
+    const auto clock = parameters.timing.clockPolicy();
+    if (clock.pcrInterval.nanoseconds() <= 0 ||
+        clock.maximumPcrGap <= clock.pcrInterval ||
+        clock.maximumPcrJitter.nanoseconds() <= 0 ||
+        clock.maximumPcrJitter >= clock.pcrInterval ||
+        clock.timestampTimeBaseNumerator != 1 ||
+        clock.timestampTimeBaseDenominator != 90'000) {
         return invalid("contains an invalid output clock policy");
     }
     if (parameters.transportDecodeLead.nanoseconds() <= 0 ||
@@ -172,7 +174,8 @@ MediaTsMuxPlan::maximumPacketsPerDatagram(
 }
 
 MediaTsMuxPlan::MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept
-    : m_parameters(std::move(parameters))
+    : m_parameters(std::move(parameters)),
+      m_clockPolicy(m_parameters.timing.clockPolicy())
 {
 }
 
@@ -216,7 +219,12 @@ std::uint8_t MediaTsMuxPlan::videoStreamType() const noexcept
 
 const MediaTsOutputClockPolicy& MediaTsMuxPlan::clockPolicy() const noexcept
 {
-    return m_parameters.clock;
+    return m_clockPolicy;
+}
+
+const MediaMpegTsTimingPolicy& MediaTsMuxPlan::timingPolicy() const noexcept
+{
+    return m_parameters.timing;
 }
 
 MediaRunningTime MediaTsMuxPlan::transportDecodeLead() const noexcept

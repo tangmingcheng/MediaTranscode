@@ -341,8 +341,9 @@ template <typename Emission>
         demand = audio ? combine(demand.value(), audio.value()) : audio;
         if (!demand) return demand;
     }
-    const auto psiNs = mux.parameters().psiRepeatInterval.nanoseconds();
-    const auto pcrNs = mux.parameters().clock.pcrInterval.nanoseconds();
+    const auto psiNs =
+        mux.timingPolicy().psiRepeatInterval().value.nanoseconds();
+    const auto pcrNs = mux.timingPolicy().pcrInterval().value.nanoseconds();
     if (psiNs <= 0 || pcrNs <= 0) {
         return ::media::Result<WireDemand>::failure(
             ::media::ErrorInfo::notInitialized(

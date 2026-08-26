@@ -80,7 +80,10 @@ MediaRealtimeDeploymentEnvelope::decode(
                 (std::numeric_limits<std::uint16_t>::max)());
     const bool validLatency = !latency.authority.empty() &&
         positive(latency.targetResidence) &&
-        latency.maximumResidence >= latency.targetResidence;
+        latency.maximumResidence >= latency.targetResidence &&
+        positive(latency.maximumReleaseJitter) &&
+        latency.maximumReleaseJitter < latency.maximumResidence &&
+        !latency.releaseJitterAuthority.empty();
     const bool validObservation = !observation.authority.empty() &&
         observation.maximumRunDatagrams > 0 &&
         positive(observation.maximumDrainResidence) &&

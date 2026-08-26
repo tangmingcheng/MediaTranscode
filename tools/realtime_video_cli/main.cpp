@@ -142,6 +142,8 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-local-authority",
         "--egress-target-residence-ms",
         "--egress-latency-authority",
+        "--egress-maximum-release-jitter-ms",
+        "--egress-release-jitter-authority",
         "--egress-observation-run-datagrams",
         "--egress-observation-drain-residence-ms",
         "--egress-tx-evidence-policy",
@@ -257,7 +259,9 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
     encoding.latency = {
         milliseconds("--egress-target-residence-ms"),
         milliseconds("--egress-maximum-residence-ms"),
-        requiredArg(argc, argv, "--egress-latency-authority")};
+        requiredArg(argc, argv, "--egress-latency-authority"),
+        milliseconds("--egress-maximum-release-jitter-ms"),
+        requiredArg(argc, argv, "--egress-release-jitter-authority")};
     const std::string evidencePolicy = requiredArg(
         argc, argv, "--egress-tx-evidence-policy");
     MediaRealtimeTransmitEvidencePolicy parsedEvidence =
