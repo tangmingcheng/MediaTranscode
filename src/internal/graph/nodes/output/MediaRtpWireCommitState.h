@@ -84,7 +84,12 @@ public:
 
     ::media::Result<std::uint64_t> sequence(
         std::size_t index) const noexcept;
-    ::media::Status commit(std::size_t index) noexcept;
+    ::media::Status markScheduled(
+        std::size_t index, MediaRunningTime now) noexcept;
+    ::media::Status markSubmitted(
+        std::size_t index, MediaRunningTime now) noexcept;
+    ::media::Status commit(
+        std::size_t index, MediaRunningTime now) noexcept;
 
 private:
     ::media::Status poison(::media::ErrorInfo error) noexcept;

@@ -58,7 +58,7 @@ private:
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
     ::media::Status waitUntil(MediaRunningTime deadline);
     ::media::Status beginSubmitGroup();
-    ::media::Status commitSubmittedPrefix(std::size_t count) noexcept;
+    ::media::Status commitSubmittedPrefix(std::size_t count);
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);

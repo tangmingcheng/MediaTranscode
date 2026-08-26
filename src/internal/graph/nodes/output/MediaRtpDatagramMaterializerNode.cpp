@@ -348,7 +348,13 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::allocationFailed("RTP wire AU views"));
     }
-    auto wire = m_wireMaterializer->materializeBatch(views);
+    auto materializedAt = m_dependencies.authority->now();
+    if (!materializedAt) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            materializedAt.error());
+    }
+    auto wire = m_wireMaterializer->materializeBatch(
+        views, materializedAt.value());
     if (!wire) {
         return ::media::Result<MediaNodeProcessResult>::failure(wire.error());
     }

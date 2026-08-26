@@ -29,7 +29,20 @@ public:
         return m_reservation.sequence(index);
     }
 
-    ::media::Status commit(std::size_t index) noexcept
+    ::media::Status markScheduled(
+        std::size_t index, MediaRunningTime now) noexcept
+    {
+        return m_reservation.markScheduled(index, now);
+    }
+
+    ::media::Status markSubmitted(
+        std::size_t index, MediaRunningTime now) noexcept
+    {
+        return m_reservation.markSubmitted(index, now);
+    }
+
+    ::media::Status commit(
+        std::size_t index, MediaRunningTime now) noexcept
     {
         auto ready = m_reservation.canCommit(index);
         if (!ready) return ready;
@@ -42,7 +55,7 @@ public:
             auto protocolCommitted = m_protocolCommits[index].commit();
             if (!protocolCommitted) return protocolCommitted;
         }
-        return m_reservation.commit(index);
+        return m_reservation.commit(index, now);
     }
 
 private:
@@ -60,10 +73,26 @@ public:
     {
     }
 
-    ::media::Status commit() noexcept
+    ::media::Status markScheduled(MediaRunningTime now) noexcept
     {
         return m_transaction
-            ? m_transaction->commit(m_index)
+            ? m_transaction->markScheduled(m_index, now)
+            : ::media::Status::failure(::media::ErrorInfo::internalError(
+                  "MPEG-TS UDP wire reservation has no transaction"));
+    }
+
+    ::media::Status markSubmitted(MediaRunningTime now) noexcept
+    {
+        return m_transaction
+            ? m_transaction->markSubmitted(m_index, now)
+            : ::media::Status::failure(::media::ErrorInfo::internalError(
+                  "MPEG-TS UDP wire reservation has no transaction"));
+    }
+
+    ::media::Status commit(MediaRunningTime now) noexcept
+    {
+        return m_transaction
+            ? m_transaction->commit(m_index, now)
             : ::media::Status::failure(::media::ErrorInfo::internalError(
                   "MPEG-TS UDP wire reservation has no transaction"));
     }
@@ -114,23 +143,26 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime canonicalRelease)
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
         {completeTsPackets, canonicalRelease}}};
-    return materializeBatch(datagrams);
+    return materializeBatch(datagrams, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeBatch(
-    std::span<const MediaMpegTsDatagramView> datagrams)
+    std::span<const MediaMpegTsDatagramView> datagrams,
+    MediaRunningTime materializedAt)
 {
-    return materializeBatchReserved(datagrams, nullptr);
+    return materializeBatchReserved(datagrams, nullptr, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
-    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
+    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+    MediaRunningTime materializedAt)
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (protocolBatch.generation() != m_config.generation) {
@@ -150,13 +182,15 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS UDP protocol batch views"));
     }
-    return materializeBatchReserved(views, &protocolBatch);
+    return materializeBatchReserved(
+        views, &protocolBatch, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     std::span<const MediaMpegTsDatagramView> datagrams,
-    MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch)
+    MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
+    MediaRunningTime materializedAt)
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
@@ -185,7 +219,21 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
         if (!deadline) return Result::failure(deadline.error());
         deadlines.push_back(deadline.value());
     }
-    auto global = m_config.globalSequence->reserve(datagrams.size());
+    std::vector<MediaWireGlobalSequenceReservationEntry> globalEntries;
+    try {
+        globalEntries.reserve(datagrams.size());
+        for (const auto& datagram : datagrams) {
+            globalEntries.push_back({
+                m_config.endpointId,
+                static_cast<std::uint64_t>(
+                    datagram.completeTsPackets.size()),
+                materializedAt});
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "MPEG-TS UDP service backlog reservation"));
+    }
+    auto global = m_config.globalSequence->reserve(globalEntries);
     if (!global) return Result::failure(global.error());
     std::vector<MediaProtocolDatagramCommitLease> protocolCommits;
     if (protocolBatch) {
@@ -298,16 +346,18 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime canonicalRelease)
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
         {completeTsPackets, canonicalRelease}}};
-    return materializeBatch(datagrams);
+    return materializeBatch(datagrams, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
-    std::span<const MediaMpegTsDatagramView> datagrams)
+    std::span<const MediaMpegTsDatagramView> datagrams,
+    MediaRunningTime materializedAt)
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty()) {
@@ -339,12 +389,14 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS RTP wire batch"));
     }
-    return m_rtpMaterializer.materializeBatch(packetized);
+    return m_rtpMaterializer.materializeBatch(
+        packetized, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
-    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
+    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+    MediaRunningTime materializedAt)
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (protocolBatch.generation() != m_rtpMaterializer.generation()) {
@@ -378,16 +430,17 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
             "MPEG-TS RTP protocol batch"));
     }
     return m_rtpMaterializer.materializeProtocolBatch(
-        packetized, protocolBatch);
+        packetized, protocolBatch, materializedAt);
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaMpegTsRtpWireDatagramMaterializer::materializeTerminalReport(
     MediaRunningTime reportInstant,
-    MediaRunningTime canonicalRelease)
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt)
 {
     return m_rtpMaterializer.materializeTerminalReport(
-        reportInstant, canonicalRelease);
+        reportInstant, canonicalRelease, materializedAt);
 }
 
 ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>

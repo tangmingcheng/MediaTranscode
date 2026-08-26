@@ -31,7 +31,14 @@ public:
         requires std::is_nothrow_move_constructible_v<Reservation> &&
                  std::is_nothrow_destructible_v<Reservation> &&
                  requires(Reservation& reservation) {
-                     { reservation.commit() } noexcept ->
+                     { reservation.markScheduled(
+                         MediaRunningTime::fromNanoseconds(0)) } noexcept ->
+                         std::same_as<::media::Status>;
+                     { reservation.markSubmitted(
+                         MediaRunningTime::fromNanoseconds(0)) } noexcept ->
+                         std::same_as<::media::Status>;
+                     { reservation.commit(
+                         MediaRunningTime::fromNanoseconds(0)) } noexcept ->
                          std::same_as<::media::Status>;
                  }
     static ::media::Result<MediaDatagramSubmitCommitLease> create(
@@ -71,7 +78,9 @@ private:
     class Concept {
     public:
         virtual ~Concept() = default;
-        virtual ::media::Status commit() noexcept = 0;
+        virtual ::media::Status markScheduled(MediaRunningTime now) noexcept = 0;
+        virtual ::media::Status markSubmitted(MediaRunningTime now) noexcept = 0;
+        virtual ::media::Status commit(MediaRunningTime now) noexcept = 0;
     };
 
     template <typename Reservation>
@@ -82,9 +91,19 @@ private:
         {
         }
 
-        ::media::Status commit() noexcept override
+        ::media::Status markScheduled(MediaRunningTime now) noexcept override
         {
-            return m_reservation.commit();
+            return m_reservation.markScheduled(now);
+        }
+
+        ::media::Status markSubmitted(MediaRunningTime now) noexcept override
+        {
+            return m_reservation.markSubmitted(now);
+        }
+
+        ::media::Status commit(MediaRunningTime now) noexcept override
+        {
+            return m_reservation.commit(now);
         }
 
     private:
@@ -107,7 +126,9 @@ private:
         return valid() && m_generation == generation &&
                m_globalSequence == globalSequence;
     }
-    ::media::Status commit() noexcept;
+    ::media::Status markScheduled(MediaRunningTime now) noexcept;
+    ::media::Status markSubmitted(MediaRunningTime now) noexcept;
+    ::media::Status commit(MediaRunningTime now) noexcept;
 
     friend class MediaScheduledDatagramSenderNode;
     friend class MediaScheduledWireDatagram;

@@ -27,9 +27,16 @@ MediaScheduledWireDatagram::MediaScheduledWireDatagram(
 {
 }
 
-::media::Status MediaScheduledWireDatagram::commitSubmit() noexcept
+::media::Status MediaScheduledWireDatagram::markSubmitted(
+    MediaRunningTime now) noexcept
 {
-    return m_commitLease.commit();
+    return m_commitLease.markSubmitted(now);
+}
+
+::media::Status MediaScheduledWireDatagram::commitSubmit(
+    MediaRunningTime now) noexcept
+{
+    return m_commitLease.commit(now);
 }
 
 MediaScheduledWireDatagramBatchBuffer::
@@ -50,7 +57,8 @@ MediaScheduledWireDatagramBatchBuffer(
 MediaScheduledWireDatagramBatchBuffer::create(
     const MediaDatagramShapingPlan& plan,
     MediaWireDatagramBatchBuffer& source,
-    std::vector<MediaScheduledWireDatagramDescriptor> descriptors)
+    std::vector<MediaScheduledWireDatagramDescriptor> descriptors,
+    MediaRunningTime scheduledAt)
 {
     using Result = ::media::Result<
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>;
@@ -92,7 +100,7 @@ MediaScheduledWireDatagramBatchBuffer::create(
     for (std::size_t index = 0; index < descriptors.size(); ++index) {
         const auto& descriptor = descriptors[index];
         const auto& wire = descriptor.wire;
-        const auto& datagram = source.m_datagrams[index];
+        auto& datagram = source.m_datagrams[index];
         const auto* endpoint = plan.endpoint(wire.endpointId);
         auto validWire = validator.accept(wire);
         auto plannedWireCost = plan.plannedWireCost(
@@ -123,6 +131,8 @@ MediaScheduledWireDatagramBatchBuffer::create(
         }
 
         EndpointBatchUsage* usage = nullptr;
+        auto marked = datagram.m_commitLease.markScheduled(scheduledAt);
+        if (!marked) return Result::failure(marked.error());
         try {
             usage = &endpointUsage[wire.endpointId];
         } catch (const std::bad_alloc&) {

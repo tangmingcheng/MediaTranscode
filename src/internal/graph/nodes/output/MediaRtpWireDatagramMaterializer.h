@@ -67,18 +67,22 @@ public:
         std::span<const std::uint8_t> packetizedRtp,
         std::size_t payloadOctets,
         MediaRunningTime presentationOnMaster,
-        MediaRunningTime canonicalRelease);
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams);
+    materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams,
+                     MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
         std::span<const MediaPacketizedRtpDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+        MediaRunningTime materializedAt);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
         MediaRunningTime reportInstant,
-        MediaRunningTime canonicalRelease);
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt);
 
     ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>
     snapshot() const noexcept;
@@ -95,7 +99,8 @@ private:
     ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatchReserved(
         std::span<const MediaPacketizedRtpDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);
+        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
+        MediaRunningTime materializedAt);
 
     std::shared_ptr<MediaRtpWireProtocolState> m_state;
 };

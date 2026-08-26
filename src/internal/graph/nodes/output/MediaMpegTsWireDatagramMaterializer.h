@@ -39,12 +39,15 @@ public:
 
     ::media::Result<MediaWireDatagramBatchCollection> materialize(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime canonicalRelease);
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
+    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams,
+                     MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+        MediaRunningTime materializedAt);
 
 private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
@@ -52,7 +55,8 @@ private:
     ::media::Result<MediaWireDatagramBatchCollection>
     materializeBatchReserved(
         std::span<const MediaMpegTsDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch);
+        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
+        MediaRunningTime materializedAt);
 
     MediaMpegTsUdpWireDatagramMaterializerConfig m_config;
 };
@@ -88,17 +92,21 @@ public:
 
     ::media::Result<MediaWireDatagramBatchCollection> materialize(
         std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime canonicalRelease);
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams);
+    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams,
+                     MediaRunningTime materializedAt);
     ::media::Result<MediaWireDatagramBatchCollection>
     materializeProtocolBatch(
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch);
+        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+        MediaRunningTime materializedAt);
 
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
         MediaRunningTime reportInstant,
-        MediaRunningTime canonicalRelease);
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt);
 
     ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>
     snapshot() const noexcept;

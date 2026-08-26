@@ -236,9 +236,15 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(invalid(
             "MPEG-TS datagram materializer requires a protocol batch"));
     }
+    auto materializedAt = m_authority->now();
+    if (!materializedAt) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            materializedAt.error());
+    }
     auto wire = std::visit(
-        [batch](auto& materializer) {
-            return materializer.materializeProtocolBatch(*batch);
+        [batch, materializedAt = materializedAt.value()](auto& materializer) {
+            return materializer.materializeProtocolBatch(
+                *batch, materializedAt);
         },
         *m_materializer);
     if (!wire) {

@@ -72,7 +72,8 @@ private:
         std::span<const std::uint8_t> bytes,
         const MediaScheduledWireDatagramDescriptor& descriptor,
         MediaDatagramSubmitCommitLease commitLease) noexcept;
-    ::media::Status commitSubmit() noexcept;
+    ::media::Status markSubmitted(MediaRunningTime now) noexcept;
+    ::media::Status commitSubmit(MediaRunningTime now) noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaScheduledWireDatagramDescriptor m_descriptor;
@@ -105,7 +106,8 @@ private:
         std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>>
     create(const MediaDatagramShapingPlan& plan,
            MediaWireDatagramBatchBuffer& source,
-           std::vector<MediaScheduledWireDatagramDescriptor> descriptors);
+           std::vector<MediaScheduledWireDatagramDescriptor> descriptors,
+           MediaRunningTime scheduledAt);
 
     MediaScheduledWireDatagramBatchBuffer(
         std::string sessionKey,

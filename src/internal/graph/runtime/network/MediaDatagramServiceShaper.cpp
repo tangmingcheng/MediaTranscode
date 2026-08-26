@@ -363,7 +363,7 @@ MediaDatagramServiceShaper::shape(
     }
 
     auto output = MediaScheduledWireDatagramBatchBuffer::create(
-        m_plan, batch, std::move(descriptors));
+        m_plan, batch, std::move(descriptors), now);
     if (!output) return Result::failure(output.error());
 
     const bool telemetryOverflow =

@@ -1,6 +1,8 @@
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 
+#include <limits>
 #include <new>
+#include <unordered_map>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -26,9 +28,34 @@ MediaDatagramTransportPlanBuffer::MediaDatagramTransportPlanBuffer(
     if (!activated) {
         return ::media::Result<MediaBufferRef>::failure(activated.error());
     }
+    std::unordered_map<std::uint64_t, std::uint64_t> endpointWireHeaders;
+    try {
+        endpointWireHeaders.reserve(
+            activated.value().shaping.endpoints().size());
+        for (const auto& endpoint :
+             activated.value().shaping.endpoints()) {
+            if (endpoint.mtuEvidence.ipHeaderBytes >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    endpoint.mtuEvidence.transportHeaderBytes) {
+                return ::media::Result<MediaBufferRef>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Datagram transport endpoint wire header overflows"));
+            }
+            endpointWireHeaders.emplace(
+                endpoint.endpointId,
+                endpoint.mtuEvidence.ipHeaderBytes +
+                    endpoint.mtuEvidence.transportHeaderBytes);
+        }
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "Datagram transport endpoint wire headers"));
+    }
     auto sequence = MediaWireGlobalSequenceState::create(
         planTemplate.sessionKey(), planTemplate.serviceScopeId(), generation, 1,
-        activated.value().shaping.backlog().maximumDatagrams);
+        activated.value().shaping.backlog().maximumDatagrams,
+        activated.value().shaping.backlog().maximumBytes,
+        std::move(endpointWireHeaders));
     if (!sequence) {
         return ::media::Result<MediaBufferRef>::failure(sequence.error());
     }

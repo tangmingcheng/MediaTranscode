@@ -259,16 +259,20 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 }
 
 ::media::Status MediaScheduledDatagramSenderNode::commitSubmittedPrefix(
-    std::size_t count) noexcept
+    std::size_t count)
 {
     if (!m_pendingBatch || count > m_groupCount) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
             "scheduled datagram sender received an invalid commit prefix"));
     }
+    auto now = m_clock->now();
+    if (!now) return ::media::Status::failure(now.error());
     for (std::size_t offset = 0; offset < count; ++offset) {
         auto& datagram =
             m_pendingBatch->m_datagrams[m_groupBegin + offset];
-        auto committed = datagram.commitSubmit();
+        auto submitted = datagram.markSubmitted(now.value());
+        if (!submitted) return submitted;
+        auto committed = datagram.commitSubmit(now.value());
         if (!committed) return committed;
         if (m_datagrams == (std::numeric_limits<std::uint64_t>::max)() ||
             datagram.bytes().size() >

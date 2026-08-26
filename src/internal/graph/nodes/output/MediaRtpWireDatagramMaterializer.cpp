@@ -76,33 +76,38 @@ MediaRtpWireDatagramMaterializer::materialize(
     std::span<const std::uint8_t> packetizedRtp,
     std::size_t payloadOctets,
     MediaRunningTime presentationOnMaster,
-    MediaRunningTime canonicalRelease)
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt)
 {
     const std::array<MediaPacketizedRtpDatagramView, 1> datagrams{{
         {packetizedRtp, payloadOctets, presentationOnMaster,
          canonicalRelease}}};
-    return materializeBatch(datagrams);
+    return materializeBatch(datagrams, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeBatch(
-    std::span<const MediaPacketizedRtpDatagramView> datagrams)
+    std::span<const MediaPacketizedRtpDatagramView> datagrams,
+    MediaRunningTime materializedAt)
 {
-    return materializeBatchReserved(datagrams, nullptr);
+    return materializeBatchReserved(datagrams, nullptr, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeProtocolBatch(
     std::span<const MediaPacketizedRtpDatagramView> datagrams,
-    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch)
+    MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
+    MediaRunningTime materializedAt)
 {
-    return materializeBatchReserved(datagrams, &protocolBatch);
+    return materializeBatchReserved(
+        datagrams, &protocolBatch, materializedAt);
 }
 
 ::media::Result<MediaWireDatagramBatchCollection>
 MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     std::span<const MediaPacketizedRtpDatagramView> datagrams,
-    MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch)
+    MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
+    MediaRunningTime materializedAt)
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
@@ -237,7 +242,26 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "RTP wire reservation exceeds planner backlog capacity"));
     }
-    auto global = m_state->globalSequence->reserve(entryCount);
+    std::vector<MediaWireGlobalSequenceReservationEntry> globalEntries;
+    try {
+        globalEntries.reserve(entryCount);
+        if (rtcpBytes) {
+            globalEntries.push_back({
+                m_state->rtcpEndpointId,
+                static_cast<std::uint64_t>(rtcpBytes->size()),
+                materializedAt});
+        }
+        for (const auto& bytes : materializedRtp) {
+            globalEntries.push_back({
+                m_state->rtpEndpointId,
+                static_cast<std::uint64_t>(bytes.size()),
+                materializedAt});
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "RTP wire service backlog reservation"));
+    }
+    auto global = m_state->globalSequence->reserve(globalEntries);
     if (!global) return Result::failure(global.error());
     std::vector<MediaRtpWireCommitAction> actions;
     try {
@@ -353,7 +377,8 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
 MediaRtpWireDatagramMaterializer::materializeTerminalReport(
     MediaRunningTime reportInstant,
-    MediaRunningTime canonicalRelease)
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
@@ -383,7 +408,12 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "RTP terminal reservation exceeds planner backlog capacity"));
     }
-    auto global = m_state->globalSequence->reserve(1);
+    const std::array<MediaWireGlobalSequenceReservationEntry, 1>
+        globalEntries{{{
+            m_state->rtcpEndpointId,
+            static_cast<std::uint64_t>(datagram.value().size()),
+            materializedAt}}};
+    auto global = m_state->globalSequence->reserve(globalEntries);
     if (!global) return Result::failure(global.error());
     std::vector<MediaRtpWireCommitAction> actions;
     try {

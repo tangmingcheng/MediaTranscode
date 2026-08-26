@@ -6,14 +6,33 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Status MediaDatagramSubmitCommitLease::commit() noexcept
+::media::Status MediaDatagramSubmitCommitLease::markScheduled(
+    MediaRunningTime now) noexcept
+{
+    return m_reservation
+        ? m_reservation->markScheduled(now)
+        : ::media::Status::failure(::media::ErrorInfo::internalError(
+              "datagram submit commit lease is inactive"));
+}
+
+::media::Status MediaDatagramSubmitCommitLease::markSubmitted(
+    MediaRunningTime now) noexcept
+{
+    return m_reservation
+        ? m_reservation->markSubmitted(now)
+        : ::media::Status::failure(::media::ErrorInfo::internalError(
+              "datagram submit commit lease is inactive"));
+}
+
+::media::Status MediaDatagramSubmitCommitLease::commit(
+    MediaRunningTime now) noexcept
 {
     if (!m_reservation) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
             "datagram submit commit lease cannot be committed twice or after move"));
     }
     auto reservation = std::move(m_reservation);
-    return reservation->commit();
+    return reservation->commit(now);
 }
 
 MediaWireDatagram::MediaWireDatagram(

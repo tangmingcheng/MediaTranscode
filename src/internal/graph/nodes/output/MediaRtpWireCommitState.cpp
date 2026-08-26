@@ -18,10 +18,26 @@ public:
     {
     }
 
-    ::media::Status commit() noexcept
+    ::media::Status markScheduled(MediaRunningTime now) noexcept
     {
         return m_transaction
-            ? m_transaction->commit(m_index)
+            ? m_transaction->markScheduled(m_index, now)
+            : ::media::Status::failure(::media::ErrorInfo::internalError(
+                  "RTP wire entry reservation has no transaction"));
+    }
+
+    ::media::Status markSubmitted(MediaRunningTime now) noexcept
+    {
+        return m_transaction
+            ? m_transaction->markSubmitted(m_index, now)
+            : ::media::Status::failure(::media::ErrorInfo::internalError(
+                  "RTP wire entry reservation has no transaction"));
+    }
+
+    ::media::Status commit(MediaRunningTime now) noexcept
+    {
+        return m_transaction
+            ? m_transaction->commit(m_index, now)
             : ::media::Status::failure(::media::ErrorInfo::internalError(
                   "RTP wire entry reservation has no transaction"));
     }
@@ -85,8 +101,20 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
     return m_globalReservation.sequence(index);
 }
 
+::media::Status MediaRtpWireCommitTransaction::markScheduled(
+    std::size_t index, MediaRunningTime now) noexcept
+{
+    return m_globalReservation.markScheduled(index, now);
+}
+
+::media::Status MediaRtpWireCommitTransaction::markSubmitted(
+    std::size_t index, MediaRunningTime now) noexcept
+{
+    return m_globalReservation.markSubmitted(index, now);
+}
+
 ::media::Status MediaRtpWireCommitTransaction::commit(
-    std::size_t index) noexcept
+    std::size_t index, MediaRunningTime now) noexcept
 {
     if (!m_state) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -141,7 +169,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
         m_state->terminalCommitted = true;
         break;
     }
-    auto globalCommitted = m_globalReservation.commit(index);
+    auto globalCommitted = m_globalReservation.commit(index, now);
     if (!globalCommitted) return poison(globalCommitted.error());
     ++m_nextAction;
     ++m_state->reservations.front().committed;
