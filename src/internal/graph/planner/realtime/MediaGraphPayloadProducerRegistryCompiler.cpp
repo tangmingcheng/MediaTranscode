@@ -84,30 +84,32 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
         return ::media::Result<std::uint64_t>::success(
             bound->maximumPayloadBytes);
     }
-    if (producerKind != MediaNodeKind::VideoEncode &&
-        producerKind != MediaNodeKind::AudioEncode) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::unsupported(
-                "producer registry lacks an authoritative source allocation bound"));
-    }
     if (edge.payloadKind == MediaPayloadKind::Packet &&
-        edge.streamKind == MediaStreamKind::Video) {
+        edge.streamKind == MediaStreamKind::Video &&
+        producerKind == MediaNodeKind::VideoEncode) {
         return ::media::Result<std::uint64_t>::success(
             ledger.media.videoUnitBytes);
     }
     if (edge.payloadKind == MediaPayloadKind::Packet &&
         edge.streamKind == MediaStreamKind::Audio &&
+        producerKind == MediaNodeKind::AudioEncode &&
         ledger.media.audioUnitBytes) {
         return ::media::Result<std::uint64_t>::success(
             *ledger.media.audioUnitBytes);
     }
     if (edge.payloadKind == MediaPayloadKind::Frame &&
-        edge.streamKind == MediaStreamKind::Video) {
+        edge.streamKind == MediaStreamKind::Video &&
+        (producerKind == MediaNodeKind::VideoDecode ||
+         producerKind == MediaNodeKind::HardwareTransfer ||
+         producerKind == MediaNodeKind::VideoFilter)) {
         return ::media::Result<std::uint64_t>::success(
             ledger.videoSurfaceUnitBytes);
     }
     if (edge.payloadKind == MediaPayloadKind::Frame &&
         edge.streamKind == MediaStreamKind::Audio &&
+        (producerKind == MediaNodeKind::AudioDecode ||
+         producerKind == MediaNodeKind::AudioStartupTrim ||
+         producerKind == MediaNodeKind::AudioResample) &&
         ledger.audioFrameUnitBytes) {
         return ::media::Result<std::uint64_t>::success(
             *ledger.audioFrameUnitBytes);
