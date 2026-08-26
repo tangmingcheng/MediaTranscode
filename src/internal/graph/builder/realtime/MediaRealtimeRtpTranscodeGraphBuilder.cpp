@@ -747,6 +747,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                 "final realtime graph lacks its video codec resolver"));
     }
     const auto& finalized = finalLedger.value();
+    if (!graph.setPayloadCreditPlan(finalized.payloadCreditPlan)) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "realtime graph rejected its complete payload credit plan"));
+    }
     if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
             graph, owner, codecResolver,
             "resource.graph_payload_reserved_bytes",

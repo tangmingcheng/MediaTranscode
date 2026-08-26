@@ -566,7 +566,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
     const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
-    if (!inputPayloadCredit) {
+    if (!inputPayloadCredit && context.payloadCreditsRequired()) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "VideoFilterNode input frame lacks payload credit ownership"));
     }
@@ -605,7 +605,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
 {
     if (!m_lineageState->pendingFrame ||
         m_lineageState->pendingFrame->opaque_ref ||
-        !m_lineageState->pendingPayloadCredit) {
+        (!m_lineageState->pendingPayloadCredit && !m_lineageRegistry)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VideoFilterNode requires one unowned frame payload credit"));
@@ -641,7 +641,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
 ::media::Status VideoFilterNode::submitPendingFrame(
     MediaGraphExecutionContext& context)
 {
-    if (!m_lineageState->pendingFrame->opaque_ref) {
+    if ((m_lineageRegistry || m_lineageState->pendingPayloadCredit) &&
+        !m_lineageState->pendingFrame->opaque_ref) {
         auto attached = attachPendingLineage();
         if (!attached) return attached;
     }

@@ -10,6 +10,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaGraphPayloadCreditMode : std::uint8_t {
+    NonRealtimeNotApplicable = 1,
+    RealtimeRequired = 2,
+};
+
 enum class MediaGraphPayloadCreditIntegration : std::uint8_t {
     Incomplete = 0,
     Complete = 1

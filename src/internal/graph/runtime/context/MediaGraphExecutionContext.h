@@ -68,6 +68,7 @@ public:
         const MediaAvSyncGroupKey& key) const noexcept;
     std::shared_ptr<MediaGraphPayloadCreditLedger> payloadCreditLedger()
         const noexcept;
+    bool payloadCreditsRequired() const noexcept;
     ::media::Result<MediaGraphPayloadReservation> reservePayload(
         MediaNodeId producer,
         MediaStreamKind streamKind,

@@ -46,7 +46,18 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         return orderStatus;
     }
 
-    if (graph.payloadCreditPlan()) {
+    if (!graph.payloadCreditMode()) {
+        reset();
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "MediaGraphExecutionContext requires a typed payload credit mode"));
+    }
+    if (*graph.payloadCreditMode() ==
+        MediaGraphPayloadCreditMode::RealtimeRequired) {
+        if (!graph.payloadCreditPlan()) {
+            reset();
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "realtime execution requires its installed payload credit plan"));
+        }
         if (!graph.payloadCreditPlan()->isCompleteAndValid()) {
             reset();
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -67,6 +78,10 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         }
         m_payloadCreditLedger->setReleaseObserver(
             m_payloadCreditWakeupHub);
+    } else if (graph.payloadCreditPlan()) {
+        reset();
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "non-realtime execution rejects a payload credit plan"));
     }
 
     m_graph = &graph;
@@ -112,6 +127,13 @@ MediaGraphExecutionContext::payloadCreditLedger() const noexcept
     return m_payloadCreditLedger;
 }
 
+bool MediaGraphExecutionContext::payloadCreditsRequired() const noexcept
+{
+    return m_graph && m_graph->payloadCreditMode() &&
+           *m_graph->payloadCreditMode() ==
+               MediaGraphPayloadCreditMode::RealtimeRequired;
+}
+
 ::media::Result<MediaGraphPayloadReservation>
 MediaGraphExecutionContext::reservePayload(
     MediaNodeId producer,
@@ -139,6 +161,16 @@ MediaGraphExecutionContext::reservePayloadBatch(
     using Result =
         ::media::Result<std::vector<MediaGraphPayloadReservation>>;
     if (!m_payloadCreditLedger) {
+        if (!payloadCreditsRequired()) {
+            std::vector<MediaGraphPayloadReservation> reservations;
+            const std::size_t count = actualBytes.empty() ? 1 : actualBytes.size();
+            reservations.reserve(count);
+            for (std::size_t index = 0; index < count; ++index) {
+                reservations.push_back(
+                    MediaGraphPayloadReservation::nonRealtimeNotApplicable());
+            }
+            return Result::success(std::move(reservations));
+        }
         return Result::failure(::media::ErrorInfo::notInitialized(
             "runtime graph has no activated payload credit ledger"));
     }

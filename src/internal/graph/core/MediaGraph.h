@@ -91,6 +91,9 @@ public:
     std::size_t nodeCount() const;
     std::size_t edgeCount() const;
     bool setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan);
+    bool setPayloadCreditMode(MediaGraphPayloadCreditMode mode);
+    const std::optional<MediaGraphPayloadCreditMode>& payloadCreditMode()
+        const noexcept;
     const std::optional<MediaGraphPayloadCreditPlan>& payloadCreditPlan()
         const noexcept;
 
@@ -115,6 +118,7 @@ private:
     std::vector<MediaNode> m_nodes;
     std::vector<MediaEdge> m_edges;
     std::optional<MediaGraphPayloadCreditPlan> m_payloadCreditPlan;
+    std::optional<MediaGraphPayloadCreditMode> m_payloadCreditMode;
 
     uint32_t m_nextNodeId = 1;
     uint32_t m_nextPortId = 1;

@@ -178,7 +178,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 {
     if (!m_lineageState->pendingPacket ||
         m_lineageState->pendingPacket->opaque_ref ||
-        !m_lineageState->pendingPayloadCredit) {
+        (!m_lineageState->pendingPayloadCredit && !m_lineageRegistry)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoDecodeNode requires one unowned packet payload credit"));
     }
@@ -286,7 +286,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected packet buffer"));
     }
     const auto& inputPayloadCredit = FFmpegPacketView::payloadCredit(buffer);
-    if (!inputPayloadCredit) {
+    if (!inputPayloadCredit && context.payloadCreditsRequired()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::notInitialized(
                 "VideoDecodeNode input packet lacks payload credit ownership"));
@@ -344,7 +344,8 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> VideoDecodeNode::submitPendingPacket(
     MediaGraphExecutionContext& context)
 {
-    if (!m_lineageState->pendingPacket->opaque_ref &&
+    if ((m_lineageRegistry || m_lineageState->pendingPayloadCredit) &&
+        !m_lineageState->pendingPacket->opaque_ref &&
         !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));

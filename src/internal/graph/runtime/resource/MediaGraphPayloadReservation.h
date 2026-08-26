@@ -23,6 +23,7 @@ public:
         MediaGraphPayloadAllocationAccounting accounting,
         std::uint64_t maximumReservationBytes,
         MediaGraphPayloadCreditLease lease);
+    static MediaGraphPayloadReservation nonRealtimeNotApplicable() noexcept;
 
     ::media::Status shrinkToActual(std::uint64_t bytes) noexcept;
     ::media::Status attachTo(MediaBuffer& buffer) noexcept;
@@ -34,6 +35,7 @@ private:
         MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
     std::uint64_t m_maximumReservationBytes = 0;
     std::shared_ptr<MediaGraphPayloadCreditLease> m_lease;
+    bool m_nonRealtimeNotApplicable = false;
 };
 
 } // namespace media::ffmpeg::graph

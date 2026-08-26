@@ -287,7 +287,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 {
     if (!m_lineageState->pendingFrame ||
         m_lineageState->pendingFrame->opaque_ref ||
-        !m_lineageState->pendingPayloadCredit) {
+        (!m_lineageState->pendingPayloadCredit && !m_lineageRegistry)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoEncodeNode requires one unowned frame payload credit"));
     }
@@ -417,7 +417,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
     }
     const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
-    if (!inputPayloadCredit) {
+    if (!inputPayloadCredit && context.payloadCreditsRequired()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::notInitialized(
                 "VideoEncodeNode input frame lacks payload credit ownership"));
@@ -505,7 +505,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             encodeLog(MediaGraphDiagnosticLevel::State, out.str());
         }
     }
-    if (!m_lineageState->pendingFrame->opaque_ref &&
+    if ((m_lineageRegistry || m_lineageState->pendingPayloadCredit) &&
+        !m_lineageState->pendingFrame->opaque_ref &&
         !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));
