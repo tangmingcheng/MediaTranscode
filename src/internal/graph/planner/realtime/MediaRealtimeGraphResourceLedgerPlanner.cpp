@@ -127,6 +127,10 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
     std::uint64_t audioUnitCount = 0;
     std::uint64_t audioBytes = 0;
     if (emission.audio) {
+        if (!emission.audioFrames || !emission.audioFrames->valid()) {
+            return Result::failure(::media::ErrorInfo::notInitialized(
+                "audio resource planning requires authoritative prepared frame footprints"));
+        }
         auto units = residenceUnits(
             emission.audio->accessUnitsPerSecondNumerator,
             emission.audio->accessUnitsPerSecondDenominator,
@@ -222,6 +226,11 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
             std::move(media), resourceScope,
             deployment.encode().resources
                 .maximumGraphPayloadAndReservedStorageBytes,
+            surfaceUnitBytes.value(),
+            emission.audioFrames
+                ? std::optional<std::uint64_t>(
+                      emission.audioFrames->maximumFrameBytes)
+                : std::nullopt,
             emission.hardwareMemory, emission.video.maximumEncoderRetainedFrames,
             hardwareSurface,
             std::move(entries)});
@@ -237,6 +246,7 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
     if (ledger.resourceScope ==
             MediaRealtimeGraphResourceBudgetScope::Unknown ||
         ledger.maximumGraphPayloadAndReservedStorageBytes == 0 ||
+        ledger.videoSurfaceUnitBytes == 0 ||
         ledger.entries.empty() ||
         ledger.maximumEncoderRetainedFrames == 0 ||
         ledger.queues.metadata != RetainLatestItemCount ||
@@ -246,6 +256,11 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
         ledger.media.maximumGap.nanoseconds() <= 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "realtime graph resource ledger is incomplete"));
+    }
+    if (ledger.media.audioUnits &&
+        (!ledger.audioFrameUnitBytes || *ledger.audioFrameUnitBytes == 0)) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "audio graph resource ledger lacks prepared frame footprint"));
     }
     bool retainLatest = false;
     for (const auto& entry : ledger.entries) {

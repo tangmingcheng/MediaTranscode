@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 
 #include <cstdint>
@@ -25,6 +26,7 @@ struct MediaFinalGraphResourceLedgerEntry final {
     std::uint64_t queueSlots;
     std::uint64_t maximumBufferObjects;
     std::uint64_t retainedItems;
+    bool coveredByGlobalPayloadLedger;
     std::string authority;
 };
 
@@ -44,6 +46,7 @@ struct MediaFinalGraphResourceLedger final {
     std::vector<MediaFinalGraphResourceLedgerEntry> entries;
     std::vector<std::string> outOfScopeAuthorities;
     std::optional<MediaEncoderHardwareFramesPoolPlan> encoderFramesPool;
+    MediaGraphPayloadCreditPlan payloadCreditPlan;
 };
 
 class MediaFinalGraphResourceLedgerCompiler final {

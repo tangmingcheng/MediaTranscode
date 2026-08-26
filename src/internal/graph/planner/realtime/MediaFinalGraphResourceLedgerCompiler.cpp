@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
+#include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <algorithm>
 #include <charconv>
@@ -110,6 +111,13 @@ bool networkLedgerPayload(MediaPayloadKind kind) noexcept
     }
 }
 
+bool globallyCreditedPayload(MediaPayloadKind kind) noexcept
+{
+    return kind == MediaPayloadKind::Packet ||
+        kind == MediaPayloadKind::Frame ||
+        kind == MediaPayloadKind::TsAccessUnit;
+}
+
 ::media::Result<std::uint64_t> queueSlotCount(const MediaEdge& edge)
 {
     const auto& queue = edge.policy.queuePolicy;
@@ -178,8 +186,7 @@ MediaFinalGraphResourceLedgerCompiler::compile(
     MediaFinalGraphResourceLedger ledger{
         planningLedger.resourceScope,
         planningLedger.maximumGraphPayloadAndReservedStorageBytes,
-        0, 0, {}, {}, std::nullopt};
-    std::map<std::string, std::uint64_t> sharedPayloads;
+        0, 0, {}, {}, std::nullopt, {}};
     std::uint64_t videoFrameEdgeSurfaces = 0;
     std::uint64_t pipelinePendingSurfaces = 0;
     const bool hasVideoFilter = std::any_of(
@@ -199,21 +206,19 @@ MediaFinalGraphResourceLedgerCompiler::compile(
                 return Result::failure(slots.error());
             }
             std::uint64_t payloadBytes = 0;
+            bool coveredByGlobalPayloadLedger = false;
             MediaFinalGraphResourceScope scope =
                 MediaFinalGraphResourceScope::
                     EngineManagedPayloadAndReservedStorage;
             std::string authority =
                 "final-edge-bounded-queue-slot-count";
             const auto& memory = edge.policy.bufferPolicy.memoryBudget;
-            if (memory.enforceHardLimit && memory.maxBytes > 0) {
+            if (globallyCreditedPayload(edge.payloadKind)) {
+                coveredByGlobalPayloadLedger = true;
+                authority += "+global-payload-credit-ledger";
+            } else if (memory.enforceHardLimit && memory.maxBytes > 0) {
                 payloadBytes = memory.maxBytes;
                 authority += "+edge-buffer-hard-limit";
-                if (!edge.policy.bufferPolicy.sharedAllocationGroup.empty()) {
-                    auto& grouped = sharedPayloads[
-                        edge.policy.bufferPolicy.sharedAllocationGroup];
-                    grouped = (std::max)(grouped, payloadBytes);
-                    payloadBytes = 0;
-                }
             } else if (networkLedgerPayload(edge.payloadKind)) {
                 scope = MediaFinalGraphResourceScope::AccountedByNetworkLedger;
                 authority = "typed-realtime-network-resource-ledger";
@@ -254,21 +259,7 @@ MediaFinalGraphResourceLedgerCompiler::compile(
                 edge.policy.bufferPolicy.sharedAllocationGroup,
                 scope, payloadBytes, slots.value(),
                 static_cast<std::uint64_t>(edge.policy.queuePolicy.capacity),
-                0, std::move(authority)});
-        }
-
-        for (const auto& [group, bytes] : sharedPayloads) {
-            auto total = addTo(
-                ledger.admittedGraphPayloadAndReservedStorageBytes, bytes,
-                "final graph shared allocation group");
-            if (!total) return Result::failure(total.error());
-            ledger.admittedGraphPayloadAndReservedStorageBytes = total.value();
-            ledger.entries.push_back(MediaFinalGraphResourceLedgerEntry{
-                "shared-allocation:" + group, group,
-                MediaFinalGraphResourceScope::
-                    EngineManagedPayloadAndReservedStorage,
-                bytes, 0, 1, 1,
-                "explicit-final-graph-shared-allocation-group"});
+                0, coveredByGlobalPayloadLedger, std::move(authority)});
         }
 
         for (const auto& node : graph.nodes()) {
@@ -351,6 +342,7 @@ MediaFinalGraphResourceLedgerCompiler::compile(
                 MediaFinalGraphResourceScope::
                     EngineManagedPayloadAndReservedStorage,
                 nodePayload, 0, retainedRefs, retainedRefs,
+                false,
                 node.kind == MediaNodeKind::RawRtpInput
                     ? "final-node-port-retention+planned-raw-rtp-ingress-arena"
                     : "conservative-final-node-port-retention"});
@@ -425,6 +417,22 @@ MediaFinalGraphResourceLedgerCompiler::compile(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             message.str()));
     }
+    std::uint64_t maximumPayloadObjects = 0;
+    for (const auto& entry : ledger.entries) {
+        auto objects = Arithmetic::add(
+            maximumPayloadObjects, entry.maximumBufferObjects,
+            "final DAG payload object credits");
+        if (!objects) return Result::failure(objects.error());
+        maximumPayloadObjects = objects.value();
+    }
+    const std::uint64_t availablePayloadBytes =
+        ledger.maximumGraphPayloadAndReservedStorageBytes -
+        ledger.admittedGraphPayloadAndReservedStorageBytes;
+    auto payloadPlan = MediaGraphPayloadProducerRegistryCompiler::compile(
+        graph, planningLedger, availablePayloadBytes,
+        maximumPayloadObjects, false);
+    if (!payloadPlan) return Result::failure(payloadPlan.error());
+    ledger.payloadCreditPlan = std::move(payloadPlan).value();
     return Result::success(std::move(ledger));
 }
 

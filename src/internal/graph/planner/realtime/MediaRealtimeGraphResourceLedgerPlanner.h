@@ -38,6 +38,8 @@ struct MediaRealtimeGraphResourceLedgerPlan final {
     MediaRealtimeMediaCapacityPlan media;
     MediaRealtimeGraphResourceBudgetScope resourceScope;
     std::uint64_t maximumGraphPayloadAndReservedStorageBytes;
+    std::uint64_t videoSurfaceUnitBytes;
+    std::optional<std::uint64_t> audioFrameUnitBytes;
     std::optional<MediaPreparedHardwareMemoryEnvelope> hardwareMemory;
     std::uint64_t maximumEncoderRetainedFrames;
     bool hardwareEncoderSurfacePool;

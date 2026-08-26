@@ -3,6 +3,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedHardwareMemoryEnvelope.h"
+#include "internal/graph/planner/realtime/MediaPreparedAudioFrameFootprintEnvelope.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -12,6 +13,7 @@ namespace media::ffmpeg::graph {
 struct MediaPreparedRealtimeEmissionSet final {
     MediaPreparedEncoderEmissionEnvelope video;
     std::optional<MediaPreparedAudioEncoderEmissionEnvelope> audio;
+    std::optional<MediaPreparedAudioFrameFootprintEnvelope> audioFrames;
     std::optional<MediaPreparedHardwareMemoryEnvelope> hardwareMemory;
 };
 
