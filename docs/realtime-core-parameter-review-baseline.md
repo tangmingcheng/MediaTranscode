@@ -23,14 +23,17 @@
 | 部署事实 | open/read timeout、analyze duration、probe observation budget、low-latency | realtime CLI | 需纳入输入 observation contract；probe-size 不能复用为 retention/handoff 容量 |
 | 部署事实 | MPEG-TS maximum PCR gap | realtime CLI | 保留为源协议时钟 acceptance fact，仅适用于 MPEG-TS 输入 |
 | 部署事实 | address family、path MTU/maximum IP packet/sender payload limit、managed service scope/rate/peak/burst、graph/network/socket 总预算、target/maximum residence | realtime CLI、beta deployment envelope | 已收口。IP/UDP header 由 address family 与 UDP 标准推导；批次、backlog、endpoint pending、socket per-endpoint 与 correlation 容量不对外 |
-| 部署事实 | receiver transport decode lead、startup emission preroll 及 authority | realtime CLI、beta optional receiver timing capability | TS 输出必需；缺失时 DAG 前失败。独立 RTP 不要求该事实 |
+| 部署事实 | receiver transport buffer/decode lead 及 authority | realtime CLI、beta optional receiver timing capability | TS 输出必需；这是部署方可从 VLC `--network-caching=100` 等接收端配置直接取得的事实。startup emission preroll 由 planner 根据 receiver lead、TS/PCR 与输出 cadence 推导，不再由 caller 传入；独立 RTP 不要求该事实 |
 | planner 产品 | `PreparedEncoderEmissionEnvelope`、encoder packet-layout evidence、`WireTrafficEnvelope` | encoder open readback/真实 probe packet、mux/RTP overhead | encoder preflight 在 `avcodec_open2` 后读取有效 target/max/VBV/cadence/private RC；layout 优先取 extradata，缺失时由独立 preflight context 编码真实 probe frame 并解析首个非空 packet。缺失、冲突或无法证明即失败，不按 codec 名猜测。wire demand 只消费 prepared 产品，不复制调用方码率 |
 | planner 产品 | maximum UDP payload、TS packets per datagram、RTP/RTCP endpoint plan、socket requested/effective bound | MTU、协议封装、服务曲线与总资源预算 | 已移出 CLI/API。TS/UDP 与 MP2T/RTP 均按 MTU 推导；小 MTU DAG 前拒绝 |
 | planner 产品 | queue item/byte/residence、shaper backlog、batch、endpoint pending、socket per-endpoint、correlation bound | prepared emission、媒体 cadence、graph/network/socket 总预算与 latency | realtime 产品已由 planner 独立推导；禁止把 datagram 容量映射为 packet/frame/mux queue 或单 AU 上限 |
 | planner 产品 | pacing reservation、wire service duration、enqueue window、service-scope token/debt | `WireTrafficEnvelope` 与 managed service curve | 公共 shaper 是唯一 network rate authority；runtime 不重建，TS schedule 不读取 deployment wire rate |
 | planner 产品 | SSRC、RTP base sequence/timestamp、CNAME、RTCP schedule、MPEG-TS PID/continuity/PCR policy | 当前 planner/protocol plan | 保持 planner-owned，不新增对外手工参数 |
-| 后置审查 | max-duration、progress-timeout-ms、first-output-timeout-ms、poll-interval-ms | realtime CLI | 仅 runner/验收控制，不得进入 production DAG 媒体规划；正式 120 秒门禁禁用 max-duration |
+| 后置审查 | max-duration、progress-timeout-ms、first-output-timeout-ms、poll-interval-ms | realtime CLI | 仅 runner/验收控制，不得进入 production DAG 媒体规划；正式 120 秒门禁禁用 max-duration。当前 CLI 的 5 s、30 s、250 ms 默认值仍需独立审查是否应改为必填 observation/run facts |
 | 后置审查 | quiet-graph/diagnostic log、event callback/user data | CLI、beta callbacks | 仅诊断与通知，不得改变失败语义或执行策略 |
+| 后置审查 | A/V startup 10 s maximum wait、500 ms preroll、5 s key-frame wait | `MediaAvSyncStartupPolicyPlanner` | 当前属于输入 startup/reacquisition 策略，不参与 wire envelope、shaper 或 socket 规划；尚未由真实源/receiver facts 权威推导，Task5 不扩大修改范围 |
+| 后置审查 | RTCP sender-report 1 s interval | realtime output planner | 当前是 protocol policy 而非 caller 参数；已计入 `WireTrafficEnvelope`，但周期选择的互操作证据仍需后续独立审查 |
+| 后置审查 | A/V servo/reacquisition 常量 | `MediaAvSyncPlanner`、`MediaAudioDriftServoLimits` | 包括 10 s reacquisition、500 ms recovery hold 及相关阈值；不参与本轮发送控制，保留为后置参数审查项 |
 
 ## 已整改项与后置项
 
@@ -49,7 +52,7 @@
 ## 本轮参数收口门槛
 
 - realtime CLI、beta API、request、planner plan 四层逐字段可追踪，不能同一事实多处独立拥有。
-- 全树不存在 caller-provided queue、handoff、packet-size 或 input AU -> SO_SNDBUF。
+- realtime datagram graph 不存在 caller-provided queue、handoff、packet-size 或 input AU -> SO_SNDBUF；`local_video_cli` 文件产品的四类 queue 仍按用户要求列为后置项，不声称全树删除。
 - 全树不存在 caller-provided startup gap；若链路需要该约束，必须能追溯到真实源探测证据或类型化源时钟契约。
 - network service、MTU、resource/residence 缺少 scope/evidence 时 DAG 前失败。
 - caller encoder 参数只进入 encoder planning；transport planner 只消费 prepared encoder emission envelope 与完整 wire overhead，不能直接复制 caller bitrate/VBV。TX timestamp/MSG_ZEROCOPY 只影响 evidence telemetry；后置审查参数不改变生产 DAG。
@@ -62,3 +65,11 @@
 - encoder packet layout 不再按 codec 名称硬编码；opened-context extradata 不足时，由独立 preflight context 的真实首包形成 Annex B/length-prefix evidence，无法唯一证明则 DAG 前拒绝。
 - metadata queue 的单槽位是类型化 `RetainLatest` 语义；其他 realtime media queue 按 cadence、latency 与 graph memory 规划。`local_video_cli` 的文件队列参数列入后置项。
 - known submitted prefix 仍精确 commit，unknown remainder 不 commit 并终止；`enqueueNotAfter` 保持 inclusive，等于 deadline 可提交，超过 1 ns 失败。
+
+## Task5 review round2 补充
+
+- `MediaAvSyncStartupPolicyPlanner::planInputPreflight` 发生在 opened encoder emission 和最终 graph/resource ledger 之前，只服务于有界 raw-RTP A/V 输入观察；它不进入 runtime graph，也不作为 wire、socket、batch 或最终媒体 edge 容量的权威产品。该 seam 当前按 graph 总预算形成临时 observation bound，后续需与真实 opened emission 事实进一步收口。
+- `MediaPreparedEmissionResolver` 只消费已打开的 video/audio encoder 产品；`MediaWireTrafficEnvelopePlanner` 再按 elementary RTP 或 TS/PES/ADTS/adaptation/PCR/PAT/PMT/RTCP 离散几何做 checked arithmetic。transport planner 只聚合 endpoint 与已完成的 wire 产品。
+- receiver 对外只剩 transport buffer/decode lead 与 authority；Task5 的真实 VLC 命令使用 `--network-caching=100 --rtp-caching=100`，与 `--receiver-transport-decode-lead-ms 100 --receiver-timing-authority vlc-network-caching-100ms` 对应。caller preroll 已删除。
+- TS/UDP、MP2T/RTP 和 elementary RTP 的协议层不消费 deployment wire rate；公共 `DatagramShaper` 是唯一 token/debt authority。
+- MTU 是 UDP payload capacity 上界。MP2T/RTP planner 将 1472 B capacity 离散规范化为 7×188+12=1328 B protocol geometry，transport endpoint 与 materializer 对该实际上界保持严格等值校验。
