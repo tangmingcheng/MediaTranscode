@@ -203,10 +203,10 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         ledger.maximumBatchDatagrams == 0 || ledger.maximumBatchBytes == 0 ||
         ledger.maximumEndpointPendingDatagrams == 0 ||
         ledger.maximumEndpointPendingBytes == 0 ||
-        ledger.requestedSendBufferBytesPerEndpoint == 0 ||
+        ledger.targetEffectiveSendBufferBytesPerEndpoint == 0 ||
         ledger.minimumEffectiveSendBufferBytesPerEndpoint == 0 ||
         ledger.maximumAdmittedEffectiveSendBufferBytesPerEndpoint <
-            ledger.requestedSendBufferBytesPerEndpoint) {
+            ledger.targetEffectiveSendBufferBytesPerEndpoint) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "network resource ledger is incomplete"));
     }

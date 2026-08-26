@@ -496,8 +496,10 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                 const auto* capabilities = m_session->capabilities(endpointId);
                 if (!capabilities) continue;
                 diagnostic
-                    << " endpoint_" << endpointId << "_requested_socket_bytes="
-                    << capabilities->requestedSendBufferBytes
+                    << " endpoint_" << endpointId << "_target_effective_socket_bytes="
+                    << capabilities->targetEffectiveSendBufferBytes
+                    << " endpoint_" << endpointId << "_api_requested_socket_bytes="
+                    << capabilities->apiRequestedSendBufferBytes
                     << " endpoint_" << endpointId << "_effective_socket_bytes="
                     << capabilities->effectiveSendBufferBytes
                     << " endpoint_" << endpointId << "_timestamp_source="

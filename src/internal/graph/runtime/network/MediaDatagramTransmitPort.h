@@ -78,7 +78,8 @@ struct MediaDatagramTransmitKernelSchedulePlan final {
 };
 
 struct MediaDatagramTransmitPortCapabilities final {
-    std::uint64_t requestedSendBufferBytes;
+    std::uint64_t targetEffectiveSendBufferBytes;
+    std::uint64_t apiRequestedSendBufferBytes;
     std::uint64_t effectiveSendBufferBytes;
     MediaDatagramTransmitTimestampAvailability timestampAvailability;
     MediaDatagramTransmitTimestampSource timestampSource;

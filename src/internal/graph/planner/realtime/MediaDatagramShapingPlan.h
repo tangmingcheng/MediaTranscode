@@ -79,7 +79,7 @@ struct MediaDatagramEndpointPlan final {
     std::uint64_t maximumPendingDatagrams;
     std::uint64_t maximumPendingBytes;
     MediaRunningTime maximumResidence;
-    std::uint64_t requestedSendBufferBytes;
+    std::uint64_t targetEffectiveSendBufferBytes;
     std::uint64_t minimumEffectiveSendBufferBytes;
     std::uint64_t maximumAdmittedEffectiveSendBufferBytes;
 

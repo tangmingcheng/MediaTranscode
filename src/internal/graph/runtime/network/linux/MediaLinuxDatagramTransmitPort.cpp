@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/network/linux/MediaLinuxDatagramTransmitPort.h"
+#include "internal/graph/runtime/network/MediaDatagramSocketBufferApiRequest.h"
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -107,8 +108,8 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
-            request.endpoint.requestedSendBufferBytes == 0 ||
-            request.endpoint.requestedSendBufferBytes >
+            request.endpoint.targetEffectiveSendBufferBytes == 0 ||
+            request.endpoint.targetEffectiveSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
@@ -139,8 +140,17 @@ public:
             ::close(handle);
             return ResultType::failure(std::move(error));
         };
-        const int requestedBuffer =
-            static_cast<int>(request.endpoint.requestedSendBufferBytes);
+        auto apiRequest = MediaDatagramSocketBufferApiRequest::fromTargetEffective(
+            request.endpoint.targetEffectiveSendBufferBytes,
+            MediaDatagramSocketBufferApiAccounting::LinuxDoubled);
+        if (!apiRequest || apiRequest.value() >
+                static_cast<std::uint64_t>((std::numeric_limits<int>::max)())) {
+            return fail(!apiRequest
+                ? apiRequest.error()
+                : ::media::ErrorInfo::invalidArgument(
+                      "Linux Datagram SO_SNDBUF API request exceeds int"));
+        }
+        const int requestedBuffer = static_cast<int>(apiRequest.value());
         if (::setsockopt(handle, SOL_SOCKET, SO_SNDBUF, &requestedBuffer,
                          sizeof(requestedBuffer)) != 0) {
             return fail(::media::ErrorInfo::ioFailure(
@@ -227,7 +237,14 @@ public:
             static_cast<std::uint64_t>(effectiveBuffer) >
                 request.endpoint.maximumAdmittedEffectiveSendBufferBytes) {
             return fail(::media::ErrorInfo::unsupported(
-                "Linux effective SO_SNDBUF is outside the admitted planner range"));
+                "Linux effective SO_SNDBUF is outside the admitted planner range: target=" +
+                std::to_string(request.endpoint.targetEffectiveSendBufferBytes) +
+                " api_request=" + std::to_string(apiRequest.value()) +
+                " minimum=" +
+                std::to_string(request.endpoint.minimumEffectiveSendBufferBytes) +
+                " maximum=" +
+                std::to_string(request.endpoint.maximumAdmittedEffectiveSendBufferBytes) +
+                " effective=" + std::to_string(effectiveBuffer)));
         }
         m_socket = handle;
         m_stopFd = stopFd;
@@ -244,7 +261,8 @@ public:
                 request.kernelSchedule->maximumScheduleAheadNanoseconds;
         }
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
-            request.endpoint.requestedSendBufferBytes,
+            request.endpoint.targetEffectiveSendBufferBytes,
+            apiRequest.value(),
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
             m_timestampAvailable
                 ? MediaDatagramTransmitTimestampSource::LinuxSoftwareRealtime

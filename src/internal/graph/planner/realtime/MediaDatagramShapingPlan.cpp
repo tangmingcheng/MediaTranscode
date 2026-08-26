@@ -66,13 +66,13 @@ namespace {
     if (endpoint.endpointId == 0 || endpoint.port == 0 || !address || !mtu ||
         endpoint.maximumPendingDatagrams == 0 ||
         endpoint.maximumPendingBytes < endpoint.maximumDatagramBytes ||
-        endpoint.requestedSendBufferBytes == 0 ||
+        endpoint.targetEffectiveSendBufferBytes == 0 ||
         endpoint.minimumEffectiveSendBufferBytes <
             endpoint.maximumDatagramBytes ||
-        endpoint.requestedSendBufferBytes <
+        endpoint.targetEffectiveSendBufferBytes <
             endpoint.minimumEffectiveSendBufferBytes ||
         endpoint.maximumAdmittedEffectiveSendBufferBytes <
-            endpoint.requestedSendBufferBytes ||
+            endpoint.targetEffectiveSendBufferBytes ||
         endpoint.maximumResidence <= MediaRunningTime::fromNanoseconds(0) ||
         endpoint.maximumAdmittedEffectiveSendBufferBytes <
             endpoint.maximumDatagramBytes) {

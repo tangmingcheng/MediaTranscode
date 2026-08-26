@@ -142,8 +142,8 @@ MediaDatagramTransmitSession::create(
                 return ResultType::failure(::media::ErrorInfo::unsupported(
                     "Datagram MSG_ZEROCOPY is forbidden by the transmit plan"));
             }
-            if (opened.value().requestedSendBufferBytes !=
-                    endpoint.requestedSendBufferBytes ||
+            if (opened.value().targetEffectiveSendBufferBytes !=
+                    endpoint.targetEffectiveSendBufferBytes ||
                 opened.value().effectiveSendBufferBytes <
                     endpoint.minimumEffectiveSendBufferBytes ||
                 opened.value().effectiveSendBufferBytes >

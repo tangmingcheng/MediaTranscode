@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/network/windows/MediaWindowsDatagramTransmitPort.h"
+#include "internal/graph/runtime/network/MediaDatagramSocketBufferApiRequest.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -141,8 +142,8 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
-            request.endpoint.requestedSendBufferBytes == 0 ||
-            request.endpoint.requestedSendBufferBytes >
+            request.endpoint.targetEffectiveSendBufferBytes == 0 ||
+            request.endpoint.targetEffectiveSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
@@ -180,8 +181,17 @@ public:
                 "Windows Datagram exclusive bind configuration failed",
                 WSAGetLastError()));
         }
-        const int requestedBuffer =
-            static_cast<int>(request.endpoint.requestedSendBufferBytes);
+        auto apiRequest = MediaDatagramSocketBufferApiRequest::fromTargetEffective(
+            request.endpoint.targetEffectiveSendBufferBytes,
+            MediaDatagramSocketBufferApiAccounting::Exact);
+        if (!apiRequest || apiRequest.value() >
+                static_cast<std::uint64_t>((std::numeric_limits<int>::max)())) {
+            return fail(!apiRequest
+                ? apiRequest.error()
+                : ::media::ErrorInfo::invalidArgument(
+                      "Windows Datagram SO_SNDBUF API request exceeds int"));
+        }
+        const int requestedBuffer = static_cast<int>(apiRequest.value());
         if (setsockopt(handle, SOL_SOCKET, SO_SNDBUF,
                        reinterpret_cast<const char*>(&requestedBuffer),
                        sizeof(requestedBuffer)) == SOCKET_ERROR) {
@@ -292,7 +302,8 @@ public:
         m_timestampSource = timestampSource;
         m_timestampFrequency = timestampFrequency;
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
-            request.endpoint.requestedSendBufferBytes,
+            request.endpoint.targetEffectiveSendBufferBytes,
+            apiRequest.value(),
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
             timestampSource, timestampFrequency,
             m_timestampAvailable
