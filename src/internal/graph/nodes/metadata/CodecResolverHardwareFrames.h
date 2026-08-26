@@ -10,12 +10,18 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
+::media::Status validateEncoderHardwareFramesPoolReadback(
+    int requestedInitialPoolSize,
+    int effectiveInitialPoolSize,
+    const char* authority);
+
 ::media::Status configureEncoderHardwareFrames(AVCodecContext* encoderContext,
                                                AVBufferRef* hardwareDevice,
                                                AVPixelFormat hardwareFormat,
                                                AVPixelFormat softwareFormat,
                                                int width,
                                                int height,
-                                               int initialPoolSize);
+                                               int initialPoolSize,
+                                               const char* poolAuthority);
 
 } // namespace media::ffmpeg::graph

@@ -298,13 +298,31 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     if (formatPlan.requiresHardwareFramesContext) {
+        auto initialPoolSize = intOption(
+            options, "encoder.hardware_frames.initial_pool_surfaces");
+        if (!initialPoolSize || !initialPoolSize.value() ||
+            *initialPoolSize.value() <= 0) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                !initialPoolSize
+                    ? initialPoolSize.error()
+                    : ::media::ErrorInfo::notInitialized(
+                          "CodecResolverEncoderContextBuilder requires a planner-owned hardware frame pool size"));
+        }
+        const std::string poolAuthority = optionValue(
+            options, "encoder.hardware_frames.pool_authority");
+        if (poolAuthority.empty()) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "CodecResolverEncoderContextBuilder requires the hardware frame pool authority"));
+        }
         auto framesStatus = configureEncoderHardwareFrames(encoderContext.get(),
                                                            request.hardwareDevice,
                                                            result.hardwareFramesFormat,
                                                            result.surfaceSoftwareFormat,
                                                            targetWidth,
                                                            targetHeight,
-                                                           32);
+                                                           *initialPoolSize.value(),
+                                                           poolAuthority.c_str());
         if (!framesStatus) {
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(framesStatus.error());
         }

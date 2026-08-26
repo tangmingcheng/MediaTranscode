@@ -8,13 +8,33 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
+::media::Status validateEncoderHardwareFramesPoolReadback(
+    int requestedInitialPoolSize,
+    int effectiveInitialPoolSize,
+    const char* authority)
+{
+    if (requestedInitialPoolSize <= 0 || effectiveInitialPoolSize <= 0 ||
+        !authority || authority[0] == '\0') {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "hardware frames pool readback requires a positive planner contract and authority"));
+    }
+    if (effectiveInitialPoolSize != requestedInitialPoolSize) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "hardware frames pool readback conflicts with the planner contract"));
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status configureEncoderHardwareFrames(AVCodecContext* encoderContext,
                                                AVBufferRef* hardwareDevice,
                                                AVPixelFormat hardwareFormat,
                                                AVPixelFormat softwareFormat,
                                                int width,
                                                int height,
-                                               int initialPoolSize)
+                                               int initialPoolSize,
+                                               const char* poolAuthority)
 {
     if (!encoderContext) {
         return ::media::Status::failure(
@@ -36,9 +56,10 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument("configureEncoderHardwareFrames requires software pixel format"));
     }
 
-    if (width <= 0 || height <= 0) {
+    if (width <= 0 || height <= 0 || initialPoolSize <= 0) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("configureEncoderHardwareFrames requires positive dimensions"));
+            ::media::ErrorInfo::invalidArgument(
+                "configureEncoderHardwareFrames requires positive dimensions and a planner-owned pool size"));
     }
 
     encoderContext->hw_device_ctx = av_buffer_ref(hardwareDevice);
@@ -58,12 +79,18 @@ namespace media::ffmpeg::graph {
     framesContext->sw_format = softwareFormat;
     framesContext->width = width;
     framesContext->height = height;
-    framesContext->initial_pool_size = initialPoolSize > 0 ? initialPoolSize : 16;
+    framesContext->initial_pool_size = initialPoolSize;
 
     const int initRet = av_hwframe_ctx_init(framesRef);
     if (initRet < 0) {
         av_buffer_unref(&framesRef);
         return FFmpegGraphError::statusFromCode(initRet, "av_hwframe_ctx_init(encoder)");
+    }
+    if (auto status = validateEncoderHardwareFramesPoolReadback(
+            initialPoolSize, framesContext->initial_pool_size,
+            poolAuthority); !status) {
+        av_buffer_unref(&framesRef);
+        return status;
     }
 
     encoderContext->hw_frames_ctx = framesRef;

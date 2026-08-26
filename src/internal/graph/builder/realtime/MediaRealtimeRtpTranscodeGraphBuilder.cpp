@@ -14,6 +14,7 @@
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
 #include <string>
 #include <optional>
@@ -720,6 +721,64 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                 "Realtime graph lost its typed runtime variant"));
     }
 
+    if (!plan.resourceLedger) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "final realtime graph requires its resource planning ledger"));
+    }
+    auto finalLedger = MediaFinalGraphResourceLedgerCompiler::compile(
+        graph, *plan.resourceLedger);
+    if (!finalLedger) {
+        return ::media::Result<MediaGraph>::failure(finalLedger.error());
+    }
+    MediaNodeId codecResolver = MediaNodeId::invalid();
+    for (const auto& node : graph.nodes()) {
+        if (node.kind != MediaNodeKind::CodecResolver) continue;
+        if (codecResolver.isValid()) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "final realtime graph has duplicate video codec resolvers"));
+        }
+        codecResolver = node.id;
+    }
+    if (!codecResolver.isValid()) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "final realtime graph lacks its video codec resolver"));
+    }
+    const auto& finalized = finalLedger.value();
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, codecResolver,
+            "resource.graph_payload_reserved_bytes",
+            std::to_string(
+                finalized.admittedGraphPayloadAndReservedStorageBytes));
+        !status) {
+        return ::media::Result<MediaGraph>::failure(status.error());
+    }
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, codecResolver,
+            "resource.observed_external_allocation",
+            finalized.outOfScopeAuthorities.empty() ? "0" : "1");
+        !status) {
+        return ::media::Result<MediaGraph>::failure(status.error());
+    }
+    if (finalized.encoderFramesPool) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, codecResolver,
+                "encoder.hardware_frames.initial_pool_surfaces",
+                std::to_string(
+                    finalized.encoderFramesPool->initialPoolSurfaces));
+            !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, codecResolver,
+                "encoder.hardware_frames.pool_authority",
+                finalized.encoderFramesPool->authority);
+            !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
+    }
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
 
