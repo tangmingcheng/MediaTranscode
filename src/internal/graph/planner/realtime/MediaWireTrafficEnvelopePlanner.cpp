@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelopePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimePlanningArithmetic.h"
+#include "internal/graph/planner/realtime/MediaWireBurstGeometry.h"
 
 #include <algorithm>
 #include <string>
@@ -68,6 +69,8 @@ struct WireDemand final {
     std::uint64_t peakPayload = 0;
     std::uint64_t packetsPerSecond = 0;
     std::uint64_t burstPayload = 0;
+    std::uint64_t burstPayloadDatagrams = 0;
+    std::uint64_t burstDiscreteDatagrams = 0;
 };
 
 template <typename Emission>
@@ -151,7 +154,8 @@ template <typename Emission>
             !peak ? peak.error() : burst.error());
     }
     return ::media::Result<WireDemand>::success(
-        {sustained.value(), peak.value(), packetRate.value(), burst.value()});
+        {sustained.value(), peak.value(), packetRate.value(), burst.value(),
+         burstPackets.value()});
 }
 
 ::media::Result<WireDemand> addRtcp(
@@ -180,13 +184,19 @@ template <typename Emission>
                      "RTP and RTCP burst bytes");
     auto packets = add(demand.packetsPerSecond, 1U,
                        "RTP and RTCP packet rate");
-    if (!sustained || !peak || !burst || !packets) {
+    auto burstDiscreteDatagrams = add(
+        demand.burstDiscreteDatagrams, 1U,
+        "RTP and RTCP discrete burst datagrams");
+    if (!sustained || !peak || !burst || !packets ||
+        !burstDiscreteDatagrams) {
         return ::media::Result<WireDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
-            !burst ? burst.error() : packets.error());
+            !burst ? burst.error() : !packets ? packets.error() :
+            burstDiscreteDatagrams.error());
     }
     return ::media::Result<WireDemand>::success(
-        {sustained.value(), peak.value(), packets.value(), burst.value()});
+        {sustained.value(), peak.value(), packets.value(), burst.value(),
+         demand.burstPayloadDatagrams, burstDiscreteDatagrams.value()});
 }
 
 ::media::Result<WireDemand> combine(WireDemand left, WireDemand right)
@@ -199,13 +209,23 @@ template <typename Emission>
                        "aggregate packet rate");
     auto burst = add(left.burstPayload, right.burstPayload,
                      "aggregate burst payload");
-    if (!sustained || !peak || !packets || !burst) {
+    auto burstPayloadDatagrams = add(
+        left.burstPayloadDatagrams, right.burstPayloadDatagrams,
+        "aggregate burst payload datagrams");
+    auto burstDiscreteDatagrams = add(
+        left.burstDiscreteDatagrams, right.burstDiscreteDatagrams,
+        "aggregate burst discrete datagrams");
+    if (!sustained || !peak || !packets || !burst ||
+        !burstPayloadDatagrams || !burstDiscreteDatagrams) {
         return ::media::Result<WireDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
-            !packets ? packets.error() : burst.error());
+            !packets ? packets.error() : !burst ? burst.error() :
+            !burstPayloadDatagrams ? burstPayloadDatagrams.error() :
+            burstDiscreteDatagrams.error());
     }
     return ::media::Result<WireDemand>::success(
-        {sustained.value(), peak.value(), packets.value(), burst.value()});
+        {sustained.value(), peak.value(), packets.value(), burst.value(),
+         burstPayloadDatagrams.value(), burstDiscreteDatagrams.value()});
 }
 
 ::media::Result<MediaWireTrafficEnvelope> finish(
@@ -225,12 +245,9 @@ template <typename Emission>
     auto peak = peakHeaders
         ? add(demand.peakPayload, peakHeaders.value(), "peak wire demand")
         : peakHeaders;
-    auto burstHeaders = ceilScale(
-        demand.burstPayload, networkHeader, maximumUdpPayload,
-        "network burst headers");
-    auto burst = burstHeaders
-        ? add(demand.burstPayload, burstHeaders.value(), "wire burst demand")
-        : burstHeaders;
+    auto burst = MediaWireBurstGeometry::create(
+        demand.burstPayload, demand.burstPayloadDatagrams,
+        demand.burstDiscreteDatagrams, maximumUdpPayload, networkHeader);
     auto maximumWire = add(maximumUdpPayload, networkHeader,
                            "maximum wire datagram");
     if (!sustained || !peak || !burst || !maximumWire ||
@@ -242,7 +259,8 @@ template <typename Emission>
     }
     return ::media::Result<MediaWireTrafficEnvelope>::success({
         sustained.value(), peak.value(), demand.packetsPerSecond,
-        burst.value(), maximumUdpPayload, maximumWire.value(),
+        burst.value().wireBytes, burst.value().datagramCount,
+        maximumUdpPayload, maximumWire.value(),
         std::move(authority)});
 }
 
@@ -312,7 +330,7 @@ template <typename Emission>
     }
     return ::media::Result<WireDemand>::success(
         {sustainedTs.value(), peakTs.value(), unitRate.value(),
-         burstTs.value()});
+         burstTs.value(), burstPackets.value(), 0U});
 }
 
 ::media::Result<WireDemand> tsDemand(
@@ -387,6 +405,13 @@ template <typename Emission>
     demand.value().sustainedPayload = sustained.value();
     demand.value().peakPayload = peak.value();
     demand.value().burstPayload = burst.value();
+    auto burstDatagrams = ceilScale(
+        demand.value().burstPayload, 1, tsPayloadPerDatagram.value(),
+        "TS burst datagram count");
+    if (!burstDatagrams) {
+        return ::media::Result<WireDemand>::failure(burstDatagrams.error());
+    }
+    demand.value().burstPayloadDatagrams = burstDatagrams.value();
     auto datagrams = ceilScale(
         demand.value().peakPayload, 1, tsPayloadPerDatagram.value(),
         "TS datagram rate");
@@ -406,15 +431,11 @@ template <typename Emission>
         auto rtpHeaders = multiply(
             demand.value().packetsPerSecond, RtpHeaderBytes,
             "MP2T RTP sustained headers");
-        auto burstPackets = ceilScale(
-            demand.value().burstPayload, 1, tsPayloadPerDatagram.value(),
-            "MP2T RTP burst packets");
-        if (!rtpHeaders || !burstPackets) {
-            return ::media::Result<WireDemand>::failure(
-                !rtpHeaders ? rtpHeaders.error() : burstPackets.error());
+        if (!rtpHeaders) {
+            return ::media::Result<WireDemand>::failure(rtpHeaders.error());
         }
         auto burstHeaders = multiply(
-            burstPackets.value(), RtpHeaderBytes,
+            demand.value().burstPayloadDatagrams, RtpHeaderBytes,
             "MP2T RTP burst headers");
         auto withSustainedHeaders = add(
             demand.value().sustainedPayload, rtpHeaders.value(),

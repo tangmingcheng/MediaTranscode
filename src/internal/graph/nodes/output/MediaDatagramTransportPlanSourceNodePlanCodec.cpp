@@ -114,6 +114,7 @@ template <typename Value>
              put("wire.peak_bps", encoding.wireTraffic.peakWireBytesPerSecond),
              put("wire.peak_datagrams", encoding.wireTraffic.peakDatagramsPerSecond),
              put("wire.burst_bytes", encoding.wireTraffic.burstWireBytes),
+             put("wire.burst_datagrams", encoding.wireTraffic.burstDatagrams),
              put("wire.udp_payload_bytes", encoding.wireTraffic.maximumUdpPayloadBytes),
              put("wire.datagram_bytes", encoding.wireTraffic.maximumWireDatagramBytes),
              set(graph, nodeId, key("wire.authority"), encoding.wireTraffic.authority),
@@ -178,6 +179,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto wirePeak = parse<std::uint64_t>(node.options, key("wire.peak_bps"));
     auto wirePackets = parse<std::uint64_t>(node.options, key("wire.peak_datagrams"));
     auto wireBurst = parse<std::uint64_t>(node.options, key("wire.burst_bytes"));
+    auto wireBurstDatagrams = parse<std::uint64_t>(
+        node.options, key("wire.burst_datagrams"));
     auto wirePayload = parse<std::uint64_t>(node.options, key("wire.udp_payload_bytes"));
     auto wireDatagram = parse<std::uint64_t>(node.options, key("wire.datagram_bytes"));
     auto wireAuthority = required(node.options, key("wire.authority"));
@@ -197,7 +200,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
     REQUIRE_VALUE(receiverAuthority);
     REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
-    REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
+    REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wireBurstDatagrams);
+    REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
     REQUIRE_VALUE(wireAuthority);
     REQUIRE_VALUE(endpointCount);
 #undef REQUIRE_VALUE
@@ -258,7 +262,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
         std::move(endpoints),
         MediaWireTrafficEnvelope{
             wireSustained.value(), wirePeak.value(), wirePackets.value(),
-            wireBurst.value(), wirePayload.value(), wireDatagram.value(),
+            wireBurst.value(), wireBurstDatagrams.value(),
+            wirePayload.value(), wireDatagram.value(),
             std::move(wireAuthority).value()});
 }
 

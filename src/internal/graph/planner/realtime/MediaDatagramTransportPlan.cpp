@@ -60,6 +60,7 @@ MediaDatagramTransportPlanTemplate::create(
             wireTraffic.sustainedWireBytesPerSecond ||
         wireTraffic.peakDatagramsPerSecond == 0 ||
         wireTraffic.burstWireBytes == 0 ||
+        wireTraffic.burstDatagrams == 0 ||
         wireTraffic.maximumUdpPayloadBytes == 0 ||
         wireTraffic.maximumWireDatagramBytes == 0 ||
         wireTraffic.authority.empty() ||
