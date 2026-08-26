@@ -58,10 +58,30 @@ planVideoScheduledRtpPacketization(
         return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
             videoPacketLayout.error());
     }
+    const auto& prepared = plan.videoPlan.selected.encoder.preparedEmission;
+    if (!prepared || prepared->maximumAccessUnitPayloadBytes == 0 ||
+        prepared->authority.empty()) {
+        return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "scheduled video RTP requires prepared encoder emission"));
+    }
+    const auto mode = canonicalCodecName(plan.videoPlan.outputCodecName) == "h264"
+        ? MediaScheduledRtpPacketizationMode::H264AnnexB
+        : MediaScheduledRtpPacketizationMode::HevcAnnexB;
+    auto emission = MediaRtpAccessUnitEmissionContract::createVideo(
+        mode, videoPacketLayout.value(),
+        prepared->maximumAccessUnitPayloadBytes,
+        static_cast<std::size_t>(output.packetSize),
+        prepared->authority + "+deterministic-rfc-packetizer");
+    if (!emission) {
+        return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
+            emission.error());
+    }
     return MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
         clockRate, payloadType,
-        static_cast<std::size_t>(output.packetSize));
+        static_cast<std::size_t>(output.packetSize),
+        std::move(emission).value());
 }
 
 ::media::Status planScheduledRtpPacketization(
@@ -83,11 +103,23 @@ planVideoScheduledRtpPacketization(
         plan, output.videoOutput,
         *synchronization.rtpOutput->videoOutput.clockRate,
         *synchronization.rtpOutput->videoOutput.payloadType);
+    if (!audio.preparedEmission) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "scheduled audio RTP requires prepared encoder emission"));
+    }
+    auto audioEmission = MediaRtpAccessUnitEmissionContract::createAacLatm(
+        audio.preparedEmission->maximumAccessUnitPayloadBytes,
+        static_cast<std::size_t>(output.audioOutput.packetSize),
+        audio.preparedEmission->authority + "+ffmpeg-rtpenc-latm-contract");
+    if (!audioEmission) {
+        return ::media::Status::failure(audioEmission.error());
+    }
     auto audioPacketization = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Audio, audio.resolvedOutput->codecName(), 1,
         *synchronization.rtpOutput->audioOutput.clockRate,
         *synchronization.rtpOutput->audioOutput.payloadType,
         static_cast<std::size_t>(output.audioOutput.packetSize),
+        std::move(audioEmission).value(),
         audio.resolvedOutput->codecFrameSamples());
     if (!video || !audioPacketization) {
         return ::media::Status::failure(

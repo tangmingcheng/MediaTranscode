@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/protocol/rtp/MediaScheduledRtpPacketizationMode.h"
+#include "internal/graph/protocol/rtp/MediaRtpAccessUnitEmissionContract.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -16,6 +17,7 @@ public:
         MediaStreamKind streamKind, std::string codecName,
         int streamTimeBaseNumerator, int streamTimeBaseDenominator,
         int payloadType, std::size_t maximumDatagramBytes,
+        MediaRtpAccessUnitEmissionContract emissionContract,
         std::optional<int> maximumAccessUnitSamples = std::nullopt);
 
     MediaStreamKind streamKind() const noexcept { return m_streamKind; }
@@ -25,6 +27,10 @@ public:
     MediaScheduledRtpPacketizationMode packetizationMode() const noexcept { return m_packetizationMode; }
     int payloadType() const noexcept { return m_payloadType; }
     std::size_t maximumDatagramBytes() const noexcept { return m_maximumDatagramBytes; }
+    const MediaRtpAccessUnitEmissionContract& emissionContract() const noexcept
+    {
+        return m_emissionContract;
+    }
     std::optional<int> maximumAccessUnitSamples() const noexcept { return m_maximumAccessUnitSamples; }
     friend bool operator==(const MediaScheduledRtpPacketizationPlan&,
                            const MediaScheduledRtpPacketizationPlan&) = default;
@@ -35,6 +41,7 @@ private:
         int streamTimeBaseNumerator, int streamTimeBaseDenominator,
         MediaScheduledRtpPacketizationMode packetizationMode, int payloadType,
         std::size_t maximumDatagramBytes,
+        MediaRtpAccessUnitEmissionContract emissionContract,
         std::optional<int> maximumAccessUnitSamples);
 
     MediaStreamKind m_streamKind;
@@ -44,6 +51,7 @@ private:
     MediaScheduledRtpPacketizationMode m_packetizationMode;
     int m_payloadType;
     std::size_t m_maximumDatagramBytes;
+    MediaRtpAccessUnitEmissionContract m_emissionContract;
     std::optional<int> m_maximumAccessUnitSamples;
 };
 

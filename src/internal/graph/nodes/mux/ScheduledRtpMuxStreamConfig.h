@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/protocol/rtp/MediaScheduledRtpPacketizationMode.h"
+#include "internal/graph/protocol/rtp/MediaRtpAccessUnitEmissionContract.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDatagramWriteAvio.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "media_transcode/Result.h"
@@ -20,7 +21,8 @@ public:
         MediaScheduledRtpPacketizationMode packetizationMode,
         int payloadType,
         std::uint32_t ssrc,
-        int maximumDatagramBytes);
+        int maximumDatagramBytes,
+        MediaRtpAccessUnitEmissionContract emissionContract);
 
     ScheduledRtpMuxStreamConfig(ScheduledRtpMuxStreamConfig&&) noexcept = default;
     ScheduledRtpMuxStreamConfig& operator=(ScheduledRtpMuxStreamConfig&&) noexcept = default;
@@ -42,6 +44,10 @@ public:
     {
         return m_avioConfig;
     }
+    const MediaRtpAccessUnitEmissionContract& emissionContract() const noexcept
+    {
+        return m_emissionContract;
+    }
 
 private:
     ScheduledRtpMuxStreamConfig(
@@ -50,7 +56,8 @@ private:
         AVRational streamTimeBase,
         MediaScheduledRtpPacketizationMode packetizationMode,
         MediaRtpDatagramRewriteIdentity identity,
-        FFmpegDatagramWriteAvioConfig avioConfig) noexcept;
+        FFmpegDatagramWriteAvioConfig avioConfig,
+        MediaRtpAccessUnitEmissionContract emissionContract) noexcept;
 
     MediaStreamKind m_streamKind;
     ::media::ffmpeg::CodecParametersPtr m_codecParameters;
@@ -58,6 +65,7 @@ private:
     MediaScheduledRtpPacketizationMode m_packetizationMode;
     MediaRtpDatagramRewriteIdentity m_identity;
     FFmpegDatagramWriteAvioConfig m_avioConfig;
+    MediaRtpAccessUnitEmissionContract m_emissionContract;
 };
 
 } // namespace media::ffmpeg::graph

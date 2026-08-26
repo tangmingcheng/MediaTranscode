@@ -9,6 +9,7 @@ MediaScheduledRtpPacketizationPlan::create(
     MediaStreamKind streamKind, std::string codecName,
     int streamTimeBaseNumerator, int streamTimeBaseDenominator,
     int payloadType, std::size_t maximumDatagramBytes,
+    MediaRtpAccessUnitEmissionContract emissionContract,
     std::optional<int> maximumAccessUnitSamples)
 {
     codecName = canonicalCodecName(codecName);
@@ -30,7 +31,14 @@ MediaScheduledRtpPacketizationPlan::create(
                 codecName));
     }
     if (streamTimeBaseNumerator <= 0 || streamTimeBaseDenominator <= 0 ||
-        payloadType < 0 || payloadType > 127 || maximumDatagramBytes == 0) {
+        payloadType < 0 || payloadType > 127 || maximumDatagramBytes == 0 ||
+        emissionContract.maximumAccessUnitPayloadBytes() == 0 ||
+        emissionContract.maximumDatagramsPerAccessUnit() == 0 ||
+        emissionContract.authority().empty() ||
+        emissionContract.packetizationMode() != *mode ||
+        emissionContract.maximumDatagramBytes() != maximumDatagramBytes ||
+        ((streamKind == MediaStreamKind::Video) !=
+         emissionContract.packetLayout().has_value())) {
         return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "scheduled RTP packetization selection is incomplete"));
@@ -39,7 +47,8 @@ MediaScheduledRtpPacketizationPlan::create(
         MediaScheduledRtpPacketizationPlan(
             streamKind, std::move(codecName), streamTimeBaseNumerator,
             streamTimeBaseDenominator, *mode, payloadType,
-            maximumDatagramBytes, maximumAccessUnitSamples));
+            maximumDatagramBytes, std::move(emissionContract),
+            maximumAccessUnitSamples));
 }
 
 MediaScheduledRtpPacketizationPlan::MediaScheduledRtpPacketizationPlan(
@@ -47,12 +56,14 @@ MediaScheduledRtpPacketizationPlan::MediaScheduledRtpPacketizationPlan(
     int streamTimeBaseNumerator, int streamTimeBaseDenominator,
     MediaScheduledRtpPacketizationMode packetizationMode, int payloadType,
     std::size_t maximumDatagramBytes,
+    MediaRtpAccessUnitEmissionContract emissionContract,
     std::optional<int> maximumAccessUnitSamples)
     : m_streamKind(streamKind), m_codecName(std::move(codecName)),
       m_streamTimeBaseNumerator(streamTimeBaseNumerator),
       m_streamTimeBaseDenominator(streamTimeBaseDenominator),
       m_packetizationMode(packetizationMode), m_payloadType(payloadType),
       m_maximumDatagramBytes(maximumDatagramBytes),
+      m_emissionContract(std::move(emissionContract)),
       m_maximumAccessUnitSamples(maximumAccessUnitSamples)
 {
 }

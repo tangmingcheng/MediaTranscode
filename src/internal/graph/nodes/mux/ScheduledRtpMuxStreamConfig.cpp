@@ -158,13 +158,15 @@ ScheduledRtpMuxStreamConfig::ScheduledRtpMuxStreamConfig(
     AVRational streamTimeBase,
     MediaScheduledRtpPacketizationMode packetizationMode,
     MediaRtpDatagramRewriteIdentity identity,
-    FFmpegDatagramWriteAvioConfig avioConfig) noexcept
+    FFmpegDatagramWriteAvioConfig avioConfig,
+    MediaRtpAccessUnitEmissionContract emissionContract) noexcept
     : m_streamKind(streamKind),
       m_codecParameters(std::move(codecParameters)),
       m_streamTimeBase(streamTimeBase),
       m_packetizationMode(packetizationMode),
       m_identity(identity),
-      m_avioConfig(avioConfig)
+      m_avioConfig(avioConfig),
+      m_emissionContract(std::move(emissionContract))
 {
 }
 
@@ -176,7 +178,8 @@ ScheduledRtpMuxStreamConfig::create(
     MediaScheduledRtpPacketizationMode packetizationMode,
     int payloadType,
     std::uint32_t ssrc,
-    int maximumDatagramBytes)
+    int maximumDatagramBytes,
+    MediaRtpAccessUnitEmissionContract emissionContract)
 {
     if (!isSupportedStreamKind(streamKind) ||
         codecParameters.codec_type != mediaType(streamKind)) {
@@ -197,6 +200,18 @@ ScheduledRtpMuxStreamConfig::create(
         return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AAC LATM requires sample rate, channel layout, ASC, and time base 1/sample_rate"));
+    }
+    if (emissionContract.maximumAccessUnitPayloadBytes() == 0 ||
+        emissionContract.maximumDatagramsPerAccessUnit() == 0 ||
+        emissionContract.authority().empty() ||
+        emissionContract.packetizationMode() != packetizationMode ||
+        emissionContract.maximumDatagramBytes() !=
+            static_cast<std::size_t>(maximumDatagramBytes) ||
+        ((streamKind == MediaStreamKind::Video) !=
+         emissionContract.packetLayout().has_value())) {
+        return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP stream requires a matching emission contract"));
     }
     auto identity = MediaRtpDatagramRewriteIdentity::create(payloadType, ssrc);
     if (!identity) {
@@ -222,7 +237,8 @@ ScheduledRtpMuxStreamConfig::create(
             streamTimeBase,
             packetizationMode,
             identity.value(),
-            avioConfig.value()));
+            avioConfig.value(),
+            std::move(emissionContract)));
 }
 
 } // namespace media::ffmpeg::graph

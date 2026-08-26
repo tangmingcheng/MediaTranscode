@@ -156,23 +156,10 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto bufferBytes = static_cast<std::uint64_t>(
         context.rc_buffer_size / BitsPerByte +
         (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0));
-    std::uint64_t maximumPacketizationUnits = 0;
-    if (context.priv_data &&
-        av_opt_find(context.priv_data, "slices", nullptr, 0, 0)) {
-        std::int64_t slices = 0;
-        const int readSlices = av_opt_get_int(
-            context.priv_data, "slices", 0, &slices);
-        if (readSlices < 0) {
-            return Result::failure(FFmpegGraphError::statusFromCode(
-                readSlices, "read encoder slice capability contract").error());
-        }
-        if (slices == 1) maximumPacketizationUnits = 1;
-    }
     return Result::success(MediaPreparedEncoderEmissionEnvelope{
         sustainedBytes, peakBytes, bufferBytes, bufferBytes,
         static_cast<std::uint64_t>(plannedCadence.num),
         static_cast<std::uint64_t>(plannedCadence.den),
-        maximumPacketizationUnits,
         std::move(packetLayout),
         std::move(authority), std::move(backend)});
 }

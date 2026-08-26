@@ -4,7 +4,7 @@
 
 namespace media::ffmpeg::graph {
 
-class ScheduledRtpMuxFfmpegSessionFactory final
+class ScheduledRtpPacketizerSessionFactory final
     : public ScheduledRtpPacketizerFactory {
 public:
     ::media::Result<std::unique_ptr<ScheduledRtpPacketizerSession>> create(

@@ -12,7 +12,6 @@ struct MediaPreparedAudioEncoderEmissionEnvelope final {
     std::uint64_t maximumBurstPayloadBytes = 0;
     std::uint64_t accessUnitsPerSecondNumerator = 0;
     std::uint64_t accessUnitsPerSecondDenominator = 0;
-    std::uint64_t maximumPacketizationUnitsPerAccessUnit = 0;
     int frameSizeSamples = 0;
     std::string authority;
     std::string backend;

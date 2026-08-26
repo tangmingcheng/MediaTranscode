@@ -198,7 +198,7 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
         : maximumAccessUnit;
     verified.preparedEmission = MediaPreparedAudioEncoderEmissionEnvelope{
         ceilBytes(context->bit_rate), peakBytes, maximumAccessUnit, burst,
-        sampleRate, frameSamples, 1, context->frame_size,
+        sampleRate, frameSamples, context->frame_size,
         context->codec_id == AV_CODEC_ID_AAC
             ? "opened-audio-context+aac-frame-length"
             : "opened-audio-context+codec-frame",

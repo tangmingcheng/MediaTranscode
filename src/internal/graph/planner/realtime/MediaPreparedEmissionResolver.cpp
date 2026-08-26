@@ -46,7 +46,6 @@ MediaPreparedEmissionResolver::resolve(
         audio->maximumBurstPayloadBytes == 0 ||
         audio->accessUnitsPerSecondNumerator == 0 ||
         audio->accessUnitsPerSecondDenominator == 0 ||
-        audio->maximumPacketizationUnitsPerAccessUnit == 0 ||
         audio->frameSizeSamples <= 0 || audio->authority.empty() ||
         audio->backend.empty()) {
         return ::media::Result<MediaPreparedRealtimeEmissionSet>::failure(

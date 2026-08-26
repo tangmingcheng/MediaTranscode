@@ -120,7 +120,8 @@ namespace {
             outputPlan.packetization.streamTimeBaseDenominator()},
         outputPlan.packetization.packetizationMode(),
         outputPlan.packetization.payloadType(), outputPlan.ssrc,
-        static_cast<int>(maximumDatagramBytes));
+        static_cast<int>(maximumDatagramBytes),
+        outputPlan.packetization.emissionContract());
     if (!streamConfig) {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
             streamConfig.error());

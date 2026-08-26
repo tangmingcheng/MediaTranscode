@@ -25,7 +25,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
-#include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
+#include "internal/graph/nodes/mux/ScheduledRtpPacketizerSessionFactory.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
 #include "internal/graph/nodes/output/MediaRtpSdpPublisherNode.h"
@@ -75,7 +75,7 @@
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
-#include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
+#include "internal/graph/nodes/mux/ScheduledRtpPacketizerSessionFactory.h"
 #include "internal/graph/runtime/filesystem/MediaPlatformAtomicFileReplacePort.h"
 #include "internal/graph/runtime/network/MediaSocketRuntime.h"
 #ifdef _WIN32
@@ -653,7 +653,7 @@ template <typename Node>
         }
         MediaRtpDatagramMaterializerNodeDependencies dependencies{
             protocolOutputAuthority,
-            std::make_unique<ScheduledRtpMuxFfmpegSessionFactory>()};
+            std::make_unique<ScheduledRtpPacketizerSessionFactory>()};
         auto created = MediaRtpDatagramMaterializerNode::create(
             node.id, std::move(decoded.value().sessionKey),
             std::move(decoded.value().output), std::move(decoded.value().sdp),

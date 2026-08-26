@@ -16,7 +16,7 @@ namespace {
 
 constexpr std::string_view Owner = "MediaRtpDatagramMaterializerNodePlanCodec";
 constexpr const char* NodeName = "MediaRtpDatagramMaterializerNode";
-constexpr std::array<const char*, 28> OptionKeys{
+constexpr std::array<const char*, 33> OptionKeys{
     "scheduled_rtp.session",
     "scheduled_rtp.stream_set",
     "scheduled_rtp.stream",
@@ -31,6 +31,11 @@ constexpr std::array<const char*, 28> OptionKeys{
     "scheduled_rtp.packetization.payload_type",
     "scheduled_rtp.packetization.maximum_datagram_bytes",
     "scheduled_rtp.packetization.maximum_access_unit_samples",
+    "scheduled_rtp.packetization.maximum_access_unit_payload_bytes",
+    "scheduled_rtp.packetization.maximum_datagrams_per_access_unit",
+    "scheduled_rtp.packetization.emission_authority",
+    "scheduled_rtp.packetization.packet_layout",
+    "scheduled_rtp.packetization.length_field_bytes",
     "scheduled_rtp.ssrc",
     "scheduled_rtp.base_timestamp",
     "scheduled_rtp.clock_rate",
@@ -172,6 +177,27 @@ template <typename Unsigned>
              output.packetization.maximumAccessUnitSamples()
                  ? std::to_string(*output.packetization.maximumAccessUnitSamples())
                  : "none"},
+        {"scheduled_rtp.packetization.maximum_access_unit_payload_bytes",
+             std::to_string(output.packetization.emissionContract()
+                                .maximumAccessUnitPayloadBytes())},
+        {"scheduled_rtp.packetization.maximum_datagrams_per_access_unit",
+             std::to_string(output.packetization.emissionContract()
+                                .maximumDatagramsPerAccessUnit())},
+        {"scheduled_rtp.packetization.emission_authority",
+             output.packetization.emissionContract().authority()},
+        {"scheduled_rtp.packetization.packet_layout",
+             !output.packetization.emissionContract().packetLayout()
+                 ? "none"
+                 : output.packetization.emissionContract().packetLayout()->kind() ==
+                           MediaEncodedPacketLayoutKind::StartCodeDelimited
+                       ? "start-code" : "length-prefixed"},
+        {"scheduled_rtp.packetization.length_field_bytes",
+             output.packetization.emissionContract().packetLayout() &&
+                     output.packetization.emissionContract().packetLayout()
+                         ->lengthFieldBytes()
+                 ? std::to_string(*output.packetization.emissionContract()
+                                       .packetLayout()->lengthFieldBytes())
+                 : "none"},
         {"scheduled_rtp.ssrc", std::to_string(output.ssrc)},
         {"scheduled_rtp.base_timestamp", std::to_string(output.baseTimestamp)},
         {"scheduled_rtp.clock_rate", std::to_string(output.clockRate)},
@@ -261,15 +287,37 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
     auto samplesText = requiredNodeOption(
         &node.options, NodeName,
         "scheduled_rtp.packetization.maximum_access_unit_samples");
+    auto maximumAccessUnitBytes = parseUnsigned<std::uint64_t>(
+        node.options,
+        "scheduled_rtp.packetization.maximum_access_unit_payload_bytes");
+    auto encodedMaximumDatagrams = parseUnsigned<std::uint64_t>(
+        node.options,
+        "scheduled_rtp.packetization.maximum_datagrams_per_access_unit");
+    auto emissionAuthority = requiredNodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.packetization.emission_authority");
+    auto packetLayoutText = requiredNodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.packetization.packet_layout");
+    auto lengthFieldText = requiredNodeOption(
+        &node.options, NodeName,
+        "scheduled_rtp.packetization.length_field_bytes");
     if (!codec || !timeBaseNum || !timeBaseDen || !mode || !payloadType ||
-        !packetMaximum || !samplesText) {
+        !packetMaximum || !samplesText || !maximumAccessUnitBytes ||
+        !encodedMaximumDatagrams || !emissionAuthority || !packetLayoutText ||
+        !lengthFieldText) {
         const ::media::ErrorInfo error = !codec ? codec.error()
             : !timeBaseNum ? timeBaseNum.error()
             : !timeBaseDen ? timeBaseDen.error()
             : !mode ? mode.error()
             : !payloadType ? payloadType.error()
             : !packetMaximum ? packetMaximum.error()
-            : samplesText.error();
+            : !samplesText ? samplesText.error()
+            : !maximumAccessUnitBytes ? maximumAccessUnitBytes.error()
+            : !encodedMaximumDatagrams ? encodedMaximumDatagrams.error()
+            : !emissionAuthority ? emissionAuthority.error()
+            : !packetLayoutText ? packetLayoutText.error()
+            : lengthFieldText.error();
         return DecodedResult::failure(error);
     }
     std::optional<int> maximumSamples;
@@ -280,13 +328,53 @@ MediaRtpDatagramMaterializerNodePlanCodec::decode(const MediaNode& node)
         if (!parsedSamples) return DecodedResult::failure(parsedSamples.error());
         maximumSamples = parsedSamples.value();
     }
-    auto packetization = MediaScheduledRtpPacketizationPlan::create(
-        streamKind, codec.value(), timeBaseNum.value(), timeBaseDen.value(),
-        payloadType.value(), packetMaximum.value(), maximumSamples);
-    if (!packetization) return DecodedResult::failure(packetization.error());
     auto decodedMode = MediaScheduledRtpPacketizationModeCodec::decode(
         mode.value());
-    if (!decodedMode ||
+    if (!decodedMode) return DecodedResult::failure(decodedMode.error());
+    ::media::Result<MediaRtpAccessUnitEmissionContract> emission =
+        ::media::Result<MediaRtpAccessUnitEmissionContract>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP emission contract layout is invalid"));
+    if (streamKind == MediaStreamKind::Audio &&
+        packetLayoutText.value() == "none" &&
+        lengthFieldText.value() == "none") {
+        emission = MediaRtpAccessUnitEmissionContract::createAacLatm(
+            maximumAccessUnitBytes.value(), packetMaximum.value(),
+            emissionAuthority.value());
+    } else if (streamKind == MediaStreamKind::Video) {
+        std::optional<MediaEncodedPacketLayout> layout;
+        if (packetLayoutText.value() == "start-code" &&
+            lengthFieldText.value() == "none") {
+            layout = MediaEncodedPacketLayout::startCodeDelimited();
+        } else if (packetLayoutText.value() == "length-prefixed" &&
+                   lengthFieldText.value() != "none") {
+            auto width = parseUnsigned<std::uint8_t>(
+                node.options,
+                "scheduled_rtp.packetization.length_field_bytes");
+            if (!width) return DecodedResult::failure(width.error());
+            auto created = MediaEncodedPacketLayout::lengthPrefixed(width.value());
+            if (!created) return DecodedResult::failure(created.error());
+            layout = created.value();
+        }
+        if (layout) {
+            emission = MediaRtpAccessUnitEmissionContract::createVideo(
+                decodedMode.value(), *layout, maximumAccessUnitBytes.value(),
+                packetMaximum.value(), emissionAuthority.value());
+        }
+    }
+    if (!emission || emission.value().maximumDatagramsPerAccessUnit() !=
+                         encodedMaximumDatagrams.value()) {
+        return DecodedResult::failure(
+            emission ? ::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP emission geometry was altered")
+                     : emission.error());
+    }
+    auto packetization = MediaScheduledRtpPacketizationPlan::create(
+        streamKind, codec.value(), timeBaseNum.value(), timeBaseDen.value(),
+        payloadType.value(), packetMaximum.value(),
+        std::move(emission).value(), maximumSamples);
+    if (!packetization) return DecodedResult::failure(packetization.error());
+    if (
         decodedMode.value() != packetization.value().packetizationMode()) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP packetization options contradict the planned transport"));

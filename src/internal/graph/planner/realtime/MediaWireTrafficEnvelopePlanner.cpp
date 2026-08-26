@@ -80,10 +80,13 @@ template <typename Emission>
 {
     const auto maximumDatagram = static_cast<std::uint64_t>(
         output.packetization.maximumDatagramBytes());
-    if (emission.maximumPacketizationUnitsPerAccessUnit == 0) {
+    const auto& contract = output.packetization.emissionContract();
+    if (contract.maximumDatagramsPerAccessUnit() == 0 ||
+        contract.maximumAccessUnitPayloadBytes() !=
+            emission.maximumAccessUnitPayloadBytes) {
         return ::media::Result<WireDemand>::failure(
             ::media::ErrorInfo::unsupported(
-                "elementary RTP requires authoritative packetization-unit bound"));
+                "elementary RTP requires matching prepared emission and packetization contract"));
     }
     if constexpr (std::is_same_v<Emission,
                   MediaPreparedEncoderEmissionEnvelope>) {
@@ -107,24 +110,16 @@ template <typename Emission>
     }
     const auto payloadCapacity =
         maximumDatagram - RtpHeaderBytes - fragmentationHeader;
-    auto payloadPackets = ceilScale(
-        emission.peakPayloadBytesPerSecond, 1, payloadCapacity,
-        "RTP peak payload packet rate");
-    auto unitRate = ceilScale(
-        emission.maximumPacketizationUnitsPerAccessUnit,
+    auto packetRate = ceilScale(
+        contract.maximumDatagramsPerAccessUnit(),
         emission.accessUnitsPerSecondNumerator,
         emission.accessUnitsPerSecondDenominator,
-        "RTP packetization-unit rate");
-    auto burstPackets = ceilScale(
-        emission.maximumBurstPayloadBytes, 1, payloadCapacity,
-        "RTP burst packet count");
-    if (!payloadPackets || !unitRate || !burstPackets) {
+        "RTP contracted datagram rate");
+    const auto burstPackets = contract.maximumDatagramsPerAccessUnit();
+    if (!packetRate) {
         return ::media::Result<WireDemand>::failure(
-            !payloadPackets ? payloadPackets.error() :
-            !unitRate ? unitRate.error() : burstPackets.error());
+            packetRate.error());
     }
-    auto packetRate = add(
-        payloadPackets.value(), unitRate.value(), "RTP packet rate");
     auto sustainedHeaders = packetRate
         ? multiply(packetRate.value(), RtpHeaderBytes + fragmentationHeader,
                    "RTP sustained headers")
@@ -142,7 +137,7 @@ template <typename Emission>
               "RTP peak payload")
         : peakHeaders;
     auto burstHeaders = multiply(
-        burstPackets.value(), RtpHeaderBytes + fragmentationHeader,
+        burstPackets, RtpHeaderBytes + fragmentationHeader,
         "RTP burst headers");
     auto burst = burstHeaders
         ? add(emission.maximumBurstPayloadBytes, burstHeaders.value(),
@@ -155,7 +150,7 @@ template <typename Emission>
     }
     return ::media::Result<WireDemand>::success(
         {sustained.value(), peak.value(), packetRate.value(), burst.value(),
-         burstPackets.value()});
+         burstPackets});
 }
 
 ::media::Result<WireDemand> addRtcp(

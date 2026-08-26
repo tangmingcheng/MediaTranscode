@@ -50,6 +50,7 @@ private:
     AVFormatContext* m_context = nullptr;
     std::unique_ptr<FFmpegDatagramWriteAvio> m_avio;
     std::optional<MediaRtpTimestamp> m_activeTimestamp;
+    std::uint64_t m_activeDatagrams = 0;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::vector<std::uint8_t> m_rewriteScratch;
     State m_state = State::Empty;
