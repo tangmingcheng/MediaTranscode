@@ -48,9 +48,10 @@ MediaTsInitialAcquiringPacketBuffer::create(
 
 ::media::Status MediaTsInitialAcquiringPacketBuffer::retain(
     ::media::ffmpeg::PacketPtr packet,
-    MediaStreamKind streamKind)
+    MediaStreamKind streamKind,
+    MediaGraphPayloadReservation reservation)
 {
-    if (!packet ||
+    if (!packet || !reservation ||
         (packet->pts == AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) ||
         packet->duration <= 0 ||
         packet->time_base.num <= 0 || packet->time_base.den <= 0 ||
@@ -93,7 +94,8 @@ MediaTsInitialAcquiringPacketBuffer::create(
             "MPEG-TS initial acquiring packet retention capacity exhausted"));
     }
     m_packets.push_back(
-        MediaTsInitialAcquiringPacket{std::move(packet), streamKind});
+        MediaTsInitialAcquiringPacket{
+            std::move(packet), streamKind, std::move(reservation)});
     ++usage.packets;
     usage.bytes += bytes;
     return ::media::Status::success();
@@ -102,18 +104,22 @@ MediaTsInitialAcquiringPacketBuffer::create(
 ::media::Status MediaTsInitialAcquiringPacketBuffer::stageReplay(
     const AVPacket& current,
     MediaStreamKind streamKind,
+    MediaGraphPayloadReservation currentReservation,
     const Materializer& materializer)
 {
-    if (!materializer || hasReplay() ||
+    if (!materializer || !currentReservation || hasReplay() ||
         (streamKind == MediaStreamKind::Audio &&
          std::holds_alternative<MediaTsVideoOnlyPacketRetentionPlan>(m_plan))) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS initial packet replay staging state is invalid"));
     }
     std::deque<MediaTsInitialReplayPacket> staged;
-    const auto append = [&](const AVPacket& packet,
-                            MediaStreamKind kind) -> ::media::Status {
-        auto materialized = materializer(packet, kind);
+    const auto append = [&](
+                            const AVPacket& packet,
+                            MediaStreamKind kind,
+                            const MediaGraphPayloadReservation& reservation)
+                            -> ::media::Status {
+        auto materialized = materializer(packet, kind, reservation);
         if (!materialized) {
             return ::media::Status::failure(materialized.error());
         }
@@ -122,11 +128,14 @@ MediaTsInitialAcquiringPacketBuffer::create(
         return ::media::Status::success();
     };
     for (const auto& retained : m_packets) {
-        if (auto status = append(*retained.packet, retained.streamKind); !status) {
+        if (auto status = append(
+                *retained.packet, retained.streamKind,
+                retained.reservation); !status) {
             return status;
         }
     }
-    if (auto status = append(current, streamKind); !status) return status;
+    if (auto status = append(
+            current, streamKind, currentReservation); !status) return status;
     m_replay = std::move(staged);
     clear();
     return ::media::Status::success();

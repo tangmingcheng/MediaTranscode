@@ -7,6 +7,7 @@
 namespace media::ffmpeg::graph {
 
 struct FFmpegInputStreamSnapshot;
+class MediaGraphPayloadReservation;
 
 class PacketNormalizeNode final : public FFmpegNodeRuntime {
 public:
@@ -22,7 +23,9 @@ private:
     void releaseInputSnapshots() noexcept;
     ::media::Status bindInputSnapshots(MediaGraphExecutionContext& context);
     ::media::Status bindSourceStream(MediaGraphExecutionContext& context);
-    ::media::Result<MediaBufferRef> normalizePacket(const MediaBufferRef& buffer);
+    ::media::Result<MediaBufferRef> normalizePacket(
+        const MediaBufferRef& buffer,
+        MediaGraphPayloadReservation reservation);
     ::media::Status normalizePacketTimestamps(MediaBufferRef& buffer);
 
 private:

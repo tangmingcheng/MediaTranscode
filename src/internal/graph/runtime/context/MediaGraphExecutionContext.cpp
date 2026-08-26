@@ -124,24 +124,31 @@ MediaGraphExecutionContext::reservePayload(
             "runtime graph has no activated payload credit ledger"));
     }
     const auto& strategies = m_payloadCreditLedger->plan().producers;
-    const auto found = std::find_if(
-        strategies.begin(), strategies.end(), [&](const auto& strategy) {
-            return strategy.nodeId == producer &&
-                strategy.streamKind == streamKind &&
-                strategy.payloadKind == payloadKind;
-        });
-    if (found == strategies.end()) {
+    const MediaGraphPayloadProducerStrategy* selected = nullptr;
+    for (const auto& strategy : strategies) {
+        if (strategy.nodeId != producer ||
+            strategy.payloadKind != payloadKind ||
+            (streamKind != MediaStreamKind::Any &&
+             strategy.streamKind != streamKind)) {
+            continue;
+        }
+        if (!selected || strategy.maximumReservationBytes >
+                selected->maximumReservationBytes) {
+            selected = &strategy;
+        }
+    }
+    if (!selected) {
         return Result::failure(::media::ErrorInfo::unsupported(
             "runtime payload producer is absent from the final DAG registry"));
     }
-    const std::uint64_t reservedBytes = found->accounting ==
+    const std::uint64_t reservedBytes = selected->accounting ==
             MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject
-        ? found->maximumReservationBytes : 0;
+        ? selected->maximumReservationBytes : 0;
     auto lease = m_payloadCreditLedger->tryReserve(reservedBytes);
     if (!lease) return Result::failure(lease.error());
     try {
         return Result::success(MediaGraphPayloadReservation(
-            found->accounting, found->maximumReservationBytes,
+            selected->accounting, selected->maximumReservationBytes,
             std::move(lease).value()));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

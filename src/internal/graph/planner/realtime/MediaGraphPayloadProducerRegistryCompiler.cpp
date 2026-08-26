@@ -30,6 +30,9 @@ bool allocatesPayload(MediaNodeKind kind) noexcept
 bool runtimeIntegrated(MediaNodeKind kind) noexcept
 {
     switch (kind) {
+    case MediaNodeKind::Demux:
+    case MediaNodeKind::MpegTsDemux:
+    case MediaNodeKind::PacketNormalize:
     case MediaNodeKind::VideoEncode:
     case MediaNodeKind::AudioEncode:
         return true;
@@ -43,6 +46,34 @@ bool runtimeIntegrated(MediaNodeKind kind) noexcept
     const MediaEdge& edge,
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
+    if (producerKind == MediaNodeKind::Demux ||
+        producerKind == MediaNodeKind::MpegTsDemux ||
+        producerKind == MediaNodeKind::PacketNormalize) {
+        if (!ledger.preparedInputPayload ||
+            !ledger.preparedInputPayload->validate()) {
+            return ::media::Result<std::uint64_t>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "producer registry lacks a prepared input allocation envelope"));
+        }
+        const auto expectedSource = producerKind == MediaNodeKind::Demux
+            ? MediaPreparedInputPayloadSource::GenericDemuxPacket
+            : producerKind == MediaNodeKind::MpegTsDemux
+                ? MediaPreparedInputPayloadSource::MpegTsPesPacket
+                : ledger.preparedInputPayload->source;
+        if (ledger.preparedInputPayload->source != expectedSource) {
+            return ::media::Result<std::uint64_t>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "producer registry input source conflicts with the final DAG"));
+        }
+        const auto* bound = ledger.preparedInputPayload->find(edge.streamKind);
+        if (!bound) {
+            return ::media::Result<std::uint64_t>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "producer registry input envelope lacks the selected stream"));
+        }
+        return ::media::Result<std::uint64_t>::success(
+            bound->maximumPayloadBytes);
+    }
     if (producerKind != MediaNodeKind::VideoEncode &&
         producerKind != MediaNodeKind::AudioEncode) {
         return ::media::Result<std::uint64_t>::failure(
@@ -83,6 +114,24 @@ bool sameKey(
     return strategy.nodeId == edge.from.nodeId &&
         strategy.streamKind == edge.streamKind &&
         strategy.payloadKind == edge.payloadKind;
+}
+
+std::string allocationAuthority(
+    MediaNodeKind producerKind,
+    const MediaEdge& edge,
+    const MediaRealtimeGraphResourceLedgerPlan& ledger,
+    bool deviceBacked)
+{
+    if ((producerKind == MediaNodeKind::Demux ||
+         producerKind == MediaNodeKind::MpegTsDemux ||
+         producerKind == MediaNodeKind::PacketNormalize) &&
+        ledger.preparedInputPayload) {
+        const auto* bound = ledger.preparedInputPayload->find(edge.streamKind);
+        if (bound) return bound->authority;
+    }
+    return deviceBacked
+        ? "prepared-logical-frame-bound+device-bytes-observed-only"
+        : "prepared-encoder-emission-or-frame-footprint-bound";
 }
 
 bool sameKey(
@@ -166,9 +215,8 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
                               EngineManagedBytesAndObject,
                     bound.value(),
                     runtimeIntegrated(node.kind),
-                    deviceBacked
-                        ? "prepared-logical-frame-bound+device-bytes-observed-only"
-                        : "prepared-emission-or-frame-footprint-bound"});
+                    allocationAuthority(
+                        node.kind, edge, planningLedger, deviceBacked)});
                 plan.maximumUnitBytes =
                     (std::max)(plan.maximumUnitBytes, bound.value());
             }

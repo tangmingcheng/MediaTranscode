@@ -39,10 +39,12 @@ private:
         std::uint64_t packetPosition);
     ::media::Status enqueueLockedPacket(
         ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
-        const MediaTsClockProjectionCheckpoint& checkpoint);
+        const MediaTsClockProjectionCheckpoint& checkpoint,
+        MediaGraphPayloadReservation reservation);
     ::media::Status prepareLockedBatch(
         ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
-        const MediaTsClockProjectionCheckpoint& checkpoint);
+        const MediaTsClockProjectionCheckpoint& checkpoint,
+        MediaGraphPayloadReservation reservation);
     ::media::Result<MediaNodeProcessResult> emitReadyPacket(
         MediaGraphExecutionContext& context);
     ::media::Status emitEof(MediaGraphExecutionContext& context);

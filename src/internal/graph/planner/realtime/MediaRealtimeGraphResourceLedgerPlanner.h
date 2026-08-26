@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
+#include "internal/graph/planner/realtime/MediaPreparedInputPayloadEnvelope.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 
@@ -43,6 +44,7 @@ struct MediaRealtimeGraphResourceLedgerPlan final {
     std::optional<MediaPreparedHardwareMemoryEnvelope> hardwareMemory;
     std::uint64_t maximumEncoderRetainedFrames;
     bool hardwareEncoderSurfacePool;
+    std::optional<MediaPreparedInputPayloadEnvelope> preparedInputPayload;
     std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
 };
 

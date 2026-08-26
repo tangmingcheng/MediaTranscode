@@ -44,6 +44,16 @@ MediaGraphPayloadReservation::MediaGraphPayloadReservation(
     return buffer.attachPayloadCredit(std::move(m_lease));
 }
 
+::media::Status MediaGraphPayloadReservation::shareWithAliasingBuffer(
+    MediaBuffer& buffer) const noexcept
+{
+    if (!m_lease || !*m_lease) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "payload reservation has no active alias credit lease"));
+    }
+    return buffer.attachPayloadCredit(m_lease);
+}
+
 MediaGraphPayloadReservation::operator bool() const noexcept
 {
     return m_lease && *m_lease;

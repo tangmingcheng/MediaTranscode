@@ -233,6 +233,7 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
                 : std::nullopt,
             emission.hardwareMemory, emission.video.maximumEncoderRetainedFrames,
             hardwareSurface,
+            std::nullopt,
             std::move(entries)});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -261,6 +262,11 @@ MediaRealtimeGraphResourceLedgerPlanner::plan(
         (!ledger.audioFrameUnitBytes || *ledger.audioFrameUnitBytes == 0)) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "audio graph resource ledger lacks prepared frame footprint"));
+    }
+    if (ledger.preparedInputPayload) {
+        if (auto status = ledger.preparedInputPayload->validate(); !status) {
+            return status;
+        }
     }
     bool retainLatest = false;
     for (const auto& entry : ledger.entries) {

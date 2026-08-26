@@ -810,6 +810,29 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             resourceLedger.error());
     }
+    if (preparedResource && preparedResource->genericPlan()) {
+        const auto& generic = *preparedResource->genericPlan();
+        MediaPreparedInputPayloadEnvelope inputPayload{
+            MediaPreparedInputPayloadSource::GenericDemuxPacket,
+            1,
+            "av_read_frame-produces-at-most-one-packet-per-successful-call",
+            {
+                MediaPreparedInputPayloadBound{
+                    MediaStreamKind::Video,
+                    generic.maximumVideoPacketBytes,
+                    "prepared-generic-input-maximum-video-packet"},
+                MediaPreparedInputPayloadBound{
+                    MediaStreamKind::Audio,
+                    generic.maximumAudioPacketBytes,
+                    "prepared-generic-input-maximum-audio-packet"}
+            }};
+        if (auto status = inputPayload.validate(); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        resourceLedger.value().preparedInputPayload =
+            std::move(inputPayload);
+    }
     options.parameters.queues = resourceLedger.value().queues;
     options.parameters.video = videoParameters;
     if (audioPlan && audioPlan->resolvedOutput) {
@@ -955,6 +978,34 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 retention.error());
         }
+        MediaPreparedInputPayloadEnvelope inputPayload{
+            MediaPreparedInputPayloadSource::MpegTsPesPacket,
+            1,
+            "av_read_frame-produces-at-most-one-selected-PES-packet-per-successful-call",
+            {}};
+        std::visit(
+            [&](const auto& selectedRetention) {
+                inputPayload.streams.push_back(
+                    MediaPreparedInputPayloadBound{
+                        MediaStreamKind::Video,
+                        selectedRetention.maximumVideoPacketBytes,
+                        "prepared-mpegts-video-PES-retention-bound"});
+                if constexpr (requires {
+                        selectedRetention.maximumAudioPacketBytes;
+                    }) {
+                    inputPayload.streams.push_back(
+                        MediaPreparedInputPayloadBound{
+                            MediaStreamKind::Audio,
+                            selectedRetention.maximumAudioPacketBytes,
+                            "prepared-mpegts-audio-PES-retention-bound"});
+                }
+            }, retention.value());
+        if (auto status = inputPayload.validate(); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        plan.resourceLedger->preparedInputPayload =
+            std::move(inputPayload);
         auto ts = MediaRealtimeTsInputPlan::create(
             std::move(policy).value(), *selectedTsProgram,
             maximumPcrGap27Mhz.value(), std::move(retention).value(),

@@ -13,6 +13,12 @@ class MediaBuffer;
 class MediaGraphPayloadReservation final {
 public:
     MediaGraphPayloadReservation() = default;
+    MediaGraphPayloadReservation(const MediaGraphPayloadReservation&) = delete;
+    MediaGraphPayloadReservation& operator=(
+        const MediaGraphPayloadReservation&) = delete;
+    MediaGraphPayloadReservation(MediaGraphPayloadReservation&&) noexcept = default;
+    MediaGraphPayloadReservation& operator=(
+        MediaGraphPayloadReservation&&) noexcept = default;
     MediaGraphPayloadReservation(
         MediaGraphPayloadAllocationAccounting accounting,
         std::uint64_t maximumReservationBytes,
@@ -20,6 +26,7 @@ public:
 
     ::media::Status shrinkToActual(std::uint64_t bytes) noexcept;
     ::media::Status attachTo(MediaBuffer& buffer) noexcept;
+    ::media::Status shareWithAliasingBuffer(MediaBuffer& buffer) const noexcept;
     explicit operator bool() const noexcept;
 
 private:

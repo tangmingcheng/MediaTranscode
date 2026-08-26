@@ -61,6 +61,13 @@ MediaNodeKind DemuxNode::staticKind() noexcept
         return processFinished();
     }
 
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Any, MediaPayloadKind::Packet);
+    if (!reservation) {
+        return processProgress(
+            ::media::Status::failure(reservation.error()));
+    }
+
     ::media::ffmpeg::PacketPtr packet;
     MediaDemuxPacketProvenance provenance{
         MediaDemuxPacketOrigin::LiveDemuxRead,
@@ -99,6 +106,23 @@ MediaNodeKind DemuxNode::staticKind() noexcept
         std::move(packet), streamKind, std::nullopt, provenance);
     if (!buffer) {
         return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
+    }
+
+    const auto footprint = buffer.value()->payloadFootprintBytes();
+    if (!footprint || *footprint == 0) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "DemuxNode packet lacks an exact payload footprint"));
+    }
+    if (auto status = reservation.value().shrinkToActual(*footprint);
+        !status) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            status.error());
+    }
+    if (auto status = reservation.value().attachTo(*buffer.value());
+        !status) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            status.error());
     }
 
     const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());
