@@ -216,12 +216,12 @@ MediaFinalGraphResourceLedgerCompiler::compile(
             if (globallyCreditedPayload(edge.payloadKind)) {
                 coveredByGlobalPayloadLedger = true;
                 authority += "+global-payload-credit-ledger";
-            } else if (memory.enforceHardLimit && memory.maxBytes > 0) {
-                payloadBytes = memory.maxBytes;
-                authority += "+edge-buffer-hard-limit";
             } else if (networkLedgerPayload(edge.payloadKind)) {
                 scope = MediaFinalGraphResourceScope::AccountedByNetworkLedger;
                 authority = "typed-realtime-network-resource-ledger";
+            } else if (memory.enforceHardLimit && memory.maxBytes > 0) {
+                payloadBytes = memory.maxBytes;
+                authority += "+edge-buffer-hard-limit";
             } else if (externalLibraryPayload(edge.payloadKind)) {
                 scope = MediaFinalGraphResourceScope::
                     ObservedOnlyExternalAllocation;
