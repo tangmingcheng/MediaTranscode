@@ -466,17 +466,13 @@ void AudioResampleNode::resetRuntimeState() noexcept
         m_correctionExecutor &&
         m_correctionExecutor->mode() == MediaAudioCorrectionExecutionMode::Disabled) {
         auto cloned = FFmpegBufferFactory::cloneFrame(
-            inputFrame, MediaStreamKind::Audio);
+            m_pendingInput->buffer, MediaStreamKind::Audio);
         if (!cloned) return ::media::Status::failure(cloned.error());
         const auto& inheritedCredit =
             FFmpegFrameView::payloadCredit(m_pendingInput->buffer);
         if (!inheritedCredit && context.payloadCreditsRequired()) {
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
                 "AudioResampleNode alias input lacks payload credit"));
-        }
-        if (inheritedCredit) {
-            if (auto status = cloned.value()->attachPayloadCredit(inheritedCredit);
-                !status) return status;
         }
         std::optional<MediaGraphPayloadReservation> nonRealtimeReservation;
         if (!inheritedCredit) {

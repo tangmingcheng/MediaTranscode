@@ -49,7 +49,7 @@ private:
     ::media::Status drainPending(MediaGraphExecutionContext& context);
     ::media::Result<bool> preparePendingOutput(MediaGraphExecutionContext& context);
     ::media::Status queueFrameReference(
-        const AVFrame* sourceFrame, int64_t outputPts,
+        const MediaBufferRef& sourceBuffer, int64_t outputPts,
         std::shared_ptr<const MediaCanonicalLineage> lineage);
     ::media::Status rememberLastInputFrame(const MediaBufferRef& buffer);
 

@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 
 #include <cstring>
 #include <utility>
@@ -221,9 +222,10 @@ namespace media::ffmpeg::graph {
     return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }
 
-::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneFrame(const AVFrame* frame,
-                                                                MediaStreamKind streamKind)
+::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneFrame(
+    const MediaBufferRef& source, MediaStreamKind streamKind)
 {
+    const AVFrame* frame = FFmpegFrameView::frame(source);
     if (!frame) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument("cloneFrame failed: frame is null"));
@@ -241,7 +243,16 @@ namespace media::ffmpeg::graph {
             FFmpegGraphError::fromCode(ret, "av_frame_ref"));
     }
 
-    return wrapFrame(std::move(cloned), streamKind);
+    auto wrapped = wrapFrame(std::move(cloned), streamKind);
+    if (!wrapped) return wrapped;
+    const auto& payloadCredit = FFmpegFrameView::payloadCredit(source);
+    if (payloadCredit) {
+        if (auto status = wrapped.value()->attachPayloadCredit(payloadCredit);
+            !status) {
+            return ::media::Result<MediaBufferRef>::failure(status.error());
+        }
+    }
+    return wrapped;
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapHardwareFrame(::media::ffmpeg::FramePtr frame,

@@ -433,7 +433,9 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         auto selectedLineage = sourceFrame == frame
             ? FFmpegFrameView::canonicalLineage(buffer)
             : FFmpegFrameView::canonicalLineage(state.lastInputFrame.buffer);
-        auto queueStatus = queueFrameReference(sourceFrame, targetPts,
+        const MediaBufferRef& sourceBuffer = sourceFrame == frame
+            ? buffer : state.lastInputFrame.buffer;
+        auto queueStatus = queueFrameReference(sourceBuffer, targetPts,
                                                 std::move(selectedLineage));
         if (!queueStatus) {
             return queueStatus;
@@ -492,10 +494,11 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
 }
 
 ::media::Status VideoFrameRateNode::queueFrameReference(
-    const AVFrame* sourceFrame, int64_t outputPts,
+    const MediaBufferRef& sourceBuffer, int64_t outputPts,
     std::shared_ptr<const MediaCanonicalLineage> lineage)
 {
     auto& state = m_state->data();
+    const AVFrame* sourceFrame = FFmpegFrameView::frame(sourceBuffer);
     if (!sourceFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode source frame is null"));
@@ -505,7 +508,8 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Status::success();
     }
 
-    auto cloned = FFmpegBufferFactory::cloneFrame(sourceFrame, MediaStreamKind::Video);
+    auto cloned = FFmpegBufferFactory::cloneFrame(
+        sourceBuffer, MediaStreamKind::Video);
     if (!cloned) {
         return ::media::Status::failure(cloned.error());
     }
@@ -600,7 +604,7 @@ const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* fra
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode expected frame buffer for history"));
     }
 
-    auto cloned = FFmpegBufferFactory::cloneFrame(frame, MediaStreamKind::Video);
+    auto cloned = FFmpegBufferFactory::cloneFrame(buffer, MediaStreamKind::Video);
     if (!cloned) {
         return ::media::Status::failure(cloned.error());
     }

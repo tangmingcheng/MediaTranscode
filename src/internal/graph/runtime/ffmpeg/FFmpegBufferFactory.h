@@ -42,7 +42,7 @@ public:
 
     static ::media::Result<MediaBufferRef> wrapFrame(::media::ffmpeg::FramePtr frame,
                                                       MediaStreamKind streamKind = MediaStreamKind::Unknown);
-    static ::media::Result<MediaBufferRef> cloneFrame(const AVFrame* frame,
+    static ::media::Result<MediaBufferRef> cloneFrame(const MediaBufferRef& source,
                                                       MediaStreamKind streamKind = MediaStreamKind::Unknown);
 
     static ::media::Result<MediaBufferRef> wrapHardwareFrame(::media::ffmpeg::FramePtr frame,
