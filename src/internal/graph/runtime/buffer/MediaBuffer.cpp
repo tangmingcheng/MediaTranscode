@@ -1,8 +1,43 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+::media::Status MediaBuffer::attachPayloadCredit(
+    std::shared_ptr<MediaGraphPayloadCreditLease> credit) noexcept
+{
+    if (!credit || !*credit || m_payloadCredit) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "media buffer requires one active payload credit reservation"));
+    }
+    m_payloadCredit = std::move(credit);
+    return ::media::Status::success();
+}
+
+const std::shared_ptr<MediaGraphPayloadCreditLease>&
+MediaBuffer::payloadCredit() const noexcept
+{
+    return m_payloadCredit;
+}
+
+std::shared_ptr<MediaGraphPayloadCreditLease>
+MediaBuffer::takePayloadCredit() noexcept
+{
+    return std::move(m_payloadCredit);
+}
+
+::media::Status MediaBuffer::sharePayloadCreditFrom(
+    const MediaBuffer& source) noexcept
+{
+    if (m_payloadCredit || !source.m_payloadCredit) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "media buffer payload credit sharing requires one source allocation reservation"));
+    }
+    m_payloadCredit = source.m_payloadCredit;
+    return ::media::Status::success();
+}
 
 std::optional<std::uint64_t> MediaBuffer::payloadFootprintBytes() const noexcept
 {

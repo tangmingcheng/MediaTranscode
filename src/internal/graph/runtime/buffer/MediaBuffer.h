@@ -5,12 +5,16 @@
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
+#include "media_transcode/Result.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <memory>
 
 namespace media::ffmpeg::graph {
+
+class MediaGraphPayloadCreditLease;
 
 enum class MediaBufferType {
     Unknown,
@@ -88,6 +92,13 @@ public:
     void addFlags(MediaBufferFlag flags) noexcept;
     void setDiagnosticName(std::string name);
 
+    ::media::Status attachPayloadCredit(
+        std::shared_ptr<MediaGraphPayloadCreditLease> credit) noexcept;
+    const std::shared_ptr<MediaGraphPayloadCreditLease>& payloadCredit()
+        const noexcept;
+    std::shared_ptr<MediaGraphPayloadCreditLease> takePayloadCredit() noexcept;
+    ::media::Status sharePayloadCreditFrom(const MediaBuffer& source) noexcept;
+
 protected:
     MediaBuffer() = default;
 
@@ -103,6 +114,7 @@ private:
     MediaDuration m_duration = 0;
     MediaBufferFlag m_flags = MediaBufferFlag::None;
     std::string m_diagnosticName;
+    std::shared_ptr<MediaGraphPayloadCreditLease> m_payloadCredit;
 };
 
 } // namespace media::ffmpeg::graph
