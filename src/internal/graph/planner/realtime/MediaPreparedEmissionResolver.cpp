@@ -18,6 +18,7 @@ MediaPreparedEmissionResolver::resolve(
             video->sustainedPayloadBytesPerSecond ||
         video->maximumAccessUnitPayloadBytes == 0 ||
         video->maximumBurstPayloadBytes == 0 ||
+        video->maximumEncoderRetainedFrames == 0 ||
         !video->encodedPacketLayout ||
         video->authority.empty() || video->backend.empty() ||
         !outputFrameRate.isKnown() || outputFrameRate.num <= 0 ||

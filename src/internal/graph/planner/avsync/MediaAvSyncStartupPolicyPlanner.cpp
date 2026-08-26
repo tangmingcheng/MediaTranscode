@@ -92,7 +92,8 @@ MediaAvSyncStartupPolicyPlanner::planInputPreflight(
                 "A/V input observation requires deployment and stream-set facts"));
     }
     const auto graphBudget =
-        request.deployment->encode().resources.maximumGraphMemoryBytes;
+        request.deployment->encode().resources
+            .maximumGraphPayloadAndReservedStorageBytes;
     const auto perStreamBudget = graphBudget / 2U;
     if (perStreamBudget == 0) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(

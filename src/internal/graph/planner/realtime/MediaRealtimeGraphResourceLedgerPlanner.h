@@ -30,14 +30,17 @@ struct MediaRealtimeGraphResourceLedgerEntry final {
     MediaRealtimeQueueRetentionSemantics retention;
     std::uint64_t itemCount;
     std::uint64_t payloadBytes;
-    std::uint64_t containerBytes;
     std::string authority;
 };
 
 struct MediaRealtimeGraphResourceLedgerPlan final {
     MediaGraphQueueParameters queues;
     MediaRealtimeMediaCapacityPlan media;
-    std::uint64_t admittedGraphBytes;
+    MediaRealtimeGraphResourceBudgetScope resourceScope;
+    std::uint64_t maximumGraphPayloadAndReservedStorageBytes;
+    std::optional<MediaPreparedHardwareMemoryEnvelope> hardwareMemory;
+    std::uint64_t maximumEncoderRetainedFrames;
+    bool hardwareEncoderSurfacePool;
     std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
 };
 

@@ -8,7 +8,7 @@ namespace media::ffmpeg::graph {
 MediaRealtimeMediaCapacityPlanner::plan(
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
-    if (ledger.admittedGraphBytes == 0 || ledger.entries.empty() ||
+    if (ledger.entries.empty() ||
         ledger.media.videoUnits == 0 || ledger.media.videoUnitBytes == 0 ||
         ledger.media.videoBytes == 0) {
         return ::media::Result<MediaRealtimeMediaCapacityPlan>::failure(

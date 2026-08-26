@@ -130,7 +130,8 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--egress-peak-wire-bytes-per-second",
         "--egress-burst-wire-bytes",
         "--egress-service-authority",
-        "--egress-maximum-graph-memory-bytes",
+        "--egress-graph-resource-scope",
+        "--egress-maximum-graph-payload-and-reserved-storage-bytes",
         "--egress-maximum-network-memory-bytes",
         "--egress-maximum-socket-memory-bytes",
         "--egress-maximum-residence-ms",
@@ -205,8 +206,23 @@ MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
             argc, argv, "--egress-peak-wire-bytes-per-second"),
         requiredSizeArg(argc, argv, "--egress-burst-wire-bytes"),
         requiredArg(argc, argv, "--egress-service-authority")};
+    const std::string graphResourceScope = requiredArg(
+        argc, argv, "--egress-graph-resource-scope");
+    const auto parsedGraphResourceScope =
+        graphResourceScope == "engine-managed-payload-and-reserved-storage"
+            ? MediaRealtimeGraphResourceBudgetScope::
+                  EngineManagedPayloadAndReservedStorage
+            : graphResourceScope ==
+                  "engine-managed-payload-and-reserved-storage-plus-device"
+                ? MediaRealtimeGraphResourceBudgetScope::
+                      EngineManagedPayloadAndReservedStoragePlusDevice
+                : throw std::invalid_argument(
+                      "--egress-graph-resource-scope is invalid");
     encoding.resources = {
-        requiredSizeArg(argc, argv, "--egress-maximum-graph-memory-bytes"),
+        parsedGraphResourceScope,
+        requiredSizeArg(
+            argc, argv,
+            "--egress-maximum-graph-payload-and-reserved-storage-bytes"),
         requiredSizeArg(argc, argv, "--egress-maximum-network-memory-bytes"),
         requiredSizeArg(argc, argv, "--egress-maximum-socket-memory-bytes"),
         requiredArg(argc, argv, "--egress-resource-authority")};

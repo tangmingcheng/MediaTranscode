@@ -173,8 +173,24 @@ copyDeployment(const mt_beta_realtime_deployment& source)
         source.sustained_wire_bytes_per_second,
         source.peak_wire_bytes_per_second, source.burst_wire_bytes,
         source.service_authority};
+    MediaRealtimeGraphResourceBudgetScope graphResourceScope =
+        MediaRealtimeGraphResourceBudgetScope::Unknown;
+    if (source.graph_resource_scope ==
+        MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE) {
+        graphResourceScope = MediaRealtimeGraphResourceBudgetScope::
+            EngineManagedPayloadAndReservedStorage;
+    } else if (source.graph_resource_scope ==
+               MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE_PLUS_DEVICE) {
+        graphResourceScope = MediaRealtimeGraphResourceBudgetScope::
+            EngineManagedPayloadAndReservedStoragePlusDevice;
+    } else {
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "deployment graph memory scope is invalid"));
+    }
     encoding.resources = {
-        source.maximum_graph_memory_bytes,
+        graphResourceScope,
+        source.maximum_graph_payload_and_reserved_storage_bytes,
         source.maximum_network_memory_bytes,
         source.maximum_socket_memory_bytes,
         source.resource_authority};

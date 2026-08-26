@@ -156,10 +156,17 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto bufferBytes = static_cast<std::uint64_t>(
         context.rc_buffer_size / BitsPerByte +
         (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0));
+    if (context.max_b_frames < 0) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "opened encoder did not expose a valid retained-frame bound"));
+    }
+    const auto retainedFrames =
+        static_cast<std::uint64_t>(context.max_b_frames) + 1U;
     return Result::success(MediaPreparedEncoderEmissionEnvelope{
         sustainedBytes, peakBytes, bufferBytes, bufferBytes,
         static_cast<std::uint64_t>(plannedCadence.num),
         static_cast<std::uint64_t>(plannedCadence.den),
+        retainedFrames,
         std::move(packetLayout),
         std::move(authority), std::move(backend)});
 }

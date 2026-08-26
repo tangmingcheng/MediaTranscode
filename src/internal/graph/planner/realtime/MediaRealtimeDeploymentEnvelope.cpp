@@ -64,7 +64,9 @@ MediaRealtimeDeploymentEnvelope::decode(
         service.peakWireBytesPerSecond >= service.sustainedWireBytesPerSecond &&
         service.burstWireBytes > 0;
     const bool validResources = !resources.authority.empty() &&
-        resources.maximumGraphMemoryBytes > 0 &&
+        resources.graphResourceScope !=
+            MediaRealtimeGraphResourceBudgetScope::Unknown &&
+        resources.maximumGraphPayloadAndReservedStorageBytes > 0 &&
         resources.maximumNetworkMemoryBytes > 0 &&
         resources.maximumSocketMemoryBytes > 0;
     const auto localAddress = MediaNumericIpAddress::create(

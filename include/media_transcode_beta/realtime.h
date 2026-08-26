@@ -145,6 +145,11 @@ typedef enum mt_beta_ip_address_family {
     MT_BETA_IP_ADDRESS_FAMILY_IPV6 = 2
 } mt_beta_ip_address_family;
 
+typedef enum mt_beta_graph_resource_budget_scope {
+    MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE = 1,
+    MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE_PLUS_DEVICE = 2
+} mt_beta_graph_resource_budget_scope;
+
 typedef struct mt_beta_realtime_deployment {
     mt_beta_egress_scope_kind scope_kind;
     const char* scope_id;
@@ -157,7 +162,8 @@ typedef struct mt_beta_realtime_deployment {
     uint64_t peak_wire_bytes_per_second;
     uint64_t burst_wire_bytes;
     const char* service_authority;
-    uint64_t maximum_graph_memory_bytes;
+    mt_beta_graph_resource_budget_scope graph_resource_scope;
+    uint64_t maximum_graph_payload_and_reserved_storage_bytes;
     uint64_t maximum_network_memory_bytes;
     uint64_t maximum_socket_memory_bytes;
     uint64_t maximum_residence_ms;
