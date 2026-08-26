@@ -83,11 +83,15 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     m_session.reset();
+    m_serviceLedger.reset();
     m_pendingBatch.reset();
     m_generation.reset();
     m_serviceScopeId.clear();
     m_executionMode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
     m_wireOverheadBytes.clear();
+    m_endpointDatagrams.clear();
+    m_endpointBytes.clear();
+    m_endpointIds.clear();
     m_burstWireBytes = 0;
     m_maximumBatchDatagrams = 0;
     m_maximumBatchBytes = 0;
@@ -170,11 +174,15 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         *m_portFactory);
     if (!session) return ::media::Status::failure(session.error());
     m_session = std::move(session).value();
+    m_serviceLedger = planBuffer.globalSequence();
     m_generation = plan.shaping.generation();
     m_serviceScopeId = plan.shaping.serviceScope().scopeId;
     m_executionMode = mode;
     m_wireOverheadBytes.clear();
     for (const auto& endpoint : plan.shaping.endpoints()) {
+        m_endpointIds.push_back(endpoint.endpointId);
+        m_endpointDatagrams.emplace(endpoint.endpointId, 0);
+        m_endpointBytes.emplace(endpoint.endpointId, 0);
         m_wireOverheadBytes.emplace(
             endpoint.endpointId,
             endpoint.mtuEvidence.ipHeaderBytes +
@@ -282,6 +290,21 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         }
         ++m_datagrams;
         m_bytes += static_cast<std::uint64_t>(datagram.bytes().size());
+        auto endpointDatagrams = m_endpointDatagrams.find(datagram.endpointId());
+        auto endpointBytes = m_endpointBytes.find(datagram.endpointId());
+        if (endpointDatagrams == m_endpointDatagrams.end() ||
+            endpointBytes == m_endpointBytes.end() ||
+            endpointDatagrams->second ==
+                (std::numeric_limits<std::uint64_t>::max)() ||
+            datagram.bytes().size() >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    endpointBytes->second) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "scheduled datagram endpoint telemetry overflowed"));
+        }
+        ++endpointDatagrams->second;
+        endpointBytes->second +=
+            static_cast<std::uint64_t>(datagram.bytes().size());
     }
     m_nextDatagram += count;
     return ::media::Status::success();
@@ -430,7 +453,26 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << " partial_submitted_failures="
                    << m_partialSubmittedFailures
                    << " ambiguous_submitted_failures="
-                   << m_ambiguousSubmittedFailures;
+                   << m_ambiguousSubmittedFailures
+                   << " delivery_evidence=not_proven";
+        if (m_serviceLedger) {
+            const auto backlog = m_serviceLedger->snapshot();
+            diagnostic
+                << " backlog_current_datagrams=" << backlog.currentDatagrams
+                << " backlog_current_wire_bytes=" << backlog.currentWireBytes
+                << " backlog_high_water_datagrams=" << backlog.highWaterDatagrams
+                << " backlog_high_water_wire_bytes=" << backlog.highWaterWireBytes
+                << " backlog_max_residence_ns="
+                << backlog.maximumResidenceNanoseconds
+                << " last_materialized_sequence="
+                << backlog.lastMaterializedSequence.value_or(0)
+                << " last_scheduled_sequence="
+                << backlog.lastScheduledSequence.value_or(0)
+                << " last_submitted_sequence="
+                << backlog.lastSubmittedSequence.value_or(0)
+                << " last_committed_sequence="
+                << backlog.lastCommittedSequence.value_or(0);
+        }
         if (m_session) {
             const auto& evidence = m_session->evidenceTelemetry();
             diagnostic << " evidence_submitted=" << evidence.submitted
@@ -444,7 +486,24 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                        << " evidence_duplicate=" << evidence.duplicate
                        << " evidence_unmatched=" << evidence.unmatched
                        << " evidence_coverage_complete="
-                       << (evidence.transmitTimestampCoverageComplete ? 1 : 0);
+                       << (evidence.transmitTimestampCoverageComplete ? 1 : 0)
+                       << " aggregate_effective_socket_bytes="
+                       << m_session->effectiveSocketBytes();
+            for (const auto endpointId : m_endpointIds) {
+                const auto* capabilities = m_session->capabilities(endpointId);
+                if (!capabilities) continue;
+                diagnostic
+                    << " endpoint_" << endpointId << "_requested_socket_bytes="
+                    << capabilities->requestedSendBufferBytes
+                    << " endpoint_" << endpointId << "_effective_socket_bytes="
+                    << capabilities->effectiveSendBufferBytes
+                    << " endpoint_" << endpointId << "_timestamp_source="
+                    << static_cast<int>(capabilities->timestampSource)
+                    << " endpoint_" << endpointId << "_committed_datagrams="
+                    << m_endpointDatagrams[endpointId]
+                    << " endpoint_" << endpointId << "_committed_payload_bytes="
+                    << m_endpointBytes[endpointId];
+            }
         }
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
@@ -558,9 +617,9 @@ void MediaScheduledDatagramSenderNode::closeSender(
             if (!closed) closeFailure = closed.error();
         }
     }
+    emitDiagnostics(closeFailure ? "failed" : "finished");
     m_session.reset();
     m_pendingBatch.reset();
-    emitDiagnostics(closeFailure ? "failed" : "finished");
     auto base = FFmpegNodeRuntime::stop(context);
     if (closeFailure) return ::media::Status::failure(*closeFailure);
     return base;

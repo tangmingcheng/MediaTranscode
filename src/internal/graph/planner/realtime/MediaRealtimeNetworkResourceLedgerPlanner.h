@@ -33,7 +33,9 @@ struct MediaRealtimeNetworkResourceLedgerPlan final {
     std::uint64_t maximumBatchBytes;
     std::uint64_t maximumEndpointPendingDatagrams;
     std::uint64_t maximumEndpointPendingBytes;
-    std::uint64_t socketHardBoundBytesPerEndpoint;
+    std::uint64_t requestedSendBufferBytesPerEndpoint;
+    std::uint64_t minimumEffectiveSendBufferBytesPerEndpoint;
+    std::uint64_t maximumAdmittedEffectiveSendBufferBytesPerEndpoint;
     std::uint64_t maximumCorrelationEntries;
     std::uint64_t admittedNetworkBytes;
     std::uint64_t admittedSocketBytes;

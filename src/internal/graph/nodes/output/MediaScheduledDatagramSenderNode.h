@@ -9,11 +9,13 @@
 #include <optional>
 #include <stop_token>
 #include <unordered_map>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
 class MediaDatagramTransportPlanBuffer;
 class MediaScheduledWireDatagramBatchBuffer;
+class MediaWireGlobalSequenceState;
 
 struct MediaScheduledDatagramSenderNodeDependencies final {
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> clock;
@@ -70,6 +72,7 @@ private:
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_clock;
     std::unique_ptr<MediaDatagramTransmitPortFactory> m_portFactory;
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
+    std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
     std::shared_ptr<MediaScheduledWireDatagramBatchBuffer> m_pendingBatch;
     MediaNodeWakeup m_wakeup;
     std::stop_source m_stopSource;
@@ -78,6 +81,9 @@ private:
     MediaDatagramTransmitExecutionMode m_executionMode =
         MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
     std::unordered_map<std::uint64_t, std::uint64_t> m_wireOverheadBytes;
+    std::unordered_map<std::uint64_t, std::uint64_t> m_endpointDatagrams;
+    std::unordered_map<std::uint64_t, std::uint64_t> m_endpointBytes;
+    std::vector<std::uint64_t> m_endpointIds;
     std::uint64_t m_burstWireBytes = 0;
     std::uint64_t m_maximumBatchDatagrams = 0;
     std::uint64_t m_maximumBatchBytes = 0;

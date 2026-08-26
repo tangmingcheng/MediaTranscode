@@ -71,6 +71,10 @@ public:
     const MediaDatagramTransmitEvidenceTelemetry& evidenceTelemetry() const noexcept;
     const MediaDatagramTransmitPortCapabilities* capabilities(
         std::uint64_t endpointId) const noexcept;
+    std::uint64_t effectiveSocketBytes() const noexcept
+    {
+        return m_effectiveSocketBytes;
+    }
     const std::optional<::media::ErrorInfo>& terminalFailure() const noexcept
     {
         return m_terminalFailure;
@@ -116,6 +120,7 @@ private:
     std::uint64_t m_burstWireBytes = 0;
     std::uint64_t m_maximumBatchDatagrams = 0;
     std::uint64_t m_maximumBatchBytes = 0;
+    std::uint64_t m_effectiveSocketBytes = 0;
     std::unordered_map<std::uint64_t, EndpointState> m_endpoints;
     std::unique_ptr<MediaDatagramTransmitEvidenceCollector> m_evidence;
     std::unique_ptr<PendingJob> m_pending;

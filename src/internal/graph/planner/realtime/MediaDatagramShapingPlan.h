@@ -79,7 +79,9 @@ struct MediaDatagramEndpointPlan final {
     std::uint64_t maximumPendingDatagrams;
     std::uint64_t maximumPendingBytes;
     MediaRunningTime maximumResidence;
-    std::uint64_t socketHardBoundBytes;
+    std::uint64_t requestedSendBufferBytes;
+    std::uint64_t minimumEffectiveSendBufferBytes;
+    std::uint64_t maximumAdmittedEffectiveSendBufferBytes;
 
     friend bool operator==(const MediaDatagramEndpointPlan&,
                            const MediaDatagramEndpointPlan&) = default;
@@ -132,6 +134,15 @@ struct MediaDatagramBatchPlan final {
                            const MediaDatagramBatchPlan&) = default;
 };
 
+struct MediaDatagramNetworkMemoryPlan final {
+    std::uint64_t maximumTotalBytes;
+    std::uint64_t reservedUserspaceBytes;
+    std::uint64_t maximumSocketBytes;
+
+    friend bool operator==(const MediaDatagramNetworkMemoryPlan&,
+                           const MediaDatagramNetworkMemoryPlan&) = default;
+};
+
 struct MediaDatagramTransmitEvidencePlan final {
     MediaDatagramTransmitEvidenceKind kind;
     MediaDatagramEvidenceCoverageGapPolicy coverageGapPolicy;
@@ -153,6 +164,7 @@ struct MediaDatagramShapingPlanEncoding final {
     MediaDatagramServiceCurvePlan serviceCurve;
     MediaDatagramBacklogPlan backlog;
     MediaDatagramBatchPlan batch;
+    MediaDatagramNetworkMemoryPlan networkMemory;
     MediaDatagramSubmitMode submitMode;
     MediaDatagramOrderingMode orderingMode;
     MediaDatagramLimitFailureMode pressureFailureMode;
@@ -187,6 +199,7 @@ public:
     const MediaDatagramServiceCurvePlan& serviceCurve() const noexcept;
     const MediaDatagramBacklogPlan& backlog() const noexcept;
     const MediaDatagramBatchPlan& batch() const noexcept;
+    const MediaDatagramNetworkMemoryPlan& networkMemory() const noexcept;
     MediaDatagramSubmitMode submitMode() const noexcept;
     MediaDatagramOrderingMode orderingMode() const noexcept;
     MediaDatagramLimitFailureMode pressureFailureMode() const noexcept;

@@ -107,8 +107,8 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
-            request.endpoint.socketHardBoundBytes == 0 ||
-            request.endpoint.socketHardBoundBytes >
+            request.endpoint.requestedSendBufferBytes == 0 ||
+            request.endpoint.requestedSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
@@ -140,7 +140,7 @@ public:
             return ResultType::failure(std::move(error));
         };
         const int requestedBuffer =
-            static_cast<int>(request.endpoint.socketHardBoundBytes);
+            static_cast<int>(request.endpoint.requestedSendBufferBytes);
         if (::setsockopt(handle, SOL_SOCKET, SO_SNDBUF, &requestedBuffer,
                          sizeof(requestedBuffer)) != 0) {
             return fail(::media::ErrorInfo::ioFailure(
@@ -222,6 +222,13 @@ public:
             return fail(::media::ErrorInfo::ioFailure(
                 "Linux Datagram effective SO_SNDBUF query failed", errno));
         }
+        if (static_cast<std::uint64_t>(effectiveBuffer) <
+                request.endpoint.minimumEffectiveSendBufferBytes ||
+            static_cast<std::uint64_t>(effectiveBuffer) >
+                request.endpoint.maximumAdmittedEffectiveSendBufferBytes) {
+            return fail(::media::ErrorInfo::unsupported(
+                "Linux effective SO_SNDBUF is outside the admitted planner range"));
+        }
         m_socket = handle;
         m_stopFd = stopFd;
         m_endpointId = request.endpoint.endpointId;
@@ -237,7 +244,7 @@ public:
                 request.kernelSchedule->maximumScheduleAheadNanoseconds;
         }
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
-            request.endpoint.socketHardBoundBytes,
+            request.endpoint.requestedSendBufferBytes,
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
             m_timestampAvailable
                 ? MediaDatagramTransmitTimestampSource::LinuxSoftwareRealtime

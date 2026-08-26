@@ -170,7 +170,9 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 resources.maximumEndpointPendingDatagrams,
                 resources.maximumEndpointPendingBytes,
                 deployment.latency.maximumResidence,
-                resources.socketHardBoundBytesPerEndpoint});
+                resources.requestedSendBufferBytesPerEndpoint,
+                resources.minimumEffectiveSendBufferBytesPerEndpoint,
+                resources.maximumAdmittedEffectiveSendBufferBytesPerEndpoint});
             localEndpoints.push_back(MediaDatagramLocalEndpointPlan{
                 remote.endpointId,
                 deployment.localPorts.addressFamily,
@@ -198,6 +200,10 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             MediaDatagramBatchPlan{
                 resources.maximumBatchDatagrams,
                 resources.maximumBatchBytes},
+            MediaDatagramNetworkMemoryPlan{
+                deployment.resources.maximumNetworkMemoryBytes,
+                resources.admittedNetworkBytes,
+                deployment.resources.maximumSocketMemoryBytes},
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue,
             MediaDatagramOrderingMode::CanonicalOrdered,
             MediaDatagramLimitFailureMode::Terminate,

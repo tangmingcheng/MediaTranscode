@@ -141,8 +141,8 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
-            request.endpoint.socketHardBoundBytes == 0 ||
-            request.endpoint.socketHardBoundBytes >
+            request.endpoint.requestedSendBufferBytes == 0 ||
+            request.endpoint.requestedSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
@@ -181,7 +181,7 @@ public:
                 WSAGetLastError()));
         }
         const int requestedBuffer =
-            static_cast<int>(request.endpoint.socketHardBoundBytes);
+            static_cast<int>(request.endpoint.requestedSendBufferBytes);
         if (setsockopt(handle, SOL_SOCKET, SO_SNDBUF,
                        reinterpret_cast<const char*>(&requestedBuffer),
                        sizeof(requestedBuffer)) == SOCKET_ERROR) {
@@ -274,6 +274,13 @@ public:
                 "Windows Datagram effective SO_SNDBUF query failed",
                 WSAGetLastError()));
         }
+        if (static_cast<std::uint64_t>(effectiveBuffer) <
+                request.endpoint.minimumEffectiveSendBufferBytes ||
+            static_cast<std::uint64_t>(effectiveBuffer) >
+                request.endpoint.maximumAdmittedEffectiveSendBufferBytes) {
+            return fail(::media::ErrorInfo::unsupported(
+                "Windows effective SO_SNDBUF is outside the admitted planner range"));
+        }
         m_socket = handle;
         m_socketEvent = socketEvent;
         m_stopEvent = stopEvent;
@@ -285,7 +292,7 @@ public:
         m_timestampSource = timestampSource;
         m_timestampFrequency = timestampFrequency;
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
-            request.endpoint.socketHardBoundBytes,
+            request.endpoint.requestedSendBufferBytes,
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
             timestampSource, timestampFrequency,
             m_timestampAvailable

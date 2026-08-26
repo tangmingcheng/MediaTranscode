@@ -149,10 +149,9 @@ MediaScheduledWireDatagramBatchBuffer::create(
         ++usage->datagrams;
         usage->bytes += wire.payloadSize;
         if (usage->datagrams > endpoint->maximumPendingDatagrams ||
-            usage->bytes > endpoint->maximumPendingBytes ||
-            usage->bytes > endpoint->socketHardBoundBytes) {
+            usage->bytes > endpoint->maximumPendingBytes) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled wire endpoint batch exceeds its pending or socket hard bound"));
+                "scheduled wire endpoint batch exceeds its pending bound"));
         }
 
         previousCompletion = completion.value();

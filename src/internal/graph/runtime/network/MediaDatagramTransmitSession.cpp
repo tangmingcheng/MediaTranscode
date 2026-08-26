@@ -142,6 +142,24 @@ MediaDatagramTransmitSession::create(
                 return ResultType::failure(::media::ErrorInfo::unsupported(
                     "Datagram MSG_ZEROCOPY is forbidden by the transmit plan"));
             }
+            if (opened.value().requestedSendBufferBytes !=
+                    endpoint.requestedSendBufferBytes ||
+                opened.value().effectiveSendBufferBytes <
+                    endpoint.minimumEffectiveSendBufferBytes ||
+                opened.value().effectiveSendBufferBytes >
+                    endpoint.maximumAdmittedEffectiveSendBufferBytes ||
+                opened.value().effectiveSendBufferBytes >
+                    plan.networkMemory().maximumSocketBytes -
+                        session->m_effectiveSocketBytes ||
+                opened.value().effectiveSendBufferBytes >
+                    plan.networkMemory().maximumTotalBytes -
+                        plan.networkMemory().reservedUserspaceBytes -
+                        session->m_effectiveSocketBytes) {
+                return ResultType::failure(::media::ErrorInfo::unsupported(
+                    "effective Datagram socket memory exceeds the activated network ledger"));
+            }
+            session->m_effectiveSocketBytes +=
+                opened.value().effectiveSendBufferBytes;
             if (execution.mode ==
                     MediaDatagramTransmitExecutionMode::LinuxSocketTxTime &&
                 !opened.value().kernelTransmitTimeAvailable) {

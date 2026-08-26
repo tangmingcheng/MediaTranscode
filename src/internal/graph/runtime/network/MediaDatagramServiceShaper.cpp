@@ -71,6 +71,7 @@ bool sameRuntimeContract(const MediaDatagramShapingPlan& lhs,
            lhs.endpoints() == rhs.endpoints() &&
            lhs.serviceCurve() == rhs.serviceCurve() &&
            lhs.backlog() == rhs.backlog() && lhs.batch() == rhs.batch() &&
+           lhs.networkMemory() == rhs.networkMemory() &&
            lhs.submitMode() == rhs.submitMode() &&
            lhs.orderingMode() == rhs.orderingMode() &&
            lhs.pressureFailureMode() == rhs.pressureFailureMode() &&
@@ -315,8 +316,7 @@ MediaDatagramServiceShaper::shape(
         if (backlogDatagrams > m_plan.backlog().maximumDatagrams ||
             backlogWireBytes > m_plan.backlog().maximumBytes ||
             endpointPending->datagrams > endpoint->maximumPendingDatagrams ||
-            endpointPending->bytes > endpoint->maximumPendingBytes ||
-            endpointPending->bytes > endpoint->socketHardBoundBytes) {
+            endpointPending->bytes > endpoint->maximumPendingBytes) {
             if (m_telemetry.pressureFailures ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
                 m_telemetry.counterSaturated = true;

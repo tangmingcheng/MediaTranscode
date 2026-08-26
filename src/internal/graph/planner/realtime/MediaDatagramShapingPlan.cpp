@@ -129,9 +129,16 @@ constexpr UInt128 multiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
     if (endpoint.endpointId == 0 || endpoint.port == 0 || !address || !mtu ||
         endpoint.maximumPendingDatagrams == 0 ||
         endpoint.maximumPendingBytes < endpoint.maximumDatagramBytes ||
-        endpoint.maximumPendingBytes > endpoint.socketHardBoundBytes ||
+        endpoint.requestedSendBufferBytes == 0 ||
+        endpoint.minimumEffectiveSendBufferBytes <
+            endpoint.maximumDatagramBytes ||
+        endpoint.requestedSendBufferBytes <
+            endpoint.minimumEffectiveSendBufferBytes ||
+        endpoint.maximumAdmittedEffectiveSendBufferBytes <
+            endpoint.requestedSendBufferBytes ||
         endpoint.maximumResidence <= MediaRunningTime::fromNanoseconds(0) ||
-        endpoint.socketHardBoundBytes < endpoint.maximumDatagramBytes) {
+        endpoint.maximumAdmittedEffectiveSendBufferBytes <
+            endpoint.maximumDatagramBytes) {
         return ::media::Status::failure(
             !address
                 ? address.error()
@@ -257,6 +264,14 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
         encoding.batch.maximumBytes == 0 ||
         encoding.batch.maximumDatagrams > encoding.backlog.maximumDatagrams ||
         encoding.batch.maximumBytes > encoding.backlog.maximumBytes ||
+        encoding.networkMemory.maximumTotalBytes == 0 ||
+        encoding.networkMemory.reservedUserspaceBytes == 0 ||
+        encoding.networkMemory.maximumSocketBytes == 0 ||
+        encoding.networkMemory.reservedUserspaceBytes >
+            encoding.networkMemory.maximumTotalBytes ||
+        encoding.networkMemory.maximumSocketBytes >
+            encoding.networkMemory.maximumTotalBytes -
+                encoding.networkMemory.reservedUserspaceBytes ||
         encoding.submitMode !=
             MediaDatagramSubmitMode::NonBlockingAtomicEnqueue ||
         encoding.orderingMode != MediaDatagramOrderingMode::CanonicalOrdered ||
@@ -397,6 +412,12 @@ MediaDatagramShapingPlan::backlog() const noexcept
 const MediaDatagramBatchPlan& MediaDatagramShapingPlan::batch() const noexcept
 {
     return m_encoding.batch;
+}
+
+const MediaDatagramNetworkMemoryPlan&
+MediaDatagramShapingPlan::networkMemory() const noexcept
+{
+    return m_encoding.networkMemory;
 }
 
 MediaDatagramSubmitMode MediaDatagramShapingPlan::submitMode() const noexcept

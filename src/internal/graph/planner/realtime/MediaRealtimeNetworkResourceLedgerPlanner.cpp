@@ -146,6 +146,9 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     if (!networkBytes || !socketBytes ||
         networkBytes.value() >
             deployment.resources.maximumNetworkMemoryBytes ||
+        socketBytes.value() >
+            deployment.resources.maximumNetworkMemoryBytes -
+                networkBytes.value() ||
         socketBytes.value() > deployment.resources.maximumSocketMemoryBytes) {
         return Result::failure(
             !networkBytes ? networkBytes.error() :
@@ -177,7 +180,8 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
             backlogDatagrams, backlogBytes.value(),
             batchDatagrams, batchBytes,
             endpointPendingDatagrams, endpointPendingBytes,
-            socketPerEndpoint, correlationEntries,
+            endpointPendingBytes, endpointPendingBytes, socketPerEndpoint,
+            correlationEntries,
             networkBytes.value(), socketBytes.value(), std::move(entries)};
         auto status = validate(ledger, deployment);
         return status ? Result::success(std::move(ledger))
@@ -197,7 +201,10 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         ledger.maximumBatchDatagrams == 0 || ledger.maximumBatchBytes == 0 ||
         ledger.maximumEndpointPendingDatagrams == 0 ||
         ledger.maximumEndpointPendingBytes == 0 ||
-        ledger.socketHardBoundBytesPerEndpoint == 0) {
+        ledger.requestedSendBufferBytesPerEndpoint == 0 ||
+        ledger.minimumEffectiveSendBufferBytesPerEndpoint == 0 ||
+        ledger.maximumAdmittedEffectiveSendBufferBytesPerEndpoint <
+            ledger.requestedSendBufferBytesPerEndpoint) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "network resource ledger is incomplete"));
     }
@@ -219,6 +226,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     if (network != ledger.admittedNetworkBytes ||
         socket != ledger.admittedSocketBytes ||
         network > deployment.resources.maximumNetworkMemoryBytes ||
+        socket > deployment.resources.maximumNetworkMemoryBytes - network ||
         socket > deployment.resources.maximumSocketMemoryBytes) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "network resource ledger totals conflict with deployment budgets"));
