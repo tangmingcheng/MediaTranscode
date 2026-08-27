@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -22,12 +23,6 @@ struct MediaGraphPayloadCreditSnapshot final {
 };
 
 class MediaGraphPayloadCreditState;
-
-class MediaGraphPayloadCreditReleaseObserver {
-public:
-    virtual ~MediaGraphPayloadCreditReleaseObserver() = default;
-    virtual void onGraphPayloadCreditReleased() noexcept = 0;
-};
 
 class MediaGraphPayloadCreditLease final {
 public:
@@ -64,8 +59,11 @@ public:
         std::uint64_t bytes) noexcept;
     ::media::Result<std::vector<MediaGraphPayloadCreditLease>> tryReserveBatch(
         std::span<const std::uint64_t> bytes) noexcept;
-    void setReleaseObserver(
-        std::weak_ptr<MediaGraphPayloadCreditReleaseObserver> observer) noexcept;
+    ::media::Result<std::vector<MediaGraphPayloadCreditLease>> tryReserveOrArm(
+        MediaNodeId producer,
+        std::span<const std::uint64_t> bytes,
+        std::shared_ptr<MediaNodeWakeup> wakeup) noexcept;
+    void cancelBlockedWaiters() noexcept;
     MediaGraphPayloadCreditSnapshot snapshot() const noexcept;
     const MediaGraphPayloadCreditPlan& plan() const noexcept { return m_plan; }
 

@@ -3,7 +3,6 @@
 #include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/runtime/context/MediaGraphPayloadCreditWakeupHub.h"
 #include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <sstream>
@@ -70,14 +69,6 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
             return ::media::Status::failure(ledger.error());
         }
         m_payloadCreditLedger = std::move(ledger).value();
-        m_payloadCreditWakeupHub =
-            std::make_shared<MediaGraphPayloadCreditWakeupHub>();
-        for (const auto& [node, wakeup] : m_nodeWakeups) {
-            (void)node;
-            m_payloadCreditWakeupHub->add(wakeup);
-        }
-        m_payloadCreditLedger->setReleaseObserver(
-            m_payloadCreditWakeupHub);
     } else if (graph.payloadCreditPlan()) {
         reset();
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -112,9 +103,8 @@ void MediaGraphExecutionContext::reset()
     shutdownAvSyncGroups();
     m_graph = nullptr;
     m_channels.clear();
-    if (m_payloadCreditWakeupHub) m_payloadCreditWakeupHub->interrupt();
+    if (m_payloadCreditLedger) m_payloadCreditLedger->cancelBlockedWaiters();
     m_payloadCreditLedger.reset();
-    m_payloadCreditWakeupHub.reset();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
     m_compiled = false;
@@ -230,7 +220,8 @@ MediaGraphExecutionContext::reservePayloadBatch(
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "runtime payload batch credit request"));
     }
-    auto leases = m_payloadCreditLedger->tryReserveBatch(ledgerBytes);
+    auto leases = m_payloadCreditLedger->tryReserveOrArm(
+        producer, ledgerBytes, sharedNodeWakeup(producer));
     if (!leases) return Result::failure(leases.error());
     try {
         std::vector<MediaGraphPayloadReservation> reservations;

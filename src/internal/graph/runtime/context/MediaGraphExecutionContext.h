@@ -17,7 +17,6 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphPayloadCreditLedger;
-class MediaGraphPayloadCreditWakeupHub;
 
 class MediaGraphExecutionContext final {
 public:
@@ -91,7 +90,6 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
     MediaAvSyncGroupRegistry m_avSyncGroups;
     std::shared_ptr<MediaGraphPayloadCreditLedger> m_payloadCreditLedger;
-    std::shared_ptr<MediaGraphPayloadCreditWakeupHub> m_payloadCreditWakeupHub;
     bool m_compiled = false;
     MediaGraphDiagnosticConfig m_diagnosticConfig;
 };
