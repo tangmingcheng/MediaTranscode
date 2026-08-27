@@ -71,8 +71,8 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
                 bufferSize.error());
         }
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
-            { output.rate_control_mode, bitrate.value(), 0, 0,
-              bufferSize.value() });
+            MediaRealtimeBetaOwnedConfig::CbrRateControl{
+                bitrate.value(), bufferSize.value() });
     }
     if (output.rate_control_mode != MT_BETA_RATE_CONTROL_VBR) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
@@ -103,8 +103,8 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
         bufferSizeKbits = bufferSize.value();
     }
     return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
-        { output.rate_control_mode, target.value(), minimum.value(), maximum.value(),
-          bufferSizeKbits });
+        MediaRealtimeBetaOwnedConfig::VbrRateControl{
+            minimum.value(), target.value(), maximum.value(), bufferSizeKbits });
 }
 
 ::media::Result<ffmpeg::graph::MediaRealtimeDeploymentEnvelope>

@@ -80,71 +80,63 @@ MediaEncoderRateControlPlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "MediaEncoderRateControlPlanner requires a planner-selected encoder"));
     }
-    if (auto status = validatePositive(request.targetBitrateKbps, "target bitrate"); !status) {
+    const auto target = request.targetBitrateKbps();
+    const auto minimum = request.minimumBitrateKbps();
+    const auto maximum = request.maximumBitrateKbps();
+    const auto buffer = request.bufferSizeKbits();
+    const auto mode = request.mode();
+    if (auto status = validatePositive(target, "target bitrate"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
-    if (auto status = validatePositive(request.minimumBitrateKbps, "minimum bitrate"); !status) {
+    if (auto status = validatePositive(minimum, "minimum bitrate"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
-    if (auto status = validatePositive(request.maximumBitrateKbps, "maximum bitrate"); !status) {
+    if (auto status = validatePositive(maximum, "maximum bitrate"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
-    if (auto status = validatePositive(request.bufferSizeKbits, "buffer size"); !status) {
+    if (auto status = validatePositive(buffer, "buffer size"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
-    if (request.minimumBitrateKbps && request.maximumBitrateKbps &&
-        *request.minimumBitrateKbps > *request.maximumBitrateKbps) {
+    if (minimum && maximum && *minimum > *maximum) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaEncoderRateControlPlanner requires minimum bitrate <= maximum bitrate"));
     }
-    if (request.mode == MediaRateControlMode::Cbr &&
-        (!request.targetBitrateKbps || !request.bufferSizeKbits)) {
+    if (mode == MediaRateControlMode::Cbr && (!target || !buffer)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "CBR requires target bitrate and buffer-size facts"));
     }
-    if (request.mode == MediaRateControlMode::Cbr &&
-        ((request.minimumBitrateKbps &&
-             *request.targetBitrateKbps != *request.minimumBitrateKbps) ||
-         (request.maximumBitrateKbps &&
-             *request.targetBitrateKbps != *request.maximumBitrateKbps))) {
+    if (mode == MediaRateControlMode::Cbr && (minimum || maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "CBR minimum or maximum bitrate conflicts with target bitrate"));
+                "CBR request rejects caller-supplied minimum or maximum bitrate"));
     }
-    if (request.mode == MediaRateControlMode::Vbr &&
-        (!request.targetBitrateKbps || !request.minimumBitrateKbps ||
-         !request.maximumBitrateKbps)) {
+    if (mode == MediaRateControlMode::Vbr && (!target || !minimum || !maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VBR requires target, minimum, and maximum bitrate facts"));
     }
-    if (request.mode == MediaRateControlMode::Vbr &&
-        (*request.targetBitrateKbps < *request.minimumBitrateKbps ||
-         *request.targetBitrateKbps > *request.maximumBitrateKbps)) {
+    if (mode == MediaRateControlMode::Vbr &&
+        (*target < *minimum || *target > *maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VBR requires minimum bitrate <= target bitrate <= maximum bitrate"));
     }
 
     MediaEncoderRateControlPlan result{
-        request.mode, request.targetBitrateKbps,
-        request.minimumBitrateKbps, request.maximumBitrateKbps,
-        request.bufferSizeKbits, std::nullopt};
-    if (request.mode == MediaRateControlMode::Cbr) {
-        result.minimumBitrateKbps = request.targetBitrateKbps;
-        result.maximumBitrateKbps = request.targetBitrateKbps;
+        mode, target, minimum, maximum, buffer, std::nullopt};
+    if (mode == MediaRateControlMode::Cbr) {
+        result.minimumBitrateKbps = target;
+        result.maximumBitrateKbps = target;
     }
     if (deviceKind == MediaHardwareDeviceKind::RKMPP) {
-        if (request.mode == MediaRateControlMode::Crf ||
-            request.mode == MediaRateControlMode::Cvbr) {
+        if (mode == MediaRateControlMode::Crf || mode == MediaRateControlMode::Cvbr) {
             return ::media::Result<MediaEncoderRateControlPlan>::failure(
                 ::media::ErrorInfo::unsupported(
                     "RKMPP encoder does not expose the requested rate-control mode"));
         }
-        if (request.mode == MediaRateControlMode::Cbr ||
-            request.mode == MediaRateControlMode::Vbr) {
+        if (mode == MediaRateControlMode::Cbr || mode == MediaRateControlMode::Vbr) {
             const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName.c_str());
             if (!encoder) {
                 return ::media::Result<MediaEncoderRateControlPlan>::failure(
@@ -152,7 +144,7 @@ MediaEncoderRateControlPlanner::plan(
                         "planner-selected encoder is unavailable: " + encoderName));
             }
             auto option = resolveNamedMode(
-                *encoder, mediaRateControlModeName(request.mode));
+                *encoder, mediaRateControlModeName(mode));
             if (!option) {
                 return ::media::Result<MediaEncoderRateControlPlan>::failure(option.error());
             }

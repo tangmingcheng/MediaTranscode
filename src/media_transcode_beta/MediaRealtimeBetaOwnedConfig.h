@@ -8,18 +8,23 @@
 
 #include <cstdint>
 #include <string>
+#include <variant>
 
 namespace media::beta {
 
 class MediaRealtimeBetaOwnedConfig final {
 public:
-    struct RateControl final {
-        mt_beta_rate_control_mode mode;
+    struct CbrRateControl final {
         int targetBitrateKbps;
+        int bufferSizeKbits;
+    };
+    struct VbrRateControl final {
         int minimumBitrateKbps;
+        int targetBitrateKbps;
         int maximumBitrateKbps;
         int bufferSizeKbits;
     };
+    using RateControl = std::variant<CbrRateControl, VbrRateControl>;
 
     static ::media::Result<MediaRealtimeBetaOwnedConfig> create(
         const mt_beta_realtime_config* config,

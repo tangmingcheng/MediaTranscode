@@ -237,9 +237,14 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
+    auto rateControl = MediaEncoderRateControlRequest::create(
         video.rateControl, video.bitrateKbps, video.minBitrateKbps,
-        video.maxBitrateKbps, video.bufferSizeKbits};
+        video.maxBitrateKbps, video.bufferSizeKbits);
+    if (!rateControl) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            rateControl.error());
+    }
+    plannerOptions.encoderRateControl = std::move(rateControl).value();
     plannerOptions.encoderOpenRequest = video;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {

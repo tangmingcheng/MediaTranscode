@@ -299,7 +299,7 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     plan.filterActive = plan.selected.filterActive;
     MediaEncoderRateControlRequest rateControlRequest =
         options.encoderRateControl;
-    if (!rateControlRequest.targetBitrateKbps &&
+    if (!rateControlRequest.targetBitrateKbps() &&
         inputInfo.bitrateBitsPerSecond > 0) {
         const std::int64_t kbps =
             (inputInfo.bitrateBitsPerSecond + 999) / 1000;
@@ -308,7 +308,10 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
                 ::media::ErrorInfo::invalidArgument(
                     "input bitrate exceeds planner rate-control range"));
         }
-        rateControlRequest.targetBitrateKbps = static_cast<int>(kbps);
+        if (auto status = rateControlRequest.setPlannerDerivedTargetBitrate(
+                static_cast<int>(kbps)); !status) {
+            return ::media::Result<MediaPipelinePlan>::failure(status.error());
+        }
     }
     auto rateControl = MediaEncoderRateControlPlanner::plan(
         plan.selected.encoder.ffmpegName,

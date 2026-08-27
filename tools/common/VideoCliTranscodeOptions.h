@@ -42,6 +42,17 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
+    if (parameters.video.rateControl == MediaRateControlMode::Cbr &&
+        (parameters.video.minBitrateKbps || parameters.video.maxBitrateKbps)) {
+        throw std::invalid_argument(
+            "CBR accepts target bitrate only; --min-bitrate and --max-bitrate are VBR facts");
+    }
+    if (parameters.video.rateControl == MediaRateControlMode::Vbr &&
+        (!parameters.video.bitrateKbps || !parameters.video.minBitrateKbps ||
+         !parameters.video.maxBitrateKbps)) {
+        throw std::invalid_argument(
+            "VBR requires --min-bitrate, --bitrate, and --max-bitrate");
+    }
 
     parameters.audio.codecName = argValue(argc, argv, "--audio-codec");
     parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
@@ -54,6 +65,17 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
     parameters.audio.preset = argValue(argc, argv, "--audio-preset");
     parameters.audio.profile = argValue(argc, argv, "--audio-profile");
+    if (parameters.audio.rateControl == MediaRateControlMode::Cbr &&
+        (parameters.audio.minBitrateKbps || parameters.audio.maxBitrateKbps)) {
+        throw std::invalid_argument(
+            "audio CBR accepts target bitrate only; audio minimum and maximum bitrate are VBR facts");
+    }
+    if (parameters.audio.rateControl == MediaRateControlMode::Vbr &&
+        (!parameters.audio.bitrateKbps || !parameters.audio.minBitrateKbps ||
+         !parameters.audio.maxBitrateKbps)) {
+        throw std::invalid_argument(
+            "audio VBR requires minimum, target, and maximum bitrate facts");
+    }
 }
 
 inline std::vector<std::string> commonVideoTranscodeValueArgs()
