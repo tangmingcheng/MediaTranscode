@@ -16,13 +16,11 @@ class MediaRealtimeBetaOwnedConfig final {
 public:
     struct CbrRateControl final {
         int targetBitrateKbps;
-        int bufferSizeKbits;
     };
     struct VbrRateControl final {
         int minimumBitrateKbps;
         int targetBitrateKbps;
         int maximumBitrateKbps;
-        int bufferSizeKbits;
     };
     using RateControl = std::variant<CbrRateControl, VbrRateControl>;
 

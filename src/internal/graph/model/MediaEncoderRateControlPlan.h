@@ -12,14 +12,12 @@ namespace media::ffmpeg::graph {
 
 struct MediaEncoderCbrRateControlFacts final {
     int targetBitrateKbps = 0;
-    int bufferSizeKbits = 0;
 };
 
 struct MediaEncoderVbrRateControlFacts final {
     int minimumBitrateKbps = 0;
     int targetBitrateKbps = 0;
     int maximumBitrateKbps = 0;
-    std::optional<int> bufferSizeKbits;
 };
 
 struct MediaEncoderGeneralRateControlFacts final {

@@ -89,6 +89,7 @@ private:
     bool m_firstFrameDiagnosticEmitted = false;
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstPacketDiagnosticEmitted = false;
+    bool m_firstPacketFootprintDiagnosticEmitted = false;
     std::optional<bool> m_sendWouldBlock;
     std::optional<bool> m_forceGenerationStartKeyFrame;
     std::optional<bool> m_copyOpaqueLineage;

@@ -84,6 +84,7 @@ private:
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointDatagrams;
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointBytes;
     std::vector<std::uint64_t> m_endpointIds;
+    std::vector<MediaDatagramTransmitJobEntry> m_submitEntries;
     std::uint64_t m_burstWireBytes = 0;
     std::uint64_t m_maximumBatchDatagrams = 0;
     std::uint64_t m_maximumBatchBytes = 0;
@@ -92,13 +93,16 @@ private:
     std::size_t m_groupBegin = 0;
     std::size_t m_groupCount = 0;
     std::uint64_t m_groupEndpointId = 0;
+    MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
+    std::optional<MediaRunningTime> m_nextPhysicalSubmitNotBefore;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::uint64_t m_batches = 0;
     std::uint64_t m_datagrams = 0;
     std::uint64_t m_bytes = 0;
     std::uint64_t m_wouldBlockEvents = 0;
     std::uint64_t m_writableWaits = 0;
+    std::uint64_t m_physicalSpacingDeferrals = 0;
     std::uint64_t m_deadlineMisses = 0;
     std::uint64_t m_pressureFailures = 0;
     std::uint64_t m_partialSubmittedFailures = 0;

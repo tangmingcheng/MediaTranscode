@@ -24,6 +24,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanner.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <chrono>
 #include <limits>
@@ -245,6 +246,53 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
             rateControl.error());
     }
     plannerOptions.encoderRateControl = std::move(rateControl).value();
+    if (!options.deployment) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Realtime video pipeline planning requires deployment facts"));
+    }
+    const auto peakBitrateKbps = video.rateControl == MediaRateControlMode::Vbr
+        ? video.maxBitrateKbps
+        : video.bitrateKbps;
+    if ((video.rateControl == MediaRateControlMode::Cbr ||
+         video.rateControl == MediaRateControlMode::Vbr) &&
+        !peakBitrateKbps) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Realtime bitrate-controlled output requires a peak bitrate fact"));
+    }
+    if (peakBitrateKbps) {
+        const auto& latency = options.deployment->encode().latency;
+        auto smoothingWindow = latency.targetResidence.checkedSubtract(
+            latency.maximumReleaseJitter);
+        if (!smoothingWindow || smoothingWindow.value().nanoseconds() <= 0) {
+            return ::media::Result<MediaPipelinePlannerOptions>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Realtime encoder VBV planning requires target residence greater than release jitter"));
+        }
+        auto bufferKilobitNanoseconds = MediaCheckedArithmetic::multiply(
+            static_cast<std::uint64_t>(*peakBitrateKbps),
+            static_cast<std::uint64_t>(smoothingWindow.value().nanoseconds()),
+            "Realtime encoder VBV latency product");
+        if (!bufferKilobitNanoseconds) {
+            return ::media::Result<MediaPipelinePlannerOptions>::failure(
+                bufferKilobitNanoseconds.error());
+        }
+        constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
+        const auto bufferSizeKbits =
+            bufferKilobitNanoseconds.value() / NanosecondsPerSecond;
+        if (bufferSizeKbits == 0 ||
+            bufferSizeKbits > static_cast<std::uint64_t>(
+                (std::numeric_limits<int>::max)())) {
+            return ::media::Result<MediaPipelinePlannerOptions>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Realtime encoder VBV derived from latency is outside the encoder range"));
+        }
+        plannerOptions.encoderVbvPlan =
+            MediaPipelinePlannerOptions::EncoderVbvPlan{
+                static_cast<int>(bufferSizeKbits),
+                latency.authority + "+" + latency.releaseJitterAuthority};
+    }
     plannerOptions.encoderOpenRequest = video;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
@@ -300,11 +348,11 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 
 ::media::Result<MediaPipelinePlan> planRawRtpVideoPipeline(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaDetectedRtpVideoSignaling& detected,
+    const MediaDetectedRtpVideoSignaling* detected,
     const MediaRational& detectedFrameRate)
 {
     auto signaling = MediaRealtimeRtpVideoSignalingResolver::resolve(
-        request.input.videoRtp, &detected);
+        request.input.videoRtp, detected);
     if (!signaling) {
         return ::media::Result<MediaPipelinePlan>::failure(
             signaling.error());
@@ -1240,13 +1288,6 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
     }
     if (request.input.type && *request.input.type == RealtimeInputType::RtpPort) {
-        if (request.input.videoRtp.fmtp) {
-            auto planned = plan(request);
-            if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
-            MediaRealtimeTranscodePreflight result(
-                std::move(planned).value());
-            return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
-        }
         const auto preflightDeadline = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(*request.input.openTimeoutMs);
         auto remainingForProbe = remainingRawRtpStartupMilliseconds(
@@ -1298,8 +1339,11 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         MediaPreparedRealtimeInput* preparedAudio = audioVideoProbe
             ? &audioVideoProbe->audio
             : nullptr;
+        const auto* detectedForPlanning = request.input.videoRtp.fmtp
+            ? nullptr
+            : &detected;
         auto preplannedVideo = planRawRtpVideoPipeline(
-            request, detected, detectedFrameRate);
+            request, detectedForPlanning, detectedFrameRate);
         if (!preplannedVideo) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 preplannedVideo.error());
@@ -1342,7 +1386,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         }
         auto planned = planWithInput(
             request, nullptr, nullptr, &preparedVideo, preparedAudio,
-            &videoIngress.value(), std::move(preplannedVideo).value(), &detected,
+            &videoIngress.value(), std::move(preplannedVideo).value(),
+            detectedForPlanning,
             &detectedFrameRate);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
         auto remainingAfterPlanning = remainingRawRtpStartupMilliseconds(

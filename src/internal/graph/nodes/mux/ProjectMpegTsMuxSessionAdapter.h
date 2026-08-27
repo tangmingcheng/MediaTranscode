@@ -42,7 +42,6 @@ private:
     std::unique_ptr<MediaTsMuxSession> session;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
-    MediaBufferRef stagedAccessUnit;
     bool mediaTimelineStarted = false;
     std::atomic<std::uint64_t> generation{0};
 };
@@ -121,7 +120,6 @@ private:
     std::unique_ptr<MediaTsMuxSession>& m_session;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
-    MediaBufferRef& m_stagedAccessUnit;
     bool& m_mediaTimelineStarted;
     std::atomic<std::uint64_t>& m_generation;
     std::unique_ptr<MediaOutputByteSink> m_sink;

@@ -34,6 +34,8 @@ struct MediaRawRtpProbePlan final {
     std::size_t maximumBufferedBytes = 0;
     std::size_t reorderWindowPackets = 0;
     int maximumReorderDelayMs = 0;
+    std::optional<MediaRtpVideoSignalingFacts>
+        authoritativeVideoSignaling;
     std::optional<MediaRtpVideoPacketizationPolicy> packetizationPolicy;
     std::optional<MediaRtcpCompoundPolicy> rtcpPolicy;
 };

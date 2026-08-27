@@ -84,7 +84,7 @@ public:
     {
         return m_terminalSubmitFailure;
     }
-    bool hasPendingRetry() const noexcept { return m_pending != nullptr; }
+    bool hasPendingRetry() const noexcept { return m_pendingActive; }
 
 private:
     struct EndpointState final {
@@ -107,6 +107,7 @@ private:
                                  std::uint64_t generation) noexcept;
     MediaDatagramTransmitSubmitResult submitPending(
         MediaRunningTime now) noexcept;
+    void clearPending() noexcept;
     ::media::Status advanceClock(MediaRunningTime now) noexcept;
     ::media::Status validateOwnerThread() noexcept;
     ::media::Status terminate(::media::ErrorInfo error) noexcept;
@@ -124,10 +125,13 @@ private:
     std::unordered_map<std::uint64_t, EndpointState> m_endpoints;
     std::unique_ptr<MediaDatagramTransmitEvidenceCollector> m_evidence;
     std::unique_ptr<PendingJob> m_pending;
+    std::vector<std::uint64_t> m_evidenceIdsScratch;
+    std::vector<std::optional<std::uint64_t>> m_launchTimesScratch;
     std::optional<MediaRunningTime> m_lastNow;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::optional<MediaDatagramTransmitError> m_terminalSubmitFailure;
     std::thread::id m_ownerThread;
+    bool m_pendingActive = false;
     bool m_portsClosed = false;
     bool m_closed = false;
 };

@@ -46,6 +46,33 @@ bool isRkmppChain(const MediaPipelineChainPlan& chain) noexcept
            chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP;
 }
 
+::media::Result<MediaEncoderRateControlPlan>
+completeRateControlFromPreparedReadback(
+    const MediaPipelineStagePlan& encoder)
+{
+    using Result = ::media::Result<MediaEncoderRateControlPlan>;
+    if (!encoder.encoderRateControl || !encoder.preparedEmission) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "encoder rate-control completion requires prepared emission readback"));
+    }
+    MediaEncoderRateControlPlan completed = *encoder.encoderRateControl;
+    if (completed.bufferSizeKbits) {
+        return Result::success(std::move(completed));
+    }
+    constexpr std::uint64_t BitsPerKilobit = 1000;
+    const auto effectiveBits =
+        encoder.preparedEmission->effectiveVbvBufferBits;
+    if (effectiveBits == 0 || effectiveBits % BitsPerKilobit != 0 ||
+        effectiveBits / BitsPerKilobit > static_cast<std::uint64_t>(
+            (std::numeric_limits<int>::max)())) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "opened encoder did not expose an exactly representable effective VBV readback"));
+    }
+    completed.bufferSizeKbits = static_cast<int>(
+        effectiveBits / BitsPerKilobit);
+    return Result::success(std::move(completed));
+}
+
 bool sameFrameDomain(const MediaHardwareDescriptor& left,
                      const MediaHardwareDescriptor& right) noexcept
 {
@@ -320,8 +347,18 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     if (!rateControl) {
         return ::media::Result<MediaPipelinePlan>::failure(rateControl.error());
     }
-    plan.selected.encoder.encoderRateControl =
-        std::move(rateControl).value();
+    if (options.encoderVbvPlan) {
+        if (options.encoderVbvPlan->bufferSizeKbits <= 0 ||
+            options.encoderVbvPlan->authority.empty() ||
+            rateControl.value().bufferSizeKbits) {
+            return ::media::Result<MediaPipelinePlan>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "planner-owned encoder VBV plan conflicts with rate-control facts"));
+        }
+        rateControl.value().bufferSizeKbits =
+            options.encoderVbvPlan->bufferSizeKbits;
+    }
+    plan.selected.encoder.encoderRateControl = std::move(rateControl).value();
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
     const int encoderWidth = options.targetWidth > 0
@@ -349,6 +386,16 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     if (!preflight) {
         return ::media::Result<MediaPipelinePlan>::failure(preflight.error());
     }
+    auto completedRateControl = completeRateControlFromPreparedReadback(
+        plan.selected.encoder);
+    if (!completedRateControl) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            completedRateControl.error());
+    }
+    plan.selected.encoder.encoderRateControl =
+        std::move(completedRateControl).value();
+    plan.selected.encoder.encoderOpenContract->rateControl =
+        *plan.selected.encoder.encoderRateControl;
     logSelectedPlan(options, plan);
     return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }

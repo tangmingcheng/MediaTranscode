@@ -102,20 +102,26 @@ MediaEncoderRateControlPlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "MediaEncoderRateControlPlanner requires minimum bitrate <= maximum bitrate"));
     }
-    if (mode == MediaRateControlMode::Cbr && (!target || !buffer)) {
+    if (mode == MediaRateControlMode::Cbr && !target) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "CBR requires target bitrate and buffer-size facts"));
+                "CBR requires target bitrate"));
     }
-    if (mode == MediaRateControlMode::Cbr && (minimum || maximum)) {
+    if (mode == MediaRateControlMode::Cbr &&
+        (minimum || maximum || buffer)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "CBR request rejects caller-supplied minimum or maximum bitrate"));
+                "CBR request accepts only caller-supplied target bitrate"));
     }
     if (mode == MediaRateControlMode::Vbr && (!target || !minimum || !maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VBR requires target, minimum, and maximum bitrate facts"));
+    }
+    if (mode == MediaRateControlMode::Vbr && buffer) {
+        return ::media::Result<MediaEncoderRateControlPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VBR request accepts only minimum, target, and maximum bitrate"));
     }
     if (mode == MediaRateControlMode::Vbr &&
         (*target < *minimum || *target > *maximum)) {

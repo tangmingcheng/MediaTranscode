@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
 #include <new>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -30,10 +31,15 @@ MediaGraphPayloadReservation::nonRealtimeNotApplicable() noexcept
     std::uint64_t bytes) noexcept
 {
     if (m_nonRealtimeNotApplicable) return ::media::Status::success();
-    if (!m_lease || !*m_lease || bytes == 0 ||
-        bytes > m_maximumReservationBytes) {
+    if (!m_lease || !*m_lease) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "payload producer has no active prepared reservation"));
+    }
+    if (bytes == 0 || bytes > m_maximumReservationBytes) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "payload producer exceeded its prepared single-unit bound"));
+            "payload producer footprint=" + std::to_string(bytes) +
+            " bytes is outside prepared single-unit bound=1.." +
+            std::to_string(m_maximumReservationBytes) + " bytes"));
     }
     if (m_accounting ==
         MediaGraphPayloadAllocationAccounting::

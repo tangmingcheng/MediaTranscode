@@ -109,6 +109,11 @@ struct MediaPipelinePlannerOptions {
     MediaRational sourceFrameRate;
     MediaRational targetFrameRate;
     MediaEncoderRateControlRequest encoderRateControl;
+    struct EncoderVbvPlan final {
+        int bufferSizeKbits = 0;
+        std::string authority;
+    };
+    std::optional<EncoderVbvPlan> encoderVbvPlan;
     MediaVideoTranscodeParameters encoderOpenRequest;
     int targetWidth = 0;
     int targetHeight = 0;

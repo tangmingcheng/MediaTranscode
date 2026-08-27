@@ -34,6 +34,7 @@ struct MediaDatagramTransmitEvidenceTelemetry final {
 struct MediaDatagramTransmitEvidenceReservation final {
     std::uint64_t evidenceId;
     std::optional<std::uint32_t> platformCorrelationId;
+    bool observationRequested;
 };
 
 struct MediaDatagramTransmitEvidenceEndpoint final {
@@ -51,12 +52,13 @@ public:
         std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule,
         std::vector<MediaDatagramTransmitEvidenceEndpoint> endpoints);
 
-    ::media::Result<std::vector<MediaDatagramTransmitEvidenceReservation>>
-    reserveBeforeSubmit(
+    ::media::Status reserveBeforeSubmit(
         std::uint64_t endpointId,
         std::span<const std::uint64_t> evidenceIds,
         std::span<const std::optional<std::uint64_t>> launchTimes,
-        MediaRunningTime submittedAt) noexcept;
+        MediaRunningTime submittedAt,
+        std::vector<MediaDatagramTransmitEvidenceReservation>& reservations)
+        noexcept;
     void markSubmittedPrefix(
         std::span<const MediaDatagramTransmitEvidenceReservation> reservations,
         std::uint64_t submittedPrefix) noexcept;
@@ -115,6 +117,8 @@ private:
     std::optional<MediaRunningTime> m_launchCorrelationResidence;
     std::unordered_map<std::uint64_t, EndpointState> m_endpoints;
     std::unordered_map<std::uint64_t, Entry> m_entries;
+    std::vector<std::uint32_t> m_outstandingPlatformIdsScratch;
+    std::vector<std::uint64_t> m_expiredEvidenceIdsScratch;
     std::optional<std::uint64_t> m_lastEvidenceId;
     std::optional<MediaRunningTime> m_lastNow;
     MediaDatagramTransmitEvidenceTelemetry m_telemetry;

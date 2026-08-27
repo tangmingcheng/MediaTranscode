@@ -43,15 +43,21 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
     if (parameters.video.rateControl == MediaRateControlMode::Cbr &&
-        (parameters.video.minBitrateKbps || parameters.video.maxBitrateKbps)) {
+        (parameters.video.minBitrateKbps || parameters.video.maxBitrateKbps ||
+         parameters.video.bufferSizeKbits)) {
         throw std::invalid_argument(
-            "CBR accepts target bitrate only; --min-bitrate and --max-bitrate are VBR facts");
+            "CBR accepts --bitrate only; minimum, maximum, and buffer size are not caller facts");
     }
     if (parameters.video.rateControl == MediaRateControlMode::Vbr &&
         (!parameters.video.bitrateKbps || !parameters.video.minBitrateKbps ||
          !parameters.video.maxBitrateKbps)) {
         throw std::invalid_argument(
             "VBR requires --min-bitrate, --bitrate, and --max-bitrate");
+    }
+    if (parameters.video.rateControl == MediaRateControlMode::Vbr &&
+        parameters.video.bufferSizeKbits) {
+        throw std::invalid_argument(
+            "VBR accepts only --min-bitrate, --bitrate, and --max-bitrate");
     }
 
     parameters.audio.codecName = argValue(argc, argv, "--audio-codec");

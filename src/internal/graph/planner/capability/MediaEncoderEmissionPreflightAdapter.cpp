@@ -1,6 +1,7 @@
 #include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -41,12 +42,14 @@ constexpr std::int64_t BitsPerByte = 8;
     AVCodecContext& context,
     const MediaEncoderRateControlPlan& contract)
 {
-    if (!contract.targetBitrateKbps || !contract.bufferSizeKbits) {
+    if (!contract.targetBitrateKbps) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "encoder emission preflight requires target rate and VBV"));
+            "encoder emission preflight requires target rate"));
     }
     auto target = bitsFromKbits(*contract.targetBitrateKbps, "target rate");
-    auto buffer = bitsFromKbits(*contract.bufferSizeKbits, "VBV");
+    auto buffer = contract.bufferSizeKbits
+        ? bitsFromKbits(*contract.bufferSizeKbits, "VBV")
+        : ::media::Result<std::int64_t>::success(0);
     auto minimum = contract.minimumBitrateKbps
         ? bitsFromKbits(*contract.minimumBitrateKbps, "minimum rate")
         : ::media::Result<std::int64_t>::success(0);
@@ -68,7 +71,9 @@ constexpr std::int64_t BitsPerByte = 8;
     context.bit_rate = target.value();
     context.rc_min_rate = minimum.value();
     context.rc_max_rate = maximum.value();
-    context.rc_buffer_size = static_cast<int>(buffer.value());
+    if (buffer.value() > 0) {
+        context.rc_buffer_size = static_cast<int>(buffer.value());
+    }
     if (contract.privateOption) {
         if (!context.priv_data) {
             return ::media::Status::failure(::media::ErrorInfo::unsupported(
@@ -95,7 +100,7 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     std::string backend)
 {
     using Result = ::media::Result<MediaPreparedEncoderEmissionEnvelope>;
-    if (!contract.targetBitrateKbps || !contract.bufferSizeKbits ||
+    if (!contract.targetBitrateKbps ||
         !plannedCadence.isKnown() || plannedCadence.num <= 0 ||
         plannedCadence.den <= 0 || authority.empty() || backend.empty()) {
         return Result::failure(::media::ErrorInfo::notInitialized(
@@ -106,8 +111,9 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     auto expectedMaximum = bitsFromKbits(
         contract.maximumBitrateKbps.value_or(*contract.targetBitrateKbps),
         "maximum rate");
-    auto expectedBuffer = bitsFromKbits(
-        *contract.bufferSizeKbits, "VBV");
+    auto expectedBuffer = contract.bufferSizeKbits
+        ? bitsFromKbits(*contract.bufferSizeKbits, "VBV")
+        : ::media::Result<std::int64_t>::success(0);
     if (!expectedTarget || !expectedMaximum || !expectedBuffer) {
         return Result::failure(
             !expectedTarget ? expectedTarget.error() :
@@ -127,7 +133,8 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     if (effectiveMaximum != expectedMaximum.value()) {
         return Result::failure(conflict("maximum rate").error());
     }
-    if (context.rc_buffer_size != expectedBuffer.value()) {
+    if (expectedBuffer.value() > 0 &&
+        context.rc_buffer_size != expectedBuffer.value()) {
         return Result::failure(conflict("VBV").error());
     }
     if (context.framerate.num != plannedCadence.num ||
@@ -156,6 +163,19 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto bufferBytes = static_cast<std::uint64_t>(
         context.rc_buffer_size / BitsPerByte +
         (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0));
+    auto peakBytesPerAccessUnit = MediaCheckedArithmetic::ceilScale(
+        peakBytes,
+        static_cast<std::uint64_t>(plannedCadence.den),
+        static_cast<std::uint64_t>(plannedCadence.num),
+        "encoder peak bytes per access unit");
+    auto maximumAccessUnitBytes = peakBytesPerAccessUnit
+        ? MediaCheckedArithmetic::add(
+              bufferBytes, peakBytesPerAccessUnit.value(),
+              "encoder VBV and cadence access-unit admission bound")
+        : peakBytesPerAccessUnit;
+    if (!maximumAccessUnitBytes) {
+        return Result::failure(maximumAccessUnitBytes.error());
+    }
     if (context.max_b_frames < 0) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "opened encoder did not expose a valid retained-frame bound"));
@@ -163,7 +183,9 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto retainedFrames =
         static_cast<std::uint64_t>(context.max_b_frames) + 1U;
     return Result::success(MediaPreparedEncoderEmissionEnvelope{
-        sustainedBytes, peakBytes, bufferBytes, bufferBytes,
+        sustainedBytes, peakBytes,
+        static_cast<std::uint64_t>(context.rc_buffer_size),
+        maximumAccessUnitBytes.value(), maximumAccessUnitBytes.value(),
         static_cast<std::uint64_t>(plannedCadence.num),
         static_cast<std::uint64_t>(plannedCadence.den),
         retainedFrames,

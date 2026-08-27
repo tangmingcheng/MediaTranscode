@@ -92,6 +92,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_endpointDatagrams.clear();
     m_endpointBytes.clear();
     m_endpointIds.clear();
+    m_submitEntries.clear();
     m_burstWireBytes = 0;
     m_maximumBatchDatagrams = 0;
     m_maximumBatchBytes = 0;
@@ -100,6 +101,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupBegin = 0;
     m_groupCount = 0;
     m_groupEndpointId = 0;
+    m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
+    m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
+    m_nextPhysicalSubmitNotBefore.reset();
     m_terminalFailure.reset();
     m_wakeup.reset();
     m_stopSource = std::stop_source{};
@@ -108,6 +112,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_bytes = 0;
     m_wouldBlockEvents = 0;
     m_writableWaits = 0;
+    m_physicalSpacingDeferrals = 0;
     m_deadlineMisses = 0;
     m_pressureFailures = 0;
     m_partialSubmittedFailures = 0;
@@ -194,6 +199,17 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_burstWireBytes = plan.shaping.serviceCurve().burstWireBytes;
     m_maximumBatchDatagrams = plan.shaping.batch().maximumDatagrams;
     m_maximumBatchBytes = plan.shaping.batch().maximumBytes;
+    if (m_maximumBatchDatagrams > m_submitEntries.max_size()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "scheduled datagram sender batch capacity is not representable"));
+    }
+    try {
+        m_submitEntries.reserve(
+            static_cast<std::size_t>(m_maximumBatchDatagrams));
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "scheduled datagram sender submit storage"));
+    }
     return ::media::Status::success();
 }
 
@@ -240,6 +256,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     m_groupCount = 1;
     m_groupEndpointId = first.endpointId();
+    m_groupNotBefore = first.enqueueNotBefore();
     m_groupDeadline = first.enqueueNotAfter();
     std::uint64_t payloadBytes = first.bytes().size();
     std::uint64_t wireBytes = payloadBytes + overhead->second;
@@ -266,6 +283,16 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             overhead->second;
         ++m_groupCount;
     }
+    if (m_nextPhysicalSubmitNotBefore &&
+        *m_nextPhysicalSubmitNotBefore > m_groupNotBefore) {
+        m_groupNotBefore = *m_nextPhysicalSubmitNotBefore;
+        ++m_physicalSpacingDeferrals;
+    }
+    if (m_groupNotBefore > m_groupDeadline) {
+        ++m_deadlineMisses;
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "scheduled datagram physical service spacing exceeds its original deadline"));
+    }
     return ::media::Status::success();
 }
 
@@ -278,9 +305,14 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     auto now = m_clock->now();
     if (!now) return ::media::Status::failure(now.error());
+    MediaRunningTime submittedService = MediaRunningTime::fromNanoseconds(0);
     for (std::size_t offset = 0; offset < count; ++offset) {
         auto& datagram =
             m_pendingBatch->m_datagrams[m_groupBegin + offset];
+        auto accumulated = submittedService.checkedAdd(
+            datagram.wireServiceDuration());
+        if (!accumulated) return ::media::Status::failure(accumulated.error());
+        submittedService = accumulated.value();
         auto submitted = datagram.markSubmitted(now.value());
         if (!submitted) return submitted;
         auto committed = datagram.commitSubmit(now.value());
@@ -309,6 +341,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         endpointBytes->second +=
             static_cast<std::uint64_t>(datagram.bytes().size());
     }
+    auto nextPhysical = now.value().checkedAdd(submittedService);
+    if (!nextPhysical) return ::media::Status::failure(nextPhysical.error());
+    m_nextPhysicalSubmitNotBefore = nextPhysical.value();
     m_nextDatagram += count;
     return ::media::Status::success();
 }
@@ -354,8 +389,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         if (m_state == SubmitState::WaitReservation) {
             auto begun = beginSubmitGroup();
             if (!begun) return failTerminal(begun.error());
-            const auto& first = m_pendingBatch->m_datagrams[m_groupBegin];
-            auto waited = waitUntil(first.enqueueNotBefore());
+            auto waited = waitUntil(m_groupNotBefore);
             if (!waited) return failTerminal(waited.error());
             m_state = SubmitState::TrySubmit;
         }
@@ -390,6 +424,10 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         if (m_state == SubmitState::TrySubmit) {
             auto now = m_clock->now();
             if (!now) return failTerminal(now.error());
+            if (now.value() < m_groupNotBefore) {
+                return failTerminal(::media::ErrorInfo::internalError(
+                    "scheduled datagram submit violated physical service spacing"));
+            }
             if (now.value() > m_groupDeadline) {
                 ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
@@ -402,17 +440,16 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             if (m_session->hasPendingRetry()) {
                 submitted = m_session->retryPending(now.value());
             } else {
-                std::vector<MediaDatagramTransmitJobEntry> entries;
-                entries.reserve(m_groupCount);
+                m_submitEntries.clear();
                 for (std::size_t offset = 0; offset < m_groupCount; ++offset) {
                     const auto& datagram =
                         m_pendingBatch->m_datagrams[m_groupBegin + offset];
-                    entries.push_back(MediaDatagramTransmitJobEntry{
+                    m_submitEntries.push_back(MediaDatagramTransmitJobEntry{
                         datagram.bytes(), datagram.globalSequence(),
                         datagram.enqueueNotAfter(), std::nullopt});
                 }
                 submitted = m_session->trySubmitNew(
-                    m_groupEndpointId, entries, now.value());
+                    m_groupEndpointId, m_submitEntries, now.value());
             }
             if (!submitted) return failSubmit(submitted.error());
             if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
@@ -451,6 +488,8 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << " committed_payload_bytes=" << m_bytes
                    << " would_block=" << m_wouldBlockEvents
                    << " writable_waits=" << m_writableWaits
+                   << " physical_spacing_deferrals="
+                   << m_physicalSpacingDeferrals
                    << " deadline_misses=" << m_deadlineMisses
                    << " pressure_failures=" << m_pressureFailures
                    << " partial_submitted_failures="

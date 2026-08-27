@@ -121,7 +121,6 @@ typedef struct mt_beta_video_output {
     uint32_t frame_rate_num;
     uint32_t frame_rate_den;
     uint32_t gop_frames;
-    uint64_t vbv_buffer_size_bits;
     mt_beta_rate_control_mode rate_control_mode;
     union {
         mt_beta_cbr cbr;

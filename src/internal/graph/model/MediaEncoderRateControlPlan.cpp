@@ -12,21 +12,21 @@ MediaEncoderRateControlRequest::create(
 {
     using Result = ::media::Result<MediaEncoderRateControlRequest>;
     if (mode == MediaRateControlMode::Cbr) {
-        if (!target || !buffer || minimum || maximum) {
+        if (!target || minimum || maximum || buffer) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "CBR facts require target and VBV buffer without minimum or maximum"));
+                "CBR facts require only target bitrate"));
         }
         return Result::success(MediaEncoderRateControlRequest(
-            MediaEncoderCbrRateControlFacts{*target, *buffer}));
+            MediaEncoderCbrRateControlFacts{*target}));
     }
     if (mode == MediaRateControlMode::Vbr) {
-        if (!target || !minimum || !maximum) {
+        if (!target || !minimum || !maximum || buffer) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "VBR facts require minimum, target, and maximum"));
+                "VBR facts require only minimum, target, and maximum bitrate"));
         }
         return Result::success(MediaEncoderRateControlRequest(
             MediaEncoderVbrRateControlFacts{
-                *minimum, *target, *maximum, buffer}));
+                *minimum, *target, *maximum}));
     }
     return Result::success(MediaEncoderRateControlRequest(
         MediaEncoderGeneralRateControlFacts{
@@ -75,9 +75,9 @@ std::optional<int> MediaEncoderRateControlRequest::maximumBitrateKbps() const no
 
 std::optional<int> MediaEncoderRateControlRequest::bufferSizeKbits() const noexcept
 {
-    return std::visit([](const auto& facts) -> std::optional<int> {
-        return facts.bufferSizeKbits;
-    }, m_facts);
+    const auto* general =
+        std::get_if<MediaEncoderGeneralRateControlFacts>(&m_facts);
+    return general ? general->bufferSizeKbits : std::nullopt;
 }
 
 ::media::Status MediaEncoderRateControlRequest::setPlannerDerivedTargetBitrate(

@@ -196,7 +196,8 @@ namespace {
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     std::optional<Clock::time_point> firstMatchingPacketAt;
-    bool signalingComplete = false;
+    bool signalingComplete =
+        plan.authoritativeVideoSignaling.has_value();
     const auto observeReordered = [&](MediaRtpReorderResult reordered)
         -> ::media::Status {
         for (const auto& discontinuity : reordered.discontinuities) {
@@ -216,11 +217,13 @@ namespace {
                 packetCount = 0;
                 bufferedRtcpValidated = false;
                 firstMatchingPacketAt = Clock::now();
-                signalingComplete = false;
+                signalingComplete =
+                    plan.authoritativeVideoSignaling.has_value();
                 videoIngressObservation->reset();
             }
-            signalingComplete = signalingComplete ||
-                observation.value().complete;
+            signalingComplete =
+                plan.authoritativeVideoSignaling.has_value() ||
+                signalingComplete || observation.value().complete;
             if (auto status = frameRateObserver.value().observe(packet);
                 !status) {
                 return status;
@@ -387,8 +390,24 @@ namespace {
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             Clock::now() - startedAt).count();
-        auto detected = observer.value().detected(
-            packetCount, bufferedBytes, elapsed);
+        ::media::Result<MediaDetectedRtpVideoSignaling> detected =
+            plan.authoritativeVideoSignaling
+            ? observer.value().evidence().ssrc
+                ? ::media::Result<MediaDetectedRtpVideoSignaling>::success(
+                      MediaDetectedRtpVideoSignaling{
+                          video.identity.codecName,
+                          video.identity.payloadType,
+                          video.identity.clockRate,
+                          *observer.value().evidence().ssrc,
+                          *plan.authoritativeVideoSignaling,
+                          packetCount,
+                          bufferedBytes,
+                          elapsed})
+                : ::media::Result<MediaDetectedRtpVideoSignaling>::failure(
+                      ::media::ErrorInfo::notInitialized(
+                          "raw RTP authoritative signaling preparation requires observed SSRC identity"))
+            : observer.value().detected(
+                  packetCount, bufferedBytes, elapsed);
         if (!detected) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 detected.error());

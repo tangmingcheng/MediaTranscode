@@ -52,11 +52,10 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
             static_cast<int>(bits / std::kilo::num));
     };
     if (output.rate_control_mode == MT_BETA_RATE_CONTROL_CBR) {
-        if (output.rate_control.cbr.bitrate_bps == 0U ||
-            output.vbv_buffer_size_bits == 0U) {
+        if (output.rate_control.cbr.bitrate_bps == 0U) {
             return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "CBR bitrate and VBV buffer size must be positive"));
+                    "CBR target bitrate must be positive"));
         }
         auto bitrate = checkedKiloBits(
             output.rate_control.cbr.bitrate_bps, "CBR bitrate bps");
@@ -64,15 +63,9 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
             return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
                 bitrate.error());
         }
-        auto bufferSize = checkedKiloBits(
-            output.vbv_buffer_size_bits, "VBV buffer size bits");
-        if (!bufferSize) {
-            return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
-                bufferSize.error());
-        }
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
             MediaRealtimeBetaOwnedConfig::CbrRateControl{
-                bitrate.value(), bufferSize.value() });
+                bitrate.value() });
     }
     if (output.rate_control_mode != MT_BETA_RATE_CONTROL_VBR) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
@@ -92,19 +85,9 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
     if (!target) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(target.error());
     if (!minimum) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(minimum.error());
     if (!maximum) return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(maximum.error());
-    int bufferSizeKbits = 0;
-    if (output.vbv_buffer_size_bits != 0U) {
-        auto bufferSize = checkedKiloBits(
-            output.vbv_buffer_size_bits, "VBV buffer size bits");
-        if (!bufferSize) {
-            return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::failure(
-                bufferSize.error());
-        }
-        bufferSizeKbits = bufferSize.value();
-    }
     return ::media::Result<MediaRealtimeBetaOwnedConfig::RateControl>::success(
         MediaRealtimeBetaOwnedConfig::VbrRateControl{
-            minimum.value(), target.value(), maximum.value(), bufferSizeKbits });
+            minimum.value(), target.value(), maximum.value() });
 }
 
 ::media::Result<ffmpeg::graph::MediaRealtimeDeploymentEnvelope>

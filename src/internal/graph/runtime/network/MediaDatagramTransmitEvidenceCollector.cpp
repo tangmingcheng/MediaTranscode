@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <limits>
 #include <new>
-#include <unordered_set>
 
 namespace media::ffmpeg::graph {
 
@@ -66,6 +65,10 @@ MediaDatagramTransmitEvidenceCollector::create(
             collector.m_launchCorrelationResidence = residence.value();
         }
         collector.m_entries.reserve(
+            static_cast<std::size_t>(maximumTrackedDatagrams));
+        collector.m_outstandingPlatformIdsScratch.reserve(
+            static_cast<std::size_t>(maximumTrackedDatagrams));
+        collector.m_expiredEvidenceIdsScratch.reserve(
             static_cast<std::size_t>(maximumTrackedDatagrams));
         collector.m_endpoints.reserve(endpoints.size());
         for (auto& endpoint : endpoints) {
@@ -143,46 +146,39 @@ MediaDatagramTransmitEvidenceCollector::create(
     }
 }
 
-::media::Result<std::vector<MediaDatagramTransmitEvidenceReservation>>
-MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
+::media::Status MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
     std::uint64_t endpointId,
     std::span<const std::uint64_t> evidenceIds,
     std::span<const std::optional<std::uint64_t>> launchTimes,
-    MediaRunningTime submittedAt) noexcept
+    MediaRunningTime submittedAt,
+    std::vector<MediaDatagramTransmitEvidenceReservation>& reservations)
+    noexcept
 {
-    using ResultType = ::media::Result<
-        std::vector<MediaDatagramTransmitEvidenceReservation>>;
-    if (m_terminalFailure) return ResultType::failure(*m_terminalFailure);
+    reservations.clear();
+    if (m_terminalFailure) return ::media::Status::failure(*m_terminalFailure);
     auto endpoint = m_endpoints.find(endpointId);
     if (endpoint == m_endpoints.end() || evidenceIds.empty() ||
         evidenceIds.size() != launchTimes.size() ||
         submittedAt.nanoseconds() < 0 ||
         (m_lastNow && submittedAt < *m_lastNow)) {
-        return ResultType::failure(::media::ErrorInfo::invalidArgument(
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid pre-submit evidence reservation"));
-    }
-    const bool timestampExpected = m_plan &&
-        endpoint->second.capabilities.timestampAvailability ==
-            MediaDatagramTransmitTimestampAvailability::Available;
-    std::unordered_set<std::uint64_t> batchIds;
-    try {
-        batchIds.reserve(evidenceIds.size());
-    } catch (const std::bad_alloc&) {
-        return ResultType::failure(::media::ErrorInfo::allocationFailed(
-            "pre-submit evidence batch identity"));
     }
     std::uint64_t previous = m_lastEvidenceId.value_or(0);
     std::uint64_t requiredTracking = 0;
     for (std::size_t index = 0; index < evidenceIds.size(); ++index) {
         const auto evidenceId = evidenceIds[index];
-        if (evidenceId == 0 || evidenceId <= previous ||
-            !batchIds.insert(evidenceId).second ||
-            (m_plan && (evidenceId < m_plan->firstEvidenceId ||
-                        evidenceId > m_plan->lastEvidenceId))) {
-            return ResultType::failure(::media::ErrorInfo::invalidArgument(
-                "evidence ids must be unique, increasing, and in range"));
+        if (evidenceId == 0 || evidenceId <= previous) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "evidence ids must be unique and increasing"));
         }
         previous = evidenceId;
+        const bool observationRequested = m_plan &&
+            evidenceId >= m_plan->firstEvidenceId &&
+            evidenceId <= m_plan->lastEvidenceId;
+        const bool timestampExpected = observationRequested &&
+            endpoint->second.capabilities.timestampAvailability ==
+                MediaDatagramTransmitTimestampAvailability::Available;
         if (timestampExpected || launchTimes[index]) ++requiredTracking;
     }
     bool omitTimestampForReport = false;
@@ -193,23 +189,26 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
         if (hasLaunch || !m_plan ||
             m_plan->coverageGapPolicy ==
                 MediaDatagramEvidenceCoverageGapPolicy::Fail) {
-            return ResultType::failure(::media::ErrorInfo::wouldBlock(
+            return ::media::Status::failure(::media::ErrorInfo::wouldBlock(
                 "transmit observation ledger is at its planner hard bound"));
         }
         omitTimestampForReport = true;
     }
 
-    std::vector<MediaDatagramTransmitEvidenceReservation> reservations;
-    std::vector<std::uint64_t> inserted;
+    std::size_t processed = 0;
     try {
-        reservations.reserve(evidenceIds.size());
-        inserted.reserve(evidenceIds.size());
         auto nextKernelId = endpoint->second.nextKernelCorrelationId;
         auto kernelIdsExhausted =
             endpoint->second.kernelCorrelationIdsExhausted;
         for (std::size_t index = 0; index < evidenceIds.size(); ++index) {
-            const bool trackTimestamp = timestampExpected &&
-                                        !omitTimestampForReport;
+            const bool observationRequested = m_plan &&
+                evidenceIds[index] >= m_plan->firstEvidenceId &&
+                evidenceIds[index] <= m_plan->lastEvidenceId;
+            const bool timestampExpected = observationRequested &&
+                endpoint->second.capabilities.timestampAvailability ==
+                    MediaDatagramTransmitTimestampAvailability::Available;
+            const bool trackTimestamp =
+                timestampExpected && !omitTimestampForReport;
             const bool track = trackTimestamp || launchTimes[index];
             const bool requestTimestamp = trackTimestamp ||
                 (timestampExpected &&
@@ -245,7 +244,8 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
             }
             reservations.push_back(
                 MediaDatagramTransmitEvidenceReservation{
-                    evidenceIds[index], platformId});
+                    evidenceIds[index], platformId, observationRequested});
+            processed = index + 1;
             if (!track) continue;
             const auto launchLow = launchTimes[index]
                 ? std::optional<std::uint32_t>(static_cast<std::uint32_t>(
@@ -271,7 +271,6 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
                         EntryState::Prepared,
                         trackTimestamp, false};
             m_entries.emplace(evidenceIds[index], std::move(entry));
-            inserted.push_back(evidenceIds[index]);
             if (platformId) {
                 endpoint->second.byPlatformId.emplace(
                     *platformId, evidenceIds[index]);
@@ -285,13 +284,19 @@ MediaDatagramTransmitEvidenceCollector::reserveBeforeSubmit(
         endpoint->second.kernelCorrelationIdsExhausted = kernelIdsExhausted;
         m_lastEvidenceId = previous;
         m_lastNow = submittedAt;
-        return ResultType::success(std::move(reservations));
+        return ::media::Status::success();
     } catch (const ::media::ErrorInfo& error) {
-        for (const auto evidenceId : inserted) eraseEntry(evidenceId);
-        return ResultType::failure(error);
+        for (std::size_t index = 0; index < processed; ++index) {
+            eraseEntry(evidenceIds[index]);
+        }
+        reservations.clear();
+        return ::media::Status::failure(error);
     } catch (const std::bad_alloc&) {
-        for (const auto evidenceId : inserted) eraseEntry(evidenceId);
-        return ResultType::failure(::media::ErrorInfo::allocationFailed(
+        for (std::size_t index = 0; index < processed; ++index) {
+            eraseEntry(evidenceIds[index]);
+        }
+        reservations.clear();
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
             "pre-submit evidence reservation"));
     }
 }
@@ -302,10 +307,14 @@ void MediaDatagramTransmitEvidenceCollector::markSubmittedPrefix(
 {
     if (submittedPrefix > reservations.size()) return;
     for (std::uint64_t index = 0; index < submittedPrefix; ++index) {
-        incrementCounter(m_telemetry.submitted);
+        if (reservations[index].observationRequested) {
+            incrementCounter(m_telemetry.submitted);
+        }
         const auto entry = m_entries.find(reservations[index].evidenceId);
         if (entry == m_entries.end()) {
-            if (m_plan) incrementCounter(m_telemetry.timestampUntracked);
+            if (reservations[index].observationRequested) {
+                incrementCounter(m_telemetry.timestampUntracked);
+            }
             continue;
         }
         if (entry->second.state != EntryState::Prepared) continue;
@@ -341,25 +350,23 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
             "transmit evidence clock must be nonnegative"));
     }
     m_lastNow = now;
+    if (m_entries.empty()) {
+        m_telemetry.deliveryEvidenceProven = false;
+        return ::media::Status::success();
+    }
     for (auto& [endpointId, endpoint] : m_endpoints) {
-        std::vector<std::uint32_t> outstanding;
-        try {
-            outstanding.reserve(endpoint.byPlatformId.size());
-            for (const auto& [platformId, evidenceId] : endpoint.byPlatformId) {
-                const auto entry = m_entries.find(evidenceId);
-                if (entry != m_entries.end() &&
-                    entry->second.state == EntryState::Submitted &&
-                    entry->second.timestampExpected &&
-                    !entry->second.timestampObserved) {
-                    outstanding.push_back(platformId);
-                }
+        m_outstandingPlatformIdsScratch.clear();
+        for (const auto& [platformId, evidenceId] : endpoint.byPlatformId) {
+            const auto entry = m_entries.find(evidenceId);
+            if (entry != m_entries.end() &&
+                entry->second.state == EntryState::Submitted &&
+                entry->second.timestampExpected &&
+                !entry->second.timestampObserved) {
+                m_outstandingPlatformIdsScratch.push_back(platformId);
             }
-        } catch (const std::bad_alloc&) {
-            m_terminalFailure = ::media::ErrorInfo::allocationFailed(
-                "transmit evidence drain ids");
-            return ::media::Status::failure(*m_terminalFailure);
         }
-        auto drained = endpoint.port->drainAvailableEvents(outstanding);
+        auto drained = endpoint.port->drainAvailableEvents(
+            m_outstandingPlatformIdsScratch);
         if (!drained) {
             m_terminalFailure = drained.error();
             return ::media::Status::failure(*m_terminalFailure);
@@ -370,10 +377,8 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         }
         (void)endpointId;
     }
-    std::vector<std::uint64_t> expired;
-    try {
-        expired.reserve(m_entries.size());
-        for (auto& [evidenceId, entry] : m_entries) {
+    m_expiredEvidenceIdsScratch.clear();
+    for (auto& [evidenceId, entry] : m_entries) {
             if (entry.state != EntryState::Submitted) continue;
             if (entry.timestampExpected && m_plan) {
                 auto deadline = entry.submittedAt.checkedAdd(
@@ -404,15 +409,12 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
                 entry.launchTimeLowBits.reset();
             }
             if (!entry.timestampExpected && !entry.launchTimeLowBits) {
-                expired.push_back(evidenceId);
+                m_expiredEvidenceIdsScratch.push_back(evidenceId);
             }
-        }
-    } catch (const std::bad_alloc&) {
-        m_terminalFailure = ::media::ErrorInfo::allocationFailed(
-            "transmit evidence expiry scan");
-        return ::media::Status::failure(*m_terminalFailure);
     }
-    for (const auto evidenceId : expired) eraseEntry(evidenceId);
+    for (const auto evidenceId : m_expiredEvidenceIdsScratch) {
+        eraseEntry(evidenceId);
+    }
     m_telemetry.transmitTimestampCoverageComplete =
         m_telemetry.submitted != 0 &&
         m_telemetry.timestampTracked == m_telemetry.submitted &&
@@ -429,21 +431,17 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
 {
     auto drained = drainAvailable(now);
     if (!drained) return drained;
-    std::vector<std::uint64_t> remaining;
-    try {
-        remaining.reserve(m_entries.size());
-        for (const auto& [evidenceId, entry] : m_entries) {
+    m_expiredEvidenceIdsScratch.clear();
+    for (const auto& [evidenceId, entry] : m_entries) {
             if (entry.state == EntryState::Submitted &&
                 entry.timestampExpected && !entry.timestampObserved) {
                 incrementCounter(m_telemetry.lost);
             }
-            remaining.push_back(evidenceId);
-        }
-    } catch (const std::bad_alloc&) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
-            "transmit evidence close settlement"));
+            m_expiredEvidenceIdsScratch.push_back(evidenceId);
     }
-    for (const auto evidenceId : remaining) eraseEntry(evidenceId);
+    for (const auto evidenceId : m_expiredEvidenceIdsScratch) {
+        eraseEntry(evidenceId);
+    }
     if (m_plan && m_telemetry.lost != 0 &&
         m_plan->coverageGapPolicy ==
             MediaDatagramEvidenceCoverageGapPolicy::Fail) {

@@ -95,7 +95,6 @@ MediaRealtimeBetaRequestMapper::map(
             &rateControl)) {
         request.parameters.video.rateControl = ffmpeg::graph::MediaRateControlMode::Cbr;
         request.parameters.video.bitrateKbps = cbr->targetBitrateKbps;
-        request.parameters.video.bufferSizeKbits = cbr->bufferSizeKbits;
     } else {
         const auto& vbr = std::get<MediaRealtimeBetaOwnedConfig::VbrRateControl>(
             rateControl);
@@ -103,9 +102,6 @@ MediaRealtimeBetaRequestMapper::map(
         request.parameters.video.bitrateKbps = vbr.targetBitrateKbps;
         request.parameters.video.minBitrateKbps = vbr.minimumBitrateKbps;
         request.parameters.video.maxBitrateKbps = vbr.maximumBitrateKbps;
-        if (vbr.bufferSizeKbits > 0) {
-            request.parameters.video.bufferSizeKbits = vbr.bufferSizeKbits;
-        }
     }
 
     request.output.streamLayout = profile.outputLayout;

@@ -783,17 +783,12 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
     const auto& metadata = request.input.videoRtp;
-    if (metadata.fmtp) {
-        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "raw RTP video auto-detection requires omitted manual fmtp"));
-    }
     if (!metadata.payloadType || !metadata.clockRate ||
         !request.input.openTimeoutMs || !request.input.readTimeoutMs ||
         !request.input.analyzeDurationUs || !request.input.probeSizeBytes) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "raw RTP video auto-detection requires explicit RTP identity and probe limits"));
+                "raw RTP video preparation requires explicit RTP identity and probe limits"));
     }
     auto parsedEndpoint = endpoint(metadata, "Raw RTP video probe");
     if (!parsedEndpoint) {
@@ -883,6 +878,16 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
     plan.maximumReorderDelayMs =
         videoBootstrap.value().maximumReorderDelayMilliseconds();
     const std::string codec = canonicalCodecName(metadata.codecName);
+    if (metadata.fmtp) {
+        auto signaling = parseRtpVideoSignalingFacts(
+            codec, *metadata.fmtp);
+        if (!signaling) {
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                signaling.error());
+        }
+        plan.authoritativeVideoSignaling =
+            std::move(signaling).value();
+    }
     if (codec == "h264") {
         plan.packetizationPolicy =
             MediaRtpVideoPacketizationPolicy::H264NonInterleaved;

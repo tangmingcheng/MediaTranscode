@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
@@ -273,6 +274,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_firstFrameDiagnosticEmitted = false;
     m_firstSubmitDiagnosticEmitted = false;
     m_firstPacketDiagnosticEmitted = false;
+    m_firstPacketFootprintDiagnosticEmitted = false;
     m_sendWouldBlock.reset();
     m_forceGenerationStartKeyFrame.reset();
     m_copyOpaqueLineage.reset();
@@ -651,10 +653,23 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
         if (!m_firstPacketDiagnosticEmitted) {
             std::ostringstream out;
+            const auto receivedFootprint =
+                ffmpegPacketPayloadFootprintBytes(*packet);
             out << "first_packet pts=" << packet->pts
                 << " dts=" << packet->dts
                 << " duration=" << packet->duration
-                << " size=" << packet->size;
+                << " size=" << packet->size
+                << " side_data_elems=" << packet->side_data_elems
+                << " received_footprint="
+                << (receivedFootprint
+                        ? std::to_string(*receivedFootprint)
+                        : std::string("unknown"));
+            for (int index = 0; index < packet->side_data_elems; ++index) {
+                const auto& sideData = packet->side_data[index];
+                const char* name = av_packet_side_data_name(sideData.type);
+                out << " side_data[" << index << "]="
+                    << (name ? name : "unknown") << ":" << sideData.size;
+            }
             encodeLog(MediaGraphDiagnosticLevel::State, out.str());
             m_firstPacketDiagnosticEmitted = true;
         }
@@ -703,6 +718,16 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             return ::media::Result<bool>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "VideoEncodeNode packet lacks an exact payload footprint"));
+        }
+        if (!m_firstPacketFootprintDiagnosticEmitted) {
+            const AVPacket* wrapped = FFmpegPacketView::packet(buffer.value());
+            std::ostringstream out;
+            out << "first_packet_footprint bytes=" << *footprint
+                << " wrapped_size=" << (wrapped ? wrapped->size : -1)
+                << " wrapped_side_data_elems="
+                << (wrapped ? wrapped->side_data_elems : -1);
+            encodeLog(MediaGraphDiagnosticLevel::State, out.str());
+            m_firstPacketFootprintDiagnosticEmitted = true;
         }
         if (auto status = reservation.value().shrinkToActual(*footprint);
             !status) {

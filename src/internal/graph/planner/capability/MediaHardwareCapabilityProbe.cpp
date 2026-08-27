@@ -84,6 +84,14 @@ MediaHardwareCapability unavailable(std::string reason)
     return {false, std::move(reason)};
 }
 
+MediaRational capabilityInputFrameRate(
+    const MediaPipelinePlannerOptions& options) noexcept
+{
+    return options.sourceFrameRate.isKnown()
+        ? options.sourceFrameRate
+        : options.targetFrameRate;
+}
+
 MediaHardwareCapability ffmpegUnavailable(const std::string& operation, int code)
 {
     return unavailable(operation + " failed: " + FFmpegGraphError::describe(code));
@@ -242,10 +250,11 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         VideoFilterGraphBuildRequest request;
         request.options = &filterOptions;
         request.firstFrame = probeFrame.get();
+        const auto inputFrameRate = capabilityInputFrameRate(options);
         request.inputTimeBase =
-            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
+            AVRational{inputFrameRate.den, inputFrameRate.num};
         request.inputFrameRate =
-            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
+            AVRational{inputFrameRate.num, inputFrameRate.den};
         request.sampleAspectRatio = AVRational{1, 1};
         auto filterGraph = VideoFilterGraphBuilder::build(request);
         if (!filterGraph) {
@@ -384,8 +393,9 @@ MediaHardwareCapability validateCompleteChain(
     if (options.probeWidth <= 0 || options.probeHeight <= 0) {
         return unavailable("hardware chain validation requires planner-resolved probe dimensions");
     }
-    if (!options.sourceFrameRate.isKnown()) {
-        return unavailable("hardware chain validation requires planner-resolved source frame rate");
+    if (!capabilityInputFrameRate(options).isKnown()) {
+        return unavailable(
+            "hardware chain validation requires planner-resolved source or target frame rate");
     }
 
     if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
@@ -525,10 +535,11 @@ MediaHardwareCapability validateCompleteChain(
         VideoFilterGraphBuildRequest request;
         request.options = &filterOptions;
         request.firstFrame = firstFrame.get();
+        const auto inputFrameRate = capabilityInputFrameRate(options);
         request.inputTimeBase =
-            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
+            AVRational{inputFrameRate.den, inputFrameRate.num};
         request.inputFrameRate =
-            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
+            AVRational{inputFrameRate.num, inputFrameRate.den};
         request.sampleAspectRatio = AVRational{1, 1};
         auto filterGraph = VideoFilterGraphBuilder::build(request);
         if (!filterGraph) {

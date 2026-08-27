@@ -121,6 +121,17 @@ MediaDatagramTransmitSession::create(
         session->m_burstWireBytes = plan.serviceCurve().burstWireBytes;
         session->m_maximumBatchDatagrams = plan.batch().maximumDatagrams;
         session->m_maximumBatchBytes = plan.batch().maximumBytes;
+        session->m_pending = std::make_unique<PendingJob>();
+        session->m_pending->entries.reserve(
+            static_cast<std::size_t>(session->m_maximumBatchDatagrams));
+        session->m_pending->portRequests.reserve(
+            static_cast<std::size_t>(session->m_maximumBatchDatagrams));
+        session->m_pending->reservations.reserve(
+            static_cast<std::size_t>(session->m_maximumBatchDatagrams));
+        session->m_evidenceIdsScratch.reserve(
+            static_cast<std::size_t>(session->m_maximumBatchDatagrams));
+        session->m_launchTimesScratch.reserve(
+            static_cast<std::size_t>(session->m_maximumBatchDatagrams));
         session->m_endpoints.reserve(plan.endpoints().size());
         std::vector<MediaDatagramTransmitEvidenceEndpoint> evidenceEndpoints;
         evidenceEndpoints.reserve(plan.endpoints().size());
@@ -217,7 +228,8 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
     auto clock = advanceClock(now);
     if (!clock) return terminateSubmit(mediaDatagramTransmitError(clock.error()));
     const auto endpoint = m_endpoints.find(endpointId);
-    if (m_closed || m_pending || endpoint == m_endpoints.end() ||
+    if (m_closed || m_pendingActive || !m_pending ||
+        endpoint == m_endpoints.end() ||
         entries.empty() ||
         entries.size() > m_maximumBatchDatagrams) {
         return terminateSubmit(mediaDatagramTransmitError(
@@ -227,11 +239,9 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
     const auto deadline = entries.front().enqueueNotAfter;
     std::uint64_t payloadBytes = 0;
     std::uint64_t wireBytes = 0;
-    std::vector<std::uint64_t> evidenceIds;
-    std::vector<std::optional<std::uint64_t>> launchTimes;
+    m_evidenceIdsScratch.clear();
+    m_launchTimesScratch.clear();
     try {
-        evidenceIds.reserve(entries.size());
-        launchTimes.reserve(entries.size());
         for (const auto& entry : entries) {
             if (entry.bytes.empty() ||
                 entry.bytes.size() > endpoint->second.maximumDatagramBytes ||
@@ -255,8 +265,9 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
             }
             payloadBytes += size;
             wireBytes += size + endpoint->second.wireOverheadBytes;
-            evidenceIds.push_back(entry.evidenceId);
-            launchTimes.push_back(entry.kernelTransmitTimeNanoseconds);
+            m_evidenceIdsScratch.push_back(entry.evidenceId);
+            m_launchTimesScratch.push_back(
+                entry.kernelTransmitTimeNanoseconds);
         }
     } catch (const std::bad_alloc&) {
         return terminateSubmit(mediaDatagramTransmitError(
@@ -269,27 +280,29 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
                 "Datagram transmit job exceeds planner batch or burst bound")));
     }
     auto reservations = m_evidence->reserveBeforeSubmit(
-        endpointId, evidenceIds, launchTimes, now);
+        endpointId, m_evidenceIdsScratch, m_launchTimesScratch, now,
+        m_pending->reservations);
     if (!reservations) {
         return terminateSubmit(mediaDatagramTransmitError(
             reservations.error()));
     }
     try {
-        auto pending = std::make_unique<PendingJob>();
-        pending->endpointId = endpointId;
-        pending->entries.assign(entries.begin(), entries.end());
-        pending->portRequests.reserve(entries.size());
+        m_pending->endpointId = endpointId;
+        m_pending->entries.assign(entries.begin(), entries.end());
+        m_pending->portRequests.clear();
         for (std::size_t index = 0; index < entries.size(); ++index) {
-            pending->portRequests.push_back(MediaDatagramTransmitPortRequest{
+            m_pending->portRequests.push_back(MediaDatagramTransmitPortRequest{
                 entries[index].bytes,
-                reservations.value()[index].platformCorrelationId,
+                m_pending->reservations[index].platformCorrelationId,
                 entries[index].kernelTransmitTimeNanoseconds});
         }
-        pending->reservations = std::move(reservations.value());
-        pending->requiresWritableWait = false;
-        m_pending = std::move(pending);
+        m_pending->requiresWritableWait = false;
+        m_pendingActive = true;
     } catch (const std::bad_alloc&) {
-        m_evidence->cancelPrepared(reservations.value(), 0);
+        m_evidence->cancelPrepared(m_pending->reservations, 0);
+        m_pending->entries.clear();
+        m_pending->portRequests.clear();
+        m_pending->reservations.clear();
         return terminateSubmit(mediaDatagramTransmitError(
             ::media::ErrorInfo::allocationFailed(
                 "Datagram transmit pending job")));
@@ -312,12 +325,23 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::retryPending(
     }
     auto clock = advanceClock(now);
     if (!clock) return terminateSubmit(mediaDatagramTransmitError(clock.error()));
-    if (!m_pending || m_pending->requiresWritableWait) {
+    if (!m_pendingActive || !m_pending || m_pending->requiresWritableWait) {
         return terminateSubmit(mediaDatagramTransmitError(
             ::media::ErrorInfo::invalidArgument(
                 "Datagram retry requires a successful writable wait")));
     }
     return submitPending(now);
+}
+
+void MediaDatagramTransmitSession::clearPending() noexcept
+{
+    if (!m_pending) return;
+    m_pending->endpointId = 0;
+    m_pending->entries.clear();
+    m_pending->portRequests.clear();
+    m_pending->reservations.clear();
+    m_pending->requiresWritableWait = false;
+    m_pendingActive = false;
 }
 
 MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
@@ -326,7 +350,7 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
     const auto deadline = m_pending->entries.front().enqueueNotAfter;
     if (now > deadline) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
-        m_pending.reset();
+        clearPending();
         return terminateSubmit(mediaDatagramTransmitError(
             ::media::ErrorInfo::ioFailure(
                 "Datagram submit exceeded its original deadline")));
@@ -361,7 +385,7 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
         const auto prefix = error.submittedPrefixDatagrams;
         m_evidence->markSubmittedPrefix(m_pending->reservations, prefix);
         m_evidence->cancelPrepared(m_pending->reservations, prefix);
-        m_pending.reset();
+        clearPending();
         return terminateSubmit(error);
     }
     if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
@@ -375,7 +399,7 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
     }
     m_evidence->markSubmittedPrefix(
         m_pending->reservations, m_pending->reservations.size());
-    m_pending.reset();
+    clearPending();
     return submitted;
 }
 
@@ -399,7 +423,8 @@ MediaDatagramTransmitSession::waitWritable(
         return ResultType::failure(clock.error());
     }
     const auto endpoint = m_endpoints.find(endpointId);
-    if (m_closed || endpoint == m_endpoints.end() || !m_pending ||
+    if (m_closed || endpoint == m_endpoints.end() || !m_pendingActive ||
+        !m_pending ||
         m_pending->endpointId != endpointId ||
         !m_pending->requiresWritableWait || maximumWait.nanoseconds() < 0) {
         auto error = ::media::ErrorInfo::invalidArgument(
@@ -457,9 +482,9 @@ MediaDatagramTransmitSession::waitWritable(
         return terminate(::media::ErrorInfo::invalidArgument(
             "Datagram abort requires explicit worker-local causality"));
     }
-    if (m_pending) {
+    if (m_pendingActive && m_pending) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
-        m_pending.reset();
+        clearPending();
     }
     return terminate(std::move(cause));
 }
@@ -476,9 +501,9 @@ MediaDatagramTransmitSession::waitWritable(
     }
     auto clock = advanceClock(now);
     if (!clock && !m_terminalFailure) m_terminalFailure = clock.error();
-    if (m_pending) {
+    if (m_pendingActive && m_pending) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
-        m_pending.reset();
+        clearPending();
     }
     auto settled = m_evidence->settleOnClose(now);
     if (!settled && !m_terminalFailure) m_terminalFailure = settled.error();
@@ -513,9 +538,9 @@ MediaDatagramTransmitSession::waitWritable(
     ::media::ErrorInfo error) noexcept
 {
     if (!m_terminalFailure) m_terminalFailure = std::move(error);
-    if (m_pending) {
+    if (m_pendingActive && m_pending) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
-        m_pending.reset();
+        clearPending();
     }
     return ::media::Status::failure(*m_terminalFailure);
 }
@@ -525,9 +550,9 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::terminateSubmit(
 {
     if (!m_terminalSubmitFailure) m_terminalSubmitFailure = error;
     if (!m_terminalFailure) m_terminalFailure = error.cause;
-    if (m_pending) {
+    if (m_pendingActive && m_pending) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
-        m_pending.reset();
+        clearPending();
     }
     return MediaDatagramTransmitSubmitResult::failure(
         *m_terminalSubmitFailure);

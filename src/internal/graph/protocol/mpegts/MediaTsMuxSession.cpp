@@ -566,12 +566,10 @@ MediaTsMuxSession::writeAccessUnit(
         return advanceFailure(invalid(
             "MPEG-TS mux session rejects a second access unit while emission is pending"));
     }
-    if (actualMasterNow < unit.emitOnMaster) {
-        return advanceFailure(invalid(
-            "MPEG-TS mux session requires an access unit at its canonical emission time"));
-    }
+    const MediaRunningTime maintenanceAvailableThrough = (std::max)(
+        actualMasterNow, unit.emitOnMaster);
     auto advanced = advanceThroughAvailable(
-        unit.emitOnMaster, actualMasterNow);
+        unit.emitOnMaster, maintenanceAvailableThrough);
     if (!advanced) {
         return ::media::Result<AdvanceResult>::failure(advanced.error());
     }
