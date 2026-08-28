@@ -10,11 +10,13 @@ MediaWireDatagramBatchPartitionBuilder(
     std::string sessionKey,
     std::string serviceScopeId,
     std::uint64_t generation,
-    MediaDatagramBatchPlan batchPlan) noexcept
+    MediaDatagramBatchPlan batchPlan,
+    MediaDatagramCommitTransaction commitTransaction) noexcept
     : m_sessionKey(std::move(sessionKey)),
       m_serviceScopeId(std::move(serviceScopeId)),
       m_generation(generation),
-      m_batchPlan(batchPlan)
+      m_batchPlan(batchPlan),
+      m_commitTransaction(std::move(commitTransaction))
 {
 }
 
@@ -23,17 +25,21 @@ MediaWireDatagramBatchPartitionBuilder::create(
     const std::string& sessionKey,
     const std::string& serviceScopeId,
     std::uint64_t generation,
-    const MediaDatagramBatchPlan& batchPlan)
+    const MediaDatagramBatchPlan& batchPlan,
+    MediaDatagramCommitTransaction commitTransaction)
 {
     using Result = ::media::Result<MediaWireDatagramBatchPartitionBuilder>;
     if (sessionKey.empty() || serviceScopeId.empty() || generation == 0 ||
-        batchPlan.maximumDatagrams == 0 || batchPlan.maximumBytes == 0) {
+        batchPlan.maximumDatagrams == 0 || batchPlan.maximumBytes == 0 ||
+        !commitTransaction.valid() ||
+        commitTransaction.generation() != generation) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire batch partition builder requires service identity and planner batch bounds"));
     }
     try {
         return Result::success(MediaWireDatagramBatchPartitionBuilder(
-            sessionKey, serviceScopeId, generation, batchPlan));
+            sessionKey, serviceScopeId, generation, batchPlan,
+            std::move(commitTransaction)));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "wire batch partition builder identity"));
@@ -59,7 +65,9 @@ MediaWireDatagramBatchPartitionBuilder::create(
         return ::media::Status::failure(::media::ErrorInfo::internalError(
             "wire batch partition builder has no complete partition"));
     }
-    auto finished = m_current->finish();
+    auto slice = m_commitTransaction.takeNextSlice(m_currentDatagrams);
+    if (!slice) return ::media::Status::failure(slice.error());
+    auto finished = m_current->finish(std::move(slice).value());
     if (!finished) return ::media::Status::failure(finished.error());
     try {
         m_partitions.push_back(std::move(finished).value());
@@ -79,13 +87,17 @@ MediaWireDatagramBatchPartitionBuilder::create(
     std::uint64_t endpointId,
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline,
-    std::uint64_t globalSequence,
-    MediaDatagramSubmitCommitLease commitLease)
+    std::uint64_t globalSequence)
 {
     if (m_finished || bytes.empty() ||
         bytes.size() > m_batchPlan.maximumBytes) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "wire datagram cannot fit one planner-owned batch partition"));
+    }
+    auto expectedSequence = m_commitTransaction.sequence(m_totalDatagrams);
+    if (!expectedSequence || expectedSequence.value() != globalSequence) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "wire datagram sequence differs from its batch commit transaction"));
     }
     const auto bytes64 = static_cast<std::uint64_t>(bytes.size());
     const bool deadlineChanged =
@@ -104,11 +116,12 @@ MediaWireDatagramBatchPartitionBuilder::create(
     }
     auto appended = m_current->append(
         bytes, endpointId, canonicalRelease, canonicalDeadline,
-        globalSequence, std::move(commitLease));
+        globalSequence);
     if (!appended) return appended;
     ++m_currentDatagrams;
     m_currentBytes += bytes64;
     m_currentDeadline = canonicalDeadline;
+    ++m_totalDatagrams;
     return ::media::Status::success();
 }
 
@@ -116,7 +129,8 @@ MediaWireDatagramBatchPartitionBuilder::create(
 MediaWireDatagramBatchPartitionBuilder::finish()
 {
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
-    if (m_finished || (!m_current && m_partitions.empty())) {
+    if (m_finished || (!m_current && m_partitions.empty()) ||
+        m_totalDatagrams != m_commitTransaction.size()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire batch partition builder can finish one nonempty collection"));
     }

@@ -21,10 +21,10 @@ public:
         std::uint64_t endpointId,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline,
-        std::uint64_t globalSequence,
-        MediaDatagramSubmitCommitLease commitLease);
+        std::uint64_t globalSequence);
 
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> finish();
+    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>> finish(
+        MediaDatagramCommitSlice commitSlice);
 
 private:
     friend class MediaMpegTsUdpWireDatagramMaterializer;

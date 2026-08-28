@@ -264,12 +264,14 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             MediaDatagramServiceCurvePlan{
                 m_encoding.wireTraffic.sustainedWireBytesPerSecond,
                 smoothingPeak.value(),
-                m_encoding.wireTraffic.maximumWireDatagramBytes,
+                m_encoding.wireTraffic.burstWireBytes,
+                deployment.latency.targetResidence,
+                deployment.latency.maximumReleaseJitter,
                 m_encoding.wireTraffic.authority + "+" +
                     deployment.latency.authority + "+" +
                     deployment.latency.releaseJitterAuthority + "+" +
                     deployment.service.authority +
-                    "+single-wire-datagram-transmit-quantum"},
+                    "+prepared-wire-burst-envelope"},
             MediaDatagramBacklogPlan{
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,

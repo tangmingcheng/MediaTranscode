@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -63,8 +64,8 @@ public:
     {
         return m_datagrams;
     }
-    ::media::Result<MediaProtocolDatagramCommitLease> takeCommitLease(
-        std::size_t index) noexcept;
+    ::media::Result<MediaProtocolDatagramCommitTransaction>
+    takeCommitTransaction() noexcept;
 
 private:
     explicit MediaMpegTsProtocolDatagramBatchBuffer(
@@ -73,7 +74,7 @@ private:
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaMpegTsProtocolDatagram> m_datagrams;
-    std::vector<MediaProtocolDatagramCommitLease> m_commitLeases;
+    std::optional<MediaProtocolDatagramCommitTransaction> m_commitTransaction;
 };
 
 } // namespace media::ffmpeg::graph

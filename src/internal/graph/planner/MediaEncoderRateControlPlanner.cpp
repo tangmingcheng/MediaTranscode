@@ -9,6 +9,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
@@ -65,6 +66,36 @@ bool equalAsciiInsensitive(std::string_view left, std::string_view right)
         ::media::ErrorInfo::unsupported(
             "planned encoder does not advertise requested rc_mode=" +
             std::string(requestedMode)));
+}
+
+::media::Status applyRkmppCbrEmissionBounds(
+    MediaEncoderRateControlPlan& plan)
+{
+    constexpr std::int64_t RateScale = 16;
+    constexpr std::int64_t MinimumRateNumerator = 15;
+    constexpr std::int64_t MaximumRateNumerator = 17;
+    if (plan.mode != MediaRateControlMode::Cbr ||
+        !plan.targetBitrateKbps || *plan.targetBitrateKbps <= 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RKMPP CBR emission bounds require a positive target rate"));
+    }
+    const auto target = static_cast<std::int64_t>(*plan.targetBitrateKbps);
+    if (target >
+        ((std::numeric_limits<std::int64_t>::max)() - RateScale + 1) /
+            MaximumRateNumerator) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RKMPP CBR emission bounds exceed the planner range"));
+    }
+    const auto minimum = target * MinimumRateNumerator / RateScale;
+    const auto maximum =
+        (target * MaximumRateNumerator + RateScale - 1) / RateScale;
+    if (minimum <= 0 || maximum > (std::numeric_limits<int>::max)()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RKMPP CBR emission bounds exceed the encoder range"));
+    }
+    plan.minimumBitrateKbps = static_cast<int>(minimum);
+    plan.maximumBitrateKbps = static_cast<int>(maximum);
+    return ::media::Status::success();
 }
 
 } // namespace
@@ -155,6 +186,12 @@ MediaEncoderRateControlPlanner::plan(
                 return ::media::Result<MediaEncoderRateControlPlan>::failure(option.error());
             }
             result.privateOption = std::move(option).value();
+        }
+        if (mode == MediaRateControlMode::Cbr) {
+            if (auto status = applyRkmppCbrEmissionBounds(result); !status) {
+                return ::media::Result<MediaEncoderRateControlPlan>::failure(
+                    status.error());
+            }
         }
     }
     return ::media::Result<MediaEncoderRateControlPlan>::success(std::move(result));

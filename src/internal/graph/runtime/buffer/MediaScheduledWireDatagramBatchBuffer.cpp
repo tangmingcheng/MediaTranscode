@@ -19,34 +19,22 @@ struct EndpointBatchUsage final {
 
 MediaScheduledWireDatagram::MediaScheduledWireDatagram(
     std::span<const std::uint8_t> bytes,
-    const MediaScheduledWireDatagramDescriptor& descriptor,
-    MediaDatagramSubmitCommitLease commitLease) noexcept
+    const MediaScheduledWireDatagramDescriptor& descriptor) noexcept
     : m_bytes(bytes),
-      m_descriptor(descriptor),
-      m_commitLease(std::move(commitLease))
+      m_descriptor(descriptor)
 {
-}
-
-::media::Status MediaScheduledWireDatagram::markSubmitted(
-    MediaRunningTime now) noexcept
-{
-    return m_commitLease.markSubmitted(now);
-}
-
-::media::Status MediaScheduledWireDatagram::commitSubmit(
-    MediaRunningTime now) noexcept
-{
-    return m_commitLease.commit(now);
 }
 
 MediaScheduledWireDatagramBatchBuffer::
 MediaScheduledWireDatagramBatchBuffer(
     std::string sessionKey,
     std::string serviceScopeId,
-    std::uint64_t generation) noexcept
+    std::uint64_t generation,
+    MediaDatagramCommitSlice commitSlice) noexcept
     : m_sessionKey(std::move(sessionKey)),
       m_serviceScopeId(std::move(serviceScopeId)),
-      m_generation(generation)
+      m_generation(generation),
+      m_commitSlice(std::move(commitSlice))
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::ScheduledWireDatagramBatch);
@@ -110,8 +98,11 @@ MediaScheduledWireDatagramBatchBuffer::create(
         auto residence = descriptor.enqueueNotAfter.checkedSubtract(
             wire.canonicalRelease);
         if (!validWire || wire.generation != plan.generation() || !endpoint ||
-            !plannedWireCost || descriptor.wireServiceDuration !=
-                                    plannedWireCost.value().peakServiceDuration ||
+            !plannedWireCost ||
+            descriptor.wireServiceDuration <
+                plannedWireCost.value().peakServiceDuration ||
+            descriptor.wireServiceDuration >
+                plannedWireCost.value().sustainedDebtDuration ||
             descriptor.enqueueNotBefore < wire.canonicalRelease ||
             descriptor.enqueueNotAfter < descriptor.enqueueNotBefore ||
             descriptor.enqueueNotAfter > wire.canonicalDeadline ||
@@ -123,16 +114,12 @@ MediaScheduledWireDatagramBatchBuffer::create(
              descriptor.enqueueNotBefore < *previousCompletion) ||
             (previousEnqueueNotAfter &&
              descriptor.enqueueNotAfter < *previousEnqueueNotAfter) ||
-            datagram.m_descriptor != wire ||
-            !datagram.m_commitLease.matches(
-                wire.generation, wire.globalSequence)) {
+            datagram.m_descriptor != wire) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "scheduled wire datagram violates plan, payload, generation, sequence, deadline, or lease ownership"));
         }
 
         EndpointBatchUsage* usage = nullptr;
-        auto marked = datagram.m_commitLease.markScheduled(scheduledAt);
-        if (!marked) return Result::failure(marked.error());
         try {
             usage = &endpointUsage[wire.endpointId];
         } catch (const std::bad_alloc&) {
@@ -159,14 +146,23 @@ MediaScheduledWireDatagramBatchBuffer::create(
     }
     auto complete = validator.finish();
     if (!complete) return Result::failure(complete.error());
+    if (!source.m_commitSlice.matches(
+            validator.generation(), descriptors.front().wire.globalSequence,
+            descriptors.size())) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "scheduled wire datagram batch commit slice differs from its descriptor range"));
+    }
+    auto scheduled = source.m_commitSlice.scheduleAll(scheduledAt);
+    if (!scheduled) return Result::failure(scheduled.error());
 
     std::shared_ptr<MediaScheduledWireDatagramBatchBuffer> output;
     try {
         output = std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>(
             new MediaScheduledWireDatagramBatchBuffer(
                 source.m_sessionKey, source.m_serviceScopeId,
-                validator.generation()));
+                validator.generation(), std::move(source.m_commitSlice)));
     } catch (const std::bad_alloc&) {
+        source.m_commitSlice.abandon();
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaScheduledWireDatagramBatchBuffer"));
     }
@@ -176,8 +172,7 @@ MediaScheduledWireDatagramBatchBuffer::create(
             std::span<const std::uint8_t>(
                 source.m_payload.data() + wire.payloadOffset,
                 static_cast<std::size_t>(wire.payloadSize)),
-            descriptors[index],
-            std::move(source.m_datagrams[index].m_commitLease)));
+            descriptors[index]));
     }
     output->m_payload = std::move(source.m_payload);
     output->m_datagrams = std::move(datagrams);

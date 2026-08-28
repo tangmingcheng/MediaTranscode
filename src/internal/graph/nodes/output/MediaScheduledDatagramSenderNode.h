@@ -45,8 +45,7 @@ private:
     enum class SubmitState {
         WaitReservation,
         TrySubmit,
-        WaitWritableWithinOriginalDeadline,
-        CommitSubmittedPrefixLeases
+        WaitWritableWithinOriginalDeadline
     };
 
     MediaScheduledDatagramSenderNode(
@@ -60,9 +59,15 @@ private:
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
     ::media::Status waitUntil(MediaRunningTime deadline);
     ::media::Status beginSubmitGroup();
-    ::media::Status commitSubmittedPrefix(std::size_t count);
+    ::media::Status preflightBatchTelemetry(
+        const MediaScheduledWireDatagramBatchBuffer& batch) const;
+    void recordSubmittedPrefix(
+        std::size_t count,
+        MediaRunningTime submittedAt) noexcept;
+    ::media::Status commitAccumulatedSubmittedPrefix();
     ::media::Result<MediaNodeProcessResult> failSubmit(
-        const MediaDatagramTransmitError& error);
+        const MediaDatagramTransmitError& error,
+        MediaRunningTime submittedAt);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void emitDiagnostics(const char* stage) noexcept;
     void closeSender(::media::ErrorInfo cause) noexcept;
@@ -95,7 +100,10 @@ private:
     std::uint64_t m_groupEndpointId = 0;
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
+    MediaRunningTime m_groupServiceDuration =
+        MediaRunningTime::fromNanoseconds(0);
     std::optional<MediaRunningTime> m_nextPhysicalSubmitNotBefore;
+    std::optional<MediaRunningTime> m_lastSubmittedAt;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::uint64_t m_batches = 0;
     std::uint64_t m_datagrams = 0;
@@ -107,6 +115,7 @@ private:
     std::uint64_t m_pressureFailures = 0;
     std::uint64_t m_partialSubmittedFailures = 0;
     std::uint64_t m_ambiguousSubmittedFailures = 0;
+    bool m_commitAttempted = false;
     bool m_diagnosticsEmitted = false;
 };
 

@@ -3,12 +3,14 @@
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/runtime/buffer/MediaScheduledWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/network/MediaDatagramBatchPacingRateSelector.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -30,6 +32,10 @@ struct MediaDatagramServiceShaperTelemetry final {
     std::int64_t lastAdmittedBatchFirstDeadlineNanoseconds = 0;
     std::int64_t lastAdmittedBatchLastDeadlineNanoseconds = 0;
     std::int64_t lastAdmittedBatchArrivalNanoseconds = 0;
+    std::uint64_t lastSelectedPacingWireBytesPerSecond = 0;
+    std::uint64_t minimumSelectedPacingWireBytesPerSecond = 0;
+    std::uint64_t maximumSelectedPacingWireBytesPerSecond = 0;
+    std::uint64_t targetResidenceMissedBatches = 0;
     std::uint64_t serviceCurveViolations = 0;
     std::uint64_t deadlineMisses = 0;
     std::uint64_t pressureFailures = 0;
@@ -57,14 +63,38 @@ private:
         MediaRunningTime completion;
     };
 
+    struct EndpointUsage final {
+        std::uint64_t datagrams = 0;
+        std::uint64_t bytes = 0;
+    };
+
+    struct PreparedReservation final {
+        MediaDatagramPlannedWireCost cost;
+        MediaRunningTime endpointDeadline;
+        MediaRunningTime backlogDeadline;
+        MediaRunningTime enqueueNotAfter;
+        std::uint64_t maximumPendingDatagrams;
+        std::uint64_t maximumPendingBytes;
+    };
+
     MediaDatagramServiceShaper(MediaDatagramShapingPlan plan,
                                MediaRunningTime burstDebtDuration) noexcept;
 
     MediaDatagramShapingPlan m_plan;
     MediaRunningTime m_burstDebtDuration;
     MediaDatagramServiceShaperTelemetry m_telemetry;
-    std::deque<PendingReservation> m_pending;
-    std::optional<MediaRunningTime> m_peakAvailable;
+    std::vector<std::optional<PendingReservation>> m_pending;
+    std::vector<PendingReservation> m_newPending;
+    std::vector<PreparedReservation> m_preparedReservations;
+    std::vector<MediaDatagramPacingReservationFact> m_pacingFacts;
+    std::unordered_map<std::uint64_t, EndpointUsage> m_pendingByEndpoint;
+    std::unordered_map<std::uint64_t, EndpointUsage> m_batchByEndpoint;
+    std::unordered_map<std::uint64_t, EndpointUsage> m_expiredByEndpoint;
+    std::size_t m_pendingHead = 0;
+    std::size_t m_pendingCount = 0;
+    std::uint64_t m_pendingDatagrams = 0;
+    std::uint64_t m_pendingWireBytes = 0;
+    std::optional<MediaRunningTime> m_physicalAvailable;
     std::optional<MediaRunningTime> m_sustainedDebtUntil;
     std::optional<MediaRunningTime> m_previousCanonicalRelease;
     std::optional<MediaRunningTime> m_previousCanonicalDeadline;

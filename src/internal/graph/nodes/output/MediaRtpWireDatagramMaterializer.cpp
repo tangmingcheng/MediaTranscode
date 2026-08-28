@@ -263,6 +263,19 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     }
     auto global = m_state->globalSequence->reserve(globalEntries);
     if (!global) return Result::failure(global.error());
+    std::optional<MediaProtocolDatagramCommitTransaction> protocolCommit;
+    if (protocolBatch) {
+        auto transaction = protocolBatch->takeCommitTransaction();
+        if (!transaction || transaction.value().size() != datagrams.size()) {
+            m_state->poisoned = true;
+            return Result::failure(
+                transaction
+                    ? ::media::ErrorInfo::internalError(
+                          "RTP wire nested protocol transaction cardinality differs")
+                    : transaction.error());
+        }
+        protocolCommit.emplace(std::move(transaction).value());
+    }
     std::vector<MediaRtpWireCommitAction> actions;
     try {
         actions.reserve(entryCount);
@@ -274,20 +287,12 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
                 std::nullopt});
         }
         for (std::size_t index = 0; index < datagrams.size(); ++index) {
-            MediaRtpWireCommitAction action{
+            actions.push_back(MediaRtpWireCommitAction{
                 MediaRtpWireCommitActionKind::Media,
                 std::nullopt,
                 reservedPayloadOctets[index],
-                timestamps[index]};
-            if (protocolBatch) {
-                auto lease = protocolBatch->takeCommitLease(index);
-                if (!lease) {
-                    m_state->poisoned = true;
-                    return Result::failure(lease.error());
-                }
-                action.protocolCommit.emplace(std::move(lease).value());
-            }
-            actions.push_back(std::move(action));
+                timestamps[index],
+                protocolBatch != nullptr});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -318,57 +323,49 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     m_state->projectedLastTimestamp = timestamps.back();
     m_state->projectedLastCanonicalRelease =
         datagrams.back().canonicalRelease;
-    std::shared_ptr<MediaRtpWireCommitTransaction> transaction;
-    try {
-        transaction = std::make_shared<MediaRtpWireCommitTransaction>(
-            m_state,
-            reservationIdentity,
-            std::move(global).value(),
-            std::move(actions));
-    } catch (const std::bad_alloc&) {
-        m_state->poisoned = true;
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "RTP wire commit transaction"));
-    }
+    const auto generation = m_state->generation;
+    MediaRtpWireCommitTransaction commitReservation(
+        m_state,
+        reservationIdentity,
+        std::move(global).value(),
+        std::move(actions),
+        std::move(protocolCommit));
     protocolLock.unlock();
+    auto transaction = MediaDatagramCommitTransaction::create(
+        generation, std::move(commitReservation));
+    if (!transaction) return Result::failure(transaction.error());
+    const auto firstGlobalSequence = transaction.value().firstGlobalSequence();
 
     auto builderResult = MediaWireDatagramBatchPartitionBuilder::create(
         m_state->globalSequence->sessionKey(),
         m_state->globalSequence->serviceScopeId(),
-        m_state->generation, m_state->batchPlan);
+        m_state->generation, m_state->batchPlan,
+        std::move(transaction).value());
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
     std::size_t index = 0;
     if (rtcpBytes) {
-        auto sequence = transaction->sequence(index);
-        if (!sequence) return Result::failure(sequence.error());
-        auto lease = makeMediaRtpWireCommitLease(
-            transaction, index, m_state->generation, sequence.value());
-        if (!lease) return Result::failure(lease.error());
+        const auto sequence = firstGlobalSequence +
+            static_cast<std::uint64_t>(index);
         auto appended = builder.append(
             *rtcpBytes,
             m_state->rtcpEndpointId,
             datagrams.front().canonicalRelease,
             rtcpDeadline.value(),
-            sequence.value(),
-            std::move(lease).value());
+            sequence);
         if (!appended) return Result::failure(appended.error());
         ++index;
     }
     for (std::size_t datagramIndex = 0;
          datagramIndex < datagrams.size(); ++datagramIndex, ++index) {
-        auto sequence = transaction->sequence(index);
-        if (!sequence) return Result::failure(sequence.error());
-        auto lease = makeMediaRtpWireCommitLease(
-            transaction, index, m_state->generation, sequence.value());
-        if (!lease) return Result::failure(lease.error());
+        const auto sequence = firstGlobalSequence +
+            static_cast<std::uint64_t>(index);
         auto appended = builder.append(
             materializedRtp[datagramIndex],
             m_state->rtpEndpointId,
             datagrams[datagramIndex].canonicalRelease,
             rtpDeadlines[datagramIndex],
-            sequence.value(),
-            std::move(lease).value());
+            sequence);
         if (!appended) return Result::failure(appended.error());
     }
     return builder.finish();
@@ -437,28 +434,22 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
     }
     ++m_state->outstandingDatagrams;
     m_state->projectedTerminal = true;
-    std::shared_ptr<MediaRtpWireCommitTransaction> transaction;
-    try {
-        transaction = std::make_shared<MediaRtpWireCommitTransaction>(
-            m_state,
-            reservationIdentity,
-            std::move(global).value(),
-            std::move(actions));
-    } catch (const std::bad_alloc&) {
-        m_state->poisoned = true;
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "RTP terminal commit transaction"));
-    }
+    const auto generation = m_state->generation;
+    MediaRtpWireCommitTransaction commitReservation(
+        m_state,
+        reservationIdentity,
+        std::move(global).value(),
+        std::move(actions), std::nullopt);
     protocolLock.unlock();
-    auto sequence = transaction->sequence(0);
-    if (!sequence) return Result::failure(sequence.error());
-    auto lease = makeMediaRtpWireCommitLease(
-        transaction, 0, m_state->generation, sequence.value());
-    if (!lease) return Result::failure(lease.error());
-    auto builderResult = MediaWireDatagramBatchBuilder::create(
+    auto transaction = MediaDatagramCommitTransaction::create(
+        generation, std::move(commitReservation));
+    if (!transaction) return Result::failure(transaction.error());
+    const auto sequence = transaction.value().firstGlobalSequence();
+    auto builderResult = MediaWireDatagramBatchPartitionBuilder::create(
         m_state->globalSequence->sessionKey(),
         m_state->globalSequence->serviceScopeId(),
-        m_state->generation);
+        m_state->generation, m_state->batchPlan,
+        std::move(transaction).value());
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
     auto appended = builder.append(
@@ -466,10 +457,15 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
         m_state->rtcpEndpointId,
         canonicalRelease,
         canonicalDeadline.value(),
-        sequence.value(),
-        std::move(lease).value());
+        sequence);
     if (!appended) return Result::failure(appended.error());
-    return builder.finish();
+    auto finished = builder.finish();
+    if (!finished) return Result::failure(finished.error());
+    if (finished.value().size() != 1) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "RTP terminal report did not produce exactly one wire partition"));
+    }
+    return Result::success(std::move(finished).value().front());
 }
 
 ::media::Result<MediaRtpWireDatagramMaterializerSnapshot>

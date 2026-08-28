@@ -7,9 +7,9 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-class MediaTsProtocolCommitTransaction final {
+class MediaTsProtocolCommitReservation final {
 public:
-    MediaTsProtocolCommitTransaction(
+    MediaTsProtocolCommitReservation(
         MediaTsPacketCursor cursor,
         MediaTsPacketCommitToken token,
         std::size_t entryCount) noexcept
@@ -19,19 +19,33 @@ public:
     {
     }
 
-    ~MediaTsProtocolCommitTransaction() noexcept
+    MediaTsProtocolCommitReservation(
+        MediaTsProtocolCommitReservation&& other) noexcept
+        : m_cursor(std::move(other.m_cursor)),
+          m_token(std::move(other.m_token)),
+          m_entryCount(other.m_entryCount),
+          m_nextEntry(other.m_nextEntry)
+    {
+        other.m_nextEntry = other.m_entryCount;
+    }
+    MediaTsProtocolCommitReservation& operator=(
+        MediaTsProtocolCommitReservation&&) = delete;
+
+    ~MediaTsProtocolCommitReservation() noexcept
     {
         if (m_nextEntry != m_entryCount) m_cursor.poison();
     }
 
-    ::media::Status commit(std::size_t index) noexcept
+    std::size_t size() const noexcept { return m_entryCount; }
+
+    ::media::Status commitNextPrefix(std::size_t count) noexcept
     {
-        if (index != m_nextEntry || index >= m_entryCount) {
+        if (count > m_entryCount - m_nextEntry) {
             m_cursor.poison();
             return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "MPEG-TS protocol datagram commit is stale or reordered"));
+                "MPEG-TS protocol commit prefix exceeds its transaction"));
         }
-        ++m_nextEntry;
+        m_nextEntry += count;
         if (m_nextEntry != m_entryCount) return ::media::Status::success();
         auto committed = m_cursor.commit(std::move(m_token));
         if (!committed) m_cursor.poison();
@@ -43,28 +57,6 @@ private:
     MediaTsPacketCommitToken m_token;
     std::size_t m_entryCount;
     std::size_t m_nextEntry = 0;
-};
-
-class MediaTsProtocolEntryReservation final {
-public:
-    MediaTsProtocolEntryReservation(
-        std::shared_ptr<MediaTsProtocolCommitTransaction> transaction,
-        std::size_t index) noexcept
-        : m_transaction(std::move(transaction)), m_index(index)
-    {
-    }
-
-    ::media::Status commit() noexcept
-    {
-        return m_transaction
-            ? m_transaction->commit(m_index)
-            : ::media::Status::failure(::media::ErrorInfo::internalError(
-                  "MPEG-TS protocol entry lost its transaction"));
-    }
-
-private:
-    std::shared_ptr<MediaTsProtocolCommitTransaction> m_transaction;
-    std::size_t m_index;
 };
 
 } // namespace
@@ -118,16 +110,12 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     const std::size_t entryCount =
         (packets.size() + maximumPacketsPerDatagram - 1) /
         maximumPacketsPerDatagram;
-    std::shared_ptr<MediaTsProtocolCommitTransaction> transaction;
     std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer> output;
     try {
-        transaction = std::make_shared<MediaTsProtocolCommitTransaction>(
-            std::move(cursor), prepared.value().takeCommitToken(), entryCount);
         output = std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>(
             new MediaMpegTsProtocolDatagramBatchBuffer(generation));
         output->m_payload.reserve(packets.size() * std::size_t{188});
         output->m_datagrams.reserve(entryCount);
-        output->m_commitLeases.reserve(entryCount);
         for (const auto& packet : packets) {
             output->m_payload.insert(
                 output->m_payload.end(), packet.begin(), packet.end());
@@ -143,30 +131,32 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
                 std::span<const std::uint8_t>(
                     output->m_payload.data() + byteOffset, byteCount),
                 presentationOnMaster, canonicalRelease, canonicalDeadline));
-            auto lease = MediaProtocolDatagramCommitLease::create(
-                MediaTsProtocolEntryReservation(transaction, index));
-            if (!lease) return Result::failure(lease.error());
-            output->m_commitLeases.push_back(std::move(lease).value());
             packetOffset += packetCount;
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MPEG-TS protocol datagram batch"));
     }
+    auto transaction = MediaProtocolDatagramCommitTransaction::create(
+        MediaTsProtocolCommitReservation(
+            std::move(cursor), prepared.value().takeCommitToken(), entryCount));
+    if (!transaction) return Result::failure(transaction.error());
+    output->m_commitTransaction.emplace(std::move(transaction).value());
     return Result::success(std::move(output));
 }
 
-::media::Result<MediaProtocolDatagramCommitLease>
-MediaMpegTsProtocolDatagramBatchBuffer::takeCommitLease(
-    std::size_t index) noexcept
+::media::Result<MediaProtocolDatagramCommitTransaction>
+MediaMpegTsProtocolDatagramBatchBuffer::takeCommitTransaction() noexcept
 {
-    if (index >= m_commitLeases.size() || !m_commitLeases[index].valid()) {
-        return ::media::Result<MediaProtocolDatagramCommitLease>::failure(
+    using Result = ::media::Result<MediaProtocolDatagramCommitTransaction>;
+    if (!m_commitTransaction || !m_commitTransaction->valid()) {
+        return Result::failure(
             ::media::ErrorInfo::internalError(
-                "MPEG-TS protocol datagram lease is absent or already moved"));
+                "MPEG-TS protocol transaction is absent or already moved"));
     }
-    return ::media::Result<MediaProtocolDatagramCommitLease>::success(
-        std::move(m_commitLeases[index]));
+    auto transaction = std::move(*m_commitTransaction);
+    m_commitTransaction.reset();
+    return Result::success(std::move(transaction));
 }
 
 std::optional<std::uint64_t>

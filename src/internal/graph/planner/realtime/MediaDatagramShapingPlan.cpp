@@ -193,10 +193,18 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
         encoding.serviceCurve.peakWireBytesPerSecond <
             encoding.serviceCurve.sustainedWireBytesPerSecond ||
         encoding.serviceCurve.burstWireBytes == 0 ||
+        encoding.serviceCurve.targetResidence <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        encoding.serviceCurve.maximumReleaseJitter <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        encoding.serviceCurve.maximumReleaseJitter >=
+            encoding.serviceCurve.targetResidence ||
         encoding.backlog.maximumDatagrams == 0 ||
         encoding.backlog.maximumBytes == 0 ||
         encoding.backlog.maximumResidence <=
             MediaRunningTime::fromNanoseconds(0) ||
+        encoding.serviceCurve.targetResidence >
+            encoding.backlog.maximumResidence ||
         encoding.batch.maximumDatagrams == 0 ||
         encoding.batch.maximumBytes == 0 ||
         encoding.batch.maximumDatagrams > encoding.backlog.maximumDatagrams ||

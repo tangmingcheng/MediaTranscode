@@ -82,7 +82,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     const auto endpointPendingBytes = (std::min)(
         socketPerEndpoint,
         (std::max)(wire.maximumWireDatagramBytes,
-                   backlogBytes.value() / endpointCount));
+                   backlogBytes.value()));
     const auto endpointPendingDatagrams = (std::max)(
         std::uint64_t{1},
         ceilDivide(endpointPendingBytes, wire.maximumWireDatagramBytes));

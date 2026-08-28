@@ -18,88 +18,60 @@ class MediaMpegTsUdpWireCommitTransaction final {
 public:
     explicit MediaMpegTsUdpWireCommitTransaction(
         MediaWireGlobalSequenceReservation reservation,
-        std::vector<MediaProtocolDatagramCommitLease> protocolCommits) noexcept
+        std::optional<MediaProtocolDatagramCommitTransaction>
+            protocolCommit) noexcept
         : m_reservation(std::move(reservation)),
-          m_protocolCommits(std::move(protocolCommits))
+          m_protocolCommit(std::move(protocolCommit))
     {
     }
+
+    std::size_t size() const noexcept { return m_reservation.size(); }
 
     ::media::Result<std::uint64_t> sequence(std::size_t index) const noexcept
     {
         return m_reservation.sequence(index);
     }
 
-    ::media::Status markScheduled(
-        std::size_t index, MediaRunningTime now) noexcept
+    ::media::Status markScheduledPrefix(
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept
     {
-        return m_reservation.markScheduled(index, now);
+        if (begin > size() || count > size() - begin) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "MPEG-TS UDP schedule prefix is outside its transaction"));
+        }
+        return m_reservation.markScheduled(begin, count, now);
     }
 
-    ::media::Status markSubmitted(
-        std::size_t index, MediaRunningTime now) noexcept
+    ::media::Status commitSubmittedPrefix(
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept
     {
-        return m_reservation.markSubmitted(index, now);
-    }
-
-    ::media::Status commit(
-        std::size_t index, MediaRunningTime now) noexcept
-    {
-        auto ready = m_reservation.canCommit(index);
-        if (!ready) return ready;
-        if (!m_protocolCommits.empty()) {
-            if (index >= m_protocolCommits.size()) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError(
-                        "MPEG-TS UDP protocol commit index is outside its transaction"));
-            }
-            auto protocolCommitted = m_protocolCommits[index].commit();
+        if (begin > size() || count > size() - begin) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "MPEG-TS UDP submitted prefix is outside its transaction"));
+        }
+        if (m_protocolCommit &&
+            (!m_protocolCommit->valid() ||
+             count > m_protocolCommit->size() -
+                         m_protocolCommit->committed())) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "MPEG-TS UDP submitted prefix exceeds its protocol transaction"));
+        }
+        auto committed = m_reservation.commit(begin, count, now);
+        if (!committed) return committed;
+        if (m_protocolCommit) {
+            auto protocolCommitted = m_protocolCommit->commitNextPrefix(count);
             if (!protocolCommitted) return protocolCommitted;
         }
-        return m_reservation.commit(index, now);
+        return ::media::Status::success();
     }
 
 private:
     MediaWireGlobalSequenceReservation m_reservation;
-    std::vector<MediaProtocolDatagramCommitLease> m_protocolCommits;
-};
-
-class MediaMpegTsUdpWireEntryReservation final {
-public:
-    explicit MediaMpegTsUdpWireEntryReservation(
-        std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction,
-        std::size_t index)
-        noexcept
-        : m_transaction(std::move(transaction)), m_index(index)
-    {
-    }
-
-    ::media::Status markScheduled(MediaRunningTime now) noexcept
-    {
-        return m_transaction
-            ? m_transaction->markScheduled(m_index, now)
-            : ::media::Status::failure(::media::ErrorInfo::internalError(
-                  "MPEG-TS UDP wire reservation has no transaction"));
-    }
-
-    ::media::Status markSubmitted(MediaRunningTime now) noexcept
-    {
-        return m_transaction
-            ? m_transaction->markSubmitted(m_index, now)
-            : ::media::Status::failure(::media::ErrorInfo::internalError(
-                  "MPEG-TS UDP wire reservation has no transaction"));
-    }
-
-    ::media::Status commit(MediaRunningTime now) noexcept
-    {
-        return m_transaction
-            ? m_transaction->commit(m_index, now)
-            : ::media::Status::failure(::media::ErrorInfo::internalError(
-                  "MPEG-TS UDP wire reservation has no transaction"));
-    }
-
-private:
-    std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> m_transaction;
-    std::size_t m_index;
+    std::optional<MediaProtocolDatagramCommitTransaction> m_protocolCommit;
 };
 
 } // namespace
@@ -235,46 +207,34 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     }
     auto global = m_config.globalSequence->reserve(globalEntries);
     if (!global) return Result::failure(global.error());
-    std::vector<MediaProtocolDatagramCommitLease> protocolCommits;
+    std::optional<MediaProtocolDatagramCommitTransaction> protocolCommit;
     if (protocolBatch) {
-        try {
-            protocolCommits.reserve(datagrams.size());
-            for (std::size_t index = 0; index < datagrams.size(); ++index) {
-                auto lease = protocolBatch->takeCommitLease(index);
-                if (!lease) return Result::failure(lease.error());
-                protocolCommits.push_back(std::move(lease).value());
-            }
-        } catch (const std::bad_alloc&) {
-            return Result::failure(::media::ErrorInfo::allocationFailed(
-                "MPEG-TS UDP protocol commit transfer"));
+        auto transaction = protocolBatch->takeCommitTransaction();
+        if (!transaction) return Result::failure(transaction.error());
+        if (transaction.value().size() != datagrams.size()) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "MPEG-TS UDP protocol transaction cardinality differs"));
         }
+        protocolCommit.emplace(std::move(transaction).value());
     }
-    std::shared_ptr<MediaMpegTsUdpWireCommitTransaction> transaction;
-    try {
-        transaction =
-                std::make_shared<MediaMpegTsUdpWireCommitTransaction>(
-                std::move(global).value(), std::move(protocolCommits));
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "MPEG-TS UDP wire commit transaction"));
-    }
+    auto transaction = MediaDatagramCommitTransaction::create(
+        m_config.generation,
+        MediaMpegTsUdpWireCommitTransaction(
+            std::move(global).value(), std::move(protocolCommit)));
+    if (!transaction) return Result::failure(transaction.error());
+    const auto firstGlobalSequence = transaction.value().firstGlobalSequence();
     auto builderResult = MediaWireDatagramBatchPartitionBuilder::create(
         m_config.sessionKey, m_config.serviceScopeId, m_config.generation,
-        m_config.batchPlan);
+        m_config.batchPlan, std::move(transaction).value());
     if (!builderResult) return Result::failure(builderResult.error());
     auto builder = std::move(builderResult).value();
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
-        auto sequence = transaction->sequence(index);
-        if (!sequence) return Result::failure(sequence.error());
-        auto lease = MediaDatagramSubmitCommitLease::create(
-            m_config.generation, sequence.value(),
-            MediaMpegTsUdpWireEntryReservation(transaction, index));
-        if (!lease) return Result::failure(lease.error());
+        const auto sequence = firstGlobalSequence +
+            static_cast<std::uint64_t>(index);
         auto appended = builder.append(
             datagrams[index].completeTsPackets, m_config.endpointId,
             datagrams[index].canonicalRelease,
-            deadlines[index], sequence.value(),
-            std::move(lease).value());
+            deadlines[index], sequence);
         if (!appended) return Result::failure(appended.error());
     }
     return builder.finish();

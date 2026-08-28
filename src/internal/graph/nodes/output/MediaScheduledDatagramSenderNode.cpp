@@ -103,7 +103,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupEndpointId = 0;
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
+    m_groupServiceDuration = MediaRunningTime::fromNanoseconds(0);
     m_nextPhysicalSubmitNotBefore.reset();
+    m_lastSubmittedAt.reset();
     m_terminalFailure.reset();
     m_wakeup.reset();
     m_stopSource = std::stop_source{};
@@ -117,6 +119,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_pressureFailures = 0;
     m_partialSubmittedFailures = 0;
     m_ambiguousSubmittedFailures = 0;
+    m_commitAttempted = false;
     m_diagnosticsEmitted = false;
     auto valid = validatePorts(context);
     return valid ? FFmpegNodeRuntime::start(context) : valid;
@@ -241,7 +244,8 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             "scheduled datagram sender has no reservable wire job"));
     }
     auto& first = m_pendingBatch->m_datagrams[m_nextDatagram];
-    if (first.generation() != *m_generation || !first.hasCommitLease()) {
+    if (first.generation() != *m_generation ||
+        !m_pendingBatch->m_commitSlice.valid()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled wire job violates generation or commit ownership"));
     }
@@ -258,31 +262,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupEndpointId = first.endpointId();
     m_groupNotBefore = first.enqueueNotBefore();
     m_groupDeadline = first.enqueueNotAfter();
-    std::uint64_t payloadBytes = first.bytes().size();
-    std::uint64_t wireBytes = payloadBytes + overhead->second;
-    while (m_groupBegin + m_groupCount < m_pendingBatch->m_datagrams.size()) {
-        const auto& next =
-            m_pendingBatch->m_datagrams[m_groupBegin + m_groupCount];
-        if (next.endpointId() != m_groupEndpointId ||
-            next.enqueueNotBefore() != first.enqueueNotBefore() ||
-            next.enqueueNotAfter() != m_groupDeadline) {
-            break;
-        }
-        if (m_groupCount == m_maximumBatchDatagrams ||
-            next.bytes().size() > m_maximumBatchBytes - payloadBytes ||
-            next.bytes().size() + overhead->second >
-                m_burstWireBytes - wireBytes) {
-            break;
-        }
-        if (next.generation() != *m_generation || !next.hasCommitLease()) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "scheduled wire batch contains invalid ordered commit ownership"));
-        }
-        payloadBytes += static_cast<std::uint64_t>(next.bytes().size());
-        wireBytes += static_cast<std::uint64_t>(next.bytes().size()) +
-            overhead->second;
-        ++m_groupCount;
-    }
+    m_groupServiceDuration = first.wireServiceDuration();
     if (m_nextPhysicalSubmitNotBefore &&
         *m_nextPhysicalSubmitNotBefore > m_groupNotBefore) {
         m_groupNotBefore = *m_nextPhysicalSubmitNotBefore;
@@ -296,61 +276,115 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Status MediaScheduledDatagramSenderNode::commitSubmittedPrefix(
-    std::size_t count)
+::media::Status MediaScheduledDatagramSenderNode::preflightBatchTelemetry(
+    const MediaScheduledWireDatagramBatchBuffer& batch) const
 {
-    if (!m_pendingBatch || count > m_groupCount) {
+    if (batch.m_datagrams.empty() ||
+        batch.m_datagrams.size() > m_maximumBatchDatagrams ||
+        m_batches == (std::numeric_limits<std::uint64_t>::max)() ||
+        batch.m_datagrams.size() >
+            (std::numeric_limits<std::uint64_t>::max)() - m_datagrams) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "scheduled datagram sender received an invalid commit prefix"));
+            "scheduled datagram sender batch telemetry overflowed"));
     }
-    auto now = m_clock->now();
-    if (!now) return ::media::Status::failure(now.error());
-    MediaRunningTime submittedService = MediaRunningTime::fromNanoseconds(0);
-    for (std::size_t offset = 0; offset < count; ++offset) {
-        auto& datagram =
-            m_pendingBatch->m_datagrams[m_groupBegin + offset];
-        auto accumulated = submittedService.checkedAdd(
-            datagram.wireServiceDuration());
-        if (!accumulated) return ::media::Status::failure(accumulated.error());
-        submittedService = accumulated.value();
-        auto submitted = datagram.markSubmitted(now.value());
-        if (!submitted) return submitted;
-        auto committed = datagram.commitSubmit(now.value());
-        if (!committed) return committed;
-        if (m_datagrams == (std::numeric_limits<std::uint64_t>::max)() ||
+    std::uint64_t batchBytes = 0;
+    for (const auto& datagram : batch.m_datagrams) {
+        if (m_endpointDatagrams.find(datagram.endpointId()) ==
+                m_endpointDatagrams.end() ||
+            m_endpointBytes.find(datagram.endpointId()) ==
+                m_endpointBytes.end() ||
             datagram.bytes().size() >
-                (std::numeric_limits<std::uint64_t>::max)() - m_bytes) {
+                (std::numeric_limits<std::uint64_t>::max)() - batchBytes) {
             return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "scheduled datagram sender telemetry overflowed"));
+                "scheduled datagram sender batch endpoint or byte telemetry is invalid"));
         }
-        ++m_datagrams;
-        m_bytes += static_cast<std::uint64_t>(datagram.bytes().size());
+        batchBytes += static_cast<std::uint64_t>(datagram.bytes().size());
+    }
+    if (batchBytes > (std::numeric_limits<std::uint64_t>::max)() - m_bytes) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "scheduled datagram sender batch byte telemetry overflowed"));
+    }
+    for (const auto endpointId : m_endpointIds) {
+        std::uint64_t endpointDatagramCount = 0;
+        std::uint64_t endpointByteCount = 0;
+        for (const auto& datagram : batch.m_datagrams) {
+            if (datagram.endpointId() != endpointId) continue;
+            if (endpointDatagramCount ==
+                    (std::numeric_limits<std::uint64_t>::max)() ||
+                datagram.bytes().size() >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        endpointByteCount) {
+                return ::media::Status::failure(::media::ErrorInfo::internalError(
+                    "scheduled datagram sender endpoint batch telemetry overflowed"));
+            }
+            ++endpointDatagramCount;
+            endpointByteCount +=
+                static_cast<std::uint64_t>(datagram.bytes().size());
+        }
+        const auto datagrams = m_endpointDatagrams.find(endpointId);
+        const auto bytes = m_endpointBytes.find(endpointId);
+        if (datagrams == m_endpointDatagrams.end() ||
+            bytes == m_endpointBytes.end() ||
+            endpointDatagramCount >
+                (std::numeric_limits<std::uint64_t>::max)() - datagrams->second ||
+            endpointByteCount >
+                (std::numeric_limits<std::uint64_t>::max)() - bytes->second) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "scheduled datagram sender endpoint cumulative telemetry overflowed"));
+        }
+    }
+    return ::media::Status::success();
+}
+
+void MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
+    std::size_t count,
+    MediaRunningTime submittedAt) noexcept
+{
+    std::int64_t serviceNanoseconds = 0;
+    for (std::size_t offset = 0; offset < count; ++offset) {
+        serviceNanoseconds +=
+            m_pendingBatch->m_datagrams[m_groupBegin + offset]
+                .wireServiceDuration().nanoseconds();
+    }
+    m_nextPhysicalSubmitNotBefore = MediaRunningTime::fromNanoseconds(
+        submittedAt.nanoseconds() + serviceNanoseconds);
+    m_lastSubmittedAt = submittedAt;
+    m_nextDatagram += count;
+}
+
+::media::Status
+MediaScheduledDatagramSenderNode::commitAccumulatedSubmittedPrefix()
+{
+    if (!m_pendingBatch || m_commitAttempted || !m_lastSubmittedAt ||
+        m_nextDatagram == 0 ||
+        m_nextDatagram > m_pendingBatch->m_datagrams.size()) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "scheduled datagram sender has no valid accumulated submitted prefix"));
+    }
+    m_commitAttempted = true;
+    auto committed = m_pendingBatch->m_commitSlice.commitSubmittedPrefix(
+        m_nextDatagram, *m_lastSubmittedAt);
+    if (!committed) return committed;
+
+    std::uint64_t submittedBytes = 0;
+    for (std::size_t index = 0; index < m_nextDatagram; ++index) {
+        const auto& datagram = m_pendingBatch->m_datagrams[index];
+        const auto bytes = static_cast<std::uint64_t>(datagram.bytes().size());
+        submittedBytes += bytes;
         auto endpointDatagrams = m_endpointDatagrams.find(datagram.endpointId());
         auto endpointBytes = m_endpointBytes.find(datagram.endpointId());
-        if (endpointDatagrams == m_endpointDatagrams.end() ||
-            endpointBytes == m_endpointBytes.end() ||
-            endpointDatagrams->second ==
-                (std::numeric_limits<std::uint64_t>::max)() ||
-            datagram.bytes().size() >
-                (std::numeric_limits<std::uint64_t>::max)() -
-                    endpointBytes->second) {
-            return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "scheduled datagram endpoint telemetry overflowed"));
-        }
         ++endpointDatagrams->second;
-        endpointBytes->second +=
-            static_cast<std::uint64_t>(datagram.bytes().size());
+        endpointBytes->second += bytes;
     }
-    auto nextPhysical = now.value().checkedAdd(submittedService);
-    if (!nextPhysical) return ::media::Status::failure(nextPhysical.error());
-    m_nextPhysicalSubmitNotBefore = nextPhysical.value();
-    m_nextDatagram += count;
+    m_datagrams += static_cast<std::uint64_t>(m_nextDatagram);
+    m_bytes += submittedBytes;
     return ::media::Status::success();
 }
 
 ::media::Result<MediaNodeProcessResult>
 MediaScheduledDatagramSenderNode::failSubmit(
-    const MediaDatagramTransmitError& error)
+    const MediaDatagramTransmitError& error,
+    MediaRunningTime submittedAt)
 {
     if (error.kind ==
         MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
@@ -364,9 +398,9 @@ MediaScheduledDatagramSenderNode::failSubmit(
          error.kind ==
              MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix) &&
         error.submittedPrefixDatagrams != 0) {
-        auto committed = commitSubmittedPrefix(
-            static_cast<std::size_t>(error.submittedPrefixDatagrams));
-        if (!committed) return failTerminal(error.cause);
+        recordSubmittedPrefix(
+            static_cast<std::size_t>(error.submittedPrefixDatagrams),
+            submittedAt);
     }
     return failTerminal(error.cause);
 }
@@ -376,12 +410,12 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
 {
     while (m_pendingBatch) {
         if (m_nextDatagram == m_pendingBatch->m_datagrams.size()) {
-            if (m_batches == (std::numeric_limits<std::uint64_t>::max)()) {
-                return failTerminal(::media::ErrorInfo::internalError(
-                    "scheduled datagram sender batch telemetry overflowed"));
-            }
+            auto committed = commitAccumulatedSubmittedPrefix();
+            if (!committed) return failTerminal(committed.error());
             ++m_batches;
             m_pendingBatch.reset();
+            m_nextDatagram = 0;
+            m_commitAttempted = false;
             m_state = SubmitState::WaitReservation;
             return processProgress();
         }
@@ -433,6 +467,8 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram submit exceeded its original deadline"));
             }
+            auto nextPhysical = now.value().checkedAdd(m_groupServiceDuration);
+            if (!nextPhysical) return failTerminal(nextPhysical.error());
             MediaDatagramTransmitSubmitResult submitted =
                 MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(::media::ErrorInfo::internalError(
@@ -451,7 +487,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 submitted = m_session->trySubmitNew(
                     m_groupEndpointId, m_submitEntries, now.value());
             }
-            if (!submitted) return failSubmit(submitted.error());
+            if (!submitted) return failSubmit(submitted.error(), now.value());
             if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
                 ++m_wouldBlockEvents;
                 m_state = SubmitState::WaitWritableWithinOriginalDeadline;
@@ -461,12 +497,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
             }
-            m_state = SubmitState::CommitSubmittedPrefixLeases;
-        }
-
-        if (m_state == SubmitState::CommitSubmittedPrefixLeases) {
-            auto committed = commitSubmittedPrefix(m_groupCount);
-            if (!committed) return failTerminal(committed.error());
+            recordSubmittedPrefix(m_groupCount, now.value());
             m_state = SubmitState::WaitReservation;
         }
     }
@@ -561,6 +592,10 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
 MediaScheduledDatagramSenderNode::failTerminal(::media::ErrorInfo error)
 {
     if (!m_terminalFailure) {
+        if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
+            auto committed = commitAccumulatedSubmittedPrefix();
+            if (!committed) error = committed.error();
+        }
         m_terminalFailure = std::move(error);
         if (m_session && m_clock) {
             auto now = m_clock->now();
@@ -628,8 +663,12 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender received a batch outside the active service scope"));
     }
+    auto telemetry = preflightBatchTelemetry(*batch);
+    if (!telemetry) return failTerminal(telemetry.error());
     m_pendingBatch = std::move(batch);
     m_nextDatagram = 0;
+    m_lastSubmittedAt.reset();
+    m_commitAttempted = false;
     m_state = SubmitState::WaitReservation;
     return progressPendingBatch();
 }
@@ -652,13 +691,17 @@ void MediaScheduledDatagramSenderNode::closeSender(
     m_stopSource.request_stop();
     m_wakeup.interrupt();
     std::optional<::media::ErrorInfo> closeFailure;
+    if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
+        auto committed = commitAccumulatedSubmittedPrefix();
+        if (!committed) closeFailure = committed.error();
+    }
     if (m_session) {
         auto now = m_clock->now();
         if (!now) {
-            closeFailure = now.error();
+            if (!closeFailure) closeFailure = now.error();
         } else {
             auto closed = m_session->close(now.value());
-            if (!closed) closeFailure = closed.error();
+            if (!closed && !closeFailure) closeFailure = closed.error();
         }
     }
     emitDiagnostics(closeFailure ? "failed" : "finished");
@@ -681,8 +724,13 @@ void MediaScheduledDatagramSenderNode::abort(
 {
     interrupt(context);
     if (!m_terminalFailure) {
-        m_terminalFailure = ::media::ErrorInfo::cancelled(
+        auto cause = ::media::ErrorInfo::cancelled(
             "scheduled datagram sender was aborted");
+        if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
+            auto committed = commitAccumulatedSubmittedPrefix();
+            if (!committed) cause = committed.error();
+        }
+        m_terminalFailure = std::move(cause);
     }
     emitDiagnostics("aborted");
     closeSender(*m_terminalFailure);

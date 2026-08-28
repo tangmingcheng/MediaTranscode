@@ -6,8 +6,11 @@
 
 #include <concepts>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -25,124 +28,226 @@ class MediaWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuilder;
 class MediaWireDatagramBatchPartitionBuilder;
 
-class MediaDatagramSubmitCommitLease final {
+class MediaDatagramCommitSlice;
+
+class MediaDatagramCommitTransaction final {
 public:
     template <typename Reservation>
         requires std::is_nothrow_move_constructible_v<Reservation> &&
                  std::is_nothrow_destructible_v<Reservation> &&
-                 requires(Reservation& reservation) {
-                     { reservation.markScheduled(
+                 requires(Reservation& reservation, std::size_t begin,
+                          std::size_t count) {
+                     { reservation.size() } noexcept ->
+                         std::same_as<std::size_t>;
+                     { reservation.sequence(begin) } noexcept ->
+                         std::same_as<::media::Result<std::uint64_t>>;
+                     { reservation.markScheduledPrefix(
+                         begin, count,
                          MediaRunningTime::fromNanoseconds(0)) } noexcept ->
                          std::same_as<::media::Status>;
-                     { reservation.markSubmitted(
-                         MediaRunningTime::fromNanoseconds(0)) } noexcept ->
-                         std::same_as<::media::Status>;
-                     { reservation.commit(
+                     { reservation.commitSubmittedPrefix(
+                         begin, count,
                          MediaRunningTime::fromNanoseconds(0)) } noexcept ->
                          std::same_as<::media::Status>;
                  }
-    static ::media::Result<MediaDatagramSubmitCommitLease> create(
+    static ::media::Result<MediaDatagramCommitTransaction> create(
         std::uint64_t generation,
-        std::uint64_t globalSequence,
         Reservation reservation)
     {
-        using Result = ::media::Result<MediaDatagramSubmitCommitLease>;
-        if (generation == 0) {
+        using Result = ::media::Result<MediaDatagramCommitTransaction>;
+        const auto size = reservation.size();
+        auto firstSequence = reservation.sequence(0);
+        if (generation == 0 || size == 0 || !firstSequence ||
+            static_cast<std::uint64_t>(size - 1) >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    firstSequence.value()) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "datagram commit lease requires a generation"));
+                "datagram commit transaction requires generation and a representable nonempty sequence range"));
         }
         try {
-            return Result::success(MediaDatagramSubmitCommitLease(
-                generation, globalSequence,
-                std::make_unique<Model<Reservation>>(
+            return Result::success(MediaDatagramCommitTransaction(
+                generation, firstSequence.value(), size,
+                std::make_shared<Model<Reservation>>(
                     std::move(reservation))));
         } catch (const std::bad_alloc&) {
             return Result::failure(::media::ErrorInfo::allocationFailed(
-                "datagram submit commit lease"));
+                "datagram commit transaction"));
         }
     }
 
-    MediaDatagramSubmitCommitLease(
-        MediaDatagramSubmitCommitLease&&) noexcept = default;
-    MediaDatagramSubmitCommitLease& operator=(
-        MediaDatagramSubmitCommitLease&&) noexcept = default;
-    MediaDatagramSubmitCommitLease(
-        const MediaDatagramSubmitCommitLease&) = delete;
-    MediaDatagramSubmitCommitLease& operator=(
-        const MediaDatagramSubmitCommitLease&) = delete;
-    ~MediaDatagramSubmitCommitLease() = default;
+    MediaDatagramCommitTransaction(
+        MediaDatagramCommitTransaction&& other) noexcept;
+    MediaDatagramCommitTransaction& operator=(
+        MediaDatagramCommitTransaction&& other) noexcept;
+    MediaDatagramCommitTransaction(
+        const MediaDatagramCommitTransaction&) = delete;
+    MediaDatagramCommitTransaction& operator=(
+        const MediaDatagramCommitTransaction&) = delete;
+    ~MediaDatagramCommitTransaction() noexcept;
 
-    bool valid() const noexcept { return m_reservation != nullptr; }
+    bool valid() const noexcept { return m_control != nullptr; }
+    std::uint64_t generation() const noexcept { return m_generation; }
+    std::uint64_t firstGlobalSequence() const noexcept
+    {
+        return m_firstGlobalSequence;
+    }
+    std::size_t size() const noexcept { return m_size; }
+    ::media::Result<std::uint64_t> sequence(std::size_t index) const noexcept;
 
 private:
     class Concept {
     public:
         virtual ~Concept() = default;
-        virtual ::media::Status markScheduled(MediaRunningTime now) noexcept = 0;
-        virtual ::media::Status markSubmitted(MediaRunningTime now) noexcept = 0;
-        virtual ::media::Status commit(MediaRunningTime now) noexcept = 0;
+        virtual ::media::Status markScheduledPrefix(
+            std::size_t begin,
+            std::size_t count,
+            MediaRunningTime now) noexcept = 0;
+        virtual ::media::Status commitSubmittedPrefix(
+            std::size_t begin,
+            std::size_t count,
+            MediaRunningTime now) noexcept = 0;
+        virtual void abandon() noexcept = 0;
     };
 
     template <typename Reservation>
     class Model final : public Concept {
     public:
         explicit Model(Reservation reservation) noexcept
-            : m_reservation(std::move(reservation))
+            : m_reservation(std::move(reservation)),
+              m_size(m_reservation->size())
         {
         }
 
-        ::media::Status markScheduled(MediaRunningTime now) noexcept override
+        ::media::Status markScheduledPrefix(
+            std::size_t begin,
+            std::size_t count,
+            MediaRunningTime now) noexcept override
         {
-            return m_reservation.markScheduled(now);
+            std::lock_guard lock(m_mutex);
+            if (!m_reservation || begin != m_nextScheduled || count == 0 ||
+                count > m_size - begin) {
+                abandonLocked();
+                return ::media::Status::failure(::media::ErrorInfo::internalError(
+                    "datagram schedule prefix is stale, empty, or outside its transaction"));
+            }
+            auto marked = m_reservation->markScheduledPrefix(begin, count, now);
+            if (!marked) {
+                abandonLocked();
+                return marked;
+            }
+            m_nextScheduled += count;
+            return ::media::Status::success();
         }
 
-        ::media::Status markSubmitted(MediaRunningTime now) noexcept override
+        ::media::Status commitSubmittedPrefix(
+            std::size_t begin,
+            std::size_t count,
+            MediaRunningTime now) noexcept override
         {
-            return m_reservation.markSubmitted(now);
+            std::lock_guard lock(m_mutex);
+            if (!m_reservation || begin != m_nextCommitted || count == 0 ||
+                count > m_size - begin || begin + count > m_nextScheduled) {
+                abandonLocked();
+                return ::media::Status::failure(::media::ErrorInfo::internalError(
+                    "datagram submitted prefix is stale, empty, unscheduled, or outside its transaction"));
+            }
+            auto committed = m_reservation->commitSubmittedPrefix(
+                begin, count, now);
+            if (!committed) {
+                abandonLocked();
+                return committed;
+            }
+            m_nextCommitted += count;
+            if (m_nextCommitted == m_size) m_reservation.reset();
+            return ::media::Status::success();
         }
 
-        ::media::Status commit(MediaRunningTime now) noexcept override
+        void abandon() noexcept override
         {
-            return m_reservation.commit(now);
+            std::lock_guard lock(m_mutex);
+            abandonLocked();
         }
 
     private:
-        Reservation m_reservation;
+        void abandonLocked() noexcept { m_reservation.reset(); }
+
+        std::mutex m_mutex;
+        std::optional<Reservation> m_reservation;
+        std::size_t m_size = 0;
+        std::size_t m_nextScheduled = 0;
+        std::size_t m_nextCommitted = 0;
     };
 
-    MediaDatagramSubmitCommitLease(
+    MediaDatagramCommitTransaction(
         std::uint64_t generation,
-        std::uint64_t globalSequence,
-        std::unique_ptr<Concept> reservation) noexcept
+        std::uint64_t firstGlobalSequence,
+        std::size_t size,
+        std::shared_ptr<Concept> control) noexcept
         : m_generation(generation),
-          m_globalSequence(globalSequence),
-          m_reservation(std::move(reservation))
+          m_firstGlobalSequence(firstGlobalSequence),
+          m_size(size),
+          m_control(std::move(control))
     {
     }
 
+    ::media::Result<MediaDatagramCommitSlice> takeNextSlice(
+        std::size_t count) noexcept;
+    void abandonUnsliced() noexcept;
+
+    friend class MediaWireDatagramBatchPartitionBuilder;
+    friend class MediaDatagramCommitSlice;
+
+    std::uint64_t m_generation = 0;
+    std::uint64_t m_firstGlobalSequence = 0;
+    std::size_t m_size = 0;
+    std::size_t m_nextSlice = 0;
+    std::shared_ptr<Concept> m_control;
+};
+
+class MediaDatagramCommitSlice final {
+public:
+    MediaDatagramCommitSlice(MediaDatagramCommitSlice&& other) noexcept;
+    MediaDatagramCommitSlice& operator=(
+        MediaDatagramCommitSlice&& other) noexcept;
+    MediaDatagramCommitSlice(const MediaDatagramCommitSlice&) = delete;
+    MediaDatagramCommitSlice& operator=(
+        const MediaDatagramCommitSlice&) = delete;
+    ~MediaDatagramCommitSlice() noexcept;
+
+    bool valid() const noexcept { return m_control != nullptr; }
+    std::size_t size() const noexcept { return m_count; }
+
+private:
+    MediaDatagramCommitSlice(
+        std::shared_ptr<MediaDatagramCommitTransaction::Concept> control,
+        std::uint64_t generation,
+        std::uint64_t firstGlobalSequence,
+        std::size_t begin,
+        std::size_t count) noexcept;
     bool matches(std::uint64_t generation,
-                 std::uint64_t globalSequence) const noexcept
-    {
-        return valid() && m_generation == generation &&
-               m_globalSequence == globalSequence;
-    }
-    ::media::Status markScheduled(MediaRunningTime now) noexcept;
-    ::media::Status markSubmitted(MediaRunningTime now) noexcept;
-    ::media::Status commit(MediaRunningTime now) noexcept;
+                 std::uint64_t firstGlobalSequence,
+                 std::size_t count) const noexcept;
+    ::media::Status scheduleAll(MediaRunningTime now) noexcept;
+    ::media::Status commitSubmittedPrefix(
+        std::size_t count, MediaRunningTime now) noexcept;
+    void abandon() noexcept;
 
+    friend class MediaDatagramCommitTransaction;
     friend class MediaScheduledDatagramSenderNode;
-    friend class MediaScheduledWireDatagram;
     friend class MediaScheduledWireDatagramBatchBuffer;
     friend class MediaWireDatagramBatchBuffer;
 
-    std::uint64_t m_generation;
-    std::uint64_t m_globalSequence;
-    std::unique_ptr<Concept> m_reservation;
+    std::shared_ptr<MediaDatagramCommitTransaction::Concept> m_control;
+    std::uint64_t m_generation = 0;
+    std::uint64_t m_firstGlobalSequence = 0;
+    std::size_t m_begin = 0;
+    std::size_t m_count = 0;
+    std::size_t m_committed = 0;
+    bool m_scheduled = false;
 };
 
 struct MediaWireDatagramBatchEntry final {
     MediaWireDatagramDescriptor descriptor;
-    MediaDatagramSubmitCommitLease commitLease;
 };
 
 class MediaWireDatagram final {
@@ -173,8 +278,6 @@ public:
     {
         return m_descriptor.globalSequence;
     }
-    bool hasCommitLease() const noexcept { return m_commitLease.valid(); }
-
 private:
     friend class MediaDatagramShaperNode;
     friend class MediaDatagramServiceShaper;
@@ -183,12 +286,10 @@ private:
 
     MediaWireDatagram(
         std::span<const std::uint8_t> bytes,
-        const MediaWireDatagramDescriptor& descriptor,
-        MediaDatagramSubmitCommitLease commitLease) noexcept;
+        const MediaWireDatagramDescriptor& descriptor) noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaWireDatagramDescriptor m_descriptor;
-    MediaDatagramSubmitCommitLease m_commitLease;
 };
 
 class MediaWireDatagramBatchBuffer final : public MediaBuffer {
@@ -220,20 +321,23 @@ private:
     create(std::string sessionKey,
            std::string serviceScopeId,
            std::vector<std::uint8_t> payload,
-           std::vector<MediaWireDatagramBatchEntry> entries);
+           std::vector<MediaWireDatagramBatchEntry> entries,
+           MediaDatagramCommitSlice commitSlice);
 
     MediaWireDatagramBatchBuffer(
         std::string sessionKey,
         std::string serviceScopeId,
-        std::uint64_t generation,
-        std::vector<std::uint8_t> payload,
-        std::vector<MediaWireDatagram> datagrams) noexcept;
+         std::uint64_t generation,
+         std::vector<std::uint8_t> payload,
+         std::vector<MediaWireDatagram> datagrams,
+         MediaDatagramCommitSlice commitSlice) noexcept;
 
     const std::string m_sessionKey;
     const std::string m_serviceScopeId;
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaWireDatagram> m_datagrams;
+    MediaDatagramCommitSlice m_commitSlice;
 };
 
 } // namespace media::ffmpeg::graph

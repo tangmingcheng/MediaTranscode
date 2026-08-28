@@ -41,12 +41,11 @@ MediaWireDatagramBatchBuilder::create(
     std::uint64_t endpointId,
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline,
-    std::uint64_t globalSequence,
-    MediaDatagramSubmitCommitLease commitLease)
+    std::uint64_t globalSequence)
 {
     if (m_finished || m_generation == 0 || endpointId == 0 ||
         bytes.empty() || canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
-        canonicalDeadline < canonicalRelease || !commitLease.valid() ||
+        canonicalDeadline < canonicalRelease ||
         bytes.size() >
             (std::numeric_limits<std::uint64_t>::max)() - m_payload.size()) {
         return ::media::Status::failure(
@@ -64,8 +63,7 @@ MediaWireDatagramBatchBuilder::create(
                 static_cast<std::uint64_t>(bytes.size()),
                 canonicalRelease,
                 canonicalDeadline,
-                globalSequence},
-            std::move(commitLease)});
+                globalSequence}});
     } catch (const std::bad_alloc&) {
         return ::media::Status::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -75,7 +73,7 @@ MediaWireDatagramBatchBuilder::create(
 }
 
 ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-MediaWireDatagramBatchBuilder::finish()
+MediaWireDatagramBatchBuilder::finish(MediaDatagramCommitSlice commitSlice)
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
@@ -86,7 +84,7 @@ MediaWireDatagramBatchBuilder::finish()
     m_finished = true;
     return MediaWireDatagramBatchBuffer::create(
         std::move(m_sessionKey), std::move(m_serviceScopeId),
-        std::move(m_payload), std::move(m_entries));
+        std::move(m_payload), std::move(m_entries), std::move(commitSlice));
 }
 
 } // namespace media::ffmpeg::graph

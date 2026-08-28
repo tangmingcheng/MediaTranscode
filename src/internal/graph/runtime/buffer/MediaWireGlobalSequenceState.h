@@ -56,12 +56,19 @@ public:
     std::size_t size() const noexcept;
     ::media::Result<std::uint64_t> sequence(std::size_t index) const noexcept;
     ::media::Status markScheduled(
-        std::size_t index, MediaRunningTime now) noexcept;
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept;
     ::media::Status markSubmitted(
-        std::size_t index, MediaRunningTime now) noexcept;
-    ::media::Status canCommit(std::size_t index) const noexcept;
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept;
+    ::media::Status canCommit(
+        std::size_t begin, std::size_t count) const noexcept;
     ::media::Status commit(
-        std::size_t index, MediaRunningTime now) noexcept;
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept;
 
 private:
     friend class MediaWireGlobalSequenceState;
@@ -117,11 +124,22 @@ private:
                                  std::uint64_t maximumOutstandingWireBytes,
                                  std::unordered_map<std::uint64_t, std::uint64_t>
                                      endpointWireHeaderBytes) noexcept;
-    ::media::Status markStage(
+    ::media::Status markStageRange(
         const MediaWireGlobalSequenceReservation& reservation,
-        std::size_t index,
+        std::size_t begin,
+        std::size_t count,
         MediaRunningTime now,
         std::optional<std::uint64_t>& lastStageSequence) noexcept;
+    ::media::Status markStageRangeLocked(
+        const MediaWireGlobalSequenceReservation& reservation,
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now,
+        std::optional<std::uint64_t>& lastStageSequence) noexcept;
+    ::media::Status canCommitRangeLocked(
+        const MediaWireGlobalSequenceReservation& reservation,
+        std::size_t begin,
+        std::size_t count) const noexcept;
     void observeResidence(
         MediaRunningTime materializedAt, MediaRunningTime now) noexcept;
 

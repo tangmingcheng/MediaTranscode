@@ -21,7 +21,7 @@ struct MediaRtpWireCommitAction final {
     std::optional<MediaRtcpSenderReportCommitToken> reportToken;
     std::uint64_t payloadOctets;
     std::optional<MediaRtpTimestamp> timestamp;
-    std::optional<MediaProtocolDatagramCommitLease> protocolCommit;
+    bool consumesProtocolEntry = false;
 };
 
 class MediaRtpWireCommitTransaction;
@@ -79,32 +79,37 @@ public:
         std::shared_ptr<MediaRtpWireProtocolState> state,
         std::uint64_t reservationIdentity,
         MediaWireGlobalSequenceReservation globalReservation,
-        std::vector<MediaRtpWireCommitAction> actions) noexcept;
+        std::vector<MediaRtpWireCommitAction> actions,
+        std::optional<MediaProtocolDatagramCommitTransaction>
+            protocolCommit) noexcept;
+    MediaRtpWireCommitTransaction(
+        MediaRtpWireCommitTransaction&&) noexcept = default;
+    MediaRtpWireCommitTransaction& operator=(
+        MediaRtpWireCommitTransaction&&) = delete;
     ~MediaRtpWireCommitTransaction() noexcept;
 
+    std::size_t size() const noexcept { return m_actions.size(); }
     ::media::Result<std::uint64_t> sequence(
         std::size_t index) const noexcept;
-    ::media::Status markScheduled(
-        std::size_t index, MediaRunningTime now) noexcept;
-    ::media::Status markSubmitted(
-        std::size_t index, MediaRunningTime now) noexcept;
-    ::media::Status commit(
-        std::size_t index, MediaRunningTime now) noexcept;
+    ::media::Status markScheduledPrefix(
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept;
+    ::media::Status commitSubmittedPrefix(
+        std::size_t begin,
+        std::size_t count,
+        MediaRunningTime now) noexcept;
 
 private:
     ::media::Status poison(::media::ErrorInfo error) noexcept;
+    ::media::Status poisonLocked(::media::ErrorInfo error) noexcept;
 
     std::shared_ptr<MediaRtpWireProtocolState> m_state;
     std::uint64_t m_reservationIdentity = 0;
     MediaWireGlobalSequenceReservation m_globalReservation;
     std::vector<MediaRtpWireCommitAction> m_actions;
+    std::optional<MediaProtocolDatagramCommitTransaction> m_protocolCommit;
     std::size_t m_nextAction = 0;
 };
-
-::media::Result<MediaDatagramSubmitCommitLease> makeMediaRtpWireCommitLease(
-    const std::shared_ptr<MediaRtpWireCommitTransaction>& transaction,
-    std::size_t index,
-    std::uint64_t generation,
-    std::uint64_t globalSequence);
 
 } // namespace media::ffmpeg::graph

@@ -91,6 +91,8 @@ struct MediaDatagramServiceCurvePlan final {
     std::uint64_t sustainedWireBytesPerSecond;
     std::uint64_t peakWireBytesPerSecond;
     std::uint64_t burstWireBytes;
+    MediaRunningTime targetResidence;
+    MediaRunningTime maximumReleaseJitter;
     std::string authority;
 
     friend bool operator==(const MediaDatagramServiceCurvePlan&,

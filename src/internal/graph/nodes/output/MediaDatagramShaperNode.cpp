@@ -88,6 +88,14 @@ void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
                 << telemetry.lastAdmittedBatchLastDeadlineNanoseconds
                 << " last_admitted_batch_arrival_ns="
                 << telemetry.lastAdmittedBatchArrivalNanoseconds
+                << " last_selected_pacing_wire_bytes_per_second="
+                << telemetry.lastSelectedPacingWireBytesPerSecond
+                << " minimum_selected_pacing_wire_bytes_per_second="
+                << telemetry.minimumSelectedPacingWireBytesPerSecond
+                << " maximum_selected_pacing_wire_bytes_per_second="
+                << telemetry.maximumSelectedPacingWireBytesPerSecond
+                << " target_residence_missed_batches="
+                << telemetry.targetResidenceMissedBatches
                 << " service_curve_violations="
                 << telemetry.serviceCurveViolations
                 << " deadline_misses=" << telemetry.deadlineMisses
@@ -99,7 +107,9 @@ void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
                 << " peak_wire_bytes_per_second="
                 << plan.serviceCurve().peakWireBytesPerSecond
                 << " burst_wire_bytes="
-                << plan.serviceCurve().burstWireBytes;
+                << plan.serviceCurve().burstWireBytes
+                << " maximum_release_jitter_ns="
+                << plan.serviceCurve().maximumReleaseJitter.nanoseconds();
         }
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,

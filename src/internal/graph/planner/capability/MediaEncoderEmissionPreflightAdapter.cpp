@@ -1,5 +1,7 @@
 #include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
 
+#include "internal/graph/planner/capability/MediaEncoderPacketCapacityPreflight.h"
+
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 
@@ -154,38 +156,43 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
             return Result::failure(conflict("backend rate-control mode").error());
         }
     }
-    const auto sustainedBytes = static_cast<std::uint64_t>(
+    const auto sustainedBytesPerSecond = static_cast<std::uint64_t>(
         context.bit_rate / BitsPerByte +
         (context.bit_rate % BitsPerByte != 0 ? 1 : 0));
-    const auto peakBytes = static_cast<std::uint64_t>(
+    const auto peakBytesPerSecond = static_cast<std::uint64_t>(
         effectiveMaximum / BitsPerByte +
         (effectiveMaximum % BitsPerByte != 0 ? 1 : 0));
     const auto bufferBytes = static_cast<std::uint64_t>(
         context.rc_buffer_size / BitsPerByte +
         (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0));
     auto peakBytesPerAccessUnit = MediaCheckedArithmetic::ceilScale(
-        peakBytes,
+        peakBytesPerSecond,
         static_cast<std::uint64_t>(plannedCadence.den),
         static_cast<std::uint64_t>(plannedCadence.num),
         "encoder peak bytes per access unit");
-    auto maximumAccessUnitBytes = peakBytesPerAccessUnit
+    auto rateControlBurstBytes = peakBytesPerAccessUnit
         ? MediaCheckedArithmetic::add(
               bufferBytes, peakBytesPerAccessUnit.value(),
-              "encoder VBV and cadence access-unit admission bound")
+              "encoder VBV and cadence emission burst")
         : peakBytesPerAccessUnit;
-    if (!maximumAccessUnitBytes) {
-        return Result::failure(maximumAccessUnitBytes.error());
+    if (!rateControlBurstBytes) {
+        return Result::failure(rateControlBurstBytes.error());
     }
+    auto packetCapacity = MediaEncoderPacketCapacityPreflight::derive(
+        context, backend, rateControlBurstBytes.value());
+    if (!packetCapacity) return Result::failure(packetCapacity.error());
     if (context.max_b_frames < 0) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "opened encoder did not expose a valid retained-frame bound"));
     }
     const auto retainedFrames =
         static_cast<std::uint64_t>(context.max_b_frames) + 1U;
+    authority += "; " + packetCapacity.value().authority;
     return Result::success(MediaPreparedEncoderEmissionEnvelope{
-        sustainedBytes, peakBytes,
+        sustainedBytesPerSecond, peakBytesPerSecond,
         static_cast<std::uint64_t>(context.rc_buffer_size),
-        maximumAccessUnitBytes.value(), maximumAccessUnitBytes.value(),
+        packetCapacity.value().maximumAccessUnitPayloadBytes,
+        packetCapacity.value().maximumAccessUnitPayloadBytes,
         static_cast<std::uint64_t>(plannedCadence.num),
         static_cast<std::uint64_t>(plannedCadence.den),
         retainedFrames,

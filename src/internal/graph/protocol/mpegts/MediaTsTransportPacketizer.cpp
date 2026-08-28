@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <utility>
@@ -48,8 +49,17 @@ struct MediaTsPacketizerControlState final {
         bool clearsDiscontinuity;
     };
 
+    MediaTsPacketizerControlState(
+        MediaTsMuxPlan planValue,
+        ProgramContinuityState continuityValue) noexcept
+        : plan(std::move(planValue)),
+          continuity(std::move(continuityValue))
+    {
+    }
+
     MediaTsMuxPlan plan;
     ProgramContinuityState continuity;
+    std::mutex mutex;
     std::array<std::optional<std::uint64_t>, 4> activeCursors;
     std::array<std::deque<ContinuityReservation>, 4> reservations;
     std::uint64_t nextCursorIdentity = 1;
@@ -166,7 +176,22 @@ bool reservedDiscontinuityPending(MediaTsPacketizerControlState& state,
         : *committed;
 }
 
-::media::Result<MediaTsPacketCursor> beginPayload(
+bool cursorFinishedLocked(const MediaTsPacketCursorState& state) noexcept
+{
+    return state.packets && !state.pending &&
+           state.committedOffset == state.packets->size();
+}
+
+std::size_t cursorRemainingPacketCountLocked(
+    const MediaTsPacketCursorState& state) noexcept
+{
+    if (!state.packets || state.committedOffset >= state.packets->size()) {
+        return 0;
+    }
+    return state.packets->size() - state.committedOffset;
+}
+
+::media::Result<MediaTsPacketCursor> beginPayloadLocked(
     const std::shared_ptr<MediaTsPacketizerControlState>& state,
     CursorPidKind kind,
     std::uint16_t pid,
@@ -331,14 +356,16 @@ MediaTsPacketCursor& MediaTsPacketCursor::operator=(
 void MediaTsPacketCursor::cancel() noexcept
 {
     if (m_state && m_state->owner) {
+        const auto owner = m_state->owner;
+        const std::lock_guard lock(owner->mutex);
         if (m_state->continuityReserved && m_state->pending) {
-            m_state->owner->poisoned = true;
+            owner->poisoned = true;
         }
         if (m_state->packets && m_state->packets.use_count() == 1) {
-            m_state->owner->packetWorkspace =
+            owner->packetWorkspace =
                 std::move(*m_state->packets);
         }
-        auto* active = activeCursor(*m_state->owner, m_state->pidKind);
+        auto* active = activeCursor(*owner, m_state->pidKind);
         if (active && *active == m_state->identity) {
             active->reset();
         }
@@ -349,12 +376,18 @@ void MediaTsPacketCursor::cancel() noexcept
 ::media::Result<MediaTsPreparedPacketBatch> MediaTsPacketCursor::prepare(
     std::size_t maximumPackets)
 {
-    if (!m_state || !m_state->owner || m_state->owner->poisoned) {
+    if (!m_state || !m_state->owner) {
+        return ::media::Result<MediaTsPreparedPacketBatch>::failure(
+            invalid("MPEG-TS packet cursor cannot prepare from poisoned state"));
+    }
+    const auto owner = m_state->owner;
+    const std::lock_guard lock(owner->mutex);
+    if (owner->poisoned) {
         return ::media::Result<MediaTsPreparedPacketBatch>::failure(
             invalid("MPEG-TS packet cursor cannot prepare from poisoned state"));
     }
     if (maximumPackets < 1 ||
-        maximumPackets > m_state->owner->plan.parameters().maximumPacketsPerDatagram) {
+        maximumPackets > owner->plan.parameters().maximumPacketsPerDatagram) {
         return ::media::Result<MediaTsPreparedPacketBatch>::failure(
             invalid("MPEG-TS packet batch limit is outside the mux plan"));
     }
@@ -362,7 +395,7 @@ void MediaTsPacketCursor::cancel() noexcept
         return ::media::Result<MediaTsPreparedPacketBatch>::failure(
             invalid("MPEG-TS packet cursor already has a prepared batch"));
     }
-    if (finished()) {
+    if (cursorFinishedLocked(*m_state)) {
         return ::media::Result<MediaTsPreparedPacketBatch>::failure(
             invalid("MPEG-TS packet cursor is finished"));
     }
@@ -392,11 +425,17 @@ void MediaTsPacketCursor::cancel() noexcept
 ::media::Result<MediaTsPreparedPacketSeries>
 MediaTsPacketCursor::prepareRemaining()
 {
-    if (!m_state || !m_state->owner || m_state->owner->poisoned) {
+    if (!m_state || !m_state->owner) {
         return ::media::Result<MediaTsPreparedPacketSeries>::failure(
             invalid("MPEG-TS packet cursor cannot reserve from poisoned state"));
     }
-    if (m_state->pending || finished() ||
+    const auto owner = m_state->owner;
+    const std::lock_guard lock(owner->mutex);
+    if (owner->poisoned) {
+        return ::media::Result<MediaTsPreparedPacketSeries>::failure(
+            invalid("MPEG-TS packet cursor cannot reserve from poisoned state"));
+    }
+    if (m_state->pending || cursorFinishedLocked(*m_state) ||
         m_state->nextRevision == 0 ||
         m_state->nextRevision == (std::numeric_limits<std::uint64_t>::max)()) {
         return ::media::Result<MediaTsPreparedPacketSeries>::failure(
@@ -411,9 +450,8 @@ MediaTsPacketCursor::prepareRemaining()
         : m_state->initialPayloadContinuity;
     const bool clearsDiscontinuity =
         m_state->carriesDiscontinuity && begin == 0;
-    auto* ledger = reservationLedger(
-        *m_state->owner, m_state->pidKind);
-    auto* active = activeCursor(*m_state->owner, m_state->pidKind);
+    auto* ledger = reservationLedger(*owner, m_state->pidKind);
+    auto* active = activeCursor(*owner, m_state->pidKind);
     if (!ledger || !active || *active != m_state->identity) {
         return ::media::Result<MediaTsPreparedPacketSeries>::failure(
             invalid("MPEG-TS packet cursor lost its reservation authority"));
@@ -439,35 +477,43 @@ MediaTsPacketCursor::prepareRemaining()
 
 void MediaTsPacketCursor::poison() noexcept
 {
-    if (m_state && m_state->owner) m_state->owner->poisoned = true;
+    if (m_state && m_state->owner) {
+        const auto owner = m_state->owner;
+        const std::lock_guard lock(owner->mutex);
+        owner->poisoned = true;
+    }
 }
 
 ::media::Status MediaTsPacketCursor::commit(MediaTsPacketCommitToken token)
 {
-    if (!m_state || !m_state->owner || m_state->owner->poisoned ||
-        !m_state->pending || !token.m_valid) {
+    if (!m_state || !m_state->owner) {
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit token is not valid for a prepared batch"));
     }
+    const auto owner = m_state->owner;
     auto tokenOwner = token.m_owner.lock();
-    const auto* active = activeCursor(*m_state->owner, m_state->pidKind);
-    auto* ledger = reservationLedger(*m_state->owner, m_state->pidKind);
+    const std::lock_guard lock(owner->mutex);
+    if (owner->poisoned || !m_state->pending || !token.m_valid) {
+        return ::media::Status::failure(
+            invalid("MPEG-TS packet commit token is not valid for a prepared batch"));
+    }
+    const auto* active = activeCursor(*owner, m_state->pidKind);
+    auto* ledger = reservationLedger(*owner, m_state->pidKind);
     const bool reservationMatches = m_state->continuityReserved
         ? ledger && !ledger->empty() &&
             ledger->front().cursorIdentity == m_state->identity
         : active && *active == m_state->identity;
-    if (!tokenOwner || tokenOwner.get() != m_state->owner.get() ||
+    if (!tokenOwner || tokenOwner.get() != owner.get() ||
         token.m_cursorIdentity != m_state->identity ||
         token.m_revision != m_state->pending->revision ||
         !reservationMatches) {
-        m_state->owner->poisoned = true;
+        owner->poisoned = true;
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit token is stale, reordered, or has a continuity gap"));
     }
-    ContinuityState* nextContinuity = continuity(
-        *m_state->owner, m_state->pidKind);
+    ContinuityState* nextContinuity = continuity(*owner, m_state->pidKind);
     bool* pendingDiscontinuity = discontinuityPending(
-        *m_state->owner, m_state->pidKind);
+        *owner, m_state->pidKind);
     if (!nextContinuity || !pendingDiscontinuity) {
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit stream is absent from its plan"));
@@ -481,25 +527,24 @@ void MediaTsPacketCursor::poison() noexcept
     }
     m_state->committedOffset = m_state->pending->endOffset;
     m_state->pending.reset();
-    if (finished() && !m_state->continuityReserved) {
-        activeCursor(*m_state->owner, m_state->pidKind)->reset();
+    if (cursorFinishedLocked(*m_state) && !m_state->continuityReserved) {
+        activeCursor(*owner, m_state->pidKind)->reset();
     }
     return ::media::Status::success();
 }
 
 bool MediaTsPacketCursor::finished() const noexcept
 {
-    return m_state && !m_state->pending &&
-           m_state->committedOffset == m_state->packets->size();
+    if (!m_state || !m_state->owner) return false;
+    const std::lock_guard lock(m_state->owner->mutex);
+    return cursorFinishedLocked(*m_state);
 }
 
 std::size_t MediaTsPacketCursor::remainingPacketCount() const noexcept
 {
-    if (!m_state || !m_state->packets ||
-        m_state->committedOffset >= m_state->packets->size()) {
-        return 0;
-    }
-    return m_state->packets->size() - m_state->committedOffset;
+    if (!m_state || !m_state->owner) return 0;
+    const std::lock_guard lock(m_state->owner->mutex);
+    return cursorRemainingPacketCountLocked(*m_state);
 }
 
 ::media::Result<MediaTsTransportPacketizer> MediaTsTransportPacketizer::create(
@@ -526,8 +571,7 @@ std::size_t MediaTsPacketCursor::remainingPacketCount() const noexcept
             invalid("MPEG-TS packetizer requires a typed program plan"));
     }
     auto state = std::make_shared<MediaTsPacketizerControlState>(
-        MediaTsPacketizerControlState{
-            plan, std::move(continuityState)});
+        plan, std::move(continuityState));
     return ::media::Result<MediaTsTransportPacketizer>::success(
         MediaTsTransportPacketizer(std::move(state)));
 }
@@ -541,6 +585,11 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<std::size_t> MediaTsTransportPacketizer::patPacketCount(
     const MediaTsPatSection& section) const
 {
+    if (!m_state) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PAT packet count cannot be inspected"));
+    }
+    const std::lock_guard lock(m_state->mutex);
     const auto* active = m_state
         ? activeCursor(*m_state, CursorPidKind::Pat)
         : nullptr;
@@ -564,6 +613,11 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<std::size_t> MediaTsTransportPacketizer::pmtPacketCount(
     const MediaTsPmtSection& section) const
 {
+    if (!m_state) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PMT packet count cannot be inspected"));
+    }
+    const std::lock_guard lock(m_state->mutex);
     const auto* active = m_state
         ? activeCursor(*m_state, CursorPidKind::Pmt)
         : nullptr;
@@ -587,6 +641,11 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<std::size_t> MediaTsTransportPacketizer::pcrOnlyPacketCount(
     const MediaTsPcrClock& pcr) const
 {
+    if (!m_state) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PCR packet count cannot be inspected"));
+    }
+    const std::lock_guard lock(m_state->mutex);
     const auto* active = m_state
         ? activeCursor(*m_state, CursorPidKind::Pcr)
         : nullptr;
@@ -613,37 +672,52 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPat(
     const MediaTsPatSection& section)
 {
-    if (!m_state || m_state->poisoned || !section.matches(m_state->plan)) {
+    if (!m_state) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS PAT section does not match the packetizer plan"));
+    }
+    const std::lock_guard lock(m_state->mutex);
+    if (m_state->poisoned || !section.matches(m_state->plan)) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PAT section does not match the packetizer plan"));
     }
     const std::array<std::uint8_t, 1> pointerField{0};
     const std::array<std::span<const std::uint8_t>, 2> segments{
         pointerField, section.bytes()};
-    return beginPayload(m_state, CursorPidKind::Pat,
-                        m_state ? m_state->plan.parameters().patPid : 0,
+    return beginPayloadLocked(m_state, CursorPidKind::Pat,
+                        m_state->plan.parameters().patPid,
                         segments, false);
 }
 
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPmt(
     const MediaTsPmtSection& section)
 {
-    if (!m_state || m_state->poisoned || !section.matches(m_state->plan)) {
+    if (!m_state) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS PMT section does not match the packetizer plan"));
+    }
+    const std::lock_guard lock(m_state->mutex);
+    if (m_state->poisoned || !section.matches(m_state->plan)) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PMT section does not match the packetizer plan"));
     }
     const std::array<std::uint8_t, 1> pointerField{0};
     const std::array<std::span<const std::uint8_t>, 2> segments{
         pointerField, section.bytes()};
-    return beginPayload(m_state, CursorPidKind::Pmt,
-                        m_state ? m_state->plan.parameters().programMapPid : 0,
+    return beginPayloadLocked(m_state, CursorPidKind::Pmt,
+                        m_state->plan.parameters().programMapPid,
                         segments, false);
 }
 
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPcrOnly(
     const MediaTsPcrClock& pcr)
 {
-    if (!m_state || m_state->poisoned) {
+    if (!m_state) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS packetizer was moved from"));
+    }
+    const std::lock_guard lock(m_state->mutex);
+    if (m_state->poisoned) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer was moved from"));
     }
@@ -697,7 +771,12 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     std::span<const std::uint8_t> payload,
     bool randomAccess)
 {
-    if (!m_state || m_state->poisoned) {
+    if (!m_state) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS packetizer is poisoned"));
+    }
+    const std::lock_guard lock(m_state->mutex);
+    if (m_state->poisoned) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer is poisoned"));
     }
@@ -734,7 +813,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     }
     const std::array<std::span<const std::uint8_t>, 2> segments{
         header.bytes(), payload};
-    return beginPayload(m_state, kind, pid, segments, randomAccess);
+    return beginPayloadLocked(m_state, kind, pid, segments, randomAccess);
 }
 
 } // namespace media::ffmpeg::graph

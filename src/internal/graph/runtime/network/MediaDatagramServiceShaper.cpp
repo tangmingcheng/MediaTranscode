@@ -5,7 +5,6 @@
 #include <limits>
 #include <new>
 #include <sstream>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -28,11 +27,6 @@ bool sameRuntimeContract(const MediaDatagramShapingPlan& lhs,
            lhs.persistentStateMode() == rhs.persistentStateMode();
 }
 
-struct EndpointUsage final {
-    std::uint64_t datagrams = 0;
-    std::uint64_t bytes = 0;
-};
-
 } // namespace
 
 MediaDatagramServiceShaper::MediaDatagramServiceShaper(
@@ -52,6 +46,18 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
         plan.serviceCurve().sustainedWireBytesPerSecond,
         "service shaper burst duration");
     if (!burstDurationNs) return Result::failure(burstDurationNs.error());
+    const auto maximumPendingDatagrams = plan.backlog().maximumDatagrams;
+    const auto maximumBatchDatagrams = plan.batch().maximumDatagrams;
+    std::vector<std::uint64_t> endpointIds;
+    try {
+        endpointIds.reserve(plan.endpoints().size());
+        for (const auto& endpoint : plan.endpoints()) {
+            endpointIds.push_back(endpoint.endpointId);
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "service shaper endpoint ledger identity"));
+    }
     auto result = std::unique_ptr<MediaDatagramServiceShaper>(
         new (std::nothrow) MediaDatagramServiceShaper(
             std::move(plan), MediaRunningTime::fromNanoseconds(
@@ -59,6 +65,34 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
     if (!result) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaDatagramServiceShaper"));
+    }
+    if (maximumPendingDatagrams > result->m_pending.max_size() ||
+        maximumBatchDatagrams > result->m_newPending.max_size() ||
+        maximumBatchDatagrams > result->m_preparedReservations.max_size() ||
+        maximumBatchDatagrams > result->m_pacingFacts.max_size()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "service shaper planner backlog is not representable"));
+    }
+    try {
+        result->m_pending.resize(
+            static_cast<std::size_t>(maximumPendingDatagrams));
+        result->m_newPending.reserve(
+            static_cast<std::size_t>(maximumBatchDatagrams));
+        result->m_preparedReservations.reserve(
+            static_cast<std::size_t>(maximumBatchDatagrams));
+        result->m_pacingFacts.reserve(
+            static_cast<std::size_t>(maximumBatchDatagrams));
+        result->m_pendingByEndpoint.reserve(endpointIds.size());
+        result->m_batchByEndpoint.reserve(endpointIds.size());
+        result->m_expiredByEndpoint.reserve(endpointIds.size());
+        for (const auto endpointId : endpointIds) {
+            result->m_pendingByEndpoint.emplace(endpointId, EndpointUsage{});
+            result->m_batchByEndpoint.emplace(endpointId, EndpointUsage{});
+            result->m_expiredByEndpoint.emplace(endpointId, EndpointUsage{});
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "service shaper incremental backlog ledger"));
     }
     return Result::success(std::move(result));
 }
@@ -87,63 +121,150 @@ MediaDatagramServiceShaper::shape(
         batch.generation() != m_plan.generation() ||
         now < MediaRunningTime::fromNanoseconds(0) ||
         (m_previousNow && now < *m_previousNow) ||
-        batch.m_payload.empty() || batch.m_datagrams.empty()) {
+        batch.m_payload.empty() || batch.m_datagrams.empty() ||
+        !batch.m_commitSlice.valid() ||
+        batch.m_datagrams.size() > m_plan.batch().maximumDatagrams) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "service shaper requires matching service identity, monotonic time, and an unconsumed active-generation batch"));
     }
 
-    std::deque<PendingReservation> pending;
-    std::unordered_map<std::uint64_t, EndpointUsage> endpointUsage;
     std::vector<MediaScheduledWireDatagramDescriptor> descriptors;
     try {
-        pending = m_pending;
-        endpointUsage.reserve(m_plan.endpoints().size());
         descriptors.reserve(batch.m_datagrams.size());
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "service shaper reservation scratch state"));
     }
-    while (!pending.empty() && pending.front().completion <= now) {
-        pending.pop_front();
+    m_newPending.clear();
+    m_preparedReservations.clear();
+    m_pacingFacts.clear();
+    for (auto& [endpointId, usage] : m_batchByEndpoint) {
+        static_cast<void>(endpointId);
+        usage = EndpointUsage{};
+    }
+    for (auto& [endpointId, usage] : m_expiredByEndpoint) {
+        static_cast<void>(endpointId);
+        usage = EndpointUsage{};
     }
 
-    std::uint64_t backlogDatagrams = 0;
-    std::uint64_t backlogWireBytes = 0;
+    std::uint64_t backlogDatagrams = m_pendingDatagrams;
+    std::uint64_t backlogWireBytes = m_pendingWireBytes;
+    std::size_t expiredCount = 0;
+    while (expiredCount < m_pendingCount) {
+        const auto index =
+            (m_pendingHead + expiredCount) % m_pending.size();
+        const auto& slot = m_pending[index];
+        if (!slot) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "service shaper ring ledger contains an empty active slot"));
+        }
+        const auto& expired = *slot;
+        if (expired.completion > now) break;
+        auto endpoint = m_pendingByEndpoint.find(expired.endpointId);
+        auto endpointExpired = m_expiredByEndpoint.find(expired.endpointId);
+        if (endpoint == m_pendingByEndpoint.end() ||
+            endpointExpired == m_expiredByEndpoint.end() ||
+            backlogDatagrams == 0 ||
+            backlogWireBytes < expired.wireBytes ||
+            endpoint->second.datagrams <= endpointExpired->second.datagrams ||
+            endpoint->second.bytes < endpointExpired->second.bytes ||
+            endpoint->second.bytes - endpointExpired->second.bytes <
+                expired.payloadBytes) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "service shaper incremental backlog ledger underflowed"));
+        }
+        --backlogDatagrams;
+        backlogWireBytes -= expired.wireBytes;
+        ++endpointExpired->second.datagrams;
+        endpointExpired->second.bytes += expired.payloadBytes;
+        ++expiredCount;
+    }
     std::uint64_t batchDatagrams = 0;
     std::uint64_t batchPayloadBytes = 0;
     std::uint64_t batchWireBytes = 0;
     std::int64_t maximumDebtDelayNanoseconds =
         m_telemetry.maximumDebtDelayNanoseconds;
-    try {
-        for (const auto& item : pending) {
-            if (backlogDatagrams ==
-                    (std::numeric_limits<std::uint64_t>::max)() ||
-                item.wireBytes >
-                    (std::numeric_limits<std::uint64_t>::max)() -
-                        backlogWireBytes) {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "service shaper backlog accounting overflowed"));
-            }
-            ++backlogDatagrams;
-            backlogWireBytes += item.wireBytes;
-            auto& usage = endpointUsage[item.endpointId];
-            ++usage.datagrams;
-            usage.bytes += item.payloadBytes;
-        }
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "service shaper endpoint scratch state"));
-    }
-
-    auto peakAvailable = m_peakAvailable;
+    auto physicalAvailable = m_physicalAvailable;
     auto sustainedDebtUntil = m_sustainedDebtUntil;
     auto previousRelease = m_previousCanonicalRelease;
     auto previousDeadline = m_previousCanonicalDeadline;
     auto previousSequence = m_previousGlobalSequence;
     const auto& batchFirst = batch.m_datagrams.front().m_descriptor;
     const auto& batchLast = batch.m_datagrams.back().m_descriptor;
+    auto targetServiceWindow =
+        m_plan.serviceCurve().targetResidence.checkedSubtract(
+            m_plan.serviceCurve().maximumReleaseJitter);
+    if (!targetServiceWindow) {
+        return Result::failure(targetServiceWindow.error());
+    }
     for (const auto& datagram : batch.m_datagrams) {
         const auto& wire = datagram.m_descriptor;
+        const auto* endpoint = m_plan.endpoint(wire.endpointId);
+        auto cost = m_plan.plannedWireCost(wire.endpointId, wire.payloadSize);
+        if (!endpoint || !cost) {
+            return Result::failure(
+                cost ? ::media::ErrorInfo::invalidArgument(
+                           "service shaper rejects endpoint or lease mismatch")
+                     : cost.error());
+        }
+        auto targetCompletion = wire.canonicalRelease.checkedAdd(
+            targetServiceWindow.value());
+        auto endpointDeadline = wire.canonicalRelease.checkedAdd(
+            endpoint->maximumResidence);
+        auto backlogDeadline = wire.canonicalRelease.checkedAdd(
+            m_plan.backlog().maximumResidence);
+        if (!targetCompletion || !endpointDeadline || !backlogDeadline) {
+            return Result::failure(
+                !targetCompletion ? targetCompletion.error()
+                                  : (!endpointDeadline
+                                         ? endpointDeadline.error()
+                                         : backlogDeadline.error()));
+        }
+        const auto hardDeadline = (std::min)(
+            wire.canonicalDeadline,
+            (std::min)(endpointDeadline.value(), backlogDeadline.value()));
+        auto reservedHardDeadline = hardDeadline.checkedSubtract(
+            m_plan.serviceCurve().maximumReleaseJitter);
+        if (!reservedHardDeadline) {
+            return Result::failure(reservedHardDeadline.error());
+        }
+        const auto selectedTarget = (std::min)(
+            targetCompletion.value(), reservedHardDeadline.value());
+        if (selectedTarget < wire.canonicalRelease ||
+            reservedHardDeadline.value() < selectedTarget) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "service shaper target completion precedes canonical release"));
+        }
+        try {
+            m_preparedReservations.push_back(PreparedReservation{
+                cost.value(), endpointDeadline.value(),
+                backlogDeadline.value(), hardDeadline,
+                endpoint->maximumPendingDatagrams,
+                endpoint->maximumPendingBytes});
+            m_pacingFacts.push_back(MediaDatagramPacingReservationFact{
+                cost.value().wireBytes, wire.canonicalRelease, selectedTarget,
+                reservedHardDeadline.value(),
+                cost.value().sustainedDebtDuration});
+        } catch (const std::bad_alloc&) {
+            return Result::failure(::media::ErrorInfo::allocationFailed(
+                "service shaper prepared reservation"));
+        }
+    }
+    auto selectedPacingRate =
+        MediaDatagramBatchPacingRateSelector::selectMinimumFeasibleRate(
+            m_pacingFacts, now, physicalAvailable, sustainedDebtUntil,
+            m_burstDebtDuration,
+            m_plan.serviceCurve().sustainedWireBytesPerSecond,
+            m_plan.serviceCurve().peakWireBytesPerSecond);
+    if (!selectedPacingRate) {
+        return Result::failure(selectedPacingRate.error());
+    }
+    for (std::size_t datagramIndex = 0;
+         datagramIndex < batch.m_datagrams.size(); ++datagramIndex) {
+        const auto& datagram = batch.m_datagrams[datagramIndex];
+        const auto& wire = datagram.m_descriptor;
+        const auto& prepared = m_preparedReservations[datagramIndex];
+        const auto& cost = prepared.cost;
         const auto arrivalAfterRelease = now.checkedSubtract(
             wire.canonicalRelease);
         if (arrivalAfterRelease &&
@@ -164,19 +285,12 @@ MediaDatagramServiceShaper::shape(
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "service shaper requires globally canonical wire order"));
         }
-        const auto* endpoint = m_plan.endpoint(wire.endpointId);
-        auto cost = m_plan.plannedWireCost(wire.endpointId, wire.payloadSize);
-        if (!endpoint || !cost || !datagram.hasCommitLease()) {
-            return Result::failure(
-                cost ? ::media::ErrorInfo::invalidArgument(
-                           "service shaper rejects endpoint or lease mismatch")
-                     : cost.error());
-        }
-
         MediaRunningTime eligibility = (std::max)(now, wire.canonicalRelease);
-        if (peakAvailable) eligibility = (std::max)(eligibility, *peakAvailable);
+        if (physicalAvailable) {
+            eligibility = (std::max)(eligibility, *physicalAvailable);
+        }
         auto burstSlack = m_burstDebtDuration.checkedSubtract(
-            cost.value().sustainedDebtDuration);
+            cost.sustainedDebtDuration);
         if (!burstSlack ||
             burstSlack.value() < MediaRunningTime::fromNanoseconds(0)) {
             if (m_telemetry.serviceCurveViolations ==
@@ -197,25 +311,26 @@ MediaDatagramServiceShaper::shape(
         const auto debtBase = sustainedDebtUntil
             ? (std::max)(*sustainedDebtUntil, eligibility)
             : eligibility;
-        auto nextDebt = debtBase.checkedAdd(cost.value().sustainedDebtDuration);
-        auto completion = eligibility.checkedAdd(
-            cost.value().peakServiceDuration);
-        auto endpointDeadline = wire.canonicalRelease.checkedAdd(
-            endpoint->maximumResidence);
-        auto backlogDeadline = wire.canonicalRelease.checkedAdd(
-            m_plan.backlog().maximumResidence);
-        if (!nextDebt || !completion || !endpointDeadline || !backlogDeadline) {
+        auto nextDebt = debtBase.checkedAdd(cost.sustainedDebtDuration);
+        auto serviceDurationNanoseconds =
+            MediaCheckedArithmetic::ceilDurationNanoseconds(
+                cost.wireBytes,
+                selectedPacingRate.value().wireBytesPerSecond,
+                "selected datagram pacing duration");
+        if (!serviceDurationNanoseconds) {
+            return Result::failure(serviceDurationNanoseconds.error());
+        }
+        const auto serviceDuration = MediaRunningTime::fromNanoseconds(
+            serviceDurationNanoseconds.value());
+        auto completion = eligibility.checkedAdd(serviceDuration);
+        if (!nextDebt || !completion) {
             return Result::failure(
                 !nextDebt ? nextDebt.error()
-                          : (!completion ? completion.error()
-                                         : (!endpointDeadline
-                                                ? endpointDeadline.error()
-                                                : backlogDeadline.error())));
+                          : completion.error());
         }
-        const auto enqueueNotAfter = (std::min)(
-            wire.canonicalDeadline,
-            (std::min)(endpointDeadline.value(), backlogDeadline.value()));
-        if (eligibility > enqueueNotAfter) {
+        const auto enqueueNotAfter = prepared.enqueueNotAfter;
+        if (eligibility > enqueueNotAfter ||
+            completion.value() > enqueueNotAfter) {
             if (m_telemetry.deadlineMisses ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
                 m_telemetry.counterSaturated = true;
@@ -228,14 +343,14 @@ MediaDatagramServiceShaper::shape(
                 << " global_sequence=" << wire.globalSequence
                 << " endpoint_id=" << wire.endpointId
                 << " payload_bytes=" << wire.payloadSize
-                << " wire_bytes=" << cost.value().wireBytes
+                << " wire_bytes=" << cost.wireBytes
                 << " canonical_release_ns="
                 << wire.canonicalRelease.nanoseconds()
                 << " canonical_deadline_ns="
                 << wire.canonicalDeadline.nanoseconds()
                 << " now_ns=" << now.nanoseconds()
-                << " peak_available_ns="
-                << (peakAvailable ? peakAvailable->nanoseconds() : -1)
+                << " physical_available_ns="
+                << (physicalAvailable ? physicalAvailable->nanoseconds() : -1)
                 << " debt_eligibility_ns=";
             if (sustainedDebtUntil) {
                 auto debtEligibility = sustainedDebtUntil->checkedSubtract(
@@ -247,10 +362,14 @@ MediaDatagramServiceShaper::shape(
             }
             message
                 << " selected_eligibility_ns=" << eligibility.nanoseconds()
+                << " selected_completion_ns="
+                << completion.value().nanoseconds()
+                << " selected_pacing_wire_bytes_per_second="
+                << selectedPacingRate.value().wireBytesPerSecond
                 << " endpoint_deadline_ns="
-                << endpointDeadline.value().nanoseconds()
+                << prepared.endpointDeadline.nanoseconds()
                 << " backlog_deadline_ns="
-                << backlogDeadline.value().nanoseconds()
+                << prepared.backlogDeadline.nanoseconds()
                 << " enqueue_not_after_ns="
                 << enqueueNotAfter.nanoseconds()
                 << " batch_datagrams=" << batch.m_datagrams.size()
@@ -268,41 +387,87 @@ MediaDatagramServiceShaper::shape(
                 ::media::ErrorInfo::invalidArgument(message.str()));
         }
 
-        EndpointUsage* endpointPending = nullptr;
-        try {
-            endpointPending = &endpointUsage[wire.endpointId];
-        } catch (const std::bad_alloc&) {
-            return Result::failure(::media::ErrorInfo::allocationFailed(
-                "service shaper endpoint pressure state"));
+        auto endpointPending = m_pendingByEndpoint.find(wire.endpointId);
+        auto endpointBatch = m_batchByEndpoint.find(wire.endpointId);
+        auto endpointExpired = m_expiredByEndpoint.find(wire.endpointId);
+        if (endpointPending == m_pendingByEndpoint.end() ||
+            endpointBatch == m_batchByEndpoint.end() ||
+            endpointExpired == m_expiredByEndpoint.end() ||
+            endpointPending->second.datagrams <
+                endpointExpired->second.datagrams ||
+            endpointPending->second.bytes < endpointExpired->second.bytes) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "service shaper endpoint ledger differs from its activated plan"));
         }
+        const auto activeEndpointDatagrams =
+            endpointPending->second.datagrams -
+            endpointExpired->second.datagrams;
+        const auto activeEndpointBytes =
+            endpointPending->second.bytes - endpointExpired->second.bytes;
+        if (endpointBatch->second.datagrams >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    activeEndpointDatagrams ||
+            endpointBatch->second.bytes >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    activeEndpointBytes) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "service shaper endpoint pressure accounting overflowed"));
+        }
+        const auto endpointPendingDatagrams =
+            activeEndpointDatagrams + endpointBatch->second.datagrams;
+        const auto endpointPendingBytes =
+            activeEndpointBytes + endpointBatch->second.bytes;
         if (backlogDatagrams ==
                 (std::numeric_limits<std::uint64_t>::max)() ||
-            cost.value().wireBytes >
+            cost.wireBytes >
                 (std::numeric_limits<std::uint64_t>::max)() - backlogWireBytes ||
-            endpointPending->datagrams ==
+            endpointPendingDatagrams ==
                 (std::numeric_limits<std::uint64_t>::max)() ||
             wire.payloadSize >
                 (std::numeric_limits<std::uint64_t>::max)() -
-                    endpointPending->bytes) {
+                    endpointPendingBytes) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "service shaper pressure accounting overflowed"));
         }
         ++backlogDatagrams;
-        backlogWireBytes += cost.value().wireBytes;
-        ++endpointPending->datagrams;
-        endpointPending->bytes += wire.payloadSize;
+        backlogWireBytes += cost.wireBytes;
+        ++endpointBatch->second.datagrams;
+        endpointBatch->second.bytes += wire.payloadSize;
+        const auto prospectiveEndpointDatagrams =
+            endpointPendingDatagrams + 1;
+        const auto prospectiveEndpointBytes =
+            endpointPendingBytes + wire.payloadSize;
         if (backlogDatagrams > m_plan.backlog().maximumDatagrams ||
             backlogWireBytes > m_plan.backlog().maximumBytes ||
-            endpointPending->datagrams > endpoint->maximumPendingDatagrams ||
-            endpointPending->bytes > endpoint->maximumPendingBytes) {
+            prospectiveEndpointDatagrams >
+                prepared.maximumPendingDatagrams ||
+            prospectiveEndpointBytes > prepared.maximumPendingBytes) {
             if (m_telemetry.pressureFailures ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
                 m_telemetry.counterSaturated = true;
             } else {
                 ++m_telemetry.pressureFailures;
             }
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "service shaper terminates on backlog or endpoint pressure"));
+            std::ostringstream message;
+            message
+                << "service shaper terminates on backlog or endpoint pressure"
+                << " global_sequence=" << wire.globalSequence
+                << " endpoint_id=" << wire.endpointId
+                << " backlog_datagrams=" << backlogDatagrams
+                << " maximum_backlog_datagrams="
+                << m_plan.backlog().maximumDatagrams
+                << " backlog_wire_bytes=" << backlogWireBytes
+                << " maximum_backlog_bytes="
+                << m_plan.backlog().maximumBytes
+                << " endpoint_pending_datagrams="
+                << prospectiveEndpointDatagrams
+                << " maximum_endpoint_pending_datagrams="
+                << prepared.maximumPendingDatagrams
+                << " endpoint_pending_bytes=" << prospectiveEndpointBytes
+                << " maximum_endpoint_pending_bytes="
+                << prepared.maximumPendingBytes;
+            return Result::failure(
+                ::media::ErrorInfo::invalidArgument(message.str()));
         }
         auto debtDelay = eligibility.checkedSubtract(wire.canonicalRelease);
         if (!debtDelay || debtDelay.value().nanoseconds() < 0 ||
@@ -311,7 +476,7 @@ MediaDatagramServiceShaper::shape(
             wire.payloadSize >
                 (std::numeric_limits<std::uint64_t>::max)() -
                     batchPayloadBytes ||
-            cost.value().wireBytes >
+            cost.wireBytes >
                 (std::numeric_limits<std::uint64_t>::max)() - batchWireBytes) {
             return Result::failure(
                 !debtDelay ? debtDelay.error() :
@@ -320,29 +485,26 @@ MediaDatagramServiceShaper::shape(
         }
         ++batchDatagrams;
         batchPayloadBytes += wire.payloadSize;
-        batchWireBytes += cost.value().wireBytes;
+        batchWireBytes += cost.wireBytes;
         maximumDebtDelayNanoseconds = (std::max)(
             maximumDebtDelayNanoseconds,
             debtDelay.value().nanoseconds());
         try {
-            pending.push_back({wire.endpointId, wire.payloadSize,
-                               cost.value().wireBytes, completion.value()});
+            m_newPending.push_back({wire.endpointId, wire.payloadSize,
+                                    cost.wireBytes,
+                                    completion.value()});
             descriptors.push_back({wire, eligibility, enqueueNotAfter,
-                                   cost.value().peakServiceDuration});
+                                   cost.peakServiceDuration});
         } catch (const std::bad_alloc&) {
             return Result::failure(::media::ErrorInfo::allocationFailed(
                 "service shaper scheduled reservation"));
         }
-        peakAvailable = completion.value();
+        physicalAvailable = completion.value();
         sustainedDebtUntil = nextDebt.value();
         previousRelease = wire.canonicalRelease;
         previousDeadline = wire.canonicalDeadline;
         previousSequence = wire.globalSequence;
     }
-
-    auto output = MediaScheduledWireDatagramBatchBuffer::create(
-        m_plan, batch, std::move(descriptors), now);
-    if (!output) return Result::failure(output.error());
 
     const bool telemetryOverflow =
         m_telemetry.admittedBatches ==
@@ -355,12 +517,28 @@ MediaDatagramServiceShaper::shape(
                 m_telemetry.admittedPayloadBytes ||
         batchWireBytes >
             (std::numeric_limits<std::uint64_t>::max)() -
-                m_telemetry.admittedWireBytes;
+                m_telemetry.admittedWireBytes ||
+        (!selectedPacingRate.value().targetResidenceSatisfied &&
+         m_telemetry.targetResidenceMissedBatches ==
+             (std::numeric_limits<std::uint64_t>::max)());
     if (telemetryOverflow) {
         m_telemetry.counterSaturated = true;
         return Result::failure(::media::ErrorInfo::internalError(
             "service shaper admitted telemetry overflowed"));
     }
+    if (m_pendingCount != m_pendingDatagrams ||
+        expiredCount > m_pendingCount ||
+        m_pendingCount - expiredCount > m_pending.size() ||
+        m_newPending.size() >
+            m_pending.size() - (m_pendingCount - expiredCount)) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "service shaper incremental backlog exceeds reserved planner capacity"));
+    }
+
+    auto output = MediaScheduledWireDatagramBatchBuffer::create(
+        m_plan, batch, std::move(descriptors), now);
+    if (!output) return Result::failure(output.error());
+
     ++m_telemetry.admittedBatches;
     m_telemetry.admittedDatagrams += batchDatagrams;
     m_telemetry.admittedPayloadBytes += batchPayloadBytes;
@@ -377,9 +555,48 @@ MediaDatagramServiceShaper::shape(
     m_telemetry.lastAdmittedBatchLastDeadlineNanoseconds =
         batchLast.canonicalDeadline.nanoseconds();
     m_telemetry.lastAdmittedBatchArrivalNanoseconds = now.nanoseconds();
+    m_telemetry.lastSelectedPacingWireBytesPerSecond =
+        selectedPacingRate.value().wireBytesPerSecond;
+    if (m_telemetry.minimumSelectedPacingWireBytesPerSecond == 0) {
+        m_telemetry.minimumSelectedPacingWireBytesPerSecond =
+            selectedPacingRate.value().wireBytesPerSecond;
+    } else {
+        m_telemetry.minimumSelectedPacingWireBytesPerSecond = (std::min)(
+            m_telemetry.minimumSelectedPacingWireBytesPerSecond,
+            selectedPacingRate.value().wireBytesPerSecond);
+    }
+    m_telemetry.maximumSelectedPacingWireBytesPerSecond = (std::max)(
+        m_telemetry.maximumSelectedPacingWireBytesPerSecond,
+        selectedPacingRate.value().wireBytesPerSecond);
+    if (!selectedPacingRate.value().targetResidenceSatisfied) {
+        ++m_telemetry.targetResidenceMissedBatches;
+    }
 
-    m_pending = std::move(pending);
-    m_peakAvailable = peakAvailable;
+    for (std::size_t offset = 0; offset < expiredCount; ++offset) {
+        const auto index = (m_pendingHead + offset) % m_pending.size();
+        m_pending[index].reset();
+    }
+    m_pendingHead = (m_pendingHead + expiredCount) % m_pending.size();
+    m_pendingCount -= expiredCount;
+    for (const auto& reservation : m_newPending) {
+        const auto index =
+            (m_pendingHead + m_pendingCount) % m_pending.size();
+        m_pending[index].emplace(reservation);
+        ++m_pendingCount;
+    }
+    m_pendingDatagrams = backlogDatagrams;
+    m_pendingWireBytes = backlogWireBytes;
+    for (const auto& [endpointId, expired] : m_expiredByEndpoint) {
+        auto endpoint = m_pendingByEndpoint.find(endpointId);
+        endpoint->second.datagrams -= expired.datagrams;
+        endpoint->second.bytes -= expired.bytes;
+    }
+    for (const auto& [endpointId, usage] : m_batchByEndpoint) {
+        auto endpoint = m_pendingByEndpoint.find(endpointId);
+        endpoint->second.datagrams += usage.datagrams;
+        endpoint->second.bytes += usage.bytes;
+    }
+    m_physicalAvailable = physicalAvailable;
     m_sustainedDebtUntil = sustainedDebtUntil;
     m_previousCanonicalRelease = previousRelease;
     m_previousCanonicalDeadline = previousDeadline;

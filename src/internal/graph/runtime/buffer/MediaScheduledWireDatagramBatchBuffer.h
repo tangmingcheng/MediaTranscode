@@ -62,22 +62,16 @@ public:
     {
         return m_descriptor.wireServiceDuration;
     }
-    bool hasCommitLease() const noexcept { return m_commitLease.valid(); }
-
 private:
     friend class MediaScheduledDatagramSenderNode;
     friend class MediaScheduledWireDatagramBatchBuffer;
 
     MediaScheduledWireDatagram(
         std::span<const std::uint8_t> bytes,
-        const MediaScheduledWireDatagramDescriptor& descriptor,
-        MediaDatagramSubmitCommitLease commitLease) noexcept;
-    ::media::Status markSubmitted(MediaRunningTime now) noexcept;
-    ::media::Status commitSubmit(MediaRunningTime now) noexcept;
+        const MediaScheduledWireDatagramDescriptor& descriptor) noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaScheduledWireDatagramDescriptor m_descriptor;
-    MediaDatagramSubmitCommitLease m_commitLease;
 };
 
 class MediaScheduledWireDatagramBatchBuffer final : public MediaBuffer {
@@ -112,13 +106,15 @@ private:
     MediaScheduledWireDatagramBatchBuffer(
         std::string sessionKey,
         std::string serviceScopeId,
-        std::uint64_t generation) noexcept;
+        std::uint64_t generation,
+        MediaDatagramCommitSlice commitSlice) noexcept;
 
     const std::string m_sessionKey;
     const std::string m_serviceScopeId;
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaScheduledWireDatagram> m_datagrams;
+    MediaDatagramCommitSlice m_commitSlice;
 };
 
 } // namespace media::ffmpeg::graph
