@@ -153,6 +153,28 @@ D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode
 - typeperf 121 个有效样本：平均单核 CPU 23.014%、P95 30.655%、峰值 35.757%；private working set 164802560→167141376 B，峰值 167739392 B。CPU 高于最终目标，按用户要求本阶段不优化，保留为后置风险，不用于伪造 CPU 验收通过。
 - 源结束后 CLI 保留真实 `RTP video source clock evidence expired` 终态；全部 graph payload、queue 与 reservation 释放归零，五类进程均无残留。
 
+## 2026-08-29 exact f0c52312 Windows Release 高规格 VBR 复验
+
+链路为 HEVC 2560×1440 30 fps raw RTP 输入，转码为 H.264 1920×1080 25 fps、VBR min/target/max 5/12/13 Mbps，输出 MPEG-TS/RTP。有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 58442 or udp port 58443" -a duration:135 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-preparation-lead-04\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-preparation-lead-04\vlc.log rtp://@192.168.96.122:58442
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-2k30-hevc-h264-vbr5-12-13m-preparation-lead-04 --egress-capacity-bps 50000000 --path-mtu-bytes 1500 --maximum-wire-residence-ms 100 --receiver-transport-decode-lead-ms 1000 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:56442 --video-rtp-codec hevc --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 58442 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-preparation-lead-04\output.sdp --video-codec h264 --rc vbr --width 1920 --height 1080 --fps 25 --min-bitrate 5000 --bitrate 12000 --max-bitrate 13000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s-2k-hevc.mp4 -map 0:v:0 -an -c:v copy -bsf:v hevc_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:56442?rtcpport=56443&pkt_size=1200"
+```
+
+- automatic fmtp probe 从真实输入取得 HEVC VPS/SPS/PPS；planner 选择 CUDA/NVENC zero-copy。encoder readback 明确为 H.264 VBR 5/12/13 Mbps、25 fps、GOP 50、VBV 520000 bit。
+- FFmpeg 完整发送 3600 frames/120 s；production 输出 2998 access units。RTP 113410 packets、loss 0、duration 119.966910 s；TS continuity、TEI、adaptation error 0。
+- RTP/RTCP 共 113440 datagrams、147714440 IP wire bytes；planner pacing 4010270 B/s、burst 1356 B，抓包最大 service-curve draw-up 1043.348 B，无追赶式突发。
+- sender/shaper committed 113440 datagrams；deadline、service-curve、pressure、partial、ambiguous failure 均为 0，backlog 最终为 0，maximum residence 67.8278 ms。协议物化最迟晚于 release 2.739 ms。TX timestamp 仍按 report policy 标为 delivery evidence not proven。
+- VLC 收到首帧并启动 H.264 D3D11VA 解码，输出 1920×1080；完整稳定播放窗口 corrupt、conceal、decode error、black、drop、discard、lost、discontinuity 与 late 均为 0。调用 `CloseMainWindow` 后出现 1 次 `picture might be displayed late (missing 16 ms)`，下一行即 `video widget is orphaned`，随后 `exiting`；该关闭阶段事件如实保留，不计作播放窗口卡顿。
+- typeperf 122 个有效样本：平均单核 CPU 25.350%、P95 32.464%、峰值 41.617%；private working set 196399104→198307840 B，峰值 199602176 B。CPU 高于最终目标，按用户要求继续作为后置风险。
+- 源结束后 CLI 以真实 source-clock expiry 终止，queue/payload/reservation 全部归零；全部测试进程清理完成。
+
 ## 构建、静态扫描与边界
 
 - Windows VS2026 x64 Release 当前工作树 clean-first：clean 582、build 583，RC=0。

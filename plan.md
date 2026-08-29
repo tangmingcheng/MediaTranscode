@@ -543,4 +543,5 @@ Detailed design and execution checklist:
 - [x] Task 5.2：将 realtime core request 改为专用窄参数类型，禁止通过共享 local 参数结构暴露 queue、quality、preset/profile/tune/level、B-frame 或 global-header；planner 产品不再回写外部 request。
 - [x] Task 5.3：按不可变 inclusive deadline 状态机统一 `WouldBlock` 重试边界；等值 deadline 只允许一次有界提交，超过即终态失败，不 rebase、不追赶。
 - [x] Task 5.4：将 VideoOnly 协议物化与 canonical wire release 解耦；planner 从 prepared emission 与 deployment residence 产品推导内部 `protocolPreparationLead`，scheduler 提前交付 AU，shaper 保持唯一 wire 调度权。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 120 秒门禁通过：RTP loss 0、TS error 0、service-curve draw-up 1050.054 B ≤ 1356 B、VLC 解码异常 0；CPU 仍列为后置风险。
+- [x] Task 5.5：在 exact `f0c52312` 上复验 Windows Release HEVC 2560×1440 30 fps → H.264 1920×1080 25 fps、VBR 5/12/13 Mbps、MPEG-TS/RTP 120 秒链路：RTP loss 0、TS error 0、service-curve draw-up 1043.348 B ≤ 1356 B、稳定播放窗口解码/late/drop 异常 0；关闭 VLC 窗口阶段保留 1 次 late 日志，CPU 继续列为后置风险。
 - [ ] Task 6：完成固定 56 条链路验收（38 VideoOnly + 18 AudioVideo）：Windows 全矩阵实跑，RK 对 capability-admitted 链路实跑、unsupported 链路 DAG 前拒绝；完成 120 秒证据、文档、质量评分、SDD 每 Task 单 reviewer PASS、代码冻结后两名未参与者同时 PASS、PR 与最终审核。
