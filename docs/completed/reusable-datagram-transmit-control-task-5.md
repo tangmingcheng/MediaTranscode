@@ -175,6 +175,28 @@ D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode
 - typeperf 122 个有效样本：平均单核 CPU 25.350%、P95 32.464%、峰值 41.617%；private working set 196399104→198307840 B，峰值 199602176 B。CPU 高于最终目标，按用户要求继续作为后置风险。
 - 源结束后 CLI 以真实 source-clock expiry 终止，queue/payload/reservation 全部归零；全部测试进程清理完成。
 
+## 2026-08-29 Windows Release MPEG-TS/UDP 公共 sender 复验
+
+链路为 H.264 1280×720 30 fps raw RTP 输入，转码为 HEVC 1920×1080 25 fps、CBR 6 Mbps，输出 MPEG-TS/UDP。有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 58652" -a duration:135 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-udp-02\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-udp-02\vlc.log udp://@192.168.96.122:58652
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-720p30-h264-hevc-cbr6m-mpegts-udp-02 --egress-capacity-bps 25000000 --path-mtu-bytes 1500 --maximum-wire-residence-ms 100 --receiver-transport-decode-lead-ms 1000 --input-type rtp --input-layout separate --output-layout mpegts --output-transport udp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:56652 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --output udp://192.168.96.122:58652 --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:56652?rtcpport=56653&pkt_size=1200"
+```
+
+- automatic fmtp probe 从真实输入取得 H.264 SPS/PPS；planner 选择 CUDA/NVENC zero-copy，CBR caller 只提供 target 6 Mbps。
+- FFmpeg 完整发送 3600 frames/120 s；production 输出 2998 access units。抓包为 64486 UDP datagrams、80597912 IP wire bytes、wall span 119.981640 s；TS continuity、TEI、adaptation error 0。
+- planner 按 UDP/IP 几何推导 pacing 2007540 B/s 与 burst 1344 B，未复制 MPEG-TS/RTP 的 1356 B；抓包 service-curve 最大 draw-up 1026.665 B，无追赶式突发。
+- sender/shaper committed 64486 datagrams；deadline、service-curve、pressure、partial、ambiguous failure 均为 0，backlog 最终为 0，maximum residence 99.7804 ms。TX timestamp 按 report policy 标为 delivery evidence not proven。
+- VLC 收到首帧并启动 HEVC 解码，输出 1920×1080；late、corrupt、conceal、decode error、black、video drop、lost、discontinuity 为 0。日志中的唯一 `discard` 是启动阶段 `webvtt subtitle demux discarded`，不属于视频帧丢弃。
+- typeperf 121 个有效样本：平均单核 CPU 20.829%、P95 27.996%、峰值 36.866%；private working set 161701888→165154816 B，峰值 165158912 B。CPU 按用户要求保留为后置风险。
+- 源结束后 CLI 保留真实 source-clock expiry，全部 queue/payload/reservation 归零；测试进程无残留。
+
 ## 构建、静态扫描与边界
 
 - Windows VS2026 x64 Release 当前工作树 clean-first：clean 582、build 583，RC=0。
