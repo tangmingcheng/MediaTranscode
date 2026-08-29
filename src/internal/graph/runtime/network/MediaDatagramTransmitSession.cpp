@@ -146,7 +146,8 @@ MediaDatagramTransmitSession::create(
             MediaDatagramTransmitPortOpenRequest request{
                 plan.sessionKey(), plan.serviceScope().scopeId,
                 plan.generation(), endpoint, local->second,
-                execution.mode, plan.evidence(), execution.kernelSchedule};
+                plan.batch().maximumDatagrams, execution.mode,
+                plan.evidence(), execution.kernelSchedule};
             auto opened = port.value()->open(request);
             if (!opened) return ResultType::failure(opened.error());
             if (opened.value().zeroCopyEnabled) {

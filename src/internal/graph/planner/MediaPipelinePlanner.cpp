@@ -2,7 +2,6 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
-#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
 #include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
@@ -33,13 +32,6 @@ std::string emptyAsNone(const std::string& value)
     return value.empty() ? std::string("none") : value;
 }
 
-bool isSoftwareChain(const MediaPipelineChainPlan& chain,
-                     const MediaPipelinePlannerOptions& options) noexcept
-{
-    return !chain.decoder.hardware() && !chain.encoder.hardware() &&
-           (!chain.filterActive || !chain.filter.hardware());
-}
-
 bool isRkmppChain(const MediaPipelineChainPlan& chain) noexcept
 {
     return chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP ||
@@ -62,14 +54,17 @@ completeRateControlFromPreparedReadback(
     constexpr std::uint64_t BitsPerKilobit = 1000;
     const auto effectiveBits =
         encoder.preparedEmission->effectiveVbvBufferBits;
-    if (effectiveBits == 0 || effectiveBits % BitsPerKilobit != 0 ||
-        effectiveBits / BitsPerKilobit > static_cast<std::uint64_t>(
+    if (!effectiveBits) {
+        return Result::success(std::move(completed));
+    }
+    if (*effectiveBits == 0 || *effectiveBits % BitsPerKilobit != 0 ||
+        *effectiveBits / BitsPerKilobit > static_cast<std::uint64_t>(
             (std::numeric_limits<int>::max)())) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "opened encoder did not expose an exactly representable effective VBV readback"));
     }
     completed.bufferSizeKbits = static_cast<int>(
-        effectiveBits / BitsPerKilobit);
+        *effectiveBits / BitsPerKilobit);
     return Result::success(std::move(completed));
 }
 
@@ -201,11 +196,6 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 ::media::Status validateCommonPlannerOptions(const MediaPipelinePlannerOptions& options,
                                              const std::string& context)
 {
-    auto backendValidation = MediaPipelineHardwareBackendConstraint::validate(
-        options.hardwareBackend, options.disableHardware, context);
-    if (!backendValidation) {
-        return backendValidation;
-    }
     if (options.targetWidth < 0 || options.targetHeight < 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(context + " requires non-negative target dimensions"));
@@ -279,7 +269,6 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets =
-        options.hardwareBackend == MediaHardwareBackendRequest::Auto &&
         options.allowPacketCopy &&
         !resizeRequested &&
         !options.filterRequired &&
@@ -315,15 +304,6 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
             ::media::ErrorInfo::unsupported("no media pipeline candidates were generated"));
     }
 
-    MediaHardwareCapabilityProbe hardwareProbe;
-    auto selected = MediaPipelinePlanner::selectHighestRankedCandidate(
-        plan.candidates, options);
-    if (!selected) {
-        return ::media::Result<MediaPipelinePlan>::failure(selected.error());
-    }
-
-    plan.selected = plan.candidates.at(selected.value());
-    plan.filterActive = plan.selected.filterActive;
     MediaEncoderRateControlRequest rateControlRequest =
         options.encoderRateControl;
     if (!rateControlRequest.targetBitrateKbps() &&
@@ -340,25 +320,6 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
             return ::media::Result<MediaPipelinePlan>::failure(status.error());
         }
     }
-    auto rateControl = MediaEncoderRateControlPlanner::plan(
-        plan.selected.encoder.ffmpegName,
-        plan.selected.encoder.deviceKind(),
-        rateControlRequest);
-    if (!rateControl) {
-        return ::media::Result<MediaPipelinePlan>::failure(rateControl.error());
-    }
-    if (options.encoderVbvPlan) {
-        if (options.encoderVbvPlan->bufferSizeKbits <= 0 ||
-            options.encoderVbvPlan->authority.empty() ||
-            rateControl.value().bufferSizeKbits) {
-            return ::media::Result<MediaPipelinePlan>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "planner-owned encoder VBV plan conflicts with rate-control facts"));
-        }
-        rateControl.value().bufferSizeKbits =
-            options.encoderVbvPlan->bufferSizeKbits;
-    }
-    plan.selected.encoder.encoderRateControl = std::move(rateControl).value();
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
     const int encoderWidth = options.targetWidth > 0
@@ -366,26 +327,66 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     const int encoderHeight = options.targetHeight > 0
         ? options.targetHeight : options.probeHeight;
     const auto& requestedOpen = options.encoderOpenRequest;
-    plan.selected.encoder.encoderOpenContract = MediaEncoderOpenContract{
-        plan.selected.encoder.ffmpegName,
-        encoderWidth,
-        encoderHeight,
-        encoderFrameRate,
-        *plan.selected.encoder.encoderRateControl,
-        requestedOpen.quality,
-        requestedOpen.preset,
-        requestedOpen.tune,
-        requestedOpen.profile,
-        requestedOpen.level,
-        requestedOpen.gop,
-        requestedOpen.bFrames,
-        requestedOpen.globalHeader,
-        options.lowLatency};
-    auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
-        plan.selected, options, hardwareProbe);
-    if (!preflight) {
-        return ::media::Result<MediaPipelinePlan>::failure(preflight.error());
+    MediaHardwareCapabilityProbe hardwareProbe;
+    std::optional<::media::ErrorInfo> lastCapabilityFailure;
+    bool selected = false;
+    for (MediaPipelineChainPlan& ranked : plan.candidates) {
+        if (!ranked.available) {
+            continue;
+        }
+        MediaPipelineChainPlan candidate = ranked;
+        auto rateControl = MediaEncoderRateControlPlanner::plan(
+            candidate.encoder.ffmpegName,
+            candidate.encoder.deviceKind(),
+            rateControlRequest,
+            encoderFrameRate,
+            options.lowLatency);
+        if (!rateControl) {
+            candidate.available = false;
+            candidate.reason = rateControl.error().message;
+            ranked = std::move(candidate);
+            lastCapabilityFailure = rateControl.error();
+            continue;
+        }
+        candidate.encoder.encoderRateControl = std::move(rateControl).value();
+        candidate.encoder.encoderOpenContract = MediaEncoderOpenContract{
+            candidate.encoder.ffmpegName,
+            encoderWidth,
+            encoderHeight,
+            encoderFrameRate,
+            *candidate.encoder.encoderRateControl,
+            requestedOpen.quality,
+            requestedOpen.preset,
+            requestedOpen.tune,
+            requestedOpen.profile,
+            requestedOpen.level,
+            requestedOpen.gop,
+            requestedOpen.bFrames,
+            requestedOpen.globalHeader,
+            options.lowLatency};
+        auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
+            candidate, options, hardwareProbe);
+        if (!preflight) {
+            candidate.available = false;
+            candidate.reason = preflight.error().message;
+            ranked = std::move(candidate);
+            lastCapabilityFailure = preflight.error();
+            continue;
+        }
+        ranked = candidate;
+        plan.selected = std::move(candidate);
+        selected = true;
+        break;
     }
+    if (!selected) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                lastCapabilityFailure
+                    ? "no planner-ranked hardware chain passed capability validation: " +
+                          lastCapabilityFailure->message
+                    : "no available planner-ranked hardware decoder/filter/encoder chain found"));
+    }
+    plan.filterActive = plan.selected.filterActive;
     auto completedRateControl = completeRateControlFromPreparedReadback(
         plan.selected.encoder);
     if (!completedRateControl) {
@@ -401,44 +402,6 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
 }
 
 } // namespace
-
-::media::Result<std::size_t> MediaPipelinePlanner::selectHighestRankedCandidate(
-    const std::vector<MediaPipelineChainPlan>& candidates,
-    const MediaPipelinePlannerOptions& options)
-{
-    for (std::size_t index = 0; index < candidates.size(); ++index) {
-        const MediaPipelineChainPlan& candidate = candidates[index];
-        if (!candidate.available) {
-            continue;
-        }
-
-        if (!MediaPipelineHardwareBackendConstraint::accepts(
-                candidate, candidate.filterActive, options.hardwareBackend)) {
-            continue;
-        }
-
-        if (options.disableHardware) {
-            if (isSoftwareChain(candidate, options)) {
-                return ::media::Result<std::size_t>::success(index);
-            }
-            continue;
-        }
-
-        if (!candidate.allHardware) {
-            continue;
-        }
-
-        return ::media::Result<std::size_t>::success(index);
-    }
-
-    return ::media::Result<std::size_t>::failure(
-        ::media::ErrorInfo::hardwareUnavailable(
-            options.hardwareBackend == MediaHardwareBackendRequest::RKMPP
-                ? "no complete RKMPP decoder/filter/encoder chain found"
-                : options.disableHardware
-                ? "no available explicit software decoder/filter/encoder chain found"
-                : "no structurally available hardware decoder/filter/encoder chain found"));
-}
 
 ::media::Status MediaPipelinePlanner::preflightSelectedCandidate(
     MediaPipelineChainPlan& selected,

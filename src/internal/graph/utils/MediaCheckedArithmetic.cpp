@@ -80,6 +80,9 @@ constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
     const auto seconds = nanoseconds / NanosecondsPerSecond;
     const auto remainder = nanoseconds % NanosecondsPerSecond;
     auto whole = multiply(rate, seconds, fact);
+    if (remainder == 0) {
+        return whole;
+    }
     auto fraction = ceilScale(rate, remainder, NanosecondsPerSecond, fact);
     return whole && fraction
         ? add(whole.value(), fraction.value(), fact)

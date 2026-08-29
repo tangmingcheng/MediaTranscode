@@ -371,7 +371,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
             outer.outputTransport != MediaOutputTransportKind::RtpAvp ||
             !synchronization.startup.outputLeadNs ||
-            !request.deployment || !preparedEmission.audio ||
+            !outer.deployment || !preparedEmission.audio ||
             output.sdp.path.empty() || !audio.resolvedOutput) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -382,7 +382,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             output.videoOutput,
             synchronization.rtpOutput->videoOutput,
             *synchronization.startup.outputLeadNs,
-            *request.deployment,
+            *outer.deployment,
             preparedEmission.video.sustainedPayloadBytesPerSecond,
             preparedEmission.video.authority);
         auto audio = scheduledRtpOutput(
@@ -390,7 +390,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             output.audioOutput,
             synchronization.rtpOutput->audioOutput,
             *synchronization.startup.outputLeadNs,
-            *request.deployment,
+            *outer.deployment,
             preparedEmission.audio->sustainedPayloadBytesPerSecond,
             preparedEmission.audio->authority);
         if (!video || !audio) {
@@ -500,7 +500,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 cname.size(), endpoint.addressFamily());
             auto reporting = sessionBandwidth && address && compoundWire
                 ? MediaRtcpReportingPolicyPlanner::plan(
-                      *request.deployment, address.value(),
+                      *outer.deployment, address.value(),
                       sessionBandwidth.value(),
                       preparedEmission.video.authority + "+" +
                           preparedEmission.audio->authority,
@@ -543,7 +543,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         auto emission = MediaTsDatagramEmissionPlan::create(
             accepted.value().muxPlan(), videoCadence.value(),
             audioCadence.value(), maximumQueuedBytes,
-            request.deployment->encode().latency.targetResidence);
+            outer.deployment->encode().latency.targetResidence);
         if (!emission) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 emission.error());
@@ -569,10 +569,10 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             ::media::ErrorInfo::notInitialized(
                 "A/V runtime output requires planner-owned activation lead"));
     }
-    if (!request.deployment) {
+    if (!outer.deployment) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "A/V runtime output requires deployment transport facts"));
+                "A/V runtime output requires planner-owned deployment transport facts"));
     }
     const MediaAvSyncGroupKey groupKey("realtime.av");
     auto datagramTransport = std::visit(
@@ -582,11 +582,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                               Output,
                               MediaProjectMpegTsRuntimeOutputPlan>) {
                 return MediaRealtimeDatagramTransportPlanner::plan(
-                    groupKey.value(), *request.deployment, selectedOutput,
+                    groupKey.value(), *outer.deployment, selectedOutput,
                     outer.videoPlan, outputFrameRate, &audio);
             } else {
                 return MediaRealtimeDatagramTransportPlanner::plan(
-                    groupKey.value(), *request.deployment, selectedOutput,
+                    groupKey.value(), *outer.deployment, selectedOutput,
                     outer.videoPlan, outputFrameRate, audio);
             }
         },

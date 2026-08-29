@@ -34,6 +34,12 @@ private:
         Finished,
         Poisoned
     };
+    enum class TimelineState : std::uint8_t {
+        Dormant,
+        StartupMaintenancePending,
+        AwaitingFirstAccessUnit,
+        MediaTimelineActive
+    };
     State state = State::Acquiring;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     std::optional<MediaProtocolOutputActivation> activation;
@@ -42,7 +48,7 @@ private:
     std::unique_ptr<MediaTsMuxSession> session;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
-    bool mediaTimelineStarted = false;
+    TimelineState timelineState = TimelineState::Dormant;
     std::atomic<std::uint64_t> generation{0};
 };
 
@@ -98,6 +104,8 @@ public:
 
 private:
     using State = ProjectMpegTsGenerationSessionState::State;
+    using TimelineState =
+        ProjectMpegTsGenerationSessionState::TimelineState;
     ::media::Status bindRuntimePlan(MediaGraphExecutionContext& context,
                                     const MediaBufferRef& buffer);
     ::media::Status bindSink(const MediaBufferRef& buffer);
@@ -120,7 +128,7 @@ private:
     std::unique_ptr<MediaTsMuxSession>& m_session;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
-    bool& m_mediaTimelineStarted;
+    TimelineState& m_timelineState;
     std::atomic<std::uint64_t>& m_generation;
     std::unique_ptr<MediaOutputByteSink> m_sink;
     MediaBufferRef m_videoConfig;

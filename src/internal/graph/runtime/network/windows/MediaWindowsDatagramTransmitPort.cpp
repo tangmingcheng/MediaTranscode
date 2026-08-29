@@ -143,6 +143,7 @@ public:
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
             request.endpoint.targetEffectiveSendBufferBytes == 0 ||
+            request.maximumBatchDatagrams == 0 ||
             request.endpoint.targetEffectiveSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=

@@ -45,12 +45,12 @@ struct MediaRealtimeNetworkResourceLedgerPlan final {
 class MediaRealtimeNetworkResourceLedgerPlanner final {
 public:
     static ::media::Result<MediaRealtimeNetworkResourceLedgerPlan> plan(
-        const MediaRealtimeDeploymentEnvelopeEncoding& deployment,
+        const MediaRealtimeDeploymentLatencyBudget& latency,
+        const MediaRealtimeDeploymentObservationBudget& observation,
         const MediaWireTrafficEnvelope& wire,
         std::uint64_t endpointCount);
     static ::media::Status validate(
-        const MediaRealtimeNetworkResourceLedgerPlan& ledger,
-        const MediaRealtimeDeploymentEnvelopeEncoding& deployment);
+        const MediaRealtimeNetworkResourceLedgerPlan& ledger);
 
 private:
     MediaRealtimeNetworkResourceLedgerPlanner() = delete;

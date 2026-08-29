@@ -1,7 +1,5 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 
-#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
-
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -39,7 +37,6 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         video.bitrateKbps.has_value() ||
         video.minBitrateKbps.has_value() ||
         video.maxBitrateKbps.has_value() ||
-        video.bufferSizeKbits.has_value() ||
         video.quality.has_value() ||
         !video.preset.empty() ||
         !video.tune.empty() ||
@@ -62,18 +59,8 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
-    auto backendValidation = MediaPipelineHardwareBackendConstraint::validate(
-        parameters.execution.hardwareBackend,
-        parameters.execution.disableHardware,
-        "LocalFilePlannerRequestBuilder");
-    if (!backendValidation) {
-        return ::media::Result<MediaPipelinePlannerOptions>::failure(
-            backendValidation.error());
-    }
-
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
-                                               parameters.execution.disableHardware,
                                                false);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
@@ -81,7 +68,7 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.targetHeight = video.height.value_or(0);
     auto rateControl = MediaEncoderRateControlRequest::create(
         video.rateControl, video.bitrateKbps, video.minBitrateKbps,
-        video.maxBitrateKbps, video.bufferSizeKbits);
+        video.maxBitrateKbps);
     if (!rateControl) {
         return ::media::Result<MediaPipelinePlannerOptions>::failure(
             rateControl.error());
@@ -95,7 +82,6 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         plannerOptions.targetFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.hardwareBackend = parameters.execution.hardwareBackend;
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }

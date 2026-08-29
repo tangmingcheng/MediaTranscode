@@ -88,8 +88,7 @@ struct MediaDatagramEndpointPlan final {
 };
 
 struct MediaDatagramServiceCurvePlan final {
-    std::uint64_t sustainedWireBytesPerSecond;
-    std::uint64_t peakWireBytesPerSecond;
+    std::uint64_t pacingWireBytesPerSecond;
     std::uint64_t burstWireBytes;
     MediaRunningTime targetResidence;
     MediaRunningTime maximumReleaseJitter;
@@ -101,8 +100,7 @@ struct MediaDatagramServiceCurvePlan final {
 
 struct MediaDatagramPlannedWireCost final {
     std::uint64_t wireBytes;
-    MediaRunningTime peakServiceDuration;
-    MediaRunningTime sustainedDebtDuration;
+    MediaRunningTime pacingDebtDuration;
 
     friend bool operator==(const MediaDatagramPlannedWireCost&,
                            const MediaDatagramPlannedWireCost&) = default;

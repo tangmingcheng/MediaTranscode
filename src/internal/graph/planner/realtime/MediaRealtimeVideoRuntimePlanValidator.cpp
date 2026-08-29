@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
@@ -63,6 +64,10 @@ namespace media::ffmpeg::graph {
             MediaRunningTime::fromNanoseconds(0) ||
         runtime.scheduling.transportLead <=
             MediaRunningTime::fromNanoseconds(0) ||
+        runtime.scheduling.protocolPreparationLead <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        runtime.scheduling.protocolPreparationLead >
+            runtime.scheduling.transportLead ||
         runtime.scheduling.initialGeneration == 0 ||
         runtime.scheduling.initialGeneration >
             static_cast<std::uint64_t>(
@@ -130,9 +135,16 @@ namespace media::ffmpeg::graph {
         const auto* output =
             std::get_if<MediaVideoOnlySeparateRtpOutputRuntimePlan>(
                 &runtime.outputAdapter);
-        if (!output || output->sdp.path.empty() ||
+        const auto expectedActivationLead = output
+            ? output->video.senderLead.checkedAdd(
+                  runtime.scheduling.protocolPreparationLead)
+            : ::media::Result<MediaRunningTime>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "VideoOnly separate RTP output is absent"));
+        if (!output || !expectedActivationLead || output->sdp.path.empty() ||
             output->video.stream != MediaScheduledStream::Video ||
-            output->video.senderLead != runtime.scheduling.activationLead ||
+            expectedActivationLead.value() !=
+                runtime.scheduling.activationLead ||
             output->video.senderLead != runtime.scheduling.transportLead ||
             output->video.senderLead <= MediaRunningTime::fromNanoseconds(0) ||
             output->video.rtcpReporting.steadyBaseInterval() <=
@@ -163,7 +175,9 @@ namespace media::ffmpeg::graph {
             : nullptr;
         const auto expectedActivationLead = output
             ? output->protocol.muxPlan().transportDecodeLead().checkedAdd(
-                  output->protocol.muxPlan().startupEmissionPreroll())
+                  (std::max)(
+                      output->protocol.muxPlan().startupEmissionPreroll(),
+                      runtime.scheduling.protocolPreparationLead))
             : ::media::Result<MediaRunningTime>::failure(
                   ::media::ErrorInfo::invalidArgument(
                       "Project MPEG-TS output is absent"));

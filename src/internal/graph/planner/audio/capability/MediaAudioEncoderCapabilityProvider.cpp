@@ -132,16 +132,6 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
     }
     context->bit_rate = targetRate.value();
     context->rc_max_rate = maximumRate.value();
-    if (target.bufferSizeKbits()) {
-        auto buffer = rateBits(target.bufferSizeKbits(), "VBV");
-        if (!buffer || buffer.value() > (std::numeric_limits<int>::max)()) {
-            return ::media::Result<MediaSelectedAudioEncoder>::failure(
-                buffer ? ::media::ErrorInfo::invalidArgument(
-                             "audio encoder VBV exceeds AVCodecContext range")
-                       : buffer.error());
-        }
-        context->rc_buffer_size = static_cast<int>(buffer.value());
-    }
     if (auto status = applyChannelLayout(*context, target); !status) {
         return ::media::Result<MediaSelectedAudioEncoder>::failure(status.error());
     }
@@ -175,6 +165,14 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
         return ::media::Result<MediaSelectedAudioEncoder>::failure(
             ::media::ErrorInfo::notInitialized(
                 "opened audio encoder lacks effective rate and cadence readback"));
+    }
+    if (context->rc_buffer_size > 0) {
+        if ((context->rc_buffer_size % 1000) != 0) {
+            return ::media::Result<MediaSelectedAudioEncoder>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "opened audio encoder VBV readback is not representable in kilobits"));
+        }
+        verified.bufferSizeKbits = context->rc_buffer_size / 1000;
     }
     const auto peakBytes = ceilBytes(effectiveMaximum);
     const auto frameSamples = static_cast<std::uint64_t>(context->frame_size);

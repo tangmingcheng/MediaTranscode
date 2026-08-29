@@ -53,7 +53,7 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     request.profile = profile.value();
     const bool encoderOnlyRequest = options.rateControl != MediaRateControlMode::Auto ||
         options.requestedBitrateKbps || options.requestedMinBitrateKbps ||
-        options.requestedMaxBitrateKbps || options.requestedBufferSizeKbits ||
+        options.requestedMaxBitrateKbps ||
         options.requestedQuality || !options.requestedPreset.empty();
     const bool formatChange = options.requestedSampleRate || options.requestedChannels;
     if (!request.profile && targetCodec == "aac" &&
@@ -69,7 +69,6 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     request.bitrateKbps = options.requestedBitrateKbps;
     request.minBitrateKbps = options.requestedMinBitrateKbps;
     request.maxBitrateKbps = options.requestedMaxBitrateKbps;
-    request.bufferSizeKbits = options.requestedBufferSizeKbits;
     request.quality = options.requestedQuality;
     request.preset = options.requestedPreset;
     return ::media::Result<MediaResolvedAudioRequest>::success(std::move(request));

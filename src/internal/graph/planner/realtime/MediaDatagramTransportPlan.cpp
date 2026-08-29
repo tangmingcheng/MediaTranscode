@@ -74,7 +74,7 @@ MediaDatagramTransportPlanTemplate::create(
     using Result = ::media::Result<MediaDatagramTransportPlanTemplate>;
     const auto& facts = deployment.encode();
     auto peakServiceWithinDeadline = bytesForResidence(
-        facts.service.peakWireBytesPerSecond,
+        facts.service.pacingWireBytesPerSecond,
         facts.latency.maximumResidence);
     auto burstServiceWithinDeadline = peakServiceWithinDeadline
         ? MediaCheckedArithmetic::add(
@@ -103,20 +103,23 @@ MediaDatagramTransportPlanTemplate::create(
     if (!burstServiceWithinDeadline) {
         return Result::failure(burstServiceWithinDeadline.error());
     }
-    if (facts.service.sustainedWireBytesPerSecond <
+    if (facts.service.provisionedCapacityWireBytesPerSecond <
         wireTraffic.sustainedWireBytesPerSecond) {
         std::ostringstream out;
         out << "Datagram sustained wire demand exceeds managed service: demand="
             << wireTraffic.sustainedWireBytesPerSecond
-            << " service=" << facts.service.sustainedWireBytesPerSecond;
+            << " service="
+            << facts.service.provisionedCapacityWireBytesPerSecond;
         return Result::failure(
             ::media::ErrorInfo::invalidArgument(out.str()));
     }
-    if (facts.service.peakWireBytesPerSecond < smoothingPeak.value()) {
+    if (facts.service.pacingWireBytesPerSecond <
+        smoothingPeak.value()) {
         std::ostringstream out;
         out << "Datagram smoothing peak exceeds managed service: derived="
             << smoothingPeak.value()
-            << " service=" << facts.service.peakWireBytesPerSecond
+            << " service="
+            << facts.service.pacingWireBytesPerSecond
             << " wire_peak=" << wireTraffic.peakWireBytesPerSecond
             << " wire_burst=" << wireTraffic.burstWireBytes
             << " target_residence_ns="
@@ -184,16 +187,12 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             m_encoding.remoteEndpoints.size());
         auto resourceLedger =
             MediaRealtimeNetworkResourceLedgerPlanner::plan(
-                deployment, m_encoding.wireTraffic, endpointCount);
+                deployment.latency, deployment.observation,
+                m_encoding.wireTraffic, endpointCount);
         if (!resourceLedger) {
             return Result::failure(resourceLedger.error());
         }
         const auto& resources = resourceLedger.value();
-        auto smoothingPeak = smoothingPeakWireBytesPerSecond(
-            m_encoding.wireTraffic, deployment.latency);
-        if (!smoothingPeak) {
-            return Result::failure(smoothingPeak.error());
-        }
         std::optional<MediaDatagramTransmitEvidencePlan> evidence;
         if (deployment.observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Disabled) {
@@ -218,9 +217,11 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         for (std::size_t index = 0;
              index < m_encoding.remoteEndpoints.size(); ++index) {
             const auto& remote = m_encoding.remoteEndpoints[index];
-            const auto localPort = static_cast<std::uint32_t>(
-                deployment.localPorts.firstPort) +
-                static_cast<std::uint32_t>(index);
+            const auto localPort = deployment.localPorts.firstPort == 0
+                ? 0U
+                : static_cast<std::uint32_t>(
+                      deployment.localPorts.firstPort) +
+                      static_cast<std::uint32_t>(index);
             if (localPort > static_cast<std::uint32_t>(
                     (std::numeric_limits<std::uint16_t>::max)())) {
                 return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -262,16 +263,15 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 std::move(endpointCoverage)},
             std::move(endpoints),
             MediaDatagramServiceCurvePlan{
-                m_encoding.wireTraffic.sustainedWireBytesPerSecond,
-                smoothingPeak.value(),
-                m_encoding.wireTraffic.burstWireBytes,
+                deployment.service.pacingWireBytesPerSecond,
+                m_encoding.wireTraffic.maximumWireDatagramBytes,
                 deployment.latency.targetResidence,
                 deployment.latency.maximumReleaseJitter,
                 m_encoding.wireTraffic.authority + "+" +
                     deployment.latency.authority + "+" +
                     deployment.latency.releaseJitterAuthority + "+" +
                     deployment.service.authority +
-                    "+prepared-wire-burst-envelope"},
+                    "+webrtc-zero-send-burst-interval-one-datagram-debt"},
             MediaDatagramBacklogPlan{
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,

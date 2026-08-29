@@ -88,12 +88,6 @@ void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
                 << telemetry.lastAdmittedBatchLastDeadlineNanoseconds
                 << " last_admitted_batch_arrival_ns="
                 << telemetry.lastAdmittedBatchArrivalNanoseconds
-                << " last_selected_pacing_wire_bytes_per_second="
-                << telemetry.lastSelectedPacingWireBytesPerSecond
-                << " minimum_selected_pacing_wire_bytes_per_second="
-                << telemetry.minimumSelectedPacingWireBytesPerSecond
-                << " maximum_selected_pacing_wire_bytes_per_second="
-                << telemetry.maximumSelectedPacingWireBytesPerSecond
                 << " target_residence_missed_batches="
                 << telemetry.targetResidenceMissedBatches
                 << " service_curve_violations="
@@ -102,10 +96,8 @@ void MediaDatagramShaperNode::emitDiagnostics(const char* stage) noexcept
                 << " pressure_failures=" << telemetry.pressureFailures
                 << " counter_saturated="
                 << (telemetry.counterSaturated ? 1 : 0)
-                << " sustained_wire_bytes_per_second="
-                << plan.serviceCurve().sustainedWireBytesPerSecond
-                << " peak_wire_bytes_per_second="
-                << plan.serviceCurve().peakWireBytesPerSecond
+                << " pacing_wire_bytes_per_second="
+                << plan.serviceCurve().pacingWireBytesPerSecond
                 << " burst_wire_bytes="
                 << plan.serviceCurve().burstWireBytes
                 << " maximum_release_jitter_ns="

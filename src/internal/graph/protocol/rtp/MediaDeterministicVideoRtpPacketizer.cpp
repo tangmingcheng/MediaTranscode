@@ -214,14 +214,15 @@ void fragment(std::span<const std::uint8_t> nal,
 } // namespace
 
 ::media::Result<std::uint64_t>
-MediaDeterministicVideoRtpPacketizer::maximumDatagramsPerAccessUnit(
-    std::uint64_t maximumAccessUnitBytes,
+MediaDeterministicVideoRtpPacketizer::maximumDatagramsForPayloadWindow(
+    std::uint64_t maximumPayloadBytes,
+    std::uint64_t accessUnitCount,
     MediaAnnexBCodec codec,
     std::size_t maximumRtpPayloadBytes)
 {
     const std::uint64_t fuHeader =
         codec == MediaAnnexBCodec::H264 ? 2U : 3U;
-    if (maximumAccessUnitBytes == 0 ||
+    if (maximumPayloadBytes == 0 || accessUnitCount == 0 ||
         maximumRtpPayloadBytes <= fuHeader) {
         return ::media::Result<std::uint64_t>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -233,18 +234,33 @@ MediaDeterministicVideoRtpPacketizer::maximumDatagramsPerAccessUnit(
     // or length-prefixed input cover each two-byte aggregation length field.
     const auto fragments =
         MediaCheckedArithmetic::ceilScale(
-            maximumAccessUnitBytes, 1U,
+            maximumPayloadBytes, 1U,
             static_cast<std::uint64_t>(maximumRtpPayloadBytes) - fuHeader,
             "deterministic video RTP access-unit fragments");
     if (!fragments) return fragments;
     auto doubled = MediaCheckedArithmetic::multiply(
         fragments.value(), 2U,
         "deterministic video RTP aggregation bound");
-    return doubled
+    auto accessUnitBound = MediaCheckedArithmetic::multiply(
+        accessUnitCount, 3U,
+        "deterministic video RTP access-unit boundary bound");
+    auto combined = doubled && accessUnitBound
         ? MediaCheckedArithmetic::add(
-              doubled.value(), 1U,
-              "deterministic video RTP terminal payload")
-        : doubled;
+              doubled.value(), accessUnitBound.value(),
+              "deterministic video RTP payload-window bound")
+        : (!doubled ? doubled : accessUnitBound);
+    if (!combined) return combined;
+    return ::media::Result<std::uint64_t>::success(combined.value() - 2U);
+}
+
+::media::Result<std::uint64_t>
+MediaDeterministicVideoRtpPacketizer::maximumDatagramsPerAccessUnit(
+    std::uint64_t maximumAccessUnitBytes,
+    MediaAnnexBCodec codec,
+    std::size_t maximumRtpPayloadBytes)
+{
+    return maximumDatagramsForPayloadWindow(
+        maximumAccessUnitBytes, 1U, codec, maximumRtpPayloadBytes);
 }
 
 PacketResult MediaDeterministicVideoRtpPacketizer::packetize(

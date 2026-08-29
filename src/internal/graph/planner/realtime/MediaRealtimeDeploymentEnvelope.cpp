@@ -60,8 +60,9 @@ MediaRealtimeDeploymentEnvelope::decode(
         mtu.senderMaximumPayloadBytes <=
             mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes;
     const bool validService = !service.authority.empty() &&
-        service.sustainedWireBytesPerSecond > 0 &&
-        service.peakWireBytesPerSecond >= service.sustainedWireBytesPerSecond &&
+        service.provisionedCapacityWireBytesPerSecond > 0 &&
+        service.pacingWireBytesPerSecond <=
+            service.provisionedCapacityWireBytesPerSecond &&
         service.burstWireBytes > 0;
     const bool validResources = !resources.authority.empty() &&
         resources.graphResourceScope !=
@@ -72,12 +73,13 @@ MediaRealtimeDeploymentEnvelope::decode(
     const auto localAddress = MediaNumericIpAddress::create(
         localPorts.addressFamily, localPorts.numericAddress);
     const bool validLocalPorts = localAddress &&
-        localPorts.addressFamily == mtu.addressFamily && localPorts.firstPort > 0 &&
+        localPorts.addressFamily == mtu.addressFamily &&
         localPorts.portCount > 0 && !localPorts.authority.empty() &&
-        static_cast<std::uint32_t>(localPorts.firstPort) +
+        (localPorts.firstPort == 0 ||
+         static_cast<std::uint32_t>(localPorts.firstPort) +
                 static_cast<std::uint32_t>(localPorts.portCount) - 1U <=
             static_cast<std::uint32_t>(
-                (std::numeric_limits<std::uint16_t>::max)());
+                (std::numeric_limits<std::uint16_t>::max)()));
     const bool validLatency = !latency.authority.empty() &&
         positive(latency.targetResidence) &&
         latency.maximumResidence >= latency.targetResidence &&

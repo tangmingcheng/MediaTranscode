@@ -539,4 +539,8 @@ Detailed design and execution checklist:
 - [x] Task 3：实现跨 batch、跨 RTP/RTCP 的公共 service-scope pacer/shaper，删除 forward-only 经验 pacing。
 - [x] Task 4：实现公共非阻塞 transport 与异步 evidence collector；禁止 await TX completion gate。
 - [x] Task 5：接入公共 sender、Planner、DAG 和参数契约，删除 input AU -> SO_SNDBUF、5/4 headroom、2 包 burst、caller-owned startup gap 与其他内部容量；Windows/RK 三类输出 30 秒门禁已完成，round2 exact `0084a3d1` 的 H.264→HEVC MP2T/RTP 主链再次通过。停止 source 后的 source-clock expiry 与 sender 窗口 PASS 分开记录；receiver loss/order/TS continuity 留给 Task6 固定 120 秒阶段 2。
+- [x] Task 5.1：删除 realtime hardware backend、low-latency、queue、packet/pacing、startup/handoff 与 encoder private controls；CBR 只接受 target，VBR 接受 min/target/max；planner 按 capability 最高评分选择后端。
+- [x] Task 5.2：将 realtime core request 改为专用窄参数类型，禁止通过共享 local 参数结构暴露 queue、quality、preset/profile/tune/level、B-frame 或 global-header；planner 产品不再回写外部 request。
+- [x] Task 5.3：按不可变 inclusive deadline 状态机统一 `WouldBlock` 重试边界；等值 deadline 只允许一次有界提交，超过即终态失败，不 rebase、不追赶。
+- [x] Task 5.4：将 VideoOnly 协议物化与 canonical wire release 解耦；planner 从 prepared emission 与 deployment residence 产品推导内部 `protocolPreparationLead`，scheduler 提前交付 AU，shaper 保持唯一 wire 调度权。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 120 秒门禁通过：RTP loss 0、TS error 0、service-curve draw-up 1050.054 B ≤ 1356 B、VLC 解码异常 0；CPU 仍列为后置风险。
 - [ ] Task 6：完成固定 56 条链路验收（38 VideoOnly + 18 AudioVideo）：Windows 全矩阵实跑，RK 对 capability-admitted 链路实跑、unsupported 链路 DAG 前拒绝；完成 120 秒证据、文档、质量评分、SDD 每 Task 单 reviewer PASS、代码冻结后两名未参与者同时 PASS、PR 与最终审核。

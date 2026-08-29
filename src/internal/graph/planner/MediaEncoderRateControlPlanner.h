@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaEncoderRateControlPlan.h"
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "media_transcode/Result.h"
 
@@ -13,7 +14,9 @@ public:
     static ::media::Result<MediaEncoderRateControlPlan> plan(
         const std::string& encoderName,
         MediaHardwareDeviceKind deviceKind,
-        const MediaEncoderRateControlRequest& request);
+        const MediaEncoderRateControlRequest& request,
+        MediaRational encoderFrameRate,
+        bool lowLatency);
 
 private:
     MediaEncoderRateControlPlanner() = delete;

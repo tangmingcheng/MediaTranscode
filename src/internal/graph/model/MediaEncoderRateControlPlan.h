@@ -25,7 +25,6 @@ struct MediaEncoderGeneralRateControlFacts final {
     std::optional<int> targetBitrateKbps;
     std::optional<int> minimumBitrateKbps;
     std::optional<int> maximumBitrateKbps;
-    std::optional<int> bufferSizeKbits;
 };
 
 class MediaEncoderRateControlRequest final {
@@ -38,14 +37,12 @@ public:
         MediaRateControlMode mode,
         std::optional<int> targetBitrateKbps,
         std::optional<int> minimumBitrateKbps,
-        std::optional<int> maximumBitrateKbps,
-        std::optional<int> bufferSizeKbits);
+        std::optional<int> maximumBitrateKbps);
 
     MediaRateControlMode mode() const noexcept;
     std::optional<int> targetBitrateKbps() const noexcept;
     std::optional<int> minimumBitrateKbps() const noexcept;
     std::optional<int> maximumBitrateKbps() const noexcept;
-    std::optional<int> bufferSizeKbits() const noexcept;
     ::media::Status setPlannerDerivedTargetBitrate(int bitrateKbps) noexcept;
 
 private:

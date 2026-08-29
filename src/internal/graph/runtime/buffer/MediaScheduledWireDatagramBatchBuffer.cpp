@@ -99,10 +99,8 @@ MediaScheduledWireDatagramBatchBuffer::create(
             wire.canonicalRelease);
         if (!validWire || wire.generation != plan.generation() || !endpoint ||
             !plannedWireCost ||
-            descriptor.wireServiceDuration <
-                plannedWireCost.value().peakServiceDuration ||
-            descriptor.wireServiceDuration >
-                plannedWireCost.value().sustainedDebtDuration ||
+            descriptor.wireServiceDuration !=
+                plannedWireCost.value().pacingDebtDuration ||
             descriptor.enqueueNotBefore < wire.canonicalRelease ||
             descriptor.enqueueNotAfter < descriptor.enqueueNotBefore ||
             descriptor.enqueueNotAfter > wire.canonicalDeadline ||

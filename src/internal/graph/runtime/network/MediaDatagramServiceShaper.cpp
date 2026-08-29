@@ -43,7 +43,7 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
         ::media::Result<std::unique_ptr<MediaDatagramServiceShaper>>;
     auto burstDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
         plan.serviceCurve().burstWireBytes,
-        plan.serviceCurve().sustainedWireBytesPerSecond,
+        plan.serviceCurve().pacingWireBytesPerSecond,
         "service shaper burst duration");
     if (!burstDurationNs) return Result::failure(burstDurationNs.error());
     const auto maximumPendingDatagrams = plan.backlog().maximumDatagrams;
@@ -68,8 +68,7 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
     }
     if (maximumPendingDatagrams > result->m_pending.max_size() ||
         maximumBatchDatagrams > result->m_newPending.max_size() ||
-        maximumBatchDatagrams > result->m_preparedReservations.max_size() ||
-        maximumBatchDatagrams > result->m_pacingFacts.max_size()) {
+        maximumBatchDatagrams > result->m_preparedReservations.max_size()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "service shaper planner backlog is not representable"));
     }
@@ -79,8 +78,6 @@ MediaDatagramServiceShaper::create(MediaDatagramShapingPlan plan)
         result->m_newPending.reserve(
             static_cast<std::size_t>(maximumBatchDatagrams));
         result->m_preparedReservations.reserve(
-            static_cast<std::size_t>(maximumBatchDatagrams));
-        result->m_pacingFacts.reserve(
             static_cast<std::size_t>(maximumBatchDatagrams));
         result->m_pendingByEndpoint.reserve(endpointIds.size());
         result->m_batchByEndpoint.reserve(endpointIds.size());
@@ -137,7 +134,6 @@ MediaDatagramServiceShaper::shape(
     }
     m_newPending.clear();
     m_preparedReservations.clear();
-    m_pacingFacts.clear();
     for (auto& [endpointId, usage] : m_batchByEndpoint) {
         static_cast<void>(endpointId);
         usage = EndpointUsage{};
@@ -185,7 +181,7 @@ MediaDatagramServiceShaper::shape(
     std::int64_t maximumDebtDelayNanoseconds =
         m_telemetry.maximumDebtDelayNanoseconds;
     auto physicalAvailable = m_physicalAvailable;
-    auto sustainedDebtUntil = m_sustainedDebtUntil;
+    auto pacingDebtUntil = m_pacingDebtUntil;
     auto previousRelease = m_previousCanonicalRelease;
     auto previousDeadline = m_previousCanonicalDeadline;
     auto previousSequence = m_previousGlobalSequence;
@@ -237,28 +233,16 @@ MediaDatagramServiceShaper::shape(
         }
         try {
             m_preparedReservations.push_back(PreparedReservation{
-                cost.value(), endpointDeadline.value(),
+                cost.value(), selectedTarget, endpointDeadline.value(),
                 backlogDeadline.value(), hardDeadline,
                 endpoint->maximumPendingDatagrams,
                 endpoint->maximumPendingBytes});
-            m_pacingFacts.push_back(MediaDatagramPacingReservationFact{
-                cost.value().wireBytes, wire.canonicalRelease, selectedTarget,
-                reservedHardDeadline.value(),
-                cost.value().sustainedDebtDuration});
         } catch (const std::bad_alloc&) {
             return Result::failure(::media::ErrorInfo::allocationFailed(
                 "service shaper prepared reservation"));
         }
     }
-    auto selectedPacingRate =
-        MediaDatagramBatchPacingRateSelector::selectMinimumFeasibleRate(
-            m_pacingFacts, now, physicalAvailable, sustainedDebtUntil,
-            m_burstDebtDuration,
-            m_plan.serviceCurve().sustainedWireBytesPerSecond,
-            m_plan.serviceCurve().peakWireBytesPerSecond);
-    if (!selectedPacingRate) {
-        return Result::failure(selectedPacingRate.error());
-    }
+    bool targetResidenceSatisfied = true;
     for (std::size_t datagramIndex = 0;
          datagramIndex < batch.m_datagrams.size(); ++datagramIndex) {
         const auto& datagram = batch.m_datagrams[datagramIndex];
@@ -290,7 +274,7 @@ MediaDatagramServiceShaper::shape(
             eligibility = (std::max)(eligibility, *physicalAvailable);
         }
         auto burstSlack = m_burstDebtDuration.checkedSubtract(
-            cost.sustainedDebtDuration);
+            cost.pacingDebtDuration);
         if (!burstSlack ||
             burstSlack.value() < MediaRunningTime::fromNanoseconds(0)) {
             if (m_telemetry.serviceCurveViolations ==
@@ -302,26 +286,17 @@ MediaDatagramServiceShaper::shape(
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "service shaper datagram exceeds the burst envelope"));
         }
-        if (sustainedDebtUntil) {
-            auto debtEligibility = sustainedDebtUntil->checkedSubtract(
+        if (pacingDebtUntil) {
+            auto debtEligibility = pacingDebtUntil->checkedSubtract(
                 burstSlack.value());
             if (!debtEligibility) return Result::failure(debtEligibility.error());
             eligibility = (std::max)(eligibility, debtEligibility.value());
         }
-        const auto debtBase = sustainedDebtUntil
-            ? (std::max)(*sustainedDebtUntil, eligibility)
+        const auto debtBase = pacingDebtUntil
+            ? (std::max)(*pacingDebtUntil, eligibility)
             : eligibility;
-        auto nextDebt = debtBase.checkedAdd(cost.sustainedDebtDuration);
-        auto serviceDurationNanoseconds =
-            MediaCheckedArithmetic::ceilDurationNanoseconds(
-                cost.wireBytes,
-                selectedPacingRate.value().wireBytesPerSecond,
-                "selected datagram pacing duration");
-        if (!serviceDurationNanoseconds) {
-            return Result::failure(serviceDurationNanoseconds.error());
-        }
-        const auto serviceDuration = MediaRunningTime::fromNanoseconds(
-            serviceDurationNanoseconds.value());
+        auto nextDebt = debtBase.checkedAdd(cost.pacingDebtDuration);
+        const auto serviceDuration = cost.pacingDebtDuration;
         auto completion = eligibility.checkedAdd(serviceDuration);
         if (!nextDebt || !completion) {
             return Result::failure(
@@ -329,6 +304,9 @@ MediaDatagramServiceShaper::shape(
                           : completion.error());
         }
         const auto enqueueNotAfter = prepared.enqueueNotAfter;
+        if (completion && completion.value() > prepared.targetCompletion) {
+            targetResidenceSatisfied = false;
+        }
         if (eligibility > enqueueNotAfter ||
             completion.value() > enqueueNotAfter) {
             if (m_telemetry.deadlineMisses ==
@@ -352,8 +330,8 @@ MediaDatagramServiceShaper::shape(
                 << " physical_available_ns="
                 << (physicalAvailable ? physicalAvailable->nanoseconds() : -1)
                 << " debt_eligibility_ns=";
-            if (sustainedDebtUntil) {
-                auto debtEligibility = sustainedDebtUntil->checkedSubtract(
+            if (pacingDebtUntil) {
+                auto debtEligibility = pacingDebtUntil->checkedSubtract(
                     burstSlack.value());
                 message << (debtEligibility
                     ? debtEligibility.value().nanoseconds() : -1);
@@ -365,7 +343,7 @@ MediaDatagramServiceShaper::shape(
                 << " selected_completion_ns="
                 << completion.value().nanoseconds()
                 << " selected_pacing_wire_bytes_per_second="
-                << selectedPacingRate.value().wireBytesPerSecond
+                << m_plan.serviceCurve().pacingWireBytesPerSecond
                 << " endpoint_deadline_ns="
                 << prepared.endpointDeadline.nanoseconds()
                 << " backlog_deadline_ns="
@@ -494,13 +472,13 @@ MediaDatagramServiceShaper::shape(
                                     cost.wireBytes,
                                     completion.value()});
             descriptors.push_back({wire, eligibility, enqueueNotAfter,
-                                   cost.peakServiceDuration});
+                                   cost.pacingDebtDuration});
         } catch (const std::bad_alloc&) {
             return Result::failure(::media::ErrorInfo::allocationFailed(
                 "service shaper scheduled reservation"));
         }
         physicalAvailable = completion.value();
-        sustainedDebtUntil = nextDebt.value();
+        pacingDebtUntil = nextDebt.value();
         previousRelease = wire.canonicalRelease;
         previousDeadline = wire.canonicalDeadline;
         previousSequence = wire.globalSequence;
@@ -518,7 +496,7 @@ MediaDatagramServiceShaper::shape(
         batchWireBytes >
             (std::numeric_limits<std::uint64_t>::max)() -
                 m_telemetry.admittedWireBytes ||
-        (!selectedPacingRate.value().targetResidenceSatisfied &&
+        (!targetResidenceSatisfied &&
          m_telemetry.targetResidenceMissedBatches ==
              (std::numeric_limits<std::uint64_t>::max)());
     if (telemetryOverflow) {
@@ -555,20 +533,7 @@ MediaDatagramServiceShaper::shape(
     m_telemetry.lastAdmittedBatchLastDeadlineNanoseconds =
         batchLast.canonicalDeadline.nanoseconds();
     m_telemetry.lastAdmittedBatchArrivalNanoseconds = now.nanoseconds();
-    m_telemetry.lastSelectedPacingWireBytesPerSecond =
-        selectedPacingRate.value().wireBytesPerSecond;
-    if (m_telemetry.minimumSelectedPacingWireBytesPerSecond == 0) {
-        m_telemetry.minimumSelectedPacingWireBytesPerSecond =
-            selectedPacingRate.value().wireBytesPerSecond;
-    } else {
-        m_telemetry.minimumSelectedPacingWireBytesPerSecond = (std::min)(
-            m_telemetry.minimumSelectedPacingWireBytesPerSecond,
-            selectedPacingRate.value().wireBytesPerSecond);
-    }
-    m_telemetry.maximumSelectedPacingWireBytesPerSecond = (std::max)(
-        m_telemetry.maximumSelectedPacingWireBytesPerSecond,
-        selectedPacingRate.value().wireBytesPerSecond);
-    if (!selectedPacingRate.value().targetResidenceSatisfied) {
+    if (!targetResidenceSatisfied) {
         ++m_telemetry.targetResidenceMissedBatches;
     }
 
@@ -597,7 +562,7 @@ MediaDatagramServiceShaper::shape(
         endpoint->second.bytes += usage.bytes;
     }
     m_physicalAvailable = physicalAvailable;
-    m_sustainedDebtUntil = sustainedDebtUntil;
+    m_pacingDebtUntil = pacingDebtUntil;
     m_previousCanonicalRelease = previousRelease;
     m_previousCanonicalDeadline = previousDeadline;
     m_previousGlobalSequence = previousSequence;

@@ -27,7 +27,6 @@ struct MediaAudioPipelinePlannerOptions {
     std::optional<int> requestedBitrateKbps;
     std::optional<int> requestedMinBitrateKbps;
     std::optional<int> requestedMaxBitrateKbps;
-    std::optional<int> requestedBufferSizeKbits;
     std::optional<int> requestedSampleRate;
     std::optional<int> requestedChannels;
     std::optional<int> requestedQuality;

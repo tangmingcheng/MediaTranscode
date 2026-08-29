@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsResolvedPipelineFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "media_transcode/Result.h"
 
 namespace media::ffmpeg::graph {
@@ -21,6 +22,7 @@ public:
         const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
         const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
+        const MediaRealtimeDeploymentEnvelope& deployment,
         MediaBranchMode audioBranchMode,
         int resolvedOutputAudioSampleRate);
 

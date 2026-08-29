@@ -33,6 +33,8 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
+constexpr bool RealtimeInputLowLatencyProduct = true;
+
 constexpr std::size_t TsPacketSize = 188;
 constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
 constexpr std::int64_t Millisecond = 1'000'000;
@@ -277,7 +279,7 @@ openMpegTsRuntimeSession(
         *request.input.readTimeoutMs,
         *request.input.analyzeDurationUs,
         *request.input.probeSizeBytes,
-        *request.input.lowLatency,
+        RealtimeInputLowLatencyProduct,
         policy.value().avioBufferBytes,
         policy.value().packetSize,
         policy.value().evidenceTimelineCapacity,
@@ -551,7 +553,7 @@ void fillNodePlan(
     node.readTimeoutMs = *request.input.readTimeoutMs;
     node.analyzeDurationUs = *request.input.analyzeDurationUs;
     node.probeSizeBytes = *request.input.probeSizeBytes;
-    node.lowLatency = *request.input.lowLatency;
+    node.lowLatency = RealtimeInputLowLatencyProduct;
     node.mediaId = request.mediaId;
     node.rtpTransport = std::move(transport);
     node.rtpDepacketizer = std::move(depacketizer);
@@ -653,9 +655,6 @@ void fillNodePlan(
         audio.channelLayout = audio.channels == 1 ? "mono" : "stereo";
         audio.sampleFormat = "unknown";
         audio.profile = audioDescriptor.value().audioProfile;
-        audio.bitrateBitsPerSecond = request.input.audioRtp.bitrateKbps
-            ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
-            : 0;
         ::media::Result<MediaSelectedAudioDecoder> decoder =
             ::media::Result<MediaSelectedAudioDecoder>::failure(
                 ::media::ErrorInfo::unsupported(

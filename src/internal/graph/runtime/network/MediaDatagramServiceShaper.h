@@ -3,7 +3,6 @@
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/runtime/buffer/MediaScheduledWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
-#include "internal/graph/runtime/network/MediaDatagramBatchPacingRateSelector.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -32,9 +31,6 @@ struct MediaDatagramServiceShaperTelemetry final {
     std::int64_t lastAdmittedBatchFirstDeadlineNanoseconds = 0;
     std::int64_t lastAdmittedBatchLastDeadlineNanoseconds = 0;
     std::int64_t lastAdmittedBatchArrivalNanoseconds = 0;
-    std::uint64_t lastSelectedPacingWireBytesPerSecond = 0;
-    std::uint64_t minimumSelectedPacingWireBytesPerSecond = 0;
-    std::uint64_t maximumSelectedPacingWireBytesPerSecond = 0;
     std::uint64_t targetResidenceMissedBatches = 0;
     std::uint64_t serviceCurveViolations = 0;
     std::uint64_t deadlineMisses = 0;
@@ -70,6 +66,7 @@ private:
 
     struct PreparedReservation final {
         MediaDatagramPlannedWireCost cost;
+        MediaRunningTime targetCompletion;
         MediaRunningTime endpointDeadline;
         MediaRunningTime backlogDeadline;
         MediaRunningTime enqueueNotAfter;
@@ -86,7 +83,6 @@ private:
     std::vector<std::optional<PendingReservation>> m_pending;
     std::vector<PendingReservation> m_newPending;
     std::vector<PreparedReservation> m_preparedReservations;
-    std::vector<MediaDatagramPacingReservationFact> m_pacingFacts;
     std::unordered_map<std::uint64_t, EndpointUsage> m_pendingByEndpoint;
     std::unordered_map<std::uint64_t, EndpointUsage> m_batchByEndpoint;
     std::unordered_map<std::uint64_t, EndpointUsage> m_expiredByEndpoint;
@@ -95,7 +91,7 @@ private:
     std::uint64_t m_pendingDatagrams = 0;
     std::uint64_t m_pendingWireBytes = 0;
     std::optional<MediaRunningTime> m_physicalAvailable;
-    std::optional<MediaRunningTime> m_sustainedDebtUntil;
+    std::optional<MediaRunningTime> m_pacingDebtUntil;
     std::optional<MediaRunningTime> m_previousCanonicalRelease;
     std::optional<MediaRunningTime> m_previousCanonicalDeadline;
     std::optional<std::uint64_t> m_previousGlobalSequence;

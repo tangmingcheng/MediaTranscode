@@ -2,6 +2,7 @@
 
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/planner/realtime/MediaWireBurstGeometry.h"
+#include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
 #include <algorithm>
@@ -104,12 +105,47 @@ template <typename Emission>
     }
     const auto payloadCapacity =
         maximumDatagram - RtpHeaderBytes - fragmentationHeader;
-    auto packetRate = ceilScale(
-        contract.maximumDatagramsPerAccessUnit(),
-        emission.accessUnitsPerSecondNumerator,
-        emission.accessUnitsPerSecondDenominator,
-        "RTP contracted datagram rate");
-    const auto burstPackets = contract.maximumDatagramsPerAccessUnit();
+    auto packetRate = [&]() -> ::media::Result<std::uint64_t> {
+        if constexpr (std::is_same_v<Emission,
+                      MediaPreparedEncoderEmissionEnvelope>) {
+            auto accessUnitsPerSecond = ceilScale(
+                1U, emission.accessUnitsPerSecondNumerator,
+                emission.accessUnitsPerSecondDenominator,
+                "video RTP access-unit rate");
+            if (!accessUnitsPerSecond) return accessUnitsPerSecond;
+            const auto codec = output.packetization.packetizationMode() ==
+                    MediaScheduledRtpPacketizationMode::H264AnnexB
+                ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
+            return MediaDeterministicVideoRtpPacketizer::
+                maximumDatagramsForPayloadWindow(
+                    emission.peakPayloadBytesPerSecond,
+                    accessUnitsPerSecond.value(), codec,
+                    maximumDatagram - RtpHeaderBytes);
+        }
+        return ceilScale(
+            contract.maximumDatagramsPerAccessUnit(),
+            emission.accessUnitsPerSecondNumerator,
+            emission.accessUnitsPerSecondDenominator,
+            "RTP contracted datagram rate");
+    }();
+    auto burstPackets = [&]() -> ::media::Result<std::uint64_t> {
+        if constexpr (std::is_same_v<Emission,
+                      MediaPreparedEncoderEmissionEnvelope>) {
+            const auto codec = output.packetization.packetizationMode() ==
+                    MediaScheduledRtpPacketizationMode::H264AnnexB
+                ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
+            return MediaDeterministicVideoRtpPacketizer::
+                maximumDatagramsForPayloadWindow(
+                    emission.maximumBurstPayloadBytes,
+                    emission.maximumEncoderRetainedFrames, codec,
+                    maximumDatagram - RtpHeaderBytes);
+        }
+        return ::media::Result<std::uint64_t>::success(
+            contract.maximumDatagramsPerAccessUnit());
+    }();
+    if (!burstPackets) {
+        return ::media::Result<WireDemand>::failure(burstPackets.error());
+    }
     if (!packetRate) {
         return ::media::Result<WireDemand>::failure(
             packetRate.error());
@@ -131,7 +167,7 @@ template <typename Emission>
               "RTP peak payload")
         : peakHeaders;
     auto burstHeaders = multiply(
-        burstPackets, RtpHeaderBytes + fragmentationHeader,
+        burstPackets.value(), RtpHeaderBytes + fragmentationHeader,
         "RTP burst headers");
     auto burst = burstHeaders
         ? add(emission.maximumBurstPayloadBytes, burstHeaders.value(),
@@ -144,7 +180,7 @@ template <typename Emission>
     }
     return ::media::Result<WireDemand>::success(
         {sustained.value(), peak.value(), packetRate.value(), burst.value(),
-         burstPackets});
+         burstPackets.value()});
 }
 
 ::media::Result<WireDemand> addRtcp(

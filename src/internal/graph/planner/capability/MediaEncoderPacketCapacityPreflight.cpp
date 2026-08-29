@@ -9,6 +9,7 @@ extern "C" {
 
 #include <algorithm>
 #include <limits>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -76,6 +77,34 @@ deriveRockchipMppCapacity(
         "rockchip-mpp:mpi_enc_utils-frame_size-packet-capacity"});
 }
 
+::media::Result<MediaEncoderPacketCapacityPreflightResult>
+deriveNvencCapacity(
+    const AVCodecContext& context,
+    std::uint64_t rateControlBurstBytes)
+{
+    using Result =
+        ::media::Result<MediaEncoderPacketCapacityPreflightResult>;
+    const auto format = encoderSoftwareSurface(context);
+    if (format == AV_PIX_FMT_NONE || context.width <= 0 ||
+        context.height <= 0) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "NVENC encoder did not expose its input YUV geometry"));
+    }
+    const int inputYuvBytes = av_image_get_buffer_size(
+        format, context.width, context.height, 1);
+    if (inputYuvBytes <= 0 ||
+        static_cast<std::uint64_t>(inputYuvBytes) >
+            (std::numeric_limits<std::uint64_t>::max)() / 2U) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "NVENC input YUV geometry cannot form its output buffer capacity"));
+    }
+    const auto recommendedOutputBytes =
+        static_cast<std::uint64_t>(inputYuvBytes) * 2U;
+    return Result::success(MediaEncoderPacketCapacityPreflightResult{
+        (std::max)(rateControlBurstBytes, recommendedOutputBytes),
+        "nvidia-video-codec-sdk:recommended-output-buffer=2x-input-yuv"});
+}
+
 } // namespace
 
 ::media::Result<MediaEncoderPacketCapacityPreflightResult>
@@ -92,6 +121,10 @@ MediaEncoderPacketCapacityPreflight::derive(
     }
     if (backend == "rkmpp") {
         return deriveRockchipMppCapacity(context, rateControlBurstBytes);
+    }
+    if (context.codec && context.codec->name &&
+        std::string_view(context.codec->name).ends_with("_nvenc")) {
+        return deriveNvencCapacity(context, rateControlBurstBytes);
     }
     return Result::success(MediaEncoderPacketCapacityPreflightResult{
         rateControlBurstBytes,

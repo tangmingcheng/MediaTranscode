@@ -34,17 +34,6 @@ std::string codecSpecificName(const std::string& codec, const std::string& suffi
     return codec + suffix;
 }
 
-std::string softwareEncoderName(const std::string& outputCodec)
-{
-    if (outputCodec == "h264") {
-        return "libx264";
-    }
-    if (outputCodec == "hevc") {
-        return "libx265";
-    }
-    return outputCodec;
-}
-
 bool decoderExists(const std::string& name)
 {
     return MediaHardwareCapabilityProbe::decoderExists(name);
@@ -110,13 +99,6 @@ std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
 std::string videotoolboxFilterName(const MediaPipelinePlannerOptions& options)
 {
     return targetResizeRequested(options) ? "scale_videotoolbox=" + targetSizeText(options) : "passthrough_videotoolbox";
-}
-
-std::string softwareFilterName(const MediaPipelinePlannerOptions& options)
-{
-    return targetResizeRequested(options)
-               ? "scale=" + targetSizeText(options) + ":flags=bicubic,format=pix_fmts=yuv420p"
-               : "format=pix_fmts=yuv420p";
 }
 
 std::string hardwareFramePixelFormatName(MediaHardwareDeviceKind deviceKind)
@@ -291,9 +273,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                                       std::move(encoder), options));
     };
 
-    if (!options.disableHardware)
-    {
-        add("cuda-nvenc",
+    add("cuda-nvenc",
             makeCodecStage(MediaPipelineStageRole::Decoder, "cuda decoder", inputCodec,
                            inputCodec, "cuda",
                            MediaHardwareDeviceKind::CUDA, true, true, 95),
@@ -304,7 +284,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_nvenc"), "cuda",
                            MediaHardwareDeviceKind::CUDA, true, true, 95));
 
-        add("qsv",
+    add("qsv",
             makeCodecStage(MediaPipelineStageRole::Decoder, "qsv decoder", inputCodec,
                            codecSpecificName(inputCodec, "_qsv"), "qsv",
                            MediaHardwareDeviceKind::QSV, true, true, 90),
@@ -315,7 +295,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_qsv"), "qsv",
                            MediaHardwareDeviceKind::QSV, true, true, 90));
 
-        add("d3d11va-mediafoundation",
+    add("d3d11va-mediafoundation",
             makeCodecStage(MediaPipelineStageRole::Decoder, "d3d11va decoder", inputCodec,
                            inputCodec, "d3d11va", MediaHardwareDeviceKind::D3D11VA, true, true, 84),
             makeFilterStage(targetResizeRequested(options) ? "d3d11va scale filter"
@@ -326,7 +306,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_mf"), "d3d11va",
                            MediaHardwareDeviceKind::D3D11VA, true, true, 84));
 
-        add("rkmpp",
+    add("rkmpp",
             makeCodecStage(MediaPipelineStageRole::Decoder, "rkmpp decoder", inputCodec,
                            codecSpecificName(inputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92),
@@ -338,7 +318,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92));
 
-        add("vaapi",
+    add("vaapi",
             makeCodecStage(MediaPipelineStageRole::Decoder, "vaapi decoder", inputCodec, inputCodec,
                            "vaapi", MediaHardwareDeviceKind::VAAPI, true, true, 82),
             makeFilterStage(
@@ -348,7 +328,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_vaapi"), "vaapi",
                            MediaHardwareDeviceKind::VAAPI, true, true, 82));
 
-        add("videotoolbox",
+    add("videotoolbox",
             makeCodecStage(MediaPipelineStageRole::Decoder, "videotoolbox decoder", inputCodec,
                            inputCodec, "videotoolbox", MediaHardwareDeviceKind::VideoToolbox, true,
                            true, 80),
@@ -359,29 +339,6 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
             makeCodecStage(MediaPipelineStageRole::Encoder, "videotoolbox encoder", outputCodec,
                            codecSpecificName(outputCodec, "_videotoolbox"), "videotoolbox",
                            MediaHardwareDeviceKind::VideoToolbox, true, true, 80));
-    }
-
-    if (options.disableHardware)
-    {
-        add("software",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec,
-                           inputCodec, "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeFilterStage(
-                targetResizeRequested(options) ? "software scale filter" : "software format filter",
-                softwareFilterName(options), "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "software encoder", outputCodec,
-                           softwareEncoderName(outputCodec), "", MediaHardwareDeviceKind::None,
-                           false, false, 30));
-
-        add("software-native-codec",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec,
-                           inputCodec, "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeFilterStage(
-                targetResizeRequested(options) ? "software scale filter" : "software format filter",
-                softwareFilterName(options), "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "native software encoder", outputCodec,
-                           outputCodec, "", MediaHardwareDeviceKind::None, false, false, 20));
-    }
 
     return chains;
 }

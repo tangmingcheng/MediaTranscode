@@ -92,11 +92,9 @@ struct MediaPipelinePlannerOptions {
 
     MediaPipelinePlannerOptions(bool allowPacketCopy,
                                 bool filterRequired,
-                                bool disableHardware,
                                 bool lowLatency) noexcept
         : allowPacketCopy(allowPacketCopy),
           filterRequired(filterRequired),
-          disableHardware(disableHardware),
           lowLatency(lowLatency)
     {
     }
@@ -109,17 +107,10 @@ struct MediaPipelinePlannerOptions {
     MediaRational sourceFrameRate;
     MediaRational targetFrameRate;
     MediaEncoderRateControlRequest encoderRateControl;
-    struct EncoderVbvPlan final {
-        int bufferSizeKbits = 0;
-        std::string authority;
-    };
-    std::optional<EncoderVbvPlan> encoderVbvPlan;
     MediaVideoTranscodeParameters encoderOpenRequest;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
-    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
-    bool disableHardware;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;
     int openTimeoutMs = 0;
@@ -172,10 +163,6 @@ public:
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options);
-
-    static ::media::Result<std::size_t> selectHighestRankedCandidate(
-        const std::vector<MediaPipelineChainPlan>& candidates,
-        const MediaPipelinePlannerOptions& options);
 
     static ::media::Status preflightSelectedCandidate(
         MediaPipelineChainPlan& selected,

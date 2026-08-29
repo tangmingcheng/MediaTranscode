@@ -1,8 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 
-#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
-
-#include "internal/graph/planner/MediaTranscodeStreamSetRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
@@ -47,17 +44,36 @@ bool rawRtpAudioControlSpecified(
         audio.payloadType.has_value() ||
         audio.clockRate.has_value() ||
         audio.channels.has_value() ||
-        audio.bitrateKbps.has_value() ||
         audio.fmtp.has_value();
+}
+
+bool audioTranscodeControlSpecified(
+    const MediaRealtimeAudioTranscodeParameters& audio) noexcept
+{
+    return !audio.codecName.empty() ||
+        audio.rateControl != MediaRateControlMode::Auto ||
+        audio.bitrateKbps.has_value() ||
+        audio.minBitrateKbps.has_value() ||
+        audio.maxBitrateKbps.has_value() ||
+        audio.sampleRate.has_value() ||
+        audio.channels.has_value();
 }
 
 ::media::Status validateStreamSetControls(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (!request.parameters.execution.streamSet) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime transcode stream set must be explicit"));
+    }
     switch (*request.parameters.execution.streamSet) {
     case MediaTranscodeStreamSet::AudioVideo:
         return ::media::Status::success();
     case MediaTranscodeStreamSet::VideoOnly:
+        if (audioTranscodeControlSpecified(request.parameters.audio)) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoOnly rejects explicit audio transcode controls"));
+        }
         if (rawRtpAudioControlSpecified(request.input.audioRtp)) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "VideoOnly rejects raw RTP audio controls"));
@@ -69,32 +85,36 @@ bool rawRtpAudioControlSpecified(
         "Transcode stream set is not supported"));
 }
 
+::media::Status validateDeploymentFacts(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!request.deployment.provisionedEgressCapacityBitsPerSecond ||
+        !request.deployment.pathMaximumIpPacketBytes ||
+        !request.deployment.maximumWireResidence ||
+        !request.deployment.receiverTransportDecodeLead ||
+        *request.deployment.provisionedEgressCapacityBitsPerSecond < 8 ||
+        *request.deployment.pathMaximumIpPacketBytes == 0 ||
+        *request.deployment.maximumWireResidence <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        *request.deployment.receiverTransportDecodeLead <
+            *request.deployment.maximumWireResidence) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime Datagram deployment requires positive provisioned egress capacity, path MTU, maximum wire residence, and receiver transport decode lead facts; receiver lead must cover maximum wire residence"));
+    }
+    return ::media::Status::success();
+}
+
 } // namespace
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (auto status = MediaPipelineHardwareBackendConstraint::validate(
-            request.parameters.execution.hardwareBackend,
-            request.parameters.execution.disableHardware,
-            "Realtime request");
-        !status) {
-        return status;
-    }
     if (request.mediaId.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Realtime media identity must be explicit"));
     }
-    if (!request.deployment) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "Realtime Datagram output requires an authoritative deployment envelope before DAG construction"));
-    }
-    if (auto status = MediaTranscodeStreamSetRequestValidator::validate(
-            request.parameters);
-        !status) {
-        return status;
-    }
     if (auto status = validateStreamSetControls(request); !status) return status;
     if (auto status = validateClassification(request); !status) return status;
+    if (auto status = validateDeploymentFacts(request); !status) return status;
     if ((MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
          MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) && request.input.url.empty()) {
         return ::media::Status::failure(
@@ -148,9 +168,10 @@ bool rawRtpAudioControlSpecified(
         }
     }
     if (!request.input.openTimeoutMs || !request.input.readTimeoutMs ||
-        !request.input.analyzeDurationUs || !request.input.probeSizeBytes || !request.input.lowLatency) {
+        !request.input.analyzeDurationUs || !request.input.probeSizeBytes) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP input requires explicit timeouts, probe, and latency options"));
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime RTP input requires explicit timeouts and probe limits"));
     }
     auto output = MediaRealtimeOutputPolicyPlanner::planUrls(request);
     return output ? ::media::Status::success() : ::media::Status::failure(output.error());

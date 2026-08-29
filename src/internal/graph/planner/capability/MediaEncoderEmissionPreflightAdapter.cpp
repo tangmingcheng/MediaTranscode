@@ -124,10 +124,9 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     }
     const auto effectiveMaximum = context.rc_max_rate > 0
         ? context.rc_max_rate : context.bit_rate;
-    if (context.bit_rate <= 0 || effectiveMaximum <= 0 ||
-        context.rc_buffer_size <= 0) {
+    if (context.bit_rate <= 0 || effectiveMaximum <= 0) {
         return Result::failure(::media::ErrorInfo::notInitialized(
-            "opened encoder did not expose effective rate/VBV readback"));
+            "opened encoder did not expose effective rate readback"));
     }
     if (context.bit_rate != expectedTarget.value()) {
         return Result::failure(conflict("target rate").error());
@@ -136,8 +135,13 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
         return Result::failure(conflict("maximum rate").error());
     }
     if (expectedBuffer.value() > 0 &&
-        context.rc_buffer_size != expectedBuffer.value()) {
+        (context.rc_buffer_size <= 0 ||
+         context.rc_buffer_size != expectedBuffer.value())) {
         return Result::failure(conflict("VBV").error());
+    }
+    if (context.rc_buffer_size < 0) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "opened encoder exposed an invalid negative VBV readback"));
     }
     if (context.framerate.num != plannedCadence.num ||
         context.framerate.den != plannedCadence.den) {
@@ -162,9 +166,11 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto peakBytesPerSecond = static_cast<std::uint64_t>(
         effectiveMaximum / BitsPerByte +
         (effectiveMaximum % BitsPerByte != 0 ? 1 : 0));
-    const auto bufferBytes = static_cast<std::uint64_t>(
-        context.rc_buffer_size / BitsPerByte +
-        (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0));
+    const auto bufferBytes = context.rc_buffer_size > 0
+        ? static_cast<std::uint64_t>(
+              context.rc_buffer_size / BitsPerByte +
+              (context.rc_buffer_size % BitsPerByte != 0 ? 1 : 0))
+        : 0U;
     auto peakBytesPerAccessUnit = MediaCheckedArithmetic::ceilScale(
         peakBytesPerSecond,
         static_cast<std::uint64_t>(plannedCadence.den),
@@ -188,11 +194,19 @@ MediaEncoderEmissionPreflightAdapter::readAfterOpen(
     const auto retainedFrames =
         static_cast<std::uint64_t>(context.max_b_frames) + 1U;
     authority += "; " + packetCapacity.value().authority;
+    if (context.rc_buffer_size <= 0) {
+        authority += "; opened-encoder-vbv=not-exposed";
+    }
+    const std::optional<std::uint64_t> effectiveVbvBufferBits =
+        context.rc_buffer_size > 0
+            ? std::optional<std::uint64_t>(
+                  static_cast<std::uint64_t>(context.rc_buffer_size))
+            : std::nullopt;
     return Result::success(MediaPreparedEncoderEmissionEnvelope{
         sustainedBytesPerSecond, peakBytesPerSecond,
-        static_cast<std::uint64_t>(context.rc_buffer_size),
+        effectiveVbvBufferBits,
         packetCapacity.value().maximumAccessUnitPayloadBytes,
-        packetCapacity.value().maximumAccessUnitPayloadBytes,
+        rateControlBurstBytes.value(),
         static_cast<std::uint64_t>(plannedCadence.num),
         static_cast<std::uint64_t>(plannedCadence.den),
         retainedFrames,

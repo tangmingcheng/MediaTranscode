@@ -1,5 +1,4 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
-#include "internal/graph/model/MediaNumericIpAddress.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
@@ -86,13 +85,32 @@ MediaOutputTransportKind requiredRealtimeOutputTransport(int argc, char** argv)
 
 void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
-    std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
-    const std::vector<std::string> realtimeValueArgs {
+    std::vector<std::string> valueArgs {
+        "--video-codec",
+        "--rc",
+        "--width",
+        "--height",
+        "--fps",
+        "--bitrate",
+        "--min-bitrate",
+        "--max-bitrate",
+        "--gop",
+        "--audio-codec",
+        "--audio-rc",
+        "--audio-bitrate",
+        "--audio-min-bitrate",
+        "--audio-max-bitrate",
+        "--sample-rate",
+        "--channels",
         "--media-id",
         "--input-type",
         "--input-layout",
         "--output-layout",
         "--output-transport",
+        "--egress-capacity-bps",
+        "--path-mtu-bytes",
+        "--maximum-wire-residence-ms",
+        "--receiver-transport-decode-lead-ms",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -119,207 +137,10 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--progress-timeout-ms",
         "--first-output-timeout-ms",
         "--poll-interval-ms",
-        "--egress-scope-kind",
-        "--egress-scope-id",
-        "--egress-scope-authority",
-        "--egress-mtu-authority",
-        "--egress-address-family",
-        "--egress-maximum-ip-packet-bytes",
-        "--egress-sender-maximum-payload-bytes",
-        "--egress-sustained-wire-bytes-per-second",
-        "--egress-peak-wire-bytes-per-second",
-        "--egress-burst-wire-bytes",
-        "--egress-service-authority",
-        "--egress-graph-resource-scope",
-        "--egress-maximum-graph-payload-and-reserved-storage-bytes",
-        "--egress-maximum-network-memory-bytes",
-        "--egress-maximum-socket-memory-bytes",
-        "--egress-maximum-residence-ms",
-        "--egress-resource-authority",
-        "--egress-local-address",
-        "--egress-local-first-port",
-        "--egress-local-port-count",
-        "--egress-local-authority",
-        "--egress-target-residence-ms",
-        "--egress-latency-authority",
-        "--egress-maximum-release-jitter-ms",
-        "--egress-release-jitter-authority",
-        "--egress-observation-run-datagrams",
-        "--egress-observation-drain-residence-ms",
-        "--egress-tx-evidence-policy",
-        "--egress-observation-authority",
-        "--receiver-transport-decode-lead-ms",
-        "--receiver-timing-authority",
-        "--receiver-maximum-rtcp-session-members",
-        "--receiver-rtcp-session-authority",
     };
-    valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
     std::vector<std::string> flagArgs = commonVideoTranscodeFlagArgs();
-    flagArgs.push_back("--no-low-latency");
     rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
-}
-
-MediaRealtimeDeploymentEnvelope parseRealtimeDeploymentEnvelope(
-    int argc, char** argv)
-{
-    const std::string scopeKind = requiredArg(
-        argc, argv, "--egress-scope-kind");
-    MediaDatagramServiceScopeKind kind =
-        MediaDatagramServiceScopeKind::Unknown;
-    if (scopeKind == "managed") {
-        kind = MediaDatagramServiceScopeKind::ManagedEgress;
-    } else if (scopeKind == "provisioned") {
-        kind = MediaDatagramServiceScopeKind::ProvisionedEgress;
-    } else {
-        throw std::invalid_argument(
-            "--egress-scope-kind must be managed or provisioned");
-    }
-    const auto milliseconds = [&](const char* option) {
-        const std::size_t value = requiredSizeArg(argc, argv, option);
-        if (value == 0 || value > static_cast<std::size_t>(
-                std::numeric_limits<std::int64_t>::max() / 1'000'000)) {
-            throw std::invalid_argument(
-                std::string(option) + " is outside the running-time range");
-        }
-        return MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(value) * 1'000'000);
-    };
-    MediaRealtimeDeploymentEnvelopeEncoding encoding;
-    encoding.serviceScope = {
-        kind,
-        requiredArg(argc, argv, "--egress-scope-id"),
-        requiredArg(argc, argv, "--egress-scope-authority")};
-    const std::string addressFamily = requiredArg(
-        argc, argv, "--egress-address-family");
-    const auto mtuFamily = addressFamily == "ipv4"
-        ? MediaIpAddressFamily::Ipv4
-        : addressFamily == "ipv6"
-            ? MediaIpAddressFamily::Ipv6
-            : throw std::invalid_argument(
-                  "--egress-address-family must be ipv4 or ipv6");
-    encoding.mtu = {
-        mtuFamily,
-        requiredArg(argc, argv, "--egress-mtu-authority"),
-        requiredSizeArg(argc, argv, "--egress-maximum-ip-packet-bytes"),
-        requiredSizeArg(argc, argv, "--egress-sender-maximum-payload-bytes")};
-    encoding.service = {
-        requiredSizeArg(
-            argc, argv, "--egress-sustained-wire-bytes-per-second"),
-        requiredSizeArg(
-            argc, argv, "--egress-peak-wire-bytes-per-second"),
-        requiredSizeArg(argc, argv, "--egress-burst-wire-bytes"),
-        requiredArg(argc, argv, "--egress-service-authority")};
-    const std::string graphResourceScope = requiredArg(
-        argc, argv, "--egress-graph-resource-scope");
-    const auto parsedGraphResourceScope =
-        graphResourceScope == "engine-managed-payload-and-reserved-storage"
-            ? MediaRealtimeGraphResourceBudgetScope::
-                  EngineManagedPayloadAndReservedStorage
-            : graphResourceScope ==
-                  "engine-managed-payload-and-reserved-storage-plus-device"
-                ? MediaRealtimeGraphResourceBudgetScope::
-                      EngineManagedPayloadAndReservedStoragePlusDevice
-                : throw std::invalid_argument(
-                      "--egress-graph-resource-scope is invalid");
-    encoding.resources = {
-        parsedGraphResourceScope,
-        requiredSizeArg(
-            argc, argv,
-            "--egress-maximum-graph-payload-and-reserved-storage-bytes"),
-        requiredSizeArg(argc, argv, "--egress-maximum-network-memory-bytes"),
-        requiredSizeArg(argc, argv, "--egress-maximum-socket-memory-bytes"),
-        requiredArg(argc, argv, "--egress-resource-authority")};
-    const std::string localAddress = requiredArg(
-        argc, argv, "--egress-local-address");
-    std::optional<MediaIpAddressFamily> localFamily;
-    if (MediaNumericIpAddress::create(
-            MediaIpAddressFamily::Ipv4, localAddress)) {
-        localFamily = MediaIpAddressFamily::Ipv4;
-    } else if (MediaNumericIpAddress::create(
-                   MediaIpAddressFamily::Ipv6, localAddress)) {
-        localFamily = MediaIpAddressFamily::Ipv6;
-    } else {
-        throw std::invalid_argument(
-            "--egress-local-address must be a numeric IP address");
-    }
-    const int localFirstPort = requiredIntArg(
-        argc, argv, "--egress-local-first-port");
-    const int localPortCount = requiredIntArg(
-        argc, argv, "--egress-local-port-count");
-    if (localFirstPort <= 0 || localFirstPort > 65'535 ||
-        localPortCount <= 0 || localPortCount > 65'535) {
-        throw std::invalid_argument(
-            "egress local port range values must be within 1..65535");
-    }
-    encoding.localPorts = {
-        *localFamily,
-        localAddress,
-        static_cast<std::uint16_t>(localFirstPort),
-        static_cast<std::uint16_t>(localPortCount),
-        requiredArg(argc, argv, "--egress-local-authority")};
-    encoding.latency = {
-        milliseconds("--egress-target-residence-ms"),
-        milliseconds("--egress-maximum-residence-ms"),
-        requiredArg(argc, argv, "--egress-latency-authority"),
-        milliseconds("--egress-maximum-release-jitter-ms"),
-        requiredArg(argc, argv, "--egress-release-jitter-authority")};
-    const std::string evidencePolicy = requiredArg(
-        argc, argv, "--egress-tx-evidence-policy");
-    MediaRealtimeTransmitEvidencePolicy parsedEvidence =
-        MediaRealtimeTransmitEvidencePolicy::Unknown;
-    if (evidencePolicy == "disabled") {
-        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Disabled;
-    } else if (evidencePolicy == "report") {
-        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Report;
-    } else if (evidencePolicy == "fail") {
-        parsedEvidence = MediaRealtimeTransmitEvidencePolicy::Fail;
-    } else {
-        throw std::invalid_argument(
-            "--egress-tx-evidence-policy must be disabled, report, or fail");
-    }
-    encoding.observation = {
-        requiredSizeArg(argc, argv, "--egress-observation-run-datagrams"),
-        milliseconds("--egress-observation-drain-residence-ms"),
-        parsedEvidence,
-        requiredArg(argc, argv, "--egress-observation-authority")};
-    const bool hasDecodeLead = hasArg(
-        argc, argv, "--receiver-transport-decode-lead-ms");
-    const bool hasTimingAuthority = hasArg(
-        argc, argv, "--receiver-timing-authority");
-    if (hasDecodeLead || hasTimingAuthority) {
-        if (!(hasDecodeLead && hasTimingAuthority)) {
-            throw std::invalid_argument(
-                "receiver timing capability requires decode lead and authority together");
-        }
-        encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
-            milliseconds("--receiver-transport-decode-lead-ms"),
-            requiredArg(argc, argv, "--receiver-timing-authority")};
-    }
-    const bool hasRtcpMembers = hasArg(
-        argc, argv, "--receiver-maximum-rtcp-session-members");
-    const bool hasRtcpAuthority = hasArg(
-        argc, argv, "--receiver-rtcp-session-authority");
-    if (hasRtcpMembers || hasRtcpAuthority) {
-        if (!(hasRtcpMembers && hasRtcpAuthority)) {
-            throw std::invalid_argument(
-                "RTCP session capability requires maximum members and authority together");
-        }
-        const auto members = requiredSizeArg(
-            argc, argv, "--receiver-maximum-rtcp-session-members");
-        if (members < 2 || members > static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)())) {
-            throw std::invalid_argument(
-                "RTCP maximum session members must be within 2..uint32_max");
-        }
-        encoding.rtcpSession = MediaRealtimeRtcpSessionCapability{
-            static_cast<std::uint32_t>(members),
-            requiredArg(argc, argv, "--receiver-rtcp-session-authority")};
-    }
-    auto envelope = MediaRealtimeDeploymentEnvelope::decode(
-        std::move(encoding));
-    if (!envelope) throw std::invalid_argument(envelope.error().message);
-    return std::move(envelope).value();
 }
 
 void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& input)
@@ -330,7 +151,6 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
     input.readTimeoutMs = requiredIntArg(argc, argv, "--read-timeout-ms");
     input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
     input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
-    input.lowLatency = !hasArg(argc, argv, "--no-low-latency");
 
     if (*input.type != RealtimeInputType::MpegTsUdp &&
         hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
@@ -406,10 +226,55 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
+    options.deployment.provisionedEgressCapacityBitsPerSecond =
+        requiredUint64Arg(argc, argv, "--egress-capacity-bps");
+    options.deployment.pathMaximumIpPacketBytes =
+        requiredUint64Arg(argc, argv, "--path-mtu-bytes");
+    const auto maximumWireResidenceMs = requiredUint64Arg(
+        argc, argv, "--maximum-wire-residence-ms");
+    if (maximumWireResidenceMs == 0 ||
+        maximumWireResidenceMs > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::int64_t>::max)() / 1'000'000)) {
+        throw std::invalid_argument(
+            "--maximum-wire-residence-ms is outside the positive running-time range");
+    }
+    options.deployment.maximumWireResidence =
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
+            maximumWireResidenceMs * 1'000'000));
+    const auto receiverTransportDecodeLeadMs = requiredUint64Arg(
+        argc, argv, "--receiver-transport-decode-lead-ms");
+    if (receiverTransportDecodeLeadMs == 0 ||
+        receiverTransportDecodeLeadMs > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::int64_t>::max)() / 1'000'000)) {
+        throw std::invalid_argument(
+            "--receiver-transport-decode-lead-ms is outside the positive running-time range");
+    }
+    options.deployment.receiverTransportDecodeLead =
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
+            receiverTransportDecodeLeadMs * 1'000'000));
     parseRealtimeInputOptions(argc, argv, options.input);
     parseRealtimeOutputOptions(argc, argv, options.output);
-    options.deployment = parseRealtimeDeploymentEnvelope(argc, argv);
-    parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
+    MediaTranscodeParameterSet parsedTranscode;
+    parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
+    options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
+    options.parameters.execution.diagnosticLogEnabled =
+        parsedTranscode.execution.diagnosticLogEnabled;
+    options.parameters.video.codecName = std::move(parsedTranscode.video.codecName);
+    options.parameters.video.width = parsedTranscode.video.width;
+    options.parameters.video.height = parsedTranscode.video.height;
+    options.parameters.video.frameRate = parsedTranscode.video.frameRate;
+    options.parameters.video.rateControl = parsedTranscode.video.rateControl;
+    options.parameters.video.bitrateKbps = parsedTranscode.video.bitrateKbps;
+    options.parameters.video.minBitrateKbps = parsedTranscode.video.minBitrateKbps;
+    options.parameters.video.maxBitrateKbps = parsedTranscode.video.maxBitrateKbps;
+    options.parameters.video.gop = parsedTranscode.video.gop;
+    options.parameters.audio.codecName = std::move(parsedTranscode.audio.codecName);
+    options.parameters.audio.rateControl = parsedTranscode.audio.rateControl;
+    options.parameters.audio.bitrateKbps = parsedTranscode.audio.bitrateKbps;
+    options.parameters.audio.minBitrateKbps = parsedTranscode.audio.minBitrateKbps;
+    options.parameters.audio.maxBitrateKbps = parsedTranscode.audio.maxBitrateKbps;
+    options.parameters.audio.sampleRate = parsedTranscode.audio.sampleRate;
+    options.parameters.audio.channels = parsedTranscode.audio.channels;
     parseAudioRtpOptions(argc, argv, options);
     return options;
 }
@@ -530,7 +395,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --mpegts-max-pcr-gap-ms 1000 [--hardware-backend auto|rkmpp] [--max-duration SECONDS] [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --path-mtu-bytes BYTES --maximum-wire-residence-ms MS --receiver-transport-decode-lead-ms MS --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         return helpRequested ? 0 : 2;
@@ -552,11 +417,7 @@ int runRealtimeVideoCli(int argc, char** argv)
         std::cout << "source_driven";
     }
     std::cout
-              << " hw="
-              << (options.parameters.execution.disableHardware
-                      ? "disabled"
-                      : mediaHardwareBackendRequestName(
-                            options.parameters.execution.hardwareBackend))
+              << " hw=planner-highest-score"
               << '\n';
 
     MediaRealtimeVideoRunControl control;

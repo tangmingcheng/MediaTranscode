@@ -1,6 +1,7 @@
 #include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -98,13 +99,53 @@ bool equalAsciiInsensitive(std::string_view left, std::string_view right)
     return ::media::Status::success();
 }
 
+::media::Result<int> lowLatencyVbvBufferSizeKbits(
+    const MediaEncoderRateControlPlan& plan,
+    MediaRational encoderFrameRate)
+{
+    const std::optional<int> emissionCeilingKbps =
+        plan.mode == MediaRateControlMode::Cbr
+            ? plan.targetBitrateKbps
+            : plan.mode == MediaRateControlMode::Vbr
+                ? plan.maximumBitrateKbps
+                : std::optional<int>{};
+    if (!emissionCeilingKbps) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::unsupported(
+                "low-latency one-frame VBV requires CBR or VBR emission bounds"));
+    }
+    if (!encoderFrameRate.isKnown() || encoderFrameRate.num <= 0 ||
+        encoderFrameRate.den <= 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "low-latency one-frame VBV requires authoritative output cadence"));
+    }
+    auto buffer = MediaCheckedArithmetic::ceilScale(
+        static_cast<std::uint64_t>(*emissionCeilingKbps),
+        static_cast<std::uint64_t>(encoderFrameRate.den),
+        static_cast<std::uint64_t>(encoderFrameRate.num),
+        "low-latency one-frame VBV kilobits");
+    if (!buffer || buffer.value() == 0 ||
+        buffer.value() > static_cast<std::uint64_t>(
+            (std::numeric_limits<int>::max)())) {
+        return ::media::Result<int>::failure(
+            !buffer ? buffer.error() :
+            ::media::ErrorInfo::invalidArgument(
+                "low-latency one-frame VBV exceeds the encoder range"));
+    }
+    return ::media::Result<int>::success(
+        static_cast<int>(buffer.value()));
+}
+
 } // namespace
 
 ::media::Result<MediaEncoderRateControlPlan>
 MediaEncoderRateControlPlanner::plan(
     const std::string& encoderName,
     MediaHardwareDeviceKind deviceKind,
-    const MediaEncoderRateControlRequest& request)
+    const MediaEncoderRateControlRequest& request,
+    MediaRational encoderFrameRate,
+    bool lowLatency)
 {
     if (encoderName.empty()) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
@@ -114,7 +155,6 @@ MediaEncoderRateControlPlanner::plan(
     const auto target = request.targetBitrateKbps();
     const auto minimum = request.minimumBitrateKbps();
     const auto maximum = request.maximumBitrateKbps();
-    const auto buffer = request.bufferSizeKbits();
     const auto mode = request.mode();
     if (auto status = validatePositive(target, "target bitrate"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
@@ -123,9 +163,6 @@ MediaEncoderRateControlPlanner::plan(
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
     if (auto status = validatePositive(maximum, "maximum bitrate"); !status) {
-        return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
-    }
-    if (auto status = validatePositive(buffer, "buffer size"); !status) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(status.error());
     }
     if (minimum && maximum && *minimum > *maximum) {
@@ -139,7 +176,7 @@ MediaEncoderRateControlPlanner::plan(
                 "CBR requires target bitrate"));
     }
     if (mode == MediaRateControlMode::Cbr &&
-        (minimum || maximum || buffer)) {
+        (minimum || maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "CBR request accepts only caller-supplied target bitrate"));
@@ -149,11 +186,6 @@ MediaEncoderRateControlPlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "VBR requires target, minimum, and maximum bitrate facts"));
     }
-    if (mode == MediaRateControlMode::Vbr && buffer) {
-        return ::media::Result<MediaEncoderRateControlPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VBR request accepts only minimum, target, and maximum bitrate"));
-    }
     if (mode == MediaRateControlMode::Vbr &&
         (*target < *minimum || *target > *maximum)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
@@ -162,7 +194,7 @@ MediaEncoderRateControlPlanner::plan(
     }
 
     MediaEncoderRateControlPlan result{
-        mode, target, minimum, maximum, buffer, std::nullopt};
+        mode, target, minimum, maximum, std::nullopt, std::nullopt};
     if (mode == MediaRateControlMode::Cbr) {
         result.minimumBitrateKbps = target;
         result.maximumBitrateKbps = target;
@@ -193,6 +225,17 @@ MediaEncoderRateControlPlanner::plan(
                     status.error());
             }
         }
+    }
+    if (lowLatency &&
+        (mode == MediaRateControlMode::Cbr ||
+         mode == MediaRateControlMode::Vbr)) {
+        auto buffer = lowLatencyVbvBufferSizeKbits(
+            result, encoderFrameRate);
+        if (!buffer) {
+            return ::media::Result<MediaEncoderRateControlPlan>::failure(
+                buffer.error());
+        }
+        result.bufferSizeKbits = buffer.value();
     }
     return ::media::Result<MediaEncoderRateControlPlan>::success(std::move(result));
 }

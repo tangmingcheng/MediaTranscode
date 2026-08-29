@@ -41,7 +41,8 @@ struct EvidenceEntryGeometry final {
 
 ::media::Result<MediaRealtimeNetworkResourceLedgerPlan>
 MediaRealtimeNetworkResourceLedgerPlanner::plan(
-    const MediaRealtimeDeploymentEnvelopeEncoding& deployment,
+    const MediaRealtimeDeploymentLatencyBudget& latency,
+    const MediaRealtimeDeploymentObservationBudget& observation,
     const MediaWireTrafficEnvelope& wire,
     std::uint64_t endpointCount)
 {
@@ -52,11 +53,11 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     }
     auto residenceBytes = MediaCheckedArithmetic::bytesForResidence(
         wire.peakWireBytesPerSecond,
-        deployment.latency.maximumResidence.nanoseconds(),
+        latency.maximumResidence.nanoseconds(),
         "network residence payload");
     auto residenceDatagrams = MediaCheckedArithmetic::bytesForResidence(
         wire.peakDatagramsPerSecond,
-        deployment.latency.maximumResidence.nanoseconds(),
+        latency.maximumResidence.nanoseconds(),
         "network residence datagrams");
     auto backlogBytes = residenceBytes
         ? MediaCheckedArithmetic::add(
@@ -73,12 +74,11 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         residenceDatagrams.value());
     const auto batchBytes = (std::min)(
         backlogBytes.value(),
-        (std::max)(deployment.service.burstWireBytes,
-                   wire.maximumWireDatagramBytes));
+        (std::max)(wire.burstWireBytes, wire.maximumWireDatagramBytes));
     const auto batchDatagrams = ceilDivide(
         batchBytes, wire.maximumWireDatagramBytes);
-    const auto socketPerEndpoint =
-        deployment.resources.maximumSocketMemoryBytes / endpointCount;
+    const auto socketPerEndpoint = (std::max)(
+        wire.maximumWireDatagramBytes, backlogBytes.value());
     const auto endpointPendingBytes = (std::min)(
         socketPerEndpoint,
         (std::max)(wire.maximumWireDatagramBytes,
@@ -87,10 +87,10 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         std::uint64_t{1},
         ceilDivide(endpointPendingBytes, wire.maximumWireDatagramBytes));
     const auto correlationEntries =
-        deployment.observation.evidencePolicy ==
+        observation.evidencePolicy ==
                 MediaRealtimeTransmitEvidencePolicy::Disabled
             ? 0U
-            : (std::min)(deployment.observation.maximumRunDatagrams,
+            : (std::min)(observation.maximumRunDatagrams,
                          backlogDatagrams);
     if (backlogDatagrams == 0 || batchDatagrams == 0 ||
         socketPerEndpoint < wire.maximumWireDatagramBytes) {
@@ -145,18 +145,12 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         : (!withEndpoints ? withEndpoints : evidenceContainers);
     auto socketBytes = MediaCheckedArithmetic::multiply(
         socketPerEndpoint, endpointCount, "aggregate socket kernel buffers");
-    if (!networkBytes || !socketBytes ||
-        networkBytes.value() >
-            deployment.resources.maximumNetworkMemoryBytes ||
-        socketBytes.value() >
-            deployment.resources.maximumNetworkMemoryBytes -
-                networkBytes.value() ||
-        socketBytes.value() > deployment.resources.maximumSocketMemoryBytes) {
+    if (!networkBytes || !socketBytes) {
         return Result::failure(
             !networkBytes ? networkBytes.error() :
             !socketBytes ? socketBytes.error() :
             ::media::ErrorInfo::invalidArgument(
-                "deployment budgets cannot admit the complete network resource ledger"));
+                "network resource ledger arithmetic failed"));
     }
     try {
         std::vector<MediaRealtimeNetworkResourceLedgerEntry> entries{
@@ -185,7 +179,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
             endpointPendingBytes, endpointPendingBytes, socketPerEndpoint,
             correlationEntries,
             networkBytes.value(), socketBytes.value(), std::move(entries)};
-        auto status = validate(ledger, deployment);
+        auto status = validate(ledger);
         return status ? Result::success(std::move(ledger))
                       : Result::failure(status.error());
     } catch (const std::bad_alloc&) {
@@ -195,8 +189,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
 }
 
 ::media::Status MediaRealtimeNetworkResourceLedgerPlanner::validate(
-    const MediaRealtimeNetworkResourceLedgerPlan& ledger,
-    const MediaRealtimeDeploymentEnvelopeEncoding& deployment)
+    const MediaRealtimeNetworkResourceLedgerPlan& ledger)
 {
     if (ledger.entries.size() != 6 || ledger.maximumBacklogDatagrams == 0 ||
         ledger.maximumBacklogBytes == 0 ||
@@ -226,10 +219,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         (entry.chargedToSocketBudget ? socket : network) = next.value();
     }
     if (network != ledger.admittedNetworkBytes ||
-        socket != ledger.admittedSocketBytes ||
-        network > deployment.resources.maximumNetworkMemoryBytes ||
-        socket > deployment.resources.maximumNetworkMemoryBytes - network ||
-        socket > deployment.resources.maximumSocketMemoryBytes) {
+        socket != ledger.admittedSocketBytes) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "network resource ledger totals conflict with deployment budgets"));
     }

@@ -17,9 +17,11 @@
 
 ## 参数收口
 
-保留调用方能直接取得的媒体/会话/部署事实：media-id、input/output endpoint、裸 RTP codec/PT/clock/fmtp、显式 stream set、目标 codec/尺寸/fps/GOP/RC/VBV、硬件后端请求、SDP 路径、受管网络与资源/时延/receiver timing 事实。
+保留调用方能直接取得的媒体/会话/部署事实：media-id、input/output endpoint、裸 RTP codec/PT/clock/fmtp、显式 stream set、目标 codec/尺寸/fps/GOP/RC、SDP 路径，以及受管出口容量、端到端 MTU、最大 wire residence 和 receiver decode lead。CBR 只接受 target bitrate；VBR 接受 min/target/max。硬件后端由 capability probe 后的最高评分 planner 产品决定，不接受调用方指定。
 
 已从 realtime CLI、Beta 和 request 删除且不保留别名/default/fallback：caller `packet-size`、`output-pacing-bitrate-bps`、旧 `transport-decode-lead`、四类 realtime queue、startup unit/gap、prepared handoff packet/byte capacity、IP/UDP header、batch/backlog/endpoint/socket/correlation 内部容量，以及 input-AU → `SO_SNDBUF`。同时删除 `5/4` headroom、two-packet burst、默认 GOP 30、固定 TS packets/datagram=7 和 Beta 内部传输 profile。`local_video_cli` 四类队列属于独立文件产品且不参与本轮发送控制，列入后置审查而未修改。完整清单见 `docs/realtime-core-parameter-review-baseline.md`。
+
+realtime core request 已改为专用窄参数类型，不再复用 local 的通用参数结构。quality/preset/tune/profile/level/B-frame/global-header、audio quality/preset/profile 和 low-latency bool 已从 realtime 类型层面删除；planner 派生 queue、resolved audio 与 encoder private 产品不再回写外部 request。
 
 ## 临时 TDD 与生产 RED→GREEN
 
@@ -106,9 +108,54 @@ Windows source: D:\mabs\local64\bin-video\ffmpeg.exe -re -i D:\Code\MyCode\Media
 
 失败演进均保留首错且未降低规格：`4b56b16b` 在 generic transport product 报错；`81a57fd0` 将其收口为 endpoint MTU evidence 等值误判；`4085f795` 放宽为 protocol bound ≤ MTU 后进入首个 encoded packet，但暴露 MP2T/RTP 1328 B 实际 geometry 与 1472 B capacity 混用；`0084a3d1` 在 planner 产品处规范化后两平台主链通过。Windows `0084a3d1` 首次启动因两个工具调用间隔使 source 恰在 10 秒 open timeout 才创建，probe 收到 0 包；三进程清理后，在同一直接 PowerShell 调用内保证 CLI→1.064 秒→source，复验通过。
 
+## 2026-08-29 Windows Release 120 秒高规格复测
+
+测试按 dumpcap → VLC → CLI → FFmpeg 直接启动，VLC 使用 URL；源为真实 2560×1440 HEVC 30 fps 连续 120 秒文件，输出为 H.264 1920×1080 25 fps、VBR 5/12/13 Mbps、MPEG-TS/RTP。最终有效复测命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 58440 or udp port 58441" -a duration:135 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-deparam-deadline-03\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-deparam-deadline-03\vlc.log rtp://@192.168.96.122:58440
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-2k-hevc-h264-vbr-deparam-deadline-03 --egress-capacity-bps 50000000 --path-mtu-bytes 1500 --maximum-wire-residence-ms 100 --receiver-transport-decode-lead-ms 1000 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:56440 --video-rtp-codec hevc --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 58440 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-2k30-hevc-to-1080p25-h264-vbr5-12-13m-deparam-deadline-03\output.sdp --video-codec h264 --rc vbr --width 1920 --height 1080 --fps 25 --min-bitrate 5000 --bitrate 12000 --max-bitrate 13000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s-2k-hevc.mp4 -map 0:v:0 -an -c:v copy -bsf:v hevc_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:56440?rtcpport=56441&pkt_size=1200"
+```
+
+- automatic fmtp probe：HEVC PT 96，VPS/SPS/PPS，211 packets、251814 bytes、50 ms；selected chain 为 CUDA/NVENC zero-copy，HEVC decode → `scale_cuda=1920:1080` → H.264 encode。
+- FFmpeg 输入发送 3600 frames/120 s；production 输出 2998 access units。RTP 113410 packets、loss 0、duration 119.890409 s、max delta 36.591 ms、max jitter 5.032 ms。
+- 抓包聚合含 RTP/RTCP 113439 datagrams、147714344 IP wire bytes；planner pacing 4010270 B/s、burst 1356 B，最大 draw-up 1016.576 B，未超过单 datagram burst；TS TEI/continuity/adaptation error 0。
+- PTS 2997 rows，媒体跨度 119.84 s、抓包 wall span 119.840322 s；PCR 1500 rows、wall span 119.839340 s。
+- sender/shaper committed 113439 datagrams；WouldBlock/writable/deadline/pressure/partial/ambiguous/service-curve violation 均为 0；backlog 最终为 0，maximum residence 41.1989 ms。TX timestamp 未被平台 tracked，按 report policy 如实标为 delivery evidence not proven。
+- VLC 记录 `Received first picture` 和 `Stream buffering done (1040 ms in 942 ms)`；might/too late、corrupt、conceal、decode error、black、drop/discard/lost/discontinuity 均为 0，并完成 avcodec/direct3d11 优雅 teardown。
+- runtime queue/dropped buffer 最终 0；payload reservation/release 22813/22813；RSS 约 227.5→228.8 MB 后稳定。平均单核 CPU 23.61%，高于最终 10–14% 目标；用户已要求本阶段不优化 CPU，因此保留为风险，不用于伪造通过结论。
+- 源结束后 CLI 保留真实 `RTP video source clock evidence expired` 终态；该输入 source-loss 与 120 秒发送/接收窗口结论分开记录。dumpcap、VLC、CLI、FFmpeg 均无进程残留。
+
+## 2026-08-29 Windows Release 120 秒低规格 CBR 复测
+
+链路为真实 H.264 1280×720 30 fps raw RTP 输入，经 planner 自动选择 CUDA/NVENC zero-copy，转码为 HEVC 1920×1080 25 fps、CBR 6 Mbps，输出 MPEG-TS/RTP。启动顺序为 dumpcap → VLC → typeperf → CLI → FFmpeg；CLI 与 FFmpeg 之间无检测或等待。最终有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 58648 or udp port 58649" -a duration:135 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-05\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-05\vlc.log rtp://@192.168.96.122:58648
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-720p30-h264-hevc-cbr6m-mpegts-rtp-05 --egress-capacity-bps 25000000 --path-mtu-bytes 1500 --maximum-wire-residence-ms 100 --receiver-transport-decode-lead-ms 1000 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:56648 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 58648 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-05\output.sdp --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:56648?rtcpport=56649&pkt_size=1200"
+```
+
+- automatic fmtp probe 从真实输入取得 H.264 SPS/PPS；selected chain 为 H.264 CUDA decode → `scale_cuda=1920:1080` → HEVC NVENC encode。CBR 对外只传 target 6 Mbps；prepared encoder readback 为 25 fps、GOP 50、单帧 VBV 240000 bit。
+- FFmpeg 完整发送 3600 frames/120 s；production 输出 2998 access units。RTP 64486 packets、loss 0、duration 119.979214 s；TS continuity、TEI、adaptation error 为 0。
+- RTP/RTCP 聚合为 64515 datagrams、81374528 IP wire bytes；planner pacing 为 2027220 B/s、burst 1356 B，抓包 service-curve 最大 draw-up 为 1050.054 B，未出现追赶式突发。
+- sender、shaper、materializer 的 deadline、service-curve、pressure、partial、ambiguous failure 全为 0；序列 materialized/scheduled/submitted/committed 均到 64515，backlog 最终为 0。协议物化最迟晚于 release 9.361 ms，低于不可变 100 ms deadline。TX timestamp 未被平台 tracked，按 report policy 如实标为 delivery evidence not proven。
+- VLC 收到首帧，启动 HEVC `avcodec`，输出 1920×1080；late、corrupt、conceal、decode error、black、drop、discard、lost、discontinuity 均为 0。
+- typeperf 121 个有效样本：平均单核 CPU 23.014%、P95 30.655%、峰值 35.757%；private working set 164802560→167141376 B，峰值 167739392 B。CPU 高于最终目标，按用户要求本阶段不优化，保留为后置风险，不用于伪造 CPU 验收通过。
+- 源结束后 CLI 保留真实 `RTP video source clock evidence expired` 终态；全部 graph payload、queue 与 reservation 释放归零，五类进程均无残留。
+
 ## 构建、静态扫描与边界
 
-- Windows VS2026 x64 Debug exact `0084a3d1` clean-first：clean 559、build 560，RC=0。
+- Windows VS2026 x64 Release 当前工作树 clean-first：clean 582、build 583，RC=0。
 - RK exact production code `0084a3d1` 在隔离目录 `/home/tang/task5-0084a3d1` 以 Release clean-first、`--parallel 8` 完整构建 559/559，RC=0。
 - production shape validator 要求唯一 transport-plan source、shared shaper、common sender；三类 materializer 分别是 elementary RTP、MP2T/RTP、TS/UDP。file output validator 排除全部 datagram 节点。
 - 旧 caller 参数、第二 pacing authority、固定 7 包、legacy network sender/pacer/sink/direct transport、`CompletionGated`、`AwaitCompletion`、`UserspaceSendReturn` 和临时 fixture 均无生产引用。协议物化层仍有历史 `SenderSession`/`SenderMaterializer` 类型名，但它们不持有 socket、不提交 datagram，也不是第二发送控制器；后续可作纯命名清理。系统调用只存在于 Linux/Windows transmit adapter。

@@ -17,6 +17,7 @@ struct MediaSelectedAudioEncoder final {
     std::vector<int> supportedProfileIds;
     int frameSizeSamples = 0;
     int delaySamples = 0;
+    std::optional<int> bufferSizeKbits;
     std::optional<MediaPreparedAudioEncoderEmissionEnvelope> preparedEmission;
 };
 

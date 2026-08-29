@@ -77,6 +77,9 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     auto transportLead = requiredPositiveInt64NodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
+    auto protocolPreparationLead = requiredPositiveInt64NodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.protocol_preparation_lead_ns");
     auto activationLead = requiredPositiveInt64NodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.activation_lead_ns");
@@ -94,7 +97,8 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !activationLead || !pacingEnabled ||
+        !transportLead || !protocolPreparationLead || !activationLead ||
+        !pacingEnabled ||
         !initialGeneration || !session) {
         const auto& error = !requireKeyFrame ? requireKeyFrame.error()
             : !maximumWait ? maximumWait.error()
@@ -109,6 +113,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             : !packetTimeBaseDenominator ? packetTimeBaseDenominator.error()
             : !packetTimingMode ? packetTimingMode.error()
             : !transportLead ? transportLead.error()
+            : !protocolPreparationLead ? protocolPreparationLead.error()
             : !activationLead ? activationLead.error()
             : !pacingEnabled ? pacingEnabled.error()
             : !initialGeneration ? initialGeneration.error()
@@ -142,8 +147,15 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     }
     m_transportLead =
         MediaRunningTime::fromNanoseconds(transportLead.value());
+    m_protocolPreparationLead = MediaRunningTime::fromNanoseconds(
+        protocolPreparationLead.value());
     m_activationLead =
         MediaRunningTime::fromNanoseconds(activationLead.value());
+    if (m_protocolPreparationLead > m_transportLead ||
+        m_activationLead < m_transportLead) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoOnly protocol preparation lead exceeds its transport schedule"));
+    }
     m_sourceTimeBase =
         MediaRational{sourceNumerator.value(), sourceDenominator.value()};
     m_outputFrameRate = MediaRational{
@@ -407,7 +419,13 @@ MediaVideoOutputSchedulerNode::onProcess(
             ready.error());
     }
     recordEncodedReady(*unit, ready.value());
-    m_pendingDeadline = unit->emitOnMaster();
+    auto preparationDeadline = unit->emitOnMaster().checkedSubtract(
+        m_protocolPreparationLead);
+    if (!preparationDeadline) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            preparationDeadline.error());
+    }
+    m_pendingDeadline = preparationDeadline.value();
     m_pendingScheduled = std::move(scheduled).value();
     return emitPending(context);
 }
@@ -470,6 +488,8 @@ void MediaVideoOutputSchedulerNode::emitDiagnostics(
         out << "video_output_scheduler stage=" << stage
             << " activation_lead_ns=" << m_activationLead.nanoseconds()
             << " transport_lead_ns=" << m_transportLead.nanoseconds()
+            << " protocol_preparation_lead_ns="
+            << m_protocolPreparationLead.nanoseconds()
             << " source_start_ns="
             << (m_sourceStart ? m_sourceStart->nanoseconds() : 0)
             << " master_release_ns="
@@ -501,6 +521,7 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_startedMedia = false;
     m_maximumStartupWait = MediaRunningTime::fromNanoseconds(0);
     m_transportLead = MediaRunningTime::fromNanoseconds(0);
+    m_protocolPreparationLead = MediaRunningTime::fromNanoseconds(0);
     m_activationLead = MediaRunningTime::fromNanoseconds(0);
     m_packetCapacity = 0;
     m_maximumUnitBytes = 0;

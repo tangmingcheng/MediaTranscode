@@ -114,6 +114,7 @@ struct MediaDatagramTransmitPortOpenRequest final {
     std::uint64_t generation;
     MediaDatagramEndpointPlan endpoint;
     MediaUdpDatagramEndpoint localEndpoint;
+    std::uint64_t maximumBatchDatagrams;
     MediaDatagramTransmitExecutionMode executionMode;
     std::optional<MediaDatagramTransmitEvidencePlan> evidence;
     std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;

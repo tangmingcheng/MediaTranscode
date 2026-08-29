@@ -844,7 +844,7 @@ bool sameProtocol(
         &node.options, Owner, RtcpMembershipAuthorityKey);
     auto bandwidthAuthority = requiredNodeOption(
         &node.options, Owner, RtcpBandwidthAuthorityKey);
-    auto packetCount = parseUnsignedOption<std::uint8_t>(
+    auto packetCount = parseUnsignedOption<std::uint16_t>(
         node.options, RtpKeys[15], false);
     auto sdpPath = requiredNodeOption(
         &node.options, Owner, RtpKeys[16]);

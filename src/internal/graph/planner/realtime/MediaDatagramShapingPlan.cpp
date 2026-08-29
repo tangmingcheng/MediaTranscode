@@ -189,9 +189,7 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
     using Result = ::media::Result<MediaDatagramShapingPlan>;
     if (encoding.sessionKey.empty() || encoding.generation == 0 ||
         encoding.endpoints.empty() || encoding.serviceCurve.authority.empty() ||
-        encoding.serviceCurve.sustainedWireBytesPerSecond == 0 ||
-        encoding.serviceCurve.peakWireBytesPerSecond <
-            encoding.serviceCurve.sustainedWireBytesPerSecond ||
+        encoding.serviceCurve.pacingWireBytesPerSecond == 0 ||
         encoding.serviceCurve.burstWireBytes == 0 ||
         encoding.serviceCurve.targetResidence <=
             MediaRunningTime::fromNanoseconds(0) ||
@@ -415,22 +413,16 @@ MediaDatagramShapingPlan::plannedWireCost(
 
     auto wireBytes = checkedWireBytes(*plannedEndpoint, payloadBytes);
     if (!wireBytes) return Result::failure(wireBytes.error());
-    auto peakDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
+    auto pacingDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
         wireBytes.value(),
-        m_encoding.serviceCurve.peakWireBytesPerSecond,
-        "datagram peak wire duration");
-    if (!peakDurationNs) return Result::failure(peakDurationNs.error());
-    auto sustainedDurationNs = MediaCheckedArithmetic::ceilDurationNanoseconds(
-        wireBytes.value(),
-        m_encoding.serviceCurve.sustainedWireBytesPerSecond,
-        "datagram sustained wire duration");
-    if (!sustainedDurationNs) {
-        return Result::failure(sustainedDurationNs.error());
+        m_encoding.serviceCurve.pacingWireBytesPerSecond,
+        "datagram pacing debt duration");
+    if (!pacingDurationNs) {
+        return Result::failure(pacingDurationNs.error());
     }
     return Result::success(MediaDatagramPlannedWireCost{
         wireBytes.value(),
-        MediaRunningTime::fromNanoseconds(peakDurationNs.value()),
-        MediaRunningTime::fromNanoseconds(sustainedDurationNs.value())});
+        MediaRunningTime::fromNanoseconds(pacingDurationNs.value())});
 }
 
 ::media::Result<MediaDatagramWireDeadlinePlan>

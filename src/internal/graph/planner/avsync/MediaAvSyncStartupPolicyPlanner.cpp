@@ -19,10 +19,10 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 }
 
 ::media::Result<MediaAvSyncStartupPolicy> makePolicy(
-    const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeMediaCapacityPlan& capacity)
+    const MediaRealtimeMediaCapacityPlan& capacity,
+    std::optional<MediaRunningTime> outputLead)
 {
-    if (!request.deployment || !capacity.audioUnits ||
+    if (!capacity.audioUnits ||
         !capacity.audioUnitBytes || !capacity.audioBytes ||
         capacity.videoUnits == 0 || capacity.videoUnitBytes == 0 ||
         capacity.videoBytes == 0 ||
@@ -42,8 +42,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
     startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
     startup.maximumGapNs = capacity.maximumGap;
-    startup.outputLeadNs =
-        request.deployment->encode().latency.maximumResidence;
+    startup.outputLeadNs = outputLead;
     startup.videoCapacity = capacity.videoUnits;
     startup.audioCapacity = *capacity.audioUnits;
     startup.videoByteCapacity = capacity.videoBytes;
@@ -70,42 +69,88 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 ::media::Result<MediaAvSyncStartupPolicy>
 MediaAvSyncStartupPolicyPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeGraphResourceLedgerPlan& ledger)
+    const MediaRealtimeGraphResourceLedgerPlan& ledger,
+    const MediaRealtimeDeploymentEnvelope& deployment)
+{
+    if (request.parameters.execution.streamSet !=
+        MediaTranscodeStreamSet::AudioVideo) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V startup requires the AudioVideo stream set"));
+    }
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(ledger);
+    if (!capacity) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            capacity.error());
+    }
+    if (!deployment.encode().receiverTiming) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V startup requires authoritative receiver transport decode lead"));
+    }
+    return makePolicy(
+        capacity.value(),
+        deployment.encode().receiverTiming->transportDecodeLead);
+}
+
+::media::Result<MediaAvSyncStartupPolicy>
+MediaAvSyncStartupPolicyPlanner::finalizePrepared(
+    MediaAvSyncStartupPolicy prepared,
+    const MediaRealtimeGraphResourceLedgerPlan& ledger,
+    const MediaRealtimeDeploymentEnvelope& deployment)
 {
     auto capacity = MediaRealtimeMediaCapacityPlanner::plan(ledger);
     if (!capacity) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             capacity.error());
     }
-    return makePolicy(request, capacity.value());
+    if (!prepared.videoCapacity || !prepared.audioCapacity ||
+        !prepared.videoByteCapacity || !prepared.audioByteCapacity ||
+        !prepared.maximumVideoUnitBytes ||
+        !prepared.maximumAudioUnitBytes) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "prepared A/V startup is missing its input replay bounds"));
+    }
+    prepared.maximumGapNs = capacity.value().maximumGap;
+    if (!deployment.encode().receiverTiming) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "prepared A/V startup requires authoritative receiver transport decode lead"));
+    }
+    prepared.outputLeadNs =
+        deployment.encode().receiverTiming->transportDecodeLead;
+    return ::media::Result<MediaAvSyncStartupPolicy>::success(
+        std::move(prepared));
 }
 
 ::media::Result<MediaAvSyncStartupPolicy>
 MediaAvSyncStartupPolicyPlanner::planInputPreflight(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (!request.deployment ||
-        request.parameters.execution.streamSet !=
-            MediaTranscodeStreamSet::AudioVideo) {
+    if (request.parameters.execution.streamSet !=
+            MediaTranscodeStreamSet::AudioVideo ||
+        !request.input.probeSizeBytes || *request.input.probeSizeBytes < 2 ||
+        !request.input.readTimeoutMs || *request.input.readTimeoutMs <= 0) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
-                "A/V input observation requires deployment and stream-set facts"));
+                "A/V input observation requires stream-set and positive probe/read limits"));
     }
-    const auto graphBudget =
-        request.deployment->encode().resources
-            .maximumGraphPayloadAndReservedStorageBytes;
-    const auto perStreamBudget = graphBudget / 2U;
+    const auto perStreamBudget = static_cast<std::uint64_t>(
+        *request.input.probeSizeBytes) / 2U;
     if (perStreamBudget == 0) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V input observation graph budget cannot admit both streams"));
     }
-    return makePolicy(request, MediaRealtimeMediaCapacityPlan{
+    const auto maximumGap = MediaRunningTime::fromNanoseconds(
+        static_cast<std::int64_t>(*request.input.readTimeoutMs) * Millisecond);
+    return makePolicy(MediaRealtimeMediaCapacityPlan{
         MediaAvStartupMaximumUnitCapacity, perStreamBudget,
         perStreamBudget,
         MediaAvStartupMaximumUnitCapacity, perStreamBudget,
         perStreamBudget,
-        request.deployment->encode().latency.maximumResidence});
+        maximumGap}, std::nullopt);
 }
 
 } // namespace media::ffmpeg::graph

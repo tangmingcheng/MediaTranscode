@@ -6,29 +6,25 @@
 #include "media_transcode/Result.h"
 
 #include <optional>
+#include <string>
 
 namespace media::ffmpeg::graph {
 
-class MediaTsReceiverTimingPlanner final {
+class MediaMpegTsOutputTimingPlanner final {
 public:
-    static ::media::Result<MediaMpegTsTimingPolicy> plan(
-        MediaRunningTime receiverTransportDecodeLead,
-        std::string receiverAuthority,
-        MediaRunningTime targetResidence,
-        MediaRunningTime maximumResidence,
+    static ::media::Result<MediaMpegTsTimingPolicy> planVariableBitrate(
         MediaRunningTime maximumReleaseJitter,
         std::string releaseJitterAuthority,
-        MediaRational videoCadence,
-        std::optional<MediaRunningTime> audioCadence);
+        MediaRational videoCadence);
 
     static ::media::Result<MediaRunningTime> startupEmissionPreroll(
-        MediaRunningTime receiverTransportDecodeLead,
+        MediaRunningTime transportDecodeLead,
         MediaRational videoCadence,
         std::optional<MediaRunningTime> audioCadence,
         const MediaMpegTsTimingPolicy& timingPolicy);
 
 private:
-    MediaTsReceiverTimingPlanner() = delete;
+    MediaMpegTsOutputTimingPlanner() = delete;
 };
 
 } // namespace media::ffmpeg::graph

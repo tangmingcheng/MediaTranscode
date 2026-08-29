@@ -90,172 +90,6 @@ bool isVideoCodec(mt_beta_video_codec codec) noexcept
             minimum.value(), target.value(), maximum.value() });
 }
 
-::media::Result<ffmpeg::graph::MediaRealtimeDeploymentEnvelope>
-copyDeployment(const mt_beta_realtime_deployment& source)
-{
-    using namespace ffmpeg::graph;
-    const auto runningMilliseconds = [](std::uint64_t value) {
-        if (value == 0 || value > static_cast<std::uint64_t>(
-                std::numeric_limits<std::int64_t>::max() / 1'000'000)) {
-            return ::media::Result<MediaRunningTime>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "deployment duration is outside the running-time range"));
-        }
-        return ::media::Result<MediaRunningTime>::success(
-            MediaRunningTime::fromNanoseconds(
-                static_cast<std::int64_t>(value) * 1'000'000));
-    };
-    for (const auto& field : {
-             std::pair{source.scope_id, "deployment scope id"},
-             std::pair{source.scope_authority, "deployment scope authority"},
-             std::pair{source.mtu_authority, "deployment MTU authority"},
-             std::pair{source.service_authority, "deployment service authority"},
-             std::pair{source.resource_authority, "deployment resource authority"},
-             std::pair{source.local_address, "deployment local address"},
-             std::pair{source.local_authority, "deployment local authority"},
-             std::pair{source.latency_authority, "deployment latency authority"},
-             std::pair{source.observation_authority, "deployment observation authority"}}) {
-        if (auto valid = requireText(field.first, field.second); !valid) {
-            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                valid.error());
-        }
-    }
-    MediaDatagramServiceScopeKind scope =
-        MediaDatagramServiceScopeKind::Unknown;
-    if (source.scope_kind == MT_BETA_EGRESS_SCOPE_MANAGED) {
-        scope = MediaDatagramServiceScopeKind::ManagedEgress;
-    } else if (source.scope_kind == MT_BETA_EGRESS_SCOPE_PROVISIONED) {
-        scope = MediaDatagramServiceScopeKind::ProvisionedEgress;
-    }
-    auto maximumResidence = runningMilliseconds(source.maximum_residence_ms);
-    auto targetResidence = runningMilliseconds(source.target_residence_ms);
-    auto drainResidence = runningMilliseconds(
-        source.observation_drain_residence_ms);
-    if (!maximumResidence || !targetResidence || !drainResidence) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            !maximumResidence ? maximumResidence.error() :
-            !targetResidence ? targetResidence.error() : drainResidence.error());
-    }
-    MediaRealtimeDeploymentEnvelopeEncoding encoding;
-    encoding.serviceScope = {
-        scope, source.scope_id, source.scope_authority};
-    if (source.address_family != MT_BETA_IP_ADDRESS_FAMILY_IPV4 &&
-        source.address_family != MT_BETA_IP_ADDRESS_FAMILY_IPV6) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "deployment address family must be IPv4 or IPv6"));
-    }
-    const auto mtuAddressFamily =
-        source.address_family == MT_BETA_IP_ADDRESS_FAMILY_IPV4
-            ? MediaIpAddressFamily::Ipv4
-            : MediaIpAddressFamily::Ipv6;
-    encoding.mtu = {
-        mtuAddressFamily, source.mtu_authority,
-        source.maximum_ip_packet_bytes, source.sender_maximum_payload_bytes};
-    encoding.service = {
-        source.sustained_wire_bytes_per_second,
-        source.peak_wire_bytes_per_second, source.burst_wire_bytes,
-        source.service_authority};
-    MediaRealtimeGraphResourceBudgetScope graphResourceScope =
-        MediaRealtimeGraphResourceBudgetScope::Unknown;
-    if (source.graph_resource_scope ==
-        MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE) {
-        graphResourceScope = MediaRealtimeGraphResourceBudgetScope::
-            EngineManagedPayloadAndReservedStorage;
-    } else if (source.graph_resource_scope ==
-               MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE_PLUS_DEVICE) {
-        graphResourceScope = MediaRealtimeGraphResourceBudgetScope::
-            EngineManagedPayloadAndReservedStoragePlusDevice;
-    } else {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "deployment graph memory scope is invalid"));
-    }
-    encoding.resources = {
-        graphResourceScope,
-        source.maximum_graph_payload_and_reserved_storage_bytes,
-        source.maximum_network_memory_bytes,
-        source.maximum_socket_memory_bytes,
-        source.resource_authority};
-    auto localAddress = parseNumericAddress(source.local_address);
-    if (!localAddress) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            localAddress.error());
-    }
-    encoding.localPorts = {
-        localAddress.value().addressFamily(), source.local_address,
-        source.local_first_port, source.local_port_count,
-        source.local_authority};
-    auto maximumReleaseJitter = runningMilliseconds(
-        source.maximum_release_jitter_ms);
-    if (!maximumReleaseJitter) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            maximumReleaseJitter.error());
-    }
-    if (auto valid = requireText(
-            source.release_jitter_authority,
-            "release jitter authority"); !valid) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            valid.error());
-    }
-    encoding.latency = {
-        targetResidence.value(), maximumResidence.value(),
-        source.latency_authority, maximumReleaseJitter.value(),
-        source.release_jitter_authority};
-    MediaRealtimeTransmitEvidencePolicy evidencePolicy =
-        MediaRealtimeTransmitEvidencePolicy::Unknown;
-    if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_DISABLED) {
-        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Disabled;
-    } else if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_REPORT) {
-        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Report;
-    } else if (source.tx_evidence_policy == MT_BETA_TX_EVIDENCE_FAIL) {
-        evidencePolicy = MediaRealtimeTransmitEvidencePolicy::Fail;
-    }
-    encoding.observation = {
-        source.observation_run_datagrams,
-        drainResidence.value(),
-        evidencePolicy,
-        source.observation_authority};
-    const bool hasReceiverTiming = source.receiver_timing_authority != nullptr ||
-        source.receiver_transport_decode_lead_ms != 0;
-    if (hasReceiverTiming) {
-        if (auto valid = requireText(
-                source.receiver_timing_authority,
-                "receiver timing authority"); !valid) {
-            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                valid.error());
-        }
-        auto decodeLead = runningMilliseconds(
-            source.receiver_transport_decode_lead_ms);
-        if (!decodeLead) {
-            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                decodeLead.error());
-        }
-        encoding.receiverTiming = MediaRealtimeReceiverTimingCapability{
-            decodeLead.value(),
-            source.receiver_timing_authority};
-    }
-    const bool hasRtcpSession = source.rtcp_session_authority != nullptr ||
-        source.maximum_rtcp_session_members != 0;
-    if (hasRtcpSession) {
-        if (source.maximum_rtcp_session_members < 2) {
-            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "RTCP session maximum members must be at least two"));
-        }
-        if (auto valid = requireText(
-                source.rtcp_session_authority,
-                "RTCP session authority"); !valid) {
-            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-                valid.error());
-        }
-        encoding.rtcpSession = MediaRealtimeRtcpSessionCapability{
-            source.maximum_rtcp_session_members,
-            source.rtcp_session_authority};
-    }
-    return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));
-}
-
 } // namespace
 
 MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
@@ -273,8 +107,11 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     std::uint32_t frameRateNumerator,
     std::uint32_t frameRateDenominator,
     std::uint32_t gopFrames,
-    ffmpeg::graph::MediaRealtimeDeploymentEnvelope deployment,
     RateControl rateControl,
+    std::uint64_t provisionedEgressCapacityBitsPerSecond,
+    std::uint32_t pathMaximumIpPacketBytes,
+    std::uint32_t maximumWireResidenceMilliseconds,
+    std::uint32_t receiverTransportDecodeLeadMilliseconds,
     ffmpeg::graph::MediaIpAddressFamily addressFamily,
     mt_beta_realtime_event_callback eventCallback,
     void* eventUserData)
@@ -292,8 +129,13 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     , m_frameRateNumerator(frameRateNumerator)
     , m_frameRateDenominator(frameRateDenominator)
     , m_gopFrames(gopFrames)
-    , m_deployment(std::move(deployment))
     , m_rateControl(rateControl)
+    , m_provisionedEgressCapacityBitsPerSecond(
+          provisionedEgressCapacityBitsPerSecond)
+    , m_pathMaximumIpPacketBytes(pathMaximumIpPacketBytes)
+    , m_maximumWireResidenceMilliseconds(maximumWireResidenceMilliseconds)
+    , m_receiverTransportDecodeLeadMilliseconds(
+          receiverTransportDecodeLeadMilliseconds)
     , m_addressFamily(addressFamily)
     , m_eventCallback(eventCallback)
     , m_eventUserData(eventUserData)
@@ -332,7 +174,12 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
         config->output.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->output.frame_rate_num > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->output.frame_rate_den > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-        config->output.gop_frames > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        config->output.gop_frames > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+        config->deployment.provisioned_egress_capacity_bps < 8U ||
+        config->deployment.path_mtu_bytes == 0U ||
+        config->deployment.maximum_wire_residence_ms == 0U ||
+        config->deployment.receiver_transport_decode_lead_ms <
+            config->deployment.maximum_wire_residence_ms) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(
             ::media::ErrorInfo::invalidArgument("realtime video facts are invalid"));
     }
@@ -349,12 +196,6 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     if (!rateControl) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(rateControl.error());
     }
-    auto deployment = copyDeployment(config->deployment);
-    if (!deployment) {
-        return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(
-            deployment.error());
-    }
-
     return ::media::Result<MediaRealtimeBetaOwnedConfig>::success(
         MediaRealtimeBetaOwnedConfig(
             config->media_id,
@@ -371,8 +212,11 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
             config->output.frame_rate_num,
             config->output.frame_rate_den,
             config->output.gop_frames,
-            std::move(deployment).value(),
             rateControl.value(),
+            config->deployment.provisioned_egress_capacity_bps,
+            config->deployment.path_mtu_bytes,
+            config->deployment.maximum_wire_residence_ms,
+            config->deployment.receiver_transport_decode_lead_ms,
             bindAddress.value().addressFamily(),
             callbacks->on_event,
             callbacks->user_data));
@@ -392,9 +236,11 @@ std::uint32_t MediaRealtimeBetaOwnedConfig::height() const noexcept { return m_h
 std::uint32_t MediaRealtimeBetaOwnedConfig::frameRateNumerator() const noexcept { return m_frameRateNumerator; }
 std::uint32_t MediaRealtimeBetaOwnedConfig::frameRateDenominator() const noexcept { return m_frameRateDenominator; }
 std::uint32_t MediaRealtimeBetaOwnedConfig::gopFrames() const noexcept { return m_gopFrames; }
-const ffmpeg::graph::MediaRealtimeDeploymentEnvelope&
-MediaRealtimeBetaOwnedConfig::deployment() const noexcept { return m_deployment; }
 const MediaRealtimeBetaOwnedConfig::RateControl& MediaRealtimeBetaOwnedConfig::rateControl() const noexcept { return m_rateControl; }
+std::uint64_t MediaRealtimeBetaOwnedConfig::provisionedEgressCapacityBitsPerSecond() const noexcept { return m_provisionedEgressCapacityBitsPerSecond; }
+std::uint32_t MediaRealtimeBetaOwnedConfig::pathMaximumIpPacketBytes() const noexcept { return m_pathMaximumIpPacketBytes; }
+std::uint32_t MediaRealtimeBetaOwnedConfig::maximumWireResidenceMilliseconds() const noexcept { return m_maximumWireResidenceMilliseconds; }
+std::uint32_t MediaRealtimeBetaOwnedConfig::receiverTransportDecodeLeadMilliseconds() const noexcept { return m_receiverTransportDecodeLeadMilliseconds; }
 ffmpeg::graph::MediaIpAddressFamily MediaRealtimeBetaOwnedConfig::addressFamily() const noexcept { return m_addressFamily; }
 mt_beta_realtime_event_callback MediaRealtimeBetaOwnedConfig::eventCallback() const noexcept { return m_eventCallback; }
 void* MediaRealtimeBetaOwnedConfig::eventUserData() const noexcept { return m_eventUserData; }

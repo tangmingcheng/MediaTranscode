@@ -63,7 +63,7 @@ private:
         const MediaScheduledWireDatagramBatchBuffer& batch) const;
     void recordSubmittedPrefix(
         std::size_t count,
-        MediaRunningTime submittedAt) noexcept;
+        MediaRunningTime submitCompletedAt) noexcept;
     ::media::Status commitAccumulatedSubmittedPrefix();
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
@@ -102,6 +102,7 @@ private:
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupServiceDuration =
         MediaRunningTime::fromNanoseconds(0);
+    bool m_groupDeadlineSubmitAttempted = false;
     std::optional<MediaRunningTime> m_nextPhysicalSubmitNotBefore;
     std::optional<MediaRunningTime> m_lastSubmittedAt;
     std::optional<::media::ErrorInfo> m_terminalFailure;

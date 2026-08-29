@@ -152,6 +152,13 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
     }
     if (auto status = set(
+            "video_scheduler.protocol_preparation_lead_ns",
+            std::to_string(
+                plan.scheduling.protocolPreparationLead.nanoseconds()));
+        !status) {
+        return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
+    }
+    if (auto status = set(
             "video_scheduler.pacing_enabled",
             plan.scheduling.pacingEnabled ? "1" : "0"); !status) {
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());

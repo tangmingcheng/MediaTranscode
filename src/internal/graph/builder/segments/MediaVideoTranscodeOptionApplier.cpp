@@ -96,7 +96,6 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
     if (auto status = validateOptionalPositive(video.bitrateKbps, "video bitrate"); !status) return status;
     if (auto status = validateOptionalPositive(video.minBitrateKbps, "video min bitrate"); !status) return status;
     if (auto status = validateOptionalPositive(video.maxBitrateKbps, "video max bitrate"); !status) return status;
-    if (auto status = validateOptionalPositive(video.bufferSizeKbits, "video buffer size"); !status) return status;
     if (video.minBitrateKbps && video.maxBitrateKbps && *video.minBitrateKbps > *video.maxBitrateKbps) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaVideoTranscodeOptionApplier requires video min bitrate <= max bitrate"));

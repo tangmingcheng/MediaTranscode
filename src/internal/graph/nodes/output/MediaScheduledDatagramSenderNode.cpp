@@ -104,6 +104,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     m_groupServiceDuration = MediaRunningTime::fromNanoseconds(0);
+    m_groupDeadlineSubmitAttempted = false;
     m_nextPhysicalSubmitNotBefore.reset();
     m_lastSubmittedAt.reset();
     m_terminalFailure.reset();
@@ -263,6 +264,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupNotBefore = first.enqueueNotBefore();
     m_groupDeadline = first.enqueueNotAfter();
     m_groupServiceDuration = first.wireServiceDuration();
+    m_groupDeadlineSubmitAttempted = false;
     if (m_nextPhysicalSubmitNotBefore &&
         *m_nextPhysicalSubmitNotBefore > m_groupNotBefore) {
         m_groupNotBefore = *m_nextPhysicalSubmitNotBefore;
@@ -338,7 +340,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 
 void MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
     std::size_t count,
-    MediaRunningTime submittedAt) noexcept
+    MediaRunningTime submitCompletedAt) noexcept
 {
     std::int64_t serviceNanoseconds = 0;
     for (std::size_t offset = 0; offset < count; ++offset) {
@@ -347,8 +349,8 @@ void MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
                 .wireServiceDuration().nanoseconds();
     }
     m_nextPhysicalSubmitNotBefore = MediaRunningTime::fromNanoseconds(
-        submittedAt.nanoseconds() + serviceNanoseconds);
-    m_lastSubmittedAt = submittedAt;
+        submitCompletedAt.nanoseconds() + serviceNanoseconds);
+    m_lastSubmittedAt = submitCompletedAt;
     m_nextDatagram += count;
 }
 
@@ -431,10 +433,14 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         if (m_state == SubmitState::WaitWritableWithinOriginalDeadline) {
             auto now = m_clock->now();
             if (!now) return failTerminal(now.error());
-            if (now.value() >= m_groupDeadline) {
+            if (now.value() > m_groupDeadline) {
                 ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram remained blocked through its original deadline"));
+            }
+            if (now.value() == m_groupDeadline) {
+                m_state = SubmitState::TrySubmit;
+                continue;
             }
             auto remaining = m_groupDeadline.checkedSubtract(now.value());
             if (!remaining) return failTerminal(remaining.error());
@@ -467,6 +473,14 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram submit exceeded its original deadline"));
             }
+            if (now.value() == m_groupDeadline) {
+                if (m_groupDeadlineSubmitAttempted) {
+                    ++m_deadlineMisses;
+                    return failTerminal(::media::ErrorInfo::ioFailure(
+                        "scheduled datagram remained blocked at its original deadline"));
+                }
+                m_groupDeadlineSubmitAttempted = true;
+            }
             auto nextPhysical = now.value().checkedAdd(m_groupServiceDuration);
             if (!nextPhysical) return failTerminal(nextPhysical.error());
             MediaDatagramTransmitSubmitResult submitted =
@@ -497,7 +511,11 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
             }
-            recordSubmittedPrefix(m_groupCount, now.value());
+            auto submitCompletedAt = m_clock->now();
+            if (!submitCompletedAt) {
+                return failTerminal(submitCompletedAt.error());
+            }
+            recordSubmittedPrefix(m_groupCount, submitCompletedAt.value());
             m_state = SubmitState::WaitReservation;
         }
     }

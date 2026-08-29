@@ -6,6 +6,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -114,6 +115,23 @@ inline std::string requiredArg(int argc, char** argv, const std::string& key)
         throw std::invalid_argument("missing required argument: " + key);
     }
     return value;
+}
+
+inline std::uint64_t requiredUint64Arg(
+    int argc, char** argv, const std::string& key)
+{
+    const std::string value = requiredArg(argc, argv, key);
+    if (value.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::invalid_argument(
+            "invalid unsigned integer value for " + key + ": " + value);
+    }
+    std::size_t parsed = 0;
+    const auto result = std::stoull(value, &parsed, 10);
+    if (parsed != value.size()) {
+        throw std::invalid_argument(
+            "invalid unsigned integer value for " + key + ": " + value);
+    }
+    return result;
 }
 
 inline bool requiredExclusiveBoolArg(int argc,

@@ -18,6 +18,12 @@ struct MediaVideoRtpPayloadPacket final {
 
 class MediaDeterministicVideoRtpPacketizer final {
 public:
+    static ::media::Result<std::uint64_t> maximumDatagramsForPayloadWindow(
+        std::uint64_t maximumPayloadBytes,
+        std::uint64_t accessUnitCount,
+        MediaAnnexBCodec codec,
+        std::size_t maximumRtpPayloadBytes);
+
     static ::media::Result<std::uint64_t> maximumDatagramsPerAccessUnit(
         std::uint64_t maximumAccessUnitBytes,
         MediaAnnexBCodec codec,

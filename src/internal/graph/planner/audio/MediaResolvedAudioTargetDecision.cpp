@@ -93,7 +93,7 @@ template <typename T>
         (source.bitrateBitsPerSecond > 0 &&
          (source.bitrateBitsPerSecond + 999) / 1000 == *request.bitrateKbps);
     const bool encoderOnlyRequest = request.rateControl != MediaRateControlMode::Auto ||
-        request.minBitrateKbps || request.maxBitrateKbps || request.bufferSizeKbits ||
+        request.minBitrateKbps || request.maxBitrateKbps ||
         request.quality || !request.preset.empty();
     const bool copy = codec.value() == sourceCodec && profile.value() == source.profile &&
         sampleRate.value() == source.sampleRate && channels.value() == source.channels &&
@@ -130,7 +130,6 @@ template <typename T>
     }
     decision.m_minBitrateKbps = request.minBitrateKbps;
     decision.m_maxBitrateKbps = request.maxBitrateKbps;
-    decision.m_bufferSizeKbits = request.bufferSizeKbits;
     decision.m_quality = request.quality;
     decision.m_preset = request.preset;
     return ::media::Result<MediaResolvedAudioTargetDecision>::success(std::move(decision));
@@ -147,7 +146,6 @@ MediaRateControlMode MediaResolvedAudioTargetDecision::rateControl() const noexc
 const std::optional<int>& MediaResolvedAudioTargetDecision::bitrateKbps() const noexcept { return m_bitrateKbps; }
 const std::optional<int>& MediaResolvedAudioTargetDecision::minBitrateKbps() const noexcept { return m_minBitrateKbps; }
 const std::optional<int>& MediaResolvedAudioTargetDecision::maxBitrateKbps() const noexcept { return m_maxBitrateKbps; }
-const std::optional<int>& MediaResolvedAudioTargetDecision::bufferSizeKbits() const noexcept { return m_bufferSizeKbits; }
 const std::optional<int>& MediaResolvedAudioTargetDecision::quality() const noexcept { return m_quality; }
 const std::string& MediaResolvedAudioTargetDecision::preset() const noexcept { return m_preset; }
 

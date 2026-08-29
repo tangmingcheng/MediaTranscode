@@ -70,7 +70,7 @@ void ProjectMpegTsGenerationSessionState::
     streamSet.reset();
     nextTransportDeadline.reset();
     latestAcceptedEmission.reset();
-    mediaTimelineStarted = false;
+    timelineState = TimelineState::Dormant;
     generation.store(0, std::memory_order_release);
     state = State::Acquiring;
 }
@@ -136,8 +136,7 @@ ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
           m_generationSession->nextTransportDeadline)
     , m_latestAcceptedEmission(
           m_generationSession->latestAcceptedEmission)
-    , m_mediaTimelineStarted(
-          m_generationSession->mediaTimelineStarted)
+    , m_timelineState(m_generationSession->timelineState)
     , m_generation(m_generationSession->generation)
 {
 }
@@ -450,6 +449,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                                 m_session = std::move(session).value();
                                 m_nextTransportDeadline =
                                     emissionOrigin.value();
+                                m_timelineState =
+                                    TimelineState::StartupMaintenancePending;
                                 m_state = State::Active;
                             }
                         }
@@ -539,6 +540,13 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         } else if (m_state != State::Active || !m_session) {
             failure = ::media::ErrorInfo::notInitialized(
                 "project MPEG-TS mux session cannot write before activation");
+        } else if (m_timelineState ==
+                   TimelineState::StartupMaintenancePending) {
+            failure = invalid(
+                "project MPEG-TS mux session requires startup maintenance before its first access unit");
+        } else if (m_timelineState == TimelineState::Dormant) {
+            failure = invalid(
+                "project MPEG-TS mux session has no active transport timeline");
         } else if (auto unit = validateAccessUnitLocked(buffer); !unit) {
             failure = unit.error();
         } else if (m_session->hasPendingEmission()) {
@@ -556,7 +564,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                 } else {
                     m_nextTransportDeadline = written.value().nextDeadline;
                     m_latestAcceptedEmission = view.value().emitOnMaster;
-                    m_mediaTimelineStarted = true;
+                    m_timelineState = TimelineState::MediaTimelineActive;
                 }
             }
         }
@@ -658,9 +666,44 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
                     polled.value().nextDeadline,
                     MediaNodeDeadlineWakePolicy::DeadlineOrCancellation)});
         }
-        if (!m_mediaTimelineStarted) {
+        if (m_timelineState ==
+            TimelineState::StartupMaintenancePending) {
+            if (!m_nextTransportDeadline || m_latestAcceptedEmission) {
+                return ::media::Result<MediaMuxSessionPollResult>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "project MPEG-TS startup maintenance has inconsistent timeline facts"));
+            }
+            auto now = m_outputAuthority->now();
+            if (!now) {
+                return ::media::Result<MediaMuxSessionPollResult>::failure(
+                    now.error());
+            }
+            if (now.value() < *m_nextTransportDeadline) {
+                return ::media::Result<MediaMuxSessionPollResult>::success({
+                    false,
+                    m_outputAuthority->deadlineWait(
+                        *m_nextTransportDeadline,
+                        MediaNodeDeadlineWakePolicy::DeadlineOrCancellation)});
+            }
+            auto polled = m_session->poll(now.value());
+            if (!polled) {
+                return ::media::Result<MediaMuxSessionPollResult>::failure(
+                    polled.error());
+            }
+            m_nextTransportDeadline = polled.value().nextDeadline;
+            m_timelineState = TimelineState::AwaitingFirstAccessUnit;
+            return ::media::Result<MediaMuxSessionPollResult>::success({
+                polled.value().packetsWritten != 0,
+                std::nullopt});
+        }
+        if (m_timelineState == TimelineState::AwaitingFirstAccessUnit) {
             return ::media::Result<MediaMuxSessionPollResult>::success(
                 {false, std::nullopt});
+        }
+        if (m_timelineState != TimelineState::MediaTimelineActive) {
+            return ::media::Result<MediaMuxSessionPollResult>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "project MPEG-TS mux session has no pollable transport timeline"));
         }
         if (!m_outputPlan || !m_nextTransportDeadline ||
             !m_latestAcceptedEmission) {
@@ -719,7 +762,8 @@ bool ProjectMpegTsMuxSessionAdapter::hasPendingOutput() const noexcept
 {
     auto mutation = m_generationState->reserveSessionMutation();
     return m_state == State::Active && m_session &&
-        (m_session->hasPendingEmission() || m_session->hasScheduledBatch());
+        (m_timelineState == TimelineState::StartupMaintenancePending ||
+         m_session->hasPendingEmission() || m_session->hasScheduledBatch());
 }
 
 bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept

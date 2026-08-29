@@ -128,61 +128,11 @@ typedef struct mt_beta_video_output {
     } rate_control;
 } mt_beta_video_output;
 
-typedef enum mt_beta_egress_scope_kind {
-    MT_BETA_EGRESS_SCOPE_MANAGED = 1,
-    MT_BETA_EGRESS_SCOPE_PROVISIONED = 2
-} mt_beta_egress_scope_kind;
-
-typedef enum mt_beta_tx_evidence_policy {
-    MT_BETA_TX_EVIDENCE_DISABLED = 1,
-    MT_BETA_TX_EVIDENCE_REPORT = 2,
-    MT_BETA_TX_EVIDENCE_FAIL = 3
-} mt_beta_tx_evidence_policy;
-
-typedef enum mt_beta_ip_address_family {
-    MT_BETA_IP_ADDRESS_FAMILY_IPV4 = 1,
-    MT_BETA_IP_ADDRESS_FAMILY_IPV6 = 2
-} mt_beta_ip_address_family;
-
-typedef enum mt_beta_graph_resource_budget_scope {
-    MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE = 1,
-    MT_BETA_GRAPH_RESOURCE_ENGINE_MANAGED_PAYLOAD_AND_RESERVED_STORAGE_PLUS_DEVICE = 2
-} mt_beta_graph_resource_budget_scope;
-
 typedef struct mt_beta_realtime_deployment {
-    mt_beta_egress_scope_kind scope_kind;
-    const char* scope_id;
-    const char* scope_authority;
-    const char* mtu_authority;
-    mt_beta_ip_address_family address_family;
-    uint64_t maximum_ip_packet_bytes;
-    uint64_t sender_maximum_payload_bytes;
-    uint64_t sustained_wire_bytes_per_second;
-    uint64_t peak_wire_bytes_per_second;
-    uint64_t burst_wire_bytes;
-    const char* service_authority;
-    mt_beta_graph_resource_budget_scope graph_resource_scope;
-    uint64_t maximum_graph_payload_and_reserved_storage_bytes;
-    uint64_t maximum_network_memory_bytes;
-    uint64_t maximum_socket_memory_bytes;
-    uint64_t maximum_residence_ms;
-    const char* resource_authority;
-    const char* local_address;
-    uint16_t local_first_port;
-    uint16_t local_port_count;
-    const char* local_authority;
-    uint64_t target_residence_ms;
-    const char* latency_authority;
-    uint64_t maximum_release_jitter_ms;
-    const char* release_jitter_authority;
-    uint64_t observation_run_datagrams;
-    uint64_t observation_drain_residence_ms;
-    mt_beta_tx_evidence_policy tx_evidence_policy;
-    const char* observation_authority;
-    uint64_t receiver_transport_decode_lead_ms;
-    const char* receiver_timing_authority;
-    uint32_t maximum_rtcp_session_members;
-    const char* rtcp_session_authority;
+    uint64_t provisioned_egress_capacity_bps;
+    uint32_t path_mtu_bytes;
+    uint32_t maximum_wire_residence_ms;
+    uint32_t receiver_transport_decode_lead_ms;
 } mt_beta_realtime_deployment;
 
 typedef struct mt_beta_realtime_config {

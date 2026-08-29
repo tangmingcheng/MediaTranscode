@@ -73,7 +73,9 @@ namespace media::ffmpeg::graph {
     plan.m_bitrateKbps = target.bitrateKbps();
     plan.m_minBitrateKbps = target.minBitrateKbps();
     plan.m_maxBitrateKbps = target.maxBitrateKbps();
-    plan.m_bufferSizeKbits = target.bufferSizeKbits();
+    plan.m_bufferSizeKbits = copy
+        ? std::nullopt
+        : selectedEncoder->bufferSizeKbits;
     plan.m_quality = target.quality();
     plan.m_preset = target.preset();
     return ::media::Result<MediaResolvedAudioOutputPlan>::success(std::move(plan));

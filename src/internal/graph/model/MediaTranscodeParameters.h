@@ -1,6 +1,5 @@
 #pragma once
 
-#include "internal/graph/model/MediaHardwareBackendRequest.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 
 #include <cstddef>
@@ -114,7 +113,6 @@ struct MediaVideoTranscodeParameters {
     std::optional<int> bitrateKbps;
     std::optional<int> minBitrateKbps;
     std::optional<int> maxBitrateKbps;
-    std::optional<int> bufferSizeKbits;
     std::optional<int> quality;
     std::string preset;
     std::string tune;
@@ -136,7 +134,6 @@ struct MediaAudioTranscodeParameters {
     std::optional<int> bitrateKbps;
     std::optional<int> minBitrateKbps;
     std::optional<int> maxBitrateKbps;
-    std::optional<int> bufferSizeKbits;
     std::optional<int> sampleRate;
     std::optional<int> channels;
     std::optional<int> quality;
@@ -146,8 +143,6 @@ struct MediaAudioTranscodeParameters {
 
 struct MediaTranscodeExecutionParameters {
     std::optional<MediaTranscodeStreamSet> streamSet;
-    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
-    bool disableHardware = false;
     bool diagnosticLogEnabled = true;
 };
 
@@ -189,7 +184,6 @@ inline constexpr char VideoRateControl[] = "video.rc";
 inline constexpr char VideoBitrateKbps[] = "video.bitrate.kbps";
 inline constexpr char VideoMinBitrateKbps[] = "video.bitrate.min_kbps";
 inline constexpr char VideoMaxBitrateKbps[] = "video.bitrate.max_kbps";
-inline constexpr char VideoBufferSizeKbits[] = "video.rc.buffer_size.kbits";
 inline constexpr char VideoQuality[] = "video.quality";
 inline constexpr char VideoPreset[] = "video.preset";
 inline constexpr char VideoTune[] = "video.tune";

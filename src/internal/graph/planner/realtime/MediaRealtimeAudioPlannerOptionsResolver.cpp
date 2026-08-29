@@ -34,7 +34,7 @@ MediaRealtimeAudioPlannerOptionsResolver::resolve(
                 "realtime audio planner options require a validated stream set"));
     }
 
-    const MediaAudioTranscodeParameters& audio = request.parameters.audio;
+    const MediaRealtimeAudioTranscodeParameters& audio = request.parameters.audio;
     const struct Validation final {
         const std::optional<int>& value;
         const char* name;
@@ -42,10 +42,8 @@ MediaRealtimeAudioPlannerOptionsResolver::resolve(
         {audio.bitrateKbps, "audio bitrate"},
         {audio.minBitrateKbps, "audio min bitrate"},
         {audio.maxBitrateKbps, "audio max bitrate"},
-        {audio.bufferSizeKbits, "audio buffer size"},
         {audio.sampleRate, "audio sample rate"},
         {audio.channels, "audio channels"},
-        {audio.quality, "audio quality"},
     };
     for (const auto& validation : validations) {
         if (auto status = validatePositiveOptional(
@@ -68,12 +66,8 @@ MediaRealtimeAudioPlannerOptionsResolver::resolve(
     options.requestedBitrateKbps = audio.bitrateKbps;
     options.requestedMinBitrateKbps = audio.minBitrateKbps;
     options.requestedMaxBitrateKbps = audio.maxBitrateKbps;
-    options.requestedBufferSizeKbits = audio.bufferSizeKbits;
     options.requestedSampleRate = audio.sampleRate;
     options.requestedChannels = audio.channels;
-    options.requestedQuality = audio.quality;
-    options.requestedPreset = audio.preset;
-    options.requestedProfile = audio.profile;
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
         options.outputRequirement.codecName = "aac";
         options.outputRequirement.profile = MediaAudioProfile::knownAacLow();

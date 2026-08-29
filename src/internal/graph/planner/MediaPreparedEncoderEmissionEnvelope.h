@@ -11,7 +11,7 @@ namespace media::ffmpeg::graph {
 struct MediaPreparedEncoderEmissionEnvelope final {
     std::uint64_t sustainedPayloadBytesPerSecond = 0;
     std::uint64_t peakPayloadBytesPerSecond = 0;
-    std::uint64_t effectiveVbvBufferBits = 0;
+    std::optional<std::uint64_t> effectiveVbvBufferBits;
     std::uint64_t maximumAccessUnitPayloadBytes = 0;
     std::uint64_t maximumBurstPayloadBytes = 0;
     std::uint64_t accessUnitsPerSecondNumerator = 0;

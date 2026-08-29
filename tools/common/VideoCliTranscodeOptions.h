@@ -11,18 +11,6 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.execution.streamSet = hasArg(argc, argv, "--no-audio")
         ? MediaTranscodeStreamSet::VideoOnly
         : MediaTranscodeStreamSet::AudioVideo;
-    parameters.execution.disableHardware = disabledByExplicitArg(argc, argv, "--disable-hw", "hardware planning");
-    const std::string hardwareBackend = argValue(argc, argv, "--hardware-backend");
-    if (!parseMediaHardwareBackendRequest(
-            hardwareBackend, parameters.execution.hardwareBackend)) {
-        throw std::invalid_argument(
-            "unsupported hardware backend for --hardware-backend: " + hardwareBackend);
-    }
-    if (parameters.execution.hardwareBackend == MediaHardwareBackendRequest::RKMPP &&
-        parameters.execution.disableHardware) {
-        throw std::invalid_argument(
-            "--hardware-backend rkmpp conflicts with --disable-hw");
-    }
     parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
     parameters.video.codecName = argValue(argc, argv, "--video-codec");
     parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
@@ -39,14 +27,12 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");
     parameters.video.minBitrateKbps = optionalIntArg(argc, argv, "--min-bitrate");
     parameters.video.maxBitrateKbps = optionalIntArg(argc, argv, "--max-bitrate");
-    parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
     if (parameters.video.rateControl == MediaRateControlMode::Cbr &&
-        (parameters.video.minBitrateKbps || parameters.video.maxBitrateKbps ||
-         parameters.video.bufferSizeKbits)) {
+        (parameters.video.minBitrateKbps || parameters.video.maxBitrateKbps)) {
         throw std::invalid_argument(
-            "CBR accepts --bitrate only; minimum, maximum, and buffer size are not caller facts");
+            "CBR accepts --bitrate only; minimum and maximum are VBR facts");
     }
     if (parameters.video.rateControl == MediaRateControlMode::Vbr &&
         (!parameters.video.bitrateKbps || !parameters.video.minBitrateKbps ||
@@ -54,18 +40,11 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
         throw std::invalid_argument(
             "VBR requires --min-bitrate, --bitrate, and --max-bitrate");
     }
-    if (parameters.video.rateControl == MediaRateControlMode::Vbr &&
-        parameters.video.bufferSizeKbits) {
-        throw std::invalid_argument(
-            "VBR accepts only --min-bitrate, --bitrate, and --max-bitrate");
-    }
-
     parameters.audio.codecName = argValue(argc, argv, "--audio-codec");
     parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
     parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
     parameters.audio.minBitrateKbps = optionalIntArg(argc, argv, "--audio-min-bitrate");
     parameters.audio.maxBitrateKbps = optionalIntArg(argc, argv, "--audio-max-bitrate");
-    parameters.audio.bufferSizeKbits = optionalIntArg(argc, argv, "--audio-buffer-size");
     parameters.audio.sampleRate = optionalIntArg(argc, argv, "--sample-rate");
     parameters.audio.channels = optionalIntArg(argc, argv, "--channels");
     parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
@@ -88,7 +67,6 @@ inline std::vector<std::string> commonVideoTranscodeValueArgs()
 {
     return {
         "--video-codec",
-        "--hardware-backend",
         "--rc",
         "--preset",
         "--profile",
@@ -100,7 +78,6 @@ inline std::vector<std::string> commonVideoTranscodeValueArgs()
         "--bitrate",
         "--min-bitrate",
         "--max-bitrate",
-        "--buffer-size",
         "--quality",
         "--gop",
         "--audio-codec",
@@ -108,7 +85,6 @@ inline std::vector<std::string> commonVideoTranscodeValueArgs()
         "--audio-bitrate",
         "--audio-min-bitrate",
         "--audio-max-bitrate",
-        "--audio-buffer-size",
         "--sample-rate",
         "--channels",
         "--audio-quality",
@@ -123,7 +99,6 @@ inline std::vector<std::string> commonVideoTranscodeFlagArgs()
         "--help",
         "-h",
         "--no-audio",
-        "--disable-hw",
         "--quiet-graph",
     };
 }

@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -18,7 +17,9 @@ enum class MediaRealtimeResourceAccountingGroup : std::uint8_t {
     DecodedVideoSurface = 2,
     EncodedAudioPacket = 3,
     MuxDescriptor = 4,
-    RetainLatestMetadata = 5
+    RetainLatestMetadata = 5,
+    PreparedInputPacket = 6,
+    PreparedInputReservedStorage = 7
 };
 
 enum class MediaRealtimeQueueRetentionSemantics : std::uint8_t {
@@ -48,15 +49,27 @@ struct MediaRealtimeGraphResourceLedgerPlan final {
     std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
 };
 
+struct MediaRealtimeVideoSurfaceFootprintFact final {
+    int width = 0;
+    int height = 0;
+    std::string pixelFormat;
+    MediaRational productionRate;
+    std::string authority;
+};
+
 class MediaRealtimeGraphResourceLedgerPlanner final {
 public:
     static ::media::Result<MediaRealtimeGraphResourceLedgerPlan> plan(
-        const MediaRealtimeDeploymentEnvelope& deployment,
+        MediaRealtimeDeploymentLatencyBudget latency,
         const MediaPreparedRealtimeEmissionSet& emission,
-        int outputWidth,
-        int outputHeight,
-        std::string_view surfacePixelFormat,
+        const std::vector<MediaRealtimeVideoSurfaceFootprintFact>& videoSurfaces,
         bool hardwareSurface);
+    static ::media::Result<MediaRealtimeGraphResourceLedgerPlan>
+    admitPreparedInput(
+        MediaRealtimeGraphResourceLedgerPlan ledger,
+        MediaPreparedInputPayloadEnvelope payload,
+        std::uint64_t reservedStorageBytes,
+        std::string reservedStorageAuthority);
     static ::media::Status validate(
         const MediaRealtimeGraphResourceLedgerPlan& ledger);
 

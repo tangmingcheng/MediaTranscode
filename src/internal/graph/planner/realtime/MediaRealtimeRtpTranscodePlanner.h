@@ -12,6 +12,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPlanningDraft.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
@@ -42,6 +43,7 @@ struct MediaRealtimeRtpTranscodePlanCore {
 
 struct MediaRealtimeRtpTranscodePlanningDraft final
     : MediaRealtimeRtpTranscodePlanCore {
+    std::optional<MediaRealtimeDeploymentEnvelope> deployment;
     std::optional<MediaAudioPipelinePlan> audioPlan;
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
     std::optional<MediaRealtimeAvSyncComponentBounds> avSyncComponentBounds;

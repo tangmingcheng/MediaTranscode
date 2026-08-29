@@ -205,10 +205,12 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     if (!source || !source->packet() || source->sourceTiming() ||
         source->streamKind() != m_streamKind ||
         source->packet()->pts == AV_NOPTS_VALUE || source->packet()->pts < 0 ||
-        source->packet()->pts > std::numeric_limits<std::uint32_t>::max()) {
+        source->packet()->pts > std::numeric_limits<std::uint32_t>::max() ||
+        (source->packet()->dts != AV_NOPTS_VALUE &&
+         source->packet()->dts != source->packet()->pts)) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "RTP packet binder requires untimed matching packets with raw 32-bit RTP PTS"));
+                "RTP packet binder requires untimed matching packets with raw 32-bit RTP PTS and no distinct DTS"));
     }
     const MediaTimeDescriptor time = source->timeDescriptor();
     const MediaRtpSourceClockCalibration& calibration =
@@ -233,11 +235,18 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     if (!timing) {
         return ::media::Result<MediaBufferRef>::failure(timing.error());
     }
+    auto packet = source->takePacket();
+    const std::int64_t materializedTimestamp =
+        static_cast<std::int64_t>(extendedTimestamp);
+    packet->pts = materializedTimestamp;
+    if (packet->dts != AV_NOPTS_VALUE) {
+        packet->dts = materializedTimestamp;
+    }
     const MediaFormatDescriptor format = source->formatDescriptor();
     const MediaHardwareDescriptor hardware = source->hardwareDescriptor();
     const bool inputKey = source->isKeyFrame();
     auto wrapped = FFmpegBufferFactory::wrapPacket(
-        source->takePacket(), m_streamKind, std::move(timing).value());
+        std::move(packet), m_streamKind, std::move(timing).value());
     if (!wrapped) return wrapped;
     if (m_streamKind == MediaStreamKind::Video && inputKey &&
         !m_keyTraceEmitted) {

@@ -85,8 +85,10 @@ template <typename Value>
              put("mtu.ip_bytes", d.mtu.maximumIpPacketBytes),
              put("mtu.payload_bytes", d.mtu.senderMaximumPayloadBytes),
              set(graph, nodeId, key("mtu.authority"), d.mtu.authority),
-             put("service.sustained_bps", d.service.sustainedWireBytesPerSecond),
-             put("service.peak_bps", d.service.peakWireBytesPerSecond),
+             put("service.capacity_bps",
+                 d.service.provisionedCapacityWireBytesPerSecond),
+             put("service.pacing_bps",
+                  d.service.pacingWireBytesPerSecond),
              put("service.burst_bytes", d.service.burstWireBytes),
              set(graph, nodeId, key("service.authority"), d.service.authority),
              put("resources.graph_scope", static_cast<unsigned>(
@@ -164,8 +166,10 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto mtuIp = parse<std::uint64_t>(node.options, key("mtu.ip_bytes"));
     auto mtuPayload = parse<std::uint64_t>(node.options, key("mtu.payload_bytes"));
     auto mtuAuthority = required(node.options, key("mtu.authority"));
-    auto sustained = parse<std::uint64_t>(node.options, key("service.sustained_bps"));
-    auto peak = parse<std::uint64_t>(node.options, key("service.peak_bps"));
+    auto provisionedCapacity = parse<std::uint64_t>(
+        node.options, key("service.capacity_bps"));
+    auto pacing = parse<std::uint64_t>(
+        node.options, key("service.pacing_bps"));
     auto burst = parse<std::uint64_t>(node.options, key("service.burst_bytes"));
     auto serviceAuthority = required(node.options, key("service.authority"));
     auto graphScope = parse<std::uint8_t>(
@@ -214,7 +218,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(session); REQUIRE_VALUE(scopeKind); REQUIRE_VALUE(scopeId);
     REQUIRE_VALUE(scopeAuthority); REQUIRE_VALUE(mtuFamily); REQUIRE_VALUE(mtuIp);
     REQUIRE_VALUE(mtuPayload); REQUIRE_VALUE(mtuAuthority);
-    REQUIRE_VALUE(sustained); REQUIRE_VALUE(peak); REQUIRE_VALUE(burst);
+    REQUIRE_VALUE(provisionedCapacity); REQUIRE_VALUE(pacing);
+    REQUIRE_VALUE(burst);
     REQUIRE_VALUE(serviceAuthority); REQUIRE_VALUE(graphScope);
     REQUIRE_VALUE(graphBytes);
     REQUIRE_VALUE(networkBytes);
@@ -239,7 +244,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
          std::move(scopeId).value(), std::move(scopeAuthority).value()},
         {static_cast<MediaIpAddressFamily>(mtuFamily.value()),
          std::move(mtuAuthority).value(), mtuIp.value(), mtuPayload.value()},
-        {sustained.value(), peak.value(), burst.value(),
+        {provisionedCapacity.value(), pacing.value(), burst.value(),
          std::move(serviceAuthority).value()},
         {static_cast<MediaRealtimeGraphResourceBudgetScope>(
              graphScope.value()),

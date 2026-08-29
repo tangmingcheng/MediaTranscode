@@ -84,8 +84,8 @@ struct MediaRealtimeDeploymentMtuFact final {
 };
 
 struct MediaRealtimeDeploymentManagedServiceFact final {
-    std::uint64_t sustainedWireBytesPerSecond = 0;
-    std::uint64_t peakWireBytesPerSecond = 0;
+    std::uint64_t provisionedCapacityWireBytesPerSecond = 0;
+    std::uint64_t pacingWireBytesPerSecond = 0;
     std::uint64_t burstWireBytes = 0;
     std::string authority;
     friend bool operator==(const MediaRealtimeDeploymentManagedServiceFact&,

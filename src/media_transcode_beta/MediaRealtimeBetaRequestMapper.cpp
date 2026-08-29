@@ -8,6 +8,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -60,13 +61,6 @@ MediaRealtimeBetaRequestMapper::map(
     }
     ffmpeg::graph::MediaRealtimeRtpTranscodeRequest request;
     request.mediaId = config.mediaId();
-    auto deployment = ffmpeg::graph::MediaRealtimeDeploymentEnvelope::decode(
-        config.deployment().encode());
-    if (!deployment) {
-        return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::failure(
-            deployment.error());
-    }
-    request.deployment = std::move(deployment).value();
     request.input.type = ffmpeg::graph::RealtimeInputType::RtpPort;
     request.input.streamLayout = profile.inputLayout;
     request.input.url = rtpUrl(config);
@@ -74,15 +68,12 @@ MediaRealtimeBetaRequestMapper::map(
     request.input.readTimeoutMs = profile.readTimeoutMs;
     request.input.analyzeDurationUs = profile.analyzeDurationUs;
     request.input.probeSizeBytes = profile.probeSizeBytes;
-    request.input.lowLatency = profile.lowLatency;
     request.input.videoRtp.url = request.input.url;
     request.input.videoRtp.codecName = std::move(inputCodec).value();
     request.input.videoRtp.payloadType = static_cast<int>(config.inputPayloadType());
     request.input.videoRtp.clockRate = static_cast<int>(config.inputClockRate());
 
     request.parameters.execution.streamSet = profile.streamSet;
-    request.parameters.execution.disableHardware = profile.disableHardware;
-    request.parameters.execution.hardwareBackend = profile.hardwareBackend;
     request.parameters.video.codecName = std::move(outputCodec).value();
     request.parameters.video.width = static_cast<int>(config.width());
     request.parameters.video.height = static_cast<int>(config.height());
@@ -109,6 +100,19 @@ MediaRealtimeBetaRequestMapper::map(
     request.output.host = config.destinationAddress();
     request.output.basePort = static_cast<std::size_t>(config.destinationPort());
     request.output.sdpPath = sessionOwnedSdpPath;
+    request.deployment.provisionedEgressCapacityBitsPerSecond =
+        config.provisionedEgressCapacityBitsPerSecond();
+    request.deployment.pathMaximumIpPacketBytes =
+        config.pathMaximumIpPacketBytes();
+    request.deployment.maximumWireResidence =
+        ffmpeg::graph::MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(
+                config.maximumWireResidenceMilliseconds()) * 1'000'000);
+    request.deployment.receiverTransportDecodeLead =
+        ffmpeg::graph::MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(
+                config.receiverTransportDecodeLeadMilliseconds()) *
+            1'000'000);
     return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::success(
         std::move(request));
 }

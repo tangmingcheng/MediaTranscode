@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "internal/graph/runtime/network/linux/MediaLinuxDatagramTransmitPort.h"
 #include "internal/graph/runtime/network/MediaDatagramSocketBufferApiRequest.h"
 
@@ -20,6 +24,7 @@
 #include <new>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #if defined(LINUX_VERSION_CODE) && defined(KERNEL_VERSION) && \
     LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0) && \
@@ -50,6 +55,11 @@ bool detail::mediaLinuxDatagramSubmitWouldBlock(int nativeError) noexcept
 }
 
 namespace {
+
+struct MediaLinuxDatagramControlBuffer final {
+    alignas(cmsghdr) std::array<std::byte,
+        CMSG_SPACE(sizeof(std::uint64_t))> bytes{};
+};
 
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
                             sockaddr_storage& storage,
@@ -109,6 +119,9 @@ public:
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
             request.endpoint.targetEffectiveSendBufferBytes == 0 ||
+            request.maximumBatchDatagrams == 0 ||
+            request.maximumBatchDatagrams > static_cast<std::uint64_t>(
+                (std::numeric_limits<unsigned int>::max)()) ||
             request.endpoint.targetEffectiveSendBufferBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
@@ -246,6 +259,16 @@ public:
                 std::to_string(request.endpoint.maximumAdmittedEffectiveSendBufferBytes) +
                 " effective=" + std::to_string(effectiveBuffer)));
         }
+        try {
+            const auto batchCapacity = static_cast<std::size_t>(
+                request.maximumBatchDatagrams);
+            m_messages.resize(batchCapacity);
+            m_vectors.resize(batchCapacity);
+            m_controls.resize(batchCapacity);
+        } catch (const std::bad_alloc&) {
+            return fail(::media::ErrorInfo::allocationFailed(
+                "Linux Datagram batch scratch allocation"));
+        }
         m_socket = handle;
         m_stopFd = stopFd;
         m_endpointId = request.endpoint.endpointId;
@@ -277,7 +300,8 @@ public:
     MediaDatagramTransmitSubmitResult trySubmit(
         std::span<const MediaDatagramTransmitPortRequest> requests) override
     {
-        if (!isOwnerThread() || m_socket < 0 || requests.empty()) {
+        if (!isOwnerThread() || m_socket < 0 || requests.empty() ||
+            requests.size() > m_messages.size()) {
             return MediaDatagramTransmitSubmitResult::failure(
                 mediaDatagramTransmitError(::media::ErrorInfo::invalidArgument(
                     "invalid Linux Datagram submit request")));
@@ -337,21 +361,22 @@ public:
             ++expectedId;
         }
 
-        std::uint64_t submitted = 0;
-        for (const auto& request : requests) {
-            iovec vector{const_cast<std::uint8_t*>(request.bytes.data()),
-                         request.bytes.size()};
-            alignas(cmsghdr) std::array<std::byte,
-                CMSG_SPACE(sizeof(std::uint64_t))> control{};
-            msghdr message{};
+        for (std::size_t index = 0; index < requests.size(); ++index) {
+            const auto& request = requests[index];
+            m_vectors[index] = {
+                const_cast<std::uint8_t*>(request.bytes.data()),
+                request.bytes.size()};
+            m_controls[index].bytes.fill(std::byte{});
+            m_messages[index] = {};
+            auto& message = m_messages[index].msg_hdr;
             message.msg_name = &m_remote;
             message.msg_namelen = m_remoteLength;
-            message.msg_iov = &vector;
+            message.msg_iov = &m_vectors[index];
             message.msg_iovlen = 1;
             if (m_txtimeAvailable) {
 #if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
-                message.msg_control = control.data();
-                message.msg_controllen = control.size();
+                message.msg_control = m_controls[index].bytes.data();
+                message.msg_controllen = m_controls[index].bytes.size();
                 auto* header = CMSG_FIRSTHDR(&message);
                 header->cmsg_level = SOL_SOCKET;
                 header->cmsg_type = SCM_TXTIME;
@@ -360,33 +385,43 @@ public:
                 std::memcpy(CMSG_DATA(header), &launch, sizeof(launch));
 #endif
             }
-            const auto accepted = ::sendmsg(m_socket, &message, MSG_DONTWAIT);
-            if (accepted < 0) {
-                const int native = errno;
-                if (detail::mediaLinuxDatagramSubmitWouldBlock(native) &&
-                    submitted == 0) {
-                    return MediaDatagramTransmitSubmitResult::success(
-                        MediaDatagramTransmitAttempt::WouldBlock);
-                }
-                return submitFailure(
-                    submitted == 0
-                        ? "Linux Datagram submit failed"
-                        : "Linux Datagram batch stopped after a submitted prefix",
-                    native,
-                    submitted == 0
-                        ? MediaDatagramTransmitFailureKind::TerminalNoSubmit
-                        : MediaDatagramTransmitFailureKind::PartialSubmittedPrefix,
-                    submitted);
+        }
+        const int accepted = ::sendmmsg(
+            m_socket, m_messages.data(),
+            static_cast<unsigned int>(requests.size()), MSG_DONTWAIT);
+        if (accepted < 0) {
+            const int native = errno;
+            if (detail::mediaLinuxDatagramSubmitWouldBlock(native)) {
+                return MediaDatagramTransmitSubmitResult::success(
+                    MediaDatagramTransmitAttempt::WouldBlock);
             }
-            if (static_cast<std::size_t>(accepted) != request.bytes.size()) {
+            return submitFailure(
+                "Linux Datagram batch submit failed", native,
+                MediaDatagramTransmitFailureKind::TerminalNoSubmit, 0);
+        }
+        if (accepted == 0) {
+            return submitFailure(
+                "Linux Datagram batch submit accepted no messages", 0,
+                MediaDatagramTransmitFailureKind::TerminalNoSubmit, 0);
+        }
+        const auto submitted = static_cast<std::uint64_t>(accepted);
+        for (std::size_t index = 0;
+             index < static_cast<std::size_t>(accepted); ++index) {
+            if (static_cast<std::size_t>(m_messages[index].msg_len) !=
+                requests[index].bytes.size()) {
                 return submitFailure(
                     "Linux Datagram short submit has ambiguous delivery", 0,
                     MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix,
-                    submitted);
+                    index);
             }
-            ++submitted;
-            ++m_runSubmittedDatagrams;
-            ++m_nextKernelTimestampId;
+        }
+        m_runSubmittedDatagrams += submitted;
+        m_nextKernelTimestampId += submitted;
+        if (submitted != requests.size()) {
+            return submitFailure(
+                "Linux Datagram batch stopped after a submitted prefix", 0,
+                MediaDatagramTransmitFailureKind::PartialSubmittedPrefix,
+                submitted);
         }
         return MediaDatagramTransmitSubmitResult::success(
             MediaDatagramTransmitAttempt::Submitted);
@@ -644,6 +679,9 @@ private:
     std::uint64_t m_runSubmittedDatagrams = 0;
     std::uint64_t m_maximumScheduleAheadNanoseconds = 0;
     std::uint32_t m_nextKernelTimestampId = 0;
+    std::vector<mmsghdr> m_messages;
+    std::vector<iovec> m_vectors;
+    std::vector<MediaLinuxDatagramControlBuffer> m_controls;
     bool m_timestampAvailable = false;
     bool m_txtimeAvailable = false;
     bool m_openAttempted = false;

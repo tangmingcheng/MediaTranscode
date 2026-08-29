@@ -292,10 +292,13 @@ const MediaEdge* exactEdge(
             scheduler.findOutputPort("scheduled_video"),
             MediaPortDirection::Output, MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
-        scheduler.options.values().size() != 17 ||
         MediaGraphShapeQuery::incomingEdgeCount(
             graph, scheduler.findInputPort("video")->id) != 1) {
         return invalid("scheduler ports or cardinality");
+    }
+    constexpr std::size_t SchedulerOptionCount = 18;
+    if (scheduler.options.values().size() != SchedulerOptionCount) {
+        return invalid("scheduler option cardinality");
     }
     const MediaEdge* schedulerInput = nullptr;
     for (const MediaEdge& edge : graph.edges()) {
@@ -346,6 +349,9 @@ const MediaEdge* exactEdge(
     auto transportLead = requiredPositiveInt64NodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
+    auto protocolPreparationLead = requiredPositiveInt64NodeOption(
+        &scheduler.options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.protocol_preparation_lead_ns");
     auto activationLead = requiredPositiveInt64NodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.activation_lead_ns");
@@ -370,7 +376,8 @@ const MediaEdge* exactEdge(
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !activationLead || !pacingEnabled ||
+        !transportLead || !protocolPreparationLead || !activationLead ||
+        !pacingEnabled ||
         !initialGeneration || !session ||
         !expectedTimingMode ||
         requireKeyFrame.value() != runtime.startup.requireKeyFrame ||
@@ -392,6 +399,8 @@ const MediaEdge* exactEdge(
         packetTimingMode.value() != expectedTimingMode ||
         transportLead.value() !=
             runtime.scheduling.transportLead.nanoseconds() ||
+        protocolPreparationLead.value() !=
+            runtime.scheduling.protocolPreparationLead.nanoseconds() ||
         activationLead.value() !=
             runtime.scheduling.activationLead.nanoseconds() ||
         pacingEnabled.value() != runtime.scheduling.pacingEnabled ||

@@ -10,6 +10,7 @@
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -28,15 +29,16 @@ constexpr std::uint64_t InitialVideoGeneration = 1;
 planSeparateRtp(
     MediaRealtimeOutputPlanningDraft& output,
     const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaPreparedEncoderEmissionEnvelope& preparedEmission)
 {
     if (!output.videoOutput.scheduledTransport ||
         !output.videoOutput.scheduledPacketization ||
-        output.sdp.path.empty() || !request.deployment) {
+        output.sdp.path.empty() || !deployment.encode().receiverTiming) {
         return ::media::Result<
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "VideoOnly scheduled RTP requires complete transport, packetization, and SDP facts"));
+                "VideoOnly scheduled RTP requires complete transport, packetization, SDP, and receiver timing facts"));
     }
     const std::string& identity = request.mediaId;
     const std::string cname = MediaRtpOutputIdentityPlanner::cname(identity);
@@ -56,7 +58,7 @@ planSeparateRtp(
         cname.size(), endpoint.addressFamily());
     auto rtcpPolicy = remoteAddress && compoundWireBytes
         ? MediaRtcpReportingPolicyPlanner::plan(
-              *request.deployment, remoteAddress.value(),
+              deployment, remoteAddress.value(),
               preparedEmission.sustainedPayloadBytesPerSecond,
               preparedEmission.authority,
               compoundWireBytes.value())
@@ -86,7 +88,7 @@ planSeparateRtp(
             identity + ".video.timestamp"),
         VideoRtpClockRate,
         cname,
-        request.deployment->encode().latency.maximumResidence,
+        deployment.encode().receiverTiming->transportDecodeLead,
         std::move(rtcpPolicy).value()};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
@@ -116,7 +118,7 @@ planSeparateRtp(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly Project MPEG-TS requires a planned output URL"));
     }
-    if (!request.deployment || !output.muxedOutput.maximumDatagramBytes) {
+    if (!outer.deployment || !output.muxedOutput.maximumDatagramBytes) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly MPEG-TS requires deployment MTU authority"));
@@ -197,7 +199,7 @@ planSeparateRtp(
         const auto& prepared = preparedEmission.video;
         auto rtcpPolicy = remoteAddress && compoundWireBytes
             ? MediaRtcpReportingPolicyPlanner::plan(
-                  *request.deployment, remoteAddress.value(),
+                  *outer.deployment, remoteAddress.value(),
                   prepared.sustainedPayloadBytesPerSecond,
                   prepared.authority, compoundWireBytes.value())
             : ::media::Result<MediaRtcpReportingPolicy>::failure(
@@ -228,7 +230,7 @@ planSeparateRtp(
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
         startup.byteCapacity,
-        request.deployment->encode().latency.targetResidence);
+        outer.deployment->encode().latency.targetResidence);
     if (!emission) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());
@@ -358,14 +360,32 @@ MediaRealtimeVideoRuntimePlanner::plan(
     std::optional<MediaRealtimeVideoOutputAdapterPlan> adapter;
     std::optional<MediaRunningTime> activationOutputLead;
     std::optional<MediaRunningTime> transportLead;
+    if (!outer.deployment) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly Datagram transport requires planner-owned deployment facts"));
+    }
+    const auto protocolPreparationLead =
+        outer.deployment->encode().latency.targetResidence;
+    if (protocolPreparationLead <= MediaRunningTime::fromNanoseconds(0)) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly protocol preparation requires the planned Datagram target residence"));
+    }
     if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
         auto planned = planSeparateRtp(
-            output, request, preparedEmission.video);
+            output, request, *outer.deployment, preparedEmission.video);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
-        activationOutputLead = planned.value().video.senderLead;
+        auto activationLead = planned.value().video.senderLead.checkedAdd(
+            protocolPreparationLead);
+        if (!activationLead) {
+            return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+                activationLead.error());
+        }
+        activationOutputLead = activationLead.value();
         transportLead = planned.value().video.senderLead;
         adapter.emplace(
             std::in_place_type<MediaVideoOnlySeparateRtpOutputRuntimePlan>,
@@ -379,9 +399,12 @@ MediaRealtimeVideoRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
+        const auto startupPreparationLead = (std::max)(
+            planned.value().protocol.muxPlan().startupEmissionPreroll(),
+            protocolPreparationLead);
         auto projectActivationLead =
             planned.value().protocol.muxPlan().transportDecodeLead().checkedAdd(
-                planned.value().protocol.muxPlan().startupEmissionPreroll());
+                startupPreparationLead);
         if (!projectActivationLead) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 projectActivationLead.error());
@@ -398,11 +421,6 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 "VideoOnly runtime output layout is unsupported"));
     }
 
-    if (!request.deployment) {
-        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "VideoOnly Datagram transport requires deployment facts"));
-    }
     auto datagramTransport = std::visit(
         [&](const auto& plannedOutput) {
             using Output = std::decay_t<decltype(plannedOutput)>;
@@ -410,11 +428,11 @@ MediaRealtimeVideoRuntimePlanner::plan(
                               Output,
                               MediaProjectMpegTsRuntimeOutputPlan>) {
                 return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *request.deployment, plannedOutput,
+                    request.mediaId, *outer.deployment, plannedOutput,
                     outer.videoPlan, outputFrameRate, nullptr);
             } else {
                 return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *request.deployment, plannedOutput,
+                    request.mediaId, *outer.deployment, plannedOutput,
                     outer.videoPlan, outputFrameRate);
             }
         },
@@ -434,6 +452,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
             MediaRealtimeVideoSchedulingPlan{
                 true, *activationOutputLead, *transportLead,
+                protocolPreparationLead,
                 InitialVideoGeneration},
             MediaProtocolOutputSessionKey(request.mediaId),
             output.packetCopyNormalizationRequired,

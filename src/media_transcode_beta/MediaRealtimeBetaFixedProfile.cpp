@@ -14,14 +14,7 @@ const MediaRealtimeBetaFixedProfile::Product CurrentProfile{
     10000,
     30000,
     100,
-    true,
     ffmpeg::graph::MediaTranscodeStreamSet::VideoOnly,
-    false,
-#ifdef _WIN32
-    ffmpeg::graph::MediaHardwareBackendRequest::Auto,
-#else
-    ffmpeg::graph::MediaHardwareBackendRequest::RKMPP,
-#endif
     ffmpeg::graph::RealtimeInputStreamLayout::SeparateStreams,
     ffmpeg::graph::RealtimeOutputStreamLayout::MuxedTransportStream,
     ffmpeg::graph::MediaOutputTransportKind::RtpAvp
@@ -45,11 +38,9 @@ std::string MediaRealtimeBetaFixedProfile::diagnosticSummary()
            " progress_timeout_ms=" + std::to_string(profile.progressTimeoutMs) +
            " first_output_timeout_ms=" + std::to_string(profile.firstOutputTimeoutMs) +
            " poll_interval_ms=" + std::to_string(profile.pollIntervalMs) +
-           " low_latency=" + (profile.lowLatency ? "true" : "false") +
+           " low_latency=planner-realtime-product" +
            " stream_set=VideoOnly" +
-           " disable_hardware=" + (profile.disableHardware ? "true" : "false") +
-           " hardware_backend=" +
-               ffmpeg::graph::mediaHardwareBackendRequestName(profile.hardwareBackend) +
+           " hardware_backend=planner-highest-score" +
            " input_layout=SeparateStreams output_layout=MuxedTransportStream output_transport=RtpAvp";
 }
 

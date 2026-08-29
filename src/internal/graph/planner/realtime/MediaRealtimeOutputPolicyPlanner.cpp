@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 
-#include "internal/graph/planner/realtime/MediaTsReceiverTimingPlanner.h"
+#include "internal/graph/planner/realtime/MediaMpegTsOutputTimingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
@@ -143,11 +143,11 @@ std::optional<int> resolvedAudioBitrateKbps(
     MediaRealtimeRtpTranscodePlanningDraft& plan,
     MediaRealtimeOutputPlanningDraft& output)
 {
-    if (!request.deployment) {
+    if (!plan.deployment) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Realtime output policy requires the validated deployment envelope"));
     }
-    const auto& deployment = request.deployment->encode();
+    const auto& deployment = plan.deployment->encode();
     constexpr std::uint64_t Ipv4HeaderBytes = 20;
     constexpr std::uint64_t Ipv6HeaderBytes = 40;
     constexpr std::uint64_t UdpHeaderBytes = 8;
@@ -161,7 +161,7 @@ std::optional<int> resolvedAudioBitrateKbps(
     auto packetSize = checkedSocketInteger(
         maximumDatagram, "planned maximum Datagram payload");
     if (!packetSize ||
-        deployment.service.sustainedWireBytesPerSecond >
+        deployment.service.pacingWireBytesPerSecond >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
         deployment.service.burstWireBytes >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
@@ -210,18 +210,13 @@ std::optional<int> resolvedAudioBitrateKbps(
             if (!cadence) return ::media::Status::failure(cadence.error());
             audioCadence = cadence.value();
         }
-        auto timing = MediaTsReceiverTimingPlanner::plan(
-            deployment.receiverTiming->transportDecodeLead,
-            deployment.receiverTiming->authority,
-            deployment.latency.targetResidence,
-            deployment.latency.maximumResidence,
+        auto timing = MediaMpegTsOutputTimingPlanner::planVariableBitrate(
             deployment.latency.maximumReleaseJitter,
             deployment.latency.releaseJitterAuthority,
             MediaRational{*plan.videoParameters.frameRate.numerator,
-                          *plan.videoParameters.frameRate.denominator},
-            audioCadence);
+                          *plan.videoParameters.frameRate.denominator});
         if (!timing) return ::media::Status::failure(timing.error());
-        auto preroll = MediaTsReceiverTimingPlanner::startupEmissionPreroll(
+        auto preroll = MediaMpegTsOutputTimingPlanner::startupEmissionPreroll(
             deployment.receiverTiming->transportDecodeLead,
             MediaRational{*plan.videoParameters.frameRate.numerator,
                           *plan.videoParameters.frameRate.denominator},
