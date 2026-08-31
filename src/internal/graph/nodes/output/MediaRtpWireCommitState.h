@@ -35,6 +35,8 @@ private:
     friend class MediaRtpWireDatagramMaterializer;
     friend class MediaRtpWireCommitTransaction;
 
+    bool canAdmitReservation(std::size_t datagrams) const noexcept;
+
     mutable std::mutex mutex;
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
@@ -61,6 +63,8 @@ private:
     std::size_t maximumOutstandingDatagrams;
     MediaDatagramBatchPlan batchPlan;
     std::size_t outstandingDatagrams = 0;
+    std::weak_ptr<MediaNodeWakeup> reservationWakeup;
+    std::optional<std::size_t> blockedReservationDatagrams;
     std::uint64_t nextReservationIdentity = 1;
     struct ReservationRecord final {
         std::uint64_t identity;

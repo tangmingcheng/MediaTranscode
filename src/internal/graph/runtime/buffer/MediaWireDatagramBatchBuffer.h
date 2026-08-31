@@ -19,11 +19,7 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaDatagramShaperNode;
-class MediaDatagramServiceShaper;
 class MediaScheduledDatagramSenderNode;
-class MediaScheduledWireDatagram;
-class MediaScheduledWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuffer;
 class MediaWireDatagramBatchBuilder;
 class MediaWireDatagramBatchPartitionBuilder;
@@ -234,7 +230,6 @@ private:
 
     friend class MediaDatagramCommitTransaction;
     friend class MediaScheduledDatagramSenderNode;
-    friend class MediaScheduledWireDatagramBatchBuffer;
     friend class MediaWireDatagramBatchBuffer;
 
     std::shared_ptr<MediaDatagramCommitTransaction::Concept> m_control;
@@ -279,9 +274,7 @@ public:
         return m_descriptor.globalSequence;
     }
 private:
-    friend class MediaDatagramShaperNode;
-    friend class MediaDatagramServiceShaper;
-    friend class MediaScheduledWireDatagramBatchBuffer;
+    friend class MediaScheduledDatagramSenderNode;
     friend class MediaWireDatagramBatchBuffer;
 
     MediaWireDatagram(
@@ -311,9 +304,7 @@ public:
     }
 
 private:
-    friend class MediaDatagramShaperNode;
-    friend class MediaDatagramServiceShaper;
-    friend class MediaScheduledWireDatagramBatchBuffer;
+    friend class MediaScheduledDatagramSenderNode;
     friend class MediaWireDatagramBatchBuilder;
     friend class MediaWireDatagramBatchPartitionBuilder;
 

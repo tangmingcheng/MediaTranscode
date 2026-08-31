@@ -203,6 +203,7 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
 }
 
 ::media::Status MediaRtpDatagramMaterializerNode::createWireMaterializer(
+    MediaGraphExecutionContext& context,
     std::uint16_t initialSequence)
 {
     if (m_wireMaterializer) return ::media::Status::success();
@@ -256,7 +257,8 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
             initialSequence, 0, 0,
             m_outputPlan.packetization.maximumDatagramBytes(),
             transport->plan().shaping.backlog().maximumDatagrams,
-            transport->plan().shaping.batch()});
+            transport->plan().shaping.batch(),
+            context.sharedNodeWakeup(nodeId())});
     if (!created) return ::media::Status::failure(created.error());
     m_wireMaterializer = std::move(created).value();
     return ::media::Status::success();
@@ -327,7 +329,7 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
         const auto initialSequence = static_cast<std::uint16_t>(
             (static_cast<std::uint16_t>(m_packetizedBytes.front()[2]) << 8) |
             static_cast<std::uint16_t>(m_packetizedBytes.front()[3]));
-        auto wireReady = createWireMaterializer(initialSequence);
+        auto wireReady = createWireMaterializer(context, initialSequence);
         if (!wireReady) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 wireReady.error());

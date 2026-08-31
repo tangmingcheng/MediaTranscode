@@ -49,7 +49,9 @@ private:
     ::media::Result<bool> acquireBindings(
         MediaGraphExecutionContext& context);
     ::media::Status openProtocol(const AVPacket* configurationPacket);
-    ::media::Status createWireMaterializer(std::uint16_t initialSequence);
+    ::media::Status createWireMaterializer(
+        MediaGraphExecutionContext& context,
+        std::uint16_t initialSequence);
     ::media::Result<MediaNodeProcessResult> processAccessUnit(
         MediaGraphExecutionContext& context);
     ::media::Status collectPacketizedDatagram(

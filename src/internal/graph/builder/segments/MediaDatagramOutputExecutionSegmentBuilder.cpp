@@ -34,13 +34,11 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
     const MediaNodeId source = graph.addNode(
         MediaNodeKind::DatagramTransportPlanSource,
         options.prefix + ".transport.plan", "Activated datagram transport plan");
-    const MediaNodeId shaper = graph.addNode(
-        MediaNodeKind::DatagramShaper,
-        options.prefix + ".service.shaper", "Shared datagram service shaper");
     const MediaNodeId sender = graph.addNode(
         MediaNodeKind::ScheduledDatagramSender,
-        options.prefix + ".transport.sender", "Common nonblocking datagram sender");
-    if (!source.isValid() || !shaper.isValid() || !sender.isValid()) {
+        options.prefix + ".transport.sender",
+        "Common GCRA-paced nonblocking datagram sender");
+    if (!source.isValid() || !sender.isValid()) {
         return Result::failure(::media::ErrorInfo::internalError(
             "Datagram execution segment failed to add its nodes"));
     }
@@ -61,14 +59,10 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
     for (const auto& port : {
              std::tuple{source, "activation", MediaEdgeKind::Event,
                         MediaPayloadKind::GraphEvent, false},
-             std::tuple{shaper, "plan", MediaEdgeKind::Metadata,
-                        MediaPayloadKind::DatagramTransportPlan, false},
-             std::tuple{shaper, "batch", MediaEdgeKind::ScheduledDatagramBatch,
-                        MediaPayloadKind::WireDatagramBatch, true},
              std::tuple{sender, "plan", MediaEdgeKind::Metadata,
                         MediaPayloadKind::DatagramTransportPlan, false},
              std::tuple{sender, "batch", MediaEdgeKind::ScheduledDatagramBatch,
-                        MediaPayloadKind::ScheduledWireDatagramBatch, false}}) {
+                        MediaPayloadKind::WireDatagramBatch, true}}) {
         auto added = addInputPortChecked(
             graph, Owner, std::get<0>(port), std::get<1>(port),
             MediaStreamKind::Metadata, std::get<2>(port), std::get<3>(port),
@@ -80,30 +74,16 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
         MediaEdgeKind::Metadata, MediaPayloadKind::DatagramTransportPlan,
         true, true);
     if (!output) return Result::failure(output.error());
-    output = addOutputPortChecked(
-        graph, Owner, shaper, "scheduled", MediaStreamKind::Metadata,
-        MediaEdgeKind::ScheduledDatagramBatch,
-        MediaPayloadKind::ScheduledWireDatagramBatch, true, false);
-    if (!output) return Result::failure(output.error());
     auto connected = MediaGraphBuildSupport::connectChecked(
         graph, Owner, options.activation.node, options.activation.port,
         source, "activation", "activation -> datagram transport plan",
         options.edgePolicies->atomicMetadata);
     if (!connected) return Result::failure(connected.error());
     connected = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, source, "plan", shaper, "plan",
-        "transport plan -> shared shaper", options.edgePolicies->atomicMetadata);
-    if (!connected) return Result::failure(connected.error());
-    connected = MediaGraphBuildSupport::connectChecked(
         graph, Owner, source, "plan", sender, "plan",
         "transport plan -> common sender", options.edgePolicies->atomicMetadata);
     if (!connected) return Result::failure(connected.error());
-    connected = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, shaper, "scheduled", sender, "batch",
-        "shaped wire datagrams -> common sender",
-        options.edgePolicies->synchronizedPacket);
-    if (!connected) return Result::failure(connected.error());
-    return Result::success({source, shaper, sender});
+    return Result::success({source, sender});
 }
 
 ::media::Status MediaDatagramOutputExecutionSegmentBuilder::connectWireSource(
@@ -115,7 +95,7 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
 {
     return MediaGraphBuildSupport::connectChecked(
         graph, Owner, wireSource.node, wireSource.port,
-        execution.shaper, "batch", label, policy);
+        execution.sender, "batch", label, policy);
 }
 
 ::media::Status

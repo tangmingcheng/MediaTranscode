@@ -129,6 +129,8 @@ template <typename Value>
              put("wire.peak_datagrams", encoding.wireTraffic.peakDatagramsPerSecond),
              put("wire.burst_bytes", encoding.wireTraffic.burstWireBytes),
              put("wire.burst_datagrams", encoding.wireTraffic.burstDatagrams),
+             put("wire.atomic_bytes", encoding.wireTraffic.maximumAtomicWireBytes),
+             put("wire.atomic_datagrams", encoding.wireTraffic.maximumAtomicDatagrams),
              put("wire.udp_payload_bytes", encoding.wireTraffic.maximumUdpPayloadBytes),
              put("wire.datagram_bytes", encoding.wireTraffic.maximumWireDatagramBytes),
              set(graph, nodeId, key("wire.authority"), encoding.wireTraffic.authority),
@@ -210,6 +212,10 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto wireBurst = parse<std::uint64_t>(node.options, key("wire.burst_bytes"));
     auto wireBurstDatagrams = parse<std::uint64_t>(
         node.options, key("wire.burst_datagrams"));
+    auto wireAtomicBytes = parse<std::uint64_t>(
+        node.options, key("wire.atomic_bytes"));
+    auto wireAtomicDatagrams = parse<std::uint64_t>(
+        node.options, key("wire.atomic_datagrams"));
     auto wirePayload = parse<std::uint64_t>(node.options, key("wire.udp_payload_bytes"));
     auto wireDatagram = parse<std::uint64_t>(node.options, key("wire.datagram_bytes"));
     auto wireAuthority = required(node.options, key("wire.authority"));
@@ -235,6 +241,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(rtcpSessionAuthority);
     REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
     REQUIRE_VALUE(wireBurst); REQUIRE_VALUE(wireBurstDatagrams);
+    REQUIRE_VALUE(wireAtomicBytes); REQUIRE_VALUE(wireAtomicDatagrams);
     REQUIRE_VALUE(wirePayload); REQUIRE_VALUE(wireDatagram);
     REQUIRE_VALUE(wireAuthority);
     REQUIRE_VALUE(endpointCount);
@@ -310,6 +317,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
         MediaWireTrafficEnvelope{
             wireSustained.value(), wirePeak.value(), wirePackets.value(),
             wireBurst.value(), wireBurstDatagrams.value(),
+            wireAtomicBytes.value(), wireAtomicDatagrams.value(),
             wirePayload.value(), wireDatagram.value(),
             std::move(wireAuthority).value()});
 }

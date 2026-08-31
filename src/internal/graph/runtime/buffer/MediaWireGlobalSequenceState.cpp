@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+
 #include <algorithm>
 #include <limits>
 #include <new>
@@ -123,6 +125,7 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
             "wire global sequence reservation is inactive"));
     }
     bool completed = false;
+    bool notifyWaiters = false;
     {
         std::lock_guard lock(m_state->m_mutex);
         auto ready = m_state->canCommitRangeLocked(*this, begin, count);
@@ -164,6 +167,8 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
         m_state->m_reservations.front().committed += count;
         m_state->m_outstandingDatagrams -= count;
         m_state->m_outstandingWireBytes -= committedWireBytes;
+        notifyWaiters = std::exchange(
+            m_state->m_reservationBlocked, false);
         for (std::size_t index = begin; index < begin + count; ++index) {
             m_state->observeResidence(m_materializedAt[index], now);
         }
@@ -175,6 +180,7 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
             completed = true;
         }
     }
+    if (notifyWaiters) m_state->notifyReservationWaiters();
     if (completed) releaseCompleted();
     return ::media::Status::success();
 }
@@ -326,6 +332,7 @@ MediaWireGlobalSequenceState::reserve(
             m_maximumOutstandingDatagrams - m_outstandingDatagrams ||
         totalWireBytes >
             m_maximumOutstandingWireBytes - m_outstandingWireBytes) {
+        m_reservationBlocked = true;
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "wire global sequence reservation exceeds planner backlog capacity"));
     }
@@ -351,6 +358,48 @@ MediaWireGlobalSequenceState::reserve(
     return Result::success(MediaWireGlobalSequenceReservation(
         std::move(owner), identity, firstSequence,
         std::move(wireBytes), std::move(materializedAt)));
+}
+
+::media::Status MediaWireGlobalSequenceState::registerReservationWakeup(
+    std::uint64_t endpointId,
+    std::shared_ptr<MediaNodeWakeup> wakeup)
+{
+    if (!wakeup) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "wire global sequence reservation wakeup is null"));
+    }
+    std::lock_guard lock(m_mutex);
+    if (m_endpointWireHeaderBytes.find(endpointId) ==
+        m_endpointWireHeaderBytes.end()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "wire global sequence reservation wakeup endpoint is outside the service scope"));
+    }
+    const auto existing = m_reservationWakeups.find(endpointId);
+    if (existing != m_reservationWakeups.end()) {
+        auto current = existing->second.lock();
+        if (current && current != wakeup) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "wire global sequence endpoint already has another reservation wakeup"));
+        }
+        existing->second = std::move(wakeup);
+        return ::media::Status::success();
+    }
+    try {
+        m_reservationWakeups.emplace(endpointId, std::move(wakeup));
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "wire global sequence reservation wakeup registry"));
+    }
+    return ::media::Status::success();
+}
+
+void MediaWireGlobalSequenceState::notifyReservationWaiters() noexcept
+{
+    std::lock_guard lock(m_mutex);
+    for (auto& [endpointId, weakWakeup] : m_reservationWakeups) {
+        (void)endpointId;
+        if (auto wakeup = weakWakeup.lock()) wakeup->notify();
+    }
 }
 
 ::media::Status MediaWireGlobalSequenceState::markStageRange(

@@ -21,7 +21,6 @@ struct MediaDatagramOutputExecutionSegmentOptions final {
 
 struct MediaDatagramOutputExecutionSegmentResult final {
     MediaNodeId transportPlanSource;
-    MediaNodeId shaper;
     MediaNodeId sender;
 };
 

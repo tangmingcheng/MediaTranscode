@@ -38,9 +38,8 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
     auto exact = shape.requireExact({
         {MediaNodeKind::DatagramTransportPlanSource, 1,
          "datagram transport plan source"},
-        {MediaNodeKind::DatagramShaper, 1, "shared datagram shaper"},
         {MediaNodeKind::ScheduledDatagramSender, 1,
-         "common scheduled datagram sender"},
+         "common GCRA-paced datagram sender"},
         {materializerKind, materializerCount,
          "protocol datagram materializer"}} ,
         "common datagram output execution shape");
@@ -50,8 +49,6 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
     }
     const MediaNode& source =
         *shape.nodes(MediaNodeKind::DatagramTransportPlanSource).front();
-    const MediaNode& shaper =
-        *shape.nodes(MediaNodeKind::DatagramShaper).front();
     const MediaNode& sender =
         *shape.nodes(MediaNodeKind::ScheduledDatagramSender).front();
     auto decoded = MediaDatagramTransportPlanSourceNodePlanCodec::decode(source);
@@ -81,13 +78,9 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
     }
     const MediaPort* sourceActivation = source.findInputPort("activation");
     const MediaPort* sourcePlan = source.findOutputPort("plan");
-    const MediaPort* shaperPlan = shaper.findInputPort("plan");
-    const MediaPort* shaperBatch = shaper.findInputPort("batch");
-    const MediaPort* shaped = shaper.findOutputPort("scheduled");
     const MediaPort* senderPlan = sender.findInputPort("plan");
     const MediaPort* senderBatch = sender.findInputPort("batch");
     if (source.inputPorts.size() != 1 || source.outputPorts.size() != 1 ||
-        shaper.inputPorts.size() != 2 || shaper.outputPorts.size() != 1 ||
         sender.inputPorts.size() != 2 || !sender.outputPorts.empty() ||
         !MediaGraphShapeQuery::validPort(sourceActivation,
             MediaPortDirection::Input, MediaStreamKind::Metadata,
@@ -96,19 +89,6 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
             MediaPortDirection::Output, MediaStreamKind::Metadata,
             MediaEdgeKind::Metadata,
             MediaPayloadKind::DatagramTransportPlan) ||
-        !MediaGraphShapeQuery::validPort(shaperPlan,
-            MediaPortDirection::Input, MediaStreamKind::Metadata,
-            MediaEdgeKind::Metadata,
-            MediaPayloadKind::DatagramTransportPlan) ||
-        !MediaGraphShapeQuery::validPort(shaperBatch,
-            MediaPortDirection::Input, MediaStreamKind::Metadata,
-            MediaEdgeKind::ScheduledDatagramBatch,
-            MediaPayloadKind::WireDatagramBatch) ||
-        !shaperBatch->multiple ||
-        !MediaGraphShapeQuery::validPort(shaped,
-            MediaPortDirection::Output, MediaStreamKind::Metadata,
-            MediaEdgeKind::ScheduledDatagramBatch,
-            MediaPayloadKind::ScheduledWireDatagramBatch) ||
         !MediaGraphShapeQuery::validPort(senderPlan,
             MediaPortDirection::Input, MediaStreamKind::Metadata,
             MediaEdgeKind::Metadata,
@@ -116,26 +96,17 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
         !MediaGraphShapeQuery::validPort(senderBatch,
             MediaPortDirection::Input, MediaStreamKind::Metadata,
             MediaEdgeKind::ScheduledDatagramBatch,
-            MediaPayloadKind::ScheduledWireDatagramBatch)) {
+            MediaPayloadKind::WireDatagramBatch) || !senderBatch->multiple) {
         return invalid("Common datagram execution ports differ from their contract");
     }
     const MediaEdge* activation =
         MediaGraphShapeQuery::singleIncomingEdge(graph, sourceActivation->id);
-    const MediaEdge* sourceToShaper =
-        MediaGraphShapeQuery::singleIncomingEdge(graph, shaperPlan->id);
     const MediaEdge* sourceToSender =
         MediaGraphShapeQuery::singleIncomingEdge(graph, senderPlan->id);
-    const MediaEdge* shapedToSender =
-        MediaGraphShapeQuery::singleIncomingEdge(graph, senderBatch->id);
-    if (!activation || !sourceToShaper || !sourceToSender ||
-        !shapedToSender ||
+    if (!activation || !sourceToSender ||
         activation->policy != edgePolicies.atomicMetadata ||
-        sourceToShaper->from.portId != sourcePlan->id ||
         sourceToSender->from.portId != sourcePlan->id ||
-        sourceToShaper->policy != edgePolicies.atomicMetadata ||
-        sourceToSender->policy != edgePolicies.atomicMetadata ||
-        shapedToSender->from.portId != shaped->id ||
-        shapedToSender->policy != edgePolicies.synchronizedPacket) {
+        sourceToSender->policy != edgePolicies.atomicMetadata) {
         return invalid("Common datagram execution edges differ from their planner product");
     }
     std::size_t wireEdges = 0;
@@ -158,16 +129,16 @@ bool sameEndpoint(const MediaDatagramRemoteEndpointFact& left,
             return invalid("Protocol materializer transport edge differs from its product");
         }
         const MediaEdge* wireEdge = MediaGraphShapeQuery::singleEdge(
-            graph, wire->id, shaperBatch->id);
+            graph, wire->id, senderBatch->id);
         if (!wireEdge || wireEdge->policy !=
                 edgePolicies.synchronizedPacket) {
-            return invalid("Protocol materializer is not aggregated by the shared shaper");
+            return invalid("Protocol materializer is not aggregated by the common pacing sender");
         }
         ++wireEdges;
     }
     return wireEdges == materializerCount
         ? ::media::Status::success()
-        : invalid("Shared shaper has an incomplete protocol materializer set");
+        : invalid("Common pacing sender has an incomplete protocol materializer set");
 }
 
 } // namespace media::ffmpeg::graph

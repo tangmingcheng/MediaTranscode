@@ -53,6 +53,7 @@ struct MediaDatagramTransportPlanTemplateEncoding final {
     MediaRealtimeDeploymentEnvelopeEncoding deployment;
     std::vector<MediaDatagramRemoteEndpointFact> remoteEndpoints;
     MediaWireTrafficEnvelope wireTraffic;
+    std::uint64_t pacingWireBytesPerSecond;
 };
 
 class MediaDatagramTransportPlanTemplate final {

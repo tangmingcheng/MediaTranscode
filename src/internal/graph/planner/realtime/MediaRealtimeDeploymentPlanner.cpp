@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentPlanner.h"
 
+#include "internal/graph/planner/realtime/MediaDatagramPacingRatePlanner.h"
+
 #include "internal/graph/planner/realtime/MediaDatagramRouteProbe.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramPayloadPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
@@ -27,8 +29,6 @@ constexpr std::uint64_t TsPayloadBytes = 184;
 constexpr std::uint64_t VideoPesHeaderBytes = 19;
 constexpr std::uint64_t AudioPesAndAdtsHeaderBytes = 21;
 constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
-constexpr std::uint64_t WebRtcPacingRateNumerator = 5;
-constexpr std::uint64_t WebRtcPacingRateDenominator = 2;
 
 std::uint64_t ceilDivide(std::uint64_t value, std::uint64_t divisor) noexcept
 {
@@ -46,6 +46,7 @@ struct TsAdmissionDemand final {
     std::uint64_t sustainedBytesPerSecond = 0;
     std::uint64_t peakBytesPerSecond = 0;
     std::uint64_t burstBytes = 0;
+    std::uint64_t atomicBytes = 0;
     std::uint64_t accessUnitsPerSecond = 0;
 };
 
@@ -77,6 +78,9 @@ template <typename Emission>
     auto burstPayload = MediaCheckedArithmetic::add(
         emission.maximumBurstPayloadBytes, protocolHeaderBytes,
         "admission TS burst access-unit headers");
+    auto atomicPayload = MediaCheckedArithmetic::add(
+        emission.maximumAccessUnitPayloadBytes, protocolHeaderBytes,
+        "admission TS atomic access-unit headers");
     auto sustainedPackets = sustainedPayload
         ? MediaCheckedArithmetic::ceilScale(
               sustainedPayload.value(), 1, TsPayloadBytes,
@@ -92,6 +96,11 @@ template <typename Emission>
               burstPayload.value(), 1, TsPayloadBytes,
               "admission TS burst packets")
         : burstPayload;
+    auto atomicPackets = atomicPayload
+        ? MediaCheckedArithmetic::ceilScale(
+              atomicPayload.value(), 1, TsPayloadBytes,
+              "admission TS atomic packets")
+        : atomicPayload;
     auto sustainedPacketBytes = sustainedPackets
         ? MediaCheckedArithmetic::multiply(
               sustainedPackets.value(), TsPacketBytes,
@@ -121,17 +130,24 @@ template <typename Emission>
               burstPackets.value(), TsPacketBytes,
               "admission TS burst bytes")
         : burstPackets;
+    auto atomic = atomicPackets
+        ? MediaCheckedArithmetic::multiply(
+              atomicPackets.value(), TsPacketBytes,
+              "admission TS atomic bytes")
+        : atomicPackets;
     auto unitRate = accessUnitsPerSecond(
         emission.accessUnitsPerSecondNumerator,
         emission.accessUnitsPerSecondDenominator,
         "admission TS access-unit rate");
-    if (!sustained || !peak || !burst || !unitRate) {
+    if (!sustained || !peak || !burst || !atomic || !unitRate) {
         return ::media::Result<TsAdmissionDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
-            !burst ? burst.error() : unitRate.error());
+            !burst ? burst.error() : !atomic ? atomic.error() :
+            unitRate.error());
     }
     return ::media::Result<TsAdmissionDemand>::success({
-        sustained.value(), peak.value(), burst.value(), unitRate.value()});
+        sustained.value(), peak.value(), burst.value(), atomic.value(),
+        unitRate.value()});
 }
 
 ::media::Result<MediaWireTrafficEnvelope> conservativeWire(
@@ -170,13 +186,20 @@ template <typename Emission>
         emission.video.maximumBurstPayloadBytes,
         emission.audio ? emission.audio->maximumBurstPayloadBytes : 0,
         "aggregate prepared burst payload");
-    if (!sustainedPayload || !peakPayload || !burstPayload) {
+    auto atomicPayload = MediaCheckedArithmetic::add(
+        emission.video.maximumAccessUnitPayloadBytes,
+        emission.audio ? emission.audio->maximumAccessUnitPayloadBytes : 0,
+        "aggregate prepared atomic payload");
+    if (!sustainedPayload || !peakPayload || !burstPayload ||
+        !atomicPayload) {
         return ::media::Result<MediaWireTrafficEnvelope>::failure(
             !sustainedPayload ? sustainedPayload.error() :
-            !peakPayload ? peakPayload.error() : burstPayload.error());
+            !peakPayload ? peakPayload.error() :
+            !burstPayload ? burstPayload.error() : atomicPayload.error());
     }
     std::uint64_t packetRate = 0;
     std::uint64_t burstDatagrams = 0;
+    std::uint64_t atomicDatagrams = 0;
     std::uint64_t maximumProtocolPayload = maximumUdpPayload;
     std::uint64_t rtcpStreams = 0;
     if (request.output.streamLayout ==
@@ -230,6 +253,17 @@ template <typename Emission>
                       emission.audio->maximumBurstPayloadBytes, capacity),
                   1U, "audio RTP burst boundary")
             : ::media::Result<std::uint64_t>::success(0);
+        auto videoAtomicDatagrams = MediaDeterministicVideoRtpPacketizer::
+            maximumDatagramsForPayloadWindow(
+                emission.video.maximumAccessUnitPayloadBytes, 1U, codec,
+                maximumUdpPayload - RtpHeaderBytes);
+        auto audioAtomicDatagrams = emission.audio
+            ? MediaCheckedArithmetic::add(
+                  ceilDivide(
+                      emission.audio->maximumAccessUnitPayloadBytes,
+                      capacity),
+                  1U, "audio RTP atomic access-unit boundary")
+            : ::media::Result<std::uint64_t>::success(0);
         auto mediaBurstDatagrams =
             videoBurstDatagrams && audioBurstDatagrams
             ? MediaCheckedArithmetic::add(
@@ -242,13 +276,24 @@ template <typename Emission>
                   mediaBurstDatagrams.value(), emission.audio ? 4U : 2U,
                   "aggregate RTP and RTCP burst datagrams")
             : mediaBurstDatagrams;
-        if (!totalPacketRate || !totalBurstDatagrams) {
+        auto mediaAtomicDatagrams =
+            videoAtomicDatagrams && audioAtomicDatagrams
+            ? MediaCheckedArithmetic::add(
+                  videoAtomicDatagrams.value(),
+                  audioAtomicDatagrams.value(),
+                  "aggregate RTP atomic media datagrams")
+            : (!videoAtomicDatagrams
+                   ? videoAtomicDatagrams : audioAtomicDatagrams);
+        if (!totalPacketRate || !totalBurstDatagrams ||
+            !mediaAtomicDatagrams) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !totalPacketRate ? totalPacketRate.error() :
-                totalBurstDatagrams.error());
+                !totalBurstDatagrams ? totalBurstDatagrams.error() :
+                mediaAtomicDatagrams.error());
         }
         packetRate = totalPacketRate.value();
         burstDatagrams = totalBurstDatagrams.value();
+        atomicDatagrams = mediaAtomicDatagrams.value();
         rtcpStreams = emission.audio ? 2U : 1U;
         const auto rtpPacketRate = packetRate - rtcpStreams;
         const auto rtpBurstDatagrams = burstDatagrams - 2U * rtcpStreams;
@@ -258,6 +303,9 @@ template <typename Emission>
         auto rtpBurstHeaders = MediaCheckedArithmetic::multiply(
             rtpBurstDatagrams, RtpAndMaximumFragmentHeaderBytes,
             "admission RTP burst headers");
+        auto rtpAtomicHeaders = MediaCheckedArithmetic::multiply(
+            atomicDatagrams, RtpAndMaximumFragmentHeaderBytes,
+            "admission RTP atomic headers");
         sustainedPayload = rtpRateHeaders
             ? MediaCheckedArithmetic::add(
                   sustainedPayload.value(), rtpRateHeaders.value(),
@@ -273,10 +321,18 @@ template <typename Emission>
                   burstPayload.value(), rtpBurstHeaders.value(),
                   "admission RTP burst bytes")
             : rtpBurstHeaders;
-        if (!sustainedPayload || !peakPayload || !burstPayload) {
+        atomicPayload = rtpAtomicHeaders
+            ? MediaCheckedArithmetic::add(
+                  atomicPayload.value(), rtpAtomicHeaders.value(),
+                  "admission RTP atomic payload")
+            : rtpAtomicHeaders;
+        if (!sustainedPayload || !peakPayload || !burstPayload ||
+            !atomicPayload) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !sustainedPayload ? sustainedPayload.error() :
-                !peakPayload ? peakPayload.error() : burstPayload.error());
+                !peakPayload ? peakPayload.error() :
+                !burstPayload ? burstPayload.error() :
+                atomicPayload.error());
         }
     } else {
         auto videoTs = tsStreamAdmission(
@@ -301,6 +357,10 @@ template <typename Emission>
             videoTs.value().burstBytes,
             audioTs.value().burstBytes,
             "aggregate admission TS burst bytes");
+        atomicPayload = MediaCheckedArithmetic::add(
+            videoTs.value().atomicBytes,
+            audioTs.value().atomicBytes,
+            "aggregate admission TS atomic bytes");
         auto aggregateTsUnits = MediaCheckedArithmetic::add(
             videoTs.value().accessUnitsPerSecond,
             audioTs.value().accessUnitsPerSecond,
@@ -316,11 +376,12 @@ template <typename Emission>
                   "TS maintenance bytes")
             : maintenancePackets;
         if (!sustainedPayload || !peakPayload || !burstPayload ||
-            !maintenanceBytes) {
+            !atomicPayload || !maintenanceBytes) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !sustainedPayload ? sustainedPayload.error() :
                 !peakPayload ? peakPayload.error() :
                 !burstPayload ? burstPayload.error() :
+                !atomicPayload ? atomicPayload.error() :
                 maintenanceBytes.error());
         }
         sustainedPayload = MediaCheckedArithmetic::add(
@@ -337,10 +398,18 @@ template <typename Emission>
                   burstPayload.value(), maintenanceBurst.value(),
                   "conservative TS burst bytes")
             : maintenanceBurst;
-        if (!sustainedPayload || !peakPayload || !burstPayload) {
+        atomicPayload = maintenanceBurst
+            ? MediaCheckedArithmetic::add(
+                  atomicPayload.value(), maintenanceBurst.value(),
+                  "conservative TS atomic bytes")
+            : maintenanceBurst;
+        if (!sustainedPayload || !peakPayload || !burstPayload ||
+            !atomicPayload) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !sustainedPayload ? sustainedPayload.error() :
-                !peakPayload ? peakPayload.error() : burstPayload.error());
+                !peakPayload ? peakPayload.error() :
+                !burstPayload ? burstPayload.error() :
+                atomicPayload.error());
         }
         const bool rtp = request.output.transport ==
             MediaOutputTransportKind::RtpAvp;
@@ -375,18 +444,28 @@ template <typename Emission>
                        packetsPerDatagram * TsPacketBytes),
             rtp ? 2U : 0U,
             "aggregate MPEG-TS and RTCP burst datagrams");
-        if (!totalPacketRate || !totalBurstDatagrams) {
+        auto mediaAtomicDatagrams = MediaCheckedArithmetic::ceilScale(
+            atomicPayload.value(), 1,
+            packetsPerDatagram * TsPacketBytes,
+            "aggregate MPEG-TS atomic datagrams");
+        if (!totalPacketRate || !totalBurstDatagrams ||
+            !mediaAtomicDatagrams) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !totalPacketRate ? totalPacketRate.error() :
-                totalBurstDatagrams.error());
+                !totalBurstDatagrams ? totalBurstDatagrams.error() :
+                mediaAtomicDatagrams.error());
         }
         packetRate = totalPacketRate.value();
         burstDatagrams = totalBurstDatagrams.value();
+        atomicDatagrams = mediaAtomicDatagrams.value();
         if (rtp) {
             auto rtpRate = MediaCheckedArithmetic::multiply(
                 packetRate, std::uint64_t{12}, "MP2T RTP headers");
             auto rtpBurst = MediaCheckedArithmetic::multiply(
                 burstDatagrams, std::uint64_t{12}, "MP2T RTP burst headers");
+            auto rtpAtomic = MediaCheckedArithmetic::multiply(
+                atomicDatagrams, std::uint64_t{12},
+                "MP2T RTP atomic headers");
             sustainedPayload = rtpRate
                 ? MediaCheckedArithmetic::add(
                       sustainedPayload.value(), rtpRate.value(),
@@ -402,10 +481,18 @@ template <typename Emission>
                       burstPayload.value(), rtpBurst.value(),
                       "MP2T burst payload")
                 : rtpBurst;
-            if (!sustainedPayload || !peakPayload || !burstPayload) {
+            atomicPayload = rtpAtomic
+                ? MediaCheckedArithmetic::add(
+                      atomicPayload.value(), rtpAtomic.value(),
+                      "MP2T atomic payload")
+                : rtpAtomic;
+            if (!sustainedPayload || !peakPayload || !burstPayload ||
+                !atomicPayload) {
                 return ::media::Result<MediaWireTrafficEnvelope>::failure(
                     !sustainedPayload ? sustainedPayload.error() :
-                    !peakPayload ? peakPayload.error() : burstPayload.error());
+                    !peakPayload ? peakPayload.error() :
+                    !burstPayload ? burstPayload.error() :
+                    atomicPayload.error());
             }
         }
     }
@@ -429,6 +516,11 @@ template <typename Emission>
                   compoundAndBye.value(), rtcpStreams,
                   "RFC 3550 RTCP admission burst")
             : compoundAndBye;
+        auto rtcpAtomicPayload = compound
+            ? MediaCheckedArithmetic::multiply(
+                  compound.value(), rtcpStreams,
+                  "RFC 3550 RTCP admission atomic payload")
+            : compound;
         sustainedPayload = rtcpRatePayload
             ? MediaCheckedArithmetic::add(
                   sustainedPayload.value(), rtcpRatePayload.value(),
@@ -444,17 +536,33 @@ template <typename Emission>
                   burstPayload.value(), rtcpBurstPayload.value(),
                   "aggregate media and RTCP burst payload")
             : rtcpBurstPayload;
-        if (!sustainedPayload || !peakPayload || !burstPayload) {
+        atomicPayload = rtcpAtomicPayload
+            ? MediaCheckedArithmetic::add(
+                  atomicPayload.value(), rtcpAtomicPayload.value(),
+                  "aggregate media and RTCP atomic payload")
+            : rtcpAtomicPayload;
+        auto withRtcpAtomicDatagrams = MediaCheckedArithmetic::add(
+            atomicDatagrams, rtcpStreams,
+            "aggregate media and RTCP atomic datagrams");
+        if (!sustainedPayload || !peakPayload || !burstPayload ||
+            !atomicPayload || !withRtcpAtomicDatagrams) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
                 !sustainedPayload ? sustainedPayload.error() :
-                !peakPayload ? peakPayload.error() : burstPayload.error());
+                !peakPayload ? peakPayload.error() :
+                !burstPayload ? burstPayload.error() :
+                !atomicPayload ? atomicPayload.error() :
+                withRtcpAtomicDatagrams.error());
         }
+        atomicDatagrams = withRtcpAtomicDatagrams.value();
     }
     const auto networkHeader = ipHeader + UdpHeaderBytes;
     auto networkRate = MediaCheckedArithmetic::multiply(
         packetRate, networkHeader, "conservative network header rate");
     auto networkBurst = MediaCheckedArithmetic::multiply(
         burstDatagrams, networkHeader, "conservative network burst headers");
+    auto networkAtomic = MediaCheckedArithmetic::multiply(
+        atomicDatagrams, networkHeader,
+        "conservative network atomic headers");
     auto sustainedWire = networkRate
         ? MediaCheckedArithmetic::add(
               sustainedPayload.value(), networkRate.value(),
@@ -470,15 +578,23 @@ template <typename Emission>
               burstPayload.value(), networkBurst.value(),
               "conservative burst wire bytes")
         : networkBurst;
-    if (!sustainedWire || !peakWire || !burstWire || packetRate == 0 ||
-        burstDatagrams == 0) {
+    auto atomicWire = networkAtomic
+        ? MediaCheckedArithmetic::add(
+              atomicPayload.value(), networkAtomic.value(),
+              "conservative atomic wire bytes")
+        : networkAtomic;
+    if (!sustainedWire || !peakWire || !burstWire || !atomicWire ||
+        packetRate == 0 || burstDatagrams == 0 || atomicDatagrams == 0) {
         return ::media::Result<MediaWireTrafficEnvelope>::failure(
             !sustainedWire ? sustainedWire.error() :
-            !peakWire ? peakWire.error() : burstWire.error());
+            !peakWire ? peakWire.error() :
+            !burstWire ? burstWire.error() : atomicWire.error());
     }
     return ::media::Result<MediaWireTrafficEnvelope>::success({
         sustainedWire.value(), peakWire.value(), packetRate,
-        burstWire.value(), burstDatagrams, maximumProtocolPayload,
+        burstWire.value(), burstDatagrams,
+        atomicWire.value(), atomicDatagrams,
+        maximumProtocolPayload,
         maximumProtocolPayload + networkHeader,
         "prepared-emission+protocol-upper-envelope+route-mtu"});
 }
@@ -497,46 +613,46 @@ std::uint64_t endpointCount(const MediaRealtimeRtpTranscodeRequest& request)
 
 ::media::Result<MediaRealtimeDeploymentLatencyBudget> pacingLatency(
     const MediaWireTrafficEnvelope& wire,
+    std::uint64_t provisionedWireCapacityBytesPerSecond,
     MediaRunningTime maximumResidence)
 {
-    if (wire.peakWireBytesPerSecond == 0 || wire.burstWireBytes == 0 ||
-        wire.maximumWireDatagramBytes == 0) {
+    if (wire.sustainedWireBytesPerSecond == 0 ||
+        wire.peakWireBytesPerSecond == 0 || wire.burstWireBytes == 0 ||
+        wire.maximumWireDatagramBytes == 0 ||
+        provisionedWireCapacityBytesPerSecond <
+            wire.peakWireBytesPerSecond) {
         return ::media::Result<MediaRealtimeDeploymentLatencyBudget>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "prepared wire admission requires positive peak, burst, and Datagram geometry"));
+            ::media::ErrorInfo::unsupported(
+                "prepared wire demand exceeds the configured managed service rate"));
     }
-    auto pacingRate = MediaCheckedArithmetic::ceilScale(
-        wire.sustainedWireBytesPerSecond, WebRtcPacingRateNumerator,
-        WebRtcPacingRateDenominator,
-        "WebRTC no-feedback default pacing rate");
-    if (!pacingRate || pacingRate.value() < wire.peakWireBytesPerSecond) {
-        if (!pacingRate) {
-            return ::media::Result<MediaRealtimeDeploymentLatencyBudget>::failure(
-                pacingRate.error());
-        }
-        pacingRate = ::media::Result<std::uint64_t>::success(
-            wire.peakWireBytesPerSecond);
+    auto requiredPacingRate =
+        MediaDatagramPacingRatePlanner::requiredWireBytesPerSecond(
+            wire, maximumResidence);
+    if (!requiredPacingRate ||
+        requiredPacingRate.value() > provisionedWireCapacityBytesPerSecond) {
+        return ::media::Result<MediaRealtimeDeploymentLatencyBudget>::failure(
+            !requiredPacingRate ? requiredPacingRate.error() :
+            ::media::ErrorInfo::unsupported(
+                "prepared burst cannot be drained within the immutable residence by the provisioned service"));
     }
     auto burstDrain = MediaCheckedArithmetic::ceilScale(
         wire.burstWireBytes, NanosecondsPerSecond,
-        pacingRate.value(),
-        "prepared wire burst debt drain time");
+        requiredPacingRate.value(),
+        "prepared deadline-admitted burst debt drain time");
     auto packetSerialization = MediaCheckedArithmetic::ceilScale(
         wire.maximumWireDatagramBytes, NanosecondsPerSecond,
-        pacingRate.value(),
-        "maximum Datagram serialization time");
-    auto target = burstDrain && packetSerialization
-        ? MediaCheckedArithmetic::add(
-              burstDrain.value(), packetSerialization.value(),
-              "debt pacer residence bound")
-        : ::media::Result<std::uint64_t>::failure(
-              !burstDrain ? burstDrain.error() : packetSerialization.error());
-    if (!target || target.value() > static_cast<std::uint64_t>(
+        requiredPacingRate.value(),
+        "prepared deadline-admitted maximum Datagram serialization time");
+    auto target = burstDrain;
+    if (!target || !packetSerialization ||
+        target.value() > static_cast<std::uint64_t>(
             (std::numeric_limits<std::int64_t>::max)()) ||
         packetSerialization.value() > static_cast<std::uint64_t>(
             (std::numeric_limits<std::int64_t>::max)())) {
         return ::media::Result<MediaRealtimeDeploymentLatencyBudget>::failure(
-            !target ? target.error() : ::media::ErrorInfo::invalidArgument(
+            !target ? target.error() :
+            !packetSerialization ? packetSerialization.error() :
+            ::media::ErrorInfo::invalidArgument(
                 "prepared wire debt residence exceeds running-time range"));
     }
     const auto targetResidence = MediaRunningTime::fromNanoseconds(
@@ -554,10 +670,10 @@ std::uint64_t endpointCount(const MediaRealtimeRtpTranscodeRequest& request)
     return ::media::Result<MediaRealtimeDeploymentLatencyBudget>::success({
         targetResidence,
         maximumResidence,
-        "webrtc-default-2.5x-continuous-media-debt-target+caller-maximum-wire-residence",
+        "webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-queue-time-admission+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket",
         MediaRunningTime::fromNanoseconds(
             static_cast<std::int64_t>(packetSerialization.value())),
-        "webrtc-default-2.5x-maximum-datagram-debt-serialization"});
+        "prepared-deadline-admitted-rate-maximum-datagram-serialization"});
 }
 
 } // namespace
@@ -592,9 +708,13 @@ MediaRealtimeDeploymentPlanner::planBase(
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             mtu.error());
     }
+    const auto provisionedWireCapacityBytesPerSecond =
+        *request.deployment.provisionedEgressCapacityBitsPerSecond / 8;
     auto wire = conservativeWire(request, emission, mtu.value());
     auto latency = wire
-        ? pacingLatency(wire.value(), *request.deployment.maximumWireResidence)
+        ? pacingLatency(
+              wire.value(), provisionedWireCapacityBytesPerSecond,
+              *request.deployment.maximumWireResidence)
         : ::media::Result<MediaRealtimeDeploymentLatencyBudget>::failure(
               wire.error());
     if (!wire || !latency) {
@@ -603,8 +723,6 @@ MediaRealtimeDeploymentPlanner::planBase(
     }
     const auto count = endpointCount(request);
     const auto maximumResidence = latency.value().maximumResidence;
-    const auto provisionedWireCapacityBytesPerSecond =
-        *request.deployment.provisionedEgressCapacityBitsPerSecond / 8;
     MediaRealtimeDeploymentBasePlan result{
         {MediaDatagramServiceScopeKind::ProvisionedEgress,
          route.value().serviceScopeId,
@@ -637,43 +755,22 @@ MediaRealtimeDeploymentPlanner::complete(
     MediaRealtimeDeploymentBasePlan base)
 {
     const auto& wire = base.admittedWire;
-    auto serviceWindow = base.latency.targetResidence.checkedSubtract(
-        base.latency.maximumReleaseJitter);
-    auto burstRate = serviceWindow && serviceWindow.value().nanoseconds() > 0
-        ? MediaCheckedArithmetic::ceilScale(
-              wire.burstWireBytes, NanosecondsPerSecond,
-              static_cast<std::uint64_t>(
-                  serviceWindow.value().nanoseconds()),
-              "derived egress burst service rate")
-        : ::media::Result<std::uint64_t>::failure(
-              ::media::ErrorInfo::invalidArgument(
-                  "derived egress service window is not positive"));
-    if (!burstRate) {
+    auto pacingRate =
+        MediaDatagramPacingRatePlanner::requiredWireBytesPerSecond(
+            wire, base.latency.maximumResidence);
+    if (!pacingRate || pacingRate.value() >
+            base.provisionedWireCapacityBytesPerSecond) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            burstRate.error());
-    }
-    auto webRtcPacingRate = MediaCheckedArithmetic::ceilScale(
-        wire.sustainedWireBytesPerSecond, WebRtcPacingRateNumerator,
-        WebRtcPacingRateDenominator,
-        "WebRTC no-feedback default pacing rate");
-    if (!webRtcPacingRate) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
-            webRtcPacingRate.error());
-    }
-    const auto fixedPacingRate = (std::max)({
-        wire.peakWireBytesPerSecond, burstRate.value(),
-        webRtcPacingRate.value()});
-    if (fixedPacingRate > base.provisionedWireCapacityBytesPerSecond) {
-        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            !pacingRate ? pacingRate.error() :
             ::media::ErrorInfo::unsupported(
-                "prepared wire pacing demand exceeds provisioned egress capacity"));
+                "prepared deadline-admitted pacing rate exceeds provisioned egress capacity"));
     }
     MediaRealtimeDeploymentManagedServiceFact service{
         base.provisionedWireCapacityBytesPerSecond,
-        fixedPacingRate,
-        wire.burstWireBytes,
+        pacingRate.value(),
+        wire.maximumWireDatagramBytes,
         wire.authority +
-            "+webrtc-default-2.5x-continuous-token-debt-pacing+managed-no-drain-large-queues"};
+            "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-queue-time-admission+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket+managed-no-runtime-rate-fallback"};
     auto residenceDatagrams = MediaCheckedArithmetic::bytesForResidence(
         wire.peakDatagramsPerSecond,
         base.latency.maximumResidence.nanoseconds(),
@@ -690,7 +787,8 @@ MediaRealtimeDeploymentPlanner::complete(
             runDatagrams.error());
     }
     base.observation.maximumRunDatagrams = (std::max)(
-        std::uint64_t{1}, runDatagrams.value());
+        (std::max)(std::uint64_t{1}, runDatagrams.value()),
+        wire.maximumAtomicDatagrams);
     auto network = MediaRealtimeNetworkResourceLedgerPlanner::plan(
         base.latency, base.observation, wire, base.endpointCount);
     if (!network) {

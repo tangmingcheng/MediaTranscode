@@ -16,6 +16,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaNodeWakeup;
+
 struct MediaWireGlobalSequenceSnapshot final {
     std::uint64_t generation;
     std::uint64_t nextGlobalSequence;
@@ -105,6 +107,9 @@ public:
 
     ::media::Result<MediaWireGlobalSequenceReservation> reserve(
         std::span<const MediaWireGlobalSequenceReservationEntry> entries);
+    ::media::Status registerReservationWakeup(
+        std::uint64_t endpointId,
+        std::shared_ptr<MediaNodeWakeup> wakeup);
     MediaWireGlobalSequenceSnapshot snapshot() const noexcept;
     const std::string& sessionKey() const noexcept { return m_sessionKey; }
     const std::string& serviceScopeId() const noexcept
@@ -142,6 +147,7 @@ private:
         std::size_t count) const noexcept;
     void observeResidence(
         MediaRunningTime materializedAt, MediaRunningTime now) noexcept;
+    void notifyReservationWaiters() noexcept;
 
     struct ReservationRecord final {
         std::uint64_t identity;
@@ -158,6 +164,8 @@ private:
     const std::uint64_t m_maximumOutstandingWireBytes;
     const std::unordered_map<std::uint64_t, std::uint64_t>
         m_endpointWireHeaderBytes;
+    std::unordered_map<std::uint64_t, std::weak_ptr<MediaNodeWakeup>>
+        m_reservationWakeups;
     std::uint64_t m_nextGlobalSequence;
     std::uint64_t m_projectedNextGlobalSequence;
     std::uint64_t m_nextReservationIdentity = 1;
@@ -171,6 +179,7 @@ private:
     std::optional<std::uint64_t> m_lastSubmittedSequence;
     std::optional<std::uint64_t> m_lastCommittedSequence;
     std::deque<ReservationRecord> m_reservations;
+    bool m_reservationBlocked = false;
     bool m_poisoned = false;
 };
 

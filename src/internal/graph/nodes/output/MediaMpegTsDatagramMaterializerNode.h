@@ -40,7 +40,8 @@ private:
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority) noexcept;
     ::media::Status validatePorts(
         MediaGraphExecutionContext& context) const;
-    ::media::Status tryCreateMaterializer();
+    ::media::Status tryCreateMaterializer(
+        MediaGraphExecutionContext& context);
     void recordMaterialized(
         const MediaWireDatagramBatchCollection& batches,
         MediaRunningTime materializedAt) noexcept;

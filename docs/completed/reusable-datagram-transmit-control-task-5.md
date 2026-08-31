@@ -197,6 +197,30 @@ D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode
 - typeperf 121 个有效样本：平均单核 CPU 20.829%、P95 27.996%、峰值 36.866%；private working set 161701888→165154816 B，峰值 165158912 B。CPU 按用户要求保留为后置风险。
 - 源结束后 CLI 保留真实 source-clock expiry，全部 queue/payload/reservation 归零；测试进程无残留。
 
+## 2026-08-31 Windows Release 公共 GBRA sender 复验
+
+链路为 H.264 1280×720 30 fps raw RTP 输入，经 CUDA/NVENC 转码为 HEVC 1920×1080 25 fps、CBR 6 Mbps，输出 MPEG-TS/RTP。公共 sender 直接消费最终 wire batch；发送速率由 planner 按 WebRTC 无反馈 2.5× target、prepared peak、prepared burst/maximum residence 三者最大值推导，再由 ITU Y.1221 GBRA 按实际非阻塞提交完成时间建立下一包 service debt。本次有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 59248 or udp port 59249" -a duration:135 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-gbra-11\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-gbra-11\vlc.log rtp://@192.168.96.122:59248
+
+C:\Windows\System32\typeperf.exe "\Process(media_transcode_realtime_video_cli)\% Processor Time" "\Process(media_transcode_realtime_video_cli)\Working Set - Private" -si 1 -sc 130 -f CSV -o D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-gbra-11\cpu-rss.csv
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-gbra-11 --egress-capacity-bps 25000000 --path-mtu-bytes 1500 --maximum-wire-residence-ms 100 --receiver-transport-decode-lead-ms 1000 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:57248 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 59248 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-gbra-11\output.sdp --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:57248?rtcpport=57249&pkt_size=1200"
+```
+
+- FFmpeg 完整发送 3600 frames/120 s；production 输出 2998 access units。dumpcap 捕获 64515 datagrams、81374528 IP wire bytes，接口丢包 0，wall span 119.974794 s。
+- planner pacing 为 2027220 B/s，单 datagram burst 合同 1356 B。按 packet-event service curve 计算的最大 draw-up 恰为 1356 B；1/5/10/20/100 ms 滑动窗口分别为 2940/8136/13788/25992/122536 B，均未超过对应合同上界。
+- RTP 64486 packets、loss 0；TS TEI、continuity skip、drop 均为 0；1500 个 PCR 样本 wall span 119.911903 s。
+- sender materialized/scheduled/submitted/committed 均为 64515，WouldBlock、writable、deadline、pressure、partial、ambiguous failure 均为 0，backlog 最终归零。协议物化最迟晚于 release 7.0834 ms；TX timestamp 未被平台 tracked，按 report policy 如实记录 delivery evidence not proven。
+- VLC 记录 `Received first picture`、HEVC D3D11VA 1920×1080 与 `Stream buffering done (1040 ms in 945 ms)`；might/too late、corrupt、conceal、decode error、black、drop、discard、lost、discontinuity 均为 0，并完成优雅退出。
+- typeperf 122 个有效 CPU 样本：平均单核 21.221%、P95 26.382%、峰值 35.628%；private working set 164769792 B 起步、峰值 168124416 B。CPU 未达到最终目标，按用户要求本阶段不优化，继续列为风险。
+- 源结束后 CLI 保留真实 source-clock expiry；queue、payload、reservation 全部归零，dumpcap、VLC、CLI、FFmpeg 与 typeperf 均无进程残留。
+
 ## 构建、静态扫描与边界
 
 - Windows VS2026 x64 Release 当前工作树 clean-first：clean 582、build 583，RC=0。

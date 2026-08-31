@@ -88,7 +88,8 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
     return valid ? FFmpegNodeRuntime::start(context) : valid;
 }
 
-::media::Status MediaMpegTsDatagramMaterializerNode::tryCreateMaterializer()
+::media::Status MediaMpegTsDatagramMaterializerNode::tryCreateMaterializer(
+    MediaGraphExecutionContext& context)
 {
     if (m_materializer || !m_protocolPlan || !m_transportPlan) {
         return ::media::Status::success();
@@ -132,7 +133,7 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
                 transport->globalSequence(),
                 protocol->muxPlan().parameters().packetSize,
                 static_cast<std::size_t>(endpoint->maximumDatagramBytes),
-                shaping.batch()});
+                shaping.batch(), context.sharedNodeWakeup(nodeId())});
         if (!created) return ::media::Status::failure(created.error());
         m_materializer.emplace<MediaMpegTsUdpWireDatagramMaterializer>(
             std::move(created).value());
@@ -177,7 +178,8 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
             shaping.batch(),
             m_authority->sharedNtpEpoch()->masterAtCapture(),
             *m_authority->sharedNtpEpoch(),
-            std::move(reportSchedule).value(), rtp->cname()});
+            std::move(reportSchedule).value(), rtp->cname(),
+            context.sharedNodeWakeup(nodeId())});
     if (!created) return ::media::Status::failure(created.error());
     m_materializer.emplace<MediaMpegTsRtpWireDatagramMaterializer>(
         std::move(created).value());
@@ -202,7 +204,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         }
         if (input.value()) {
             m_protocolPlan = std::move(*input.value());
-            auto created = tryCreateMaterializer();
+            auto created = tryCreateMaterializer(context);
             return created ? processProgress()
                            : processProgress(std::move(created));
         }
@@ -215,7 +217,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         }
         if (input.value()) {
             m_transportPlan = std::move(*input.value());
-            auto created = tryCreateMaterializer();
+            auto created = tryCreateMaterializer(context);
             return created ? processProgress()
                            : processProgress(std::move(created));
         }

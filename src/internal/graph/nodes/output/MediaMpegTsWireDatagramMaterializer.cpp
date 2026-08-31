@@ -104,10 +104,14 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
     if (config.globalSequence->sessionKey() != config.sessionKey ||
         config.globalSequence->serviceScopeId() != config.serviceScopeId ||
         global.generation != config.generation || global.poisoned ||
+        !config.reservationWakeup ||
         global.reservationActive) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP wire materializer global sequence session or service scope identity differs"));
     }
+    auto registered = config.globalSequence->registerReservationWakeup(
+        config.endpointId, config.reservationWakeup);
+    if (!registered) return Result::failure(registered.error());
     return Result::success(MediaMpegTsUdpWireDatagramMaterializer(
         std::move(config)));
 }
@@ -296,7 +300,8 @@ MediaMpegTsRtpWireDatagramMaterializer::create(
             0,
             config.maximumDatagramBytes,
             config.maximumOutstandingDatagrams,
-            config.batchPlan});
+            config.batchPlan,
+            std::move(config.reservationWakeup)});
     if (!rtpMaterializer) return Result::failure(rtpMaterializer.error());
     return Result::success(MediaMpegTsRtpWireDatagramMaterializer(
         std::move(packetizer).value(),

@@ -31,7 +31,6 @@
 #include "internal/graph/nodes/output/MediaRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
-#include "internal/graph/nodes/output/MediaDatagramShaperNode.h"
 #include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNode.h"
@@ -725,15 +724,9 @@ template <typename Node>
             std::move(created).value());
     }
     case MediaNodeKind::DatagramShaper:
-    {
-        auto created = MediaDatagramShaperNode::create(
-            node.id, protocolOutputAuthority);
-        return created
-            ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-                  std::move(created).value())
-            : ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                  created.error());
-    }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::unsupported(
+                "DatagramShaper node kind is reserved; pacing is owned by ScheduledDatagramSender"));
     case MediaNodeKind::MpegTsRtpSdpPublisher:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(

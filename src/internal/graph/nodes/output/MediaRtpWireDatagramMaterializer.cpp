@@ -47,6 +47,7 @@ MediaRtpWireDatagramMaterializer::create(
         config.senderReportSchedule.generation() != config.generation ||
         config.maximumDatagramBytes <= RtpFixedHeaderBytes ||
         config.maximumOutstandingDatagrams == 0 ||
+        !config.reservationWakeup ||
         config.batchPlan.maximumDatagrams == 0 ||
         config.batchPlan.maximumBytes < config.maximumDatagramBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -59,6 +60,12 @@ MediaRtpWireDatagramMaterializer::create(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire materializer global sequence session or service scope identity differs"));
     }
+    auto registeredRtp = config.globalSequence->registerReservationWakeup(
+        config.rtpEndpointId, config.reservationWakeup);
+    if (!registeredRtp) return Result::failure(registeredRtp.error());
+    auto registeredRtcp = config.globalSequence->registerReservationWakeup(
+        config.rtcpEndpointId, config.reservationWakeup);
+    if (!registeredRtcp) return Result::failure(registeredRtcp.error());
     auto cname = MediaRtcpSdesTextValidator::validateCname(config.cname);
     if (!cname) return Result::failure(cname.error());
     try {
@@ -237,11 +244,24 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     }
     const std::size_t entryCount =
         datagrams.size() + (rtcpBytes ? 1U : 0U);
-    if (entryCount > m_state->maximumOutstandingDatagrams -
-                         m_state->outstandingDatagrams) {
+    if (!m_state->canAdmitReservation(entryCount)) {
+        if (m_state->blockedReservationDatagrams &&
+            *m_state->blockedReservationDatagrams != entryCount) {
+            m_state->poisoned = true;
+            return Result::failure(::media::ErrorInfo::internalError(
+                "RTP wire materializer changed an armed reservation demand"));
+        }
+        m_state->blockedReservationDatagrams = entryCount;
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "RTP wire reservation exceeds planner backlog capacity"));
     }
+    if (m_state->blockedReservationDatagrams &&
+        *m_state->blockedReservationDatagrams != entryCount) {
+        m_state->poisoned = true;
+        return Result::failure(::media::ErrorInfo::internalError(
+            "RTP wire materializer resumed with a different reservation demand"));
+    }
+    m_state->blockedReservationDatagrams.reset();
     std::vector<MediaWireGlobalSequenceReservationEntry> globalEntries;
     try {
         globalEntries.reserve(entryCount);
@@ -400,11 +420,24 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTCP terminal report exceeds the planned datagram bound"));
     }
-    if (m_state->outstandingDatagrams ==
-        m_state->maximumOutstandingDatagrams) {
+    if (!m_state->canAdmitReservation(1U)) {
+        if (m_state->blockedReservationDatagrams &&
+            *m_state->blockedReservationDatagrams != 1U) {
+            m_state->poisoned = true;
+            return Result::failure(::media::ErrorInfo::internalError(
+                "RTP terminal materializer changed an armed reservation demand"));
+        }
+        m_state->blockedReservationDatagrams = 1U;
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "RTP terminal reservation exceeds planner backlog capacity"));
     }
+    if (m_state->blockedReservationDatagrams &&
+        *m_state->blockedReservationDatagrams != 1U) {
+        m_state->poisoned = true;
+        return Result::failure(::media::ErrorInfo::internalError(
+            "RTP terminal materializer resumed with a different reservation demand"));
+    }
+    m_state->blockedReservationDatagrams.reset();
     const std::array<MediaWireGlobalSequenceReservationEntry, 1>
         globalEntries{{{
             m_state->rtcpEndpointId,

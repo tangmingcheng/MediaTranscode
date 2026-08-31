@@ -18,6 +18,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaNodeWakeup;
+
 struct MediaRtpWireDatagramMaterializerConfig final {
     std::string sessionKey;
     std::string serviceScopeId;
@@ -38,6 +40,7 @@ struct MediaRtpWireDatagramMaterializerConfig final {
     std::size_t maximumDatagramBytes;
     std::size_t maximumOutstandingDatagrams;
     MediaDatagramBatchPlan batchPlan;
+    std::shared_ptr<MediaNodeWakeup> reservationWakeup;
 };
 
 struct MediaRtpWireDatagramMaterializerSnapshot final {

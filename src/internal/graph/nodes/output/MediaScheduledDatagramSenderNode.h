@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
+#include "internal/graph/runtime/network/MediaDatagramPacingController.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitSession.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
@@ -14,7 +15,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaDatagramTransportPlanBuffer;
-class MediaScheduledWireDatagramBatchBuffer;
+class MediaWireDatagramBatchBuffer;
 class MediaWireGlobalSequenceState;
 
 struct MediaScheduledDatagramSenderNodeDependencies final {
@@ -58,16 +59,22 @@ private:
     ::media::Status bindPlan(const MediaDatagramTransportPlanBuffer& plan);
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
     ::media::Status waitUntil(MediaRunningTime deadline);
-    ::media::Status beginSubmitGroup();
+    ::media::Status beginSubmitGroup(MediaRunningTime now);
     ::media::Status preflightBatchTelemetry(
-        const MediaScheduledWireDatagramBatchBuffer& batch) const;
+        const MediaWireDatagramBatchBuffer& batch) const;
+    ::media::Status enqueueWireBatch(
+        std::shared_ptr<MediaWireDatagramBatchBuffer> batch);
+    ::media::Result<bool> activateNextWireBatch();
+    bool allBatchInputsDrained(
+        MediaGraphExecutionContext& context) const noexcept;
     void recordSubmittedPrefix(
         std::size_t count,
         MediaRunningTime submitCompletedAt) noexcept;
     ::media::Status commitAccumulatedSubmittedPrefix();
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
-        MediaRunningTime submittedAt);
+        MediaRunningTime submitStartedAt,
+        MediaRunningTime submitCompletedAt);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void emitDiagnostics(const char* stage) noexcept;
     void closeSender(::media::ErrorInfo cause) noexcept;
@@ -76,9 +83,10 @@ private:
     MediaTranscodeStreamSet m_streamSet;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_clock;
     std::unique_ptr<MediaDatagramTransmitPortFactory> m_portFactory;
+    std::unique_ptr<MediaDatagramPacingController> m_pacingController;
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
     std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
-    std::shared_ptr<MediaScheduledWireDatagramBatchBuffer> m_pendingBatch;
+    std::shared_ptr<MediaWireDatagramBatchBuffer> m_pendingBatch;
     MediaNodeWakeup m_wakeup;
     std::stop_source m_stopSource;
     std::optional<std::uint64_t> m_generation;
@@ -90,9 +98,24 @@ private:
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointBytes;
     std::vector<std::uint64_t> m_endpointIds;
     std::vector<MediaDatagramTransmitJobEntry> m_submitEntries;
+    struct QueuedWireBatch final {
+        std::uint64_t firstGlobalSequence;
+        std::uint64_t lastGlobalSequence;
+        std::uint64_t wireBytes;
+        std::shared_ptr<MediaWireDatagramBatchBuffer> batch;
+    };
+    std::vector<QueuedWireBatch> m_queuedWireBatches;
     std::uint64_t m_burstWireBytes = 0;
     std::uint64_t m_maximumBatchDatagrams = 0;
     std::uint64_t m_maximumBatchBytes = 0;
+    std::uint64_t m_maximumBacklogDatagrams = 0;
+    std::uint64_t m_maximumBacklogBytes = 0;
+    std::uint64_t m_queuedWireDatagrams = 0;
+    std::uint64_t m_queuedWireBytes = 0;
+    std::uint64_t m_maximumQueuedWireBatches = 0;
+    std::uint64_t m_maximumQueuedWireDatagrams = 0;
+    std::uint64_t m_maximumQueuedWireBytes = 0;
+    std::optional<std::uint64_t> m_nextScheduledSequence;
     SubmitState m_state = SubmitState::WaitReservation;
     std::size_t m_nextDatagram = 0;
     std::size_t m_groupBegin = 0;
@@ -100,10 +123,7 @@ private:
     std::uint64_t m_groupEndpointId = 0;
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
-    MediaRunningTime m_groupServiceDuration =
-        MediaRunningTime::fromNanoseconds(0);
     bool m_groupDeadlineSubmitAttempted = false;
-    std::optional<MediaRunningTime> m_nextPhysicalSubmitNotBefore;
     std::optional<MediaRunningTime> m_lastSubmittedAt;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::uint64_t m_batches = 0;
@@ -111,7 +131,6 @@ private:
     std::uint64_t m_bytes = 0;
     std::uint64_t m_wouldBlockEvents = 0;
     std::uint64_t m_writableWaits = 0;
-    std::uint64_t m_physicalSpacingDeferrals = 0;
     std::uint64_t m_deadlineMisses = 0;
     std::uint64_t m_pressureFailures = 0;
     std::uint64_t m_partialSubmittedFailures = 0;

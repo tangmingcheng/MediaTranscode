@@ -30,6 +30,7 @@ struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
     std::uint16_t tsPacketBytes;
     std::size_t maximumDatagramBytes;
     MediaDatagramBatchPlan batchPlan;
+    std::shared_ptr<MediaNodeWakeup> reservationWakeup;
 };
 
 class MediaMpegTsUdpWireDatagramMaterializer final {
@@ -83,6 +84,7 @@ struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
     MediaSharedNtpEpoch ntpEpoch;
     MediaRtcpSenderReportSchedule senderReportSchedule;
     std::string cname;
+    std::shared_ptr<MediaNodeWakeup> reservationWakeup;
 };
 
 class MediaMpegTsRtpWireDatagramMaterializer final {

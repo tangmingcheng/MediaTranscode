@@ -3,13 +3,17 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
-#include "internal/graph/runtime/buffer/MediaScheduledWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -66,13 +70,41 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 {
     const auto* plan = context.findInputChannel(nodeId(), "plan");
     const auto* batch = context.findInputChannel(nodeId(), "batch");
-    if (context.inputChannels(nodeId()).size() != 2 ||
-        !context.outputChannels(nodeId()).empty() || !plan || !batch ||
+    const auto* graph = context.graph();
+    const auto* planPort = graph ? graph->findInputPort(nodeId(), "plan") : nullptr;
+    const auto* batchPort = graph ? graph->findInputPort(nodeId(), "batch") : nullptr;
+    std::size_t planChannels = 0;
+    std::size_t batchChannels = 0;
+    bool channelTypesValid = true;
+    for (const auto* channel : context.inputChannels(nodeId())) {
+        if (!channel) {
+            channelTypesValid = false;
+            continue;
+        }
+        if (planPort && channel->binding().to.portId == planPort->id) {
+            ++planChannels;
+            channelTypesValid = channelTypesValid &&
+                channel->binding().streamKind == MediaStreamKind::Metadata &&
+                channel->binding().payloadKind ==
+                    MediaPayloadKind::DatagramTransportPlan;
+        } else if (batchPort &&
+                   channel->binding().to.portId == batchPort->id) {
+            ++batchChannels;
+            channelTypesValid = channelTypesValid &&
+                channel->binding().streamKind == MediaStreamKind::Metadata &&
+                channel->binding().payloadKind ==
+                    MediaPayloadKind::WireDatagramBatch;
+        } else {
+            channelTypesValid = false;
+        }
+    }
+    if (!context.outputChannels(nodeId()).empty() || !plan || !batch ||
+        !planPort || !batchPort || planChannels != 1 || batchChannels == 0 ||
+        !channelTypesValid ||
         plan->binding().streamKind != MediaStreamKind::Metadata ||
         plan->binding().payloadKind != MediaPayloadKind::DatagramTransportPlan ||
         batch->binding().streamKind != MediaStreamKind::Metadata ||
-        batch->binding().payloadKind !=
-            MediaPayloadKind::ScheduledWireDatagramBatch) {
+        batch->binding().payloadKind != MediaPayloadKind::WireDatagramBatch) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender requires exact transport plan and scheduled wire inputs"));
     }
@@ -83,6 +115,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     m_session.reset();
+    m_pacingController.reset();
     m_serviceLedger.reset();
     m_pendingBatch.reset();
     m_generation.reset();
@@ -93,9 +126,15 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_endpointBytes.clear();
     m_endpointIds.clear();
     m_submitEntries.clear();
+    m_queuedWireBatches.clear();
     m_burstWireBytes = 0;
     m_maximumBatchDatagrams = 0;
     m_maximumBatchBytes = 0;
+    m_maximumBacklogDatagrams = 0;
+    m_maximumBacklogBytes = 0;
+    m_queuedWireDatagrams = 0;
+    m_queuedWireBytes = 0;
+    m_nextScheduledSequence.reset();
     m_state = SubmitState::WaitReservation;
     m_nextDatagram = 0;
     m_groupBegin = 0;
@@ -103,9 +142,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupEndpointId = 0;
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
-    m_groupServiceDuration = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadlineSubmitAttempted = false;
-    m_nextPhysicalSubmitNotBefore.reset();
     m_lastSubmittedAt.reset();
     m_terminalFailure.reset();
     m_wakeup.reset();
@@ -115,7 +152,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_bytes = 0;
     m_wouldBlockEvents = 0;
     m_writableWaits = 0;
-    m_physicalSpacingDeferrals = 0;
     m_deadlineMisses = 0;
     m_pressureFailures = 0;
     m_partialSubmittedFailures = 0;
@@ -131,7 +167,8 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 {
     const auto& plan = planBuffer.plan();
     auto activation = m_clock->currentActivation();
-    if (!activation || plan.shaping.sessionKey() != m_plannedSession.value() ||
+    if (!activation || !planBuffer.globalSequence() ||
+        plan.shaping.sessionKey() != m_plannedSession.value() ||
         activation.value().generation != plan.shaping.generation() ||
         (m_generation && plan.shaping.generation() <= *m_generation) ||
         plan.shaping.serviceScope().scopeId.empty() ||
@@ -171,6 +208,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             shaping.value(), bindings, execution); !valid) {
         return valid;
     }
+    if (!m_queuedWireBatches.empty() || m_pendingBatch) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "scheduled datagram sender cannot rebind with queued wire work"));
+    }
     if (m_session) {
         auto now = m_clock->now();
         if (!now) return ::media::Status::failure(now.error());
@@ -182,6 +223,19 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         shaping.value(), std::move(bindings), std::move(execution),
         *m_portFactory);
     if (!session) return ::media::Status::failure(session.error());
+    MediaDatagramPacingContract pacingContract{
+        plan.shaping.sessionKey(), plan.shaping.serviceScope().scopeId,
+        plan.shaping.generation(),
+        plan.shaping.serviceCurve().pacingWireBytesPerSecond};
+    if (m_pacingController) {
+        auto rebound = m_pacingController->rebind(std::move(pacingContract));
+        if (!rebound) return rebound;
+    } else {
+        auto pacing = MediaDatagramPacingController::create(
+            std::move(pacingContract));
+        if (!pacing) return ::media::Status::failure(pacing.error());
+        m_pacingController = std::move(pacing).value();
+    }
     m_session = std::move(session).value();
     m_serviceLedger = planBuffer.globalSequence();
     m_generation = plan.shaping.generation();
@@ -203,13 +257,20 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_burstWireBytes = plan.shaping.serviceCurve().burstWireBytes;
     m_maximumBatchDatagrams = plan.shaping.batch().maximumDatagrams;
     m_maximumBatchBytes = plan.shaping.batch().maximumBytes;
-    if (m_maximumBatchDatagrams > m_submitEntries.max_size()) {
+    m_maximumBacklogDatagrams = plan.shaping.backlog().maximumDatagrams;
+    m_maximumBacklogBytes = plan.shaping.backlog().maximumBytes;
+    const auto snapshot = m_serviceLedger->snapshot();
+    m_nextScheduledSequence = snapshot.nextGlobalSequence;
+    if (m_maximumBatchDatagrams > m_submitEntries.max_size() ||
+        m_maximumBacklogDatagrams > m_queuedWireBatches.max_size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender batch capacity is not representable"));
     }
     try {
         m_submitEntries.reserve(
             static_cast<std::size_t>(m_maximumBatchDatagrams));
+        m_queuedWireBatches.reserve(
+            static_cast<std::size_t>(m_maximumBacklogDatagrams));
     } catch (const std::bad_alloc&) {
         return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
             "scheduled datagram sender submit storage"));
@@ -237,9 +298,11 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
 }
 
-::media::Status MediaScheduledDatagramSenderNode::beginSubmitGroup()
+::media::Status MediaScheduledDatagramSenderNode::beginSubmitGroup(
+    MediaRunningTime now)
 {
     if (!m_pendingBatch || !m_generation || !m_session ||
+        !m_pacingController ||
         m_nextDatagram >= m_pendingBatch->m_datagrams.size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender has no reservable wire job"));
@@ -261,25 +324,25 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     m_groupCount = 1;
     m_groupEndpointId = first.endpointId();
-    m_groupNotBefore = first.enqueueNotBefore();
-    m_groupDeadline = first.enqueueNotAfter();
-    m_groupServiceDuration = first.wireServiceDuration();
-    m_groupDeadlineSubmitAttempted = false;
-    if (m_nextPhysicalSubmitNotBefore &&
-        *m_nextPhysicalSubmitNotBefore > m_groupNotBefore) {
-        m_groupNotBefore = *m_nextPhysicalSubmitNotBefore;
-        ++m_physicalSpacingDeferrals;
-    }
+    auto pacing = m_pacingController->reserve(
+        MediaDatagramPacingJob{
+            first.generation(), first.endpointId(), first.globalSequence(),
+            static_cast<std::uint64_t>(first.bytes().size()) + overhead->second,
+            first.canonicalRelease(), first.canonicalDeadline()},
+        now);
+    if (!pacing) return ::media::Status::failure(pacing.error());
+    m_groupNotBefore = pacing.value().notBefore;
+    m_groupDeadline = pacing.value().notAfter;
     if (m_groupNotBefore > m_groupDeadline) {
-        ++m_deadlineMisses;
         return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-            "scheduled datagram physical service spacing exceeds its original deadline"));
+            "scheduled wire job cannot satisfy its GBRA completion deadline"));
     }
+    m_groupDeadlineSubmitAttempted = false;
     return ::media::Status::success();
 }
 
 ::media::Status MediaScheduledDatagramSenderNode::preflightBatchTelemetry(
-    const MediaScheduledWireDatagramBatchBuffer& batch) const
+    const MediaWireDatagramBatchBuffer& batch) const
 {
     if (batch.m_datagrams.empty() ||
         batch.m_datagrams.size() > m_maximumBatchDatagrams ||
@@ -338,18 +401,141 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
+::media::Status MediaScheduledDatagramSenderNode::enqueueWireBatch(
+    std::shared_ptr<MediaWireDatagramBatchBuffer> batch)
+{
+    if (!batch || batch->m_datagrams.empty() || !m_nextScheduledSequence ||
+        batch->m_datagrams.size() > m_maximumBacklogDatagrams) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "common pacing sender requires one ordered bounded wire batch"));
+    }
+    const auto first = batch->m_datagrams.front().globalSequence();
+    const auto last = batch->m_datagrams.back().globalSequence();
+    if (first < *m_nextScheduledSequence || last < first) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "common pacing sender rejects stale or wrapped wire sequence"));
+    }
+
+    std::uint64_t wireBytes = 0;
+    for (const auto& datagram : batch->m_datagrams) {
+        const auto overhead = m_wireOverheadBytes.find(datagram.endpointId());
+        const auto payloadBytes =
+            static_cast<std::uint64_t>(datagram.bytes().size());
+        if (overhead == m_wireOverheadBytes.end() ||
+            payloadBytes > (std::numeric_limits<std::uint64_t>::max)() -
+                               overhead->second ||
+            payloadBytes + overhead->second >
+                (std::numeric_limits<std::uint64_t>::max)() - wireBytes) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "common pacing sender wire cost is not representable"));
+        }
+        wireBytes += payloadBytes + overhead->second;
+    }
+    const auto datagrams =
+        static_cast<std::uint64_t>(batch->m_datagrams.size());
+    if (datagrams > m_maximumBacklogDatagrams - m_queuedWireDatagrams ||
+        wireBytes > m_maximumBacklogBytes - m_queuedWireBytes) {
+        ++m_pressureFailures;
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "common pacing sender ordered queue exceeds planner backlog"));
+    }
+
+    auto position = std::lower_bound(
+        m_queuedWireBatches.begin(), m_queuedWireBatches.end(), first,
+        [](const QueuedWireBatch& queued, std::uint64_t sequence) {
+            return queued.firstGlobalSequence < sequence;
+        });
+    if ((position != m_queuedWireBatches.end() &&
+         last >= position->firstGlobalSequence) ||
+        (position != m_queuedWireBatches.begin() &&
+         std::prev(position)->lastGlobalSequence >= first)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "common pacing sender rejects overlapping wire sequence ranges"));
+    }
+    try {
+        m_queuedWireBatches.insert(
+            position, QueuedWireBatch{first, last, wireBytes, std::move(batch)});
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "common pacing sender ordered wire queue"));
+    }
+    m_queuedWireDatagrams += datagrams;
+    m_queuedWireBytes += wireBytes;
+    m_maximumQueuedWireBatches = (std::max)(
+        m_maximumQueuedWireBatches,
+        static_cast<std::uint64_t>(m_queuedWireBatches.size()));
+    m_maximumQueuedWireDatagrams = (std::max)(
+        m_maximumQueuedWireDatagrams, m_queuedWireDatagrams);
+    m_maximumQueuedWireBytes = (std::max)(
+        m_maximumQueuedWireBytes, m_queuedWireBytes);
+    return ::media::Status::success();
+}
+
+::media::Result<bool>
+MediaScheduledDatagramSenderNode::activateNextWireBatch()
+{
+    using Result = ::media::Result<bool>;
+    if (m_pendingBatch || m_queuedWireBatches.empty()) {
+        return Result::success(false);
+    }
+    if (!m_nextScheduledSequence ||
+        m_queuedWireBatches.front().firstGlobalSequence !=
+            *m_nextScheduledSequence) {
+        return Result::success(false);
+    }
+    auto& queued = m_queuedWireBatches.front();
+    if (queued.lastGlobalSequence ==
+        (std::numeric_limits<std::uint64_t>::max)()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "common pacing sender next sequence would overflow"));
+    }
+    auto scheduledAt = m_clock->now();
+    if (!scheduledAt) return Result::failure(scheduledAt.error());
+    auto scheduled = queued.batch->m_commitSlice.scheduleAll(
+        scheduledAt.value());
+    if (!scheduled) return Result::failure(scheduled.error());
+    const auto datagrams = static_cast<std::uint64_t>(
+        queued.batch->m_datagrams.size());
+    if (datagrams > m_queuedWireDatagrams ||
+        queued.wireBytes > m_queuedWireBytes) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "common pacing sender ordered queue accounting underflowed"));
+    }
+    m_pendingBatch = std::move(queued.batch);
+    *m_nextScheduledSequence = queued.lastGlobalSequence + 1;
+    m_queuedWireDatagrams -= datagrams;
+    m_queuedWireBytes -= queued.wireBytes;
+    m_queuedWireBatches.erase(m_queuedWireBatches.begin());
+    m_nextDatagram = 0;
+    m_lastSubmittedAt.reset();
+    m_commitAttempted = false;
+    m_state = SubmitState::WaitReservation;
+    return Result::success(true);
+}
+
+bool MediaScheduledDatagramSenderNode::allBatchInputsDrained(
+    MediaGraphExecutionContext& context) const noexcept
+{
+    const auto* graph = context.graph();
+    const auto* batchPort = graph
+        ? graph->findInputPort(nodeId(), "batch")
+        : nullptr;
+    if (!batchPort) return false;
+    bool found = false;
+    for (const auto* channel : context.inputChannels(nodeId())) {
+        if (!channel || channel->binding().to.portId != batchPort->id) {
+            continue;
+        }
+        found = true;
+        if (!channel->closed() || channel->size() != 0) return false;
+    }
+    return found;
+}
+
 void MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
     std::size_t count,
     MediaRunningTime submitCompletedAt) noexcept
 {
-    std::int64_t serviceNanoseconds = 0;
-    for (std::size_t offset = 0; offset < count; ++offset) {
-        serviceNanoseconds +=
-            m_pendingBatch->m_datagrams[m_groupBegin + offset]
-                .wireServiceDuration().nanoseconds();
-    }
-    m_nextPhysicalSubmitNotBefore = MediaRunningTime::fromNanoseconds(
-        submitCompletedAt.nanoseconds() + serviceNanoseconds);
     m_lastSubmittedAt = submitCompletedAt;
     m_nextDatagram += count;
 }
@@ -386,7 +572,8 @@ MediaScheduledDatagramSenderNode::commitAccumulatedSubmittedPrefix()
 ::media::Result<MediaNodeProcessResult>
 MediaScheduledDatagramSenderNode::failSubmit(
     const MediaDatagramTransmitError& error,
-    MediaRunningTime submittedAt)
+    MediaRunningTime submitStartedAt,
+    MediaRunningTime submitCompletedAt)
 {
     if (error.kind ==
         MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
@@ -400,9 +587,17 @@ MediaScheduledDatagramSenderNode::failSubmit(
          error.kind ==
              MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix) &&
         error.submittedPrefixDatagrams != 0) {
+        if (error.kind ==
+            MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
+            const auto submittedSequence =
+                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
+            auto paced = m_pacingController->markSubmitted(
+                submittedSequence, submitStartedAt, submitCompletedAt);
+            if (!paced) return failTerminal(paced.error());
+        }
         recordSubmittedPrefix(
             static_cast<std::size_t>(error.submittedPrefixDatagrams),
-            submittedAt);
+            submitCompletedAt);
     }
     return failTerminal(error.cause);
 }
@@ -423,7 +618,9 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         }
 
         if (m_state == SubmitState::WaitReservation) {
-            auto begun = beginSubmitGroup();
+            auto reservationTime = m_clock->now();
+            if (!reservationTime) return failTerminal(reservationTime.error());
+            auto begun = beginSubmitGroup(reservationTime.value());
             if (!begun) return failTerminal(begun.error());
             auto waited = waitUntil(m_groupNotBefore);
             if (!waited) return failTerminal(waited.error());
@@ -481,8 +678,6 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 }
                 m_groupDeadlineSubmitAttempted = true;
             }
-            auto nextPhysical = now.value().checkedAdd(m_groupServiceDuration);
-            if (!nextPhysical) return failTerminal(nextPhysical.error());
             MediaDatagramTransmitSubmitResult submitted =
                 MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(::media::ErrorInfo::internalError(
@@ -496,12 +691,19 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                         m_pendingBatch->m_datagrams[m_groupBegin + offset];
                     m_submitEntries.push_back(MediaDatagramTransmitJobEntry{
                         datagram.bytes(), datagram.globalSequence(),
-                        datagram.enqueueNotAfter(), std::nullopt});
+                        m_groupDeadline, std::nullopt});
                 }
                 submitted = m_session->trySubmitNew(
                     m_groupEndpointId, m_submitEntries, now.value());
             }
-            if (!submitted) return failSubmit(submitted.error(), now.value());
+            if (!submitted) {
+                auto submitCompletedAt = m_clock->now();
+                if (!submitCompletedAt) {
+                    return failTerminal(submitCompletedAt.error());
+                }
+                return failSubmit(
+                    submitted.error(), now.value(), submitCompletedAt.value());
+            }
             if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
                 ++m_wouldBlockEvents;
                 m_state = SubmitState::WaitWritableWithinOriginalDeadline;
@@ -511,10 +713,15 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
             }
+            const auto submittedSequence =
+                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
             auto submitCompletedAt = m_clock->now();
             if (!submitCompletedAt) {
                 return failTerminal(submitCompletedAt.error());
             }
+            auto paced = m_pacingController->markSubmitted(
+                submittedSequence, now.value(), submitCompletedAt.value());
+            if (!paced) return failTerminal(paced.error());
             recordSubmittedPrefix(m_groupCount, submitCompletedAt.value());
             m_state = SubmitState::WaitReservation;
         }
@@ -537,14 +744,31 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << " committed_payload_bytes=" << m_bytes
                    << " would_block=" << m_wouldBlockEvents
                    << " writable_waits=" << m_writableWaits
-                   << " physical_spacing_deferrals="
-                   << m_physicalSpacingDeferrals
                    << " deadline_misses=" << m_deadlineMisses
                    << " pressure_failures=" << m_pressureFailures
                    << " partial_submitted_failures="
                    << m_partialSubmittedFailures
                    << " ambiguous_submitted_failures="
                    << m_ambiguousSubmittedFailures
+                   << " ordered_queue_maximum_batches="
+                   << m_maximumQueuedWireBatches
+                   << " ordered_queue_maximum_datagrams="
+                   << m_maximumQueuedWireDatagrams
+                   << " ordered_queue_maximum_wire_bytes="
+                   << m_maximumQueuedWireBytes
+                   << " pacing_reserved="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry().reservedDatagrams
+                           : 0)
+                   << " pacing_submitted="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry().submittedDatagrams
+                           : 0)
+                   << " pacing_maximum_submit_lateness_ns="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry()
+                                 .maximumSubmitLatenessNanoseconds
+                           : 0)
                    << " delivery_evidence=not_proven";
         if (m_serviceLedger) {
             const auto backlog = m_serviceLedger->snapshot();
@@ -657,24 +881,32 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
         return processWaiting();
     }
 
-    auto batchInput = tryPopInputOptional(context, "batch");
+    auto activated = activateNextWireBatch();
+    if (!activated) return failTerminal(activated.error());
+    if (activated.value()) return progressPendingBatch();
+
+    static constexpr std::array<std::string_view, 1> BatchPortNames{"batch"};
+    auto batchInput = tryPopFirstInputWithChannelOptional(
+        context, BatchPortNames);
     if (!batchInput) return failTerminal(batchInput.error());
     if (!batchInput.value()) {
-        const auto* channel = context.findInputChannel(nodeId(), "batch");
-        return channel && channel->closed() ? processFinished()
-                                            : processWaiting();
+        if (!allBatchInputsDrained(context)) return processWaiting();
+        if (!m_queuedWireBatches.empty()) {
+            return failTerminal(::media::ErrorInfo::internalError(
+                "common pacing sender inputs closed with a global sequence gap"));
+        }
+        return processFinished();
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
-            batchInput.value()->get())) {
+            batchInput.value()->buffer.get())) {
         if (control->controlKind() == MediaControlBufferKind::Abort) {
             return failTerminal(::media::ErrorInfo::cancelled(
                 "scheduled datagram sender received abort"));
         }
-        return control->controlKind() == MediaControlBufferKind::Eof
-            ? processFinished() : processProgress();
+        return processProgress();
     }
-    auto batch = std::dynamic_pointer_cast<MediaScheduledWireDatagramBatchBuffer>(
-        *batchInput.value());
+    auto batch = std::dynamic_pointer_cast<MediaWireDatagramBatchBuffer>(
+        batchInput.value()->buffer);
     if (!batch || batch->sessionKey() != m_plannedSession.value() ||
         batch->serviceScopeId() != m_serviceScopeId || !m_generation ||
         batch->generation() != *m_generation || batch->m_datagrams.empty()) {
@@ -683,12 +915,11 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     }
     auto telemetry = preflightBatchTelemetry(*batch);
     if (!telemetry) return failTerminal(telemetry.error());
-    m_pendingBatch = std::move(batch);
-    m_nextDatagram = 0;
-    m_lastSubmittedAt.reset();
-    m_commitAttempted = false;
-    m_state = SubmitState::WaitReservation;
-    return progressPendingBatch();
+    auto queued = enqueueWireBatch(std::move(batch));
+    if (!queued) return failTerminal(queued.error());
+    activated = activateNextWireBatch();
+    if (!activated) return failTerminal(activated.error());
+    return activated.value() ? progressPendingBatch() : processProgress();
 }
 
 void MediaScheduledDatagramSenderNode::closeSender(
@@ -701,6 +932,9 @@ void MediaScheduledDatagramSenderNode::closeSender(
     }
     m_session.reset();
     m_pendingBatch.reset();
+    m_queuedWireBatches.clear();
+    m_queuedWireDatagrams = 0;
+    m_queuedWireBytes = 0;
 }
 
 ::media::Status MediaScheduledDatagramSenderNode::stop(

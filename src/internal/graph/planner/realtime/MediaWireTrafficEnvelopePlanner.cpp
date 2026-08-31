@@ -66,6 +66,9 @@ struct WireDemand final {
     std::uint64_t burstPayload = 0;
     std::uint64_t burstPayloadDatagrams = 0;
     std::uint64_t burstDiscreteDatagrams = 0;
+    std::uint64_t atomicPayload = 0;
+    std::uint64_t atomicPayloadDatagrams = 0;
+    std::uint64_t atomicDiscreteDatagrams = 0;
 };
 
 template <typename Emission>
@@ -173,14 +176,23 @@ template <typename Emission>
         ? add(emission.maximumBurstPayloadBytes, burstHeaders.value(),
               "RTP burst payload")
         : burstHeaders;
-    if (!packetRate || !sustained || !peak || !burst) {
+    auto atomicHeaders = multiply(
+        contract.maximumDatagramsPerAccessUnit(),
+        RtpHeaderBytes + fragmentationHeader,
+        "RTP atomic access-unit headers");
+    auto atomic = atomicHeaders
+        ? add(emission.maximumAccessUnitPayloadBytes, atomicHeaders.value(),
+              "RTP atomic access-unit payload")
+        : atomicHeaders;
+    if (!packetRate || !sustained || !peak || !burst || !atomic) {
         return ::media::Result<WireDemand>::failure(
             !packetRate ? packetRate.error() : !sustained ? sustained.error() :
-            !peak ? peak.error() : burst.error());
+            !peak ? peak.error() : !burst ? burst.error() : atomic.error());
     }
     return ::media::Result<WireDemand>::success(
         {sustained.value(), peak.value(), packetRate.value(), burst.value(),
-         burstPackets.value()});
+         burstPackets.value(), 0U, atomic.value(),
+         contract.maximumDatagramsPerAccessUnit(), 0U});
 }
 
 ::media::Result<WireDemand> addRtcp(
@@ -212,16 +224,24 @@ template <typename Emission>
     auto burstDiscreteDatagrams = add(
         demand.burstDiscreteDatagrams, 2U,
         "RTP and RTCP discrete burst datagrams");
+    auto atomic = add(demand.atomicPayload, compound.value(),
+                      "RTP and RTCP atomic payload");
+    auto atomicDiscreteDatagrams = add(
+        demand.atomicDiscreteDatagrams, 1U,
+        "RTP and RTCP atomic discrete datagrams");
     if (!sustained || !peak || !burst || !packets ||
-        !burstDiscreteDatagrams) {
+        !burstDiscreteDatagrams || !atomic || !atomicDiscreteDatagrams) {
         return ::media::Result<WireDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
             !burst ? burst.error() : !packets ? packets.error() :
-            burstDiscreteDatagrams.error());
+            !burstDiscreteDatagrams ? burstDiscreteDatagrams.error() :
+            !atomic ? atomic.error() : atomicDiscreteDatagrams.error());
     }
     return ::media::Result<WireDemand>::success(
         {sustained.value(), peak.value(), packets.value(), burst.value(),
-         demand.burstPayloadDatagrams, burstDiscreteDatagrams.value()});
+         demand.burstPayloadDatagrams, burstDiscreteDatagrams.value(),
+         atomic.value(), demand.atomicPayloadDatagrams,
+         atomicDiscreteDatagrams.value()});
 }
 
 ::media::Result<WireDemand> combine(WireDemand left, WireDemand right)
@@ -240,17 +260,31 @@ template <typename Emission>
     auto burstDiscreteDatagrams = add(
         left.burstDiscreteDatagrams, right.burstDiscreteDatagrams,
         "aggregate burst discrete datagrams");
+    auto atomic = add(left.atomicPayload, right.atomicPayload,
+                      "aggregate atomic payload");
+    auto atomicPayloadDatagrams = add(
+        left.atomicPayloadDatagrams, right.atomicPayloadDatagrams,
+        "aggregate atomic payload datagrams");
+    auto atomicDiscreteDatagrams = add(
+        left.atomicDiscreteDatagrams, right.atomicDiscreteDatagrams,
+        "aggregate atomic discrete datagrams");
     if (!sustained || !peak || !packets || !burst ||
-        !burstPayloadDatagrams || !burstDiscreteDatagrams) {
+        !burstPayloadDatagrams || !burstDiscreteDatagrams || !atomic ||
+        !atomicPayloadDatagrams || !atomicDiscreteDatagrams) {
         return ::media::Result<WireDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
             !packets ? packets.error() : !burst ? burst.error() :
             !burstPayloadDatagrams ? burstPayloadDatagrams.error() :
-            burstDiscreteDatagrams.error());
+            !burstDiscreteDatagrams ? burstDiscreteDatagrams.error() :
+            !atomic ? atomic.error() :
+            !atomicPayloadDatagrams ? atomicPayloadDatagrams.error() :
+            atomicDiscreteDatagrams.error());
     }
     return ::media::Result<WireDemand>::success(
         {sustained.value(), peak.value(), packets.value(), burst.value(),
-         burstPayloadDatagrams.value(), burstDiscreteDatagrams.value()});
+         burstPayloadDatagrams.value(), burstDiscreteDatagrams.value(),
+         atomic.value(), atomicPayloadDatagrams.value(),
+         atomicDiscreteDatagrams.value()});
 }
 
 ::media::Result<MediaWireTrafficEnvelope> finish(
@@ -273,18 +307,23 @@ template <typename Emission>
     auto burst = MediaWireBurstGeometry::create(
         demand.burstPayload, demand.burstPayloadDatagrams,
         demand.burstDiscreteDatagrams, maximumUdpPayload, networkHeader);
+    auto atomic = MediaWireBurstGeometry::create(
+        demand.atomicPayload, demand.atomicPayloadDatagrams,
+        demand.atomicDiscreteDatagrams, maximumUdpPayload, networkHeader);
     auto maximumWire = add(maximumUdpPayload, networkHeader,
                            "maximum wire datagram");
-    if (!sustained || !peak || !burst || !maximumWire ||
+    if (!sustained || !peak || !burst || !atomic || !maximumWire ||
         maximumUdpPayload == 0) {
         return ::media::Result<MediaWireTrafficEnvelope>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
-            !burst ? burst.error() : !maximumWire ? maximumWire.error() :
+            !burst ? burst.error() : !atomic ? atomic.error() :
+            !maximumWire ? maximumWire.error() :
             ::media::ErrorInfo::invalidArgument("UDP payload is zero"));
     }
     return ::media::Result<MediaWireTrafficEnvelope>::success({
         sustained.value(), peak.value(), demand.packetsPerSecond,
         burst.value().wireBytes, burst.value().datagramCount,
+        atomic.value().wireBytes, atomic.value().datagramCount,
         maximumUdpPayload, maximumWire.value(),
         std::move(authority)});
 }
@@ -313,6 +352,9 @@ template <typename Emission>
     auto burstPayload = add(
         emission.maximumBurstPayloadBytes, protocolHeaderBytes,
         "TS burst access-unit headers");
+    auto atomicPayload = add(
+        emission.maximumAccessUnitPayloadBytes, protocolHeaderBytes,
+        "TS atomic access-unit headers");
     auto sustainedPackets = sustainedPayload
         ? ceilScale(sustainedPayload.value(), 1, TsPayloadBytes,
                     "TS sustained packets per access unit")
@@ -323,6 +365,10 @@ template <typename Emission>
     auto burstPackets = burstPayload
         ? ceilScale(burstPayload.value(), 1, TsPayloadBytes,
                     "TS burst packets") : burstPayload;
+    auto atomicPackets = atomicPayload
+        ? ceilScale(atomicPayload.value(), 1, TsPayloadBytes,
+                    "TS atomic packets")
+        : atomicPayload;
     auto sustainedPacketBytes = sustainedPackets
         ? multiply(sustainedPackets.value(), TsPacketBytes,
                    "TS sustained packet bytes")
@@ -348,14 +394,19 @@ template <typename Emission>
     auto burstTs = burstPackets
         ? multiply(burstPackets.value(), TsPacketBytes, "TS burst bytes")
         : burstPackets;
-    if (!sustainedTs || !peakTs || !unitRate || !burstTs) {
+    auto atomicTs = atomicPackets
+        ? multiply(atomicPackets.value(), TsPacketBytes, "TS atomic bytes")
+        : atomicPackets;
+    if (!sustainedTs || !peakTs || !unitRate || !burstTs || !atomicTs) {
         return ::media::Result<WireDemand>::failure(
             !sustainedTs ? sustainedTs.error() : !peakTs ? peakTs.error() :
-            !unitRate ? unitRate.error() : burstTs.error());
+            !unitRate ? unitRate.error() :
+            !burstTs ? burstTs.error() : atomicTs.error());
     }
     return ::media::Result<WireDemand>::success(
         {sustainedTs.value(), peakTs.value(), unitRate.value(),
-         burstTs.value(), burstPackets.value(), 0U});
+         burstTs.value(), burstPackets.value(), 0U,
+         atomicTs.value(), atomicPackets.value(), 0U});
 }
 
 ::media::Result<WireDemand> tsDemand(
@@ -419,18 +470,25 @@ template <typename Emission>
         ? add(demand.value().burstPayload, maintenanceBurst.value(),
               "TS burst maintenance bytes")
         : maintenanceBurst;
+    auto atomic = maintenanceBurst
+        ? add(demand.value().atomicPayload, maintenanceBurst.value(),
+              "TS atomic maintenance bytes")
+        : maintenanceBurst;
     auto tsPayloadPerDatagram = multiply(
         static_cast<std::uint64_t>(
             mux.parameters().maximumPacketsPerDatagram),
         TsPacketBytes, "TS payload per datagram");
-    if (!sustained || !peak || !burst || !tsPayloadPerDatagram) {
+    if (!sustained || !peak || !burst || !atomic ||
+        !tsPayloadPerDatagram) {
         return ::media::Result<WireDemand>::failure(
             !sustained ? sustained.error() : !peak ? peak.error() :
-            !burst ? burst.error() : tsPayloadPerDatagram.error());
+            !burst ? burst.error() : !atomic ? atomic.error() :
+            tsPayloadPerDatagram.error());
     }
     demand.value().sustainedPayload = sustained.value();
     demand.value().peakPayload = peak.value();
     demand.value().burstPayload = burst.value();
+    demand.value().atomicPayload = atomic.value();
     auto burstDatagrams = ceilScale(
         demand.value().burstPayload, 1, tsPayloadPerDatagram.value(),
         "TS burst datagram count");
@@ -438,6 +496,14 @@ template <typename Emission>
         return ::media::Result<WireDemand>::failure(burstDatagrams.error());
     }
     demand.value().burstPayloadDatagrams = burstDatagrams.value();
+    auto atomicDatagrams = ceilScale(
+        demand.value().atomicPayload, 1, tsPayloadPerDatagram.value(),
+        "TS atomic datagram count");
+    if (!atomicDatagrams) {
+        return ::media::Result<WireDemand>::failure(
+            atomicDatagrams.error());
+    }
+    demand.value().atomicPayloadDatagrams = atomicDatagrams.value();
     auto datagrams = ceilScale(
         demand.value().peakPayload, 1, tsPayloadPerDatagram.value(),
         "TS datagram rate");
@@ -463,6 +529,9 @@ template <typename Emission>
         auto burstHeaders = multiply(
             demand.value().burstPayloadDatagrams, RtpHeaderBytes,
             "MP2T RTP burst headers");
+        auto atomicHeaders = multiply(
+            demand.value().atomicPayloadDatagrams, RtpHeaderBytes,
+            "MP2T RTP atomic headers");
         auto withSustainedHeaders = add(
             demand.value().sustainedPayload, rtpHeaders.value(),
             "MP2T RTP sustained bytes");
@@ -473,17 +542,23 @@ template <typename Emission>
             ? add(demand.value().burstPayload, burstHeaders.value(),
                   "MP2T RTP burst bytes")
             : burstHeaders;
+        auto withAtomicHeaders = atomicHeaders
+            ? add(demand.value().atomicPayload, atomicHeaders.value(),
+                  "MP2T RTP atomic bytes")
+            : atomicHeaders;
         if (!burstHeaders || !withSustainedHeaders || !withPeakHeaders ||
-            !withBurstHeaders) {
+            !withBurstHeaders || !withAtomicHeaders) {
             return ::media::Result<WireDemand>::failure(
                 !burstHeaders ? burstHeaders.error() :
                 !withSustainedHeaders ? withSustainedHeaders.error() :
                 !withPeakHeaders ? withPeakHeaders.error() :
-                withBurstHeaders.error());
+                !withBurstHeaders ? withBurstHeaders.error() :
+                withAtomicHeaders.error());
         }
         demand.value().sustainedPayload = withSustainedHeaders.value();
         demand.value().peakPayload = withPeakHeaders.value();
         demand.value().burstPayload = withBurstHeaders.value();
+        demand.value().atomicPayload = withAtomicHeaders.value();
     }
     return demand;
 }

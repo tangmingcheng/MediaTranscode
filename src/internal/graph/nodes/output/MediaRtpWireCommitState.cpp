@@ -1,5 +1,7 @@
 #include "internal/graph/nodes/output/MediaRtpWireCommitState.h"
 
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+
 #include <limits>
 #include <utility>
 
@@ -29,8 +31,17 @@ MediaRtpWireProtocolState::MediaRtpWireProtocolState(
       projectedOctetCount(config.initialOctetCount),
       maximumDatagramBytes(config.maximumDatagramBytes),
       maximumOutstandingDatagrams(config.maximumOutstandingDatagrams),
-      batchPlan(config.batchPlan)
+      batchPlan(config.batchPlan),
+      reservationWakeup(std::move(config.reservationWakeup))
 {
+}
+
+bool MediaRtpWireProtocolState::canAdmitReservation(
+    std::size_t datagrams) const noexcept
+{
+    if (datagrams == 0) return false;
+    return outstandingDatagrams <= maximumOutstandingDatagrams &&
+           datagrams <= maximumOutstandingDatagrams - outstandingDatagrams;
 }
 
 MediaRtpWireCommitTransaction::MediaRtpWireCommitTransaction(
@@ -84,7 +95,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
         return ::media::Status::failure(::media::ErrorInfo::internalError(
             "RTP wire commit transaction is inactive"));
     }
-    std::lock_guard lock(m_state->mutex);
+    std::unique_lock lock(m_state->mutex);
     if (begin != m_nextAction || count == 0 ||
         begin > m_actions.size() || count > m_actions.size() - begin ||
         m_state->poisoned || m_state->reservations.empty() ||
@@ -171,6 +182,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
     m_state->terminalCommitted = terminalCommitted;
     m_nextAction += count;
     m_state->reservations.front().committed += count;
+    std::shared_ptr<MediaNodeWakeup> reservationWakeup;
     if (m_nextAction == m_actions.size()) {
         if (m_protocolCommit && m_protocolCommit->valid()) {
             return poisonLocked(::media::ErrorInfo::internalError(
@@ -178,7 +190,15 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
         }
         m_state->outstandingDatagrams -= m_actions.size();
         m_state->reservations.pop_front();
+        if (m_state->blockedReservationDatagrams &&
+            m_state->canAdmitReservation(
+                *m_state->blockedReservationDatagrams)) {
+            m_state->blockedReservationDatagrams.reset();
+            reservationWakeup = m_state->reservationWakeup.lock();
+        }
     }
+    lock.unlock();
+    if (reservationWakeup) reservationWakeup->notify();
     return ::media::Status::success();
 }
 

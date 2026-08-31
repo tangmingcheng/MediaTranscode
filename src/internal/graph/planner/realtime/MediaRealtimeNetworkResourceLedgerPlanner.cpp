@@ -1,7 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
-#include "internal/graph/runtime/buffer/MediaScheduledWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitEvidenceCollector.h"
 
 #include <algorithm>
@@ -47,7 +47,10 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     std::uint64_t endpointCount)
 {
     using Result = ::media::Result<MediaRealtimeNetworkResourceLedgerPlan>;
-    if (endpointCount == 0 || wire.maximumWireDatagramBytes == 0) {
+    if (endpointCount == 0 || wire.burstDatagrams == 0 ||
+        wire.maximumAtomicDatagrams == 0 ||
+        wire.maximumAtomicWireBytes == 0 ||
+        wire.maximumWireDatagramBytes == 0) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "network ledger requires endpoint and wire geometry"));
     }
@@ -59,33 +62,40 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         wire.peakDatagramsPerSecond,
         latency.maximumResidence.nanoseconds(),
         "network residence datagrams");
-    auto backlogBytes = residenceBytes
+    auto serviceBacklogBytes = residenceBytes
         ? MediaCheckedArithmetic::add(
               residenceBytes.value(), wire.burstWireBytes,
               "network backlog payload")
         : residenceBytes;
-    if (!residenceDatagrams || !backlogBytes) {
+    if (!residenceDatagrams || !serviceBacklogBytes) {
         return Result::failure(
             !residenceDatagrams ? residenceDatagrams.error() :
-            backlogBytes.error());
+            serviceBacklogBytes.error());
     }
+    const auto backlogBytes = (std::max)(
+        serviceBacklogBytes.value(), wire.maximumAtomicWireBytes);
     const auto backlogDatagrams = (std::max)(
-        ceilDivide(backlogBytes.value(), wire.maximumWireDatagramBytes),
-        residenceDatagrams.value());
+        (std::max)(
+            (std::max)(
+                ceilDivide(backlogBytes, wire.maximumWireDatagramBytes),
+                wire.maximumAtomicDatagrams),
+            residenceDatagrams.value()),
+        wire.burstDatagrams);
     const auto batchBytes = (std::min)(
-        backlogBytes.value(),
+        serviceBacklogBytes.value(),
         (std::max)(wire.burstWireBytes, wire.maximumWireDatagramBytes));
     const auto batchDatagrams = ceilDivide(
         batchBytes, wire.maximumWireDatagramBytes);
     const auto socketPerEndpoint = (std::max)(
-        wire.maximumWireDatagramBytes, backlogBytes.value());
-    const auto endpointPendingBytes = (std::min)(
-        socketPerEndpoint,
-        (std::max)(wire.maximumWireDatagramBytes,
-                   backlogBytes.value()));
-    const auto endpointPendingDatagrams = (std::max)(
-        std::uint64_t{1},
-        ceilDivide(endpointPendingBytes, wire.maximumWireDatagramBytes));
+        wire.maximumWireDatagramBytes, serviceBacklogBytes.value());
+    // An endpoint may be the sole destination of the next atomic protocol
+    // transaction.  Its userspace pending bound therefore has to admit the
+    // complete service-scope backlog; the aggregate backlog still prevents
+    // all endpoints from consuming that bound simultaneously.  Kernel socket
+    // sizing remains a separate service-residence product and must not enlarge
+    // the userspace service curve.
+    const auto endpointPendingBytes = backlogBytes;
+    const auto endpointPendingDatagrams = backlogDatagrams;
     const auto correlationEntries =
         observation.evidencePolicy ==
                 MediaRealtimeTransmitEvidencePolicy::Disabled
@@ -99,12 +109,12 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     }
 
     const auto backlogContainerUnit = static_cast<std::uint64_t>(
-        sizeof(MediaScheduledWireDatagram) +
-        sizeof(std::shared_ptr<MediaScheduledWireDatagramBatchBuffer>));
+        sizeof(MediaWireDatagram) +
+        sizeof(std::shared_ptr<MediaWireDatagramBatchBuffer>));
     const auto batchContainerUnit = static_cast<std::uint64_t>(
-        sizeof(MediaScheduledWireDatagramDescriptor));
+        sizeof(MediaWireDatagramDescriptor));
     const auto endpointContainerUnit = static_cast<std::uint64_t>(
-        sizeof(MediaScheduledWireDatagram*));
+        sizeof(MediaWireDatagram*));
     const auto evidenceUnit = static_cast<std::uint64_t>(
         sizeof(EvidenceEntryGeometry) +
         sizeof(std::pair<const std::uint64_t, std::uint64_t>) +
@@ -125,7 +135,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         correlationEntries, evidenceUnit, "evidence correlation containers");
     auto withBacklogContainers = backlogContainers
         ? MediaCheckedArithmetic::add(
-              backlogBytes.value(), backlogContainers.value(),
+              backlogBytes, backlogContainers.value(),
               "backlog payload and containers")
         : backlogContainers;
     auto withBatch = withBacklogContainers && batchContainers
@@ -155,8 +165,8 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     try {
         std::vector<MediaRealtimeNetworkResourceLedgerEntry> entries{
             {MediaRealtimeNetworkAccountingGroup::BacklogPayload,
-             backlogDatagrams, backlogBytes.value(), false,
-             "wire-residence+burst-shared-payload"},
+             backlogDatagrams, backlogBytes, false,
+             "wire-residence+burst-or-atomic-transaction-shared-payload"},
             {MediaRealtimeNetworkAccountingGroup::BacklogContainer,
              backlogDatagrams, backlogContainers.value(), false,
              "scheduled-datagram-container-abi"},
@@ -173,10 +183,10 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
              endpointCount, socketBytes.value(), true,
              "deployment-socket-budget"}};
         MediaRealtimeNetworkResourceLedgerPlan ledger{
-            backlogDatagrams, backlogBytes.value(),
+            backlogDatagrams, backlogBytes,
             batchDatagrams, batchBytes,
             endpointPendingDatagrams, endpointPendingBytes,
-            endpointPendingBytes, endpointPendingBytes, socketPerEndpoint,
+            socketPerEndpoint, socketPerEndpoint, socketPerEndpoint,
             correlationEntries,
             networkBytes.value(), socketBytes.value(), std::move(entries)};
         auto status = validate(ledger);
