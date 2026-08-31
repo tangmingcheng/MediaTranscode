@@ -9,8 +9,7 @@ namespace media::ffmpeg::graph {
 class MediaRealtimeDatagramPayloadPlanner final {
 public:
     static ::media::Result<MediaRealtimeDeploymentMtuFact> plan(
-        const MediaDatagramRouteFact& route,
-        std::uint64_t pathMaximumIpPacketBytes);
+        const MediaDatagramRouteFact& route);
 
 private:
     MediaRealtimeDatagramPayloadPlanner() = delete;

@@ -14,7 +14,7 @@ struct MediaRealtimeDeploymentBasePlan final {
     MediaRealtimeDeploymentLocalPortRange localPorts;
     MediaRealtimeDeploymentLatencyBudget latency;
     MediaRealtimeDeploymentObservationBudget observation;
-    std::optional<MediaRealtimeReceiverTimingCapability> receiverTiming;
+    MediaRealtimeTransportTimingPlan transportTiming;
     std::optional<MediaRealtimeRtcpSessionCapability> rtcpSession;
     MediaWireTrafficEnvelope admittedWire;
     std::uint64_t provisionedWireCapacityBytesPerSecond = 0;

@@ -33,12 +33,11 @@ planSeparateRtp(
     const MediaPreparedEncoderEmissionEnvelope& preparedEmission)
 {
     if (!output.videoOutput.scheduledTransport ||
-        !output.videoOutput.scheduledPacketization ||
-        output.sdp.path.empty() || !deployment.encode().receiverTiming) {
+        !output.videoOutput.scheduledPacketization || output.sdp.path.empty()) {
         return ::media::Result<
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "VideoOnly scheduled RTP requires complete transport, packetization, SDP, and receiver timing facts"));
+                "VideoOnly scheduled RTP requires complete transport, packetization, SDP, and planner timing facts"));
     }
     const std::string& identity = request.mediaId;
     const std::string cname = MediaRtpOutputIdentityPlanner::cname(identity);
@@ -88,7 +87,7 @@ planSeparateRtp(
             identity + ".video.timestamp"),
         VideoRtpClockRate,
         cname,
-        deployment.encode().receiverTiming->transportDecodeLead,
+        deployment.encode().transportTiming.senderTransportLead,
         std::move(rtcpPolicy).value()};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(

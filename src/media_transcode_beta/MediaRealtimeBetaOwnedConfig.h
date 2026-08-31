@@ -44,9 +44,7 @@ public:
     std::uint32_t gopFrames() const noexcept;
     const RateControl& rateControl() const noexcept;
     std::uint64_t provisionedEgressCapacityBitsPerSecond() const noexcept;
-    std::uint32_t pathMaximumIpPacketBytes() const noexcept;
     std::uint32_t maximumWireResidenceMilliseconds() const noexcept;
-    std::uint32_t receiverTransportDecodeLeadMilliseconds() const noexcept;
     ffmpeg::graph::MediaIpAddressFamily addressFamily() const noexcept;
     mt_beta_realtime_event_callback eventCallback() const noexcept;
     void* eventUserData() const noexcept;
@@ -69,9 +67,7 @@ private:
         std::uint32_t gopFrames,
         RateControl rateControl,
         std::uint64_t provisionedEgressCapacityBitsPerSecond,
-        std::uint32_t pathMaximumIpPacketBytes,
         std::uint32_t maximumWireResidenceMilliseconds,
-        std::uint32_t receiverTransportDecodeLeadMilliseconds,
         ffmpeg::graph::MediaIpAddressFamily addressFamily,
         mt_beta_realtime_event_callback eventCallback,
         void* eventUserData);
@@ -92,9 +88,7 @@ private:
     std::uint32_t m_gopFrames;
     RateControl m_rateControl;
     std::uint64_t m_provisionedEgressCapacityBitsPerSecond;
-    std::uint32_t m_pathMaximumIpPacketBytes;
     std::uint32_t m_maximumWireResidenceMilliseconds;
-    std::uint32_t m_receiverTransportDecodeLeadMilliseconds;
     ffmpeg::graph::MediaIpAddressFamily m_addressFamily;
     mt_beta_realtime_event_callback m_eventCallback;
     void* m_eventUserData;

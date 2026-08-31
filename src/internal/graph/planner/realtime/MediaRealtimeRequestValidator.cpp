@@ -89,17 +89,12 @@ bool audioTranscodeControlSpecified(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
     if (!request.deployment.provisionedEgressCapacityBitsPerSecond ||
-        !request.deployment.pathMaximumIpPacketBytes ||
         !request.deployment.maximumWireResidence ||
-        !request.deployment.receiverTransportDecodeLead ||
         *request.deployment.provisionedEgressCapacityBitsPerSecond < 8 ||
-        *request.deployment.pathMaximumIpPacketBytes == 0 ||
         *request.deployment.maximumWireResidence <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        *request.deployment.receiverTransportDecodeLead <
-            *request.deployment.maximumWireResidence) {
+            MediaRunningTime::fromNanoseconds(0)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Realtime Datagram deployment requires positive provisioned egress capacity, path MTU, maximum wire residence, and receiver transport decode lead facts; receiver lead must cover maximum wire residence"));
+            "Realtime Datagram deployment requires positive provisioned egress capacity and maximum wire residence facts"));
     }
     return ::media::Status::success();
 }

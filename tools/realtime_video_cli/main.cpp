@@ -108,9 +108,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--output-layout",
         "--output-transport",
         "--egress-capacity-bps",
-        "--path-mtu-bytes",
         "--maximum-wire-residence-ms",
-        "--receiver-transport-decode-lead-ms",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -228,8 +226,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.mediaId = requiredArg(argc, argv, "--media-id");
     options.deployment.provisionedEgressCapacityBitsPerSecond =
         requiredUint64Arg(argc, argv, "--egress-capacity-bps");
-    options.deployment.pathMaximumIpPacketBytes =
-        requiredUint64Arg(argc, argv, "--path-mtu-bytes");
     const auto maximumWireResidenceMs = requiredUint64Arg(
         argc, argv, "--maximum-wire-residence-ms");
     if (maximumWireResidenceMs == 0 ||
@@ -241,17 +237,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.deployment.maximumWireResidence =
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
             maximumWireResidenceMs * 1'000'000));
-    const auto receiverTransportDecodeLeadMs = requiredUint64Arg(
-        argc, argv, "--receiver-transport-decode-lead-ms");
-    if (receiverTransportDecodeLeadMs == 0 ||
-        receiverTransportDecodeLeadMs > static_cast<std::uint64_t>(
-            (std::numeric_limits<std::int64_t>::max)() / 1'000'000)) {
-        throw std::invalid_argument(
-            "--receiver-transport-decode-lead-ms is outside the positive running-time range");
-    }
-    options.deployment.receiverTransportDecodeLead =
-        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
-            receiverTransportDecodeLeadMs * 1'000'000));
     parseRealtimeInputOptions(argc, argv, options.input);
     parseRealtimeOutputOptions(argc, argv, options.output);
     MediaTranscodeParameterSet parsedTranscode;
@@ -395,7 +380,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --path-mtu-bytes BYTES --maximum-wire-residence-ms MS --receiver-transport-decode-lead-ms MS --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --maximum-wire-residence-ms MS --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         return helpRequested ? 0 : 2;

@@ -16,6 +16,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaMasterClock;
+
 class MediaNodeWakeup;
 
 struct MediaWireGlobalSequenceSnapshot final {
@@ -32,6 +34,12 @@ struct MediaWireGlobalSequenceSnapshot final {
     std::optional<std::uint64_t> lastScheduledSequence;
     std::optional<std::uint64_t> lastSubmittedSequence;
     std::optional<std::uint64_t> lastCommittedSequence;
+};
+
+struct MediaWirePacingQueueSnapshot final {
+    std::uint64_t wireBytes;
+    MediaRunningTime averageResidence;
+    MediaRunningTime sampledAt;
 };
 
 struct MediaWireGlobalSequenceReservationEntry final {
@@ -110,6 +118,8 @@ public:
     ::media::Status registerReservationWakeup(
         std::uint64_t endpointId,
         std::shared_ptr<MediaNodeWakeup> wakeup);
+    ::media::Result<MediaWirePacingQueueSnapshot> pacingQueueSnapshot(
+        const MediaMasterClock& clock) const;
     MediaWireGlobalSequenceSnapshot snapshot() const noexcept;
     const std::string& sessionKey() const noexcept { return m_sessionKey; }
     const std::string& serviceScopeId() const noexcept
@@ -174,6 +184,8 @@ private:
     std::uint64_t m_highWaterDatagrams = 0;
     std::uint64_t m_highWaterWireBytes = 0;
     std::uint64_t m_maximumResidenceNanoseconds = 0;
+    std::uint64_t m_queueResidenceSumNanoseconds = 0;
+    std::optional<MediaRunningTime> m_queueResidenceUpdatedAt;
     std::optional<std::uint64_t> m_lastMaterializedSequence;
     std::optional<std::uint64_t> m_lastScheduledSequence;
     std::optional<std::uint64_t> m_lastSubmittedSequence;

@@ -92,15 +92,17 @@ MediaRealtimeDeploymentEnvelope::decode(
         observation.maximumDrainResidence <= latency.maximumResidence &&
         observation.evidencePolicy !=
             MediaRealtimeTransmitEvidencePolicy::Unknown;
-    const bool validReceiverTiming = !encoding.receiverTiming ||
-        (!encoding.receiverTiming->authority.empty() &&
-         positive(encoding.receiverTiming->transportDecodeLead));
+    const bool validTransportTiming =
+        !encoding.transportTiming.authority.empty() &&
+        positive(encoding.transportTiming.senderTransportLead) &&
+        encoding.transportTiming.senderTransportLead >=
+            encoding.latency.maximumResidence;
     const bool validRtcpSession = !encoding.rtcpSession ||
         (encoding.rtcpSession->maximumSessionMembers >= 2 &&
          !encoding.rtcpSession->authority.empty());
     if (!validScope || !validMtu || !validService || !validResources ||
         !validLocalPorts ||
-        !validLatency || !validObservation || !validReceiverTiming ||
+        !validLatency || !validObservation || !validTransportTiming ||
         !validRtcpSession) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(

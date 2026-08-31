@@ -182,6 +182,20 @@ public:
                 "Windows Datagram exclusive bind configuration failed",
                 WSAGetLastError()));
         }
+        const DWORD pathMtuDiscovery = IP_PMTUDISC_DO;
+        const int pathMtuLevel = family == AF_INET
+            ? IPPROTO_IP
+            : IPPROTO_IPV6;
+        const int pathMtuOption = family == AF_INET
+            ? IP_MTU_DISCOVER
+            : IPV6_MTU_DISCOVER;
+        if (setsockopt(handle, pathMtuLevel, pathMtuOption,
+                       reinterpret_cast<const char*>(&pathMtuDiscovery),
+                       sizeof(pathMtuDiscovery)) == SOCKET_ERROR) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram path MTU discovery configuration failed",
+                WSAGetLastError()));
+        }
         auto apiRequest = MediaDatagramSocketBufferApiRequest::fromTargetEffective(
             request.endpoint.targetEffectiveSendBufferBytes,
             MediaDatagramSocketBufferApiAccounting::Exact);

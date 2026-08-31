@@ -143,7 +143,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadlineSubmitAttempted = false;
-    m_lastSubmittedAt.reset();
     m_terminalFailure.reset();
     m_wakeup.reset();
     m_stopSource = std::stop_source{};
@@ -156,7 +155,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_pressureFailures = 0;
     m_partialSubmittedFailures = 0;
     m_ambiguousSubmittedFailures = 0;
-    m_commitAttempted = false;
     m_diagnosticsEmitted = false;
     auto valid = validatePorts(context);
     return valid ? FFmpegNodeRuntime::start(context) : valid;
@@ -226,7 +224,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     MediaDatagramPacingContract pacingContract{
         plan.shaping.sessionKey(), plan.shaping.serviceScope().scopeId,
         plan.shaping.generation(),
-        plan.shaping.serviceCurve().pacingWireBytesPerSecond};
+        plan.shaping.serviceCurve().pacingWireBytesPerSecond,
+        plan.shaping.serviceCurve().maximumWireBytesPerSecond,
+        plan.shaping.backlog().maximumResidence};
     if (m_pacingController) {
         auto rebound = m_pacingController->rebind(std::move(pacingContract));
         if (!rebound) return rebound;
@@ -298,8 +298,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
 }
 
-::media::Status MediaScheduledDatagramSenderNode::beginSubmitGroup(
-    MediaRunningTime now)
+::media::Status MediaScheduledDatagramSenderNode::beginSubmitGroup()
 {
     if (!m_pendingBatch || !m_generation || !m_session ||
         !m_pacingController ||
@@ -324,12 +323,17 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     m_groupCount = 1;
     m_groupEndpointId = first.endpointId();
+    auto queue = m_serviceLedger->pacingQueueSnapshot(*m_clock);
+    if (!queue) return ::media::Status::failure(queue.error());
     auto pacing = m_pacingController->reserve(
         MediaDatagramPacingJob{
             first.generation(), first.endpointId(), first.globalSequence(),
             static_cast<std::uint64_t>(first.bytes().size()) + overhead->second,
-            first.canonicalRelease(), first.canonicalDeadline()},
-        now);
+            first.canonicalRelease(), first.canonicalDeadline(),
+            MediaDatagramPacingQueueState{
+                queue.value().wireBytes,
+                queue.value().averageResidence}},
+        queue.value().sampledAt);
     if (!pacing) return ::media::Status::failure(pacing.error());
     m_groupNotBefore = pacing.value().notBefore;
     m_groupDeadline = pacing.value().notAfter;
@@ -507,8 +511,6 @@ MediaScheduledDatagramSenderNode::activateNextWireBatch()
     m_queuedWireBytes -= queued.wireBytes;
     m_queuedWireBatches.erase(m_queuedWireBatches.begin());
     m_nextDatagram = 0;
-    m_lastSubmittedAt.reset();
-    m_commitAttempted = false;
     m_state = SubmitState::WaitReservation;
     return Result::success(true);
 }
@@ -532,30 +534,23 @@ bool MediaScheduledDatagramSenderNode::allBatchInputsDrained(
     return found;
 }
 
-void MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
+::media::Status MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
     std::size_t count,
-    MediaRunningTime submitCompletedAt) noexcept
+    MediaRunningTime submitCompletedAt)
 {
-    m_lastSubmittedAt = submitCompletedAt;
-    m_nextDatagram += count;
-}
-
-::media::Status
-MediaScheduledDatagramSenderNode::commitAccumulatedSubmittedPrefix()
-{
-    if (!m_pendingBatch || m_commitAttempted || !m_lastSubmittedAt ||
-        m_nextDatagram == 0 ||
-        m_nextDatagram > m_pendingBatch->m_datagrams.size()) {
+    if (!m_pendingBatch || count == 0 ||
+        m_nextDatagram > m_pendingBatch->m_datagrams.size() ||
+        count > m_pendingBatch->m_datagrams.size() - m_nextDatagram) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "scheduled datagram sender has no valid accumulated submitted prefix"));
+            "scheduled datagram sender has no valid submitted prefix"));
     }
-    m_commitAttempted = true;
     auto committed = m_pendingBatch->m_commitSlice.commitSubmittedPrefix(
-        m_nextDatagram, *m_lastSubmittedAt);
+        count, submitCompletedAt);
     if (!committed) return committed;
 
     std::uint64_t submittedBytes = 0;
-    for (std::size_t index = 0; index < m_nextDatagram; ++index) {
+    for (std::size_t index = m_nextDatagram;
+         index < m_nextDatagram + count; ++index) {
         const auto& datagram = m_pendingBatch->m_datagrams[index];
         const auto bytes = static_cast<std::uint64_t>(datagram.bytes().size());
         submittedBytes += bytes;
@@ -564,8 +559,9 @@ MediaScheduledDatagramSenderNode::commitAccumulatedSubmittedPrefix()
         ++endpointDatagrams->second;
         endpointBytes->second += bytes;
     }
-    m_datagrams += static_cast<std::uint64_t>(m_nextDatagram);
+    m_datagrams += static_cast<std::uint64_t>(count);
     m_bytes += submittedBytes;
+    m_nextDatagram += count;
     return ::media::Status::success();
 }
 
@@ -595,9 +591,10 @@ MediaScheduledDatagramSenderNode::failSubmit(
                 submittedSequence, submitStartedAt, submitCompletedAt);
             if (!paced) return failTerminal(paced.error());
         }
-        recordSubmittedPrefix(
+        auto committed = recordSubmittedPrefix(
             static_cast<std::size_t>(error.submittedPrefixDatagrams),
             submitCompletedAt);
+        if (!committed) return failTerminal(committed.error());
     }
     return failTerminal(error.cause);
 }
@@ -607,20 +604,15 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
 {
     while (m_pendingBatch) {
         if (m_nextDatagram == m_pendingBatch->m_datagrams.size()) {
-            auto committed = commitAccumulatedSubmittedPrefix();
-            if (!committed) return failTerminal(committed.error());
             ++m_batches;
             m_pendingBatch.reset();
             m_nextDatagram = 0;
-            m_commitAttempted = false;
             m_state = SubmitState::WaitReservation;
             return processProgress();
         }
 
         if (m_state == SubmitState::WaitReservation) {
-            auto reservationTime = m_clock->now();
-            if (!reservationTime) return failTerminal(reservationTime.error());
-            auto begun = beginSubmitGroup(reservationTime.value());
+            auto begun = beginSubmitGroup();
             if (!begun) return failTerminal(begun.error());
             auto waited = waitUntil(m_groupNotBefore);
             if (!waited) return failTerminal(waited.error());
@@ -722,7 +714,9 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             auto paced = m_pacingController->markSubmitted(
                 submittedSequence, now.value(), submitCompletedAt.value());
             if (!paced) return failTerminal(paced.error());
-            recordSubmittedPrefix(m_groupCount, submitCompletedAt.value());
+            auto committed = recordSubmittedPrefix(
+                m_groupCount, submitCompletedAt.value());
+            if (!committed) return failTerminal(committed.error());
             m_state = SubmitState::WaitReservation;
         }
     }
@@ -768,6 +762,15 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << (m_pacingController
                            ? m_pacingController->telemetry()
                                  .maximumSubmitLatenessNanoseconds
+                           : 0)
+                   << " pacing_rate_adaptations="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry().rateAdaptations
+                           : 0)
+                   << " pacing_maximum_wire_bytes_per_second="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry()
+                                 .maximumWireBytesPerSecond
                            : 0)
                    << " delivery_evidence=not_proven";
         if (m_serviceLedger) {
@@ -834,10 +837,6 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
 MediaScheduledDatagramSenderNode::failTerminal(::media::ErrorInfo error)
 {
     if (!m_terminalFailure) {
-        if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
-            auto committed = commitAccumulatedSubmittedPrefix();
-            if (!committed) error = committed.error();
-        }
         m_terminalFailure = std::move(error);
         if (m_session && m_clock) {
             auto now = m_clock->now();
@@ -943,10 +942,6 @@ void MediaScheduledDatagramSenderNode::closeSender(
     m_stopSource.request_stop();
     m_wakeup.interrupt();
     std::optional<::media::ErrorInfo> closeFailure;
-    if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
-        auto committed = commitAccumulatedSubmittedPrefix();
-        if (!committed) closeFailure = committed.error();
-    }
     if (m_session) {
         auto now = m_clock->now();
         if (!now) {
@@ -978,10 +973,6 @@ void MediaScheduledDatagramSenderNode::abort(
     if (!m_terminalFailure) {
         auto cause = ::media::ErrorInfo::cancelled(
             "scheduled datagram sender was aborted");
-        if (m_pendingBatch && m_nextDatagram != 0 && !m_commitAttempted) {
-            auto committed = commitAccumulatedSubmittedPrefix();
-            if (!committed) cause = committed.error();
-        }
         m_terminalFailure = std::move(cause);
     }
     emitDiagnostics("aborted");

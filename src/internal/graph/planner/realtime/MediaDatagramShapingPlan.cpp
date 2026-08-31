@@ -190,6 +190,8 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
     if (encoding.sessionKey.empty() || encoding.generation == 0 ||
         encoding.endpoints.empty() || encoding.serviceCurve.authority.empty() ||
         encoding.serviceCurve.pacingWireBytesPerSecond == 0 ||
+        encoding.serviceCurve.maximumWireBytesPerSecond <
+            encoding.serviceCurve.pacingWireBytesPerSecond ||
         encoding.serviceCurve.burstWireBytes == 0 ||
         encoding.serviceCurve.targetResidence <=
             MediaRunningTime::fromNanoseconds(0) ||

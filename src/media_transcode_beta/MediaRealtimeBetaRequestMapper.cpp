@@ -102,17 +102,10 @@ MediaRealtimeBetaRequestMapper::map(
     request.output.sdpPath = sessionOwnedSdpPath;
     request.deployment.provisionedEgressCapacityBitsPerSecond =
         config.provisionedEgressCapacityBitsPerSecond();
-    request.deployment.pathMaximumIpPacketBytes =
-        config.pathMaximumIpPacketBytes();
     request.deployment.maximumWireResidence =
         ffmpeg::graph::MediaRunningTime::fromNanoseconds(
             static_cast<std::int64_t>(
                 config.maximumWireResidenceMilliseconds()) * 1'000'000);
-    request.deployment.receiverTransportDecodeLead =
-        ffmpeg::graph::MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(
-                config.receiverTransportDecodeLeadMilliseconds()) *
-            1'000'000);
     return ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest>::success(
         std::move(request));
 }

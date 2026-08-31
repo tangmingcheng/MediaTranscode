@@ -8,16 +8,16 @@
 
 ## 事实、规划产品与执行契约
 
-- `MediaRealtimeDeploymentEnvelope` 只接收 scope/authority、address family、权威 MTU/发送上限、受管 service curve、graph/network/socket 总资源预算、local address/port reservation、target/maximum latency、observation budget/evidence policy，以及可选 receiver timing capability。IP/UDP header 和 batch/backlog/endpoint/socket/correlation 容量由 planner 推导。
+- `MediaRealtimeDeploymentEnvelope` 只承载 planner 已完成的 scope/authority、address family、权威 PMTU/发送上限、受管 service curve、graph/network/socket 总资源预算、local address/port reservation、target/maximum latency、observation budget/evidence policy 与 transport timing。IP/UDP header 和 batch/backlog/endpoint/socket/correlation 容量由 planner 推导。
 - encoder preflight 在真实 `avcodec_open2` 后形成 `PreparedEncoderEmissionEnvelope`。effective rate/VBV/cadence 取 opened-context/backend readback；packet layout 优先取 extradata，缺失时用独立 preflight context 编码一个真实 probe frame，从首个非空 `AVPacket` 权威判定 Annex B 或唯一合法 length prefix。缺失、冲突或无法证明时 DAG 前失败，不按 codec 名称猜测，不软件 fallback。
 - planner 由 prepared encoder emission、TS mux/RTP/IP/UDP overhead 形成唯一 `WireTrafficEnvelope`，先与受管 service curve 做 admission，再由总资源和 latency 推导 transport、batch、backlog、endpoint、socket、correlation 与媒体 queue 硬边界。datagram 容量不映射为 frame/AU/mux queue。
-- TS 协议时序只消费 mux/PCR/output cadence 与 receiver timing；receiver 只提供可直接取得的 transport buffer/decode lead 及 authority，startup preroll 由 planner 推导。公共 shaper 是唯一 wire-rate authority。MTU 同时推导 TS/UDP 与 MP2T/RTP 的 TS packets/datagram，独立 RTP 再扣除 RTP header；小 MTU DAG 前拒绝。
+- TS 协议时序只消费 mux/PCR/output cadence 与 planner-owned transport timing；接收端 caching 不参与发送端决策，startup preroll 由 planner 推导。公共 sender 是唯一 wire-rate authority。PMTU 同时推导 TS/UDP 与 MP2T/RTP 的 TS packets/datagram，独立 RTP 再扣除 RTP header；小 MTU DAG 前拒绝。
 - sender 固定执行 reservation、release wait、nonblocking submit、原 deadline 内 writable wait、精确 prefix commit。WouldBlock 保留原 job/lease；known submitted prefix 精确提交，unknown remainder 不提交并终止；`enqueueNotAfter` 为 inclusive deadline。
 - generation rebind 先完整验证新 plan，再关闭旧 session 并 bind 新 session；失败终态、不回滚。Linux `SO_TXTIME` adapter 保留为 capability，但当前 production planner 只接纳共享 userspace baseline，不运行期探测或降级。
 
 ## 参数收口
 
-保留调用方能直接取得的媒体/会话/部署事实：media-id、input/output endpoint、裸 RTP codec/PT/clock/fmtp、显式 stream set、目标 codec/尺寸/fps/GOP/RC、SDP 路径，以及受管出口容量、端到端 MTU、最大 wire residence 和 receiver decode lead。CBR 只接受 target bitrate；VBR 接受 min/target/max。硬件后端由 capability probe 后的最高评分 planner 产品决定，不接受调用方指定。
+保留调用方能直接取得的媒体/会话/部署事实：media-id、input/output endpoint、裸 RTP codec/PT/clock/fmtp、显式 stream set、目标 codec/尺寸/fps/GOP/RC、SDP 路径，以及受管出口容量和最大 wire residence。PMTU 由 connected route 与所选接口权威探测，sender transport lead 由最大 wire residence 推导；不再接受 path MTU 或 receiver decode lead。CBR 只接受 target bitrate；VBR 接受 min/target/max。硬件后端由 capability probe 后的最高评分 planner 产品决定，不接受调用方指定。
 
 已从 realtime CLI、Beta 和 request 删除且不保留别名/default/fallback：caller `packet-size`、`output-pacing-bitrate-bps`、旧 `transport-decode-lead`、四类 realtime queue、startup unit/gap、prepared handoff packet/byte capacity、IP/UDP header、batch/backlog/endpoint/socket/correlation 内部容量，以及 input-AU → `SO_SNDBUF`。同时删除 `5/4` headroom、two-packet burst、默认 GOP 30、固定 TS packets/datagram=7 和 Beta 内部传输 profile。`local_video_cli` 四类队列属于独立文件产品且不参与本轮发送控制，列入后置审查而未修改。完整清单见 `docs/realtime-core-parameter-review-baseline.md`。
 
@@ -221,6 +221,56 @@ D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode
 - typeperf 122 个有效 CPU 样本：平均单核 21.221%、P95 26.382%、峰值 35.628%；private working set 164769792 B 起步、峰值 168124416 B。CPU 未达到最终目标，按用户要求本阶段不优化，继续列为风险。
 - 源结束后 CLI 保留真实 source-clock expiry；queue、payload、reservation 全部归零，dumpcap、VLC、CLI、FFmpeg 与 typeperf 均无进程残留。
 
+## 2026-08-31 Windows Release PMTU 与 transport timing 去参数化门禁
+
+链路为 H.264 1280×720 30 fps raw RTP 输入，经 CUDA/NVENC 转码为 HEVC 1920×1080 25 fps、CBR 6 Mbps，输出 MPEG-TS/RTP。CLI 不再接受 path MTU 或 receiver decode lead，只保留调用方可直接取得的受管出口容量与最大 wire residence。有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 59452 or udp port 59453" -a duration:200 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-deparam-03\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-deparam-03\vlc.log rtp://@192.168.96.122:59452
+
+C:\Windows\System32\typeperf.exe "\Process(media_transcode_realtime_video_cli)\% Processor Time" "\Process(media_transcode_realtime_video_cli)\Working Set - Private" -si 1 -sc 220 -f CSV -o D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-deparam-03\cpu-rss.csv
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-deparam-03 --egress-capacity-bps 25000000 --maximum-wire-residence-ms 100 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:57452 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 59452 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-deparam-03\output.sdp --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:57452?rtcpport=57453&pkt_size=1200"
+```
+
+- FFmpeg 完整发送 3600 frames/120 s；dumpcap 捕获 64516 datagrams、81374624 IP wire bytes，capture span 119.979439 s，接口丢包 0。输出含 64486 RTP 与 30 RTCP datagrams。
+- connected route 选择 `ifindex:16`；planner 继续形成 2027220 B/s pacing 与 1356 B 单 datagram burst。packet-event GBRA 最大 debt 恰为 1356 B；1/5/10/20/100 ms 最大字节数为 2940/8136/13788/27120/122536 B，均低于对应合同上界。
+- RTP 64486 packets、loss 0；419108 个 TS packets 的 TEI、continuity skip/drop、invalid AFC 与 discontinuity 均为 0，共 1500 个 PCR frames。
+- sender materialized/scheduled/submitted/committed 均为 64516；WouldBlock、writable wait、deadline miss、pressure、partial 与 ambiguous failure 均为 0，backlog 最终归零，maximum residence 98.2718 ms。协议 batch 与最终 wire 物化最迟分别在 release 后 2.9186/2.9519 ms 完成。
+- VLC 记录 HEVC、1920×1080、`Received first picture` 与 `Stream buffering done (1040 ms in 943 ms)`；picture too late、deadlock、discontinuity、loss、corrupt 与 decoder error 均为 0。两条 D3D11VA surface/slice warning 属接收端硬件表面协商，未伴随解码或画面错误。
+- typeperf 运行窗口 122 个样本平均单核 CPU 21.553%、峰值 52.422%；private working set 从稳定运行首样本 163336192 B 增至 166338560 B，峰值 166346752 B。CPU 按用户要求本阶段不优化，继续列为后置风险。
+- 源结束后 CLI 保留真实 source-clock expiry；最终 queue、graph payload 与 reservation 全部归零，VLC、CLI、FFmpeg、dumpcap、typeperf 均无进程残留。
+
+## 2026-08-31 Windows Release 公共队列时钟与 WebRTC queue-drain 复验
+
+公共 sender 的全局 outstanding queue 以 packet-count 加权平均 residence 和 wire bytes 形成 WebRTC queue-time drain-rate：`requiredRate = queueWireBytes / max(1 ms, queueTimeLimit - averageQueueTime)`。它只在 baseline rate 不足以于 immutable residence 内排空队列时提高 pacing，且不得超过调用方直接取得的受管服务容量；超过即失败，不扩容、不追赶。queue snapshot 在 ledger 锁内采样权威时钟；submit lifecycle 保留真实完成时刻，aggregate accounting 在不早于最新 ledger 时刻扣减，分别消除 reserve/snapshot 与 submit/commit 交错导致的非单调 TOCTOU。该算法对照 WebRTC `PacingController::UpdateBudgetWithElapsedTime` 的 queue-time 路径；本轮共享 userspace zero-burst/GBRA 语义不需要 `sch_etf`，未修改内核、qdisc 或模块。
+
+链路为 H.264 1280×720 30 fps raw RTP 输入，经 CUDA/NVENC 转码为 HEVC 1920×1080 25 fps、CBR 6 Mbps，输出 MPEG-TS/RTP。有效命令：
+
+```text
+D:\Wireshark\dumpcap.exe -i 10 -f "udp port 59852 or udp port 59853" -a duration:140 -w D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-queue-adapt-05\capture.pcapng
+
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-queue-adapt-05\vlc.log rtp://@192.168.96.122:59852
+
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-queue-adapt-05 --egress-capacity-bps 100000000 --maximum-wire-residence-ms 100 --input-type rtp --input-layout separate --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:57852 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 59852 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-queue-adapt-05\output.sdp --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:57852?rtcpport=57853&pkt_size=1200"
+
+C:\Windows\System32\typeperf.exe "\Process(media_transcode_realtime_video_cli)\% Processor Time" "\Process(media_transcode_realtime_video_cli)\Working Set - Private" -si 1 -sc 140 -f CSV -o D:\Code\MyCode\MediaTranscode\out\acceptance\windows-release-720p30-h264-to-1080p25-hevc-cbr6m-mpegts-rtp-queue-adapt-05\cpu-rss.csv
+```
+
+- 先用未经部署证据支持的 25 Mbps 上限运行时，queue drain 需要 3502181 B/s，超过 3125000 B/s 上限，sender 按 admission contract 失败。只读路由证据确认 `ifIndex 16` 对应出口链路为 100 Mbps；最终复验仅在产品明确接纳整条物理链路作为受管服务时使用该事实。100 Mbps 只是 maximum，最终实际 pacing max 为 2006648 B/s，未按链路速率发送。
+- FFmpeg 完整发送 3600 frames/120 s；dumpcap 捕获 64516 datagrams 且 receive/drop 为 64516/0，pcap、dumpcap 与接口 drop 均为 0。输出含 64486 RTP 与 30 RTCP datagrams；RTP sequence gap/reorder 均为 0。
+- RTP span 119.978282 s、平均 IP wire rate 5425765 bps、最大 IP packet 1356 B。按实际 pacing max 计算的 GCRA 最大 debt 为 1356 B、violation 0；1/5/10/20/100 ms 最大字节数为 2940/8364/14916/27348/125852 B，均低于 3363/11390/21423/41489/202021 B 合同上界。
+- 419108 个 TS packets 中 PAT 1200、PMT 1200、video 416708；continuity、TEI、invalid AFC、cc.drop 与 declared discontinuity 均为 0，共 1500 个 PCR frames。
+- sender committed batches/datagrams/payload 为 6939/64516/79568176 B；WouldBlock、writable wait、deadline miss、pressure、partial 与 ambiguous failure 均为 0，最终 backlog 为 0，high-water 为 78 datagrams/105580 B，maximum residence 为 96.9708 ms。materialized/scheduled/submitted/committed sequence 均为 64516。TX timestamp 仍为 untracked，按 report policy 不能声称 wire completion。
+- VLC 识别 MPEG-2 TS、PID 257 HEVC、1920×1080，记录 `Received first picture`、`Stream buffering done (1040 ms in 944 ms)` 和 decoder wait 0 ms；loss、corrupt、discontinuity、late picture 与 decode error 均为 0。D3D11VA surface/slice warning 未伴随解码或画面错误。
+- typeperf 121 个有效样本平均单核 CPU 23.131%、P95 33.986%、峰值 41.651%；private RSS 从 159.109 MiB 增至 162.059 MiB、峰值 162.711 MiB。CPU 按用户要求本阶段不优化，继续列为后置风险。源结束后 CLI 如实以 source-clock expiry 退出；graph payload reservation/release 均为 22812、最终 current/queue/drop 为 0，所有测试进程无残留。
+
 ## 构建、静态扫描与边界
 
 - Windows VS2026 x64 Release 当前工作树 clean-first：clean 582、build 583，RC=0。
@@ -233,7 +283,7 @@ Task5 round2 新增提交为：`d44a2b66`、`d277f894`、`7ba283c1`、`bd81bd0d`
 
 ## 剩余风险与后置项
 
-- 120 秒持续运行和 56 链路矩阵尚未执行；Task6 必须覆盖全部 admitted tuple，并对 unsupported tuple 验证 DAG 前 typed rejection。
+- Windows 单视频 H.264 raw RTP → HEVC MPEG-TS/RTP 的 120 秒发送控制门禁已通过；56 链路矩阵仍未执行，Task6 必须覆盖全部 admitted tuple，并对 unsupported tuple 验证 DAG 前 typed rejection。
 - TX evidence policy 为 `report` 时，timestamp 缺失只影响证据，不阻止发送；它不是逐包 wire completion。
 - 公网自适应拥塞控制、NACK/RTX/FEC 不在本轮范围；当前产品只接纳显式受管/预留 service scope。
 - 输入 PCR 失活阈值、open/read/analyze/probe 工作限额、A/V servo/reacquisition 与 `local_video_cli` 文件队列仍需后续独立审查。

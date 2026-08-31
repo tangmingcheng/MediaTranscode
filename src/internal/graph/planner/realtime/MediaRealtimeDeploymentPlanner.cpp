@@ -4,6 +4,7 @@
 
 #include "internal/graph/planner/realtime/MediaDatagramRouteProbe.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramPayloadPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeTransportTimingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
@@ -684,26 +685,20 @@ MediaRealtimeDeploymentPlanner::planBase(
     const MediaPreparedRealtimeEmissionSet& emission)
 {
     if (!request.deployment.provisionedEgressCapacityBitsPerSecond ||
-        !request.deployment.pathMaximumIpPacketBytes ||
         !request.deployment.maximumWireResidence ||
-        !request.deployment.receiverTransportDecodeLead ||
         *request.deployment.provisionedEgressCapacityBitsPerSecond < 8 ||
-        *request.deployment.pathMaximumIpPacketBytes == 0 ||
         *request.deployment.maximumWireResidence <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        *request.deployment.receiverTransportDecodeLead <
-            *request.deployment.maximumWireResidence) {
+            MediaRunningTime::fromNanoseconds(0)) {
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "realtime Datagram deployment requires provisioned egress capacity, path MTU, maximum wire residence, and receiver transport decode lead facts"));
+                "realtime Datagram deployment requires provisioned egress capacity and maximum wire residence facts"));
     }
     auto route = MediaDatagramRouteProbe::probe(request);
     if (!route) {
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             route.error());
     }
-    auto mtu = MediaRealtimeDatagramPayloadPlanner::plan(
-        route.value(), *request.deployment.pathMaximumIpPacketBytes);
+    auto mtu = MediaRealtimeDatagramPayloadPlanner::plan(route.value());
     if (!mtu) {
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             mtu.error());
@@ -721,6 +716,12 @@ MediaRealtimeDeploymentPlanner::planBase(
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             !wire ? wire.error() : latency.error());
     }
+    auto transportTiming = MediaRealtimeTransportTimingPlanner::plan(
+        latency.value());
+    if (!transportTiming) {
+        return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
+            transportTiming.error());
+    }
     const auto count = endpointCount(request);
     const auto maximumResidence = latency.value().maximumResidence;
     MediaRealtimeDeploymentBasePlan result{
@@ -736,9 +737,7 @@ MediaRealtimeDeploymentPlanner::planBase(
         {1, maximumResidence,
          MediaRealtimeTransmitEvidencePolicy::Report,
          "planner-owned-asynchronous-transmit-evidence"},
-        MediaRealtimeReceiverTimingCapability{
-            *request.deployment.receiverTransportDecodeLead,
-            "caller-receiver-transport-decode-lead"},
+        std::move(transportTiming).value(),
         std::nullopt, std::move(wire).value(),
         provisionedWireCapacityBytesPerSecond, count};
     if (request.output.transport == MediaOutputTransportKind::RtpAvp) {
@@ -770,7 +769,7 @@ MediaRealtimeDeploymentPlanner::complete(
         pacingRate.value(),
         wire.maximumWireDatagramBytes,
         wire.authority +
-            "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-queue-time-admission+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket+managed-no-runtime-rate-fallback"};
+            "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket+managed-no-runtime-capacity-fallback"};
     auto residenceDatagrams = MediaCheckedArithmetic::bytesForResidence(
         wire.peakDatagramsPerSecond,
         base.latency.maximumResidence.nanoseconds(),
@@ -810,7 +809,7 @@ MediaRealtimeDeploymentPlanner::complete(
          totalNetwork.value(), network.value().admittedSocketBytes,
          "prepared-graph-and-wire-resource-ledgers"},
         std::move(base.localPorts), std::move(base.latency),
-        std::move(base.observation), std::move(base.receiverTiming),
+        std::move(base.observation), std::move(base.transportTiming),
         std::move(base.rtcpSession)};
     return MediaRealtimeDeploymentEnvelope::decode(std::move(encoding));
 }

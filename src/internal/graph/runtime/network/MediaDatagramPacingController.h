@@ -15,9 +15,19 @@ struct MediaDatagramPacingContract final {
     std::string serviceScopeId;
     std::uint64_t generation;
     std::uint64_t wireBytesPerSecond;
+    std::uint64_t maximumWireBytesPerSecond;
+    MediaRunningTime queueTimeLimit;
 
     friend bool operator==(const MediaDatagramPacingContract&,
                            const MediaDatagramPacingContract&) = default;
+};
+
+struct MediaDatagramPacingQueueState final {
+    std::uint64_t wireBytes;
+    MediaRunningTime averageResidence;
+
+    friend bool operator==(const MediaDatagramPacingQueueState&,
+                           const MediaDatagramPacingQueueState&) = default;
 };
 
 struct MediaDatagramPacingJob final {
@@ -27,6 +37,7 @@ struct MediaDatagramPacingJob final {
     std::uint64_t wireBytes;
     MediaRunningTime canonicalRelease;
     MediaRunningTime canonicalDeadline;
+    MediaDatagramPacingQueueState queue;
 };
 
 struct MediaDatagramPacingReservation final {
@@ -34,6 +45,7 @@ struct MediaDatagramPacingReservation final {
     MediaRunningTime notBefore;
     MediaRunningTime notAfter;
     MediaRunningTime serviceDuration;
+    std::uint64_t wireBytesPerSecond;
 };
 
 struct MediaDatagramPacingTelemetry final {
@@ -41,6 +53,8 @@ struct MediaDatagramPacingTelemetry final {
     std::uint64_t submittedDatagrams = 0;
     std::int64_t maximumSubmitLatenessNanoseconds = 0;
     std::uint64_t worstLateGlobalSequence = 0;
+    std::uint64_t rateAdaptations = 0;
+    std::uint64_t maximumWireBytesPerSecond = 0;
     bool counterSaturated = false;
 };
 
@@ -81,6 +95,7 @@ private:
     std::optional<MediaRunningTime> m_theoreticalArrivalTime;
     std::optional<MediaRunningTime> m_lastObservedTime;
     std::optional<std::uint64_t> m_lastSubmittedSequence;
+    std::uint64_t m_adjustedWireBytesPerSecond = 0;
 };
 
 } // namespace media::ffmpeg::graph

@@ -178,11 +178,10 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaRealtimeDeploymentEnvelope& deploymentEnvelope,
     const MediaProjectMpegTsResolvedPipelineFacts& resolvedFacts)
 {
-    if (!plan.startup.outputLeadNs ||
-        !deploymentEnvelope.encode().receiverTiming) {
+    if (!plan.startup.outputLeadNs) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "MPEG-TS output requires planner-owned startup timing and authoritative receiver timing capability"));
+                "MPEG-TS output requires planner-owned startup and transport timing"));
     }
     if (!request.output.transport) {
         return ::media::Result<MediaTsMuxPlan>::failure(
@@ -213,7 +212,7 @@ void planTsInput(MediaAvSyncPlan& plan,
         !request.parameters.video.frameRate.denominator) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "MPEG-TS receiver timing requires prepared video cadence"));
+                "MPEG-TS transport timing requires prepared video cadence"));
     }
     auto audioCadence = MediaRunningTime::checkedFromTicks(
         resolvedFacts.audioOutput.codecFrameSamples(), 1,
@@ -230,7 +229,7 @@ void planTsInput(MediaAvSyncPlan& plan,
               audioCadence.error());
     auto preroll = timing
         ? MediaMpegTsOutputTimingPlanner::startupEmissionPreroll(
-              deployment.receiverTiming->transportDecodeLead,
+              deployment.transportTiming.senderTransportLead,
               MediaRational{
                   *request.parameters.video.frameRate.numerator,
                   *request.parameters.video.frameRate.denominator},
@@ -242,7 +241,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput, std::move(timing).value(),
-        deployment.receiverTiming->transportDecodeLead,
+        deployment.transportTiming.senderTransportLead,
         preroll.value(),
         *request.output.transport,
         maximumPacketsPerDatagram);

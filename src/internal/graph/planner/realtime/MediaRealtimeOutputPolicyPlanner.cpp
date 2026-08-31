@@ -178,19 +178,14 @@ std::optional<int> resolvedAudioBitrateKbps(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS output requires a resolved transport"));
         }
-        if (!deployment.receiverTiming) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS output requires authoritative receiver timing capability"));
-        }
         output.muxedOutput.transportDecodeLead =
-            deployment.receiverTiming->transportDecodeLead;
+            deployment.transportTiming.senderTransportLead;
         if (!plan.videoParameters.frameRate.complete() ||
             !plan.videoParameters.frameRate.numerator ||
             !plan.videoParameters.frameRate.denominator) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS receiver timing requires prepared video cadence"));
+                    "MPEG-TS transport timing requires prepared video cadence"));
         }
         std::optional<MediaRunningTime> audioCadence;
         if (plan.audioPlan && plan.audioPlan->preparedEmission) {
@@ -217,7 +212,7 @@ std::optional<int> resolvedAudioBitrateKbps(
                           *plan.videoParameters.frameRate.denominator});
         if (!timing) return ::media::Status::failure(timing.error());
         auto preroll = MediaMpegTsOutputTimingPlanner::startupEmissionPreroll(
-            deployment.receiverTiming->transportDecodeLead,
+            deployment.transportTiming.senderTransportLead,
             MediaRational{*plan.videoParameters.frameRate.numerator,
                           *plan.videoParameters.frameRate.denominator},
             audioCadence, timing.value());

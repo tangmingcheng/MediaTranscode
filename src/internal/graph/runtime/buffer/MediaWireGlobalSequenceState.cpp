@@ -1,6 +1,8 @@
 #include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <limits>
@@ -8,6 +10,37 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Result<std::uint64_t> advanceQueueResidence(
+    std::uint64_t residenceSumNanoseconds,
+    std::optional<MediaRunningTime> updatedAt,
+    std::size_t queuedDatagrams,
+    MediaRunningTime now)
+{
+    if (now < MediaRunningTime::fromNanoseconds(0) ||
+        (updatedAt && now < *updatedAt)) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "wire pacing queue time is negative or non-monotonic"));
+    }
+    if (!updatedAt || queuedDatagrams == 0) {
+        return ::media::Result<std::uint64_t>::success(
+            residenceSumNanoseconds);
+    }
+    const auto delta = static_cast<std::uint64_t>(
+        now.nanoseconds() - updatedAt->nanoseconds());
+    auto increment = MediaCheckedArithmetic::multiply(
+        delta, static_cast<std::uint64_t>(queuedDatagrams),
+        "wire pacing queue residence accumulation");
+    return increment
+        ? MediaCheckedArithmetic::add(
+              residenceSumNanoseconds, increment.value(),
+              "wire pacing queue residence accumulation")
+        : increment;
+}
+
+} // namespace
 
 MediaWireGlobalSequenceReservation::MediaWireGlobalSequenceReservation(
     std::shared_ptr<MediaWireGlobalSequenceState> state,
@@ -163,10 +196,56 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
             return ::media::Status::failure(::media::ErrorInfo::internalError(
                 "wire global sequence range accounting underflowed"));
         }
+        const auto queueAccountingAt =
+            m_state->m_queueResidenceUpdatedAt &&
+                now < *m_state->m_queueResidenceUpdatedAt
+            ? *m_state->m_queueResidenceUpdatedAt
+            : now;
+        auto queueResidence = advanceQueueResidence(
+            m_state->m_queueResidenceSumNanoseconds,
+            m_state->m_queueResidenceUpdatedAt,
+            m_state->m_outstandingDatagrams, queueAccountingAt);
+        std::uint64_t committedResidence = 0;
+        for (std::size_t index = begin;
+             queueResidence && index < begin + count; ++index) {
+            if (queueAccountingAt < m_materializedAt[index]) {
+                queueResidence = ::media::Result<std::uint64_t>::failure(
+                    ::media::ErrorInfo::internalError(
+                        "wire pacing queue commit precedes materialization"));
+                break;
+            }
+            auto residence = static_cast<std::uint64_t>(
+                queueAccountingAt.nanoseconds() -
+                m_materializedAt[index].nanoseconds());
+            auto accumulated = MediaCheckedArithmetic::add(
+                committedResidence, residence,
+                "wire pacing queue committed residence");
+            if (!accumulated) {
+                queueResidence = ::media::Result<std::uint64_t>::failure(
+                    accumulated.error());
+                break;
+            }
+            committedResidence = accumulated.value();
+        }
+        if (!queueResidence ||
+            committedResidence > queueResidence.value()) {
+            m_state->m_poisoned = true;
+            return ::media::Status::failure(
+                !queueResidence
+                    ? queueResidence.error()
+                    : ::media::ErrorInfo::internalError(
+                          "wire pacing queue residence accounting underflowed"));
+        }
+        m_state->m_queueResidenceSumNanoseconds =
+            queueResidence.value() - committedResidence;
+        m_state->m_queueResidenceUpdatedAt = queueAccountingAt;
         m_state->m_nextGlobalSequence += static_cast<std::uint64_t>(count);
         m_state->m_reservations.front().committed += count;
         m_state->m_outstandingDatagrams -= count;
         m_state->m_outstandingWireBytes -= committedWireBytes;
+        if (m_state->m_outstandingDatagrams == 0) {
+            m_state->m_queueResidenceSumNanoseconds = 0;
+        }
         notifyWaiters = std::exchange(
             m_state->m_reservationBlocked, false);
         for (std::size_t index = begin; index < begin + count; ++index) {
@@ -336,6 +415,31 @@ MediaWireGlobalSequenceState::reserve(
         return Result::failure(::media::ErrorInfo::wouldBlock(
             "wire global sequence reservation exceeds planner backlog capacity"));
     }
+    auto projectedResidenceSum = m_queueResidenceSumNanoseconds;
+    auto projectedResidenceTime = m_queueResidenceUpdatedAt;
+    auto projectedDatagrams = m_outstandingDatagrams;
+    for (const auto& materialized : materializedAt) {
+        if (projectedResidenceTime &&
+            materialized < *projectedResidenceTime) {
+            const auto existingResidence = static_cast<std::uint64_t>(
+                projectedResidenceTime->nanoseconds() -
+                materialized.nanoseconds());
+            auto accumulated = MediaCheckedArithmetic::add(
+                projectedResidenceSum, existingResidence,
+                "wire pacing queue out-of-order materialization residence");
+            if (!accumulated) return Result::failure(accumulated.error());
+            projectedResidenceSum = accumulated.value();
+            ++projectedDatagrams;
+            continue;
+        }
+        auto advanced = advanceQueueResidence(
+            projectedResidenceSum, projectedResidenceTime,
+            projectedDatagrams, materialized);
+        if (!advanced) return Result::failure(advanced.error());
+        projectedResidenceSum = advanced.value();
+        projectedResidenceTime = materialized;
+        ++projectedDatagrams;
+    }
     const auto identity = m_nextReservationIdentity++;
     const auto firstSequence = m_projectedNextGlobalSequence;
     try {
@@ -347,8 +451,10 @@ MediaWireGlobalSequenceState::reserve(
     }
     m_projectedNextGlobalSequence +=
         static_cast<std::uint64_t>(entries.size());
-    m_outstandingDatagrams += entries.size();
+    m_outstandingDatagrams = projectedDatagrams;
     m_outstandingWireBytes += totalWireBytes;
+    m_queueResidenceSumNanoseconds = projectedResidenceSum;
+    m_queueResidenceUpdatedAt = projectedResidenceTime;
     m_highWaterDatagrams = (std::max)(
         m_highWaterDatagrams,
         static_cast<std::uint64_t>(m_outstandingDatagrams));
@@ -358,6 +464,37 @@ MediaWireGlobalSequenceState::reserve(
     return Result::success(MediaWireGlobalSequenceReservation(
         std::move(owner), identity, firstSequence,
         std::move(wireBytes), std::move(materializedAt)));
+}
+
+::media::Result<MediaWirePacingQueueSnapshot>
+MediaWireGlobalSequenceState::pacingQueueSnapshot(
+    const MediaMasterClock& clock) const
+{
+    using Result = ::media::Result<MediaWirePacingQueueSnapshot>;
+    std::lock_guard lock(m_mutex);
+    if (m_poisoned || m_outstandingDatagrams == 0 ||
+        m_outstandingWireBytes == 0) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "wire pacing queue snapshot requires active unpoisoned work"));
+    }
+    auto now = clock.now();
+    if (!now) return Result::failure(now.error());
+    auto residenceSum = advanceQueueResidence(
+        m_queueResidenceSumNanoseconds, m_queueResidenceUpdatedAt,
+        m_outstandingDatagrams, now.value());
+    if (!residenceSum) return Result::failure(residenceSum.error());
+    const auto average = residenceSum.value() /
+        static_cast<std::uint64_t>(m_outstandingDatagrams);
+    if (average > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::int64_t>::max)())) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "wire pacing queue average residence exceeds running-time range"));
+    }
+    return Result::success(MediaWirePacingQueueSnapshot{
+        m_outstandingWireBytes,
+        MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(average)),
+        now.value()});
 }
 
 ::media::Status MediaWireGlobalSequenceState::registerReservationWakeup(

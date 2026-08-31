@@ -12,6 +12,8 @@
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
 #include <linux/version.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -153,6 +155,20 @@ public:
             ::close(handle);
             return ResultType::failure(std::move(error));
         };
+        const int pathMtuDiscovery = IP_PMTUDISC_DO;
+        const int pathMtuLevel = family == AF_INET
+            ? IPPROTO_IP
+            : IPPROTO_IPV6;
+        const int pathMtuOption = family == AF_INET
+            ? IP_MTU_DISCOVER
+            : IPV6_MTU_DISCOVER;
+        if (::setsockopt(handle, pathMtuLevel, pathMtuOption,
+                         &pathMtuDiscovery,
+                         sizeof(pathMtuDiscovery)) != 0) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Linux Datagram path MTU discovery configuration failed",
+                errno));
+        }
         auto apiRequest = MediaDatagramSocketBufferApiRequest::fromTargetEffective(
             request.endpoint.targetEffectiveSendBufferBytes,
             MediaDatagramSocketBufferApiAccounting::LinuxDoubled);

@@ -114,11 +114,10 @@ template <typename Value>
              put("observation.drain_ns", d.observation.maximumDrainResidence.nanoseconds()),
              put("observation.policy", static_cast<unsigned>(d.observation.evidencePolicy)),
              set(graph, nodeId, key("observation.authority"), d.observation.authority),
-             put("receiver.present", d.receiverTiming ? 1 : 0),
-             put("receiver.decode_lead_ns", d.receiverTiming
-                 ? d.receiverTiming->transportDecodeLead.nanoseconds() : 0),
-             set(graph, nodeId, key("receiver.authority"), d.receiverTiming
-                 ? d.receiverTiming->authority : std::string("none")),
+             put("transport_timing.sender_lead_ns",
+                 d.transportTiming.senderTransportLead.nanoseconds()),
+             set(graph, nodeId, key("transport_timing.authority"),
+                 d.transportTiming.authority),
              put("rtcp_session.present", d.rtcpSession ? 1 : 0),
              put("rtcp_session.maximum_members", d.rtcpSession
                  ? d.rtcpSession->maximumSessionMembers : 0),
@@ -197,9 +196,10 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto drain = parse<std::int64_t>(node.options, key("observation.drain_ns"));
     auto evidencePolicy = parse<std::uint8_t>(node.options, key("observation.policy"));
     auto observationAuthority = required(node.options, key("observation.authority"));
-    auto receiverPresent = parse<std::uint8_t>(node.options, key("receiver.present"));
-    auto receiverDecodeLead = parse<std::int64_t>(node.options, key("receiver.decode_lead_ns"));
-    auto receiverAuthority = required(node.options, key("receiver.authority"));
+    auto senderTransportLead = parse<std::int64_t>(
+        node.options, key("transport_timing.sender_lead_ns"));
+    auto transportTimingAuthority = required(
+        node.options, key("transport_timing.authority"));
     auto rtcpSessionPresent = parse<std::uint8_t>(
         node.options, key("rtcp_session.present"));
     auto rtcpSessionMembers = parse<std::uint32_t>(
@@ -235,8 +235,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(releaseJitter);
     REQUIRE_VALUE(releaseJitterAuthority); REQUIRE_VALUE(runDatagrams);
     REQUIRE_VALUE(drain); REQUIRE_VALUE(evidencePolicy); REQUIRE_VALUE(observationAuthority);
-    REQUIRE_VALUE(receiverPresent); REQUIRE_VALUE(receiverDecodeLead);
-    REQUIRE_VALUE(receiverAuthority);
+    REQUIRE_VALUE(senderTransportLead); REQUIRE_VALUE(transportTimingAuthority);
     REQUIRE_VALUE(rtcpSessionPresent); REQUIRE_VALUE(rtcpSessionMembers);
     REQUIRE_VALUE(rtcpSessionAuthority);
     REQUIRE_VALUE(wireSustained); REQUIRE_VALUE(wirePeak); REQUIRE_VALUE(wirePackets);
@@ -269,15 +268,9 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
          MediaRunningTime::fromNanoseconds(drain.value()),
          static_cast<MediaRealtimeTransmitEvidencePolicy>(evidencePolicy.value()),
          std::move(observationAuthority).value()},
+        {MediaRunningTime::fromNanoseconds(senderTransportLead.value()),
+         std::move(transportTimingAuthority).value()},
         std::nullopt};
-    if (receiverPresent.value() == 1) {
-        deployment.receiverTiming = MediaRealtimeReceiverTimingCapability{
-            MediaRunningTime::fromNanoseconds(receiverDecodeLead.value()),
-            std::move(receiverAuthority).value()};
-    } else if (receiverPresent.value() != 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "receiver timing presence flag is invalid"));
-    }
     if (rtcpSessionPresent.value() == 1) {
         deployment.rtcpSession = MediaRealtimeRtcpSessionCapability{
             rtcpSessionMembers.value(),

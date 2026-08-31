@@ -235,6 +235,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             std::move(endpoints),
             MediaDatagramServiceCurvePlan{
                 m_encoding.pacingWireBytesPerSecond,
+                deployment.service.provisionedCapacityWireBytesPerSecond,
                 m_encoding.wireTraffic.maximumWireDatagramBytes,
                 deployment.latency.targetResidence,
                 deployment.latency.maximumReleaseJitter,
@@ -242,7 +243,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                     deployment.latency.authority + "+" +
                     deployment.latency.releaseJitterAuthority + "+" +
                     deployment.service.authority +
-                    "+exact-activated-wire-rate+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
+                    "+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
             MediaDatagramBacklogPlan{
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,

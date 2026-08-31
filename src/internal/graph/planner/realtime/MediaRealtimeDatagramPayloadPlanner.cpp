@@ -15,8 +15,7 @@ constexpr std::uint64_t MaximumUdpPayloadBytes = 65'507;
 
 ::media::Result<MediaRealtimeDeploymentMtuFact>
 MediaRealtimeDatagramPayloadPlanner::plan(
-    const MediaDatagramRouteFact& route,
-    std::uint64_t pathMaximumIpPacketBytes)
+    const MediaDatagramRouteFact& route)
 {
     const auto ipHeaderBytes =
         route.addressFamily == MediaIpAddressFamily::Ipv4
@@ -25,21 +24,18 @@ MediaRealtimeDatagramPayloadPlanner::plan(
                 ? Ipv6HeaderBytes
                 : 0U;
     if (route.authority.empty() || ipHeaderBytes == 0 ||
-        route.maximumIpPacketBytes <= ipHeaderBytes + UdpHeaderBytes ||
-        pathMaximumIpPacketBytes <= ipHeaderBytes + UdpHeaderBytes ||
-        pathMaximumIpPacketBytes > route.maximumIpPacketBytes) {
+        route.maximumIpPacketBytes <= ipHeaderBytes + UdpHeaderBytes) {
         return ::media::Result<MediaRealtimeDeploymentMtuFact>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "realtime Datagram payload planning requires an authoritative route MTU"));
     }
     const auto routeMaximumPayloadBytes = (std::min)(
         MaximumUdpPayloadBytes,
-        pathMaximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes);
+        route.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes);
     return ::media::Result<MediaRealtimeDeploymentMtuFact>::success({
         route.addressFamily,
-        route.authority +
-            "+caller-provisioned-path-mtu-validated-by-egress-interface",
-        pathMaximumIpPacketBytes,
+        route.authority,
+        route.maximumIpPacketBytes,
         routeMaximumPayloadBytes});
 }
 

@@ -59,7 +59,7 @@ private:
     ::media::Status bindPlan(const MediaDatagramTransportPlanBuffer& plan);
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
     ::media::Status waitUntil(MediaRunningTime deadline);
-    ::media::Status beginSubmitGroup(MediaRunningTime now);
+    ::media::Status beginSubmitGroup();
     ::media::Status preflightBatchTelemetry(
         const MediaWireDatagramBatchBuffer& batch) const;
     ::media::Status enqueueWireBatch(
@@ -67,10 +67,9 @@ private:
     ::media::Result<bool> activateNextWireBatch();
     bool allBatchInputsDrained(
         MediaGraphExecutionContext& context) const noexcept;
-    void recordSubmittedPrefix(
+    ::media::Status recordSubmittedPrefix(
         std::size_t count,
-        MediaRunningTime submitCompletedAt) noexcept;
-    ::media::Status commitAccumulatedSubmittedPrefix();
+        MediaRunningTime submitCompletedAt);
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
         MediaRunningTime submitStartedAt,
@@ -124,7 +123,6 @@ private:
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     bool m_groupDeadlineSubmitAttempted = false;
-    std::optional<MediaRunningTime> m_lastSubmittedAt;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::uint64_t m_batches = 0;
     std::uint64_t m_datagrams = 0;
@@ -135,7 +133,6 @@ private:
     std::uint64_t m_pressureFailures = 0;
     std::uint64_t m_partialSubmittedFailures = 0;
     std::uint64_t m_ambiguousSubmittedFailures = 0;
-    bool m_commitAttempted = false;
     bool m_diagnosticsEmitted = false;
 };
 

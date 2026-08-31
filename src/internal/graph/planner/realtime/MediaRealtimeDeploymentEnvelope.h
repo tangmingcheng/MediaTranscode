@@ -92,12 +92,12 @@ struct MediaRealtimeDeploymentManagedServiceFact final {
                            const MediaRealtimeDeploymentManagedServiceFact&) = default;
 };
 
-struct MediaRealtimeReceiverTimingCapability final {
-    MediaRunningTime transportDecodeLead =
+struct MediaRealtimeTransportTimingPlan final {
+    MediaRunningTime senderTransportLead =
         MediaRunningTime::fromNanoseconds(0);
     std::string authority;
-    friend bool operator==(const MediaRealtimeReceiverTimingCapability&,
-                           const MediaRealtimeReceiverTimingCapability&) = default;
+    friend bool operator==(const MediaRealtimeTransportTimingPlan&,
+                           const MediaRealtimeTransportTimingPlan&) = default;
 };
 
 struct MediaRealtimeRtcpSessionCapability final {
@@ -115,7 +115,7 @@ struct MediaRealtimeDeploymentEnvelopeEncoding final {
     MediaRealtimeDeploymentLocalPortRange localPorts;
     MediaRealtimeDeploymentLatencyBudget latency;
     MediaRealtimeDeploymentObservationBudget observation;
-    std::optional<MediaRealtimeReceiverTimingCapability> receiverTiming;
+    MediaRealtimeTransportTimingPlan transportTiming;
     std::optional<MediaRealtimeRtcpSessionCapability> rtcpSession;
     friend bool operator==(const MediaRealtimeDeploymentEnvelopeEncoding&,
                            const MediaRealtimeDeploymentEnvelopeEncoding&) = default;

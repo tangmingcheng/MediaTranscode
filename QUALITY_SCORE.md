@@ -19,10 +19,10 @@
 ## Task5 Datagram 发送控制证据增量（未重评分）
 
 - 三类实时输出已统一为 protocol materializer、公共 service-scope `DatagramShaper` 和公共 nonblocking sender；file output 的 shape validator 明确排除 datagram 节点。
-- `PreparedEncoderEmissionEnvelope`、`WireTrafficEnvelope`、graph/network resource ledger 与 receiver timing 产品均由 planner 形成；caller 不再提供 realtime queue、packet size、pacing rate、batch/backlog/endpoint/socket/correlation 或 startup preroll。
-- exact `0084a3d1` 在 Windows VS2026 clean-first 与 RK Release clean-first `--parallel 8` 均成功；Windows CUDA/NVENC 与 RKMPP 的 1280×720@30、8 Mbps、H.264 raw RTP→HEVC MP2T/RTP 主链均完成不低于 30 秒发送窗口。
-- RK/Windows 主链分别提交 26705/56310 datagrams；WouldBlock、deadline miss、pressure、partial/ambiguous submit 与 service-curve violation 均为 0。TX timestamp 未被平台 adapter tracked，按 report policy 如实记为 untracked，不能据此声称 wire completion。
-- 本增量不提高现有分数：固定 120 秒 receiver loss/order/TS continuity、56 链路矩阵、两名独立 reviewer 同时 PASS 和 Task6 最终验收仍未完成。
+- `PreparedEncoderEmissionEnvelope`、`WireTrafficEnvelope`、graph/network resource ledger、PMTU 与 transport timing 产品均由 planner 形成；caller 不再提供 realtime queue、packet size、pacing rate、path MTU、receiver decode lead、batch/backlog/endpoint/socket/correlation 或 startup preroll。
+- Windows VS2026 Release clean-first 已成功；Windows CUDA/NVENC 的 H.264 1280×720@30 raw RTP → HEVC 1920×1080@25 CBR 6 Mbps MP2T/RTP 完成固定源 120 秒复验。公共 queue-time drain 采用 WebRTC 公式并受部署容量硬上限约束，queue clock/commit accounting 的两类 TOCTOU 已通过临时 RED→GREEN 验证且临时测试未入库。
+- Windows 最终复验提交 64516 datagrams；RTP loss/order、TS continuity/TEI/AFC、WouldBlock、deadline、pressure、partial/ambiguous submit 与 GCRA violation 均为 0，VLC 未记录 late/corrupt/discontinuity/decode error。TX timestamp 未被 adapter tracked，按 report policy 如实记为 untracked，不能据此声称 wire completion。
+- 本增量不提高现有分数：最新公共队列改动的 RKMPP 同规格复验、56 链路矩阵、两名独立 reviewer 同时 PASS 和 Task6 最终验收仍未完成；Windows 平均单核 CPU 23.131% 按用户要求暂缓优化并保留为风险。
 
 ## Remaining priorities
 

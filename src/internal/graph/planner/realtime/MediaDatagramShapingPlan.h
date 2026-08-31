@@ -89,6 +89,7 @@ struct MediaDatagramEndpointPlan final {
 
 struct MediaDatagramServiceCurvePlan final {
     std::uint64_t pacingWireBytesPerSecond;
+    std::uint64_t maximumWireBytesPerSecond;
     std::uint64_t burstWireBytes;
     MediaRunningTime targetResidence;
     MediaRunningTime maximumReleaseJitter;

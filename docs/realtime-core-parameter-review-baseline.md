@@ -4,7 +4,7 @@
 
 对外参数只能表达调用方可直接取得的真实源、协议会话、产品意图或部署事实。编码器 readback、封装开销、wire rate、burst、队列、socket 与 batch 等内部产品必须由 planner 推导。无法权威推导时在 DAG 前失败，不使用经验默认值。
 
-工业对照采用 WebRTC 公共 pacer 的聚合 token/debt 与不追赶积压策略、RFC 8085 的聚合限速和突发抑制、RFC 8899 的 DPLPMTUD 能力边界、FFmpeg send/receive 的有界状态机，以及 GStreamer 有界 queue/backpressure 语义。
+工业对照采用 WebRTC 公共 pacer 的聚合 token/debt 与不追赶积压策略、[RFC 8085](https://datatracker.ietf.org/doc/html/rfc8085) 的聚合限速和突发抑制、[RFC 8899](https://datatracker.ietf.org/doc/html/rfc8899) 的 DPLPMTUD 能力边界、FFmpeg send/receive 的有界状态机，以及 GStreamer 有界 queue/backpressure 语义。Windows 与 Linux 均从 connected UDP socket 取得系统 PMTU 估计；发送 socket 明确启用 PMTUD，运行期不降级为 IP fragmentation。
 
 ## 当前允许的对外事实
 
@@ -17,20 +17,20 @@
 | 视频产品意图 | codec、width/height、fps、GOP、RC mode、bitrate | 保留；CBR 只接受 target，VBR 接受 min/target/max。未指定的尺寸、fps 或 target 只有在真实源或 opened encoder 能权威给出时才可继承。 |
 | 音频产品意图 | codec、sample rate、channels、RC 与 bitrate | 保留；仅 AudioVideo 可用。 |
 | 观测工作预算 | open/read timeout、analyze duration、probe size | 保留；它们限制 I/O 等待和观测资源，无法从尚未打开的源推导，不得参与发送 wire/socket 容量。 |
-| 受管出口容量 | `provisioned-egress-capacity-bps` | 保留；来自部署网络服务，不等同于编码码率。planner 仅用于 admission 上限。 |
-| 路径 MTU | `path-mtu-bytes` | 保留；本地 route probe 只能验证本机出口上限。单向 RTP/VLC 没有 DPLPMTUD 所需的接收端反馈，不能把本机接口 MTU 冒充端到端 MTU。 |
+| 受管出口容量 | `egress-capacity-bps` | 保留；来自部署网络服务，不等同于编码码率。planner 仅用于 admission 上限。物理 link speed 只有在产品明确接纳整条链路为受管服务时才是权威容量事实；它不能推导某个预留 service。Windows 复验中未经证据支持的 25 Mbps 上限被 drain-rate admission 拒绝，随后只读路由证据确认 100 Mbps 物理出口并以整链路受管事实复验；实际 pacing 仍由媒体与 queue 产品决定，而不是按 100 Mbps 发送。 |
 | wire 驻留 SLA | `maximum-wire-residence-ms` | 保留；属于产品/部署时延约束，planner 用它验证 prepared burst 是否可服务。 |
-| 接收端时序能力 | `receiver-transport-decode-lead-ms` | 保留；来自接收端 caching/decode 配置，裸 RTP 发送端无法推导。该参数已获用户明确批准。 |
 
 ## 已从 realtime 对外入口移除
 
 | 原字段 | 当前处理 |
 |---|---|
+| path MTU | 删除 `path-mtu-bytes`；planner 取系统 connected-path PMTU 与所选出口接口 MTU 的较小值，形成同一 MTU/packetization 契约。对本机地址，接口 MTU 防止系统 65535 local-route PMTU 生成巨型 UDP datagram；无法取得两项平台证据时 DAG 前失败。 |
+| receiver transport decode lead | 删除 `receiver-transport-decode-lead-ms`；接收端 caching 不再参与发送端 RTP/MPEG-TS 决策。planner 以 immutable maximum wire residence 形成 sender transport lead，协议 preparation lead、cadence 与 startup preroll 继续内部推导。 |
 | hardware backend、disable-hw | planner 根据真实 capability probe 选择最高评分链路；不允许调用方指定或运行期软件 fallback。Beta 的 `selected_backend` 仅是结果 telemetry。 |
 | packet size、pacing bitrate、transport lead | planner 从 MTU、opened encoder emission、RTP/RTCP/MPEG-TS/IP/UDP 开销与部署事实形成唯一 wire 产品。 |
 | metadata/packet/frame/mux queue | planner 从 prepared emission、媒体 cadence、驻留与资源 ledger 推导。 |
 | sender backlog/batch/socket/correlation、prepared handoff packet/byte capacity | planner 形成硬边界；调用方无法可靠计算。 |
-| startup unit/gap/preroll | 协议与 receiver timing planner 产品；不接受调用方填数。 |
+| startup unit/gap/preroll | 协议与 transport timing planner 产品；不接受调用方填数。 |
 | video quality/preset/tune/profile/level/B-frame/global-header | 已从 realtime core request 类型删除；由所选 encoder 与 realtime/output contract 决定。 |
 | audio quality/preset/profile | 已从 realtime core request 类型删除；由 audio planner 和 output protocol contract 决定。 |
 | low-latency bool | 已从调用方与 Beta profile 删除；realtime 输入类型本身形成 planner 产品。 |

@@ -130,9 +130,7 @@ typedef struct mt_beta_video_output {
 
 typedef struct mt_beta_realtime_deployment {
     uint64_t provisioned_egress_capacity_bps;
-    uint32_t path_mtu_bytes;
     uint32_t maximum_wire_residence_ms;
-    uint32_t receiver_transport_decode_lead_ms;
 } mt_beta_realtime_deployment;
 
 typedef struct mt_beta_realtime_config {

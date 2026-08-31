@@ -83,14 +83,9 @@ MediaAvSyncStartupPolicyPlanner::plan(
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             capacity.error());
     }
-    if (!deployment.encode().receiverTiming) {
-        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V startup requires authoritative receiver transport decode lead"));
-    }
     return makePolicy(
         capacity.value(),
-        deployment.encode().receiverTiming->transportDecodeLead);
+        deployment.encode().transportTiming.senderTransportLead);
 }
 
 ::media::Result<MediaAvSyncStartupPolicy>
@@ -113,13 +108,8 @@ MediaAvSyncStartupPolicyPlanner::finalizePrepared(
                 "prepared A/V startup is missing its input replay bounds"));
     }
     prepared.maximumGapNs = capacity.value().maximumGap;
-    if (!deployment.encode().receiverTiming) {
-        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "prepared A/V startup requires authoritative receiver transport decode lead"));
-    }
     prepared.outputLeadNs =
-        deployment.encode().receiverTiming->transportDecodeLead;
+        deployment.encode().transportTiming.senderTransportLead;
     return ::media::Result<MediaAvSyncStartupPolicy>::success(
         std::move(prepared));
 }

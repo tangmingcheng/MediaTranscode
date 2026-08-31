@@ -50,9 +50,7 @@ struct MediaRealtimeOutputConfig {
 
 struct MediaRealtimeDeploymentConfig {
     std::optional<std::uint64_t> provisionedEgressCapacityBitsPerSecond;
-    std::optional<std::uint64_t> pathMaximumIpPacketBytes;
     std::optional<MediaRunningTime> maximumWireResidence;
-    std::optional<MediaRunningTime> receiverTransportDecodeLead;
 };
 
 struct MediaRealtimeExecutionParameters {

@@ -109,9 +109,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     std::uint32_t gopFrames,
     RateControl rateControl,
     std::uint64_t provisionedEgressCapacityBitsPerSecond,
-    std::uint32_t pathMaximumIpPacketBytes,
     std::uint32_t maximumWireResidenceMilliseconds,
-    std::uint32_t receiverTransportDecodeLeadMilliseconds,
     ffmpeg::graph::MediaIpAddressFamily addressFamily,
     mt_beta_realtime_event_callback eventCallback,
     void* eventUserData)
@@ -132,10 +130,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
     , m_rateControl(rateControl)
     , m_provisionedEgressCapacityBitsPerSecond(
           provisionedEgressCapacityBitsPerSecond)
-    , m_pathMaximumIpPacketBytes(pathMaximumIpPacketBytes)
     , m_maximumWireResidenceMilliseconds(maximumWireResidenceMilliseconds)
-    , m_receiverTransportDecodeLeadMilliseconds(
-          receiverTransportDecodeLeadMilliseconds)
     , m_addressFamily(addressFamily)
     , m_eventCallback(eventCallback)
     , m_eventUserData(eventUserData)
@@ -176,10 +171,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
         config->output.frame_rate_den > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->output.gop_frames > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         config->deployment.provisioned_egress_capacity_bps < 8U ||
-        config->deployment.path_mtu_bytes == 0U ||
-        config->deployment.maximum_wire_residence_ms == 0U ||
-        config->deployment.receiver_transport_decode_lead_ms <
-            config->deployment.maximum_wire_residence_ms) {
+        config->deployment.maximum_wire_residence_ms == 0U) {
         return ::media::Result<MediaRealtimeBetaOwnedConfig>::failure(
             ::media::ErrorInfo::invalidArgument("realtime video facts are invalid"));
     }
@@ -214,9 +206,7 @@ MediaRealtimeBetaOwnedConfig::MediaRealtimeBetaOwnedConfig(
             config->output.gop_frames,
             rateControl.value(),
             config->deployment.provisioned_egress_capacity_bps,
-            config->deployment.path_mtu_bytes,
             config->deployment.maximum_wire_residence_ms,
-            config->deployment.receiver_transport_decode_lead_ms,
             bindAddress.value().addressFamily(),
             callbacks->on_event,
             callbacks->user_data));
@@ -238,9 +228,7 @@ std::uint32_t MediaRealtimeBetaOwnedConfig::frameRateDenominator() const noexcep
 std::uint32_t MediaRealtimeBetaOwnedConfig::gopFrames() const noexcept { return m_gopFrames; }
 const MediaRealtimeBetaOwnedConfig::RateControl& MediaRealtimeBetaOwnedConfig::rateControl() const noexcept { return m_rateControl; }
 std::uint64_t MediaRealtimeBetaOwnedConfig::provisionedEgressCapacityBitsPerSecond() const noexcept { return m_provisionedEgressCapacityBitsPerSecond; }
-std::uint32_t MediaRealtimeBetaOwnedConfig::pathMaximumIpPacketBytes() const noexcept { return m_pathMaximumIpPacketBytes; }
 std::uint32_t MediaRealtimeBetaOwnedConfig::maximumWireResidenceMilliseconds() const noexcept { return m_maximumWireResidenceMilliseconds; }
-std::uint32_t MediaRealtimeBetaOwnedConfig::receiverTransportDecodeLeadMilliseconds() const noexcept { return m_receiverTransportDecodeLeadMilliseconds; }
 ffmpeg::graph::MediaIpAddressFamily MediaRealtimeBetaOwnedConfig::addressFamily() const noexcept { return m_addressFamily; }
 mt_beta_realtime_event_callback MediaRealtimeBetaOwnedConfig::eventCallback() const noexcept { return m_eventCallback; }
 void* MediaRealtimeBetaOwnedConfig::eventUserData() const noexcept { return m_eventUserData; }
