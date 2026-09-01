@@ -47,6 +47,7 @@ public:
         const MediaRealtimeDeploymentLatencyBudget& latency,
         const MediaRealtimeDeploymentObservationBudget& observation,
         const MediaWireTrafficEnvelope& wire,
+        MediaIpAddressFamily addressFamily,
         std::uint64_t endpointCount);
     static ::media::Status validate(
         const MediaRealtimeNetworkResourceLedgerPlan& ledger);

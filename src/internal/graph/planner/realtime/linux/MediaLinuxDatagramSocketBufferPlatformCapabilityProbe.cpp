@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <limits>
+#include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <string>
@@ -38,7 +39,8 @@ namespace {
 
 ::media::Result<MediaDatagramSocketBufferPlatformCapability>
 MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
-    std::uint64_t minimumRequiredEffectiveBytes) noexcept
+    std::uint64_t minimumRequiredEffectiveBytes,
+    MediaIpAddressFamily addressFamily) noexcept
 {
     using Result =
         ::media::Result<MediaDatagramSocketBufferPlatformCapability>;
@@ -46,8 +48,21 @@ MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Linux SO_SNDBUF probe target must be positive"));
     }
+    int nativeFamily = AF_UNSPEC;
+    switch (addressFamily) {
+    case MediaIpAddressFamily::Ipv4:
+        nativeFamily = AF_INET;
+        break;
+    case MediaIpAddressFamily::Ipv6:
+        nativeFamily = AF_INET6;
+        break;
+    }
+    if (nativeFamily == AF_UNSPEC) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Linux SO_SNDBUF probe address family is unsupported"));
+    }
     MediaLinuxSocketProbeHandle socketHandle(
-        ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+        ::socket(nativeFamily, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP));
     if (socketHandle.get() < 0) {
         return Result::failure(::media::ErrorInfo::ioFailure(
             "Linux SO_SNDBUF capability probe socket failed", errno));

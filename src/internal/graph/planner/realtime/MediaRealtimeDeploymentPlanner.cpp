@@ -786,7 +786,8 @@ MediaRealtimeDeploymentPlanner::complete(
         (std::max)(std::uint64_t{1}, runDatagrams.value()),
         wire.maximumAtomicDatagrams);
     auto network = MediaRealtimeNetworkResourceLedgerPlanner::plan(
-        base.latency, base.observation, wire, base.endpointCount);
+        base.latency, base.observation, wire,
+        base.localPorts.addressFamily, base.endpointCount);
     if (!network) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             network.error());

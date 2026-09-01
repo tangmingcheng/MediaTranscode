@@ -167,7 +167,8 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         auto resourceLedger =
             MediaRealtimeNetworkResourceLedgerPlanner::plan(
                 deployment.latency, deployment.observation,
-                m_encoding.wireTraffic, endpointCount);
+                m_encoding.wireTraffic,
+                deployment.localPorts.addressFamily, endpointCount);
         if (!resourceLedger) {
             return Result::failure(resourceLedger.error());
         }

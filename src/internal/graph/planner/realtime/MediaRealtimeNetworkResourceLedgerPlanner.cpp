@@ -45,6 +45,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
     const MediaRealtimeDeploymentLatencyBudget& latency,
     const MediaRealtimeDeploymentObservationBudget& observation,
     const MediaWireTrafficEnvelope& wire,
+    MediaIpAddressFamily addressFamily,
     std::uint64_t endpointCount)
 {
     using Result = ::media::Result<MediaRealtimeNetworkResourceLedgerPlan>;
@@ -156,7 +157,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
         : (!withEndpoints ? withEndpoints : evidenceContainers);
     auto capability =
         MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
-            socketPerEndpoint);
+            socketPerEndpoint, addressFamily);
     auto socketBuffer = capability
         ? MediaDatagramSocketBufferPlanner::plan(
               socketPerEndpoint, capability.value())

@@ -9,7 +9,8 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaDatagramSocketBufferPlatformCapability>
 MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
-    std::uint64_t minimumRequiredEffectiveBytes) noexcept
+    std::uint64_t minimumRequiredEffectiveBytes,
+    MediaIpAddressFamily addressFamily) noexcept
 {
     using Result =
         ::media::Result<MediaDatagramSocketBufferPlatformCapability>;
@@ -25,8 +26,21 @@ MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
             "Windows SO_SNDBUF probe Winsock initialization failed",
             session.error()));
     }
+    int nativeFamily = AF_UNSPEC;
+    switch (addressFamily) {
+    case MediaIpAddressFamily::Ipv4:
+        nativeFamily = AF_INET;
+        break;
+    case MediaIpAddressFamily::Ipv6:
+        nativeFamily = AF_INET6;
+        break;
+    }
+    if (nativeFamily == AF_UNSPEC) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Windows SO_SNDBUF probe address family is unsupported"));
+    }
     MediaWindowsSocketProbeHandle socketHandle(
-        WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, 0));
+        WSASocketW(nativeFamily, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, 0));
     if (socketHandle.get() == INVALID_SOCKET) {
         return Result::failure(::media::ErrorInfo::ioFailure(
             "Windows SO_SNDBUF probe socket creation failed",
