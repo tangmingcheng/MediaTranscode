@@ -81,6 +81,12 @@ std::optional<int> resolvedAudioBitrateKbps(
                 ::media::ErrorInfo::unsupported(
                     "UDP output supports only MPEG-TS muxed encapsulation"));
         }
+        if (!request.output.host.empty() || request.output.basePort ||
+            !request.output.sdpPath.empty()) {
+            return ::media::Result<MediaRealtimeOutputUrls>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS UDP output accepts only output URL; RTP endpoint and SDP controls are unsupported"));
+        }
         if (request.output.url.empty()) {
             return ::media::Result<MediaRealtimeOutputUrls>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS muxed output requires explicit output URL"));

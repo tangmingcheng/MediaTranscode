@@ -35,15 +35,15 @@ namespace {
               "Realtime output layout and transport combination is not supported"));
 }
 
-bool rawRtpAudioControlSpecified(
-    const MediaRealtimeRtpInputMetadata& audio) noexcept
+bool rtpControlSpecified(
+    const MediaRealtimeRtpInputMetadata& metadata) noexcept
 {
-    return !audio.url.empty() ||
-        !audio.codecName.empty() ||
-        audio.payloadType.has_value() ||
-        audio.clockRate.has_value() ||
-        audio.channels.has_value() ||
-        audio.fmtp.has_value();
+    return !metadata.url.empty() ||
+        !metadata.codecName.empty() ||
+        metadata.payloadType.has_value() ||
+        metadata.clockRate.has_value() ||
+        metadata.channels.has_value() ||
+        metadata.fmtp.has_value();
 }
 
 bool audioTranscodeControlSpecified(
@@ -73,7 +73,7 @@ bool audioTranscodeControlSpecified(
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "VideoOnly rejects explicit audio transcode controls"));
         }
-        if (rawRtpAudioControlSpecified(request.input.audioRtp)) {
+        if (rtpControlSpecified(request.input.audioRtp)) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "VideoOnly rejects raw RTP audio controls"));
         }
@@ -82,6 +82,41 @@ bool audioTranscodeControlSpecified(
 
     return ::media::Status::failure(::media::ErrorInfo::unsupported(
         "Transcode stream set is not supported"));
+}
+
+::media::Status validateInputRouteControls(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    const bool videoRtpSpecified = rtpControlSpecified(request.input.videoRtp);
+    const bool audioRtpSpecified = rtpControlSpecified(request.input.audioRtp);
+
+    if (MediaRealtimeRequestClassifier::realtimeUrlInput(request)) {
+        if (videoRtpSpecified || audioRtpSpecified) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Realtime URL input rejects raw RTP controls"));
+        }
+        return ::media::Status::success();
+    }
+
+    if (MediaRealtimeRequestClassifier::rawRtpInput(request)) {
+        if (!request.input.url.empty() || !request.input.rtspTransport.empty()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Raw RTP input rejects URL and RTSP transport controls"));
+        }
+        if (request.input.videoRtp.channels) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Raw RTP video rejects audio channel count"));
+        }
+        return ::media::Status::success();
+    }
+
+    if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request) &&
+        (!request.input.rtspTransport.empty() ||
+         videoRtpSpecified || audioRtpSpecified)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS UDP input rejects RTSP transport and raw RTP controls"));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Status validateDeploymentFacts(
@@ -149,6 +184,7 @@ bool audioTranscodeControlSpecified(
     }
     if (auto status = validateStreamSetControls(request); !status) return status;
     if (auto status = validateClassification(request); !status) return status;
+    if (auto status = validateInputRouteControls(request); !status) return status;
     if (auto status = validateDeploymentFacts(request); !status) return status;
     if ((MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
          MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) && request.input.url.empty()) {

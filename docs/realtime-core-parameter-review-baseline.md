@@ -47,7 +47,8 @@
 | UDP 输出 | `--output` | 必填；远端 `udp://` endpoint。RTP endpoint/SDP 参数禁止传入。 |
 | VideoOnly | `--no-audio` | 当前 CLI 必须显式传入；核心收到的 stream set 始终是显式枚举。CLI 省略该 flag 仍表示 AudioVideo，属于待收口的旧布尔界面；替换为新的显式 stream-set 参数前需用户批准。 |
 | AudioVideo 目标 | `--audio-codec`、`--audio-rc`、audio bitrate/sample-rate/channels | 按目标是否需要音频重编码选择；VideoOnly 禁止任何音频控制。copy 与 encode 只能在 prepared 源后由 planner 判定，不能为无关路径强制填写。 |
-| 仅 CLI runner | `--max-duration`、`--progress-timeout-ms`、`--first-output-timeout-ms`、`--poll-interval-ms`、`--quiet-graph` | 不进入核心 request/sender；分别控制 CLI 停止门禁、liveness 观测和日志。它们不是 Datagram 发送参数。 |
+| 仅 CLI runner | `--max-duration`、`--progress-timeout-ms`、`--first-output-timeout-ms`、`--poll-interval-ms` | 不进入核心 request/sender；分别控制 CLI 停止门禁与 liveness 观测。它们不是 Datagram 发送参数。 |
+| 核心诊断意图 | `--quiet-graph` | 进入核心 request 的 `diagnosticLogEnabled`，由视频、音频和硬件 capability planner 消费，只控制 graph 诊断日志；不参与 Datagram wire、pacing、queue、socket 或 deadline 规划。 |
 
 ## 已从 realtime 对外入口移除
 

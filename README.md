@@ -50,7 +50,7 @@ URL/RTSP, separate RTP, or MPEG-TS/UDP input
 --output-layout mpegts  --output-transport rtp  Project MPEG-TS over RTP/AVP plus SDP
 ```
 
-`separate + udp` is rejected. MPEG-TS/RTP uses the static MP2T payload type 33, a 90 kHz RTP clock, adjacent RTP/RTCP ports, and one generated SDP media description. Open either RTP mode through its generated SDP:
+`separate + udp` is rejected. MPEG-TS/RTP uses the static MP2T payload type 33, a 90 kHz RTP clock, adjacent RTP/RTCP ports, and one generated SDP media description. Open separate dynamic-payload RTP through its generated SDP; open MPEG-TS/RTP through its production `rtp://@host:port` URL.
 
 For visible MPEG-TS acceptance, VLC opens the production URL directly:
 
