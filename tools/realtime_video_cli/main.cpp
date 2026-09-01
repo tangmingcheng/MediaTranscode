@@ -1,6 +1,5 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
-#include "RealtimeVideoCliArgumentContract.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
 
@@ -138,29 +137,49 @@ void parseRealtimeInputOptions(
     input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
     input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
 
-    if (*input.type == RealtimeInputType::RtpPort) {
-        input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
-        input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
-        input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
-        input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
-        if (hasArg(argc, argv, "--video-rtp-fmtp")) {
-            input.videoRtp.fmtp = requiredArg(argc, argv, "--video-rtp-fmtp");
-        }
-        return;
+    if (hasArg(argc, argv, "--input")) {
+        input.url = requiredArg(argc, argv, "--input");
     }
+    if (hasArg(argc, argv, "--rtsp-transport")) {
+        input.rtspTransport = requiredArg(argc, argv, "--rtsp-transport");
+    }
+    if (hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
+        const int maximumPcrGapMs = requiredIntArg(
+            argc, argv, "--mpegts-max-pcr-gap-ms");
+        input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
+    }
+}
 
-    input.url = requiredArg(argc, argv, "--input");
-    if (*input.type == RealtimeInputType::Url) {
-        input.rtspTransport = parseUrlInputRtspTransport(
-            argc, argv, input.url);
-        return;
+void parseRtpInputMetadata(
+    int argc,
+    char** argv,
+    const char* urlArgument,
+    const char* codecArgument,
+    const char* payloadTypeArgument,
+    const char* clockRateArgument,
+    const char* channelsArgument,
+    const char* fmtpArgument,
+    MediaRealtimeRtpInputMetadata& metadata)
+{
+    if (hasArg(argc, argv, urlArgument)) {
+        metadata.url = requiredArg(argc, argv, urlArgument);
     }
-    const int maximumPcrGapMs = requiredIntArg(argc, argv, "--mpegts-max-pcr-gap-ms");
-    if (maximumPcrGapMs <= 0) {
-        throw std::invalid_argument("MPEG-TS maximum PCR gap must be positive");
+    if (hasArg(argc, argv, codecArgument)) {
+        metadata.codecName = requiredArg(argc, argv, codecArgument);
     }
-    input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
-        static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
+    if (hasArg(argc, argv, payloadTypeArgument)) {
+        metadata.payloadType = requiredIntArg(argc, argv, payloadTypeArgument);
+    }
+    if (hasArg(argc, argv, clockRateArgument)) {
+        metadata.clockRate = requiredIntArg(argc, argv, clockRateArgument);
+    }
+    if (channelsArgument && hasArg(argc, argv, channelsArgument)) {
+        metadata.channels = requiredIntArg(argc, argv, channelsArgument);
+    }
+    if (hasArg(argc, argv, fmtpArgument)) {
+        metadata.fmtp = requiredArg(argc, argv, fmtpArgument);
+    }
 }
 
 void parseRealtimeOutputOptions(
@@ -172,38 +191,18 @@ void parseRealtimeOutputOptions(
 {
     output.streamLayout = outputLayout;
     output.transport = outputTransport;
-    if (*output.transport == MediaOutputTransportKind::RtpAvp) {
+    if (hasArg(argc, argv, "--rtp-host")) {
         output.host = requiredArg(argc, argv, "--rtp-host");
-        output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
+    }
+    if (hasArg(argc, argv, "--rtp-port")) {
+        output.basePort = static_cast<std::size_t>(
+            requiredIntArg(argc, argv, "--rtp-port"));
+    }
+    if (hasArg(argc, argv, "--sdp")) {
         output.sdpPath = requiredArg(argc, argv, "--sdp");
-        return;
     }
-
-    output.url = requiredArg(argc, argv, "--output");
-}
-
-void parseAudioRtpOptions(int argc, char** argv, MediaRealtimeRtpTranscodeRequest& options)
-{
-    if (hasArg(argc, argv, "--audio-rtp-url")) {
-        options.input.audioRtp.url = requiredArg(argc, argv, "--audio-rtp-url");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-codec")) {
-        options.input.audioRtp.codecName = requiredArg(argc, argv, "--audio-rtp-codec");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-payload-type")) {
-        options.input.audioRtp.payloadType = requiredIntArg(
-            argc, argv, "--audio-rtp-payload-type");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-clock-rate")) {
-        options.input.audioRtp.clockRate = requiredIntArg(
-            argc, argv, "--audio-rtp-clock-rate");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-channels")) {
-        options.input.audioRtp.channels = requiredIntArg(
-            argc, argv, "--audio-rtp-channels");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-fmtp")) {
-        options.input.audioRtp.fmtp = requiredArg(argc, argv, "--audio-rtp-fmtp");
+    if (hasArg(argc, argv, "--output")) {
+        output.url = requiredArg(argc, argv, "--output");
     }
 }
 
@@ -242,8 +241,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
         requiredRealtimeOutputLayout(argc, argv);
     const MediaOutputTransportKind outputTransport =
         requiredRealtimeOutputTransport(argc, argv);
-    rejectIrrelevantRealtimeArgs(
-        argc, argv, inputType, outputTransport);
 
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
@@ -261,6 +258,17 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
             maximumWireResidenceMs * 1'000'000));
     parseRealtimeInputOptions(argc, argv, inputType, options.input);
+    parseRtpInputMetadata(
+        argc, argv,
+        "--video-rtp-url", "--video-rtp-codec",
+        "--video-rtp-payload-type", "--video-rtp-clock-rate",
+        nullptr, "--video-rtp-fmtp", options.input.videoRtp);
+    parseRtpInputMetadata(
+        argc, argv,
+        "--audio-rtp-url", "--audio-rtp-codec",
+        "--audio-rtp-payload-type", "--audio-rtp-clock-rate",
+        "--audio-rtp-channels", "--audio-rtp-fmtp",
+        options.input.audioRtp);
     parseRealtimeOutputOptions(
         argc, argv, outputLayout, outputTransport, options.output);
     options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
@@ -282,7 +290,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.parameters.audio.maxBitrateKbps = parsedTranscode.audio.maxBitrateKbps;
     options.parameters.audio.sampleRate = parsedTranscode.audio.sampleRate;
     options.parameters.audio.channels = parsedTranscode.audio.channels;
-    parseAudioRtpOptions(argc, argv, options);
     return options;
 }
 
