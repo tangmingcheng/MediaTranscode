@@ -25,8 +25,7 @@ class MediaDatagramExecutionCapabilityProbe final {
 public:
     static ::media::Result<MediaDatagramExecutionCapability> scan(
         std::string_view serviceScopeId,
-        std::uint64_t maximumWireBytesPerSecond,
-        std::uint64_t maximumWireDatagramBytes) noexcept;
+        std::uint64_t maximumWireBytesPerSecond) noexcept;
 
 private:
     MediaDatagramExecutionCapabilityProbe() = delete;

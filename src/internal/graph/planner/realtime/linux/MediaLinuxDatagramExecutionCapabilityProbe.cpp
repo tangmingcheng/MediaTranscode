@@ -10,12 +10,13 @@
 #include <linux/netlink.h>
 #include <linux/pkt_sched.h>
 #include <linux/rtnetlink.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 
 #include <array>
 #include <cstddef>
-#include <limits>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
@@ -50,6 +51,34 @@ struct FqQdiscEvidence final {
     std::uint32_t initialQuantum = 0;
     std::uint32_t pacingEnabled = 0;
 };
+
+::media::Result<std::uint32_t> authoritativeInterfaceMtu(
+    std::uint32_t interfaceIndex) noexcept
+{
+    using Result = ::media::Result<std::uint32_t>;
+    char interfaceName[IF_NAMESIZE]{};
+    if (!::if_indextoname(interfaceIndex, interfaceName)) {
+        return Result::failure(::media::ErrorInfo::ioFailure(
+            "Linux Datagram interface name probe failed", errno));
+    }
+    MediaLinuxSocketProbeHandle socketHandle(
+        ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP));
+    if (socketHandle.get() < 0) {
+        return Result::failure(::media::ErrorInfo::ioFailure(
+            "Linux Datagram interface MTU probe socket failed", errno));
+    }
+    ifreq request{};
+    std::memcpy(request.ifr_name, interfaceName, sizeof(interfaceName));
+    if (::ioctl(socketHandle.get(), SIOCGIFMTU, &request) != 0) {
+        return Result::failure(::media::ErrorInfo::ioFailure(
+            "Linux Datagram interface MTU probe failed", errno));
+    }
+    if (request.ifr_mtu <= 0) {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "Linux Datagram interface MTU is not positive"));
+    }
+    return Result::success(static_cast<std::uint32_t>(request.ifr_mtu));
+}
 
 ::media::Result<FqQdiscEvidence> rootFqQdiscEvidence(
     std::uint32_t interfaceIndex) noexcept
@@ -213,35 +242,32 @@ struct FqQdiscEvidence final {
 ::media::Result<MediaDatagramExecutionCapability>
 MediaDatagramExecutionCapabilityProbe::scan(
     std::string_view serviceScopeId,
-    std::uint64_t maximumWireBytesPerSecond,
-    std::uint64_t maximumWireDatagramBytes) noexcept
+    std::uint64_t maximumWireBytesPerSecond) noexcept
 {
     using Result = ::media::Result<MediaDatagramExecutionCapability>;
-    if (maximumWireBytesPerSecond == 0 || maximumWireDatagramBytes == 0 ||
-        maximumWireDatagramBytes >
-            static_cast<std::uint64_t>(
-                (std::numeric_limits<std::uint32_t>::max)())) {
+    if (maximumWireBytesPerSecond == 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Linux Datagram execution probe requires positive managed capacity"));
     }
     auto interfaceIndex = parseInterfaceIndex(serviceScopeId);
     if (!interfaceIndex) return Result::failure(interfaceIndex.error());
+    auto interfaceMtu = authoritativeInterfaceMtu(interfaceIndex.value());
+    if (!interfaceMtu) return Result::failure(interfaceMtu.error());
     auto qdisc = rootFqQdiscEvidence(interfaceIndex.value());
     if (!qdisc) return Result::failure(qdisc.error());
-    const auto requiredQuantum = static_cast<std::uint32_t>(
-        maximumWireDatagramBytes);
+    const auto requiredQuantum = interfaceMtu.value();
     if (!qdisc.value().found ||
         qdisc.value().quantum != requiredQuantum ||
         qdisc.value().initialQuantum != requiredQuantum ||
         qdisc.value().pacingEnabled != 1) {
         return Result::failure(::media::ErrorInfo::unsupported(
-            "Linux Datagram execution requires root sch_fq with pacing enabled and quantum/initial_quantum equal to the planner wire burst"));
+            "Linux Datagram execution requires root sch_fq with pacing enabled and quantum/initial_quantum equal to the authoritative interface MTU"));
     }
     auto socketPacing = probeSocketPacing(maximumWireBytesPerSecond);
     if (!socketPacing) return Result::failure(socketPacing.error());
     return Result::success(MediaDatagramExecutionCapability{
         MediaDatagramTransportExecutionKind::LinuxFqSocketPacing,
-        "Linux rtnetlink root sch_fq with planner wire quantum plus exact socket(7) SO_MAX_PACING_RATE set/get",
+        "Linux rtnetlink root sch_fq with authoritative interface-MTU quantum plus exact socket(7) SO_MAX_PACING_RATE set/get",
         maximumWireBytesPerSecond});
 }
 

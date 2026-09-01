@@ -135,8 +135,7 @@ MediaDatagramTransportPlanTemplate::create(
         auto executionCapability =
             MediaDatagramExecutionCapabilityProbe::scan(
                 facts.serviceScope.scopeId,
-                facts.service.provisionedCapacityWireBytesPerSecond,
-                wireTraffic.maximumWireDatagramBytes);
+                facts.service.provisionedCapacityWireBytesPerSecond);
         if (!executionCapability) {
             return Result::failure(executionCapability.error());
         }
