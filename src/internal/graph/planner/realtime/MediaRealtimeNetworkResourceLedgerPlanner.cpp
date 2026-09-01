@@ -155,7 +155,8 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
               "network evidence containers")
         : (!withEndpoints ? withEndpoints : evidenceContainers);
     auto capability =
-        MediaDatagramSocketBufferPlatformCapabilityProbe::scan();
+        MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
+            socketPerEndpoint);
     auto socketBuffer = capability
         ? MediaDatagramSocketBufferPlanner::plan(
               socketPerEndpoint, capability.value())

@@ -10,8 +10,8 @@
 #include <utility>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
+#include "internal/graph/planner/realtime/windows/MediaWindowsSocketProbeHandle.h"
+
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
@@ -336,29 +336,6 @@ bool sameIpAddress(
 }
 #endif
 
-#ifdef _WIN32
-class WinsockSession final {
-public:
-    WinsockSession() noexcept
-    {
-        m_error = WSAStartup(MAKEWORD(2, 2), &m_data);
-    }
-
-    ~WinsockSession()
-    {
-        if (m_error == 0) {
-            WSACleanup();
-        }
-    }
-
-    int error() const noexcept { return m_error; }
-
-private:
-    WSADATA m_data{};
-    int m_error = 0;
-};
-#endif
-
 ::media::Result<RemoteEndpointFact> remoteEndpoint(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
@@ -412,7 +389,7 @@ private:
             remote.error());
     }
 #ifdef _WIN32
-    WinsockSession winsock;
+    MediaWindowsWinsockProbeSession winsock;
     if (winsock.error() != 0) {
         return ::media::Result<MediaDatagramRouteFact>::failure(
             ::media::ErrorInfo::ioFailure(

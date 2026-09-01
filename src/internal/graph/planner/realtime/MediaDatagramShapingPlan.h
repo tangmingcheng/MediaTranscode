@@ -65,7 +65,9 @@ inline ::media::Status validateMediaDatagramSocketBufferPlan(
         }
         break;
     case MediaDatagramSocketBufferAccounting::LinuxDoubled:
-        if (plan.apiRequestedBytes <=
+        if (plan.apiRequestedBytes <= static_cast<std::uint64_t>(
+                (std::numeric_limits<int>::max)() / 2) &&
+            plan.apiRequestedBytes <=
                 (std::numeric_limits<std::uint64_t>::max)() / 2U &&
             plan.apiRequestedBytes * 2U == plan.targetEffectiveBytes) {
             return ::media::Status::success();

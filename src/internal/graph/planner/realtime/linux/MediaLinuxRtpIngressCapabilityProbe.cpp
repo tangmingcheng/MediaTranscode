@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRtpIngressPlatformCapabilityProbe.h"
+#include "internal/graph/planner/realtime/linux/MediaLinuxSocketProbeHandle.h"
 
 #ifndef _WIN32
 
@@ -7,29 +8,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <sys/socket.h>
-#include <unistd.h>
 
 #include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-class SocketHandle final {
-public:
-    explicit SocketHandle(int value) noexcept : m_value(value) {}
-    ~SocketHandle()
-    {
-        if (m_value >= 0) ::close(m_value);
-    }
-
-    SocketHandle(const SocketHandle&) = delete;
-    SocketHandle& operator=(const SocketHandle&) = delete;
-    int get() const noexcept { return m_value; }
-
-private:
-    int m_value;
-};
 
 MediaRtpIngressAdapterAvailability probeIoUringZeroCopy()
 {
@@ -42,7 +26,8 @@ MediaRtpIngressAdapterAvailability probeReceiveMultipleMessages()
 {
     constexpr auto kind =
         MediaRtpIngressAdapterKind::LinuxReceiveMultipleMessages;
-    SocketHandle socketHandle(::socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0));
+    MediaLinuxSocketProbeHandle socketHandle(
+        ::socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0));
     if (socketHandle.get() < 0) {
         return {kind, false, "nonblocking UDP socket creation failed with errno " +
             std::to_string(errno)};

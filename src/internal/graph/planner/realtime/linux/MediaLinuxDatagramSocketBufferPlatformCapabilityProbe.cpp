@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaDatagramSocketBufferPlanner.h"
+#include "internal/graph/planner/realtime/linux/MediaLinuxSocketProbeHandle.h"
 
 #ifdef __linux__
 
@@ -6,29 +7,11 @@
 #include <cstdint>
 #include <limits>
 #include <sys/socket.h>
-#include <unistd.h>
 
 #include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-class SocketHandle final {
-public:
-    explicit SocketHandle(int value) noexcept : m_value(value) {}
-    ~SocketHandle()
-    {
-        if (m_value >= 0) ::close(m_value);
-    }
-
-    SocketHandle(const SocketHandle&) = delete;
-    SocketHandle& operator=(const SocketHandle&) = delete;
-
-    int get() const noexcept { return m_value; }
-
-private:
-    int m_value;
-};
 
 ::media::Result<std::uint64_t> effectiveSendBuffer(
     int socketHandle,
@@ -54,11 +37,17 @@ private:
 } // namespace
 
 ::media::Result<MediaDatagramSocketBufferPlatformCapability>
-MediaDatagramSocketBufferPlatformCapabilityProbe::scan() noexcept
+MediaDatagramSocketBufferPlatformCapabilityProbe::scan(
+    std::uint64_t minimumRequiredEffectiveBytes) noexcept
 {
     using Result =
         ::media::Result<MediaDatagramSocketBufferPlatformCapability>;
-    SocketHandle socketHandle(::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    if (minimumRequiredEffectiveBytes == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Linux SO_SNDBUF probe target must be positive"));
+    }
+    MediaLinuxSocketProbeHandle socketHandle(
+        ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
     if (socketHandle.get() < 0) {
         return Result::failure(::media::ErrorInfo::ioFailure(
             "Linux SO_SNDBUF capability probe socket failed", errno));

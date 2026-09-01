@@ -19,7 +19,7 @@ struct MediaDatagramSocketBufferPlatformCapability final {
 class MediaDatagramSocketBufferPlatformCapabilityProbe final {
 public:
     static ::media::Result<MediaDatagramSocketBufferPlatformCapability>
-    scan() noexcept;
+    scan(std::uint64_t minimumRequiredEffectiveBytes) noexcept;
 
 private:
     MediaDatagramSocketBufferPlatformCapabilityProbe() = delete;

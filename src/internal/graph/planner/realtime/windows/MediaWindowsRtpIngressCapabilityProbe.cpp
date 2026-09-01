@@ -1,9 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRtpIngressPlatformCapabilityProbe.h"
+#include "internal/graph/planner/realtime/windows/MediaWindowsSocketProbeHandle.h"
 
 #ifdef _WIN32
 
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
 #include <mswsock.h>
 #include <windows.h>
 
@@ -12,52 +11,6 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-
-class WinsockSession final {
-public:
-    WinsockSession() noexcept
-    {
-        m_error = WSAStartup(MAKEWORD(2, 2), &m_data);
-    }
-
-    ~WinsockSession()
-    {
-        if (m_error == 0) WSACleanup();
-    }
-
-    int error() const noexcept { return m_error; }
-
-private:
-    WSADATA m_data{};
-    int m_error = 0;
-};
-
-class SocketHandle final {
-public:
-    explicit SocketHandle(SOCKET value = INVALID_SOCKET) noexcept
-        : m_value(value)
-    {
-    }
-
-    ~SocketHandle()
-    {
-        if (m_value != INVALID_SOCKET) closesocket(m_value);
-    }
-
-    SocketHandle(const SocketHandle&) = delete;
-    SocketHandle& operator=(const SocketHandle&) = delete;
-
-    SOCKET get() const noexcept { return m_value; }
-    void close() noexcept
-    {
-        if (m_value == INVALID_SOCKET) return;
-        closesocket(m_value);
-        m_value = INVALID_SOCKET;
-    }
-
-private:
-    SOCKET m_value;
-};
 
 ::media::Status bindLoopback(SOCKET socketHandle)
 {
@@ -85,7 +38,7 @@ MediaRtpIngressAdapterAvailability unavailable(
 MediaRtpIngressAdapterAvailability probeRegisteredIo()
 {
     constexpr auto kind = MediaRtpIngressAdapterKind::WindowsRegisteredIo;
-    SocketHandle socketHandle(WSASocketW(
+    MediaWindowsSocketProbeHandle socketHandle(WSASocketW(
         AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
         WSA_FLAG_REGISTERED_IO | WSA_FLAG_OVERLAPPED));
     if (socketHandle.get() == INVALID_SOCKET) {
@@ -158,7 +111,7 @@ MediaRtpIngressAdapterAvailability probeOverlappedCompletionQueue()
 {
     constexpr auto kind =
         MediaRtpIngressAdapterKind::WindowsOverlappedCompletionQueue;
-    SocketHandle socketHandle(WSASocketW(
+    MediaWindowsSocketProbeHandle socketHandle(WSASocketW(
         AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
         WSA_FLAG_OVERLAPPED));
     if (socketHandle.get() == INVALID_SOCKET) {
@@ -184,7 +137,7 @@ MediaRtpIngressAdapterAvailability probeOverlappedCompletionQueue()
 ::media::Result<std::vector<MediaRtpIngressAdapterAvailability>>
 MediaRtpIngressPlatformCapabilityProbe::scan()
 {
-    WinsockSession session;
+    MediaWindowsWinsockProbeSession session;
     if (session.error() != 0) {
         return ::media::Result<
             std::vector<MediaRtpIngressAdapterAvailability>>::failure(
