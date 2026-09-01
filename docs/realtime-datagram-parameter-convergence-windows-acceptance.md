@@ -142,3 +142,40 @@ D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --e
 - 单核 CPU 均值 21.130%，峰值 32.450%；RSS 增长 2342912 B。CPU 按本轮明确范围仅记录，不作为 Datagram 发送控制修改项。
 - 第一次同规格运行因 CLI 与 FFmpeg 被放入同一 PowerShell 进程连续异步创建，首个 IDR 早于 RTP socket bind，只输出 2948 AU/117.98 秒；本次严格以两条相邻直接命令先后启动，无检测或 sleep，完整门禁通过。
 - 源结束后 CLI 以 RTP source-clock evidence expiry 失败退出，符合有限源生命周期语义。
+
+## 地址族能力探测修复后高规格回归：PASS
+
+- 日期：2026-09-01。
+- 冻结代码：`581a78b5`。
+- 输入：真实连续 120 秒 HEVC 2560x1440、30 fps、raw RTP。
+- 输出：H.264 1920x1080、25 fps、VBR 5/12/13 Mbps、GOP 50、MPEG-TS/RTP。
+- 部署事实：受管 egress 50 Mbps，最大 wire residence 100 ms。
+
+CLI：
+
+```powershell
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id win-family-final4-hevc2k30-h2641080p25-vbr12m --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60608 --video-rtp-codec hevc --video-rtp-payload-type 98 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61608 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\win-family-final4\output.sdp --video-codec h264 --rc vbr --min-bitrate 5000 --bitrate 12000 --max-bitrate 13000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
+```
+
+FFmpeg 源：
+
+```powershell
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s-2k-hevc.mp4 -map 0:v:0 -an -c:v copy -bsf:v hevc_mp4toannexb -f rtp -payload_type 98 "rtp://127.0.0.1:60608?rtcpport=60609&pkt_size=1200"
+```
+
+VLC 接收：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --file-logging --logfile D:\Code\MyCode\MediaTranscode\out\acceptance\win-family-final4\vlc.log --no-video-title-show rtp://@192.168.96.122:61608
+```
+
+结果：
+
+- Npcap Loopback 捕获 255007 包，接口、pcap 与 dumpcap 丢包均为 0；按输出端口隔离后 RTP 113410 包，与 sender RTP endpoint 精确一致，RTP loss/reorder 为 0。
+- sender 提交 RTCP 27 包；Npcap Loopback 对本机 RTCP 的发送与接收各记录一次，抓包为 54 条，按方向折算后与 sender 一致。
+- planner wire rate 为 3989698 B/s；1/10/100 ms 最大 IP 字节为 4068/27120/170600 B，均低于“持续速率窗口加一个最大包”的 5346/41253/400326 B 上界。GCRA 最大 debt 为 1356.437 B，仅比单包 1356 B 多 0.437 B，属于 100 ns 抓包时间戳量化误差，无追赶式 burst。
+- MPEG-TS continuity drop、TEI、malformed 均为 0。VLC 收到首帧并识别 1920x1080；late picture、black、corrupt、lost、discontinuity、decoder error 均为 0。
+- sender would-block、writable wait、deadline miss、pressure、partial submit、ambiguous submit 均为 0；最大 submit lateness 4.908324 ms，最终 backlog 为 0。
+- 两个 endpoint 的 planner target、Windows API request 与 provider effective socket buffer 均为 309970 B，aggregate effective socket bytes 为 619940 B，证明按目标地址族选择的 provider 能力探测产品与运行时一致。
+- CLI 平均单核 CPU 27.225%，峰值 77.465%，峰值 working set 229294080 B；CPU 按当前明确范围仅记录，不通过修改发送控制算法规避。源结束后 CLI 如实以 RTP source-clock evidence expiry 失败退出；最终 dropped buffer、graph payload current 与 sender backlog 均为 0。
+- 前三次相同规格运行因验收抓包接口或 BPF 引号错误而缺少 wire 证据，均未判定 PASS；本结论只采用第四次完整证据。
