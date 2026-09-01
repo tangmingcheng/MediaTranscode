@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 
+#include "internal/graph/planner/realtime/MediaDatagramSocketBufferPlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitEvidenceCollector.h"
@@ -153,11 +154,22 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
               withEndpoints.value(), evidenceContainers.value(),
               "network evidence containers")
         : (!withEndpoints ? withEndpoints : evidenceContainers);
-    auto socketBytes = MediaCheckedArithmetic::multiply(
-        socketPerEndpoint, endpointCount, "aggregate socket kernel buffers");
-    if (!networkBytes || !socketBytes) {
+    auto capability =
+        MediaDatagramSocketBufferPlatformCapabilityProbe::scan();
+    auto socketBuffer = capability
+        ? MediaDatagramSocketBufferPlanner::plan(
+              socketPerEndpoint, capability.value())
+        : ::media::Result<MediaDatagramSocketBufferPlan>::failure(
+              capability.error());
+    auto socketBytes = socketBuffer
+        ? MediaCheckedArithmetic::multiply(
+              socketBuffer.value().maximumAdmittedEffectiveBytes,
+              endpointCount, "aggregate socket kernel buffers")
+        : ::media::Result<std::uint64_t>::failure(socketBuffer.error());
+    if (!networkBytes || !socketBuffer || !socketBytes) {
         return Result::failure(
             !networkBytes ? networkBytes.error() :
+            !socketBuffer ? socketBuffer.error() :
             !socketBytes ? socketBytes.error() :
             ::media::ErrorInfo::invalidArgument(
                 "network resource ledger arithmetic failed"));
@@ -186,7 +198,7 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
             backlogDatagrams, backlogBytes,
             batchDatagrams, batchBytes,
             endpointPendingDatagrams, endpointPendingBytes,
-            socketPerEndpoint, socketPerEndpoint, socketPerEndpoint,
+            socketBuffer.value(),
             correlationEntries,
             networkBytes.value(), socketBytes.value(), std::move(entries)};
         auto status = validate(ledger);
@@ -201,15 +213,14 @@ MediaRealtimeNetworkResourceLedgerPlanner::plan(
 ::media::Status MediaRealtimeNetworkResourceLedgerPlanner::validate(
     const MediaRealtimeNetworkResourceLedgerPlan& ledger)
 {
+    auto socketBuffer =
+        validateMediaDatagramSocketBufferPlan(ledger.socketBufferPerEndpoint);
+    if (!socketBuffer) return socketBuffer;
     if (ledger.entries.size() != 6 || ledger.maximumBacklogDatagrams == 0 ||
         ledger.maximumBacklogBytes == 0 ||
         ledger.maximumBatchDatagrams == 0 || ledger.maximumBatchBytes == 0 ||
         ledger.maximumEndpointPendingDatagrams == 0 ||
-        ledger.maximumEndpointPendingBytes == 0 ||
-        ledger.targetEffectiveSendBufferBytesPerEndpoint == 0 ||
-        ledger.minimumEffectiveSendBufferBytesPerEndpoint == 0 ||
-        ledger.maximumAdmittedEffectiveSendBufferBytesPerEndpoint <
-            ledger.targetEffectiveSendBufferBytesPerEndpoint) {
+        ledger.maximumEndpointPendingBytes == 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "network resource ledger is incomplete"));
     }

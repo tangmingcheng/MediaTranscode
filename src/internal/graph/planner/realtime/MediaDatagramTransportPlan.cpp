@@ -223,9 +223,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 resources.maximumEndpointPendingDatagrams,
                 resources.maximumEndpointPendingBytes,
                 deployment.latency.maximumResidence,
-                resources.targetEffectiveSendBufferBytesPerEndpoint,
-                resources.minimumEffectiveSendBufferBytesPerEndpoint,
-                resources.maximumAdmittedEffectiveSendBufferBytesPerEndpoint});
+                resources.socketBufferPerEndpoint});
             localEndpoints.push_back(MediaDatagramLocalEndpointPlan{
                 remote.endpointId,
                 deployment.localPorts.addressFamily,

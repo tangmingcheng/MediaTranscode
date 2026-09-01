@@ -155,11 +155,11 @@ MediaDatagramTransmitSession::create(
                     "Datagram MSG_ZEROCOPY is forbidden by the transmit plan"));
             }
             if (opened.value().targetEffectiveSendBufferBytes !=
-                    endpoint.targetEffectiveSendBufferBytes ||
+                    endpoint.socketBuffer.targetEffectiveBytes ||
                 opened.value().effectiveSendBufferBytes <
-                    endpoint.minimumEffectiveSendBufferBytes ||
+                    endpoint.socketBuffer.minimumEffectiveBytes ||
                 opened.value().effectiveSendBufferBytes >
-                    endpoint.maximumAdmittedEffectiveSendBufferBytes ||
+                    endpoint.socketBuffer.maximumAdmittedEffectiveBytes ||
                 opened.value().effectiveSendBufferBytes >
                     plan.networkMemory().maximumSocketBytes -
                         session->m_effectiveSocketBytes ||

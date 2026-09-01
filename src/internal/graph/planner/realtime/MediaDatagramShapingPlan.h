@@ -5,6 +5,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,6 +28,55 @@ enum class MediaDatagramServiceScopeKind {
     ManagedEgress = 1,
     ProvisionedEgress = 2
 };
+
+enum class MediaDatagramSocketBufferAccounting : std::uint8_t {
+    Unknown = 0,
+    Exact = 1,
+    LinuxDoubled = 2
+};
+
+struct MediaDatagramSocketBufferPlan final {
+    MediaDatagramSocketBufferAccounting accounting;
+    std::uint64_t apiRequestedBytes;
+    std::uint64_t targetEffectiveBytes;
+    std::uint64_t minimumEffectiveBytes;
+    std::uint64_t maximumAdmittedEffectiveBytes;
+
+    friend bool operator==(const MediaDatagramSocketBufferPlan&,
+                           const MediaDatagramSocketBufferPlan&) = default;
+};
+
+inline ::media::Status validateMediaDatagramSocketBufferPlan(
+    const MediaDatagramSocketBufferPlan& plan) noexcept
+{
+    if (plan.apiRequestedBytes == 0 || plan.targetEffectiveBytes == 0 ||
+        plan.minimumEffectiveBytes == 0 ||
+        plan.minimumEffectiveBytes > plan.targetEffectiveBytes ||
+        plan.targetEffectiveBytes > plan.maximumAdmittedEffectiveBytes ||
+        plan.apiRequestedBytes > static_cast<std::uint64_t>(
+            (std::numeric_limits<int>::max)())) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram socket buffer hard bounds are incomplete"));
+    }
+    switch (plan.accounting) {
+    case MediaDatagramSocketBufferAccounting::Exact:
+        if (plan.apiRequestedBytes == plan.targetEffectiveBytes) {
+            return ::media::Status::success();
+        }
+        break;
+    case MediaDatagramSocketBufferAccounting::LinuxDoubled:
+        if (plan.apiRequestedBytes <=
+                (std::numeric_limits<std::uint64_t>::max)() / 2U &&
+            plan.apiRequestedBytes * 2U == plan.targetEffectiveBytes) {
+            return ::media::Status::success();
+        }
+        break;
+    default:
+        break;
+    }
+    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Datagram socket buffer accounting is inconsistent"));
+}
 
 struct MediaDatagramMtuEvidence final {
     std::string authority;
@@ -59,9 +109,7 @@ struct MediaDatagramEndpointPlan final {
     std::uint64_t maximumPendingDatagrams;
     std::uint64_t maximumPendingBytes;
     MediaRunningTime maximumResidence;
-    std::uint64_t targetEffectiveSendBufferBytes;
-    std::uint64_t minimumEffectiveSendBufferBytes;
-    std::uint64_t maximumAdmittedEffectiveSendBufferBytes;
+    MediaDatagramSocketBufferPlan socketBuffer;
 
     friend bool operator==(const MediaDatagramEndpointPlan&,
                            const MediaDatagramEndpointPlan&) = default;

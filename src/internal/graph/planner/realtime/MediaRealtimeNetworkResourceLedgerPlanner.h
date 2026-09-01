@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
+#include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
 
 #include <cstdint>
@@ -33,9 +34,7 @@ struct MediaRealtimeNetworkResourceLedgerPlan final {
     std::uint64_t maximumBatchBytes;
     std::uint64_t maximumEndpointPendingDatagrams;
     std::uint64_t maximumEndpointPendingBytes;
-    std::uint64_t targetEffectiveSendBufferBytesPerEndpoint;
-    std::uint64_t minimumEffectiveSendBufferBytesPerEndpoint;
-    std::uint64_t maximumAdmittedEffectiveSendBufferBytesPerEndpoint;
+    MediaDatagramSocketBufferPlan socketBufferPerEndpoint;
     std::uint64_t maximumCorrelationEntries;
     std::uint64_t admittedNetworkBytes;
     std::uint64_t admittedSocketBytes;

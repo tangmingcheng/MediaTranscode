@@ -10,6 +10,7 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
 namespace {
 
 ::media::Result<std::uint64_t> checkedWireBytes(
@@ -63,25 +64,24 @@ namespace {
     auto address = MediaNumericIpAddress::create(endpoint.addressFamily,
                                                  endpoint.numericAddress);
     auto mtu = validateMtuEvidence(endpoint);
+    auto socketBuffer =
+        validateMediaDatagramSocketBufferPlan(endpoint.socketBuffer);
     if (endpoint.endpointId == 0 || endpoint.port == 0 || !address || !mtu ||
+        !socketBuffer ||
         endpoint.maximumPendingDatagrams == 0 ||
         endpoint.maximumPendingBytes < endpoint.maximumDatagramBytes ||
-        endpoint.targetEffectiveSendBufferBytes == 0 ||
-        endpoint.minimumEffectiveSendBufferBytes <
+        endpoint.socketBuffer.minimumEffectiveBytes <
             endpoint.maximumDatagramBytes ||
-        endpoint.targetEffectiveSendBufferBytes <
-            endpoint.minimumEffectiveSendBufferBytes ||
-        endpoint.maximumAdmittedEffectiveSendBufferBytes <
-            endpoint.targetEffectiveSendBufferBytes ||
         endpoint.maximumResidence <= MediaRunningTime::fromNanoseconds(0) ||
-        endpoint.maximumAdmittedEffectiveSendBufferBytes <
+        endpoint.socketBuffer.maximumAdmittedEffectiveBytes <
             endpoint.maximumDatagramBytes) {
         return ::media::Status::failure(
             !address
                 ? address.error()
                 : (!mtu ? mtu.error()
+                        : (!socketBuffer ? socketBuffer.error()
                         : ::media::ErrorInfo::invalidArgument(
-                              "datagram endpoint hard bounds are incomplete")));
+                              "datagram endpoint hard bounds are incomplete"))));
     }
     return ::media::Status::success();
 }

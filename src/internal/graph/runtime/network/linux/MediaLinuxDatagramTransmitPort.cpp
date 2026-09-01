@@ -3,7 +3,6 @@
 #endif
 
 #include "internal/graph/runtime/network/linux/MediaLinuxDatagramTransmitPort.h"
-#include "internal/graph/runtime/network/MediaDatagramSocketBufferApiRequest.h"
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -120,11 +119,13 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
-            request.endpoint.targetEffectiveSendBufferBytes == 0 ||
+            request.endpoint.socketBuffer.accounting !=
+                MediaDatagramSocketBufferAccounting::LinuxDoubled ||
+            request.endpoint.socketBuffer.apiRequestedBytes == 0 ||
             request.maximumBatchDatagrams == 0 ||
             request.maximumBatchDatagrams > static_cast<std::uint64_t>(
                 (std::numeric_limits<unsigned int>::max)()) ||
-            request.endpoint.targetEffectiveSendBufferBytes >
+            request.endpoint.socketBuffer.apiRequestedBytes >
                 static_cast<std::uint64_t>((std::numeric_limits<int>::max)()) ||
             request.localEndpoint.addressFamily() !=
                 request.endpoint.addressFamily ||
@@ -169,17 +170,8 @@ public:
                 "Linux Datagram path MTU discovery configuration failed",
                 errno));
         }
-        auto apiRequest = MediaDatagramSocketBufferApiRequest::fromTargetEffective(
-            request.endpoint.targetEffectiveSendBufferBytes,
-            MediaDatagramSocketBufferApiAccounting::LinuxDoubled);
-        if (!apiRequest || apiRequest.value() >
-                static_cast<std::uint64_t>((std::numeric_limits<int>::max)())) {
-            return fail(!apiRequest
-                ? apiRequest.error()
-                : ::media::ErrorInfo::invalidArgument(
-                      "Linux Datagram SO_SNDBUF API request exceeds int"));
-        }
-        const int requestedBuffer = static_cast<int>(apiRequest.value());
+        const int requestedBuffer = static_cast<int>(
+            request.endpoint.socketBuffer.apiRequestedBytes);
         if (::setsockopt(handle, SOL_SOCKET, SO_SNDBUF, &requestedBuffer,
                          sizeof(requestedBuffer)) != 0) {
             return fail(::media::ErrorInfo::ioFailure(
@@ -262,17 +254,18 @@ public:
                 "Linux Datagram effective SO_SNDBUF query failed", errno));
         }
         if (static_cast<std::uint64_t>(effectiveBuffer) <
-                request.endpoint.minimumEffectiveSendBufferBytes ||
+                request.endpoint.socketBuffer.minimumEffectiveBytes ||
             static_cast<std::uint64_t>(effectiveBuffer) >
-                request.endpoint.maximumAdmittedEffectiveSendBufferBytes) {
+                request.endpoint.socketBuffer.maximumAdmittedEffectiveBytes) {
             return fail(::media::ErrorInfo::unsupported(
                 "Linux effective SO_SNDBUF is outside the admitted planner range: target=" +
-                std::to_string(request.endpoint.targetEffectiveSendBufferBytes) +
-                " api_request=" + std::to_string(apiRequest.value()) +
+                std::to_string(request.endpoint.socketBuffer.targetEffectiveBytes) +
+                " api_request=" + std::to_string(
+                    request.endpoint.socketBuffer.apiRequestedBytes) +
                 " minimum=" +
-                std::to_string(request.endpoint.minimumEffectiveSendBufferBytes) +
+                std::to_string(request.endpoint.socketBuffer.minimumEffectiveBytes) +
                 " maximum=" +
-                std::to_string(request.endpoint.maximumAdmittedEffectiveSendBufferBytes) +
+                std::to_string(request.endpoint.socketBuffer.maximumAdmittedEffectiveBytes) +
                 " effective=" + std::to_string(effectiveBuffer)));
         }
         try {
@@ -300,8 +293,8 @@ public:
                 request.kernelSchedule->maximumScheduleAheadNanoseconds;
         }
         return ResultType::success(MediaDatagramTransmitPortCapabilities{
-            request.endpoint.targetEffectiveSendBufferBytes,
-            apiRequest.value(),
+            request.endpoint.socketBuffer.targetEffectiveBytes,
+            request.endpoint.socketBuffer.apiRequestedBytes,
             static_cast<std::uint64_t>(effectiveBuffer), timestampAvailability,
             m_timestampAvailable
                 ? MediaDatagramTransmitTimestampSource::LinuxSoftwareRealtime
