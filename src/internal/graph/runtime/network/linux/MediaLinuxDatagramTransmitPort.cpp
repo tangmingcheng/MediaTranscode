@@ -132,17 +132,10 @@ public:
             (request.executionMode !=
                  MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
              request.executionMode !=
-                 MediaDatagramTransmitExecutionMode::LinuxSocketTxTime &&
-             request.executionMode !=
-                 MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) ||
+                 MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
             ((request.executionMode ==
                   MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
-             request.kernelSchedule.has_value()) ||
-            ((request.executionMode ==
-                  MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) !=
-             request.kernelSocketPacingRateBytesPerSecond.has_value()) ||
-            (request.kernelSocketPacingRateBytesPerSecond &&
-             *request.kernelSocketPacingRateBytesPerSecond == 0)) {
+             request.kernelSchedule.has_value())) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
                 "invalid Linux Datagram port open request"));
         }
@@ -285,37 +278,6 @@ public:
             return fail(::media::ErrorInfo::allocationFailed(
                 "Linux Datagram batch scratch allocation"));
         }
-        std::optional<std::uint64_t> fqSocketPacingRate;
-        if (request.executionMode ==
-            MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) {
-#ifdef SO_MAX_PACING_RATE
-            const auto requestedRate =
-                *request.kernelSocketPacingRateBytesPerSecond;
-            if (::setsockopt(handle, SOL_SOCKET, SO_MAX_PACING_RATE,
-                             &requestedRate, sizeof(requestedRate)) != 0) {
-                return fail(::media::ErrorInfo::ioFailure(
-                    "Linux Datagram SO_MAX_PACING_RATE configuration failed",
-                    errno));
-            }
-            std::uint64_t readback = 0;
-            socklen_t readbackSize = sizeof(readback);
-            if (::getsockopt(handle, SOL_SOCKET, SO_MAX_PACING_RATE,
-                             &readback, &readbackSize) != 0) {
-                return fail(::media::ErrorInfo::ioFailure(
-                    "Linux Datagram SO_MAX_PACING_RATE readback failed",
-                    errno));
-            }
-            if (readbackSize != sizeof(readback) ||
-                readback != requestedRate) {
-                return fail(::media::ErrorInfo::unsupported(
-                    "Linux Datagram SO_MAX_PACING_RATE readback differs from the activated planner contract"));
-            }
-            fqSocketPacingRate = readback;
-#else
-            return fail(::media::ErrorInfo::unsupported(
-                "Linux headers do not expose SO_MAX_PACING_RATE"));
-#endif
-        }
         m_socket = handle;
         m_stopFd = stopFd;
         m_endpointId = request.endpoint.endpointId;
@@ -341,7 +303,7 @@ public:
             m_timestampAvailable
                 ? MediaDatagramTransmitCorrelationMode::KernelSequentialUint32
                 : MediaDatagramTransmitCorrelationMode::None,
-            m_txtimeAvailable, fqSocketPacingRate, false});
+            m_txtimeAvailable, false});
     }
 
     MediaDatagramTransmitSubmitResult trySubmit(

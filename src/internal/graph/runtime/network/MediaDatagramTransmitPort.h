@@ -18,8 +18,7 @@ namespace media::ffmpeg::graph {
 enum class MediaDatagramTransmitExecutionMode {
     Unknown = 0,
     UserspaceNonblocking = 1,
-    LinuxSocketTxTime = 2,
-    LinuxSocketFqPacing = 3
+    LinuxSocketTxTime = 2
 };
 
 enum class MediaDatagramTransmitAttempt {
@@ -87,7 +86,6 @@ struct MediaDatagramTransmitPortCapabilities final {
     std::uint64_t timestampCounterFrequency;
     MediaDatagramTransmitCorrelationMode correlationMode;
     bool kernelTransmitTimeAvailable;
-    std::optional<std::uint64_t> kernelSocketPacingRateBytesPerSecond;
     bool zeroCopyEnabled;
 };
 
@@ -120,7 +118,6 @@ struct MediaDatagramTransmitPortOpenRequest final {
     MediaDatagramTransmitExecutionMode executionMode;
     std::optional<MediaDatagramTransmitEvidencePlan> evidence;
     std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;
-    std::optional<std::uint64_t> kernelSocketPacingRateBytesPerSecond;
 };
 
 using MediaDatagramTransmitSubmitResult =

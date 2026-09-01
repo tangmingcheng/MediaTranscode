@@ -35,8 +35,7 @@ bool samePersistentService(const MediaDatagramPacingContract& left,
 
 MediaDatagramPacingController::MediaDatagramPacingController(
     MediaDatagramPacingContract contract) noexcept
-    : m_contract(std::move(contract)),
-      m_adjustedWireBytesPerSecond(m_contract.wireBytesPerSecond)
+    : m_contract(std::move(contract))
 {
     m_telemetry.maximumWireBytesPerSecond =
         m_contract.wireBytesPerSecond;
@@ -124,11 +123,7 @@ MediaDatagramPacingController::reserve(
         return Result::failure(::media::ErrorInfo::ioFailure(message.str()));
     }
 
-    const auto effectiveArrival = (std::max)(now, job.canonicalRelease);
-    const auto adjustedRate = m_theoreticalArrivalTime &&
-            effectiveArrival < *m_theoreticalArrivalTime
-        ? (std::max)(m_adjustedWireBytesPerSecond, candidateRate)
-        : candidateRate;
+    const auto adjustedRate = candidateRate;
 
     auto durationNanoseconds = MediaCheckedArithmetic::ceilDurationNanoseconds(
         job.wireBytes, adjustedRate,
@@ -184,7 +179,6 @@ MediaDatagramPacingController::reserve(
     }
     m_telemetry.maximumWireBytesPerSecond = (std::max)(
         m_telemetry.maximumWireBytesPerSecond, adjustedRate);
-    m_adjustedWireBytesPerSecond = adjustedRate;
     ++m_telemetry.reservedDatagrams;
     return Result::success(reservation);
 }
@@ -199,6 +193,7 @@ MediaDatagramPacingController::reserve(
         submitStartedAt < m_pending->value.notBefore ||
         submitStartedAt > m_pending->value.notAfter ||
         submitCompletedAt < submitStartedAt ||
+        submitCompletedAt > m_pending->value.notAfter ||
         (m_lastObservedTime && submitStartedAt < *m_lastObservedTime)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Datagram pacing submit differs from its active GBRA reservation"));

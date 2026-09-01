@@ -95,7 +95,6 @@ private:
     std::optional<MediaRunningTime> m_theoreticalArrivalTime;
     std::optional<MediaRunningTime> m_lastObservedTime;
     std::optional<std::uint64_t> m_lastSubmittedSequence;
-    std::uint64_t m_adjustedWireBytesPerSecond = 0;
 };
 
 } // namespace media::ffmpeg::graph

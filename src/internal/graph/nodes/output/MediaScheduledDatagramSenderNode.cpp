@@ -189,21 +189,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             local.endpointId, std::move(endpoint).value()});
     }
 
-    MediaDatagramTransmitExecutionMode mode;
-    switch (plan.execution) {
-    case MediaDatagramTransportExecutionKind::UserspaceNonblocking:
-        mode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
-        break;
-    case MediaDatagramTransportExecutionKind::LinuxFqSocketPacing:
-        mode = MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing;
-        break;
-    default:
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "scheduled datagram sender execution mode is unknown"));
-    }
     MediaDatagramTransmitExecutionPlan execution{
-        mode, plan.executionAuthority, std::nullopt,
-        plan.kernelSocketPacingRateBytesPerSecond};
+        MediaDatagramTransmitExecutionMode::UserspaceNonblocking,
+        "common userspace nonblocking Datagram pacing baseline",
+        std::nullopt};
     auto shaping = plan.shaping.clone();
     if (!shaping) return ::media::Status::failure(shaping.error());
     if (auto valid = MediaDatagramTransmitSession::validateActivation(
@@ -244,7 +233,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_serviceLedger = planBuffer.globalSequence();
     m_generation = plan.shaping.generation();
     m_serviceScopeId = plan.shaping.serviceScope().scopeId;
-    m_executionMode = mode;
+    m_executionMode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
     m_wireOverheadBytes.clear();
     m_endpointIds.clear();
     m_endpointDatagrams.clear();
@@ -587,18 +576,21 @@ MediaScheduledDatagramSenderNode::failSubmit(
          error.kind ==
              MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix) &&
         error.submittedPrefixDatagrams != 0) {
+        std::optional<std::uint64_t> submittedSequence;
         if (error.kind ==
             MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
-            const auto submittedSequence =
+            submittedSequence =
                 m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
-            auto paced = m_pacingController->markSubmitted(
-                submittedSequence, submitStartedAt, submitCompletedAt);
-            if (!paced) return failTerminal(paced.error());
         }
         auto committed = recordSubmittedPrefix(
             static_cast<std::size_t>(error.submittedPrefixDatagrams),
             submitCompletedAt);
         if (!committed) return failTerminal(committed.error());
+        if (submittedSequence) {
+            auto paced = m_pacingController->markSubmitted(
+                *submittedSequence, submitStartedAt, submitCompletedAt);
+            if (!paced) return failTerminal(paced.error());
+        }
     }
     return failTerminal(error.cause);
 }
@@ -715,12 +707,12 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             if (!submitCompletedAt) {
                 return failTerminal(submitCompletedAt.error());
             }
-            auto paced = m_pacingController->markSubmitted(
-                submittedSequence, now.value(), submitCompletedAt.value());
-            if (!paced) return failTerminal(paced.error());
             auto committed = recordSubmittedPrefix(
                 m_groupCount, submitCompletedAt.value());
             if (!committed) return failTerminal(committed.error());
+            auto paced = m_pacingController->markSubmitted(
+                submittedSequence, now.value(), submitCompletedAt.value());
+            if (!paced) return failTerminal(paced.error());
             m_state = SubmitState::WaitReservation;
         }
     }
@@ -825,10 +817,6 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                     << capabilities->effectiveSendBufferBytes
                     << " endpoint_" << endpointId << "_timestamp_source="
                     << static_cast<int>(capabilities->timestampSource)
-                    << " endpoint_" << endpointId
-                    << "_kernel_socket_pacing_rate_bytes_per_second="
-                    << capabilities->kernelSocketPacingRateBytesPerSecond
-                           .value_or(0)
                     << " endpoint_" << endpointId << "_committed_datagrams="
                     << m_endpointDatagrams[endpointId]
                     << " endpoint_" << endpointId << "_committed_payload_bytes="

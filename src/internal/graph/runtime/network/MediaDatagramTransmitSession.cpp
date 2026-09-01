@@ -13,8 +13,7 @@ bool isSupportedExecutionMode(
     MediaDatagramTransmitExecutionMode mode) noexcept
 {
     return mode == MediaDatagramTransmitExecutionMode::UserspaceNonblocking ||
-           mode == MediaDatagramTransmitExecutionMode::LinuxSocketTxTime ||
-           mode == MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing;
+           mode == MediaDatagramTransmitExecutionMode::LinuxSocketTxTime;
 }
 
 } // namespace
@@ -45,12 +44,7 @@ MediaDatagramTransmitSession::~MediaDatagramTransmitSession() noexcept
         bindings.size() != plan.endpoints().size() ||
         (execution.mode ==
              MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
-            execution.kernelSchedule.has_value() ||
-        (execution.mode ==
-             MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) !=
-            execution.kernelSocketPacingRateBytesPerSecond.has_value() ||
-        (execution.kernelSocketPacingRateBytesPerSecond &&
-         *execution.kernelSocketPacingRateBytesPerSecond == 0)) {
+            execution.kernelSchedule.has_value()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid explicit Datagram transmit activation plan"));
     }
@@ -88,11 +82,6 @@ MediaDatagramTransmitSession::create(
         (execution.mode ==
              MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
             execution.kernelSchedule.has_value() ||
-        (execution.mode ==
-             MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) !=
-            execution.kernelSocketPacingRateBytesPerSecond.has_value() ||
-        (execution.kernelSocketPacingRateBytesPerSecond &&
-         *execution.kernelSocketPacingRateBytesPerSecond == 0) ||
         (execution.kernelSchedule &&
          (execution.kernelSchedule->authority.empty() ||
           execution.kernelSchedule->maximumCorrelationEntries <
@@ -162,8 +151,7 @@ MediaDatagramTransmitSession::create(
                 plan.sessionKey(), plan.serviceScope().scopeId,
                 plan.generation(), endpoint, local->second,
                 plan.batch().maximumDatagrams, execution.mode,
-                plan.evidence(), execution.kernelSchedule,
-                execution.kernelSocketPacingRateBytesPerSecond};
+                plan.evidence(), execution.kernelSchedule};
             auto opened = port.value()->open(request);
             if (!opened) return ResultType::failure(opened.error());
             if (opened.value().zeroCopyEnabled) {
@@ -193,13 +181,6 @@ MediaDatagramTransmitSession::create(
                 !opened.value().kernelTransmitTimeAvailable) {
                 return ResultType::failure(::media::ErrorInfo::unsupported(
                     "required Linux SO_TXTIME capability is unavailable"));
-            }
-            if (execution.mode ==
-                    MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing &&
-                opened.value().kernelSocketPacingRateBytesPerSecond !=
-                    execution.kernelSocketPacingRateBytesPerSecond) {
-                return ResultType::failure(::media::ErrorInfo::unsupported(
-                    "required Linux SO_MAX_PACING_RATE capability is unavailable"));
             }
             if (plan.evidence() &&
                 plan.evidence()->coverageGapPolicy ==

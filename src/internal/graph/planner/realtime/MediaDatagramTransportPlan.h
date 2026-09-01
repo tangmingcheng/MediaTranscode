@@ -1,11 +1,9 @@
 #pragma once
 
-#include "internal/graph/planner/realtime/MediaDatagramExecutionCapabilityProbe.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,9 +38,6 @@ struct MediaDatagramLocalEndpointPlan final {
 struct MediaDatagramTransportPlan final {
     MediaDatagramShapingPlan shaping;
     std::vector<MediaDatagramLocalEndpointPlan> localEndpoints;
-    MediaDatagramTransportExecutionKind execution;
-    std::string executionAuthority;
-    std::optional<std::uint64_t> kernelSocketPacingRateBytesPerSecond;
 };
 
 struct MediaDatagramTransportPlanTemplateEncoding final {
@@ -75,11 +70,9 @@ public:
 
 private:
     explicit MediaDatagramTransportPlanTemplate(
-        MediaDatagramTransportPlanTemplateEncoding encoding,
-        MediaDatagramExecutionCapability executionCapability) noexcept;
+        MediaDatagramTransportPlanTemplateEncoding encoding) noexcept;
 
     MediaDatagramTransportPlanTemplateEncoding m_encoding;
-    MediaDatagramExecutionCapability m_executionCapability;
 };
 
 } // namespace media::ffmpeg::graph

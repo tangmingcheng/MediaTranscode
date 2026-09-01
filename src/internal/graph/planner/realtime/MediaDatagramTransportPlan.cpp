@@ -35,10 +35,8 @@ std::uint64_t ceilDivide(
 } // namespace
 
 MediaDatagramTransportPlanTemplate::MediaDatagramTransportPlanTemplate(
-    MediaDatagramTransportPlanTemplateEncoding encoding,
-    MediaDatagramExecutionCapability executionCapability) noexcept
-    : m_encoding(std::move(encoding)),
-      m_executionCapability(std::move(executionCapability))
+    MediaDatagramTransportPlanTemplateEncoding encoding) noexcept
+    : m_encoding(std::move(encoding))
 {
 }
 
@@ -132,18 +130,10 @@ MediaDatagramTransportPlanTemplate::create(
                     "Datagram transport template requires unique numeric endpoints matching the reserved local address family"));
             }
         }
-        auto executionCapability =
-            MediaDatagramExecutionCapabilityProbe::scan(
-                facts.serviceScope.scopeId,
-                facts.service.provisionedCapacityWireBytesPerSecond);
-        if (!executionCapability) {
-            return Result::failure(executionCapability.error());
-        }
         return Result::success(MediaDatagramTransportPlanTemplate(
             MediaDatagramTransportPlanTemplateEncoding{
                 std::move(sessionKey), facts, std::move(remoteEndpoints),
-                std::move(wireTraffic)},
-            std::move(executionCapability).value()));
+                std::move(wireTraffic)}));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "Datagram transport template"));
@@ -274,10 +264,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         if (!decoded) return Result::failure(decoded.error());
         return Result::success(MediaDatagramTransportPlan{
             std::move(decoded).value(),
-            std::move(localEndpoints),
-            m_executionCapability.execution,
-            m_executionCapability.authority,
-            m_executionCapability.kernelSocketPacingRateBytesPerSecond});
+            std::move(localEndpoints)});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "activated Datagram transport plan"));
