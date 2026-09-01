@@ -35,6 +35,41 @@ D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --f
 - 单核 CPU 均值 26.404%，峰值 44.622%；RSS 增长 950272 B。CPU 按本轮明确范围仅记录，不作为 Datagram 发送控制修改项。
 - 源结束后 CLI 以 RTP source-clock evidence expiry 失败退出，符合有限源生命周期语义。
 
+## 最终平台能力探测回归门禁：PASS
+
+- 日期：2026-09-01。
+- 冻结代码：`55d485a9`。
+- 输入：真实连续 120 秒 HEVC 2560x1440、30 fps、raw RTP。
+- 输出：H.264 1920x1080、25 fps、VBR 5/12/13 Mbps、GOP 50、MPEG-TS/RTP。
+- 部署事实：受管 egress 50 Mbps，最大 wire residence 100 ms。
+
+CLI：
+
+```powershell
+D:\Code\MyCode\MediaTranscode\out\build\x64-release\media_transcode_realtime_video_cli.exe --media-id win-final-sndbuf-rerun-hevc2k30-h2641080p25-vbr12m --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60592 --video-rtp-codec hevc --video-rtp-payload-type 98 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61592 --sdp D:\Code\MyCode\MediaTranscode\out\acceptance\win-final-sndbuf-rerun\output.sdp --video-codec h264 --rc vbr --min-bitrate 5000 --bitrate 12000 --max-bitrate 13000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
+```
+
+FFmpeg 源：
+
+```powershell
+D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -nostdin -re -i D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s-2k-hevc.mp4 -map 0:v:0 -an -c:v copy -bsf:v hevc_mp4toannexb -f rtp -payload_type 98 "rtp://127.0.0.1:60592?rtcpport=60593&pkt_size=1200"
+```
+
+VLC：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --file-logging --logfile D:\Code\MyCode\MediaTranscode\out\acceptance\win-final-sndbuf-rerun\vlc.log --no-video-title-show rtp://@192.168.96.122:61592
+```
+
+结果：
+
+- FFmpeg 完整发送 3600 帧；生产 DAG 输出 2998 个 access unit。sender 与 pcap 均为 113436 个 datagram，接口捕获丢包 0。
+- RTP 113410 包，loss/reorder 0；MPEG-TS continuity drop、TEI、malformed 均为 0，媒体跨度 119.967640 秒。
+- planner wire rate 为 3989698 B/s、单包 burst 为 1356 B；1/10/100 ms 最大 IP 字节为 4296/27120/172708 B，均低于对应 service envelope 加单包余量 5346/41253/400326 B。GCRA 最大 debt 为 1356.437 B，与单包余量差 0.437 B，处于抓包时间戳量化误差内，无追赶式 burst。
+- sender would-block、writable wait、deadline miss、pressure、partial submit、ambiguous submit 均为 0；最大 submit lateness 4.531 ms，最终 backlog 为 0。两个 endpoint 的 target/API/effective socket buffer 均为 309970 B，证明 Windows provider 按本次目标值精确回读。
+- VLC 记录 `Received first picture`、`Stream buffering done`、1920x1080 D3D11VA 输出；picture too late、black、corrupt、lost、discontinuity、decoder error 均为 0。唯一一次 `might be displayed late (missing 14 ms)` 后立即是窗口主动关闭与 `exiting`，属于 teardown。
+- CLI 平均单核 CPU 26.985%，峰值 68.750%，峰值 working set 229462016 B；CPU 按当前范围仅记录。源结束后如实以 RTP source-clock evidence expiry 终止，最终 dropped buffer、graph payload、backlog 均为 0。
+
 ## 随机高规格复审门禁：PASS
 
 - 日期：2026-09-01。
