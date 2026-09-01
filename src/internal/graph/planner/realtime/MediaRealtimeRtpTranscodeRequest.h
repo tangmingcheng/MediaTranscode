@@ -27,7 +27,6 @@ struct MediaRealtimeMpegTsInputClockPolicy {
 
 struct MediaRealtimeInputConfig {
     std::optional<RealtimeInputType> type;
-    std::optional<RealtimeInputStreamLayout> streamLayout;
     std::string url;
     std::string rtspTransport;
     std::optional<int> openTimeoutMs;

@@ -60,16 +60,9 @@ MediaRealtimeDeploymentEnvelope::decode(
         mtu.senderMaximumPayloadBytes <=
             mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes;
     const bool validService = !service.authority.empty() &&
-        service.provisionedCapacityWireBytesPerSecond > 0 &&
-        service.pacingWireBytesPerSecond <=
-            service.provisionedCapacityWireBytesPerSecond &&
-        service.burstWireBytes > 0;
+        service.provisionedCapacityWireBytesPerSecond > 0;
     const bool validResources = !resources.authority.empty() &&
-        resources.graphResourceScope !=
-            MediaRealtimeGraphResourceBudgetScope::Unknown &&
-        resources.maximumGraphPayloadAndReservedStorageBytes > 0 &&
-        resources.maximumNetworkMemoryBytes > 0 &&
-        resources.maximumSocketMemoryBytes > 0;
+        resources.maximumNetworkMemoryBytes > 0;
     const auto localAddress = MediaNumericIpAddress::create(
         localPorts.addressFamily, localPorts.numericAddress);
     const bool validLocalPorts = localAddress &&
@@ -106,7 +99,7 @@ MediaRealtimeDeploymentEnvelope::decode(
         !validRtcpSession) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "realtime deployment envelope requires authoritative service scope, MTU, service curve, resource, latency, and observation facts"));
+                "realtime deployment envelope requires authoritative service scope, MTU, provisioned service capacity, resource, latency, and observation facts"));
     }
     return ::media::Result<MediaRealtimeDeploymentEnvelope>::success(
         MediaRealtimeDeploymentEnvelope(std::move(encoding)));

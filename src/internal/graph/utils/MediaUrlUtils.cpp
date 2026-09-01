@@ -88,6 +88,11 @@ bool isUdpUrl(const std::string& url)
     return startsWith(lowerAscii(url), "udp://");
 }
 
+bool isRtspUrl(const std::string& url)
+{
+    return startsWith(lowerAscii(url), "rtsp://");
+}
+
 ::media::Result<MediaRtpUrlEndpoint> parseRtpUdpUrlEndpoint(const std::string& url)
 {
     const std::string normalized = url;

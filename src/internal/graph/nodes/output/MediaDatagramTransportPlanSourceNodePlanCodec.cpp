@@ -87,16 +87,8 @@ template <typename Value>
              set(graph, nodeId, key("mtu.authority"), d.mtu.authority),
              put("service.capacity_bps",
                  d.service.provisionedCapacityWireBytesPerSecond),
-             put("service.pacing_bps",
-                  d.service.pacingWireBytesPerSecond),
-             put("service.burst_bytes", d.service.burstWireBytes),
              set(graph, nodeId, key("service.authority"), d.service.authority),
-             put("resources.graph_scope", static_cast<unsigned>(
-                 d.resources.graphResourceScope)),
-             put("resources.graph_payload_reserved_bytes",
-                 d.resources.maximumGraphPayloadAndReservedStorageBytes),
              put("resources.network_bytes", d.resources.maximumNetworkMemoryBytes),
-             put("resources.socket_bytes", d.resources.maximumSocketMemoryBytes),
              set(graph, nodeId, key("resources.authority"), d.resources.authority),
              put("local.family", static_cast<unsigned>(d.localPorts.addressFamily)),
              set(graph, nodeId, key("local.address"), d.localPorts.numericAddress),
@@ -169,16 +161,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto mtuAuthority = required(node.options, key("mtu.authority"));
     auto provisionedCapacity = parse<std::uint64_t>(
         node.options, key("service.capacity_bps"));
-    auto pacing = parse<std::uint64_t>(
-        node.options, key("service.pacing_bps"));
-    auto burst = parse<std::uint64_t>(node.options, key("service.burst_bytes"));
     auto serviceAuthority = required(node.options, key("service.authority"));
-    auto graphScope = parse<std::uint8_t>(
-        node.options, key("resources.graph_scope"));
-    auto graphBytes = parse<std::uint64_t>(
-        node.options, key("resources.graph_payload_reserved_bytes"));
     auto networkBytes = parse<std::uint64_t>(node.options, key("resources.network_bytes"));
-    auto socketBytes = parse<std::uint64_t>(node.options, key("resources.socket_bytes"));
     auto resourcesAuthority = required(node.options, key("resources.authority"));
     auto localFamily = parse<std::uint8_t>(node.options, key("local.family"));
     auto localAddress = required(node.options, key("local.address"));
@@ -224,12 +208,10 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     REQUIRE_VALUE(session); REQUIRE_VALUE(scopeKind); REQUIRE_VALUE(scopeId);
     REQUIRE_VALUE(scopeAuthority); REQUIRE_VALUE(mtuFamily); REQUIRE_VALUE(mtuIp);
     REQUIRE_VALUE(mtuPayload); REQUIRE_VALUE(mtuAuthority);
-    REQUIRE_VALUE(provisionedCapacity); REQUIRE_VALUE(pacing);
-    REQUIRE_VALUE(burst);
-    REQUIRE_VALUE(serviceAuthority); REQUIRE_VALUE(graphScope);
-    REQUIRE_VALUE(graphBytes);
+    REQUIRE_VALUE(provisionedCapacity);
+    REQUIRE_VALUE(serviceAuthority);
     REQUIRE_VALUE(networkBytes);
-    REQUIRE_VALUE(socketBytes); REQUIRE_VALUE(resourcesAuthority); REQUIRE_VALUE(localFamily);
+    REQUIRE_VALUE(resourcesAuthority); REQUIRE_VALUE(localFamily);
     REQUIRE_VALUE(localAddress); REQUIRE_VALUE(firstPort); REQUIRE_VALUE(portCount);
     REQUIRE_VALUE(localAuthority); REQUIRE_VALUE(targetLatency); REQUIRE_VALUE(maximumLatency);
     REQUIRE_VALUE(latencyAuthority); REQUIRE_VALUE(releaseJitter);
@@ -250,11 +232,9 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
          std::move(scopeId).value(), std::move(scopeAuthority).value()},
         {static_cast<MediaIpAddressFamily>(mtuFamily.value()),
          std::move(mtuAuthority).value(), mtuIp.value(), mtuPayload.value()},
-        {provisionedCapacity.value(), pacing.value(), burst.value(),
+        {provisionedCapacity.value(),
          std::move(serviceAuthority).value()},
-        {static_cast<MediaRealtimeGraphResourceBudgetScope>(
-             graphScope.value()),
-         graphBytes.value(), networkBytes.value(), socketBytes.value(),
+        {networkBytes.value(),
          std::move(resourcesAuthority).value()},
         {static_cast<MediaIpAddressFamily>(localFamily.value()),
          std::move(localAddress).value(), firstPort.value(), portCount.value(),

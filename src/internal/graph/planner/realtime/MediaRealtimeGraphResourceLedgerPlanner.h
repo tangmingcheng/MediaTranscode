@@ -12,6 +12,12 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRealtimeGraphResourceBudgetScope : std::uint8_t {
+    Unknown = 0,
+    EngineManagedPayloadAndReservedStorage = 1,
+    EngineManagedPayloadAndReservedStoragePlusDevice = 2
+};
+
 enum class MediaRealtimeResourceAccountingGroup : std::uint8_t {
     EncodedVideoPacket = 1,
     DecodedVideoSurface = 2,

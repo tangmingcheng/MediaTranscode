@@ -52,15 +52,17 @@ URL/RTSP, separate RTP, or MPEG-TS/UDP input
 
 `separate + udp` is rejected. MPEG-TS/RTP uses the static MP2T payload type 33, a 90 kHz RTP clock, adjacent RTP/RTCP ports, and one generated SDP media description. Open either RTP mode through its generated SDP:
 
+For visible MPEG-TS acceptance, VLC opens the production URL directly:
+
 ```powershell
-ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
-ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
+& 'D:\VideoLAN\VLC\vlc.exe' 'rtp://@192.168.96.122:60000'
+& 'D:\VideoLAN\VLC\vlc.exe' 'udp://@192.168.96.122:60000'
 ```
 
-For visible local acceptance, open separate RTP through its generated SDP because
-the H.264 and AAC dynamic payload mappings require signaling. Open MPEG-TS/RTP
-directly as `rtp://@host:port` and MPEG-TS/UDP directly as `udp://@host:port`.
-Do not insert an observer remux between the production output and VLC.
+Do not insert FFmpeg, an observer remux, or SDP playback between the production
+MPEG-TS output and VLC. Separate dynamic-payload RTP still writes SDP as the
+signaling artifact selected by the caller, but it is not the MPEG-TS/RTP receiver
+URL.
 
 `--max-duration SECONDS` is optional realtime CLI monitoring policy. When it is
 present, it must be positive and stops a still-running CLI after that duration.
@@ -71,30 +73,26 @@ media graph runtime.
 
 Raw RTP input requires explicit video and audio endpoint metadata. For H.264 or HEVC video only, omitting `--video-rtp-fmtp` enables preflight in-band parameter-set detection. Codec, payload type, 90 kHz clock rate, URL, and all timeout/capacity limits remain mandatory. The planner derives canonical fmtp only after complete, unambiguous evidence; the runtime receives the same bound UDP transport and the original pre-read RTP/RTCP queue. Supplying video fmtp keeps strict manual mode and performs no probe I/O. AAC always requires explicit fmtp; Opus keeps its existing no-fmtp contract.
 
-The following reusable input/options demonstrate automatic H.264 video fmtp with explicit AAC signaling. Add `--video-rtp-fmtp` back when authoritative signaling is available and manual mode is required:
+The following VideoOnly example demonstrates automatic H.264 fmtp detection.
+Add `--video-rtp-fmtp` only when authoritative signaling is available and manual
+mode is required:
 
 ```powershell
 $inputRtp = @(
-    '--input-type','rtp','--input-layout','separate',
+    '--input-type','rtp',
     '--video-rtp-url','rtp://127.0.0.1:5004',
     '--video-rtp-codec','h264','--video-rtp-payload-type','96',
     '--video-rtp-clock-rate','90000',
-    '--audio-rtp-url','rtp://127.0.0.1:5006',
-    '--audio-rtp-codec','aac','--audio-rtp-payload-type','97',
-    '--audio-rtp-clock-rate','44100','--audio-rtp-channels','2',
-    '--audio-rtp-fmtp','profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210',
     '--open-timeout-ms','30000','--read-timeout-ms','2000',
     '--analyze-duration-us','5000000','--probe-size','5000000'
 )
 $common = @(
-    '--metadata-queue','1','--packet-queue','256','--frame-queue','128','--mux-queue','256',
-    '--startup-max-video-unit-bytes','4194304',
-    '--startup-max-audio-unit-bytes','1048576','--startup-max-gap-ms','40',
-    '--video-codec','h264','--width','1280','--height','720','--fps','30',
-    '--bitrate','4000','--gop','30','--audio-codec','aac','--audio-bitrate','128',
-    '--sample-rate','48000','--channels','2'
+    '--egress-capacity-bps','50000000','--maximum-wire-residence-ms','100',
+    '--video-codec','hevc','--rc','cbr',
+    '--width','1920','--height','1080','--fps','25',
+    '--bitrate','6000','--gop','50','--no-audio'
 )
-$cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
+$cli = 'out/build/x64-release/media_transcode_realtime_video_cli.exe'
 
 & $cli @inputRtp @common --media-id rtp-to-tsudp `
     --output-layout mpegts --output-transport udp `
@@ -111,7 +109,13 @@ Probe limits have exact meanings: `--open-timeout-ms` is the target deadline for
 Add `--max-duration SECONDS` only when the caller wants the explicit CLI stop
 gate; do not use `0`, a sentinel, or a large replacement duration.
 
-Hardware planning, low-latency input, and graph diagnostics are enabled by default. Use `--disable-hw`, `--no-low-latency`, or `--quiet-graph` only for an explicit override. `udp://host:port` remains valid for UDP-carried RTP input in RTP-port mode; MPEG-TS input uses `--input-type mpegts-udp --input-layout mpegts` and requires an explicit `--mpegts-max-pcr-gap-ms`. A value of `1000` is the verified starting point for FFmpeg `-re` loopback sources; stricter values intentionally make PCR-gap generation reacquisition more sensitive.
+Hardware backend and realtime low-latency behavior are planner-owned and have no
+caller override; the highest-scoring capability-admitted chain is selected or the
+request fails before runtime. `--quiet-graph` only controls diagnostics.
+`udp://host:port` remains valid for UDP-carried RTP input in RTP-port mode;
+MPEG-TS input uses `--input-type mpegts-udp` and requires an explicit
+`--mpegts-max-pcr-gap-ms`. URL input uses `--input-type url`; `rtsp://` URLs
+require `--rtsp-transport`, while non-RTSP URLs reject it.
 
 ## Production acceptance
 

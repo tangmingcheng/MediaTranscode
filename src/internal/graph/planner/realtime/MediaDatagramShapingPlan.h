@@ -11,26 +11,6 @@
 
 namespace media::ffmpeg::graph {
 
-enum class MediaDatagramSubmitMode {
-    Unknown = 0,
-    NonBlockingAtomicEnqueue = 1
-};
-
-enum class MediaDatagramOrderingMode {
-    Unknown = 0,
-    CanonicalOrdered = 1
-};
-
-enum class MediaDatagramLimitFailureMode {
-    Unknown = 0,
-    Terminate = 1
-};
-
-enum class MediaDatagramPersistentStateMode {
-    Unknown = 0,
-    PreserveScopeDebt = 1
-};
-
 enum class MediaDatagramTransmitEvidenceKind {
     Unknown = 0,
     TransmitTimestamp = 1
@@ -91,8 +71,6 @@ struct MediaDatagramServiceCurvePlan final {
     std::uint64_t pacingWireBytesPerSecond;
     std::uint64_t maximumWireBytesPerSecond;
     std::uint64_t burstWireBytes;
-    MediaRunningTime targetResidence;
-    MediaRunningTime maximumReleaseJitter;
     std::string authority;
 
     friend bool operator==(const MediaDatagramServiceCurvePlan&,
@@ -166,11 +144,6 @@ struct MediaDatagramShapingPlanEncoding final {
     MediaDatagramBacklogPlan backlog;
     MediaDatagramBatchPlan batch;
     MediaDatagramNetworkMemoryPlan networkMemory;
-    MediaDatagramSubmitMode submitMode;
-    MediaDatagramOrderingMode orderingMode;
-    MediaDatagramLimitFailureMode pressureFailureMode;
-    MediaDatagramLimitFailureMode deadlineFailureMode;
-    MediaDatagramPersistentStateMode persistentStateMode;
     std::optional<MediaDatagramTransmitEvidencePlan> evidence;
 
     friend bool operator==(const MediaDatagramShapingPlanEncoding&,
@@ -201,11 +174,6 @@ public:
     const MediaDatagramBacklogPlan& backlog() const noexcept;
     const MediaDatagramBatchPlan& batch() const noexcept;
     const MediaDatagramNetworkMemoryPlan& networkMemory() const noexcept;
-    MediaDatagramSubmitMode submitMode() const noexcept;
-    MediaDatagramOrderingMode orderingMode() const noexcept;
-    MediaDatagramLimitFailureMode pressureFailureMode() const noexcept;
-    MediaDatagramLimitFailureMode deadlineFailureMode() const noexcept;
-    MediaDatagramPersistentStateMode persistentStateMode() const noexcept;
     const std::optional<MediaDatagramTransmitEvidencePlan>&
     evidence() const noexcept;
     ::media::Result<MediaDatagramPlannedWireCost> plannedWireCost(

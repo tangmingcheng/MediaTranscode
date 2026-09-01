@@ -23,10 +23,6 @@ struct MediaRealtimeVideoStartupPlan final {
     std::uint64_t byteCapacity;
 };
 
-enum class MediaRealtimeVideoTimestampAuthority {
-    DecodeTimestamp
-};
-
 enum class MediaRealtimeVideoPacketTimingMode {
     PacketDuration,
     PlannedCadence
@@ -37,7 +33,6 @@ struct MediaRealtimeVideoTimingPlan final {
     MediaRational outputFrameRate;
     MediaRational scheduledPacketTimeBase;
     MediaRealtimeVideoPacketTimingMode packetTimingMode;
-    MediaRealtimeVideoTimestampAuthority timestampAuthority;
 };
 
 struct MediaRealtimeVideoSchedulingPlan final {

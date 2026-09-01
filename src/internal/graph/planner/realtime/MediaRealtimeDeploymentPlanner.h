@@ -2,7 +2,6 @@
 
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
-#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
 
@@ -28,7 +27,6 @@ public:
         const MediaPreparedRealtimeEmissionSet& emission);
 
     static ::media::Result<MediaRealtimeDeploymentEnvelope> complete(
-        const MediaRealtimeGraphResourceLedgerPlan& graphResources,
         MediaRealtimeDeploymentBasePlan base);
 
 private:

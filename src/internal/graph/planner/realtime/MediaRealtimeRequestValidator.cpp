@@ -10,11 +10,10 @@ namespace {
 
 ::media::Status validateClassification(const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (!request.input.type || !request.input.streamLayout || !request.output.streamLayout ||
-        !request.output.transport) {
+    if (!request.input.type || !request.output.streamLayout || !request.output.transport) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Realtime input type, input/output stream layouts, and output transport must be explicit"));
+                "Realtime input type, output stream layout, and output transport must be explicit"));
     }
     const bool supportedInput =
         MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
@@ -22,7 +21,7 @@ namespace {
         MediaRealtimeRequestClassifier::mpegTsUdpInput(request);
     if (!supportedInput) {
         return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "Realtime input type and input layout combination is not supported"));
+            "Realtime input type is not supported"));
     }
     const bool supportedOutput =
         (MediaRealtimeRequestClassifier::separateStreamsOutput(request) &&
@@ -99,6 +98,44 @@ bool audioTranscodeControlSpecified(
     return ::media::Status::success();
 }
 
+::media::Status validateVideoEncodingIntent(
+    const MediaRealtimeVideoTranscodeParameters& video)
+{
+    if (!video.gop || *video.gop <= 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime video GOP must be an explicit positive frame count"));
+    }
+    if (video.rateControl != MediaRateControlMode::Cbr &&
+        video.rateControl != MediaRateControlMode::Vbr) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime video rate control must be explicit CBR or VBR"));
+    }
+    if (video.rateControl == MediaRateControlMode::Cbr) {
+        if (!video.bitrateKbps || *video.bitrateKbps <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Realtime video CBR requires a positive target bitrate"));
+        }
+        if (video.minBitrateKbps || video.maxBitrateKbps) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Realtime video CBR accepts only target bitrate"));
+        }
+        return ::media::Status::success();
+    }
+    if (!video.minBitrateKbps || !video.bitrateKbps ||
+        !video.maxBitrateKbps ||
+        *video.minBitrateKbps <= 0 || *video.bitrateKbps <= 0 ||
+        *video.maxBitrateKbps <= 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime video VBR requires positive minimum, target, and maximum bitrates"));
+    }
+    if (*video.minBitrateKbps > *video.bitrateKbps ||
+        *video.bitrateKbps > *video.maxBitrateKbps) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime video VBR requires minimum <= target <= maximum bitrate"));
+    }
+    return ::media::Status::success();
+}
+
 } // namespace
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
@@ -107,13 +144,16 @@ bool audioTranscodeControlSpecified(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Realtime media identity must be explicit"));
     }
+    if (auto status = validateVideoEncodingIntent(request.parameters.video); !status) {
+        return status;
+    }
     if (auto status = validateStreamSetControls(request); !status) return status;
     if (auto status = validateClassification(request); !status) return status;
     if (auto status = validateDeploymentFacts(request); !status) return status;
     if ((MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
          MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) && request.input.url.empty()) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP input URL must be explicit"));
+            ::media::ErrorInfo::invalidArgument("Realtime input URL must be explicit"));
     }
     if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
         if (request.output.host.empty() || !request.output.basePort) {
@@ -130,9 +170,14 @@ bool audioTranscodeControlSpecified(
             return ::media::Status::failure(
                 ::media::ErrorInfo::unsupported("Realtime URL input does not accept raw RTP, UDP, or SDP URLs"));
         }
-        if (request.input.rtspTransport.empty()) {
+        if (isRtspUrl(request.input.url) && request.input.rtspTransport.empty()) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Realtime URL input requires explicit RTSP transport"));
+        }
+        if (!isRtspUrl(request.input.url) && !request.input.rtspTransport.empty()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Non-RTSP realtime URL input rejects RTSP transport"));
         }
     }
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request) && !isUdpUrl(request.input.url)) {

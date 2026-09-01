@@ -193,18 +193,10 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
         encoding.serviceCurve.maximumWireBytesPerSecond <
             encoding.serviceCurve.pacingWireBytesPerSecond ||
         encoding.serviceCurve.burstWireBytes == 0 ||
-        encoding.serviceCurve.targetResidence <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        encoding.serviceCurve.maximumReleaseJitter <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        encoding.serviceCurve.maximumReleaseJitter >=
-            encoding.serviceCurve.targetResidence ||
         encoding.backlog.maximumDatagrams == 0 ||
         encoding.backlog.maximumBytes == 0 ||
         encoding.backlog.maximumResidence <=
             MediaRunningTime::fromNanoseconds(0) ||
-        encoding.serviceCurve.targetResidence >
-            encoding.backlog.maximumResidence ||
         encoding.batch.maximumDatagrams == 0 ||
         encoding.batch.maximumBytes == 0 ||
         encoding.batch.maximumDatagrams > encoding.backlog.maximumDatagrams ||
@@ -216,20 +208,10 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
             encoding.networkMemory.maximumTotalBytes ||
         encoding.networkMemory.maximumSocketBytes >
             encoding.networkMemory.maximumTotalBytes -
-                encoding.networkMemory.reservedUserspaceBytes ||
-        encoding.submitMode !=
-            MediaDatagramSubmitMode::NonBlockingAtomicEnqueue ||
-        encoding.orderingMode != MediaDatagramOrderingMode::CanonicalOrdered ||
-        encoding.pressureFailureMode !=
-            MediaDatagramLimitFailureMode::Terminate ||
-        encoding.deadlineFailureMode !=
-            MediaDatagramLimitFailureMode::Terminate ||
-        encoding.persistentStateMode !=
-            MediaDatagramPersistentStateMode::PreserveScopeDebt) {
+                encoding.networkMemory.reservedUserspaceBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "datagram shaping plan requires complete scope, service, resource, "
-            "and "
-            "failure facts"));
+            "and backlog facts"));
     }
 
     std::unordered_set<std::uint64_t> endpointIds;
@@ -363,35 +345,6 @@ const MediaDatagramNetworkMemoryPlan&
 MediaDatagramShapingPlan::networkMemory() const noexcept
 {
     return m_encoding.networkMemory;
-}
-
-MediaDatagramSubmitMode MediaDatagramShapingPlan::submitMode() const noexcept
-{
-    return m_encoding.submitMode;
-}
-
-MediaDatagramOrderingMode
-MediaDatagramShapingPlan::orderingMode() const noexcept
-{
-    return m_encoding.orderingMode;
-}
-
-MediaDatagramLimitFailureMode
-MediaDatagramShapingPlan::pressureFailureMode() const noexcept
-{
-    return m_encoding.pressureFailureMode;
-}
-
-MediaDatagramLimitFailureMode
-MediaDatagramShapingPlan::deadlineFailureMode() const noexcept
-{
-    return m_encoding.deadlineFailureMode;
-}
-
-MediaDatagramPersistentStateMode
-MediaDatagramShapingPlan::persistentStateMode() const noexcept
-{
-    return m_encoding.persistentStateMode;
 }
 
 const std::optional<MediaDatagramTransmitEvidencePlan>&

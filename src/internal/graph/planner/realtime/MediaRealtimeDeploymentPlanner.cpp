@@ -750,7 +750,6 @@ MediaRealtimeDeploymentPlanner::planBase(
 
 ::media::Result<MediaRealtimeDeploymentEnvelope>
 MediaRealtimeDeploymentPlanner::complete(
-    const MediaRealtimeGraphResourceLedgerPlan& graphResources,
     MediaRealtimeDeploymentBasePlan base)
 {
     const auto& wire = base.admittedWire;
@@ -766,10 +765,8 @@ MediaRealtimeDeploymentPlanner::complete(
     }
     MediaRealtimeDeploymentManagedServiceFact service{
         base.provisionedWireCapacityBytesPerSecond,
-        pacingRate.value(),
-        wire.maximumWireDatagramBytes,
         wire.authority +
-            "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket+managed-no-runtime-capacity-fallback"};
+            "+caller-provisioned-egress+prepared-wire-capacity-admission+managed-no-runtime-capacity-fallback"};
     auto residenceDatagrams = MediaCheckedArithmetic::bytesForResidence(
         wire.peakDatagramsPerSecond,
         base.latency.maximumResidence.nanoseconds(),
@@ -804,10 +801,7 @@ MediaRealtimeDeploymentPlanner::complete(
     }
     MediaRealtimeDeploymentEnvelopeEncoding encoding{
         std::move(base.serviceScope), std::move(base.mtu), std::move(service),
-        {graphResources.resourceScope,
-         graphResources.maximumGraphPayloadAndReservedStorageBytes,
-         totalNetwork.value(), network.value().admittedSocketBytes,
-         "prepared-graph-and-wire-resource-ledgers"},
+        {totalNetwork.value(), "prepared-wire-resource-ledger"},
         std::move(base.localPorts), std::move(base.latency),
         std::move(base.observation), std::move(base.transportTiming),
         std::move(base.rtcpSession)};

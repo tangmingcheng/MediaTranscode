@@ -86,17 +86,13 @@ MediaDatagramTransportPlanTemplate::create(
         return Result::failure(
             ::media::ErrorInfo::invalidArgument(out.str()));
     }
-    if (facts.service.pacingWireBytesPerSecond < pacingRate.value() ||
-        facts.service.burstWireBytes <
-            wireTraffic.maximumWireDatagramBytes) {
+    if (pacingRate.value() >
+        facts.service.provisionedCapacityWireBytesPerSecond) {
         std::ostringstream out;
-        out << "Datagram prepared wire demand exceeds its admitted service envelope: required_rate="
+        out << "Datagram final wire pacing demand exceeds its provisioned service capacity: required_rate="
             << pacingRate.value()
-            << " admitted_rate="
-            << facts.service.pacingWireBytesPerSecond
-            << " admitted_burst=" << facts.service.burstWireBytes
-            << " maximum_datagram="
-            << wireTraffic.maximumWireDatagramBytes;
+            << " provisioned_capacity="
+            << facts.service.provisionedCapacityWireBytesPerSecond;
         return Result::failure(
             ::media::ErrorInfo::invalidArgument(out.str()));
     }
@@ -137,7 +133,7 @@ MediaDatagramTransportPlanTemplate::create(
         return Result::success(MediaDatagramTransportPlanTemplate(
             MediaDatagramTransportPlanTemplateEncoding{
                 std::move(sessionKey), facts, std::move(remoteEndpoints),
-                std::move(wireTraffic), pacingRate.value()}));
+                std::move(wireTraffic)}));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "Datagram transport template"));
@@ -154,6 +150,18 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
     }
     try {
         const auto& deployment = m_encoding.deployment;
+        auto pacingRate =
+            MediaDatagramPacingRatePlanner::requiredWireBytesPerSecond(
+                m_encoding.wireTraffic,
+                deployment.latency.maximumResidence);
+        if (!pacingRate) {
+            return Result::failure(pacingRate.error());
+        }
+        if (pacingRate.value() >
+            deployment.service.provisionedCapacityWireBytesPerSecond) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Datagram activated wire pacing demand exceeds its provisioned service capacity"));
+        }
         const auto endpointCount = static_cast<std::uint64_t>(
             m_encoding.remoteEndpoints.size());
         auto resourceLedger =
@@ -234,16 +242,13 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 std::move(endpointCoverage)},
             std::move(endpoints),
             MediaDatagramServiceCurvePlan{
-                m_encoding.pacingWireBytesPerSecond,
+                pacingRate.value(),
                 deployment.service.provisionedCapacityWireBytesPerSecond,
                 m_encoding.wireTraffic.maximumWireDatagramBytes,
-                deployment.latency.targetResidence,
-                deployment.latency.maximumReleaseJitter,
                 m_encoding.wireTraffic.authority + "+" +
                     deployment.latency.authority + "+" +
-                    deployment.latency.releaseJitterAuthority + "+" +
                     deployment.service.authority +
-                    "+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
+                    "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
             MediaDatagramBacklogPlan{
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,
@@ -255,11 +260,6 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 deployment.resources.maximumNetworkMemoryBytes,
                 resources.admittedNetworkBytes,
                 resources.admittedSocketBytes},
-            MediaDatagramSubmitMode::NonBlockingAtomicEnqueue,
-            MediaDatagramOrderingMode::CanonicalOrdered,
-            MediaDatagramLimitFailureMode::Terminate,
-            MediaDatagramLimitFailureMode::Terminate,
-            MediaDatagramPersistentStateMode::PreserveScopeDebt,
             std::move(evidence)};
         auto decoded = MediaDatagramShapingPlan::decode(std::move(shaping));
         if (!decoded) return Result::failure(decoded.error());

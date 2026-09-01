@@ -200,25 +200,10 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(
             ::media::ErrorInfo::notInitialized(
                 "Realtime output GOP must be an explicit positive encoding request"));
     }
-    if (planned.bitrateKbps && *planned.bitrateKbps < 0) {
+    if (!planned.bitrateKbps || *planned.bitrateKbps <= 0) {
         return ::media::Result<MediaVideoTranscodeParameters>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be non-negative"));
-    }
-    if (!planned.bitrateKbps) {
-        if (inputInfo.bitrateBitsPerSecond <= 0) {
-            return ::media::Result<MediaVideoTranscodeParameters>::failure(
-                ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate is required when input bitrate is not observable"));
-        }
-        const int64_t sourceBitrateKbps = (inputInfo.bitrateBitsPerSecond + 999) / 1000;
-        if (sourceBitrateKbps > std::numeric_limits<int>::max()) {
-            return ::media::Result<MediaVideoTranscodeParameters>::failure(
-                ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate is too large"));
-        }
-        planned.bitrateKbps = static_cast<int>(sourceBitrateKbps);
-    }
-    if (planned.bitrateKbps && *planned.bitrateKbps == 0) {
-        return ::media::Result<MediaVideoTranscodeParameters>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be positive"));
+            ::media::ErrorInfo::notInitialized(
+                "Realtime video target bitrate was not validated"));
     }
     if (!planned.frameRate.specified()) {
         if (!inputInfo.frameRate.isKnown()) {
@@ -383,18 +368,14 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 } // namespace
 
 MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
-    std::string selectedDemuxFormat,
     std::size_t selectedPacketSize,
     std::size_t selectedAvioBufferBytes,
-    std::size_t selectedMaximumDatagramBytes,
     std::size_t selectedEvidenceTimelineCapacity,
     std::uint64_t selectedMaximumPacketPositionRegressionBytes,
     std::size_t selectedPesProvenanceCapacity,
     MediaTsPacketOriginPolicy selectedPacketOriginPolicy) noexcept
-    : demuxFormat(std::move(selectedDemuxFormat)),
-      packetSize(selectedPacketSize),
+    : packetSize(selectedPacketSize),
       avioBufferBytes(selectedAvioBufferBytes),
-      maximumDatagramBytes(selectedMaximumDatagramBytes),
       evidenceTimelineCapacity(selectedEvidenceTimelineCapacity),
       maximumPacketPositionRegressionBytes(
           selectedMaximumPacketPositionRegressionBytes),
@@ -542,7 +523,7 @@ preparedVideoSurfaceFacts(
     }
     return ::media::Result<MediaRealtimeTsInputPolicy>::success(
         MediaRealtimeTsInputPolicy(
-            "mpegts", packetSize, 65'535, 65'535,
+            packetSize, 65'535,
             evidenceTimelineCapacity,
             maximumPacketPositionRegressionBytes,
             static_cast<std::size_t>(
@@ -602,15 +583,11 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     Retention selectedRetention,
     std::uint64_t selectedInitialSourceGeneration,
     std::uint64_t selectedInitialRawTransportGeneration) noexcept
-    : demuxFormat(std::move(policy.demuxFormat)),
-      packetSize(policy.packetSize),
-      avioBufferBytes(policy.avioBufferBytes),
-      maximumDatagramBytes(policy.maximumDatagramBytes),
+    : packetSize(policy.packetSize),
       evidenceTimelineCapacity(policy.evidenceTimelineCapacity),
       maximumPacketPositionRegressionBytes(
           policy.maximumPacketPositionRegressionBytes),
       pesProvenanceCapacity(policy.pesProvenanceCapacity),
-      packetOriginPolicy(policy.packetOriginPolicy),
       selectedProgram(std::move(selected)),
       maximumPcrGap27Mhz(selectedMaximumPcrGap27Mhz),
       projectionCapacity(evidenceTimelineCapacity),
@@ -667,13 +644,9 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                 return videoValid;
             },
             retention);
-    if (demuxFormat != "mpegts" || packetSize != 188 ||
-        avioBufferBytes == 0 || maximumDatagramBytes == 0 ||
-        maximumDatagramBytes > avioBufferBytes ||
-        evidenceTimelineCapacity == 0 ||
+    if (packetSize != 188 || evidenceTimelineCapacity == 0 ||
         maximumPacketPositionRegressionBytes == 0 ||
         pesProvenanceCapacity == 0 ||
-        packetOriginPolicy != MediaTsPacketOriginPolicy::PerStreamPesCarry ||
         !MediaTsProgramContractValidator::validateSelectedProgram(
             selectedProgram) ||
         maximumPcrGap27Mhz <= 0 || projectionCapacity == 0 ||
@@ -959,7 +932,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         resourceLedger = std::move(admitted);
     }
     auto deployment = MediaRealtimeDeploymentPlanner::complete(
-        resourceLedger.value(), std::move(deploymentBase).value());
+        std::move(deploymentBase).value());
     if (!deployment) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             deployment.error());
@@ -968,7 +941,11 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     MediaRealtimeRtpTranscodePlanningDraft plan;
     plan.deployment = std::move(plannedDeployment);
     plan.inputType = *options.input.type;
-    plan.inputLayout = *options.input.streamLayout;
+    plan.inputLayout = MediaRealtimeRequestClassifier::rawRtpInput(options)
+        ? RealtimeInputStreamLayout::SeparateStreams
+        : MediaRealtimeRequestClassifier::mpegTsUdpInput(options)
+            ? RealtimeInputStreamLayout::MuxedTransportStream
+            : RealtimeInputStreamLayout::SessionDescribed;
     plan.outputLayout = *options.output.streamLayout;
     plan.outputTransport = *options.output.transport;
     plan.videoPlan = std::move(videoPlan);

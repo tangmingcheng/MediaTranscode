@@ -447,8 +447,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 sourceTimeBase,
                 outputFrameRate,
                 scheduledPacketTimeBase,
-                packetTimingMode,
-                MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
+                packetTimingMode},
             MediaRealtimeVideoSchedulingPlan{
                 true, *activationOutputLead, *transportLead,
                 protocolPreparationLead,

@@ -35,9 +35,7 @@ namespace media::ffmpeg::graph {
         runtime.timing.outputFrameRate.den <= 0 ||
         !runtime.timing.scheduledPacketTimeBase.isKnown() ||
         runtime.timing.scheduledPacketTimeBase.num <= 0 ||
-        runtime.timing.scheduledPacketTimeBase.den <= 0 ||
-        runtime.timing.timestampAuthority !=
-            MediaRealtimeVideoTimestampAuthority::DecodeTimestamp) {
+        runtime.timing.scheduledPacketTimeBase.den <= 0) {
         return invalid("timing authority");
     }
     const bool sourceTiming = outer.videoPlan.branchMode ==

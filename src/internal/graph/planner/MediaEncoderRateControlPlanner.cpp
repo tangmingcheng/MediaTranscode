@@ -72,6 +72,10 @@ bool equalAsciiInsensitive(std::string_view left, std::string_view right)
 ::media::Status applyRkmppCbrEmissionBounds(
     MediaEncoderRateControlPlan& plan)
 {
+    // Rockchip MPP's CBR contract uses the same narrow bounds in
+    // utils/mpi_enc_utils.c: target * 15 / 16 through target * 17 / 16.
+    // The opened encoder readback is validated before this becomes an
+    // emission fact; these values are not a sender-side headroom heuristic.
     constexpr std::int64_t RateScale = 16;
     constexpr std::int64_t MinimumRateNumerator = 15;
     constexpr std::int64_t MaximumRateNumerator = 17;

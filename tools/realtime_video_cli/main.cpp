@@ -1,5 +1,6 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
+#include "RealtimeVideoCliArgumentContract.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
 
@@ -32,7 +33,7 @@ struct RealtimeVideoRuntimeOptions {
 RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
 {
     const std::string value = requiredArg(argc, argv, "--input-type");
-    if (value == "rtsp") {
+    if (value == "url") {
         return RealtimeInputType::Url;
     }
     if (value == "rtp") {
@@ -42,21 +43,6 @@ RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
         return RealtimeInputType::MpegTsUdp;
     }
     throw std::invalid_argument("unsupported --input-type: " + value);
-}
-
-RealtimeInputStreamLayout requiredRealtimeInputLayout(int argc, char** argv)
-{
-    const std::string value = requiredArg(argc, argv, "--input-layout");
-    if (value == "session") {
-        return RealtimeInputStreamLayout::SessionDescribed;
-    }
-    if (value == "separate") {
-        return RealtimeInputStreamLayout::SeparateStreams;
-    }
-    if (value == "mpegts") {
-        return RealtimeInputStreamLayout::MuxedTransportStream;
-    }
-    throw std::invalid_argument("unsupported --input-layout: " + value);
 }
 
 RealtimeOutputStreamLayout requiredRealtimeOutputLayout(int argc, char** argv)
@@ -104,7 +90,6 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--channels",
         "--media-id",
         "--input-type",
-        "--input-layout",
         "--output-layout",
         "--output-transport",
         "--egress-capacity-bps",
@@ -141,19 +126,17 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
     rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
 }
 
-void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& input)
+void parseRealtimeInputOptions(
+    int argc,
+    char** argv,
+    RealtimeInputType inputType,
+    MediaRealtimeInputConfig& input)
 {
-    input.type = requiredRealtimeInputType(argc, argv);
-    input.streamLayout = requiredRealtimeInputLayout(argc, argv);
+    input.type = inputType;
     input.openTimeoutMs = requiredIntArg(argc, argv, "--open-timeout-ms");
     input.readTimeoutMs = requiredIntArg(argc, argv, "--read-timeout-ms");
     input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
     input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
-
-    if (*input.type != RealtimeInputType::MpegTsUdp &&
-        hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
-        throw std::invalid_argument("--mpegts-max-pcr-gap-ms is valid only for mpegts-udp input");
-    }
 
     if (*input.type == RealtimeInputType::RtpPort) {
         input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
@@ -168,7 +151,8 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
 
     input.url = requiredArg(argc, argv, "--input");
     if (*input.type == RealtimeInputType::Url) {
-        input.rtspTransport = requiredArg(argc, argv, "--rtsp-transport");
+        input.rtspTransport = parseUrlInputRtspTransport(
+            argc, argv, input.url);
         return;
     }
     const int maximumPcrGapMs = requiredIntArg(argc, argv, "--mpegts-max-pcr-gap-ms");
@@ -179,10 +163,15 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
         static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
 }
 
-void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig& output)
+void parseRealtimeOutputOptions(
+    int argc,
+    char** argv,
+    RealtimeOutputStreamLayout outputLayout,
+    MediaOutputTransportKind outputTransport,
+    MediaRealtimeOutputConfig& output)
 {
-    output.streamLayout = requiredRealtimeOutputLayout(argc, argv);
-    output.transport = requiredRealtimeOutputTransport(argc, argv);
+    output.streamLayout = outputLayout;
+    output.transport = outputTransport;
     if (*output.transport == MediaOutputTransportKind::RtpAvp) {
         output.host = requiredArg(argc, argv, "--rtp-host");
         output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
@@ -222,6 +211,40 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
     rejectUnknownRealtimeArgs(argc, argv);
 
+    MediaTranscodeParameterSet parsedTranscode;
+    parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
+    if (!hasArg(argc, argv, "--rc")) {
+        throw std::invalid_argument("missing required argument: --rc");
+    }
+    if (parsedTranscode.video.rateControl != MediaRateControlMode::Cbr &&
+        parsedTranscode.video.rateControl != MediaRateControlMode::Vbr) {
+        throw std::invalid_argument(
+            "realtime video --rc must be cbr or vbr");
+    }
+    if (!parsedTranscode.video.bitrateKbps) {
+        throw std::invalid_argument(
+            "missing required integer argument: --bitrate");
+    }
+    if (*parsedTranscode.video.bitrateKbps <= 0) {
+        throw std::invalid_argument(
+            "realtime video --bitrate must be positive");
+    }
+    if (!parsedTranscode.video.gop) {
+        throw std::invalid_argument(
+            "missing required integer argument: --gop");
+    }
+    if (*parsedTranscode.video.gop <= 0) {
+        throw std::invalid_argument(
+            "realtime video --gop must be positive");
+    }
+    const RealtimeInputType inputType = requiredRealtimeInputType(argc, argv);
+    const RealtimeOutputStreamLayout outputLayout =
+        requiredRealtimeOutputLayout(argc, argv);
+    const MediaOutputTransportKind outputTransport =
+        requiredRealtimeOutputTransport(argc, argv);
+    rejectIrrelevantRealtimeArgs(
+        argc, argv, inputType, outputTransport);
+
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
     options.deployment.provisionedEgressCapacityBitsPerSecond =
@@ -237,10 +260,9 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.deployment.maximumWireResidence =
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
             maximumWireResidenceMs * 1'000'000));
-    parseRealtimeInputOptions(argc, argv, options.input);
-    parseRealtimeOutputOptions(argc, argv, options.output);
-    MediaTranscodeParameterSet parsedTranscode;
-    parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
+    parseRealtimeInputOptions(argc, argv, inputType, options.input);
+    parseRealtimeOutputOptions(
+        argc, argv, outputLayout, outputTransport, options.output);
     options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
     options.parameters.execution.diagnosticLogEnabled =
         parsedTranscode.execution.diagnosticLogEnabled;
@@ -380,7 +402,8 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --maximum-wire-residence-ms MS --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type url|rtp|mpegts-udp --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --maximum-wire-residence-ms MS [--max-duration SECONDS] [options]\n";
+        std::cout << "Realtime video encoding: --rc cbr requires positive --bitrate; --rc vbr requires positive --min-bitrate, --bitrate, and --max-bitrate; --gop is always a required positive frame count.\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         return helpRequested ? 0 : 2;

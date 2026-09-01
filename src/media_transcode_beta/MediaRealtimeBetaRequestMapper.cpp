@@ -62,13 +62,11 @@ MediaRealtimeBetaRequestMapper::map(
     ffmpeg::graph::MediaRealtimeRtpTranscodeRequest request;
     request.mediaId = config.mediaId();
     request.input.type = ffmpeg::graph::RealtimeInputType::RtpPort;
-    request.input.streamLayout = profile.inputLayout;
-    request.input.url = rtpUrl(config);
     request.input.openTimeoutMs = profile.openTimeoutMs;
     request.input.readTimeoutMs = profile.readTimeoutMs;
     request.input.analyzeDurationUs = profile.analyzeDurationUs;
     request.input.probeSizeBytes = profile.probeSizeBytes;
-    request.input.videoRtp.url = request.input.url;
+    request.input.videoRtp.url = rtpUrl(config);
     request.input.videoRtp.codecName = std::move(inputCodec).value();
     request.input.videoRtp.payloadType = static_cast<int>(config.inputPayloadType());
     request.input.videoRtp.clockRate = static_cast<int>(config.inputClockRate());

@@ -160,15 +160,8 @@ std::optional<int> resolvedAudioBitrateKbps(
         deployment.mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes);
     auto packetSize = checkedSocketInteger(
         maximumDatagram, "planned maximum Datagram payload");
-    if (!packetSize ||
-        deployment.service.pacingWireBytesPerSecond >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-        deployment.service.burstWireBytes >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-        return ::media::Status::failure(
-            !packetSize ? packetSize.error() :
-            ::media::ErrorInfo::invalidArgument(
-                "deployment service curve exceeds the runtime numeric range"));
+    if (!packetSize) {
+        return ::media::Status::failure(packetSize.error());
     }
     if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
         output.muxedOutput.url = urls.muxed;

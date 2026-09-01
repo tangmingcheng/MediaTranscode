@@ -107,7 +107,6 @@ MediaTsDemuxNodePlanDecoder::decode(
             if constexpr (std::is_same_v<
                               Binding, MediaTsVideoOnlyRuntimeBinding>) {
                 return ::media::Result<MediaTsDemuxNodeRuntimePlan>::success({
-                    gap.value(),
                     static_cast<std::size_t>(packetStride.value()),
                     static_cast<std::size_t>(evidenceCapacity.value()),
                     static_cast<std::size_t>(projectionCapacity.value()),
@@ -131,7 +130,6 @@ MediaTsDemuxNodePlanDecoder::decode(
                         audioRetention.error());
                 }
                 return ::media::Result<MediaTsDemuxNodeRuntimePlan>::success({
-                    gap.value(),
                     static_cast<std::size_t>(packetStride.value()),
                     static_cast<std::size_t>(evidenceCapacity.value()),
                     static_cast<std::size_t>(projectionCapacity.value()),

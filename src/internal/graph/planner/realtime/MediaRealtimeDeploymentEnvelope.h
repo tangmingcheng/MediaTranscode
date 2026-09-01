@@ -19,18 +19,8 @@ struct MediaRealtimeDeploymentServiceScope final {
                            const MediaRealtimeDeploymentServiceScope&) = default;
 };
 
-enum class MediaRealtimeGraphResourceBudgetScope : std::uint8_t {
-    Unknown = 0,
-    EngineManagedPayloadAndReservedStorage = 1,
-    EngineManagedPayloadAndReservedStoragePlusDevice = 2
-};
-
 struct MediaRealtimeDeploymentResourceBudget final {
-    MediaRealtimeGraphResourceBudgetScope graphResourceScope =
-        MediaRealtimeGraphResourceBudgetScope::Unknown;
-    std::uint64_t maximumGraphPayloadAndReservedStorageBytes = 0;
     std::uint64_t maximumNetworkMemoryBytes = 0;
-    std::uint64_t maximumSocketMemoryBytes = 0;
     std::string authority;
     friend bool operator==(const MediaRealtimeDeploymentResourceBudget&,
                            const MediaRealtimeDeploymentResourceBudget&) = default;
@@ -85,8 +75,6 @@ struct MediaRealtimeDeploymentMtuFact final {
 
 struct MediaRealtimeDeploymentManagedServiceFact final {
     std::uint64_t provisionedCapacityWireBytesPerSecond = 0;
-    std::uint64_t pacingWireBytesPerSecond = 0;
-    std::uint64_t burstWireBytes = 0;
     std::string authority;
     friend bool operator==(const MediaRealtimeDeploymentManagedServiceFact&,
                            const MediaRealtimeDeploymentManagedServiceFact&) = default;

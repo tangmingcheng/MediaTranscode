@@ -15,6 +15,7 @@ struct MediaRtpUrlEndpoint {
 
 std::string redactUrlUserInfo(const std::string& url);
 bool isUdpUrl(const std::string& url);
+bool isRtspUrl(const std::string& url);
 bool isUnsupportedRealtimeInputUrl(const std::string& url);
 ::media::Result<MediaRtpUrlEndpoint> parseRtpUdpUrlEndpoint(const std::string& url);
 
