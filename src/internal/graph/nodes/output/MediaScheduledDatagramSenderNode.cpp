@@ -194,12 +194,16 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     case MediaDatagramTransportExecutionKind::UserspaceNonblocking:
         mode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
         break;
+    case MediaDatagramTransportExecutionKind::LinuxFqSocketPacing:
+        mode = MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing;
+        break;
     default:
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender execution mode is unknown"));
     }
     MediaDatagramTransmitExecutionPlan execution{
-        mode, plan.executionAuthority, std::nullopt};
+        mode, plan.executionAuthority, std::nullopt,
+        plan.kernelSocketPacingRateBytesPerSecond};
     auto shaping = plan.shaping.clone();
     if (!shaping) return ::media::Status::failure(shaping.error());
     if (auto valid = MediaDatagramTransmitSession::validateActivation(
@@ -733,6 +737,8 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
         diagnostic << "scheduled_datagram_sender stage=" << stage
                    << " generation=" << m_generation.value_or(0)
                    << " service_scope=" << m_serviceScopeId
+                   << " execution_mode="
+                   << static_cast<int>(m_executionMode)
                    << " committed_batches=" << m_batches
                    << " committed_datagrams=" << m_datagrams
                    << " committed_payload_bytes=" << m_bytes
@@ -819,6 +825,10 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                     << capabilities->effectiveSendBufferBytes
                     << " endpoint_" << endpointId << "_timestamp_source="
                     << static_cast<int>(capabilities->timestampSource)
+                    << " endpoint_" << endpointId
+                    << "_kernel_socket_pacing_rate_bytes_per_second="
+                    << capabilities->kernelSocketPacingRateBytesPerSecond
+                           .value_or(0)
                     << " endpoint_" << endpointId << "_committed_datagrams="
                     << m_endpointDatagrams[endpointId]
                     << " endpoint_" << endpointId << "_committed_payload_bytes="

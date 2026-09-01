@@ -7,6 +7,17 @@
 #include <unordered_set>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool isSupportedExecutionMode(
+    MediaDatagramTransmitExecutionMode mode) noexcept
+{
+    return mode == MediaDatagramTransmitExecutionMode::UserspaceNonblocking ||
+           mode == MediaDatagramTransmitExecutionMode::LinuxSocketTxTime ||
+           mode == MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing;
+}
+
+} // namespace
 
 MediaDatagramTransmitSession::MediaDatagramTransmitSession(
     std::string sessionKey,
@@ -29,15 +40,17 @@ MediaDatagramTransmitSession::~MediaDatagramTransmitSession() noexcept
     const std::vector<MediaDatagramTransmitEndpointBinding>& bindings,
     const MediaDatagramTransmitExecutionPlan& execution)
 {
-    if ((execution.mode !=
-             MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
-         execution.mode !=
-             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
+    if (!isSupportedExecutionMode(execution.mode) ||
         execution.authority.empty() ||
         bindings.size() != plan.endpoints().size() ||
         (execution.mode ==
              MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
-            execution.kernelSchedule.has_value()) {
+            execution.kernelSchedule.has_value() ||
+        (execution.mode ==
+             MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) !=
+            execution.kernelSocketPacingRateBytesPerSecond.has_value() ||
+        (execution.kernelSocketPacingRateBytesPerSecond &&
+         *execution.kernelSocketPacingRateBytesPerSecond == 0)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid explicit Datagram transmit activation plan"));
     }
@@ -69,15 +82,17 @@ MediaDatagramTransmitSession::create(
 {
     using ResultType =
         ::media::Result<std::unique_ptr<MediaDatagramTransmitSession>>;
-    if ((execution.mode !=
-             MediaDatagramTransmitExecutionMode::UserspaceNonblocking &&
-         execution.mode !=
-             MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) ||
+    if (!isSupportedExecutionMode(execution.mode) ||
         execution.authority.empty() ||
         bindings.size() != plan.endpoints().size() ||
         (execution.mode ==
              MediaDatagramTransmitExecutionMode::LinuxSocketTxTime) !=
             execution.kernelSchedule.has_value() ||
+        (execution.mode ==
+             MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing) !=
+            execution.kernelSocketPacingRateBytesPerSecond.has_value() ||
+        (execution.kernelSocketPacingRateBytesPerSecond &&
+         *execution.kernelSocketPacingRateBytesPerSecond == 0) ||
         (execution.kernelSchedule &&
          (execution.kernelSchedule->authority.empty() ||
           execution.kernelSchedule->maximumCorrelationEntries <
@@ -147,7 +162,8 @@ MediaDatagramTransmitSession::create(
                 plan.sessionKey(), plan.serviceScope().scopeId,
                 plan.generation(), endpoint, local->second,
                 plan.batch().maximumDatagrams, execution.mode,
-                plan.evidence(), execution.kernelSchedule};
+                plan.evidence(), execution.kernelSchedule,
+                execution.kernelSocketPacingRateBytesPerSecond};
             auto opened = port.value()->open(request);
             if (!opened) return ResultType::failure(opened.error());
             if (opened.value().zeroCopyEnabled) {
@@ -177,6 +193,13 @@ MediaDatagramTransmitSession::create(
                 !opened.value().kernelTransmitTimeAvailable) {
                 return ResultType::failure(::media::ErrorInfo::unsupported(
                     "required Linux SO_TXTIME capability is unavailable"));
+            }
+            if (execution.mode ==
+                    MediaDatagramTransmitExecutionMode::LinuxSocketFqPacing &&
+                opened.value().kernelSocketPacingRateBytesPerSecond !=
+                    execution.kernelSocketPacingRateBytesPerSecond) {
+                return ResultType::failure(::media::ErrorInfo::unsupported(
+                    "required Linux SO_MAX_PACING_RATE capability is unavailable"));
             }
             if (plan.evidence() &&
                 plan.evidence()->coverageGapPolicy ==

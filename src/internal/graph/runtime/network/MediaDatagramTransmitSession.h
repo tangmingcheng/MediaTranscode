@@ -22,6 +22,7 @@ struct MediaDatagramTransmitExecutionPlan final {
     MediaDatagramTransmitExecutionMode mode;
     std::string authority;
     std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;
+    std::optional<std::uint64_t> kernelSocketPacingRateBytesPerSecond;
 };
 
 struct MediaDatagramTransmitJobEntry final {

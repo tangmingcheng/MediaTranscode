@@ -152,6 +152,7 @@ public:
             request.executionMode !=
                 MediaDatagramTransmitExecutionMode::UserspaceNonblocking ||
             request.kernelSchedule ||
+            request.kernelSocketPacingRateBytesPerSecond ||
             (request.evidence && request.evidence->lastEvidenceId >
                 (std::numeric_limits<std::uint32_t>::max)())) {
             return ResultType::failure(::media::ErrorInfo::invalidArgument(
@@ -316,7 +317,7 @@ public:
             m_timestampAvailable
                 ? MediaDatagramTransmitCorrelationMode::CallerSelectedUint32
                 : MediaDatagramTransmitCorrelationMode::None,
-            false, false});
+            false, std::nullopt, false});
     }
 
     MediaDatagramTransmitSubmitResult trySubmit(
