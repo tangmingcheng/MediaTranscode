@@ -5,7 +5,7 @@
 - [x] 删除对外 input layout、path MTU、receiver decode lead、hardware backend、queue、packet、pacing、socket 与 batch 内部参数；PMTU、backend、wire envelope 和资源边界由 planner 推导。
 - [x] realtime 视频 RC/GOP/target bitrate 收口为显式产品意图；CBR 仅 target，VBR 为 min/target/max；删除 Auto 与输入码率 fallback。
 - [x] 删除 datagram deployment/transport/shaping 中无执行消费者或重复权威的 mode、pacing、socket 和 latency 副本。
-- [ ] 删除剩余 graph-resource 与 prepared MPEG-TS final-plan 无执行消费者副本，并完成最终 Release 构建与真实链路复验。
+- [x] 删除剩余 graph-resource 与 prepared MPEG-TS final-plan 无执行消费者副本，并完成 Release 全量构建及高、低质量真实链路复验。
 - [ ] 完成独立 RTP、MPEG-TS/UDP 的同 sender 复验及既有 56 链路最终矩阵。
 - [ ] 代码冻结后由两名未参与实现的独立智能体双 PASS，创建 PR，再由新智能体审核 PR。
 
