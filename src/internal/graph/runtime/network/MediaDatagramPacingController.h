@@ -58,6 +58,12 @@ struct MediaDatagramPacingTelemetry final {
     bool counterSaturated = false;
 };
 
+::media::Status validateMediaDatagramPacingContract(
+    const MediaDatagramPacingContract& contract) noexcept;
+bool mediaDatagramPacingContractsDescribeSamePersistentService(
+    const MediaDatagramPacingContract& left,
+    const MediaDatagramPacingContract& right) noexcept;
+
 class MediaDatagramPacingController final {
 public:
     static ::media::Result<std::unique_ptr<MediaDatagramPacingController>>

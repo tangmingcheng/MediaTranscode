@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/planner/realtime/MediaDatagramTransmitExecutionPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
 
@@ -37,6 +38,7 @@ struct MediaDatagramLocalEndpointPlan final {
 
 struct MediaDatagramTransportPlan final {
     MediaDatagramShapingPlan shaping;
+    MediaDatagramTransmitExecutionPlan execution;
     std::vector<MediaDatagramLocalEndpointPlan> localEndpoints;
 };
 

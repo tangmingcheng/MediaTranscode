@@ -264,6 +264,10 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
         if (!decoded) return Result::failure(decoded.error());
         return Result::success(MediaDatagramTransportPlan{
             std::move(decoded).value(),
+            MediaDatagramTransmitExecutionPlan{
+                MediaDatagramTransmitExecutionMode::UserspaceNonblocking,
+                "planner-selected-common-userspace-nonblocking-without-proven-kernel-launch-contract",
+                std::nullopt},
             std::move(localEndpoints)});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

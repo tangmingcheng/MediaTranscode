@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/planner/realtime/MediaDatagramTransmitExecutionPlan.h"
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/runtime/network/MediaUdpDatagramEndpoint.h"
 #include "media_transcode/Result.h"
@@ -14,12 +15,6 @@
 #include <vector>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaDatagramTransmitExecutionMode {
-    Unknown = 0,
-    UserspaceNonblocking = 1,
-    LinuxSocketTxTime = 2
-};
 
 enum class MediaDatagramTransmitAttempt {
     Submitted = 1,
@@ -67,14 +62,6 @@ struct MediaDatagramTransmitError final {
     ::media::ErrorInfo cause;
     MediaDatagramTransmitFailureKind kind;
     std::uint64_t submittedPrefixDatagrams;
-};
-
-struct MediaDatagramTransmitKernelSchedulePlan final {
-    std::string authority;
-    std::uint64_t maximumCorrelationEntries;
-    std::uint64_t maximumRunDatagrams;
-    MediaRunningTime maximumErrorQueueResidence;
-    std::uint64_t maximumScheduleAheadNanoseconds;
 };
 
 struct MediaDatagramTransmitPortCapabilities final {

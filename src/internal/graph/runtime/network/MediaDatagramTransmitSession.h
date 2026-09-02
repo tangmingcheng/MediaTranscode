@@ -18,12 +18,6 @@ struct MediaDatagramTransmitEndpointBinding final {
     MediaUdpDatagramEndpoint localEndpoint;
 };
 
-struct MediaDatagramTransmitExecutionPlan final {
-    MediaDatagramTransmitExecutionMode mode;
-    std::string authority;
-    std::optional<MediaDatagramTransmitKernelSchedulePlan> kernelSchedule;
-};
-
 struct MediaDatagramTransmitJobEntry final {
     std::span<const std::uint8_t> bytes;
     std::uint64_t evidenceId = 0;

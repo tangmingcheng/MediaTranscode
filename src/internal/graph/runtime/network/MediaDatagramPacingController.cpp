@@ -9,19 +9,22 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-bool validContract(const MediaDatagramPacingContract& contract) noexcept
+::media::Status validateMediaDatagramPacingContract(
+    const MediaDatagramPacingContract& contract) noexcept
 {
-    return !contract.sessionKey.empty() && !contract.serviceScopeId.empty() &&
-           contract.generation != 0 && contract.wireBytesPerSecond != 0 &&
-           contract.maximumWireBytesPerSecond >=
-               contract.wireBytesPerSecond &&
-           contract.queueTimeLimit > MediaRunningTime::fromNanoseconds(0);
+    if (contract.sessionKey.empty() || contract.serviceScopeId.empty() ||
+        contract.generation == 0 || contract.wireBytesPerSecond == 0 ||
+        contract.maximumWireBytesPerSecond < contract.wireBytesPerSecond ||
+        contract.queueTimeLimit <= MediaRunningTime::fromNanoseconds(0)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram pacing requires one complete service-scope contract"));
+    }
+    return ::media::Status::success();
 }
 
-bool samePersistentService(const MediaDatagramPacingContract& left,
-                           const MediaDatagramPacingContract& right) noexcept
+bool mediaDatagramPacingContractsDescribeSamePersistentService(
+    const MediaDatagramPacingContract& left,
+    const MediaDatagramPacingContract& right) noexcept
 {
     return left.sessionKey == right.sessionKey &&
            left.serviceScopeId == right.serviceScopeId &&
@@ -30,8 +33,6 @@ bool samePersistentService(const MediaDatagramPacingContract& left,
                right.maximumWireBytesPerSecond &&
            left.queueTimeLimit == right.queueTimeLimit;
 }
-
-} // namespace
 
 MediaDatagramPacingController::MediaDatagramPacingController(
     MediaDatagramPacingContract contract) noexcept
@@ -46,10 +47,8 @@ MediaDatagramPacingController::create(MediaDatagramPacingContract contract)
 {
     using Result =
         ::media::Result<std::unique_ptr<MediaDatagramPacingController>>;
-    if (!validContract(contract)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Datagram pacing requires one complete service-scope contract"));
-    }
+    auto valid = validateMediaDatagramPacingContract(contract);
+    if (!valid) return Result::failure(valid.error());
     auto controller = std::unique_ptr<MediaDatagramPacingController>(
         new (std::nothrow) MediaDatagramPacingController(std::move(contract)));
     if (!controller) {
@@ -62,9 +61,11 @@ MediaDatagramPacingController::create(MediaDatagramPacingContract contract)
 ::media::Status MediaDatagramPacingController::rebind(
     MediaDatagramPacingContract contract)
 {
-    if (!validContract(contract) || m_pending ||
+    auto valid = validateMediaDatagramPacingContract(contract);
+    if (!valid || m_pending ||
         contract.generation <= m_contract.generation ||
-        !samePersistentService(m_contract, contract)) {
+        !mediaDatagramPacingContractsDescribeSamePersistentService(
+            m_contract, contract)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Datagram pacing rejects an active reservation, generation rollback, or service-curve change"));
     }
@@ -193,7 +194,7 @@ MediaDatagramPacingController::reserve(
         submitStartedAt < m_pending->value.notBefore ||
         submitStartedAt >= m_pending->value.notAfter ||
         submitCompletedAt < submitStartedAt ||
-        submitCompletedAt > m_pending->value.notAfter ||
+        submitCompletedAt >= m_pending->value.notAfter ||
         (m_lastObservedTime && submitStartedAt < *m_lastObservedTime)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Datagram pacing submit differs from its active GBRA reservation"));

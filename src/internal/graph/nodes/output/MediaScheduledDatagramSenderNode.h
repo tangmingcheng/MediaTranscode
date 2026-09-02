@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/runtime/network/MediaDatagramPacingController.h"
+#include "internal/graph/runtime/network/MediaDatagramServiceScopeCoordinator.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitSession.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
@@ -60,6 +61,9 @@ private:
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
     ::media::Result<MediaNodeProcessResult> finishAfterEvidenceDrain();
     ::media::Status waitUntil(MediaRunningTime deadline);
+    ::media::Status waitUntilSteady(
+        std::chrono::steady_clock::time_point deadline);
+    ::media::Status reserveServiceScope();
     ::media::Status beginSubmitGroup();
     ::media::Status preflightBatchTelemetry(
         const MediaWireDatagramBatchBuffer& batch) const;
@@ -71,6 +75,10 @@ private:
     ::media::Status recordSubmittedPrefix(
         std::size_t count,
         MediaRunningTime submitCompletedAt);
+    ::media::Status settleServiceScopeFailure(
+        const MediaDatagramTransmitError& error,
+        std::chrono::steady_clock::time_point submitStartedAt,
+        std::chrono::steady_clock::time_point submitCompletedAt);
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
         MediaRunningTime submitStartedAt,
@@ -84,6 +92,10 @@ private:
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_clock;
     std::unique_ptr<MediaDatagramTransmitPortFactory> m_portFactory;
     std::unique_ptr<MediaDatagramPacingController> m_pacingController;
+    std::unique_ptr<MediaDatagramServiceScopeMembership>
+        m_serviceScopeMembership;
+    std::optional<MediaDatagramServiceScopeReservation>
+        m_serviceScopeReservation;
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
     std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
     std::shared_ptr<MediaWireDatagramBatchBuffer> m_pendingBatch;
@@ -92,7 +104,7 @@ private:
     std::optional<std::uint64_t> m_generation;
     std::string m_serviceScopeId;
     MediaDatagramTransmitExecutionMode m_executionMode =
-        MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
+        MediaDatagramTransmitExecutionMode::Unknown;
     std::unordered_map<std::uint64_t, std::uint64_t> m_wireOverheadBytes;
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointDatagrams;
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointBytes;
@@ -121,6 +133,7 @@ private:
     std::size_t m_groupBegin = 0;
     std::size_t m_groupCount = 0;
     std::uint64_t m_groupEndpointId = 0;
+    std::uint64_t m_groupWireBytes = 0;
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     std::optional<::media::ErrorInfo> m_terminalFailure;
