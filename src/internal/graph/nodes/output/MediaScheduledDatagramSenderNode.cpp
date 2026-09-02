@@ -142,7 +142,6 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_groupEndpointId = 0;
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
-    m_groupDeadlineSubmitAttempted = false;
     m_terminalFailure.reset();
     m_wakeup.reset();
     m_stopSource = std::stop_source{};
@@ -330,11 +329,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     if (!pacing) return ::media::Status::failure(pacing.error());
     m_groupNotBefore = pacing.value().notBefore;
     m_groupDeadline = pacing.value().notAfter;
-    if (m_groupNotBefore > m_groupDeadline) {
+    if (m_groupNotBefore >= m_groupDeadline) {
         return ::media::Status::failure(::media::ErrorInfo::ioFailure(
             "scheduled wire job cannot satisfy its GBRA completion deadline"));
     }
-    m_groupDeadlineSubmitAttempted = false;
     return ::media::Status::success();
 }
 
@@ -618,14 +616,10 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         if (m_state == SubmitState::WaitWritableWithinOriginalDeadline) {
             auto now = m_clock->now();
             if (!now) return failTerminal(now.error());
-            if (now.value() > m_groupDeadline) {
+            if (now.value() >= m_groupDeadline) {
                 ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram remained blocked through its original deadline"));
-            }
-            if (now.value() == m_groupDeadline) {
-                m_state = SubmitState::TrySubmit;
-                continue;
             }
             auto remaining = m_groupDeadline.checkedSubtract(now.value());
             if (!remaining) return failTerminal(remaining.error());
@@ -653,18 +647,10 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram submit violated physical service spacing"));
             }
-            if (now.value() > m_groupDeadline) {
+            if (now.value() >= m_groupDeadline) {
                 ++m_deadlineMisses;
                 return failTerminal(::media::ErrorInfo::ioFailure(
                     "scheduled datagram submit exceeded its original deadline"));
-            }
-            if (now.value() == m_groupDeadline) {
-                if (m_groupDeadlineSubmitAttempted) {
-                    ++m_deadlineMisses;
-                    return failTerminal(::media::ErrorInfo::ioFailure(
-                        "scheduled datagram remained blocked at its original deadline"));
-                }
-                m_groupDeadlineSubmitAttempted = true;
             }
             MediaDatagramTransmitSubmitResult submitted =
                 MediaDatagramTransmitSubmitResult::failure(

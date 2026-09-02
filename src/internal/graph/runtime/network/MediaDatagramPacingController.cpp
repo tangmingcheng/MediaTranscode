@@ -142,7 +142,7 @@ MediaDatagramPacingController::reserve(
         : job.canonicalRelease;
     auto notAfter = job.canonicalDeadline.checkedSubtract(duration);
     const auto effectiveStart = (std::max)(now, notBefore);
-    if (!notAfter || effectiveStart > notAfter.value()) {
+    if (!notAfter || effectiveStart >= notAfter.value()) {
         if (!notAfter) return Result::failure(notAfter.error());
         std::ostringstream message;
         message << "Datagram GBRA reservation misses its immutable completion deadline"
@@ -191,7 +191,7 @@ MediaDatagramPacingController::reserve(
     if (!m_pending ||
         globalSequence != m_pending->value.globalSequence ||
         submitStartedAt < m_pending->value.notBefore ||
-        submitStartedAt > m_pending->value.notAfter ||
+        submitStartedAt >= m_pending->value.notAfter ||
         submitCompletedAt < submitStartedAt ||
         submitCompletedAt > m_pending->value.notAfter ||
         (m_lastObservedTime && submitStartedAt < *m_lastObservedTime)) {

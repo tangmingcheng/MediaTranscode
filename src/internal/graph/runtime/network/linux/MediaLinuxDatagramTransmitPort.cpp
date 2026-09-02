@@ -59,7 +59,8 @@ namespace {
 
 struct MediaLinuxDatagramControlBuffer final {
     alignas(cmsghdr) std::array<std::byte,
-        CMSG_SPACE(sizeof(std::uint64_t))> bytes{};
+        CMSG_SPACE(sizeof(std::uint32_t)) +
+            CMSG_SPACE(sizeof(std::uint64_t))> bytes{};
 };
 
 ::media::Status fillAddress(const MediaUdpDatagramEndpoint& endpoint,
@@ -229,8 +230,7 @@ public:
             MediaDatagramTransmitTimestampAvailability::NotRequested;
         if (request.evidence) {
 #if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
-            const int flags = SOF_TIMESTAMPING_TX_SOFTWARE |
-                              SOF_TIMESTAMPING_SOFTWARE |
+            const int flags = SOF_TIMESTAMPING_SOFTWARE |
                               SOF_TIMESTAMPING_OPT_ID |
                               SOF_TIMESTAMPING_OPT_TSONLY;
             if (::setsockopt(handle, SOL_SOCKET, SO_TIMESTAMPING, &flags,
@@ -350,9 +350,9 @@ public:
                 request.bytes.size() > m_maximumDatagramBytes ||
                 request.bytes.size() > static_cast<std::size_t>(
                     (std::numeric_limits<ssize_t>::max)()) ||
-                (m_timestampAvailable !=
+                (!m_timestampAvailable &&
                  request.platformCorrelationId.has_value()) ||
-                (m_timestampAvailable &&
+                (request.platformCorrelationId &&
                  *request.platformCorrelationId != expectedId) ||
                 (m_txtimeAvailable !=
                  request.kernelTransmitTimeNanoseconds.has_value()) ||
@@ -382,17 +382,37 @@ public:
             message.msg_namelen = m_remoteLength;
             message.msg_iov = &m_vectors[index];
             message.msg_iovlen = 1;
-            if (m_txtimeAvailable) {
-#if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
+            if (request.platformCorrelationId || m_txtimeAvailable) {
                 message.msg_control = m_controls[index].bytes.data();
                 message.msg_controllen = m_controls[index].bytes.size();
                 auto* header = CMSG_FIRSTHDR(&message);
-                header->cmsg_level = SOL_SOCKET;
-                header->cmsg_type = SCM_TXTIME;
-                header->cmsg_len = CMSG_LEN(sizeof(std::uint64_t));
-                const auto launch = *request.kernelTransmitTimeNanoseconds;
-                std::memcpy(CMSG_DATA(header), &launch, sizeof(launch));
+                std::size_t controlBytes = 0;
+                if (request.platformCorrelationId) {
+#if MEDIA_DATAGRAM_HAS_LINUX_TIMESTAMPING
+                    header->cmsg_level = SOL_SOCKET;
+                    header->cmsg_type = SO_TIMESTAMPING;
+                    header->cmsg_len = CMSG_LEN(sizeof(std::uint32_t));
+                    const std::uint32_t timestampFlags =
+                        SOF_TIMESTAMPING_TX_SOFTWARE;
+                    std::memcpy(CMSG_DATA(header), &timestampFlags,
+                                sizeof(timestampFlags));
+                    controlBytes += CMSG_SPACE(sizeof(timestampFlags));
 #endif
+                }
+                if (m_txtimeAvailable) {
+#if MEDIA_DATAGRAM_HAS_LINUX_TXTIME
+                    if (controlBytes != 0) {
+                        header = CMSG_NXTHDR(&message, header);
+                    }
+                    header->cmsg_level = SOL_SOCKET;
+                    header->cmsg_type = SCM_TXTIME;
+                    header->cmsg_len = CMSG_LEN(sizeof(std::uint64_t));
+                    const auto launch = *request.kernelTransmitTimeNanoseconds;
+                    std::memcpy(CMSG_DATA(header), &launch, sizeof(launch));
+                    controlBytes += CMSG_SPACE(sizeof(launch));
+#endif
+                }
+                message.msg_controllen = controlBytes;
             }
         }
         const int accepted = ::sendmmsg(

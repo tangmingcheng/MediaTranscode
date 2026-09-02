@@ -122,7 +122,6 @@ private:
     std::uint64_t m_groupEndpointId = 0;
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
-    bool m_groupDeadlineSubmitAttempted = false;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::uint64_t m_batches = 0;
     std::uint64_t m_datagrams = 0;

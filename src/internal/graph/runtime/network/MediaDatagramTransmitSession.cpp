@@ -250,7 +250,7 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::trySubmitNew(
         for (const auto& entry : entries) {
             if (entry.bytes.empty() ||
                 entry.bytes.size() > endpoint->second.maximumDatagramBytes ||
-                entry.enqueueNotAfter != deadline || now > deadline ||
+                entry.enqueueNotAfter != deadline || now >= deadline ||
                 entry.enqueueNotAfter.nanoseconds() < 0 ||
                 entry.bytes.size() >
                     (std::numeric_limits<std::uint64_t>::max)() -
@@ -353,7 +353,7 @@ MediaDatagramTransmitSubmitResult MediaDatagramTransmitSession::submitPending(
     MediaRunningTime now) noexcept
 {
     const auto deadline = m_pending->entries.front().enqueueNotAfter;
-    if (now > deadline) {
+    if (now >= deadline) {
         m_evidence->cancelPrepared(m_pending->reservations, 0);
         clearPending();
         return terminateSubmit(mediaDatagramTransmitError(
@@ -438,7 +438,7 @@ MediaDatagramTransmitSession::waitWritable(
         return ResultType::failure(std::move(error));
     }
     auto remaining = m_pending->entries.front().enqueueNotAfter.checkedSubtract(now);
-    if (!remaining || remaining.value().nanoseconds() < 0 ||
+    if (!remaining || remaining.value().nanoseconds() <= 0 ||
         maximumWait > remaining.value()) {
         auto error = ::media::ErrorInfo::invalidArgument(
             "Datagram writable wait exceeds original deadline");
