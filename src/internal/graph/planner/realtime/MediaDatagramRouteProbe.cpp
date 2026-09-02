@@ -483,6 +483,7 @@ bool sameIpAddress(
     }
 
     std::uint64_t maximumIpPacketBytes = 0;
+    std::uint32_t interfaceIndex = 0;
     std::string serviceScopeId;
     std::string authority;
 #ifdef _WIN32
@@ -558,6 +559,7 @@ bool sameIpAddress(
     maximumIpPacketBytes = (std::min)(
         static_cast<std::uint64_t>(nativeMtu),
         static_cast<std::uint64_t>(row.Mtu));
+    interfaceIndex = static_cast<std::uint32_t>(row.InterfaceIndex);
     serviceScopeId = "ifindex:" + std::to_string(row.InterfaceIndex);
     authority =
         "connected-udp-system-path-mtu+GetBestRoute2+GetIfEntry2";
@@ -589,6 +591,7 @@ bool sameIpAddress(
     maximumIpPacketBytes = (std::min)(
         static_cast<std::uint64_t>(nativeMtu),
         interface.value().maximumIpPacketBytes);
+    interfaceIndex = static_cast<std::uint32_t>(interface.value().index);
     serviceScopeId = "ifindex:" + std::to_string(interface.value().index);
     authority =
         "connected-udp-system-path-mtu+selected-source-interface-mtu";
@@ -611,6 +614,7 @@ bool sameIpAddress(
     return ::media::Result<MediaDatagramRouteFact>::success({
         remote.value().addressFamily,
         presentation,
+        interfaceIndex,
         maximumIpPacketBytes,
         std::move(serviceScopeId),
         std::move(authority)});

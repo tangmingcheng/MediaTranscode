@@ -141,6 +141,7 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
+            request.endpoint.egressInterfaceIndex == 0 ||
             request.endpoint.socketBuffer.accounting !=
                 MediaDatagramSocketBufferAccounting::Exact ||
             request.endpoint.socketBuffer.apiRequestedBytes == 0 ||
@@ -175,6 +176,22 @@ public:
             closesocket(handle);
             return ResultType::failure(std::move(error));
         };
+        const int interfaceLevel = family == AF_INET
+            ? IPPROTO_IP
+            : IPPROTO_IPV6;
+        const int interfaceOption = family == AF_INET
+            ? IP_UNICAST_IF
+            : IPV6_UNICAST_IF;
+        const DWORD interfaceIndex = family == AF_INET
+            ? htonl(request.endpoint.egressInterfaceIndex)
+            : request.endpoint.egressInterfaceIndex;
+        if (setsockopt(handle, interfaceLevel, interfaceOption,
+                       reinterpret_cast<const char*>(&interfaceIndex),
+                       sizeof(interfaceIndex)) == SOCKET_ERROR) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram egress interface binding failed",
+                WSAGetLastError()));
+        }
         const BOOL exclusive = TRUE;
         if (setsockopt(handle, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
                        reinterpret_cast<const char*>(&exclusive),
@@ -227,6 +244,24 @@ public:
         if (!remote) return fail(remote.error());
         converted = fillAddress(remote.value(), m_remote, m_remoteLength);
         if (!converted) return fail(converted.error());
+        if (connect(handle, reinterpret_cast<const sockaddr*>(&m_remote),
+                    m_remoteLength) == SOCKET_ERROR) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Windows Datagram connected route activation failed",
+                WSAGetLastError()));
+        }
+        DWORD activatedMtu = 0;
+        int activatedMtuLength = sizeof(activatedMtu);
+        const int activatedMtuOption = family == AF_INET ? IP_MTU : IPV6_MTU;
+        if (getsockopt(handle, pathMtuLevel, activatedMtuOption,
+                       reinterpret_cast<char*>(&activatedMtu),
+                       &activatedMtuLength) == SOCKET_ERROR ||
+            activatedMtu == 0 ||
+            static_cast<std::uint64_t>(activatedMtu) <
+                request.endpoint.mtuEvidence.maximumIpPacketBytes) {
+            return fail(::media::ErrorInfo::unsupported(
+                "Windows Datagram activated route MTU is below the planned contract"));
+        }
 
         DWORD bytes = 0;
         GUID guid = WSAID_WSASENDMSG;
@@ -349,8 +384,8 @@ public:
                 WSA_CMSG_SPACE(sizeof(UINT32)) / sizeof(std::uint64_t) + 1>
                 control{};
             WSAMSG message{};
-            message.name = reinterpret_cast<sockaddr*>(&m_remote);
-            message.namelen = m_remoteLength;
+            message.name = nullptr;
+            message.namelen = 0;
             message.lpBuffers = &buffer;
             message.dwBufferCount = 1;
             if (request.platformCorrelationId) {

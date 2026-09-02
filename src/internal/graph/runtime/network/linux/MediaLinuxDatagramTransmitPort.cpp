@@ -120,6 +120,7 @@ public:
         if (!m_runtime || m_openAttempted || request.sessionKey.empty() ||
             request.serviceScopeId.empty() || request.generation == 0 ||
             request.endpoint.endpointId == 0 ||
+            request.endpoint.egressInterfaceIndex == 0 ||
             request.endpoint.socketBuffer.accounting !=
                 MediaDatagramSocketBufferAccounting::LinuxDoubled ||
             request.endpoint.socketBuffer.apiRequestedBytes == 0 ||
@@ -157,6 +158,20 @@ public:
             ::close(handle);
             return ResultType::failure(std::move(error));
         };
+        const int interfaceLevel = family == AF_INET
+            ? IPPROTO_IP
+            : IPPROTO_IPV6;
+        const int interfaceOption = family == AF_INET
+            ? IP_UNICAST_IF
+            : IPV6_UNICAST_IF;
+        const auto interfaceIndex = family == AF_INET
+            ? htonl(request.endpoint.egressInterfaceIndex)
+            : request.endpoint.egressInterfaceIndex;
+        if (::setsockopt(handle, interfaceLevel, interfaceOption,
+                         &interfaceIndex, sizeof(interfaceIndex)) != 0) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Linux Datagram egress interface binding failed", errno));
+        }
         const int pathMtuDiscovery = IP_PMTUDISC_DO;
         const int pathMtuLevel = family == AF_INET
             ? IPPROTO_IP
@@ -193,6 +208,22 @@ public:
         if (!remote) return fail(remote.error());
         converted = fillAddress(remote.value(), m_remote, m_remoteLength);
         if (!converted) return fail(converted.error());
+        if (::connect(handle, reinterpret_cast<const sockaddr*>(&m_remote),
+                      m_remoteLength) != 0) {
+            return fail(::media::ErrorInfo::ioFailure(
+                "Linux Datagram connected route activation failed", errno));
+        }
+        int activatedMtu = 0;
+        socklen_t activatedMtuLength = sizeof(activatedMtu);
+        const int activatedMtuOption = family == AF_INET ? IP_MTU : IPV6_MTU;
+        if (::getsockopt(handle, pathMtuLevel, activatedMtuOption,
+                         &activatedMtu, &activatedMtuLength) != 0 ||
+            activatedMtu <= 0 ||
+            static_cast<std::uint64_t>(activatedMtu) <
+                request.endpoint.mtuEvidence.maximumIpPacketBytes) {
+            return fail(::media::ErrorInfo::unsupported(
+                "Linux Datagram activated route MTU is below the planned contract"));
+        }
         stopFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
         if (stopFd < 0) {
             return fail(::media::ErrorInfo::ioFailure(
@@ -378,8 +409,8 @@ public:
             m_controls[index].bytes.fill(std::byte{});
             m_messages[index] = {};
             auto& message = m_messages[index].msg_hdr;
-            message.msg_name = &m_remote;
-            message.msg_namelen = m_remoteLength;
+            message.msg_name = nullptr;
+            message.msg_namelen = 0;
             message.msg_iov = &m_vectors[index];
             message.msg_iovlen = 1;
             if (request.platformCorrelationId || m_txtimeAvailable) {

@@ -248,13 +248,6 @@ void MediaDatagramServiceScopeReservation::cancel() noexcept
     return ::media::Status::success();
 }
 
-MediaDatagramServiceScopeMembership::MediaDatagramServiceScopeMembership(
-    std::shared_ptr<MediaDatagramServiceScopeState> state,
-    std::uint64_t memberId) noexcept
-    : m_state(std::move(state)), m_memberId(memberId)
-{
-}
-
 MediaDatagramServiceScopeMembership::~MediaDatagramServiceScopeMembership()
     noexcept
 {
@@ -294,17 +287,23 @@ MediaDatagramServiceScopeMembership::join(
 
     try {
         auto& registry = serviceScopeRegistry();
+        auto membership =
+            std::unique_ptr<MediaDatagramServiceScopeMembership>(
+                new (std::nothrow) MediaDatagramServiceScopeMembership());
+        if (!membership) {
+            return Result::failure(::media::ErrorInfo::allocationFailed(
+                "Datagram service-scope membership"));
+        }
+
+        std::lock_guard registryLock(registry.mutex);
         std::shared_ptr<MediaDatagramServiceScopeState> state;
-        {
-            std::lock_guard registryLock(registry.mutex);
-            const auto found = registry.scopes.find(contract.serviceScopeId);
-            if (found != registry.scopes.end()) state = found->second;
-            if (!state) {
-                state = std::make_shared<MediaDatagramServiceScopeState>(
-                    contract.serviceScopeId,
-                    contract.maximumWireBytesPerSecond);
-                registry.scopes[contract.serviceScopeId] = state;
-            }
+        const auto found = registry.scopes.find(contract.serviceScopeId);
+        if (found != registry.scopes.end()) state = found->second;
+        const auto publishesNewScope = !state;
+        if (publishesNewScope) {
+            state = std::make_shared<MediaDatagramServiceScopeState>(
+                contract.serviceScopeId,
+                contract.maximumWireBytesPerSecond);
         }
 
         std::lock_guard scopeLock(state->mutex);
@@ -334,12 +333,28 @@ MediaDatagramServiceScopeMembership::join(
             return Result::failure(::media::ErrorInfo::internalError(
                 "Datagram service-scope member identity exhausted"));
         }
-        const auto memberId = state->nextMemberId++;
-        state->members.emplace(
+        const auto memberId = state->nextMemberId;
+        const auto admittedWireBytesPerSecond = contract.wireBytesPerSecond;
+        const auto [member, inserted] = state->members.emplace(
             memberId,
             MediaDatagramServiceScopeState::Member{std::move(contract)});
+        if (!inserted) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "Datagram service-scope member identity collided"));
+        }
+        if (publishesNewScope) {
+            const auto [scope, scopeInserted] = registry.scopes.emplace(
+                state->scopeId, state);
+            if (!scopeInserted) {
+                state->members.erase(member);
+                return Result::failure(::media::ErrorInfo::internalError(
+                    "Datagram service scope publication collided"));
+            }
+            (void)scope;
+        }
+        ++state->nextMemberId;
         state->admittedWireBytesPerSecond +=
-            state->members.at(memberId).contract.wireBytesPerSecond;
+            admittedWireBytesPerSecond;
         state->telemetry.activeMembers =
             static_cast<std::uint64_t>(state->members.size());
         state->telemetry.highWaterMembers = (std::max)(
@@ -347,9 +362,8 @@ MediaDatagramServiceScopeMembership::join(
             state->telemetry.activeMembers);
         state->telemetry.admittedWireBytesPerSecond =
             state->admittedWireBytesPerSecond;
-        auto membership =
-            std::unique_ptr<MediaDatagramServiceScopeMembership>(
-                new MediaDatagramServiceScopeMembership(state, memberId));
+        membership->m_state = std::move(state);
+        membership->m_memberId = memberId;
         return Result::success(std::move(membership));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

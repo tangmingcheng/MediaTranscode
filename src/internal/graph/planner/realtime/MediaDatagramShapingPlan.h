@@ -101,8 +101,18 @@ struct MediaDatagramServiceScopePlan final {
                            const MediaDatagramServiceScopePlan&) = default;
 };
 
+enum class MediaDatagramSchedulingClass : std::uint8_t {
+    Unknown = 0,
+    Control = 1,
+    Audio = 2,
+    Media = 3
+};
+
 struct MediaDatagramEndpointPlan final {
     std::uint64_t endpointId;
+    std::uint32_t egressInterfaceIndex;
+    std::uint64_t schedulingFlowId;
+    MediaDatagramSchedulingClass schedulingClass;
     MediaIpAddressFamily addressFamily;
     std::string numericAddress;
     std::uint16_t port;

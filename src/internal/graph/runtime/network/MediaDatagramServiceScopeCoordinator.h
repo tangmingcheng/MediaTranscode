@@ -85,12 +85,10 @@ public:
     MediaDatagramServiceScopeTelemetry telemetry() const noexcept;
 
 private:
-    MediaDatagramServiceScopeMembership(
-        std::shared_ptr<MediaDatagramServiceScopeState> state,
-        std::uint64_t memberId) noexcept;
+    MediaDatagramServiceScopeMembership() noexcept = default;
 
     std::shared_ptr<MediaDatagramServiceScopeState> m_state;
-    std::uint64_t m_memberId;
+    std::uint64_t m_memberId = 0;
 };
 
 } // namespace media::ffmpeg::graph

@@ -13,6 +13,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaRealtimeDeploymentServiceScope final {
     MediaDatagramServiceScopeKind kind = MediaDatagramServiceScopeKind::Unknown;
+    std::uint32_t interfaceIndex = 0;
     std::string scopeId;
     std::string coverageAuthority;
     friend bool operator==(const MediaRealtimeDeploymentServiceScope&,

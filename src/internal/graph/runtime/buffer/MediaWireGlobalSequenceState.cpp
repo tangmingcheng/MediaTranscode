@@ -239,8 +239,18 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
         m_state->m_queueResidenceSumNanoseconds =
             queueResidence.value() - committedResidence;
         m_state->m_queueResidenceUpdatedAt = queueAccountingAt;
-        m_state->m_nextGlobalSequence += static_cast<std::uint64_t>(count);
-        m_state->m_reservations.front().committed += count;
+        auto record = std::find_if(
+            m_state->m_reservations.begin(), m_state->m_reservations.end(),
+            [&](const MediaWireGlobalSequenceState::ReservationRecord& value) {
+                return value.identity == m_reservationIdentity;
+            });
+        if (record == m_state->m_reservations.end()) {
+            m_state->m_poisoned = true;
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "wire global reservation disappeared during commit"));
+        }
+        record->committed += count;
+        m_state->m_committedDatagrams += static_cast<std::uint64_t>(count);
         m_state->m_outstandingDatagrams -= count;
         m_state->m_outstandingWireBytes -= committedWireBytes;
         if (m_state->m_outstandingDatagrams == 0) {
@@ -255,7 +265,7 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
             lastSequence;
         m_committed += count;
         if (m_committed == m_wireBytes.size()) {
-            m_state->m_reservations.pop_front();
+            m_state->m_reservations.erase(record);
             completed = true;
         }
     }
@@ -301,7 +311,6 @@ MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
       m_maximumOutstandingDatagrams(maximumOutstandingDatagrams),
       m_maximumOutstandingWireBytes(maximumOutstandingWireBytes),
       m_endpointWireHeaderBytes(std::move(endpointWireHeaderBytes)),
-      m_nextGlobalSequence(firstGlobalSequence),
       m_projectedNextGlobalSequence(firstGlobalSequence)
 {
 }
@@ -566,13 +575,6 @@ void MediaWireGlobalSequenceState::notifyReservationWaiters() noexcept
     }
     const auto firstSequence = reservation.m_firstSequence +
         static_cast<std::uint64_t>(begin);
-    const auto expectedSequence = lastStageSequence
-        ? *lastStageSequence + 1
-        : m_nextGlobalSequence;
-    if (firstSequence != expectedSequence) {
-        return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "wire global sequence lifecycle range is not strictly continuous"));
-    }
     for (std::size_t index = begin; index < begin + count; ++index) {
         if (now < reservation.m_materializedAt[index]) {
             return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -591,18 +593,20 @@ void MediaWireGlobalSequenceState::notifyReservationWaiters() noexcept
     std::size_t begin,
     std::size_t count) const noexcept
 {
-    if (m_poisoned || count == 0 || m_reservations.empty() ||
-        m_reservations.front().identity != reservation.m_reservationIdentity ||
-        m_reservations.front().firstSequence != reservation.m_firstSequence ||
-        m_reservations.front().count != reservation.m_wireBytes.size() ||
+    const auto record = std::find_if(
+        m_reservations.begin(), m_reservations.end(),
+        [&](const ReservationRecord& value) {
+            return value.identity == reservation.m_reservationIdentity;
+        });
+    if (m_poisoned || count == 0 || record == m_reservations.end() ||
+        record->firstSequence != reservation.m_firstSequence ||
+        record->count != reservation.m_wireBytes.size() ||
         begin != reservation.m_committed ||
         begin > reservation.m_wireBytes.size() ||
         count > reservation.m_wireBytes.size() - begin ||
-        m_reservations.front().committed != begin ||
-        m_nextGlobalSequence != reservation.m_firstSequence +
-            static_cast<std::uint64_t>(begin)) {
+        record->committed != begin) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "wire global sequence commit range is stale, reordered, or inactive"));
+            "wire global sequence commit range is stale or inactive"));
     }
     return ::media::Status::success();
 }
@@ -624,7 +628,7 @@ MediaWireGlobalSequenceState::snapshot() const noexcept
     std::lock_guard lock(m_mutex);
     return MediaWireGlobalSequenceSnapshot{
         m_generation,
-        m_nextGlobalSequence,
+        m_committedDatagrams,
         !m_reservations.empty(),
         m_poisoned,
         static_cast<std::uint64_t>(m_outstandingDatagrams),

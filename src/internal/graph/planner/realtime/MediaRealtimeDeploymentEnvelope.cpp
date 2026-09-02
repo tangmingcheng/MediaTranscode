@@ -48,7 +48,9 @@ MediaRealtimeDeploymentEnvelope::decode(
     const bool validScope =
         (scope.kind == MediaDatagramServiceScopeKind::ManagedEgress ||
          scope.kind == MediaDatagramServiceScopeKind::ProvisionedEgress) &&
-        !scope.scopeId.empty() && !scope.coverageAuthority.empty();
+        scope.interfaceIndex > 0 && !scope.scopeId.empty() &&
+        scope.scopeId == "ifindex:" + std::to_string(scope.interfaceIndex) &&
+        !scope.coverageAuthority.empty();
     const bool validMtu = !mtu.authority.empty() && ipHeaderBytes > 0 &&
         mtu.maximumIpPacketBytes <=
             (mtu.addressFamily == MediaIpAddressFamily::Ipv4

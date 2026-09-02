@@ -726,6 +726,7 @@ MediaRealtimeDeploymentPlanner::planBase(
     const auto maximumResidence = latency.value().maximumResidence;
     MediaRealtimeDeploymentBasePlan result{
         {MediaDatagramServiceScopeKind::ProvisionedEgress,
+         route.value().interfaceIndex,
          route.value().serviceScopeId,
          route.value().authority +
              "+caller-provisioned-egress+engine-owned-common-shaper"},

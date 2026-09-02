@@ -33,7 +33,7 @@ struct MediaDatagramPacingQueueState final {
 struct MediaDatagramPacingJob final {
     std::uint64_t generation;
     std::uint64_t endpointId;
-    std::uint64_t globalSequence;
+    std::uint64_t pacingSequence;
     std::uint64_t wireBytes;
     MediaRunningTime canonicalRelease;
     MediaRunningTime canonicalDeadline;
@@ -41,7 +41,7 @@ struct MediaDatagramPacingJob final {
 };
 
 struct MediaDatagramPacingReservation final {
-    std::uint64_t globalSequence;
+    std::uint64_t pacingSequence;
     MediaRunningTime notBefore;
     MediaRunningTime notAfter;
     MediaRunningTime serviceDuration;
@@ -52,7 +52,7 @@ struct MediaDatagramPacingTelemetry final {
     std::uint64_t reservedDatagrams = 0;
     std::uint64_t submittedDatagrams = 0;
     std::int64_t maximumSubmitLatenessNanoseconds = 0;
-    std::uint64_t worstLateGlobalSequence = 0;
+    std::uint64_t worstLatePacingSequence = 0;
     std::uint64_t rateAdaptations = 0;
     std::uint64_t maximumWireBytesPerSecond = 0;
     bool counterSaturated = false;
@@ -74,7 +74,7 @@ public:
         const MediaDatagramPacingJob& job,
         MediaRunningTime now);
     ::media::Status markSubmitted(
-        std::uint64_t globalSequence,
+        std::uint64_t pacingSequence,
         MediaRunningTime submitStartedAt,
         MediaRunningTime submitCompletedAt) noexcept;
 
@@ -100,7 +100,7 @@ private:
     std::optional<PendingReservation> m_pending;
     std::optional<MediaRunningTime> m_theoreticalArrivalTime;
     std::optional<MediaRunningTime> m_lastObservedTime;
-    std::optional<std::uint64_t> m_lastSubmittedSequence;
+    std::optional<std::uint64_t> m_lastSubmittedPacingSequence;
 };
 
 } // namespace media::ffmpeg::graph

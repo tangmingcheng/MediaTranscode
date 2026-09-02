@@ -81,17 +81,17 @@ MediaDatagramPacingController::reserve(
     using Result = ::media::Result<MediaDatagramPacingReservation>;
     const auto zero = MediaRunningTime::fromNanoseconds(0);
     if (m_pending || job.generation != m_contract.generation ||
-        job.endpointId == 0 || job.globalSequence == 0 || job.wireBytes == 0 ||
+        job.endpointId == 0 || job.pacingSequence == 0 || job.wireBytes == 0 ||
         job.queue.wireBytes < job.wireBytes ||
         job.queue.averageResidence < zero ||
         job.queue.averageResidence >= m_contract.queueTimeLimit ||
         job.canonicalRelease < zero ||
         job.canonicalDeadline <= job.canonicalRelease || now < zero ||
         (m_lastObservedTime && now < *m_lastObservedTime) ||
-        (m_lastSubmittedSequence &&
-         job.globalSequence <= *m_lastSubmittedSequence)) {
+        (m_lastSubmittedPacingSequence &&
+         job.pacingSequence <= *m_lastSubmittedPacingSequence)) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Datagram pacing job violates service identity, time, or global order"));
+            "Datagram pacing job violates service identity, time, or sender order"));
     }
 
     auto remainingQueueTime = m_contract.queueTimeLimit.checkedSubtract(
@@ -112,7 +112,7 @@ MediaDatagramPacingController::reserve(
     if (candidateRate > m_contract.maximumWireBytesPerSecond) {
         std::ostringstream message;
         message << "Datagram WebRTC queue-time adaptation exceeds the managed service capacity"
-                << " sequence=" << job.globalSequence
+                << " pacing_sequence=" << job.pacingSequence
                 << " queue_wire_bytes=" << job.queue.wireBytes
                 << " average_queue_residence_ns="
                 << job.queue.averageResidence.nanoseconds()
@@ -147,7 +147,7 @@ MediaDatagramPacingController::reserve(
         if (!notAfter) return Result::failure(notAfter.error());
         std::ostringstream message;
         message << "Datagram GBRA reservation misses its immutable completion deadline"
-                << " sequence=" << job.globalSequence
+                << " pacing_sequence=" << job.pacingSequence
                 << " now_ns=" << now.nanoseconds()
                 << " release_ns=" << job.canonicalRelease.nanoseconds()
                 << " deadline_ns=" << job.canonicalDeadline.nanoseconds()
@@ -171,7 +171,7 @@ MediaDatagramPacingController::reserve(
     }
 
     MediaDatagramPacingReservation reservation{
-        job.globalSequence, notBefore, notAfter.value(), duration,
+        job.pacingSequence, notBefore, notAfter.value(), duration,
         adjustedRate};
     m_pending = PendingReservation{reservation};
     m_lastObservedTime = now;
@@ -185,12 +185,12 @@ MediaDatagramPacingController::reserve(
 }
 
 ::media::Status MediaDatagramPacingController::markSubmitted(
-    std::uint64_t globalSequence,
+    std::uint64_t pacingSequence,
     MediaRunningTime submitStartedAt,
     MediaRunningTime submitCompletedAt) noexcept
 {
     if (!m_pending ||
-        globalSequence != m_pending->value.globalSequence ||
+        pacingSequence != m_pending->value.pacingSequence ||
         submitStartedAt < m_pending->value.notBefore ||
         submitStartedAt >= m_pending->value.notAfter ||
         submitCompletedAt < submitStartedAt ||
@@ -217,12 +217,12 @@ MediaDatagramPacingController::reserve(
         m_telemetry.maximumSubmitLatenessNanoseconds) {
         m_telemetry.maximumSubmitLatenessNanoseconds =
             lateness.value().nanoseconds();
-        m_telemetry.worstLateGlobalSequence = globalSequence;
+        m_telemetry.worstLatePacingSequence = pacingSequence;
     }
 
     m_theoreticalArrivalTime = nextTheoreticalArrival.value();
     m_lastObservedTime = submitCompletedAt;
-    m_lastSubmittedSequence = globalSequence;
+    m_lastSubmittedPacingSequence = pacingSequence;
     m_pending.reset();
     ++m_telemetry.submittedDatagrams;
     return ::media::Status::success();

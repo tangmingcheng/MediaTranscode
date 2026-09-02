@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
 #include <memory>
+#include <array>
 #include <optional>
 #include <stop_token>
 #include <unordered_map>
@@ -70,6 +71,7 @@ private:
     ::media::Status enqueueWireBatch(
         std::shared_ptr<MediaWireDatagramBatchBuffer> batch);
     ::media::Result<bool> activateNextWireBatch();
+    ::media::Status requeuePendingBatchContinuation();
     bool allBatchInputsDrained(
         MediaGraphExecutionContext& context) const noexcept;
     ::media::Status recordSubmittedPrefix(
@@ -106,14 +108,20 @@ private:
     MediaDatagramTransmitExecutionMode m_executionMode =
         MediaDatagramTransmitExecutionMode::Unknown;
     std::unordered_map<std::uint64_t, std::uint64_t> m_wireOverheadBytes;
+    std::unordered_map<std::uint64_t, MediaDatagramSchedulingClass>
+        m_schedulingClasses;
+    std::unordered_map<std::uint64_t, std::uint64_t> m_schedulingFlows;
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointDatagrams;
     std::unordered_map<std::uint64_t, std::uint64_t> m_endpointBytes;
     std::vector<std::uint64_t> m_endpointIds;
+    std::vector<std::uint64_t> m_schedulingFlowIds;
     std::vector<MediaDatagramTransmitJobEntry> m_submitEntries;
     struct QueuedWireBatch final {
         std::uint64_t firstGlobalSequence;
         std::uint64_t lastGlobalSequence;
         std::uint64_t wireBytes;
+        std::size_t nextDatagram;
+        bool scheduled;
         std::shared_ptr<MediaWireDatagramBatchBuffer> batch;
     };
     std::vector<QueuedWireBatch> m_queuedWireBatches;
@@ -127,7 +135,10 @@ private:
     std::uint64_t m_maximumQueuedWireBatches = 0;
     std::uint64_t m_maximumQueuedWireDatagrams = 0;
     std::uint64_t m_maximumQueuedWireBytes = 0;
-    std::optional<std::uint64_t> m_nextScheduledSequence;
+    std::array<std::uint64_t, 4> m_lastScheduledFlow{};
+    std::uint64_t m_nextPacingSequence = 1;
+    std::uint64_t m_groupPacingSequence = 0;
+    std::uint64_t m_pendingRemainingWireBytes = 0;
     SubmitState m_state = SubmitState::WaitReservation;
     std::size_t m_nextDatagram = 0;
     std::size_t m_groupBegin = 0;

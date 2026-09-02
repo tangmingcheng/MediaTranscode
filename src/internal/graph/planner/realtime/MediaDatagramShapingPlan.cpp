@@ -66,7 +66,10 @@ namespace {
     auto mtu = validateMtuEvidence(endpoint);
     auto socketBuffer =
         validateMediaDatagramSocketBufferPlan(endpoint.socketBuffer);
-    if (endpoint.endpointId == 0 || endpoint.port == 0 || !address || !mtu ||
+    if (endpoint.endpointId == 0 || endpoint.egressInterfaceIndex == 0 ||
+        endpoint.schedulingFlowId == 0 ||
+        endpoint.schedulingClass == MediaDatagramSchedulingClass::Unknown ||
+        endpoint.port == 0 || !address || !mtu ||
         !socketBuffer ||
         endpoint.maximumPendingDatagrams == 0 ||
         endpoint.maximumPendingBytes < endpoint.maximumDatagramBytes ||

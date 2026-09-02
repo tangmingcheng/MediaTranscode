@@ -79,6 +79,7 @@ template <typename Value>
     for (auto status : {
              set(graph, nodeId, key("session"), encoding.sessionKey),
              put("scope.kind", static_cast<unsigned>(d.serviceScope.kind)),
+             put("scope.ifindex", d.serviceScope.interfaceIndex),
              set(graph, nodeId, key("scope.id"), d.serviceScope.scopeId),
              set(graph, nodeId, key("scope.authority"), d.serviceScope.coverageAuthority),
              put("mtu.family", static_cast<unsigned>(d.mtu.addressFamily)),
@@ -153,6 +154,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     using Result = ::media::Result<MediaDatagramTransportPlanTemplate>;
     auto session = required(node.options, key("session"));
     auto scopeKind = parse<std::uint8_t>(node.options, key("scope.kind"));
+    auto scopeInterfaceIndex = parse<std::uint32_t>(
+        node.options, key("scope.ifindex"));
     auto scopeId = required(node.options, key("scope.id"));
     auto scopeAuthority = required(node.options, key("scope.authority"));
     auto mtuFamily = parse<std::uint8_t>(node.options, key("mtu.family"));
@@ -205,7 +208,8 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto wireAuthority = required(node.options, key("wire.authority"));
     auto endpointCount = parse<std::size_t>(node.options, key("endpoint_count"));
 #define REQUIRE_VALUE(name) if (!(name)) return Result::failure((name).error())
-    REQUIRE_VALUE(session); REQUIRE_VALUE(scopeKind); REQUIRE_VALUE(scopeId);
+    REQUIRE_VALUE(session); REQUIRE_VALUE(scopeKind);
+    REQUIRE_VALUE(scopeInterfaceIndex); REQUIRE_VALUE(scopeId);
     REQUIRE_VALUE(scopeAuthority); REQUIRE_VALUE(mtuFamily); REQUIRE_VALUE(mtuIp);
     REQUIRE_VALUE(mtuPayload); REQUIRE_VALUE(mtuAuthority);
     REQUIRE_VALUE(provisionedCapacity);
@@ -229,6 +233,7 @@ MediaDatagramTransportPlanSourceNodePlanCodec::decode(const MediaNode& node)
 #undef REQUIRE_VALUE
     MediaRealtimeDeploymentEnvelopeEncoding deployment{
         {static_cast<MediaDatagramServiceScopeKind>(scopeKind.value()),
+         scopeInterfaceIndex.value(),
          std::move(scopeId).value(), std::move(scopeAuthority).value()},
         {static_cast<MediaIpAddressFamily>(mtuFamily.value()),
          std::move(mtuAuthority).value(), mtuIp.value(), mtuPayload.value()},

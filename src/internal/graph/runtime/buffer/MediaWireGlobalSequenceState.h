@@ -22,7 +22,7 @@ class MediaNodeWakeup;
 
 struct MediaWireGlobalSequenceSnapshot final {
     std::uint64_t generation;
-    std::uint64_t nextGlobalSequence;
+    std::uint64_t committedDatagrams;
     bool reservationActive;
     bool poisoned;
     std::uint64_t currentDatagrams;
@@ -176,7 +176,7 @@ private:
         m_endpointWireHeaderBytes;
     std::unordered_map<std::uint64_t, std::weak_ptr<MediaNodeWakeup>>
         m_reservationWakeups;
-    std::uint64_t m_nextGlobalSequence;
+    std::uint64_t m_committedDatagrams = 0;
     std::uint64_t m_projectedNextGlobalSequence;
     std::uint64_t m_nextReservationIdentity = 1;
     std::size_t m_outstandingDatagrams = 0;

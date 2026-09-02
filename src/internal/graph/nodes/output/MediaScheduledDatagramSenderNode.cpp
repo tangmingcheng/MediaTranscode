@@ -124,9 +124,12 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_serviceScopeId.clear();
     m_executionMode = MediaDatagramTransmitExecutionMode::Unknown;
     m_wireOverheadBytes.clear();
+    m_schedulingClasses.clear();
+    m_schedulingFlows.clear();
     m_endpointDatagrams.clear();
     m_endpointBytes.clear();
     m_endpointIds.clear();
+    m_schedulingFlowIds.clear();
     m_submitEntries.clear();
     m_queuedWireBatches.clear();
     m_burstWireBytes = 0;
@@ -136,7 +139,10 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_maximumBacklogBytes = 0;
     m_queuedWireDatagrams = 0;
     m_queuedWireBytes = 0;
-    m_nextScheduledSequence.reset();
+    m_lastScheduledFlow.fill(0);
+    m_nextPacingSequence = 1;
+    m_groupPacingSequence = 0;
+    m_pendingRemainingWireBytes = 0;
     m_state = SubmitState::WaitReservation;
     m_nextDatagram = 0;
     m_groupBegin = 0;
@@ -261,6 +267,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_serviceScopeId = plan.shaping.serviceScope().scopeId;
     m_executionMode = plan.execution.mode;
     m_wireOverheadBytes.clear();
+    m_schedulingClasses.clear();
+    m_schedulingFlows.clear();
+    m_schedulingFlowIds.clear();
     m_endpointIds.clear();
     m_endpointDatagrams.clear();
     m_endpointBytes.clear();
@@ -272,14 +281,20 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
             endpoint.endpointId,
             endpoint.mtuEvidence.ipHeaderBytes +
                 endpoint.mtuEvidence.transportHeaderBytes);
+        m_schedulingClasses.emplace(
+            endpoint.endpointId, endpoint.schedulingClass);
+        m_schedulingFlows.emplace(
+            endpoint.endpointId, endpoint.schedulingFlowId);
+        if (std::find(m_schedulingFlowIds.begin(), m_schedulingFlowIds.end(),
+                      endpoint.schedulingFlowId) == m_schedulingFlowIds.end()) {
+            m_schedulingFlowIds.push_back(endpoint.schedulingFlowId);
+        }
     }
     m_burstWireBytes = plan.shaping.serviceCurve().burstWireBytes;
     m_maximumBatchDatagrams = plan.shaping.batch().maximumDatagrams;
     m_maximumBatchBytes = plan.shaping.batch().maximumBytes;
     m_maximumBacklogDatagrams = plan.shaping.backlog().maximumDatagrams;
     m_maximumBacklogBytes = plan.shaping.backlog().maximumBytes;
-    const auto snapshot = m_serviceLedger->snapshot();
-    m_nextScheduledSequence = snapshot.nextGlobalSequence;
     if (m_maximumBatchDatagrams > m_submitEntries.max_size() ||
         m_maximumBacklogDatagrams > m_queuedWireBatches.max_size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -380,7 +395,9 @@ catch (const std::bad_alloc&)
 {
     if (!m_pendingBatch || !m_generation || !m_session ||
         !m_pacingController || !m_serviceScopeMembership ||
-        m_nextDatagram >= m_pendingBatch->m_datagrams.size()) {
+        m_nextDatagram >= m_pendingBatch->m_datagrams.size() ||
+        m_nextPacingSequence ==
+            (std::numeric_limits<std::uint64_t>::max)()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled datagram sender has no reservable wire job"));
     }
@@ -400,6 +417,7 @@ catch (const std::bad_alloc&)
             "scheduled wire job exceeds the activated batch or burst envelope"));
     }
     m_groupCount = 1;
+    m_groupPacingSequence = m_nextPacingSequence;
     m_groupEndpointId = first.endpointId();
     m_groupWireBytes =
         static_cast<std::uint64_t>(first.bytes().size()) + overhead->second;
@@ -407,7 +425,7 @@ catch (const std::bad_alloc&)
     if (!queue) return ::media::Status::failure(queue.error());
     auto pacing = m_pacingController->reserve(
         MediaDatagramPacingJob{
-            first.generation(), first.endpointId(), first.globalSequence(),
+            first.generation(), first.endpointId(), m_groupPacingSequence,
             m_groupWireBytes,
             first.canonicalRelease(), first.canonicalDeadline(),
             MediaDatagramPacingQueueState{
@@ -487,14 +505,14 @@ catch (const std::bad_alloc&)
 ::media::Status MediaScheduledDatagramSenderNode::enqueueWireBatch(
     std::shared_ptr<MediaWireDatagramBatchBuffer> batch)
 {
-    if (!batch || batch->m_datagrams.empty() || !m_nextScheduledSequence ||
+    if (!batch || batch->m_datagrams.empty() ||
         batch->m_datagrams.size() > m_maximumBacklogDatagrams) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "common pacing sender requires one ordered bounded wire batch"));
+            "common pacing sender requires one bounded wire batch"));
     }
     const auto first = batch->m_datagrams.front().globalSequence();
     const auto last = batch->m_datagrams.back().globalSequence();
-    if (first < *m_nextScheduledSequence || last < first) {
+    if (last < first) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "common pacing sender rejects stale or wrapped wire sequence"));
     }
@@ -520,27 +538,33 @@ catch (const std::bad_alloc&)
         wireBytes > m_maximumBacklogBytes - m_queuedWireBytes) {
         ++m_pressureFailures;
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "common pacing sender ordered queue exceeds planner backlog"));
+            "common pacing sender fair queue exceeds planner backlog"));
     }
 
-    auto position = std::lower_bound(
-        m_queuedWireBatches.begin(), m_queuedWireBatches.end(), first,
-        [](const QueuedWireBatch& queued, std::uint64_t sequence) {
-            return queued.firstGlobalSequence < sequence;
-        });
-    if ((position != m_queuedWireBatches.end() &&
-         last >= position->firstGlobalSequence) ||
-        (position != m_queuedWireBatches.begin() &&
-         std::prev(position)->lastGlobalSequence >= first)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "common pacing sender rejects overlapping wire sequence ranges"));
+    for (const auto& queued : m_queuedWireBatches) {
+        if (first <= queued.lastGlobalSequence &&
+            last >= queued.firstGlobalSequence) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "common pacing sender rejects overlapping wire sequence ranges"));
+        }
+    }
+    if (m_pendingBatch) {
+        const auto pendingFirst =
+            m_pendingBatch->m_datagrams[m_nextDatagram].globalSequence();
+        const auto pendingLast =
+            m_pendingBatch->m_datagrams.back().globalSequence();
+        if (first <= pendingLast && last >= pendingFirst) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "common pacing sender rejects an overlapping active wire sequence range"));
+        }
     }
     try {
-        m_queuedWireBatches.insert(
-            position, QueuedWireBatch{first, last, wireBytes, std::move(batch)});
+        m_queuedWireBatches.push_back(
+            QueuedWireBatch{first, last, wireBytes, 0, false,
+                            std::move(batch)});
     } catch (const std::bad_alloc&) {
         return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
-            "common pacing sender ordered wire queue"));
+            "common pacing sender fair wire queue"));
     }
     m_queuedWireDatagrams += datagrams;
     m_queuedWireBytes += wireBytes;
@@ -561,37 +585,151 @@ MediaScheduledDatagramSenderNode::activateNextWireBatch()
     if (m_pendingBatch || m_queuedWireBatches.empty()) {
         return Result::success(false);
     }
-    if (!m_nextScheduledSequence ||
-        m_queuedWireBatches.front().firstGlobalSequence !=
-            *m_nextScheduledSequence) {
-        return Result::success(false);
+    const auto flowPosition = [&](std::uint64_t flowId) {
+        const auto found = std::find(
+            m_schedulingFlowIds.begin(), m_schedulingFlowIds.end(), flowId);
+        return found == m_schedulingFlowIds.end()
+            ? m_schedulingFlowIds.size()
+            : static_cast<std::size_t>(found - m_schedulingFlowIds.begin());
+    };
+    const auto schedulingClass = [&](const QueuedWireBatch& queued) {
+        if (!queued.batch ||
+            queued.nextDatagram >= queued.batch->m_datagrams.size()) {
+            return MediaDatagramSchedulingClass::Unknown;
+        }
+        const auto found = m_schedulingClasses.find(
+            queued.batch->m_datagrams[queued.nextDatagram].endpointId());
+        return found == m_schedulingClasses.end()
+            ? MediaDatagramSchedulingClass::Unknown
+            : found->second;
+    };
+    const auto schedulingFlow = [&](const QueuedWireBatch& queued) {
+        if (!queued.batch ||
+            queued.nextDatagram >= queued.batch->m_datagrams.size()) {
+            return std::uint64_t{0};
+        }
+        const auto found = m_schedulingFlows.find(
+            queued.batch->m_datagrams[queued.nextDatagram].endpointId());
+        return found == m_schedulingFlows.end() ? std::uint64_t{0}
+                                                : found->second;
+    };
+    const auto roundRobinDistance = [&](MediaDatagramSchedulingClass value,
+                                        std::uint64_t flowId) {
+        const auto index = flowPosition(flowId);
+        const auto rank = static_cast<std::size_t>(value);
+        if (index >= m_schedulingFlowIds.size() ||
+            rank >= m_lastScheduledFlow.size()) {
+            return m_schedulingFlowIds.size();
+        }
+        const auto last = flowPosition(m_lastScheduledFlow[rank]);
+        if (last >= m_schedulingFlowIds.size()) return index;
+        return (index + m_schedulingFlowIds.size() - last - 1U) %
+            m_schedulingFlowIds.size();
+    };
+
+    std::size_t selected = m_queuedWireBatches.size();
+    for (std::size_t index = 0; index < m_queuedWireBatches.size(); ++index) {
+        const auto& candidate = m_queuedWireBatches[index];
+        const auto candidateClass = schedulingClass(candidate);
+        const auto candidateFlow = schedulingFlow(candidate);
+        if (candidateClass == MediaDatagramSchedulingClass::Unknown ||
+            candidateFlow == 0) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "common pacing queue contains an unclassified endpoint"));
+        }
+        bool isFlowHead = true;
+        for (const auto& peer : m_queuedWireBatches) {
+            if (&peer != &candidate && schedulingFlow(peer) == candidateFlow &&
+                peer.firstGlobalSequence < candidate.firstGlobalSequence) {
+                isFlowHead = false;
+                break;
+            }
+        }
+        if (!isFlowHead) continue;
+        if (selected == m_queuedWireBatches.size()) {
+            selected = index;
+            continue;
+        }
+        const auto& current = m_queuedWireBatches[selected];
+        const auto currentClass = schedulingClass(current);
+        const auto currentFlow = schedulingFlow(current);
+        const bool preferred = candidateClass < currentClass ||
+            (candidateClass == currentClass &&
+             roundRobinDistance(candidateClass, candidateFlow) <
+                 roundRobinDistance(currentClass, currentFlow));
+        if (preferred) selected = index;
     }
-    auto& queued = m_queuedWireBatches.front();
-    if (queued.lastGlobalSequence ==
-        (std::numeric_limits<std::uint64_t>::max)()) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "common pacing sender next sequence would overflow"));
+    if (selected == m_queuedWireBatches.size()) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "common pacing queue has no protocol-flow head"));
+    }
+    auto queued = std::move(m_queuedWireBatches[selected]);
+    m_queuedWireBatches.erase(
+        m_queuedWireBatches.begin() + static_cast<std::ptrdiff_t>(selected));
+    if (!queued.batch || queued.nextDatagram >= queued.batch->m_datagrams.size()) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "common pacing queue selected an invalid datagram"));
     }
     auto scheduledAt = m_clock->now();
     if (!scheduledAt) return Result::failure(scheduledAt.error());
-    auto scheduled = queued.batch->m_commitSlice.scheduleAll(
-        scheduledAt.value());
-    if (!scheduled) return Result::failure(scheduled.error());
-    const auto datagrams = static_cast<std::uint64_t>(
-        queued.batch->m_datagrams.size());
-    if (datagrams > m_queuedWireDatagrams ||
-        queued.wireBytes > m_queuedWireBytes) {
-        return Result::failure(::media::ErrorInfo::internalError(
-            "common pacing sender ordered queue accounting underflowed"));
+    if (!queued.scheduled) {
+        auto scheduled = queued.batch->m_commitSlice.scheduleAll(
+            scheduledAt.value());
+        if (!scheduled) return Result::failure(scheduled.error());
+        queued.scheduled = true;
     }
+    const auto& datagram = queued.batch->m_datagrams[queued.nextDatagram];
+    const auto overhead = m_wireOverheadBytes.find(datagram.endpointId());
+    if (overhead == m_wireOverheadBytes.end() ||
+        datagram.bytes().size() >
+            (std::numeric_limits<std::uint64_t>::max)() - overhead->second) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "common pacing queue selected an unaccounted datagram"));
+    }
+    const auto selectedWireBytes =
+        static_cast<std::uint64_t>(datagram.bytes().size()) + overhead->second;
+    if (m_queuedWireDatagrams == 0 || selectedWireBytes > m_queuedWireBytes ||
+        selectedWireBytes > queued.wireBytes) {
+        return Result::failure(::media::ErrorInfo::internalError(
+            "common pacing sender fair queue accounting underflowed"));
+    }
+    const auto selectedClass = schedulingClass(queued);
+    m_lastScheduledFlow[static_cast<std::size_t>(selectedClass)] =
+        schedulingFlow(queued);
+    m_pendingRemainingWireBytes = queued.wireBytes - selectedWireBytes;
+    m_nextDatagram = queued.nextDatagram;
     m_pendingBatch = std::move(queued.batch);
-    *m_nextScheduledSequence = queued.lastGlobalSequence + 1;
-    m_queuedWireDatagrams -= datagrams;
-    m_queuedWireBytes -= queued.wireBytes;
-    m_queuedWireBatches.erase(m_queuedWireBatches.begin());
-    m_nextDatagram = 0;
+    --m_queuedWireDatagrams;
+    m_queuedWireBytes -= selectedWireBytes;
     m_state = SubmitState::WaitReservation;
     return Result::success(true);
+}
+
+::media::Status
+MediaScheduledDatagramSenderNode::requeuePendingBatchContinuation()
+{
+    if (!m_pendingBatch || m_nextDatagram == 0 ||
+        m_nextDatagram >= m_pendingBatch->m_datagrams.size() ||
+        m_pendingRemainingWireBytes == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "common pacing sender has no valid batch continuation"));
+    }
+    const auto first =
+        m_pendingBatch->m_datagrams[m_nextDatagram].globalSequence();
+    const auto last = m_pendingBatch->m_datagrams.back().globalSequence();
+    try {
+        m_queuedWireBatches.push_back(QueuedWireBatch{
+            first, last, m_pendingRemainingWireBytes, m_nextDatagram, true,
+            m_pendingBatch});
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "common pacing sender fair queue continuation"));
+    }
+    m_pendingBatch.reset();
+    m_nextDatagram = 0;
+    m_pendingRemainingWireBytes = 0;
+    m_state = SubmitState::WaitReservation;
+    return ::media::Status::success();
 }
 
 bool MediaScheduledDatagramSenderNode::allBatchInputsDrained(
@@ -666,7 +804,7 @@ MediaScheduledDatagramSenderNode::failSubmit(
         if (error.kind ==
             MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
             submittedSequence =
-                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
+                m_groupPacingSequence;
         }
         auto committed = recordSubmittedPrefix(
             static_cast<std::size_t>(error.submittedPrefixDatagrams),
@@ -712,6 +850,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             ++m_batches;
             m_pendingBatch.reset();
             m_nextDatagram = 0;
+            m_pendingRemainingWireBytes = 0;
             m_state = SubmitState::WaitReservation;
             return processProgress();
         }
@@ -827,8 +966,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
             }
-            const auto submittedSequence =
-                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
+            const auto submittedSequence = m_groupPacingSequence;
             auto scopePaced = m_serviceScopeReservation->markSubmitted(
                 scopeSubmitStartedAt, scopeSubmitCompletedAt);
             m_serviceScopeReservation.reset();
@@ -844,7 +982,13 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 submittedSequence, submitNow.value(),
                 submitCompletedAt.value());
             if (!paced) return failTerminal(paced.error());
+            ++m_nextPacingSequence;
             m_state = SubmitState::WaitReservation;
+            if (m_nextDatagram < m_pendingBatch->m_datagrams.size()) {
+                auto requeued = requeuePendingBatchContinuation();
+                if (!requeued) return failTerminal(requeued.error());
+                return processProgress();
+            }
         }
     }
     return processProgress();
@@ -896,11 +1040,11 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << m_partialSubmittedFailures
                    << " ambiguous_submitted_failures="
                    << m_ambiguousSubmittedFailures
-                   << " ordered_queue_maximum_batches="
+                   << " fair_queue_maximum_batches="
                    << m_maximumQueuedWireBatches
-                   << " ordered_queue_maximum_datagrams="
+                   << " fair_queue_maximum_datagrams="
                    << m_maximumQueuedWireDatagrams
-                   << " ordered_queue_maximum_wire_bytes="
+                   << " fair_queue_maximum_wire_bytes="
                    << m_maximumQueuedWireBytes
                    << " pacing_reserved="
                    << (m_pacingController
@@ -1065,7 +1209,7 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
         if (!allBatchInputsDrained(context)) return processWaiting();
         if (!m_queuedWireBatches.empty()) {
             return failTerminal(::media::ErrorInfo::internalError(
-                "common pacing sender inputs closed with a global sequence gap"));
+                "common pacing sender inputs closed with queued flow work remaining"));
         }
         return finishAfterEvidenceDrain();
     }
@@ -1106,6 +1250,7 @@ void MediaScheduledDatagramSenderNode::closeSender(
     }
     m_session.reset();
     m_pendingBatch.reset();
+    m_pendingRemainingWireBytes = 0;
     m_queuedWireBatches.clear();
     m_queuedWireDatagrams = 0;
     m_queuedWireBytes = 0;

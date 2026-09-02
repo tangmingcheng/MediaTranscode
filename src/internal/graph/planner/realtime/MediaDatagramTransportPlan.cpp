@@ -15,6 +15,49 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+MediaDatagramSchedulingClass schedulingClass(
+    MediaDatagramProtocolEndpointRole role) noexcept
+{
+    switch (role) {
+    case MediaDatagramProtocolEndpointRole::VideoRtcp:
+    case MediaDatagramProtocolEndpointRole::AudioRtcp:
+    case MediaDatagramProtocolEndpointRole::MpegTsRtcp:
+        return MediaDatagramSchedulingClass::Control;
+    case MediaDatagramProtocolEndpointRole::AudioRtp:
+        return MediaDatagramSchedulingClass::Audio;
+    case MediaDatagramProtocolEndpointRole::VideoRtp:
+    case MediaDatagramProtocolEndpointRole::MpegTsUdp:
+    case MediaDatagramProtocolEndpointRole::MpegTsRtp:
+        return MediaDatagramSchedulingClass::Media;
+    default:
+        return MediaDatagramSchedulingClass::Unknown;
+    }
+}
+
+std::uint64_t schedulingFlowId(
+    MediaDatagramProtocolEndpointRole role,
+    const std::vector<MediaDatagramRemoteEndpointFact>& endpoints) noexcept
+{
+    auto primaryRole = role;
+    switch (role) {
+    case MediaDatagramProtocolEndpointRole::VideoRtcp:
+        primaryRole = MediaDatagramProtocolEndpointRole::VideoRtp;
+        break;
+    case MediaDatagramProtocolEndpointRole::AudioRtcp:
+        primaryRole = MediaDatagramProtocolEndpointRole::AudioRtp;
+        break;
+    case MediaDatagramProtocolEndpointRole::MpegTsRtcp:
+        primaryRole = MediaDatagramProtocolEndpointRole::MpegTsRtp;
+        break;
+    default:
+        break;
+    }
+    for (const auto& endpoint : endpoints) {
+        if (endpoint.role == primaryRole) return endpoint.endpointId;
+    }
+    return 0;
+}
+
 constexpr std::uint64_t Ipv4HeaderBytes = 20;
 constexpr std::uint64_t Ipv6HeaderBytes = 40;
 constexpr std::uint64_t UdpHeaderBytes = 8;
@@ -210,6 +253,9 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             endpointCoverage.push_back(remote.endpointId);
             endpoints.push_back(MediaDatagramEndpointPlan{
                 remote.endpointId,
+                deployment.serviceScope.interfaceIndex,
+                schedulingFlowId(remote.role, m_encoding.remoteEndpoints),
+                schedulingClass(remote.role),
                 remote.addressFamily,
                 remote.numericAddress,
                 remote.port,

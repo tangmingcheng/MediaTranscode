@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
 struct MediaDatagramRouteFact final {
     MediaIpAddressFamily addressFamily;
     std::string localNumericAddress;
+    std::uint32_t interfaceIndex;
     std::uint64_t maximumIpPacketBytes;
     std::string serviceScopeId;
     std::string authority;
