@@ -63,6 +63,8 @@ public:
         MediaRunningTime maximumWait,
         std::stop_token stopToken) noexcept;
     ::media::Status drainAvailableEvents(MediaRunningTime now) noexcept;
+    ::media::Result<std::optional<MediaRunningTime>>
+    pendingEvidenceDeadline() noexcept;
     ::media::Status abort(
         ::media::ErrorInfo cause,
         MediaRunningTime now) noexcept;

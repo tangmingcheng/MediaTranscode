@@ -705,6 +705,29 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
     return processProgress();
 }
 
+::media::Result<MediaNodeProcessResult>
+MediaScheduledDatagramSenderNode::finishAfterEvidenceDrain()
+{
+    auto now = m_clock->now();
+    if (!now) return failTerminal(now.error());
+    auto drained = m_session->drainAvailableEvents(now.value());
+    if (!drained) return failTerminal(drained.error());
+    auto pending = m_session->pendingEvidenceDeadline();
+    if (!pending) return failTerminal(pending.error());
+    if (!pending.value()) return processFinished();
+    if (pending.value().value() <= now.value()) {
+        return failTerminal(::media::ErrorInfo::internalError(
+            "expired transmit evidence remained pending after drain"));
+    }
+
+    MediaNodeProcessResult result = MediaNodeProcessResult::waiting();
+    result.deadlineWait = m_clock->deadlineWait(
+        pending.value().value(),
+        MediaNodeDeadlineWakePolicy::DeadlineOrCancellation);
+    return ::media::Result<MediaNodeProcessResult>::success(
+        std::move(result));
+}
+
 void MediaScheduledDatagramSenderNode::emitDiagnostics(
     const char* stage) noexcept
 {
@@ -878,7 +901,7 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
             return failTerminal(::media::ErrorInfo::internalError(
                 "common pacing sender inputs closed with a global sequence gap"));
         }
-        return processFinished();
+        return finishAfterEvidenceDrain();
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             batchInput.value()->buffer.get())) {

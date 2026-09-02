@@ -58,6 +58,7 @@ private:
     ::media::Status validatePorts(MediaGraphExecutionContext& context) const;
     ::media::Status bindPlan(const MediaDatagramTransportPlanBuffer& plan);
     ::media::Result<MediaNodeProcessResult> progressPendingBatch();
+    ::media::Result<MediaNodeProcessResult> finishAfterEvidenceDrain();
     ::media::Status waitUntil(MediaRunningTime deadline);
     ::media::Status beginSubmitGroup();
     ::media::Status preflightBatchTelemetry(

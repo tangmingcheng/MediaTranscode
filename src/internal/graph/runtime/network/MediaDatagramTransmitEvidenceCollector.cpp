@@ -383,7 +383,7 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
             if (entry.timestampExpected && m_plan) {
                 auto deadline = entry.submittedAt.checkedAdd(
                     m_plan->maximumDrainResidence);
-                if (!deadline || now > deadline.value()) {
+                if (!deadline || now >= deadline.value()) {
                     if (!entry.timestampObserved) {
                         incrementCounter(m_telemetry.lost);
                         auto status = coverageFailure(
@@ -424,6 +424,34 @@ void MediaDatagramTransmitEvidenceCollector::cancelPrepared(
         m_telemetry.unmatched == 0 && !m_telemetry.counterSaturated;
     m_telemetry.deliveryEvidenceProven = false;
     return ::media::Status::success();
+}
+
+::media::Result<std::optional<MediaRunningTime>>
+MediaDatagramTransmitEvidenceCollector::pendingTimestampDeadline() const noexcept
+{
+    using Result =
+        ::media::Result<std::optional<MediaRunningTime>>;
+    if (m_terminalFailure) return Result::failure(*m_terminalFailure);
+
+    std::optional<MediaRunningTime> earliest;
+    for (const auto& [evidenceId, entry] : m_entries) {
+        if (entry.state != EntryState::Submitted ||
+            !entry.timestampExpected || entry.timestampObserved) {
+            continue;
+        }
+        if (!m_plan) {
+            return Result::failure(::media::ErrorInfo::internalError(
+                "timestamp evidence has no bounded drain plan"));
+        }
+        auto deadline = entry.submittedAt.checkedAdd(
+            m_plan->maximumDrainResidence);
+        if (!deadline) return Result::failure(deadline.error());
+        if (!earliest || deadline.value() < *earliest) {
+            earliest = deadline.value();
+        }
+        (void)evidenceId;
+    }
+    return Result::success(earliest);
 }
 
 ::media::Status MediaDatagramTransmitEvidenceCollector::settleOnClose(

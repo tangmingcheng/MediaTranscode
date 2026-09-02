@@ -66,6 +66,8 @@ public:
         std::span<const MediaDatagramTransmitEvidenceReservation> reservations,
         std::uint64_t firstIndex) noexcept;
     ::media::Status drainAvailable(MediaRunningTime now) noexcept;
+    ::media::Result<std::optional<MediaRunningTime>>
+    pendingTimestampDeadline() const noexcept;
     ::media::Status settleOnClose(MediaRunningTime now) noexcept;
 
     const MediaDatagramTransmitEvidenceTelemetry& telemetry() const noexcept

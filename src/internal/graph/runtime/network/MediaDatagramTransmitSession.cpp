@@ -475,6 +475,21 @@ MediaDatagramTransmitSession::waitWritable(
     return drained;
 }
 
+::media::Result<std::optional<MediaRunningTime>>
+MediaDatagramTransmitSession::pendingEvidenceDeadline() noexcept
+{
+    using Result =
+        ::media::Result<std::optional<MediaRunningTime>>;
+    auto owner = validateOwnerThread();
+    if (!owner) return Result::failure(owner.error());
+    if (m_terminalFailure) return Result::failure(*m_terminalFailure);
+    if (m_closed) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "closed Datagram session has no pending evidence deadline"));
+    }
+    return m_evidence->pendingTimestampDeadline();
+}
+
 ::media::Status MediaDatagramTransmitSession::abort(
     ::media::ErrorInfo cause,
     MediaRunningTime now) noexcept
