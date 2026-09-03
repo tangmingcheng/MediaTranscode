@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <limits>
 #include <new>
 #include <string>
 #include <utility>
@@ -99,6 +100,16 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         m_packets.pop_front();
         return processProgress(emitOutput(context, "packet", packet));
     }
+    const auto now = std::chrono::steady_clock::now();
+    const std::int64_t nowNs = mediaSteadyClockNowNs();
+    if (auto status = drainPlayout(context); !status) {
+        return processProgress(status);
+    }
+    if (!m_packets.empty()) {
+        MediaBufferRef packet = std::move(m_packets.front());
+        m_packets.pop_front();
+        return processProgress(emitOutput(context, "packet", packet));
+    }
     if (!m_pendingRtpPackets.empty()) {
         if (auto status = drainPendingRtpPackets(context); !status) {
             return processProgress(status);
@@ -109,8 +120,6 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             return processProgress(emitOutput(context, "packet", packet));
         }
     }
-    const auto now = std::chrono::steady_clock::now();
-    const std::int64_t nowNs = mediaSteadyClockNowNs();
     if (auto status = queueClockTransition(context, nowNs); !status) {
         return processProgress(status);
     }
@@ -146,6 +155,23 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         auto clockTimeout = m_clockSchedule->receiveTimeoutMs(nowNs, receiveTimeoutMs);
         if (!clockTimeout) return processProgress(::media::Status::failure(clockTimeout.error()));
         receiveTimeoutMs = clockTimeout.value();
+    }
+    if (const auto readyAt = m_playout->nextReadyAt()) {
+        auto remaining = readyAt->checkedSubtract(
+            MediaRunningTime::fromNanoseconds(mediaSteadyClockNowNs()));
+        if (!remaining) {
+            return processProgress(::media::Status::failure(
+                remaining.error()));
+        }
+        const auto playoutTimeout = std::chrono::ceil<
+            std::chrono::milliseconds>(std::chrono::nanoseconds(
+                remaining.value().nanoseconds()));
+        const int readyTimeoutMs = playoutTimeout.count() > 0
+            ? static_cast<int>((std::min)(
+                  playoutTimeout.count(),
+                  static_cast<std::int64_t>((std::numeric_limits<int>::max)())))
+            : 1;
+        receiveTimeoutMs = (std::min)(receiveTimeoutMs, readyTimeoutMs);
     }
     ::media::Result<MediaRtpUdpDatagram> datagram =
         ::media::Result<MediaRtpUdpDatagram>::failure(
@@ -237,6 +263,9 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                                                m_clockTracker->generation()); !status) {
                 return processProgress(status);
             }
+            if (auto status = drainPlayout(context); !status) {
+                return processProgress(status);
+            }
             if (!m_events.empty()) {
                 auto event = std::move(m_events.front());
                 m_events.pop_front();
@@ -306,11 +335,23 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         options, "RawRtpInputNode", "rtp.access_unit_size_authority");
     auto accessUnitCompletionAuthority = requiredNodeOption(
         options, "RawRtpInputNode", "rtp.access_unit_completion_authority");
+    auto playoutLatency = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.playout_latency_ns");
+    auto playoutStartupAccessUnits = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.playout_startup_access_units");
+    auto playoutAccessUnits = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.playout_maximum_access_units");
+    auto playoutPayloadBytes = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.playout_maximum_payload_bytes");
+    auto playoutAuthority = requiredNodeOption(
+        options, "RawRtpInputNode", "rtp.playout_authority");
     if (!family || !address || !rtpPort || !rtcpPort || !payloadType || !clockRate || !receiveBuffer ||
         !datagramBytes || !reorderWindow || !reorderDelay || !readTimeout || !requireSr || !requireCname ||
         !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration ||
         !maximumAccessUnitBytes || !maximumAccessUnitsPerPush ||
-        !accessUnitSizeAuthority || !accessUnitCompletionAuthority) {
+        !accessUnitSizeAuthority || !accessUnitCompletionAuthority ||
+        !playoutLatency || !playoutStartupAccessUnits ||
+        !playoutAccessUnits || !playoutPayloadBytes || !playoutAuthority) {
         const ::media::ErrorInfo* error = nullptr;
         if (!family) error = &family.error(); else if (!address) error = &address.error(); else if (!rtpPort) error = &rtpPort.error();
         else if (!rtcpPort) error = &rtcpPort.error(); else if (!payloadType) error = &payloadType.error(); else if (!clockRate) error = &clockRate.error();
@@ -326,7 +367,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         else if (!maximumAccessUnitBytes) error = &maximumAccessUnitBytes.error();
         else if (!maximumAccessUnitsPerPush) error = &maximumAccessUnitsPerPush.error();
         else if (!accessUnitSizeAuthority) error = &accessUnitSizeAuthority.error();
-        else error = &accessUnitCompletionAuthority.error();
+        else if (!accessUnitCompletionAuthority) error = &accessUnitCompletionAuthority.error();
+        else if (!playoutLatency) error = &playoutLatency.error();
+        else if (!playoutStartupAccessUnits) error = &playoutStartupAccessUnits.error();
+        else if (!playoutAccessUnits) error = &playoutAccessUnits.error();
+        else if (!playoutPayloadBytes) error = &playoutPayloadBytes.error();
+        else error = &playoutAuthority.error();
         return ::media::Status::failure(*error);
     }
     auto rtcpComposition = parseMediaRtcpCompositionMode(compositionMode.value());
@@ -356,6 +402,22 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (auto status = m_accessUnitEnvelope.validate(); !status) {
         return status;
     }
+    if (static_cast<std::uint64_t>(playoutStartupAccessUnits.value()) >
+            (std::numeric_limits<std::size_t>::max)() ||
+        static_cast<std::uint64_t>(playoutAccessUnits.value()) >
+            (std::numeric_limits<std::size_t>::max)()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RawRtpInputNode playout item capacity exceeds runtime range"));
+    }
+    MediaRtpInputPlayoutPlan playoutPlan{
+        MediaRunningTime::fromNanoseconds(playoutLatency.value()),
+        static_cast<std::size_t>(playoutStartupAccessUnits.value()),
+        static_cast<std::size_t>(playoutAccessUnits.value()),
+        static_cast<std::uint64_t>(playoutPayloadBytes.value()),
+        playoutAuthority.value()};
+    auto playout = MediaRtpAccessUnitPlayoutBuffer::create(
+        std::move(playoutPlan), clockRate.value());
+    if (!playout) return ::media::Status::failure(playout.error());
     auto depacketizer = MediaRtpDepacketizerFactory::create(m_config);
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
@@ -469,6 +531,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                   std::chrono::milliseconds(reorderDelay.value())),
         static_cast<uint8_t>(payloadType.value())});
     m_depacketizer = std::move(depacketizer).value();
+    m_playout = std::make_unique<MediaRtpAccessUnitPlayoutBuffer>(
+        std::move(playout).value());
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
         requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
         static_cast<int64_t>(cnameTimeout.value()) * 1'000'000});
@@ -526,6 +590,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         if (m_clockSchedule) m_clockSchedule->reset();
     }
     for (const auto& discontinuity : reordered.discontinuities) {
+        if (discontinuity.reason == MediaRtpDiscontinuityReason::SsrcChanged ||
+            discontinuity.reason ==
+                MediaRtpDiscontinuityReason::PayloadTypeChanged) {
+            m_playout->reset();
+        }
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -551,7 +620,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                     discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
     }
-    for (MediaRtpPacket& packet : reordered.packets) {
+    for (auto& packet : reordered.packets) {
         m_pendingRtpPackets.push_back(std::move(packet));
     }
     return drainPendingRtpPackets(context);
@@ -566,6 +635,21 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             return status;
         }
         m_pendingRtpPackets.pop_front();
+        if (auto status = drainPlayout(context); !status) {
+            return status;
+        }
+        if (!m_packets.empty()) break;
+    }
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::drainPlayout(
+    MediaGraphExecutionContext&)
+{
+    auto due = m_playout->popReady();
+    if (!due) return ::media::Status::failure(due.error());
+    if (due.value()) {
+        m_packets.push_back(std::move(*due.value()));
     }
     return ::media::Status::success();
 }
@@ -678,7 +762,9 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             format.isInput = true;
             format.isRealtime = true;
             buffer.value()->setFormatDescriptor(std::move(format));
-            m_packets.push_back(std::move(buffer).value());
+            auto playoutStatus = m_playout->push(
+                std::move(buffer).value(), unit.rtpTimestamp);
+            if (!playoutStatus) return playoutStatus;
         }
         m_pendingPayloadReservations.clear();
         m_reservedAccessUnitTimestamp.reset();
@@ -824,6 +910,7 @@ void RawRtpInputNode::resetState() noexcept
 {
     m_reorder.reset();
     m_depacketizer.reset();
+    m_playout.reset();
     m_clockTracker.reset();
     m_clockSchedule.reset();
     m_config = {};

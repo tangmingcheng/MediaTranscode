@@ -57,12 +57,13 @@ const char* boolOption(bool value) noexcept
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
     if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value() ||
-        plan.rtpTransport.has_value() != plan.rtpAccessUnitEnvelope.has_value()) {
+        plan.rtpTransport.has_value() != plan.rtpAccessUnitEnvelope.has_value() ||
+        plan.rtpTransport.has_value() != plan.rtpPlayout.has_value()) {
         return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("raw RTP input requires transport and depacketizer plans together"));
+            ::media::ErrorInfo::invalidArgument("raw RTP input requires transport, depacketizer, access-unit envelope, and playout plans together"));
     }
     if (plan.rtpTransport && plan.rtpDepacketizer &&
-        plan.rtpAccessUnitEnvelope) {
+        plan.rtpAccessUnitEnvelope && plan.rtpPlayout) {
         if (!plan.requiresPreparedInput) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -71,12 +72,16 @@ const char* boolOption(bool value) noexcept
         const auto& transport = *plan.rtpTransport;
         const auto& depacketizer = *plan.rtpDepacketizer;
         const auto& accessUnitEnvelope = *plan.rtpAccessUnitEnvelope;
+        const auto& playout = *plan.rtpPlayout;
         if (auto status = accessUnitEnvelope.validate(); !status ||
             accessUnitEnvelope.streamKind != depacketizer.streamKind ||
             accessUnitEnvelope.codecName != depacketizer.codecName) {
             return ::media::Result<void>::failure(
                 !status ? status.error() : ::media::ErrorInfo::invalidArgument(
                     "raw RTP access-unit envelope conflicts with depacketizer"));
+        }
+        if (auto status = playout.validate(); !status) {
+            return ::media::Result<void>::failure(status.error());
         }
         const auto set = [&](const char* key, std::string value) {
             return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, std::move(value));
@@ -154,6 +159,11 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtp.maximum_access_units_per_push", std::to_string(accessUnitEnvelope.maximumAccessUnitsPerPush)); !status) return status;
         if (auto status = set("rtp.access_unit_size_authority", accessUnitEnvelope.sizeAuthority); !status) return status;
         if (auto status = set("rtp.access_unit_completion_authority", accessUnitEnvelope.completionAuthority); !status) return status;
+        if (auto status = set("rtp.playout_latency_ns", std::to_string(playout.latency.nanoseconds())); !status) return status;
+        if (auto status = set("rtp.playout_startup_access_units", std::to_string(playout.startupAccessUnits)); !status) return status;
+        if (auto status = set("rtp.playout_maximum_access_units", std::to_string(playout.maximumRetainedAccessUnits)); !status) return status;
+        if (auto status = set("rtp.playout_maximum_payload_bytes", std::to_string(playout.maximumRetainedPayloadBytes)); !status) return status;
+        if (auto status = set("rtp.playout_authority", playout.authority); !status) return status;
     } else if (plan.requiresPreparedInput) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
