@@ -95,6 +95,7 @@ public:
     std::uint32_t ssrc() const noexcept;
     std::uint64_t generation() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
+    std::size_t maximumBatchDatagrams() const noexcept;
 
 private:
     explicit MediaRtpWireDatagramMaterializer(

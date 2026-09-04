@@ -7,6 +7,7 @@
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
+#include "internal/graph/time/MediaRunningTime.h"
 #include "internal/graph/planner/MediaPreparedEncoderEmissionEnvelope.h"
 #include "media_transcode/Result.h"
 
@@ -84,6 +85,7 @@ struct MediaPipelineChainPlan {
         MediaVideoFilterImplementation::Unknown;
     MediaVideoEncoderAbortPolicy encoderAbortPolicy =
         MediaVideoEncoderAbortPolicy::Unknown;
+    std::optional<MediaRunningTime> decoderReceiveInterval;
     std::string reason;
 };
 

@@ -13,6 +13,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaMpegTsProtocolCommitState;
+
 class MediaMpegTsProtocolDatagram final {
 public:
     std::span<const std::uint8_t> bytes() const noexcept { return m_bytes; }
@@ -62,10 +64,10 @@ public:
     std::uint64_t generation() const noexcept { return m_generation; }
     std::span<const MediaMpegTsProtocolDatagram> datagrams() const noexcept
     {
-        return m_datagrams;
+        return std::span(m_datagrams).subspan(m_materializedDatagrams);
     }
     ::media::Result<MediaProtocolDatagramCommitTransaction>
-    takeCommitTransaction() noexcept;
+    takeCommitTransaction(std::size_t datagrams);
 
 private:
     explicit MediaMpegTsProtocolDatagramBatchBuffer(
@@ -74,7 +76,8 @@ private:
     std::uint64_t m_generation;
     std::vector<std::uint8_t> m_payload;
     std::vector<MediaMpegTsProtocolDatagram> m_datagrams;
-    std::optional<MediaProtocolDatagramCommitTransaction> m_commitTransaction;
+    std::shared_ptr<MediaMpegTsProtocolCommitState> m_commitTransaction;
+    std::size_t m_materializedDatagrams = 0;
 };
 
 } // namespace media::ffmpeg::graph

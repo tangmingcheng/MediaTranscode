@@ -54,6 +54,7 @@ struct MediaDatagramPacingTelemetry final {
     std::int64_t maximumSubmitLatenessNanoseconds = 0;
     std::uint64_t worstLateGlobalSequence = 0;
     std::uint64_t rateAdaptations = 0;
+    std::uint64_t capacityLimitedReservations = 0;
     std::uint64_t maximumWireBytesPerSecond = 0;
     bool counterSaturated = false;
 };

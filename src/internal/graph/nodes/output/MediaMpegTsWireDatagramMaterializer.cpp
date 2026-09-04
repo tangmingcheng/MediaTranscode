@@ -147,10 +147,13 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
     }
     std::vector<MediaMpegTsDatagramView> views;
     try {
-        views.reserve(protocolBatch.datagrams().size());
+        const auto datagrams = protocolBatch.datagrams().first((std::min)(
+            protocolBatch.datagrams().size(),
+            static_cast<std::size_t>(m_config.batchPlan.maximumDatagrams)));
+        views.reserve(datagrams.size());
         for (std::size_t index = 0;
-             index < protocolBatch.datagrams().size(); ++index) {
-            const auto& datagram = protocolBatch.datagrams()[index];
+             index < datagrams.size(); ++index) {
+            const auto& datagram = datagrams[index];
             views.push_back(MediaMpegTsDatagramView{
                 datagram.bytes(), datagram.canonicalRelease()});
         }
@@ -171,7 +174,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
         (protocolBatch &&
-         protocolBatch->datagrams().size() != datagrams.size())) {
+         protocolBatch->datagrams().size() < datagrams.size())) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS UDP wire materializer requires a nonempty batch"));
     }
@@ -191,7 +194,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
                 "MPEG-TS UDP wire materializer requires complete TS datagrams and ordered canonical windows"));
         }
         auto deadline = m_config.deadline.canonicalDeadline(
-            datagram.canonicalRelease);
+            datagram.canonicalRelease, materializedAt);
         if (!deadline) return Result::failure(deadline.error());
         deadlines.push_back(deadline.value());
     }
@@ -213,7 +216,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
     if (!global) return Result::failure(global.error());
     std::optional<MediaProtocolDatagramCommitTransaction> protocolCommit;
     if (protocolBatch) {
-        auto transaction = protocolBatch->takeCommitTransaction();
+        auto transaction = protocolBatch->takeCommitTransaction(datagrams.size());
         if (!transaction) return Result::failure(transaction.error());
         if (transaction.value().size() != datagrams.size()) {
             return Result::failure(::media::ErrorInfo::internalError(
@@ -372,7 +375,8 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
     std::vector<std::size_t> payloadOctets;
     std::vector<MediaPacketizedRtpDatagramView> packetized;
     try {
-        const auto datagrams = protocolBatch.datagrams();
+        const auto datagrams = protocolBatch.datagrams().first((std::min)(
+            protocolBatch.datagrams().size(), m_rtpMaterializer.maximumBatchDatagrams()));
         payloads.reserve(datagrams.size());
         payloadOctets.reserve(datagrams.size());
         packetized.reserve(datagrams.size());

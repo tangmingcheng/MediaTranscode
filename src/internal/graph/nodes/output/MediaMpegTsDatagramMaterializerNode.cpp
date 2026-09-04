@@ -280,7 +280,11 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
             "MPEG-TS wire batch commit differs from pending output"));
     }
     m_pendingOutputs.pop_front();
-    if (m_pendingOutputs.empty()) m_pendingProtocolBatch.reset();
+    if (m_pendingOutputs.empty()) {
+        const auto* protocol = dynamic_cast<const MediaMpegTsProtocolDatagramBatchBuffer*>(
+            m_pendingProtocolBatch.get());
+        if (!protocol || protocol->datagrams().empty()) m_pendingProtocolBatch.reset();
+    }
     return ::media::Status::success();
 }
 

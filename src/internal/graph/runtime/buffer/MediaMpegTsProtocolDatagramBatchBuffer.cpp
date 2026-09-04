@@ -2,10 +2,54 @@
 
 #include <algorithm>
 #include <new>
+#include <mutex>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+struct MediaMpegTsProtocolCommitState final {
+    explicit MediaMpegTsProtocolCommitState(MediaProtocolDatagramCommitTransaction value) noexcept
+        : transaction(std::move(value)) {}
+    std::mutex mutex;
+    MediaProtocolDatagramCommitTransaction transaction;
+};
+
 namespace {
+
+class MediaTsProtocolCommitPrefix final {
+public:
+    MediaTsProtocolCommitPrefix(std::shared_ptr<MediaMpegTsProtocolCommitState> state,
+        std::size_t begin, std::size_t count) noexcept
+        : m_state(std::move(state)), m_begin(begin), m_count(count) {}
+    MediaTsProtocolCommitPrefix(MediaTsProtocolCommitPrefix&&) noexcept = default;
+    MediaTsProtocolCommitPrefix(const MediaTsProtocolCommitPrefix&) = delete;
+    ~MediaTsProtocolCommitPrefix() noexcept
+    {
+        if (m_state && m_committed != m_count) {
+            std::lock_guard lock(m_state->mutex);
+            m_state->transaction.abandon();
+        }
+    }
+    std::size_t size() const noexcept { return m_count; }
+    ::media::Status commitNextPrefix(std::size_t count) noexcept
+    {
+        std::lock_guard lock(m_state->mutex);
+        if (count == 0 || count > m_count - m_committed ||
+            m_state->transaction.committed() != m_begin + m_committed) {
+            m_state->transaction.abandon();
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "MPEG-TS protocol prefix commit violates order or bounds"));
+        }
+        auto status = m_state->transaction.commitNextPrefix(count);
+        if (status) m_committed += count;
+        return status;
+    }
+private:
+    std::shared_ptr<MediaMpegTsProtocolCommitState> m_state;
+    std::size_t m_begin;
+    std::size_t m_count;
+    std::size_t m_committed = 0;
+};
 
 class MediaTsProtocolCommitReservation final {
 public:
@@ -141,22 +185,30 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
         MediaTsProtocolCommitReservation(
             std::move(cursor), prepared.value().takeCommitToken(), entryCount));
     if (!transaction) return Result::failure(transaction.error());
-    output->m_commitTransaction.emplace(std::move(transaction).value());
+    try {
+        output->m_commitTransaction = std::make_shared<MediaMpegTsProtocolCommitState>(
+            std::move(transaction).value());
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "MPEG-TS protocol commit state"));
+    }
     return Result::success(std::move(output));
 }
 
 ::media::Result<MediaProtocolDatagramCommitTransaction>
-MediaMpegTsProtocolDatagramBatchBuffer::takeCommitTransaction() noexcept
+MediaMpegTsProtocolDatagramBatchBuffer::takeCommitTransaction(std::size_t datagrams)
 {
     using Result = ::media::Result<MediaProtocolDatagramCommitTransaction>;
-    if (!m_commitTransaction || !m_commitTransaction->valid()) {
+    if (!m_commitTransaction || datagrams == 0 ||
+        datagrams > m_datagrams.size() - m_materializedDatagrams) {
         return Result::failure(
             ::media::ErrorInfo::internalError(
-                "MPEG-TS protocol transaction is absent or already moved"));
+                "MPEG-TS protocol transaction prefix is absent or out of bounds"));
     }
-    auto transaction = std::move(*m_commitTransaction);
-    m_commitTransaction.reset();
-    return Result::success(std::move(transaction));
+    auto transaction = MediaProtocolDatagramCommitTransaction::create(
+        MediaTsProtocolCommitPrefix(m_commitTransaction, m_materializedDatagrams, datagrams));
+    if (transaction) m_materializedDatagrams += datagrams;
+    return transaction;
 }
 
 std::optional<std::uint64_t>

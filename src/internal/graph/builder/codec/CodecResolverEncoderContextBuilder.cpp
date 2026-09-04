@@ -1,4 +1,6 @@
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
+#include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 
 #include "internal/graph/builder/codec/CodecResolverEncoderFormatPlanner.h"
 #include "internal/graph/builder/codec/MediaEncoderRateControlOptionAdapter.h"
@@ -216,6 +218,14 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     encoderContext->width = targetWidth;
+    auto lowLatency = requiredBoolNodeOption(options,
+        "CodecResolverEncoderContextBuilder", "encoder.low_latency");
+    if (!lowLatency) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            lowLatency.error());
+    }
+    MediaEncoderOpenContractAdapter::applyLowLatency(
+        *encoderContext, lowLatency.value());
     encoderContext->height = targetHeight;
     encoderContext->pix_fmt = formatPlan.encoderPixelFormat;
     encoderContext->sw_pix_fmt = formatPlan.surfaceSoftwareFormat;

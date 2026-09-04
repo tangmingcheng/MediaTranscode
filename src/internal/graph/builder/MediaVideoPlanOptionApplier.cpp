@@ -191,6 +191,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 "MediaVideoPlanOptionApplier requires planner encoder-open product"));
     }
     const auto& plan = *encoder.encoderOpenContract;
+    if (auto status = setOption(graph, codecResolver, "encoder.low_latency",
+            boolOption(plan.lowLatency)); !status) return status;
     const auto setOptionalInt = [&](const char* key, const std::optional<int>& value) {
         return value
             ? setOption(graph, codecResolver, key, std::to_string(*value))
@@ -238,6 +240,16 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     };
     if (nodes.videoTimestamp.isValid()) {
         plannedNodes.push_back(nodes.videoTimestamp);
+    }
+
+    if (auto status = setOption(graph, nodes.videoDecode,
+            "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
+        !status) return status;
+    if (chain.decoderReceiveInterval) {
+        if (auto status = setOption(graph, nodes.videoDecode,
+                "video_decode.receive_interval_ns",
+                std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+            !status) return status;
     }
 
     for (MediaNodeId nodeId : plannedNodes) {

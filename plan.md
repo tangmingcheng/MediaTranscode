@@ -559,3 +559,17 @@ Detailed design and execution checklist:
 - [x] Task 5.7：将协议物化后的 wire batch 直接汇入公共 GBRA sender，删除第二级 shaper queue；planner 按 WebRTC 无反馈 2.5×、prepared peak 与 burst/deadline 共同推导 rate，GBRA 从非阻塞 submit-completion 起算下一包 debt。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 运行 120 秒：64515 datagrams、RTP loss 0、TS error 0、service-curve draw-up 1356 B ≤ burst 1356 B、VLC 播放异常 0；CPU 继续列为后置风险。
 - [x] Task 5.8：删除 realtime/Beta 的 `path-mtu` 与 `receiver-transport-decode-lead` 外部参数；planner 从 connected-path PMTU 与所选出口接口 MTU 的较小值推导 packetization 上限，并从 immutable maximum wire residence 形成 transport timing。公共 service-scope queue 采用 WebRTC queue-time drain-rate 公式并受部署容量硬上限约束；queue snapshot 在 ledger 锁内采样权威时钟，submit lifecycle evidence 与 aggregate queue accounting 分离，消除 reserve/snapshot 与 submit/commit 两类 TOCTOU。Windows/Linux sender 强制 PMTUD，不以 IP fragmentation 作为运行期 fallback。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 最终复验运行 120 秒：64516 datagrams（RTP 64486、RTCP 30）、RTP loss/order error 0、TS continuity/TEI/AFC error 0、GBRA debt 1356 B 且 violation 0、maximum residence 96.9708 ms、VLC 解码/late/discontinuity error 0；实际 pacing max 2006648 B/s，部署上限来自权威 100 Mbps 出口链路事实且未被消费为发送速率。平均单核 CPU 23.131%，按用户要求暂不优化并继续列为后置风险。
 - [ ] Task 6：完成固定 56 条链路验收（38 VideoOnly + 18 AudioVideo）：Windows 全矩阵实跑，RK 对 capability-admitted 链路实跑、unsupported 链路 DAG 前拒绝；完成 120 秒证据、文档、质量评分、SDD 每 Task 单 reviewer PASS、代码冻结后两名未参与者同时 PASS、PR 与最终审核。
+
+## 2026-09-04 外部 RTP 源 RKMPP 最小范围复验
+
+- 基线：`a5597326464140a319787d123ccc2ffef9c4e40b`；原目录分支 `codex/rk-a559-external-rtp`，没有独立工作树。
+- 目标机：`/home/tang/MediaTranscode`；用户 API 真实源 H.264 1920x1080 25 fps RTP，输出 HEVC 1920x1080 25 fps CBR 6 Mbps、GOP 50、MPEG-TS/RTP、VideoOnly；不改参数。
+- [x] 恢复基线，目标机全量构建，输入使用用户确认的 `192.168.130.229:61884`。
+- [x] 逐次记录真实失败与已确认原因；见 `docs/rk-a559-external-rtp-validation.md`，未将失败记作通过。
+- [x] RKMPP 原参数第 16/17 次分别输出 223.11/224.89 秒，源停前核心错误、丢弃、deadline 超限均为 0。
+- [ ] 完整链路验收仍未通过：接收抓包超额及 VLC 迟到尚未解决，不将持续运行达标等同完整通过。
+- [x] 持续运行修复检查点 `3f10fb4d` 已提交并推送；两名独立源码审查均 PASS，专项评分 82/100；草稿 PR #32 由新智能体审核，源码 PASS、完整交付门禁 FAIL。
+- [ ] 完整验收通过后另建成功测试提交；当前检查点与草稿 PR 均不作为成功验收。
+- 范围约束：只修导致退出的必要问题，不重新设计、不新增外部参数或诊断库。用户最新要求只做 RKMPP，不再运行 Windows 测试；已有 Windows 通过证据在独立提交 `3ebc551b`，不覆盖后续改动。
+- 当前改动：发送软目标限于硬容量、已有低延迟编码契约落实、RKMPP 异步输出轮询、首次物化驻留期限、全局提交背压、按已有 planner 批次上限逐批物化。Linux timer 精度实验未解决退出，已撤销。
+- 一小时期限已错过，未宣称按时完成。后续继续以真实 RKMPP 结果为准；先测试，后审查。

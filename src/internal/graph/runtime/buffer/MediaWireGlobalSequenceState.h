@@ -110,6 +110,7 @@ public:
            std::uint64_t firstGlobalSequence,
            std::size_t maximumOutstandingDatagrams,
            std::uint64_t maximumOutstandingWireBytes,
+           bool commitBeforeNextReservation,
            std::unordered_map<std::uint64_t, std::uint64_t>
                endpointWireHeaderBytes);
 
@@ -137,6 +138,7 @@ private:
                                  std::uint64_t firstGlobalSequence,
                                  std::size_t maximumOutstandingDatagrams,
                                  std::uint64_t maximumOutstandingWireBytes,
+                                 bool commitBeforeNextReservation,
                                  std::unordered_map<std::uint64_t, std::uint64_t>
                                      endpointWireHeaderBytes) noexcept;
     ::media::Status markStageRange(
@@ -172,6 +174,7 @@ private:
     const std::uint64_t m_generation;
     const std::size_t m_maximumOutstandingDatagrams;
     const std::uint64_t m_maximumOutstandingWireBytes;
+    const bool m_commitBeforeNextReservation;
     const std::unordered_map<std::uint64_t, std::uint64_t>
         m_endpointWireHeaderBytes;
     std::unordered_map<std::uint64_t, std::weak_ptr<MediaNodeWakeup>>

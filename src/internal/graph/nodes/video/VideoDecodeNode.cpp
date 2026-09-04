@@ -10,6 +10,7 @@
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 extern "C" {
@@ -141,6 +142,15 @@ bool VideoDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
         nodeOptions(context), "decoder.pipeline.output", "VideoDecodeNode");
     if (!contract) return ::media::Status::failure(contract.error());
     m_outputContract = std::move(contract).value();
+    auto pollOutput = requiredBoolNodeOption(
+        nodeOptions(context), "VideoDecodeNode", "video_decode.poll_output");
+    if (!pollOutput) return ::media::Status::failure(pollOutput.error());
+    if (pollOutput.value()) {
+        auto interval = requiredPositiveInt64NodeOption(nodeOptions(context),
+            "VideoDecodeNode", "video_decode.receive_interval_ns");
+        if (!interval) return ::media::Status::failure(interval.error());
+        m_receiveInterval = std::chrono::nanoseconds(interval.value());
+    }
     if (m_lineageRegistry) {
         auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
             nodeOptions(context), "video.lineage.decoder_copy_opaque");
@@ -169,6 +179,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     m_firstFrameDiagnosticEmitted = false;
     m_outputContract.reset();
     m_copyOpaqueLineage.reset();
+    m_receiveInterval.reset();
     m_drmPrimeFrames = 0;
     m_softwareFrames = 0;
     m_lineageState->resetForLifecycle();
@@ -259,6 +270,13 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         if (packetInput && packetInput->closed()) {
             m_lineageState->terminals.markClosed("packet");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        if (m_receiveInterval) {
+            auto received = receiveFrames(context);
+            if (!received) return processProgress(::media::Status::failure(received.error()));
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                    std::chrono::steady_clock::now() + *m_receiveInterval));
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }

@@ -140,7 +140,8 @@ struct MediaDatagramWireDeadlinePlan final {
     MediaRunningTime maximumResidence;
 
     ::media::Result<MediaRunningTime> canonicalDeadline(
-        MediaRunningTime canonicalRelease) const noexcept;
+        MediaRunningTime canonicalRelease,
+        MediaRunningTime materializedAt) const noexcept;
 
     friend bool operator==(const MediaDatagramWireDeadlinePlan&,
                            const MediaDatagramWireDeadlinePlan&) = default;
@@ -150,6 +151,7 @@ struct MediaDatagramBacklogPlan final {
     std::uint64_t maximumDatagrams;
     std::uint64_t maximumBytes;
     MediaRunningTime maximumResidence;
+    bool commitBeforeNextReservation;
 
     friend bool operator==(const MediaDatagramBacklogPlan&,
                            const MediaDatagramBacklogPlan&) = default;
