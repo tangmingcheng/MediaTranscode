@@ -765,6 +765,11 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << (m_pacingController
                            ? m_pacingController->telemetry().rateAdaptations
                            : 0)
+                   << " pacing_capacity_limited_reservations="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry()
+                                 .capacityLimitedReservations
+                           : 0)
                    << " pacing_maximum_wire_bytes_per_second="
                    << (m_pacingController
                            ? m_pacingController->telemetry()

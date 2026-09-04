@@ -11,6 +11,7 @@
 #include <string_view>
 #include <deque>
 #include <optional>
+#include <chrono>
 
 namespace media::ffmpeg::graph {
 
@@ -90,6 +91,7 @@ private:
     bool m_firstFrameDiagnosticEmitted = false;
     std::optional<MediaHardwareDescriptor> m_outputContract;
     std::optional<bool> m_copyOpaqueLineage;
+    std::optional<std::chrono::nanoseconds> m_receiveInterval;
     std::uint64_t m_drmPrimeFrames = 0;
     std::uint64_t m_softwareFrames = 0;
 };

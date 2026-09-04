@@ -241,17 +241,18 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 std::move(endpointCoverage)},
             std::move(endpoints),
             MediaDatagramServiceCurvePlan{
-                pacingRate.value(),
+                deployment.service.provisionedCapacityWireBytesPerSecond,
                 deployment.service.provisionedCapacityWireBytesPerSecond,
                 m_encoding.wireTraffic.maximumWireDatagramBytes,
                 m_encoding.wireTraffic.authority + "+" +
                     deployment.latency.authority + "+" +
                     deployment.service.authority +
-                    "+webrtc-no-feedback-default-2.5x+prepared-peak-and-burst-over-immutable-residence+webrtc-average-queue-time-rate-adaptation-with-managed-capacity+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
+                    "+prepared-demand-admission+provisioned-service-rate+itu-y1221-gbra+rfc1363-maximum-rate-leaky-bucket"},
             MediaDatagramBacklogPlan{
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,
-                deployment.latency.maximumResidence},
+                deployment.latency.maximumResidence,
+                true}, // The userspace sender owns one active batch at a time.
             MediaDatagramBatchPlan{
                 resources.maximumBatchDatagrams,
                 resources.maximumBatchBytes},

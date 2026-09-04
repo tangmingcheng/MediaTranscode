@@ -171,16 +171,21 @@ validateEvidence(const MediaDatagramShapingPlanEncoding& encoding)
 
 ::media::Result<MediaRunningTime>
 MediaDatagramWireDeadlinePlan::canonicalDeadline(
-    MediaRunningTime canonicalRelease) const noexcept
+    MediaRunningTime canonicalRelease,
+    MediaRunningTime materializedAt) const noexcept
 {
     using Result = ::media::Result<MediaRunningTime>;
     if (endpointId == 0 ||
         canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
+        materializedAt < MediaRunningTime::fromNanoseconds(0) ||
         maximumResidence <= MediaRunningTime::fromNanoseconds(0)) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire deadline requires endpoint identity, non-negative release, and positive hard residence"));
     }
-    return canonicalRelease.checkedAdd(maximumResidence);
+    // Wire residence starts when the datagram exists and is eligible to send.
+    // Source lateness is not time spent in the wire queue. Fix this deadline
+    // once at materialization; sender retries must never extend it.
+    return (std::max)(canonicalRelease, materializedAt).checkedAdd(maximumResidence);
 }
 
 ::media::Result<MediaDatagramShapingPlan>

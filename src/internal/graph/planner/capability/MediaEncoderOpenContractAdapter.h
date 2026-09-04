@@ -9,6 +9,7 @@ namespace media::ffmpeg::graph {
 
 class MediaEncoderOpenContractAdapter final {
 public:
+    static void applyLowLatency(AVCodecContext& context, bool lowLatency) noexcept;
     static ::media::Status applyBeforeOpen(
         AVCodecContext& context,
         const MediaEncoderOpenContract& contract);

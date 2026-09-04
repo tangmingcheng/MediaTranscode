@@ -246,8 +246,11 @@ MediaWireGlobalSequenceReservation::sequence(std::size_t index) const noexcept
         if (m_state->m_outstandingDatagrams == 0) {
             m_state->m_queueResidenceSumNanoseconds = 0;
         }
-        notifyWaiters = std::exchange(
-            m_state->m_reservationBlocked, false);
+        if (!m_state->m_commitBeforeNextReservation ||
+            m_committed + count == m_wireBytes.size()) {
+            notifyWaiters = std::exchange(
+                m_state->m_reservationBlocked, false);
+        }
         for (std::size_t index = begin; index < begin + count; ++index) {
             m_state->observeResidence(m_materializedAt[index], now);
         }
@@ -293,6 +296,7 @@ MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
     std::uint64_t firstGlobalSequence,
     std::size_t maximumOutstandingDatagrams,
     std::uint64_t maximumOutstandingWireBytes,
+    bool commitBeforeNextReservation,
     std::unordered_map<std::uint64_t, std::uint64_t>
         endpointWireHeaderBytes) noexcept
     : m_sessionKey(std::move(sessionKey)),
@@ -300,6 +304,7 @@ MediaWireGlobalSequenceState::MediaWireGlobalSequenceState(
       m_generation(generation),
       m_maximumOutstandingDatagrams(maximumOutstandingDatagrams),
       m_maximumOutstandingWireBytes(maximumOutstandingWireBytes),
+      m_commitBeforeNextReservation(commitBeforeNextReservation),
       m_endpointWireHeaderBytes(std::move(endpointWireHeaderBytes)),
       m_nextGlobalSequence(firstGlobalSequence),
       m_projectedNextGlobalSequence(firstGlobalSequence)
@@ -314,6 +319,7 @@ MediaWireGlobalSequenceState::create(
     std::uint64_t firstGlobalSequence,
     std::size_t maximumOutstandingDatagrams,
     std::uint64_t maximumOutstandingWireBytes,
+    bool commitBeforeNextReservation,
     std::unordered_map<std::uint64_t, std::uint64_t>
         endpointWireHeaderBytes)
 {
@@ -334,7 +340,8 @@ MediaWireGlobalSequenceState::create(
     auto* state = new (std::nothrow) MediaWireGlobalSequenceState(
         std::move(sessionKey), std::move(serviceScopeId), generation,
         firstGlobalSequence, maximumOutstandingDatagrams,
-        maximumOutstandingWireBytes, std::move(endpointWireHeaderBytes));
+        maximumOutstandingWireBytes, commitBeforeNextReservation,
+        std::move(endpointWireHeaderBytes));
     if (!state) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaWireGlobalSequenceState"));
@@ -407,7 +414,8 @@ MediaWireGlobalSequenceState::reserve(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "wire global sequence reservation identity would overflow"));
     }
-    if (entries.size() >
+    if ((m_commitBeforeNextReservation && !m_reservations.empty()) ||
+        entries.size() >
             m_maximumOutstandingDatagrams - m_outstandingDatagrams ||
         totalWireBytes >
             m_maximumOutstandingWireBytes - m_outstandingWireBytes) {

@@ -191,7 +191,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
                 "MPEG-TS UDP wire materializer requires complete TS datagrams and ordered canonical windows"));
         }
         auto deadline = m_config.deadline.canonicalDeadline(
-            datagram.canonicalRelease);
+            datagram.canonicalRelease, materializedAt);
         if (!deadline) return Result::failure(deadline.error());
         deadlines.push_back(deadline.value());
     }

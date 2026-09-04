@@ -224,7 +224,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     return ::media::Status::success();
 }
 
-void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
+::media::Status materializeVideoExecutionContract(
+    MediaPipelineChainPlan& chain,
+    const MediaPipelinePlannerOptions& options)
 {
     chain.decoderLineagePropagation =
         chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
@@ -243,6 +245,20 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
         chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoEncoderAbortPolicy::DrainThenAbort
         : MediaVideoEncoderAbortPolicy::Immediate;
+    chain.decoderReceiveInterval.reset();
+    if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
+        // This backend can complete a frame after receive returned EAGAIN.
+        // Bound the next receive by the probed source cadence, not new input.
+        auto interval = MediaRunningTime::checkedFromTicks(
+            1, options.sourceFrameRate.den, options.sourceFrameRate.num);
+        if (!interval) return ::media::Status::failure(interval.error());
+        if (interval.value().nanoseconds() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RKMPP decoder receive requires a positive probed frame interval"));
+        }
+        chain.decoderReceiveInterval = interval.value();
+    }
+    return ::media::Status::success();
 }
 
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
@@ -408,7 +424,9 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
     const MediaPipelinePlannerOptions& options,
     MediaHardwareCapabilityProbe& hardwareProbe)
 {
-    materializeVideoExecutionContract(selected);
+    if (auto status = materializeVideoExecutionContract(selected, options); !status) {
+        return status;
+    }
     if (isRkmppChain(selected)) {
         auto contractStatus = validateRkmppFrameContracts(selected, options);
         if (!contractStatus) {

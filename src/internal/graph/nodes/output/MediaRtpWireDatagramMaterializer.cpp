@@ -149,7 +149,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
         const auto& datagram = datagrams[index];
         auto deadline = m_state->rtpDeadline.canonicalDeadline(
-            datagram.canonicalRelease);
+            datagram.canonicalRelease, materializedAt);
         if (!deadline) return Result::failure(deadline.error());
         if (datagram.bytes.size() > m_state->maximumDatagramBytes ||
             datagram.payloadOctets == 0 ||
@@ -234,7 +234,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
         rtcpBytes = std::move(report).value();
     }
     auto rtcpDeadline = m_state->rtcpDeadline.canonicalDeadline(
-        datagrams.front().canonicalRelease);
+        datagrams.front().canonicalRelease, materializedAt);
     if (!rtcpDeadline) return Result::failure(rtcpDeadline.error());
 
     if (datagrams.size() > (std::numeric_limits<std::size_t>::max)() -
@@ -400,7 +400,7 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
     auto canonicalDeadline = m_state->rtcpDeadline.canonicalDeadline(
-        canonicalRelease);
+        canonicalRelease, materializedAt);
     if (!canonicalDeadline) return Result::failure(canonicalDeadline.error());
     std::unique_lock protocolLock(m_state->mutex);
     if (m_state->poisoned || m_state->projectedTerminal) {

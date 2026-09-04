@@ -559,3 +559,20 @@ Detailed design and execution checklist:
 - [x] Task 5.7：将协议物化后的 wire batch 直接汇入公共 GBRA sender，删除第二级 shaper queue；planner 按 WebRTC 无反馈 2.5×、prepared peak 与 burst/deadline 共同推导 rate，GBRA 从非阻塞 submit-completion 起算下一包 debt。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 运行 120 秒：64515 datagrams、RTP loss 0、TS error 0、service-curve draw-up 1356 B ≤ burst 1356 B、VLC 播放异常 0；CPU 继续列为后置风险。
 - [x] Task 5.8：删除 realtime/Beta 的 `path-mtu` 与 `receiver-transport-decode-lead` 外部参数；planner 从 connected-path PMTU 与所选出口接口 MTU 的较小值推导 packetization 上限，并从 immutable maximum wire residence 形成 transport timing。公共 service-scope queue 采用 WebRTC queue-time drain-rate 公式并受部署容量硬上限约束；queue snapshot 在 ledger 锁内采样权威时钟，submit lifecycle evidence 与 aggregate queue accounting 分离，消除 reserve/snapshot 与 submit/commit 两类 TOCTOU。Windows/Linux sender 强制 PMTUD，不以 IP fragmentation 作为运行期 fallback。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 最终复验运行 120 秒：64516 datagrams（RTP 64486、RTCP 30）、RTP loss/order error 0、TS continuity/TEI/AFC error 0、GBRA debt 1356 B 且 violation 0、maximum residence 96.9708 ms、VLC 解码/late/discontinuity error 0；实际 pacing max 2006648 B/s，部署上限来自权威 100 Mbps 出口链路事实且未被消费为发送速率。平均单核 CPU 23.131%，按用户要求暂不优化并继续列为后置风险。
 - [ ] Task 6：完成固定 56 条链路验收（38 VideoOnly + 18 AudioVideo）：Windows 全矩阵实跑，RK 对 capability-admitted 链路实跑、unsupported 链路 DAG 前拒绝；完成 120 秒证据、文档、质量评分、SDD 每 Task 单 reviewer PASS、代码冻结后两名未参与者同时 PASS、PR 与最终审核。
+
+## 2026-09-04 外部 RTP 源 RKMPP 最小范围复验
+
+- 基线：`a5597326464140a319787d123ccc2ffef9c4e40b`；当前目录直接恢复，分支 `codex/rk-a559-external-rtp`。
+- 目标机：`/home/tang/MediaTranscode`；采用用户提供的 startSendRtp/stopSendRtp 真实源，输出 HEVC 1920x1080、25 fps、CBR 6 Mbps、GOP 50、MPEG-TS/RTP、VideoOnly。
+- [x] 恢复本地基线并同步同一提交的源码归档，保留构建与依赖。
+- [x] 基线与最小发送修复均完成 rk-release 全量重建；输入监听地址为用户确认的 192.168.130.229:61884。
+- [ ] 捕获首个真实失败，按官方算法与代码证据定位，仅修该链路必要根因；不新增外部参数，不扩大功能范围。
+- [ ] 保持源持续超过 3 分钟，记录 CLI 连续运行、CPU/RSS、视频时间线、收发抓包、发送突发及源停止后的退出原因；VideoOnly 的 A/V 漂移不适用。
+- [ ] 如修改共享核心，同规格验证 Windows；每条完整通过链路立即独立 commit/push。
+- [ ] 代码冻结后两名未参与实现的智能体独立复核，更新简洁质量评分、完成文档并提交 PR。
+- 发送参考：WebRTC PacingController 的队列时间与 debt 控制；时钟参考：RFC 3550。是否修改以及具体文件以本次真实失败证据为准。
+- 边界：用户命令中的输入地址 `192.168.96.122` 不属于目标机；基线 planner 将此地址直接传给 bind，用户已明确改为目标机事实地址 `192.168.130.229:61884`，直接使用修正后的命令。
+
+- 当前结果：两次真实链路均未通过。基线约 4.1 秒因软队列排空目标超过受管容量被拒绝；最小修复将软目标限于硬容量，保留不可变 deadline，并增加容量限制计数。两名独立审查者对该代码明确 PASS，但不代表验收通过。
+- 第二次约 6.6 秒出现真实视频 AU 迟到约 1.35 秒，正在用既有逐帧 Flow 诊断区分解码迟交与恢复后的历史格点补帧。禁止通过重置时间轴或放宽 deadline 掩盖此失败。
+- 真实输入探测为 H.264 1920x1080、25 fps；media-id 中的 720p30 仅为用户给定标识，不作为源参数证据。Windows 最小发送修复已完成 Release 全量构建，同规格真实链路尚未验证。

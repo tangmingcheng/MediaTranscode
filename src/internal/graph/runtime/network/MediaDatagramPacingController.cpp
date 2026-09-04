@@ -83,7 +83,6 @@ MediaDatagramPacingController::reserve(
         job.endpointId == 0 || job.globalSequence == 0 || job.wireBytes == 0 ||
         job.queue.wireBytes < job.wireBytes ||
         job.queue.averageResidence < zero ||
-        job.queue.averageResidence >= m_contract.queueTimeLimit ||
         job.canonicalRelease < zero ||
         job.canonicalDeadline <= job.canonicalRelease || now < zero ||
         (m_lastObservedTime && now < *m_lastObservedTime) ||
@@ -93,37 +92,30 @@ MediaDatagramPacingController::reserve(
             "Datagram pacing job violates service identity, time, or global order"));
     }
 
-    auto remainingQueueTime = m_contract.queueTimeLimit.checkedSubtract(
-        job.queue.averageResidence);
-    auto requiredQueueRate = remainingQueueTime
-        ? MediaCheckedArithmetic::ceilScale(
-              job.queue.wireBytes, 1'000'000'000,
-              static_cast<std::uint64_t>(
-                  remainingQueueTime.value().nanoseconds()),
-              "Datagram WebRTC queue-time drain rate")
-        : ::media::Result<std::uint64_t>::failure(
-              remainingQueueTime.error());
-    if (!requiredQueueRate) {
-        return Result::failure(requiredQueueRate.error());
+    // Average queue time is a soft drain target. The managed service rate
+    // and each datagram's immutable completion deadline remain hard limits.
+    auto adjustedRate = m_contract.maximumWireBytesPerSecond;
+    bool capacityLimited = true;
+    if (job.queue.averageResidence < m_contract.queueTimeLimit) {
+        auto remainingQueueTime = m_contract.queueTimeLimit.checkedSubtract(
+            job.queue.averageResidence);
+        if (!remainingQueueTime) {
+            return Result::failure(remainingQueueTime.error());
+        }
+        auto requiredQueueRate = MediaCheckedArithmetic::ceilScale(
+            job.queue.wireBytes, 1'000'000'000,
+            static_cast<std::uint64_t>(
+                remainingQueueTime.value().nanoseconds()),
+            "Datagram WebRTC queue-time drain rate");
+        if (!requiredQueueRate) {
+            return Result::failure(requiredQueueRate.error());
+        }
+        const auto candidateRate = (std::max)(
+            m_contract.wireBytesPerSecond, requiredQueueRate.value());
+        capacityLimited = candidateRate > m_contract.maximumWireBytesPerSecond;
+        adjustedRate = (std::min)(
+            candidateRate, m_contract.maximumWireBytesPerSecond);
     }
-    const auto candidateRate = (std::max)(
-        m_contract.wireBytesPerSecond, requiredQueueRate.value());
-    if (candidateRate > m_contract.maximumWireBytesPerSecond) {
-        std::ostringstream message;
-        message << "Datagram WebRTC queue-time adaptation exceeds the managed service capacity"
-                << " sequence=" << job.globalSequence
-                << " queue_wire_bytes=" << job.queue.wireBytes
-                << " average_queue_residence_ns="
-                << job.queue.averageResidence.nanoseconds()
-                << " queue_time_limit_ns="
-                << m_contract.queueTimeLimit.nanoseconds()
-                << " required_rate=" << candidateRate
-                << " maximum_rate="
-                << m_contract.maximumWireBytesPerSecond;
-        return Result::failure(::media::ErrorInfo::ioFailure(message.str()));
-    }
-
-    const auto adjustedRate = candidateRate;
 
     auto durationNanoseconds = MediaCheckedArithmetic::ceilDurationNanoseconds(
         job.wireBytes, adjustedRate,
@@ -163,6 +155,8 @@ MediaDatagramPacingController::reserve(
             (std::numeric_limits<std::uint64_t>::max)() ||
         (adjustedRate > m_contract.wireBytesPerSecond &&
          m_telemetry.rateAdaptations ==
+             (std::numeric_limits<std::uint64_t>::max)()) ||
+        (capacityLimited && m_telemetry.capacityLimitedReservations ==
              (std::numeric_limits<std::uint64_t>::max)())) {
         m_telemetry.counterSaturated = true;
         return Result::failure(::media::ErrorInfo::internalError(
@@ -176,6 +170,9 @@ MediaDatagramPacingController::reserve(
     m_lastObservedTime = now;
     if (adjustedRate > m_contract.wireBytesPerSecond) {
         ++m_telemetry.rateAdaptations;
+    }
+    if (capacityLimited) {
+        ++m_telemetry.capacityLimitedReservations;
     }
     m_telemetry.maximumWireBytesPerSecond = (std::max)(
         m_telemetry.maximumWireBytesPerSecond, adjustedRate);
@@ -195,8 +192,21 @@ MediaDatagramPacingController::reserve(
         submitCompletedAt < submitStartedAt ||
         submitCompletedAt > m_pending->value.notAfter ||
         (m_lastObservedTime && submitStartedAt < *m_lastObservedTime)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Datagram pacing submit differs from its active GBRA reservation"));
+        std::ostringstream message;
+        message << "Datagram pacing submit differs from its active GBRA reservation"
+                << " sequence=" << globalSequence
+                << " started_ns=" << submitStartedAt.nanoseconds()
+                << " completed_ns=" << submitCompletedAt.nanoseconds();
+        if (m_pending) {
+            message << " reserved_sequence=" << m_pending->value.globalSequence
+                    << " not_before_ns=" << m_pending->value.notBefore.nanoseconds()
+                    << " not_after_ns=" << m_pending->value.notAfter.nanoseconds()
+                    << " duration_ns=" << m_pending->value.serviceDuration.nanoseconds();
+        }
+        if (m_lastObservedTime) {
+            message << " observed_ns=" << m_lastObservedTime->nanoseconds();
+        }
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(message.str()));
     }
     auto nextTheoreticalArrival = submitCompletedAt.checkedAdd(
         m_pending->value.serviceDuration);

@@ -55,6 +55,7 @@ MediaDatagramTransportPlanBuffer::MediaDatagramTransportPlanBuffer(
         planTemplate.sessionKey(), planTemplate.serviceScopeId(), generation, 1,
         activated.value().shaping.backlog().maximumDatagrams,
         activated.value().shaping.backlog().maximumBytes,
+        activated.value().shaping.backlog().commitBeforeNextReservation,
         std::move(endpointWireHeaders));
     if (!sequence) {
         return ::media::Result<MediaBufferRef>::failure(sequence.error());

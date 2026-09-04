@@ -80,6 +80,13 @@ namespace {
 
 } // namespace
 
+void MediaEncoderOpenContractAdapter::applyLowLatency(
+    AVCodecContext& context, bool lowLatency) noexcept
+{
+    if (lowLatency) context.flags |= AV_CODEC_FLAG_LOW_DELAY;
+    else context.flags &= ~AV_CODEC_FLAG_LOW_DELAY;
+}
+
 ::media::Status MediaEncoderOpenContractAdapter::applyBeforeOpen(
     AVCodecContext& context,
     const MediaEncoderOpenContract& contract)
@@ -95,6 +102,7 @@ namespace {
     }
 
     context.width = contract.width;
+    applyLowLatency(context, contract.lowLatency);
     context.height = contract.height;
     context.time_base = AVRational{
         contract.frameRate.den, contract.frameRate.num};
@@ -148,7 +156,7 @@ namespace {
         productionProbe.profile == packetLayoutProbe.profile &&
         productionProbe.level == packetLayoutProbe.level &&
         ((productionProbe.flags ^ packetLayoutProbe.flags) &
-         AV_CODEC_FLAG_GLOBAL_HEADER) == 0;
+         (AV_CODEC_FLAG_GLOBAL_HEADER | AV_CODEC_FLAG_LOW_DELAY)) == 0;
     if (!publicFieldsMatch) {
         return invalid(
             "packet-layout probe readback differs from production encoder open contract");
