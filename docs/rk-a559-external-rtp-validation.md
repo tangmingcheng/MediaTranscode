@@ -108,3 +108,7 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 两位未参与实现的独立审查者均重新检查全部 23 个生产文件，明确源码 PASS；没有运行 Windows 测试，且两者均指出完整实流验收未通过。专项评分 82/100，见 `QUALITY_SCORE.md`。源码冻结后二进制哈希未变。
 
 目标机本轮 CLI/capture/driver 六个精确 PID 均已退出；VLC 两个精确 PID 已退出。临时运行脚本和 Python 分析器已从目标机删除，内容以文本保留在本地证据目录，未纳入仓库。未新增诊断库。提交仅作为持续运行修复检查点，不标记完整验收成功；PR 保持草稿。
+
+修复检查点 `3f10fb4d` 已推送至 `codex/rk-a559-external-rtp`；[草稿 PR #32](https://github.com/tangmingcheng/MediaTranscode/pull/32) 以仅引用 a5597326 的基线分支为 base，避免混入历史 master 的无关差异。第三位新智能体核对实际 PR 后给出：源码审查 PASS、完整交付门禁 FAIL；维持 Draft，不标记验收成功。
+
+第 17 次源启动 API 完成时间 `16:35:29.879`，主动停止源流时间 `16:39:15.607`。未停止 CLI 结束测试，也未通过改变转码参数消除告警。
