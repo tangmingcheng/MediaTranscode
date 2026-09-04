@@ -23,7 +23,11 @@
 | 11 | 核心 API 时间诊断，约 25.84 秒失败 | 解码轮询已排空，编码同次输出；后续输入间隔约 2.51 秒，历史发送 deadline 在数据报生成前已过期 | 区分媒体迟到与 wire queue residence；deadline 在首次物化时形成，重试不得延长 |
 | 12 | 驻留起算修复，约 14.39 秒失败 | 恢复后的集中物化造成真实线端积压，驻留最高约 113.6 ms | 没有放宽 100 ms；planner 要求当前批次提交后再准入下一物化批次，复用全局 reservation 背压 |
 | 13 | 背压改动后启动段错误，退出 139 | CMake 关闭头文件依赖；结构体变更后的增量构建仅重编 3 个 cpp，混入旧布局目标文件 | 本次新增构建问题；全量重建同一源码后复验，不改 CMake 扩大范围 |
-| 14 | 全量重建，约 15 秒失败 | 启动崩溃消失；单个 reservation 可含约 473 KB，大批次内的发送耗时仍耗尽 100 ms | Windows 已使用高精度 timer；Linux timer slack 实测 50000 ns，满包额外间隔中位数约 96040 ns。Linux 等待精度修复另行验证 |
+| 14 | 全量重建，约 15 秒失败 | 启动崩溃消失；单个 reservation 可含约 473 KB，大批次内的发送耗时仍耗尽 100 ms | 已有 planner 批次上限仅在整批物化后分区，未限制同一驻留窗口内准入量；下一次按既有上限逐批物化 |
+
+| 15 | Linux 等待精度诊断版本，约 6 秒失败 | 同一提交 deadline 超限；单次 reservation 高水位仍为 346 包、468424 B | 等待精度改动没有解决大批次准入问题，已撤销；只保留按 planner 批次上限物化的待验修复 |
+
+一小时期限已于 16:18:18 到期，未在期限内取得 RKMPP 通过版本。按用户后续要求继续只做 RKMPP 修复与验收，不再运行 Windows 测试。
 
 ## 当前最小修改
 
@@ -58,6 +62,49 @@ H.264 1920x1080 25 fps RTP → HEVC 1920x1080 25 fps CBR 6 Mbps MPEG-TS/RTP，�
 
 运行期间 workerErrors/errors/droppedBuffers 均为 0；平均单核 CPU `18.50%`、峰值 `53.53%`，RSS 稳定约 `204.5 MB`、峰值 `217.1 MB`。VLC 播放窗口未记录 late/drop/discontinuity；启动有一次 `buffer deadlock prevented`，随后正常切换解码格式，另有窗口缩略图 API 报错，保留原始日志不隐去。源停止后以 `realtime runtime made no progress before timeout` 退出，未把无源判为成功 EOF。
 
-Windows 二进制 SHA256：`08369a0ed5b3d4cc8dca68871226dcc2b92e3e0addc4e10759ce1fe12765fb11`。该通过记录不代表 RKMPP 已通过，也不覆盖后续 Linux 平台等待精度修改。
+Windows 二进制 SHA256：`08369a0ed5b3d4cc8dca68871226dcc2b92e3e0addc4e10759ce1fe12765fb11`。该通过记录不代表 RKMPP 已通过，也不覆盖后续批次物化修改。
 
 证据目录：本地 `out/acceptance/rk-a559-external/`，目标机 `out/acceptance/rk-a559-external-run*/`。临时诊断不纳入版本库，交付前恢复并全量重建、删除临时脚本及诊断备份，检查测试进程残留。
+
+## 第 16 次 RKMPP 实测：持续运行达标，完整验收未通过
+
+原参数，二进制 SHA256 `96c5c71d3183cfe11846dba36ee48f4116983c775e7caa1b3eb5078188989b57`；23 个生产文件 SHA256 与本地全部一致。CLI PID `1230402`、目标机抓包 PID `1230389`、driver PID `1230386`、VLC PID `30456`。脚本内容归档在本地证据目录 `run-script-content.txt`，本次实际执行 `bash /home/tang/rk-a559-run.sh run16`。
+
+- 输入抓包持续 `224.604606 s`；输出持续 `223.113921 s`。停止源流 API 于 `16:30:44.680` 调用，CLI 随后于 `16:30:55.908` 因原配置的无进度超时退出，退出码 1；源运行期间未退出，workerErrors/errors/droppedBuffers 均为 0。
+- 输出 RTP `139060` 包、RTCP `50` 包；收发端包内容与顺序 SHA256 全部相同，无 RTP 序号或 TS continuity/TEI 错误。聚合内容哈希 `c5d6bc219dc4dfc48bbc197d6aeb162e67f024db90daae922eb02779df0c5dce`。收发捕获丢弃均为 0。
+- planner 批次上限在物化前生效，backlog 高水位从 349 包降到 `49` 包、`66444 B`；最大驻留 `48.770734 ms`，deadline_misses `0`。原大批次驻留超限在本次未再发生。
+- 平均单核 CPU `13.55%`、峰值 `87.5%`；RSS 从约 `65.98 MB` 到 `72.23 MB`，后段稳定。VideoOnly，A/V 漂移不适用。
+- 目标机发送抓包的 50 Mbps 服务曲线超额 `1356 B`，恰为一个最大包；接收抓包为 `8191.25 B`，超过该边界，故不能将整体验收记作 PASS。峰值对应相同 10 包在发送端跨 `2.836 ms`、逐包间隔 `278–341 us`，在接收端跨 `0.859 ms` 且多次间隔 `0–1 us`。网络压缩与接收时间戳误差尚未区分，第 17 次仅将抓包时间戳改用工具已支持的高精度时钟验证，不改 CLI 参数或核心代码。
+- 输入捕获确认缺少 `35` 个 RTP 序号，最长到包间隔 `2512.329 ms`；输出最长间隔 `2458.347 ms`。VLC 有 `91` 条 picture-too-late、`169` 条 late-frame-dropping，以及 PCR 迟到、硬件画面分配失败日志。部分输出空档与输入停顿重合，不能将全部播放告警归因于源，也不能宣称播放连续无异常。
+
+第 16 次接收播放命令：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --stats --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-external\vlc-run16.log --no-video-title-show rtp://@192.168.96.122:6200
+```
+
+第 17 次使用同一 CLI 命令，仅 `dir` 为 `rk-a559-external-run17`；VLC 日志路径相应为 `vlc-run17.log`。接收抓包命令：
+
+```powershell
+D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 192.168.130.229 and (udp port 6200 or udp port 6201)" -a duration:270 -q -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-external\receiver-run17.pcapng
+```
+
+## 第 17 次 RKMPP 实测：复现接收侧证据不达标
+
+未修改核心与 CLI 参数，仅接收抓包切换高精度单调时钟。CLI PID `1234117`、目标机抓包 PID `1234100`、driver PID `1234097`、VLC PID `25628`；实际执行 `bash /home/tang/rk-a559-run.sh run17`。
+
+- 输出 `224.885541 s`、RTP `141015` 包与 RTCP `50` 包；源码与二进制同第 16 次。源停前核心错误、丢弃、deadline_misses 均为 0；最大驻留 `61.715733 ms`，backlog 高水位仍为 49 包、66444 B。
+- 收发内容及顺序全部一致，聚合哈希 `dab87ce11bf9b7ed49deab93a6e0962e3b2307d4798ff7977c75974597ec3cacd`，RTP/TS 错误及捕获丢弃均为 0。目标机发送服务曲线超额 `1356 B`；接收仍为 `11479 B`，故时钟精度不足的假设未获验证，完整链路仍为未通过。
+- 输入实际缺少 16 个 RTP 包，最大到包间隔 `2511.404 ms`；输出最大间隔 `3875.483 ms`。最长输出空档附近存在两处输入序号缺口及 `2375.517 ms` 的输入空档，尚不足以把全部输出迟到归因于源。
+- 平均单核 CPU `13.09%`、峰值 `78.35%`，RSS 从 `43.26 MB` 到 `51.05 MB`，后段稳定。源停止后于 `16:39:26.876` 按原无进度超时退出，退出码 1；不将退出码解释为正常 EOF。
+- VLC 记录 33 条 picture-too-late、PCR 迟到及一次硬件画面分配失败。第 16 次 TS 中实际包含 VPS/SPS/PPS 各 113 次、IDR 112 次，不支持“输出缺少重复参数集”的推断，未据此修改编码器。
+
+接收时间戳的限制依据：[Npcap 时间戳说明](https://npcap.com/guide/wpcap/pcap-tstamp.html)指出，主机时间戳可能受中断批处理和队列延迟影响。该说明仅解释测量边界，不证明本次异常一定来自抓包，也不作为放宽门禁的理由。
+
+当前判定：RKMPP 核心持续运行及原 100 ms 驻留约束连续两轮达标；完整“持续转码、无突发”链路证据仍不达标，禁止标记整体验收成功。独立审查仅针对已实测的退出修复，不代替完整验收。
+
+## 源码交叉审查与清理
+
+两位未参与实现的独立审查者均重新检查全部 23 个生产文件，明确源码 PASS；没有运行 Windows 测试，且两者均指出完整实流验收未通过。专项评分 82/100，见 `QUALITY_SCORE.md`。源码冻结后二进制哈希未变。
+
+目标机本轮 CLI/capture/driver 六个精确 PID 均已退出；VLC 两个精确 PID 已退出。临时运行脚本和 Python 分析器已从目标机删除，内容以文本保留在本地证据目录，未纳入仓库。未新增诊断库。提交仅作为持续运行修复检查点，不标记完整验收成功；PR 保持草稿。

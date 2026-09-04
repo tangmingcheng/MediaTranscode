@@ -119,7 +119,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     using Result = ::media::Result<MediaWireDatagramBatchCollection>;
     if (datagrams.empty() ||
         (protocolBatch &&
-         protocolBatch->datagrams().size() != datagrams.size())) {
+         protocolBatch->datagrams().size() < datagrams.size())) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP wire batch requires at least one packetized datagram"));
     }
@@ -285,7 +285,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
     if (!global) return Result::failure(global.error());
     std::optional<MediaProtocolDatagramCommitTransaction> protocolCommit;
     if (protocolBatch) {
-        auto transaction = protocolBatch->takeCommitTransaction();
+        auto transaction = protocolBatch->takeCommitTransaction(datagrams.size());
         if (!transaction || transaction.value().size() != datagrams.size()) {
             m_state->poisoned = true;
             return Result::failure(
@@ -539,6 +539,11 @@ std::size_t
 MediaRtpWireDatagramMaterializer::maximumDatagramBytes() const noexcept
 {
     return m_state->maximumDatagramBytes;
+}
+
+std::size_t MediaRtpWireDatagramMaterializer::maximumBatchDatagrams() const noexcept
+{
+    return m_state->batchPlan.maximumDatagrams;
 }
 
 } // namespace media::ffmpeg::graph
