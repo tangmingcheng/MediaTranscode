@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -46,7 +47,7 @@ private:
     ::media::Status processReordered(MediaGraphExecutionContext& context,
                                      MediaRtpReorderResult reordered,
                                      std::uint64_t generationBeforeObservation);
-    ::media::Status drainPendingRtpPackets(
+    ::media::Status drainPendingRtpItems(
         MediaGraphExecutionContext& context);
     ::media::Status processPendingRtpPacket(
         MediaGraphExecutionContext& context,
@@ -76,7 +77,9 @@ private:
     std::optional<MediaRtpClockLossPolicy> m_clockLossPolicy;
     MediaRtpDepacketizerConfig m_config;
     MediaPreparedRtpAccessUnitEnvelope m_accessUnitEnvelope;
-    std::deque<MediaRtpPacket> m_pendingRtpPackets;
+    using PendingRtpItem = std::variant<MediaRtpPacket,
+        std::pair<MediaRtpDiscontinuity, std::uint64_t>>;
+    std::deque<PendingRtpItem> m_pendingRtpItems;
     std::vector<MediaGraphPayloadReservation> m_pendingPayloadReservations;
     std::optional<std::uint32_t> m_reservedAccessUnitTimestamp;
     MediaBufferRef m_streamSnapshot;

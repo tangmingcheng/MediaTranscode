@@ -100,8 +100,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         m_packets.pop_front();
         return processProgress(emitOutput(context, "packet", packet));
     }
-    if (!m_pendingRtpPackets.empty()) {
-        if (auto status = drainPendingRtpPackets(context); !status) {
+    if (!m_pendingRtpItems.empty()) {
+        if (auto status = drainPendingRtpItems(context); !status) {
             return processProgress(status);
         }
         if (!m_packets.empty()) {
@@ -543,12 +543,34 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 {
     auto nextPacket = reordered.packets.begin();
     for (const auto& discontinuity : reordered.discontinuities) {
-        // Preserve each loss boundary's position inside a receive batch.
+        // Retain the entire ordered batch before processing can yield to backpressure.
         while (nextPacket != reordered.packets.end() &&
                nextPacket->sequenceNumber != discontinuity.resumedSequence) {
-            m_pendingRtpPackets.push_back(std::move(*nextPacket++));
+            m_pendingRtpItems.emplace_back(std::move(*nextPacket++));
         }
-        if (auto status = drainPendingRtpPackets(context); !status) return status;
+        m_pendingRtpItems.emplace_back(
+            std::pair{discontinuity, generationBeforeObservation});
+    }
+    for (; nextPacket != reordered.packets.end(); ++nextPacket) {
+        m_pendingRtpItems.emplace_back(std::move(*nextPacket));
+    }
+    return drainPendingRtpItems(context);
+}
+
+::media::Status RawRtpInputNode::drainPendingRtpItems(
+    MediaGraphExecutionContext& context)
+{
+    while (!m_pendingRtpItems.empty()) {
+        auto& item = m_pendingRtpItems.front();
+        if (const auto* packet = std::get_if<MediaRtpPacket>(&item)) {
+            if (auto status = processPendingRtpPacket(context, *packet); !status) {
+                return status;
+            }
+            m_pendingRtpItems.pop_front();
+            continue;
+        }
+        const auto& [discontinuity, generationBeforeObservation] =
+            std::get<std::pair<MediaRtpDiscontinuity, std::uint64_t>>(item);
         if (m_clockTracker->generation() == generationBeforeObservation) {
             m_clockTracker->observeContinuityLoss();
         }
@@ -578,22 +600,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 makeMediaBufferRef<MediaRtpIngressEventBuffer>(
                     discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
-    }
-    for (; nextPacket != reordered.packets.end(); ++nextPacket) {
-        m_pendingRtpPackets.push_back(std::move(*nextPacket));
-    }
-    return drainPendingRtpPackets(context);
-}
-
-::media::Status RawRtpInputNode::drainPendingRtpPackets(
-    MediaGraphExecutionContext& context)
-{
-    while (!m_pendingRtpPackets.empty()) {
-        if (auto status = processPendingRtpPacket(
-                context, m_pendingRtpPackets.front()); !status) {
-            return status;
-        }
-        m_pendingRtpPackets.pop_front();
+        m_pendingRtpItems.pop_front();
     }
     return ::media::Status::success();
 }
@@ -878,7 +885,7 @@ void RawRtpInputNode::resetState() noexcept
     m_clockSchedule.reset();
     m_config = {};
     m_accessUnitEnvelope = {};
-    m_pendingRtpPackets.clear();
+    m_pendingRtpItems.clear();
     m_pendingPayloadReservations.clear();
     m_reservedAccessUnitTimestamp.reset();
     m_streamSnapshot.reset();
