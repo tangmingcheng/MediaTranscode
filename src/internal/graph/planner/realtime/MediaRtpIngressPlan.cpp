@@ -49,7 +49,8 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
 ::media::Result<MediaRtpIngressPlan> MediaRtpIngressPlan::create(
     const MediaRtpIngressCapability& capability,
     const MediaRtpIngressObservation& observation,
-    std::size_t preparedInputByteBudget)
+    std::size_t preparedInputByteBudget,
+    std::size_t maximumDatagramBytes)
 {
     if (auto status = capability.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
@@ -60,13 +61,15 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
     const std::size_t boundedReceiveBytes = (std::min)(
         preparedInputByteBudget,
         capability.effectiveSocketReceivePayloadBytes());
-    if (boundedReceiveBytes < observation.maximumDatagramBytes()) {
+    if (maximumDatagramBytes == 0 ||
+        observation.maximumDatagramBytes() > maximumDatagramBytes ||
+        boundedReceiveBytes < maximumDatagramBytes) {
         return ::media::Result<MediaRtpIngressPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP ingress facts cannot form a bounded receive product"));
     }
     const std::size_t descriptorCapacity = (std::min)(
-        boundedReceiveBytes / observation.maximumDatagramBytes(),
+        boundedReceiveBytes / maximumDatagramBytes,
         capability.maximumReceiveCompletions());
     if (capability.adapterKind() ==
             MediaRtpIngressAdapterKind::WindowsOverlappedCompletionQueue &&
@@ -76,7 +79,7 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
                 "Windows RTP ingress requires receive descriptors for both RTP and RTCP sockets"));
     }
     const std::size_t batchByteCapacity =
-        descriptorCapacity * observation.maximumDatagramBytes();
+        descriptorCapacity * maximumDatagramBytes;
     if (observation.maximumSequenceDisplacementPackets() > descriptorCapacity) {
         return ::media::Result<MediaRtpIngressPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -84,7 +87,7 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
     }
     MediaRtpIngressPlan product(
         capability,
-        observation.maximumDatagramBytes(),
+        maximumDatagramBytes,
         batchByteCapacity,
         descriptorCapacity,
         // Observed disorder is a minimum requirement, not a future network bound.

@@ -31,7 +31,8 @@ public:
     static ::media::Result<MediaRtpIngressPlan> create(
         const MediaRtpIngressCapability& capability,
         const MediaRtpIngressObservation& observation,
-        std::size_t preparedInputByteBudget);
+        std::size_t preparedInputByteBudget,
+        std::size_t maximumDatagramBytes);
     static ::media::Result<MediaRtpIngressPlan> fromFacts(
         MediaRtpIngressPlanFacts facts);
 

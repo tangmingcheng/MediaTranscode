@@ -165,6 +165,17 @@ MediaPreparedRealtimeInput::rawRtpPreparedByteCapacity() const
 }
 
 ::media::Result<std::size_t>
+MediaPreparedRealtimeInput::rawRtpMaximumDatagramBytes() const
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP datagram capacity requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->maximumDatagramBytes();
+}
+
+::media::Result<std::size_t>
 MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
 {
     if (!m_rawRtpBuffer) {

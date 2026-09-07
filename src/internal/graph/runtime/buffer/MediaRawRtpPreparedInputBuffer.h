@@ -68,6 +68,7 @@ public:
     ::media::Status captureStatus();
     ::media::Result<MediaRtpIngressObservation> ingressObservation();
     ::media::Result<std::size_t> preparedByteCapacity() const;
+    ::media::Result<std::size_t> maximumDatagramBytes() const;
     ::media::Result<std::size_t> effectiveSocketReceivePayloadBytes() const;
     ::media::Status configureRuntimeIngress(
         const MediaRtpIngressPlan& plan);

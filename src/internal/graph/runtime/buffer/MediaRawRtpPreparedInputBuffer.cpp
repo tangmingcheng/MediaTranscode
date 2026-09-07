@@ -278,6 +278,27 @@ MediaRawRtpPreparedInputBuffer::preparedByteCapacity() const
 }
 
 ::media::Result<std::size_t>
+MediaRawRtpPreparedInputBuffer::maximumDatagramBytes() const
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_captureError) {
+        return ::media::Result<std::size_t>::failure(*m_captureError);
+    }
+    if (!m_prepared || m_stopped || m_replayActive) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP datagram capacity requires an active prepared transport before replay"));
+    }
+    const auto capacity = m_prepared->transport.maximumDatagramBytes();
+    if (capacity == 0) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP prepared transport has no datagram capacity"));
+    }
+    return ::media::Result<std::size_t>::success(capacity);
+}
+
+::media::Result<std::size_t>
 MediaRawRtpPreparedInputBuffer::effectiveSocketReceivePayloadBytes() const
 {
     std::scoped_lock lock(m_mutex);

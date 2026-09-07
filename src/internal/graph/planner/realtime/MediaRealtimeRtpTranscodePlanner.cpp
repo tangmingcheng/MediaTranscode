@@ -1409,9 +1409,14 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 preparedByteCapacity.error());
         }
+        auto maximumDatagramBytes = preparedVideo.rawRtpMaximumDatagramBytes();
+        if (!maximumDatagramBytes) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                maximumDatagramBytes.error());
+        }
         auto videoIngress = MediaRtpIngressPlan::create(
             videoCapability.value(), videoObservation.value(),
-            preparedByteCapacity.value());
+            preparedByteCapacity.value(), maximumDatagramBytes.value());
         if (!videoIngress) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 videoIngress.error());
