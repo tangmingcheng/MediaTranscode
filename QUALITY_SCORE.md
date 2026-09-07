@@ -41,7 +41,7 @@
 | Planner 契约 | 19/20 | 批次、容量、轮询周期由既有事实规划；没有新对外参数。 |
 | 生命周期与约束 | 22/25 | prefix 顺序提交、失败 abandon/poison、提交后唤醒闭合；100 ms 仅约束 wire 准入后的驻留。 |
 | 平台边界 | 8/10 | 共享 DAG 复用；按用户要求不再进行 Windows 实测，不声明后续改动已覆盖。 |
-| 真实验收证据 | 19/20 | RKMPP 本地高规格 H.264 源持续 249 秒；源流期间核心不停，发送服务曲线超额 1356 B，RTP/TS 错误为 0，接收 RTP 零丢失，`hevc_rkmpp` 解码 6204 帧，VLC 默认 D3D11VA 持续硬解且无晚帧或错误。其余三项编解码与 RC 组合待验收。 |
+| 真实验收证据 | 19/20 | 两项 RKMPP CBR 互转均以本地 2K30 高规格源持续 249 秒；源期间核心不停，发送服务曲线超额 1356 B，RTP/TS 错误为 0，接收 RTP 零丢失，目标机 RKMPP 和 VLC 默认 D3D11VA 硬解通过。两项 VBR 待验收。 |
 | **专项合计** | **90/100** | **本地高规格源完整链路 PASS；长期与平台覆盖风险保留。** |
 
-残余风险：Linux TX timestamp telemetry 当前未跟踪；Windows Npcap 抓包晚于源开始约 59 秒，但有效连续窗口仍为 196.285 秒；裸 RTP 源自然结束后仍以 source-clock expiry 退出码 1 收敛；HEVC→H.264 CBR、H.264→HEVC VBR、HEVC→H.264 VBR 尚未完成本轮验收；249 秒验收不能替代多小时硬件 soak。另有未物化尾部等待不计入 wire residence、LOW_DELAY 阻塞取包在硬件失去响应时可能阻塞 worker 的设计风险。详见 `docs/rk-a559-external-rtp-validation.md`。
+残余风险：Linux TX timestamp telemetry 当前未跟踪；H.264→HEVC CBR 的 Windows Npcap 抓包晚于源开始约 59 秒，但有效连续窗口仍为 196.285 秒；裸 RTP 源自然结束后仍以 source-clock expiry 退出码 1 收敛；H.264→HEVC VBR、HEVC→H.264 VBR 尚未完成本轮验收；249 秒验收不能替代多小时硬件 soak。另有未物化尾部等待不计入 wire residence、LOW_DELAY 阻塞取包在硬件失去响应时可能阻塞 worker 的设计风险。详见 `docs/rk-a559-external-rtp-validation.md`。

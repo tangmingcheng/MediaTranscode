@@ -127,4 +127,12 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 
 第 22 次因 VLC 使用软件解码而作废。第 24 次 VLC 直接打开 `rtp://@192.168.96.122:6200` 并使用默认解码选择；日志明确记录 NVIDIA D3D11VA 硬解，GPU `VideoDecode` 计数持续增长，UDP 接收错误为 0，deadlock、持续晚帧和 decoder error 均为 0。
 
-当前 H.264→HEVC CBR 项判定为 PASS；用户追加的 HEVC→H.264 CBR、H.264→HEVC VBR 和 HEVC→H.264 VBR 仍待执行。命令、时间、PID、源文件事实、哈希、资源趋势及失败根因见 `docs/completed/2026-09-07-rk-a559-rkmpp-local-rtp-validation.md`。
+当前 H.264→HEVC CBR 项判定为 PASS；其命令、时间、PID、源文件事实、哈希、资源趋势及失败根因见 `docs/completed/2026-09-07-rk-a559-rkmpp-local-rtp-validation.md`。
+
+## 第 26 次 RKMPP HEVC 到 H.264 CBR 全硬件验收通过
+
+目标机已有高规格视频经 `hevc_rkmpp -> hevc_rkmpp` 制作为 HEVC 2560x1440 30 fps、11.58 Mbps、248.267 秒有限源。源发送只做 `-re -c:v copy`；生产 DAG 使用 RKMPP 解码和编码，输出 H.264 1920x1080 25 fps CBR 6 Mbps MPEG-TS/RTP。
+
+源连续运行 249.386 秒，源期间核心错误、丢弃、pressure failure 和 deadline miss 均为 0。发送端 156176 个 RTP 包，服务曲线超额 1356 B，RTP/TS 错误为 0；Windows 收到完整 156176 包且丢失为 0。VLC 默认选择 NVIDIA D3D11VA 并持续产生 `VideoDecode` 活动，日志无 deadlock、持续晚帧或 decoder error；目标机 `h264_rkmpp` 硬解全部 6204 帧并以 0 退出。
+
+当前两项 CBR 互转均为 PASS；两项 VBR 仍待执行。完整证据见 `docs/completed/2026-09-07-rk-a559-rkmpp-hevc-h264-cbr6m-validation.md`。
