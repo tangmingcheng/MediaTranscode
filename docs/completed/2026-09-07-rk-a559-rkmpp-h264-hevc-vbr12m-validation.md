@@ -38,4 +38,3 @@ D:\Wireshark\dumpcap.exe -i 6 -f "udp and (port 6200 or port 6201)" -a duration:
 **按用户最终明确的门禁判定 PASS。** 不扩展为逐帧零显示延迟、多小时稳定性或 Windows 转码通过。
 
 证据位于目标机和本机各自的 `out/acceptance/rk-a559-local-run27/`。临时运行脚本内容归档为文本，实际脚本与分析器交付前删除；日志、抓包和诊断工具不入库。
-

@@ -37,8 +37,8 @@ VLC 日志均明确记录 D3D11VA，并在运行期间有持续进程/GPU 活动
 
 ## 冻结审查与风险
 
-冻结提交 `dccf95da` 相对基线的全部 23 个生产文件，已由未参与实现的 `final_rk_review_a`、`final_rk_review_b` 独立核对并均明确 PASS。两者核对了目标 ffmpeg-rockchip 的异步 EAGAIN/LOW_DELAY 接口、RFC 1363 最大速率漏桶、WebRTC 软排队目标，以及 planner 契约、prefix 所有权、提交顺序和唤醒。专项评分均建议 90/100。
+冻结提交 `dccf95da` 相对基线的全部 23 个生产文件，已由未参与实现的 `final_rk_review_a`、`final_rk_review_b` 独立核对并均明确 PASS。两者核对了目标 ffmpeg-rockchip 的异步 EAGAIN/LOW_DELAY 接口、RFC 1363 最大速率漏桶、WebRTC 软排队目标，以及 planner 契约、prefix 所有权、提交顺序和唤醒。专项评分均建议 90/100。PR #32 更新至 `a54ec0c1` 后，另由未参与实现的 `pr32_final_delivery_review` 审核并明确 PASS，无阻塞项。
 
 残余风险：裸 RTP 源结束后仍按 source-clock expiry 以 1 退出；100 ms 只约束 wire 准入后的驻留，不包含未物化等待或端到端延迟；目标 TX timestamp 未跟踪；硬件失响应时 LOW_DELAY 阻塞取包可能阻塞 worker；四分钟测试不覆盖多小时热稳定性；按用户要求未运行最终共享修改后的 Windows 转码。
 
-四项 CLI、源、tcpdump、VLC、PresentMon 进程均已退出。目标机本轮临时运行/分析脚本已删除，脚本内容与证据保留在 `out/acceptance`，不入库。后续用户追加的网卡 20% 丢包测试独立记录，不回写本表的零丢包基线。
+四项 CLI、源、tcpdump、VLC、PresentMon 进程均已退出。目标机本轮临时运行/分析脚本已删除，脚本内容与证据保留在 `out/acceptance`，不入库。用户追加的输入路径 20% 丢包测试已执行，启动探测 FAIL，见 [输入损伤记录](2026-09-07-rk-a559-input-loss20-validation.md)；不回写本表的零丢包基线。

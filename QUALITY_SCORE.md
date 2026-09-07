@@ -45,3 +45,7 @@
 | **专项合计** | **90/100** | **本地高规格源完整链路 PASS；长期与平台覆盖风险保留。** |
 
 残余风险：Linux TX timestamp telemetry 当前未跟踪；H.264→HEVC CBR 的 Windows Npcap 抓包晚于源开始约 59 秒，但有效连续窗口仍为 196.285 秒；裸 RTP 源自然结束后仍以 source-clock expiry 退出码 1 收敛；248 秒验收不能替代多小时硬件 soak。另有未物化尾部等待不计入 wire residence、LOW_DELAY 阻塞取包在硬件失去响应时可能阻塞 worker 的设计风险。详见 `docs/rk-a559-external-rtp-validation.md`。
+
+追加损伤范围：run30 在输入 lo 设置 20% 丢包后启动探测失败，已有重排等待 5 秒与探测字节预算 5 MB 的组合在首个缺口后先耗尽预算。上述 90 分只覆盖原持续运行修复及四项零损伤验收，不代表 20% 损伤容忍能力；详见 docs/completed/2026-09-07-rk-a559-input-loss20-validation.md。
+
+run31 正常启动后再注入 20% 输入丢包同样 FAIL：有效编码输出停止后触发原 12 秒进展超时，完整 IDR 缺失，VLC 有明显晚帧。该损伤运行项单独保留，不纳入原零损伤 PASS。

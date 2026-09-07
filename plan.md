@@ -574,9 +574,14 @@ Detailed design and execution checklist:
 - 范围约束：只修导致退出的必要问题，不重新设计、不新增外部参数或诊断库。用户最新要求只做 RKMPP，不再运行 Windows 测试；已有 Windows 通过证据在独立提交 `3ebc551b`，不覆盖后续改动。
 - 当前改动：发送软目标限于硬容量、已有低延迟编码契约落实、RKMPP 异步输出轮询、首次物化驻留期限、全局提交背压、按已有 planner 批次上限逐批物化。Linux timer 精度实验未解决退出，已撤销。
 - 一小时期限已错过，未宣称按时完成。后续继续以真实 RKMPP 结果为准；先测试，后审查。
-- [x] 第 24 次使用全硬件制作的高规格 H.264 2560x1440@30 有限源，原参数 RKMPP 转为 HEVC 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP，连续运行 249 秒；发送服务曲线超额 1356 B，接收 RTP 零丢失，`hevc_rkmpp` 全帧解码，VLC 默认 D3D11VA 持续硬解且无 deadlock、晚帧或解码错误。
-- [x] 使用同规格 HEVC 2560x1440@30 有限源完成 RKMPP HEVC→H.264 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP 全硬件验收，连续 249 秒，发送无突发、接收零丢失、默认 VLC D3D11VA 与 `h264_rkmpp` 全帧解码通过。
+- [x] 第 24 次使用全硬件制作的高规格 H.264 2560x1440@30 有限源，原参数 RKMPP 转为 HEVC 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP，源持续 248.018 秒；发送服务曲线超额 1356 B，接收 RTP 零丢失，`hevc_rkmpp` 全帧解码，VLC 默认 D3D11VA 持续硬解且无 deadlock、严重晚帧或解码错误；保留少量 debug late 记录。
+- [x] 使用同规格 HEVC 2560x1440@30 有限源完成 RKMPP HEVC→H.264 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP 全硬件验收，源持续 248.287 秒，发送无突发、接收零丢失、默认 VLC D3D11VA 与 `h264_rkmpp` 全帧解码通过。
 - [x] run27 完成 H.264 2K30→HEVC 1080p25 VBR 5/12/13 Mbps MPEG-TS/RTP：源持续 248.347 秒，默认 VLC D3D11VA 正常持续硬解，收发 302889 个 RTP 包逐包哈希一致、零丢失，发送服务曲线超额 1356 B。
 - [x] run29 完成 HEVC 2K30→H.264 1080p25 VBR 5/12/13 Mbps MPEG-TS/RTP：源持续 248.352 秒，默认 VLC D3D11VA 正常持续硬解，收发 303041 个 RTP 包逐包哈希一致、零丢失，发送服务曲线超额 1356 B；单独归档提交。
 - [x] 四项验收完成并分别提交推送；冻结 `dccf95da` 的生产代码由两名未参与实现的智能体独立审查，均明确 PASS，专项评分 90/100。
-- [ ] 更新 PR #32 并由新的智能体复审；同时开展测试源输入路径 20% 丢包测试，出口保持正常，失败逐项记录根因。
+- [x] PR #32 更新后由新的独立智能体审核 `a54ec0c1`，明确 PASS，无阻塞项。
+- [x] run30 完成输入路径 lo 20% 丢包测试，出口维持原 fq；启动探测 FAIL：首个 RTP 缺口触发 5 秒重排等待，约 3.669 秒先耗尽 5 MB 探测预算。证据见 `docs/completed/2026-09-07-rk-a559-input-loss20-validation.md`，不修改核心、不记为通过。
+
+- [x] 按用户要求 run31 先正常运行约 20 秒，再注入输入 lo 20% 丢包；约 25.27 秒后因 12 秒无新编码输出退出，测试 FAIL。实测输入丢包 19.9085%，损伤段完整 IDR 为 0，详细原因见 docs/completed/2026-09-07-rk-a559-runtime-input-loss20-validation.md；不修改核心。
+
+- [x] 根据用户要求对照 FFmpeg、GStreamer、WebRTC 与 AWS Elemental MediaLive 的输入丢包机制；结论与适用边界见 docs/rk-rtp-input-loss-industry-comparison.md。本轮只做调研，不修改核心或新增参数。
