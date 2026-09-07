@@ -1,5 +1,7 @@
 # RKMPP H.264 2K30 到 HEVC 1080p25 CBR6M MPEGTS-RTP 验收记录
 
+> 最终门禁按用户明确要求：VLC 正常持续硬解证明持续播放；无卡顿由用户观察与收发无丢包验证。GPU 活动只作硬解辅助证据，不作为逐帧显示证明。
+
 ## 范围与版本
 
 - 基线：`a5597326464140a319787d123ccc2ffef9c4e40b`。
@@ -55,15 +57,15 @@ ffmpeg -hide_banner -nostdin -v info -c:v hevc_rkmpp -i "$dir/output.ts" -map 0:
 
 ## 验收结果
 
-第 24 次源开始于 `2026-09-07T11:59:46.834978206+08:00`，自然结束于 `12:03:55.938061092+08:00`，持续 249.103 秒。CLI PID `3802860`，源 PID `3802864`，目标机输入/输出抓包 PID `3802842/3802843`，脚本 PID `3802835`；Windows 有效 dumpcap/VLC PID `12072/30716`。
+第 24 次源开始于 `2026-09-07T11:59:47.919601470+08:00`，自然结束于 `12:03:55.938061092+08:00`，持续 248.018 秒。CLI PID `3802860`，源 PID `3802864`，目标机输入/输出抓包 PID `3802842/3802843`，脚本 PID `3802835`；Windows 有效 dumpcap/VLC PID `12072/30716`。
 
 - 输入抓包有 `262430` 个 RTP 包，持续 `247.734422` 秒，RTP 序列缺失、乱序和重复均为 0；目标机 ingress 无 truncation 或 pressure failure。
 - 发送端有 `156186` 个 RTP 包和 `56` 个 RTCP 包；RTP 序列缺失、乱序和重复均为 0，MPEG-TS sync、continuity、TEI 和 invalid AFC 错误均为 0。
 - 发送端按 50 Mbps 服务曲线计算的最大超额为 `1356 B`，恰好一个最大 IP 数据报；1/5/10/40/100 ms 最大 IP 字节分别为 `5880/25764/47460/174024/259908 B`。`deadline_misses=0`，最大 wire residence `48.916468 ms`，满足 100 ms 硬约束。
 - Windows 有效接收抓包覆盖 `196.285145` 秒，收到 `123613` 个 RTP 包，Wireshark RTP 统计为丢失 `0 (0.0%)`。抓包晚于源开始约 59 秒，但连续覆盖仍超过三分钟。
 - VLC 默认选择 `d3d11va_vld`，明确记录 `Using D3D11VA (NVIDIA GeForce RTX 4060 Laptop GPU...)`。结束段 30 秒内 VLC UDP 接收数增加 `7207`、接收错误保持 0，进程 GPU `VideoDecode` 计数持续增长；`buffer deadlock`、超过 5 秒晚帧、`picture is too late` 和 decoder error 均为 0。
-- 输出为 HEVC 1920x1080 25 fps；PTS 共 `6204` 个，间隔持续按 40 ms 推进，PTS/PCR 到达漂移末值约 `-0.230 ms`。`hevc_rkmpp` 硬解全部 `6204` 帧，退出码 0；没有使用软件解码。
-- 源运行期间 CLI 没有 worker error、runtime error、丢弃、pressure failure 或 deadline miss。平均单核 CPU 约 `16.03%`，峰值 `50.00%`；RSS 从 `52,191,232 B` 增至峰值 `56,717,312 B`，没有持续增长。
+- 输出为 HEVC 1920x1080 25 fps；PTS 共 `6204` 个，间隔持续按 40 ms 推进，PTS 到达相对媒体时钟的漂移末值约 `-0.230 ms`。`hevc_rkmpp` 硬解全部 `6204` 帧，退出码 0；没有使用软件解码。
+- 源运行期间 CLI 没有 worker error、runtime error、丢弃、pressure failure 或 deadline miss。平均单核 CPU 约 `16.03%`，峰值 `50.00%`；RSS 从 `52,191,232 B` 增至峰值 `56,717,312 B`，全程 RSS 增量约 4.5 MB；不据此外推长期内存趋势。
 - 源自然结束后约 8 秒，CLI 按既有 `RTP video source clock evidence expired` 失败退出，退出码 1。该退出发生在源停止后，不属于源持续期间的核心退出。
 - 两路目标机 tcpdump 均为 `0 packets dropped by kernel`；测试结束后 CLI、源、VLC 和抓包进程均无残留。
 
@@ -76,3 +78,5 @@ ffmpeg -hide_banner -nostdin -v info -c:v hevc_rkmpp -i "$dir/output.ts" -map 0:
 - 第 24 次首次启动 dumpcap 时参数引号被 `Start-Process` 拆散，进程立即退出。修正为完整参数字符串后从源运行第 59 秒开始有效抓包，连续覆盖 196.285 秒，仍满足三分钟门禁；核心和 CLI 参数没有改变。
 
 证据目录：目标机 `/home/tang/MediaTranscode/out/acceptance/rk-a559-local-run24/`；本机 `D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run24\`。抓包和临时分析器不纳入版本库。
+
+补充核对：接收窗口的 123613 个 RTP 包与发送端对应后缀逐包哈希一致，SHA256 为 8ec4978726957917579b24657bed658ed9e58a3074f72ae39aeda40add083aea；缺失、重复、乱序均为 0。

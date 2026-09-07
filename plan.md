@@ -576,5 +576,6 @@ Detailed design and execution checklist:
 - 一小时期限已错过，未宣称按时完成。后续继续以真实 RKMPP 结果为准；先测试，后审查。
 - [x] 第 24 次使用全硬件制作的高规格 H.264 2560x1440@30 有限源，原参数 RKMPP 转为 HEVC 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP，连续运行 249 秒；发送服务曲线超额 1356 B，接收 RTP 零丢失，`hevc_rkmpp` 全帧解码，VLC 默认 D3D11VA 持续硬解且无 deadlock、晚帧或解码错误。
 - [x] 使用同规格 HEVC 2560x1440@30 有限源完成 RKMPP HEVC→H.264 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP 全硬件验收，连续 249 秒，发送无突发、接收零丢失、默认 VLC D3D11VA 与 `h264_rkmpp` 全帧解码通过。
-- [ ] 完成 H.264→HEVC VBR 和 HEVC→H.264 VBR 两项全硬件真实链路验收；每项通过后独立提交并推送。
+- [x] run27 完成 H.264 2K30→HEVC 1080p25 VBR 5/12/13 Mbps MPEG-TS/RTP：源持续 248.347 秒，默认 VLC D3D11VA 正常持续硬解，收发 302889 个 RTP 包逐包哈希一致、零丢失，发送服务曲线超额 1356 B。
+- [ ] 完成 HEVC→H.264 VBR 全硬件验收归档并单独提交。
 - [ ] 四项验收全部完成后冻结代码，由两名未参与实现的独立智能体交叉审查，并完成 PR 复审。
