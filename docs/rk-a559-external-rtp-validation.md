@@ -119,12 +119,12 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 
 证据只能把责任边界收窄到源服务 RTP 发出端或其到目标机的传输路径，不能进一步区分二者，也不能归因到 MediaTranscode 收包后的核心处理。完整证据、精确时间、PID、序号和 SHA256 见 `docs/rk-a559-input-source-evidence.md`。未据此修改核心代码。
 
-## 第 22 次 RKMPP 本地高规格源完整通过
+## 第 24 次 RKMPP 本地高规格源全硬件验收通过
 
-用户要求在确认外部入口丢包后立即改用目标机本地视频源。本次只使用目标机已有两份 HEVC 2560x1440、30 fps、约 11 Mbps 高规格文件制作 248.267 秒 H.264 2560x1440、30 fps 有限源；没有使用 `testsrc` 或 `-stream_loop`，CLI 参数和核心代码均未改变。
+用户要求在确认外部入口丢包后立即改用目标机本地视频源。本次只使用目标机已有两份 HEVC 2560x1440、30 fps、约 11 Mbps 高规格文件制作 248.267 秒 H.264 2560x1440、30 fps 有限源；制作过程为 `hevc_rkmpp -> h264_rkmpp`，没有使用软件解码、`testsrc` 或 `-stream_loop`，CLI 参数和核心代码均未改变。
 
-本地源连续发送约 248.10 秒，源流期间 RKMPP CLI 未停止，核心错误、丢弃、pressure failure 和 deadline miss 均为 0。目标机发送 RTP `156268` 包，50 Mbps 服务曲线超额恰为一个最大包 `1356 B`，最大 wire residence `60.303236 ms`。Windows 接收同样 `156268` 包，收发 payload 序列 SHA256 完全一致，RTP/TS 错误为 0；接收数据还原为 248.16 秒、6204 帧 HEVC 1920x1080@25，全帧解码退出码 0。
+本地源连续发送约 249.10 秒，源流期间 RKMPP CLI 未停止，核心错误、丢弃、pressure failure 和 deadline miss 均为 0。目标机发送 RTP `156186` 包，50 Mbps 服务曲线超额恰为一个最大包 `1356 B`，最大 wire residence `48.916468 ms`。Windows 有效接收窗口为 196.285 秒，收到 `123613` 个 RTP 包且丢失为 0；RTP/TS 错误为 0。接收数据还原后由 `hevc_rkmpp` 硬解全部 6204 帧，退出码 0。
 
-第 21 次的 VLC 单帧卡住由该播放器 D3D11VA 路径直接触发：日志先报 `not enough decoding slices in the texture (6/28)`，随后 buffer deadlock 和持续晚帧；同一份接收数据可完整解码。第 22 次 VLC 仍直接打开 `rtp://@192.168.96.122:6200`，仅禁用故障硬件解码路径，最终 deadlock、晚帧和 decoder error 均为 0。
+第 22 次因 VLC 使用软件解码而作废。第 24 次 VLC 直接打开 `rtp://@192.168.96.122:6200` 并使用默认解码选择；日志明确记录 NVIDIA D3D11VA 硬解，GPU `VideoDecode` 计数持续增长，UDP 接收错误为 0，deadlock、持续晚帧和 decoder error 均为 0。
 
-当前完整验收判定为 PASS。命令、时间、PID、源文件事实、哈希、资源趋势及失败根因见 `docs/completed/2026-09-07-rk-a559-rkmpp-local-rtp-validation.md`。
+当前 H.264→HEVC CBR 项判定为 PASS；用户追加的 HEVC→H.264 CBR、H.264→HEVC VBR 和 HEVC→H.264 VBR 仍待执行。命令、时间、PID、源文件事实、哈希、资源趋势及失败根因见 `docs/completed/2026-09-07-rk-a559-rkmpp-local-rtp-validation.md`。

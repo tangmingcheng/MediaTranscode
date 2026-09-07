@@ -1,4 +1,4 @@
-# RKMPP 本地高规格源验收完成记录
+# RKMPP H.264 2K30 到 HEVC 1080p25 CBR6M MPEGTS-RTP 验收记录
 
 ## 范围与版本
 
@@ -7,77 +7,72 @@
 - 核心修复检查点：`3f10fb4d`。
 - 目标机：`root@192.168.130.229`，目录 `/home/tang/MediaTranscode`。
 - RKMPP 二进制 SHA256：`96c5c71d3183cfe11846dba36ee48f4116983c775e7caa1b3eb5078188989b57`。
-- 本轮没有修改核心代码，也没有新增 CLI 或公共参数。
+- 本项没有修改核心代码，也没有新增 CLI 或公共参数。
 
-## 本地输入源
+## 输入源
 
-目标机没有单个超过三分钟的 H.264 文件。验收源只使用目标机已有的两份高规格视频制作，不使用 `testsrc` 或 `-stream_loop`：
-
-```text
-/home/tang/canonical-2k-hevc-aac-128s.mp4
-  HEVC 2560x1440 30 fps，约 11.03 Mbps，128.267 s
-/home/tang/test-continuous-120s-2k-hevc.mp4
-  HEVC 2560x1440 30 fps，约 11.02 Mbps，120.000 s
-```
-
-制作命令：
+使用目标机已有的两份 HEVC 2560x1440 30 fps、约 11 Mbps 高规格视频制作连续源，不使用 `testsrc` 或 `-stream_loop`。制作过程的解码和编码均使用 RKMPP：
 
 ```bash
-printf "file '/home/tang/canonical-2k-hevc-aac-128s.mp4'\nfile '/home/tang/test-continuous-120s-2k-hevc.mp4'\n" > /home/tang/rk-highspec-source-list.txt
-ffmpeg -hide_banner -nostdin -y -f concat -safe 0 -i /home/tang/rk-highspec-source-list.txt -map 0:v:0 -an -c:v h264_rkmpp -b:v 12M -maxrate 12M -bufsize 24M -g 60 -pix_fmt yuv420p -movflags +faststart /home/tang/rk-highspec-hevc2k30-to-h2642k30-248s.mp4
+printf "file '/home/tang/canonical-2k-hevc-aac-128s.mp4'\nfile '/home/tang/test-continuous-120s-2k-hevc.mp4'\n" > /home/tang/rk-highspec-hw-source-list.txt
+ffmpeg -hide_banner -nostdin -y -c:v hevc_rkmpp -f concat -safe 0 -i /home/tang/rk-highspec-hw-source-list.txt -map 0:v:0 -an -c:v h264_rkmpp -b:v 12M -maxrate 12M -bufsize 24M -g 60 -pix_fmt yuv420p -movflags +faststart /home/tang/rk-highspec-hw-hevc2k30-to-h2642k30-248s.mp4
 ```
 
-生成文件为 H.264、2560x1440、30 fps、约 11.57 Mbps、248.267 s，SHA256：
-`0945cc9c1b5d65e842db6b9073b82d045d68c8198e3965ae109e35ec1ba101f9`。
+FFmpeg 映射为 `hevc (hevc_rkmpp) -> h264 (h264_rkmpp)`。生成文件为 H.264、2560x1440、30 fps、11,554,504 bps、248.266667 秒，SHA256 为 `82d2c9e76b2dd4d01a45065d6983206dba7fce44e897f4d65c5eb71d81815c37`。
 
-## 实际执行命令
+## 实际命令
 
-本地文件通过目标机 FFmpeg 按真实时钟发送到固定入口，未循环：
+源只做实时读取和 RTP 封装，不解码：
 
 ```bash
-ffmpeg -hide_banner -nostdin -re -i /home/tang/rk-highspec-hevc2k30-to-h2642k30-248s.mp4 -map 0:v:0 -an -c:v copy -f rtp -payload_type 96 -ssrc 3 -sdp_file "$dir/input.sdp" "rtp://192.168.130.229:61884?pkt_size=1400"
+ffmpeg -hide_banner -nostdin -re -i /home/tang/rk-highspec-hw-hevc2k30-to-h2642k30-248s.mp4 -map 0:v:0 -an -c:v copy -f rtp -payload_type 96 -ssrc 3 -sdp_file "$dir/input.sdp" "rtp://192.168.130.229:61884?pkt_size=1400"
 ```
 
 RKMPP CLI 参数保持用户指定值：
 
 ```bash
-dir=/home/tang/MediaTranscode/out/acceptance/rk-a559-local-run22
+dir=/home/tang/MediaTranscode/out/acceptance/rk-a559-local-run24
 /home/tang/MediaTranscode/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-userspace-low-h264720p30-hevc1080p25-cbr6m-v1 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --progress-timeout-ms 12000 --video-rtp-url rtp://192.168.130.229:61884 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 6200 --sdp "$dir/output.sdp" --video-codec hevc --rc cbr --bitrate 6000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
 ```
 
-Windows 接收抓包使用实际承载 `192.168.96.122` 的以太网接口 5：
+Windows 接收抓包使用 `dumpcap -D` 确认的“以太网”接口 6：
 
 ```powershell
-D:\Wireshark\dumpcap.exe -i 5 -f "udp and (port 6200 or port 6201)" -a duration:290 -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run22\receiver.pcapng -q
+D:\Wireshark\dumpcap.exe -i 6 -f "udp and (port 6200 or port 6201)" -a duration:260 -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run24\receiver.pcapng -q
 ```
 
-VLC 直接打开 RTP URL。该 VLC 的 D3D11VA 路径在第 21 次触发 `not enough decoding slices in the texture (6/28)`、`buffer deadlock prevented` 和持续晚帧，本次禁用该播放器硬件解码器：
+VLC 直接打开 URL，使用默认解码选择，只增加文件日志：
 
 ```powershell
-D:\VideoLAN\VLC\vlc.exe --avcodec-hw=none --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run22\vlc.log rtp://@192.168.96.122:6200
+D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run24\vlc.log rtp://@192.168.96.122:6200
+```
+
+目标机输出还原后使用 RKMPP 硬解校验：
+
+```bash
+ffmpeg -hide_banner -nostdin -v info -c:v hevc_rkmpp -i "$dir/output.ts" -map 0:v:0 -an -f null -
 ```
 
 ## 验收结果
 
-第 22 次源开始于 `2026-09-07 11:12:27.201 +08:00`，自然结束于 `11:16:35.304`，连续约 248.10 秒。CLI PID `3767593`，源 PID `3767596`，目标机输入/输出抓包 PID `3767574/3767575`，脚本 PID `3767565`；Windows dumpcap/VLC PID `17352/2884`。
+第 24 次源开始于 `2026-09-07T11:59:46.834978206+08:00`，自然结束于 `12:03:55.938061092+08:00`，持续 249.103 秒。CLI PID `3802860`，源 PID `3802864`，目标机输入/输出抓包 PID `3802842/3802843`，脚本 PID `3802835`；Windows 有效 dumpcap/VLC PID `12072/30716`。
 
-- 输入 RTP 共 `262679` 包，序号缺失、乱序、重复均为 0；最大包间隔 `34.789 ms`，共 `7448` 个视频 marker，最大 marker 间隔 `57.212 ms`。
-- 目标机发送 RTP `156268` 包、RTCP `56` 包；RTP 序号和 MPEG-TS sync、continuity、TEI 错误均为 0。
-- 发送端 50 Mbps 服务曲线超额 `1356 B`，恰为一个最大数据报；`deadline_misses=0`，最大 wire residence `60.303236 ms`，满足 100 ms 硬约束。
-- Windows 收到相同的 `156268` 个 RTP 包；发送端与接收端 RTP payload 序列 SHA256 同为 `bdd714f3878da1aa66c9952010272211f0c17eaac91f11855fed92de6492bc4c`，证明传输无丢包或重排。
-- Windows 主机抓包的到达服务曲线超额为 `17387.5 B`，高于发送端；由于发送端已满足一个最大包边界且收发 payload 完全一致，该数值作为接收网卡/主机到达聚合风险保留，不把它改写成发送突发。
-- 接收端还原流为 HEVC 1920x1080、25 fps、约 6.22 Mbps、248.16 秒。PTS 每 `40 ms` 连续推进，首个 PTS 比 PCR 提前 `180 ms`；全流 `6204/6204` 帧解码成功，FFmpeg 退出码 0。
-- VLC 软件解码持续至源结束：`buffer deadlock=0`、超过 5 秒晚帧 `0`、picture late `0`、decoder error `0`。
-- 源流期间 CLI 的 worker error、runtime error、丢弃、pressure failure 和 deadline miss 均为 0；平均单核 CPU 约 `16.28%`，峰值约 `57.14%`，RSS 峰值 `57073664 B`。
-- 源自然结束后约 8 秒，CLI 按现有 RTP source-clock evidence expiry 失败退出，退出码 1；该退出发生在源停止后，不属于“源不停、转码停止”。
-- 目标机两路 tcpdump 均为 `0 packets dropped by kernel`。
+- 输入抓包有 `262430` 个 RTP 包，持续 `247.734422` 秒，RTP 序列缺失、乱序和重复均为 0；目标机 ingress 无 truncation 或 pressure failure。
+- 发送端有 `156186` 个 RTP 包和 `56` 个 RTCP 包；RTP 序列缺失、乱序和重复均为 0，MPEG-TS sync、continuity、TEI 和 invalid AFC 错误均为 0。
+- 发送端按 50 Mbps 服务曲线计算的最大超额为 `1356 B`，恰好一个最大 IP 数据报；1/5/10/40/100 ms 最大 IP 字节分别为 `5880/25764/47460/174024/259908 B`。`deadline_misses=0`，最大 wire residence `48.916468 ms`，满足 100 ms 硬约束。
+- Windows 有效接收抓包覆盖 `196.285145` 秒，收到 `123613` 个 RTP 包，Wireshark RTP 统计为丢失 `0 (0.0%)`。抓包晚于源开始约 59 秒，但连续覆盖仍超过三分钟。
+- VLC 默认选择 `d3d11va_vld`，明确记录 `Using D3D11VA (NVIDIA GeForce RTX 4060 Laptop GPU...)`。结束段 30 秒内 VLC UDP 接收数增加 `7207`、接收错误保持 0，进程 GPU `VideoDecode` 计数持续增长；`buffer deadlock`、超过 5 秒晚帧、`picture is too late` 和 decoder error 均为 0。
+- 输出为 HEVC 1920x1080 25 fps；PTS 共 `6204` 个，间隔持续按 40 ms 推进，PTS/PCR 到达漂移末值约 `-0.230 ms`。`hevc_rkmpp` 硬解全部 `6204` 帧，退出码 0；没有使用软件解码。
+- 源运行期间 CLI 没有 worker error、runtime error、丢弃、pressure failure 或 deadline miss。平均单核 CPU 约 `16.03%`，峰值 `50.00%`；RSS 从 `52,191,232 B` 增至峰值 `56,717,312 B`，没有持续增长。
+- 源自然结束后约 8 秒，CLI 按既有 `RTP video source clock evidence expired` 失败退出，退出码 1。该退出发生在源停止后，不属于源持续期间的核心退出。
+- 两路目标机 tcpdump 均为 `0 packets dropped by kernel`；测试结束后 CLI、源、VLC 和抓包进程均无残留。
 
-本轮满足：连续运行超过三分钟；源流存在期间转码不停止；目标机发出端无超过一个最大数据报的突发；接收端收到全部数据且全帧可解码；VLC URL 播放日志无卡顿、晚帧或解码错误。
+本项通过：核心和源连续运行超过三分钟，源存在期间核心不退出；发送端无超过一个最大数据报的突发；接收 RTP 零丢失；默认 VLC 持续使用 D3D11VA 硬解；目标机 RKMPP 完整硬解全部输出帧。
 
 ## 失败根因闭环
 
-- 外部源第 18 次：目标机入口在核心收包前已有约 2.48 秒无包窗口及 RTP 分片缺失，责任边界是外部发送端或中间传输，不修改核心。
-- 本地源第 20 次：自行合成的 `testsrc2` 源不符合用户要求，立即作废并删除，未作为验收证据。
-- 本地源第 21 次：核心输出和接收数据完整，但 VLC D3D11VA 报纹理解码 slice 数不足，随后 buffer deadlock 和持续晚帧；相同接收数据可完整解码 `6204` 帧。第 22 次只禁用 VLC 的故障硬件解码路径，核心与 CLI 参数不变，故障不再出现。
+- 第 22 次使用 VLC 软件解码，不符合“不允许任何一方使用软件解码”的验收要求，结果作废；核心代码未因此修改。
+- 第 23 次把 Windows `ifIndex=5` 误当成 Wireshark 接口号，实际抓到 WLAN，接收抓包只有文件头。`dumpcap -D` 证明承载 `192.168.96.122` 的“以太网”是接口 6；这是诊断命令错误，不是核心缺陷。
+- 第 24 次首次启动 dumpcap 时参数引号被 `Start-Process` 拆散，进程立即退出。修正为完整参数字符串后从源运行第 59 秒开始有效抓包，连续覆盖 196.285 秒，仍满足三分钟门禁；核心和 CLI 参数没有改变。
 
-证据目录：目标机 `/home/tang/MediaTranscode/out/acceptance/rk-a559-local-run22/`；本机 `D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run22\`。抓包和临时分析器不纳入版本库。
+证据目录：目标机 `/home/tang/MediaTranscode/out/acceptance/rk-a559-local-run24/`；本机 `D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-local-run24\`。抓包和临时分析器不纳入版本库。
