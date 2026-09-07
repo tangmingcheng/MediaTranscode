@@ -123,7 +123,7 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 
 用户要求在确认外部入口丢包后立即改用目标机本地视频源。本次只使用目标机已有两份 HEVC 2560x1440、30 fps、约 11 Mbps 高规格文件制作 248.267 秒 H.264 2560x1440、30 fps 有限源；制作过程为 `hevc_rkmpp -> h264_rkmpp`，没有使用软件解码、`testsrc` 或 `-stream_loop`，CLI 参数和核心代码均未改变。
 
-本地源连续发送约 249.10 秒，源流期间 RKMPP CLI 未停止，核心错误、丢弃、pressure failure 和 deadline miss 均为 0。目标机发送 RTP `156186` 包，50 Mbps 服务曲线超额恰为一个最大包 `1356 B`，最大 wire residence `48.916468 ms`。Windows 有效接收窗口为 196.285 秒，收到 `123613` 个 RTP 包且丢失为 0；RTP/TS 错误为 0。接收数据还原后由 `hevc_rkmpp` 硬解全部 6204 帧，退出码 0。
+本地源连续发送约 248.018 秒，源流期间 RKMPP CLI 未停止，核心错误、丢弃、pressure failure 和 deadline miss 均为 0。目标机发送 RTP `156186` 包，50 Mbps 服务曲线超额恰为一个最大包 `1356 B`，最大 wire residence `48.916468 ms`。Windows 有效接收窗口为 196.285 秒，收到 `123613` 个 RTP 包且丢失为 0；RTP/TS 错误为 0。目标机输出抓包还原后由 `hevc_rkmpp` 硬解全部 6204 帧，退出码 0。
 
 第 22 次因 VLC 使用软件解码而作废。第 24 次 VLC 直接打开 `rtp://@192.168.96.122:6200` 并使用默认解码选择；日志明确记录 NVIDIA D3D11VA 硬解，GPU `VideoDecode` 计数持续增长，UDP 接收错误为 0，deadlock、持续晚帧和 decoder error 均为 0。
 
@@ -133,6 +133,8 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 
 目标机已有高规格视频经 `hevc_rkmpp -> hevc_rkmpp` 制作为 HEVC 2560x1440 30 fps、11.58 Mbps、248.267 秒有限源。源发送只做 `-re -c:v copy`；生产 DAG 使用 RKMPP 解码和编码，输出 H.264 1920x1080 25 fps CBR 6 Mbps MPEG-TS/RTP。
 
-源连续运行 249.386 秒，源期间核心错误、丢弃、pressure failure 和 deadline miss 均为 0。发送端 156176 个 RTP 包，服务曲线超额 1356 B，RTP/TS 错误为 0；Windows 收到完整 156176 包且丢失为 0。VLC 默认选择 NVIDIA D3D11VA 并持续产生 `VideoDecode` 活动，日志无 deadlock、持续晚帧或 decoder error；目标机 `h264_rkmpp` 硬解全部 6204 帧并以 0 退出。
+源连续运行 248.287 秒，源期间核心错误、丢弃、pressure failure 和 deadline miss 均为 0。发送端 156176 个 RTP 包，服务曲线超额 1356 B，RTP/TS 错误为 0；Windows 收到完整 156176 包且丢失为 0。VLC 默认选择 NVIDIA D3D11VA 并持续产生 `VideoDecode` 活动，日志无 deadlock、持续晚帧或 decoder error；目标机 `h264_rkmpp` 硬解全部 6204 帧并以 0 退出。
 
-当前两项 CBR 互转均为 PASS；两项 VBR 仍待执行。完整证据见 `docs/completed/2026-09-07-rk-a559-rkmpp-hevc-h264-cbr6m-validation.md`。
+两项 CBR 互转均为 PASS；后续两项 VBR 也已完成，见四项汇总。完整证据见 `docs/completed/2026-09-07-rk-a559-rkmpp-hevc-h264-cbr6m-validation.md`。
+
+最终四项验收、审查和风险见 [四项汇总](completed/2026-09-07-rk-a559-four-route-summary.md)。用户已观察无卡顿，最终以 VLC 正常持续硬解与收发无丢包验证播放；不以 PresentMon 或 HTTP 缓存统计作为门禁。

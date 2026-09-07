@@ -33,7 +33,7 @@
 
 ## 2026-09-04 RKMPP 持续运行修复专项评分
 
-范围：`a5597326` 至本轮的 23 个生产文件；历史全仓评分保留，本表不代表全库重评。第 24 次使用目标机本地高规格有限源完成 249 秒原参数 RKMPP 实流验收；代码冻结后的最终交叉审查以本轮最新提交为准。
+范围：`a5597326` 至本轮的 23 个生产文件；历史全仓评分保留，本表不代表全库重评。四项 CBR/VBR、H.264/HEVC 互转均完成约 248 秒 RKMPP 实流验收；冻结 dccf95da 已由两名独立智能体交叉审查并均明确 PASS，均建议专项评分维持 90/100。
 
 | 维度 | 得分/满分 | 依据与未完成项 |
 |---|---:|---|
@@ -41,7 +41,7 @@
 | Planner 契约 | 19/20 | 批次、容量、轮询周期由既有事实规划；没有新对外参数。 |
 | 生命周期与约束 | 22/25 | prefix 顺序提交、失败 abandon/poison、提交后唤醒闭合；100 ms 仅约束 wire 准入后的驻留。 |
 | 平台边界 | 8/10 | 共享 DAG 复用；按用户要求不再进行 Windows 实测，不声明后续改动已覆盖。 |
-| 真实验收证据 | 19/20 | 两项 RKMPP CBR 互转均以本地 2K30 高规格源持续 249 秒；源期间核心不停，发送服务曲线超额 1356 B，RTP/TS 错误为 0，接收 RTP 零丢失，目标机 RKMPP 和 VLC 默认 D3D11VA 硬解通过。两项 VBR 待验收。 |
+| 真实验收证据 | 19/20 | 四项 RKMPP CBR/VBR 互转均以本地 2K30 高规格源持续约 248 秒；源期间核心不停，发送服务曲线超额 1356 B，RTP/TS 错误为 0，接收 RTP 零丢失，目标机 RKMPP 和 VLC 默认 D3D11VA 硬解通过。四项分别形成独立测试提交。 |
 | **专项合计** | **90/100** | **本地高规格源完整链路 PASS；长期与平台覆盖风险保留。** |
 
-残余风险：Linux TX timestamp telemetry 当前未跟踪；H.264→HEVC CBR 的 Windows Npcap 抓包晚于源开始约 59 秒，但有效连续窗口仍为 196.285 秒；裸 RTP 源自然结束后仍以 source-clock expiry 退出码 1 收敛；H.264→HEVC VBR、HEVC→H.264 VBR 尚未完成本轮验收；249 秒验收不能替代多小时硬件 soak。另有未物化尾部等待不计入 wire residence、LOW_DELAY 阻塞取包在硬件失去响应时可能阻塞 worker 的设计风险。详见 `docs/rk-a559-external-rtp-validation.md`。
+残余风险：Linux TX timestamp telemetry 当前未跟踪；H.264→HEVC CBR 的 Windows Npcap 抓包晚于源开始约 59 秒，但有效连续窗口仍为 196.285 秒；裸 RTP 源自然结束后仍以 source-clock expiry 退出码 1 收敛；248 秒验收不能替代多小时硬件 soak。另有未物化尾部等待不计入 wire residence、LOW_DELAY 阻塞取包在硬件失去响应时可能阻塞 worker 的设计风险。详见 `docs/rk-a559-external-rtp-validation.md`。
