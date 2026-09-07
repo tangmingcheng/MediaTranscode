@@ -88,3 +88,14 @@ run42 的 GPU 采样器在引擎创建前枚举实例，输出没有样本；本
 目标机 `out/acceptance/rk-a559-loss20-run43` 保存脚本内容、CLI/源日志、输入/输出抓包、包分析及内核诊断；本机对应目录保存 VLC 日志、接收抓包与 GPU CSV。CLI/源 4042749/4042772，输入/输出抓包 4042728/4042729，主/注入脚本 4042684/4042685，网络 trace reader 4042698，附加函数 trace reader 4044207，发送 TID 4042816；VLC 34800，Windows 抓包 34988。
 
 目标机测试进程均已结束，临时执行脚本及独立 tracing instances 已删除，lo 恢复 0%，出口配置未改。已交付 53c5c0d0 库保留，新版另建目录，不覆盖旧包。
+## 本次库交付
+
+已按用户指定脚本生成新版，旧 53c5c0d0 库保留：
+
+```bash
+/home/tang/package_media_transcode_beta.sh /home/tang/MediaTranscode/out/build/rk-release /home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907
+```
+
+提交并推送成功记录 ffed7187，标签 rk-input-loss20-cbr6m-run43 指向该提交。库目录 `/home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907`，同名 `.tar.gz` 包 19,174,557 B，SHA-256：`dc1e8ebab09448a33bb06e4fd31a5cc6c79393e75777baf69c53567bf3bf83c6`。按用户要求只保留目标机，未下载库包。
+
+包含合并静态库、公开头文件、CLI、C 示例源码与可执行文件、实际依赖、源码清单、run43 报告、抓包分析和 GPU CSV。C 示例用新库完成 C11 严格编译及链接，exit 0；包内全部文件 sha256sum 校验成功。标签与 README 明确保留旧内核偶发突发、其余矩阵和独立审查限制。
