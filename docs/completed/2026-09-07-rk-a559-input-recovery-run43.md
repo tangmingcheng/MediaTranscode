@@ -72,6 +72,6 @@ run42 的 GPU 采样器在引擎创建前枚举实例，输出没有样本；本
 /home/tang/package_media_transcode_beta.sh /home/tang/MediaTranscode/out/build/rk-release /home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907
 ```
 
-提交并推送成功记录 ffed7187，标签 rk-input-loss20-cbr6m-run43 指向该提交。库目录 `/home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907`，同名 `.tar.gz` 包 19,176,872 B，SHA-256：`6b464c2de4af6d47bee492415614c462acc03533e1da6a5f24e7e7660f464be5`。按用户要求只保留目标机，未下载库包。
+提交并推送成功记录 ffed7187，标签 rk-input-loss20-cbr6m-run43 指向该提交。库目录 `/home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907`，同名 `.tar.gz` 包 19,176,566 B，SHA-256：`d6833e491c73e73d195cbcfe5e1a46d61892f0c0429601106001760edcdf6e9e`。按用户要求只保留目标机，未下载库包。
 
 包含合并静态库、公开头文件、CLI、C 示例源码与可执行文件、实际依赖、源码清单、run43 报告、抓包分析和 GPU CSV。C 示例用新库完成 C11 严格编译及链接，exit 0；包内全部文件 sha256sum 校验成功。标签与 README 保留旧内核偶发突发及其余矩阵限制。包内 RUN43 的 GPU 命令已按实际 PID 34800 修正文档生成错误；媒体二进制保持不变。
