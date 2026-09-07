@@ -467,14 +467,19 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             "rtp_fmtp mode=manual codec=" + m_config.codecName +
                 " payload_type=" + std::to_string(m_config.payloadType));
     }
-    m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{
+    const MediaRtpReorderConfig reorderConfig{
         static_cast<std::size_t>(reorderWindow.value()),
         preparedIngressPlan
             ? std::chrono::nanoseconds(
                   preparedIngressPlan->maximumReorderDelayNanoseconds())
             : std::chrono::duration_cast<std::chrono::nanoseconds>(
                   std::chrono::milliseconds(reorderDelay.value())),
-        static_cast<uint8_t>(payloadType.value())});
+        static_cast<uint8_t>(payloadType.value())};
+    m_reorder = std::make_unique<MediaRtpReorderBuffer>(reorderConfig);
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_reorder window_packets=" + std::to_string(reorderConfig.windowPackets) +
+        " maximum_delay_ns=" + std::to_string(reorderConfig.maximumDelay.count()));
     m_depacketizer = std::move(depacketizer).value();
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
         requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
