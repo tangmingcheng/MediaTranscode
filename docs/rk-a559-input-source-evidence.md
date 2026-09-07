@@ -83,4 +83,3 @@ droppedBuffers 和 deadline_misses 均为 `0`；发送端 50 Mbps
 `/home/tang/MediaTranscode/out/acceptance/rk-a559-external-run18/traffic.pcap`，
 SHA256 为
 `34e1aa720f9384516ba910b06891a46b6c4ef76a6c800681282641bd362f5b5c`。
-
