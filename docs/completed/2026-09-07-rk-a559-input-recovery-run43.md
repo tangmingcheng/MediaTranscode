@@ -13,31 +13,7 @@ ffmpeg -hide_banner -nostdin -re -i /home/tang/rk-highspec-hw-hevc2k30-to-h2642k
 ```powershell
 D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc.log rtp://@192.168.96.122:6200
 D:\Wireshark\dumpcap.exe -i 6 -f "udp and (port 6200 or port 6201)" -a duration:275 -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\receiver.pcapng -q
-$watch=[Diagnostics.Stopwatch]::StartNew(); while($watch.Elapsed.TotalSeconds -lt 275) { $samples=(Get-Counter -Counter '\GPU Engine(*)\Running Time').CounterSamples; $samples | Where-Object {```bash
-dir=/home/tang/MediaTranscode/out/acceptance/rk-a559-loss20-run43
-/home/tang/MediaTranscode/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-userspace-low-h264720p30-hevc1080p25-cbr6m-v1 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --progress-timeout-ms 12000 --video-rtp-url rtp://192.168.130.229:61884 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 6200 --sdp "$dir/output.sdp" --video-codec hevc --rc cbr --bitrate 6000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
-ffmpeg -hide_banner -nostdin -re -i /home/tang/rk-highspec-hw-hevc2k30-to-h2642k30-248s.mp4 -map 0:v:0 -an -c:v copy -f rtp -payload_type 96 -ssrc 3 -sdp_file "$dir/input.sdp" "rtp://192.168.130.229:61884?pkt_size=1400"
-```
-
-```powershell
-D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc.log rtp://@192.168.96.122:6200
-D:\Wireshark\dumpcap.exe -i 6 -f "udp and (port 6200 or port 6201)" -a duration:275 -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\receiver.pcapng -q
-Get-Counter -Counter '\GPU Engine(*)\Running Time' -SampleInterval 1 -MaxSamples 270 | ForEach-Object { $_.CounterSamples | Where-Object { $_.InstanceName -like 'pid_30548_*engtype_VideoDecode' } | Select-Object @{Name='Timestamp';Expression={$_.Timestamp.ToString('o')}},InstanceName,RawValue } | Export-Csv -LiteralPath 'D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc-gpu-running-time.csv' -NoTypeInformation -Encoding UTF8
-```
-
-.InstanceName -like 'pid_34800_*engtype_VideoDecode'} | Select-Object @{Name='Timestamp';Expression={```bash
-dir=/home/tang/MediaTranscode/out/acceptance/rk-a559-loss20-run43
-/home/tang/MediaTranscode/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-userspace-low-h264720p30-hevc1080p25-cbr6m-v1 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --progress-timeout-ms 12000 --video-rtp-url rtp://192.168.130.229:61884 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 6200 --sdp "$dir/output.sdp" --video-codec hevc --rc cbr --bitrate 6000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
-ffmpeg -hide_banner -nostdin -re -i /home/tang/rk-highspec-hw-hevc2k30-to-h2642k30-248s.mp4 -map 0:v:0 -an -c:v copy -f rtp -payload_type 96 -ssrc 3 -sdp_file "$dir/input.sdp" "rtp://192.168.130.229:61884?pkt_size=1400"
-```
-
-```powershell
-D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc.log rtp://@192.168.96.122:6200
-D:\Wireshark\dumpcap.exe -i 6 -f "udp and (port 6200 or port 6201)" -a duration:275 -w D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\receiver.pcapng -q
-Get-Counter -Counter '\GPU Engine(*)\Running Time' -SampleInterval 1 -MaxSamples 270 | ForEach-Object { $_.CounterSamples | Where-Object { $_.InstanceName -like 'pid_30548_*engtype_VideoDecode' } | Select-Object @{Name='Timestamp';Expression={$_.Timestamp.ToString('o')}},InstanceName,RawValue } | Export-Csv -LiteralPath 'D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc-gpu-running-time.csv' -NoTypeInformation -Encoding UTF8
-```
-
-.Timestamp.ToString('o')}},InstanceName,RawValue | Export-Csv -LiteralPath 'D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc-gpu-running-time.csv' -Append -NoTypeInformation -Encoding UTF8 }
+$watch=[Diagnostics.Stopwatch]::StartNew(); while($watch.Elapsed.TotalSeconds -lt 275) { $samples=(Get-Counter -Counter '\GPU Engine(*)\Running Time').CounterSamples; $samples | Where-Object {$_.InstanceName -like 'pid_34800_*engtype_VideoDecode'} | Select-Object @{Name='Timestamp';Expression={$_.Timestamp.ToString('o')}},InstanceName,RawValue | Export-Csv -LiteralPath 'D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run43\vlc-gpu-running-time.csv' -Append -NoTypeInformation -Encoding UTF8 }
 ```
 
 ## 输入丢包与恢复
@@ -81,7 +57,7 @@ run42 的 GPU 采样器在引擎创建前枚举实例，输出没有样本；本
 
 后半程另用独立 function tracer 记录 __netif_schedule/netif_tx_wake_queue 调用栈；原实例因 trace_pipe 正打开而拒绝切换 tracer，随后在独立实例成功采集，两个实例均已清理。只观察到调度及 watchdog 等路径，未据此判定旧突发根因。此次通过不证明 run41/run42 的偶发内核队列聚集已经修复，也不证明特定 WouldBlock 分支已由运行数据覆盖。
 
-本项真实链路 PASS，立即独立提交、推送并按用户指令产出本版本库。其他 CBR/VBR、H.264↔HEVC 矩阵回归、双独立审查与最终评分仍未完成；审查服务额度中断不记为 PASS。
+本项真实链路 PASS，立即独立提交、推送并按用户指令产出本版本库。其他 CBR/VBR、H.264↔HEVC 矩阵回归仍未完成。审查服务恢复后，两名未参与实现的独立审查者均对冻结 2d597ba6 明确给出 Standards PASS、Spec 源码 PASS；专项评分各为 88/100，运行范围限制仍保留。
 
 ## PID 与证据清理
 
@@ -96,6 +72,6 @@ run42 的 GPU 采样器在引擎创建前枚举实例，输出没有样本；本
 /home/tang/package_media_transcode_beta.sh /home/tang/MediaTranscode/out/build/rk-release /home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907
 ```
 
-提交并推送成功记录 ffed7187，标签 rk-input-loss20-cbr6m-run43 指向该提交。库目录 `/home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907`，同名 `.tar.gz` 包 19,174,557 B，SHA-256：`dc1e8ebab09448a33bb06e4fd31a5cc6c79393e75777baf69c53567bf3bf83c6`。按用户要求只保留目标机，未下载库包。
+提交并推送成功记录 ffed7187，标签 rk-input-loss20-cbr6m-run43 指向该提交。库目录 `/home/tang/packages/media-transcode-beta-rkmpp-ffed7187-run43-20260907`，同名 `.tar.gz` 包 19,176,872 B，SHA-256：`6b464c2de4af6d47bee492415614c462acc03533e1da6a5f24e7e7660f464be5`。按用户要求只保留目标机，未下载库包。
 
-包含合并静态库、公开头文件、CLI、C 示例源码与可执行文件、实际依赖、源码清单、run43 报告、抓包分析和 GPU CSV。C 示例用新库完成 C11 严格编译及链接，exit 0；包内全部文件 sha256sum 校验成功。标签与 README 明确保留旧内核偶发突发、其余矩阵和独立审查限制。
+包含合并静态库、公开头文件、CLI、C 示例源码与可执行文件、实际依赖、源码清单、run43 报告、抓包分析和 GPU CSV。C 示例用新库完成 C11 严格编译及链接，exit 0；包内全部文件 sha256sum 校验成功。标签与 README 保留旧内核偶发突发及其余矩阵限制。包内 RUN43 的 GPU 命令已按实际 PID 34800 修正文档生成错误；媒体二进制保持不变。
