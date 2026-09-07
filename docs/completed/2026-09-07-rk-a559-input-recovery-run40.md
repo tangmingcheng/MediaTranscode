@@ -25,6 +25,16 @@ CLI / 源 PID 3969273 / 3969298；输入/输出抓包 3969256 / 3969257；执行
 
 ## 结果及原因对照
 
+正常编码出流后等待 20 秒，再注入 30 秒丢包。源到目标机自身地址的流量经过 lo；实际执行命令如下，eth0 未注入丢包：
+
+```bash
+tc qdisc change dev lo root netem loss 20%
+tc -s qdisc show dev lo
+# 30 秒后恢复输入
+tc qdisc change dev lo root netem loss 0%
+tc -s qdisc show dev lo
+```
+
 - 15:35:50.679 注入 20% 输入丢包，15:36:20.693 撤销。实际缺包 6,208，19.5552%；注入前缺包 0，撤销后 197.301613 秒、208,666 包，缺包 0、乱序 55，socket drops 全部为 0。
 - 15:36:03.411 进入输入活跃但等待可解码数据状态；15:36:21.953 同一会话恢复输出，一直持续至有限源结束。源于 15:39:39.765 自然退出，exit 0；CLI 按原 12 秒无输入窗口于 15:39:50.793 退出，exit 1。workerErrors=0、errors=0、payload pressure failures=0，平均单核 CPU 15.146063%，峰值 RSS 60,719,104 B；无音频，A/V 漂移不适用。
 - **run39 乱序误判未复现**：运行日志记录 planner 形成的 `window_packets=1024 maximum_delay_ns=7613513`。撤销丢包之后没有额外 discontinuity；既有等待时间界限未放宽。修复只将有限样本位移上限替换为已有接收描述符预算，未修改批次消费顺序。

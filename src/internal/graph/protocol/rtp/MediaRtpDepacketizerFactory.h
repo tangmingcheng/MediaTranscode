@@ -10,7 +10,8 @@ class MediaRtpDepacketizerFactory final {
 public:
     static ::media::Status validate(const MediaRtpDepacketizerConfig& config);
     static ::media::Result<std::unique_ptr<MediaRtpDepacketizer>> create(
-        const MediaRtpDepacketizerConfig& config);
+        const MediaRtpDepacketizerConfig& config,
+        std::size_t maximumAccessUnitBytes);
 
 private:
     MediaRtpDepacketizerFactory() = delete;

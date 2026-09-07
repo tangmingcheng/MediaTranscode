@@ -103,11 +103,12 @@ MediaRtpVideoSignalingObserver::MediaRtpVideoSignalingObserver(
     std::string codecName,
     std::uint8_t payloadType,
     int clockRate,
-    NalParser parser)
+    NalParser parser, std::size_t maximumNalUnitBytes)
     : m_codecName(std::move(codecName)),
       m_payloadType(payloadType),
       m_clockRate(clockRate),
-      m_parser(std::move(parser))
+      m_parser(std::move(parser)),
+      m_maximumNalUnitBytes(maximumNalUnitBytes)
 {
 }
 
@@ -115,10 +116,12 @@ MediaRtpVideoSignalingObserver::MediaRtpVideoSignalingObserver(
 MediaRtpVideoSignalingObserver::create(std::string codecName,
                                        std::uint8_t payloadType,
                                        int clockRate,
-                                       MediaRtpVideoPacketizationPolicy packetizationPolicy)
+                                       MediaRtpVideoPacketizationPolicy packetizationPolicy,
+                                       std::size_t maximumNalUnitBytes)
 {
     codecName = canonicalCodecName(codecName);
-    if (payloadType < 96 || payloadType > 127 || clockRate != 90'000) {
+    if (payloadType < 96 || payloadType > 127 || clockRate != 90'000 ||
+        maximumNalUnitBytes == 0) {
         return ::media::Result<MediaRtpVideoSignalingObserver>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP video signaling probe requires dynamic PT and 90000 Hz clock"));
@@ -128,14 +131,14 @@ MediaRtpVideoSignalingObserver::create(std::string codecName,
         return ::media::Result<MediaRtpVideoSignalingObserver>::success(
             MediaRtpVideoSignalingObserver(
                 std::move(codecName), payloadType, clockRate,
-                NalParser(MediaH264RtpNalUnitParser(payloadType))));
+                NalParser(MediaH264RtpNalUnitParser(payloadType)), maximumNalUnitBytes));
     }
     if (codecName == "hevc" && packetizationPolicy ==
             MediaRtpVideoPacketizationPolicy::HevcNonInterleavedNoDonl) {
         return ::media::Result<MediaRtpVideoSignalingObserver>::success(
             MediaRtpVideoSignalingObserver(
                 std::move(codecName), payloadType, clockRate,
-                NalParser(MediaHevcRtpNalUnitParser(payloadType))));
+                NalParser(MediaHevcRtpNalUnitParser(payloadType)), maximumNalUnitBytes));
     }
     return ::media::Result<MediaRtpVideoSignalingObserver>::failure(
         ::media::ErrorInfo::unsupported(
@@ -173,7 +176,9 @@ MediaRtpVideoSignalingObserver::observe(const MediaRtpPacket& packet)
     }
 
     auto parsed = std::visit(
-        [&packet](auto& parser) { return parser.push(packet); }, m_parser);
+        [&packet, this](auto& parser) {
+            return parser.push(packet, m_maximumNalUnitBytes);
+        }, m_parser);
     if (!parsed) {
         return ::media::Result<MediaRtpVideoSignalingObservation>::failure(
             parsed.error());

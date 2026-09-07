@@ -56,8 +56,12 @@ MediaH264RtpNalUnitParser::MediaH264RtpNalUnitParser(
 }
 
 ::media::Result<MediaRtpNalUnitBatch> MediaH264RtpNalUnitParser::push(
-    const MediaRtpPacket& packet)
+    const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes)
 {
+    if (maximumNalUnitBytes == 0) {
+        return ::media::Result<MediaRtpNalUnitBatch>::failure(
+            invalidPayload("H264 RTP requires an explicit NAL byte capacity"));
+    }
     if (packet.payloadType != m_payloadType || packet.payload.empty()) {
         return ::media::Result<MediaRtpNalUnitBatch>::failure(
             invalidPayload("H264 RTP packet has invalid payload identity or empty payload"));
@@ -154,6 +158,11 @@ MediaH264RtpNalUnitParser::MediaH264RtpNalUnitParser(
         return ::media::Result<MediaRtpNalUnitBatch>::failure(
             invalidPayload("H264 FU-A continuation changed timestamp, NRI, or NAL type"));
     }
+    if (m_fragment.size() > maximumNalUnitBytes ||
+        packet.payload.size() - 2 > maximumNalUnitBytes - m_fragment.size()) {
+        return ::media::Result<MediaRtpNalUnitBatch>::failure(
+            invalidPayload("H264 FU-A exceeds its prepared NAL byte capacity"));
+    }
     m_fragment.insert(m_fragment.end(), packet.payload.begin() + 2,
                       packet.payload.end());
     if (packet.marker && !end) {
@@ -183,8 +192,12 @@ MediaHevcRtpNalUnitParser::MediaHevcRtpNalUnitParser(
 }
 
 ::media::Result<MediaRtpNalUnitBatch> MediaHevcRtpNalUnitParser::push(
-    const MediaRtpPacket& packet)
+    const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes)
 {
+    if (maximumNalUnitBytes < 2) {
+        return ::media::Result<MediaRtpNalUnitBatch>::failure(
+            invalidPayload("HEVC RTP requires an explicit NAL byte capacity"));
+    }
     if (packet.payloadType != m_payloadType || packet.payload.size() < 2) {
         return ::media::Result<MediaRtpNalUnitBatch>::failure(
             invalidPayload("HEVC RTP payload identity is invalid or truncated"));
@@ -283,6 +296,11 @@ MediaHevcRtpNalUnitParser::MediaHevcRtpNalUnitParser(
         *m_fragmentHeader != reconstructedHeader) {
         return ::media::Result<MediaRtpNalUnitBatch>::failure(
             invalidPayload("HEVC FU continuation changed timestamp or NAL identity"));
+    }
+    if (m_fragment.size() > maximumNalUnitBytes ||
+        packet.payload.size() - 3 > maximumNalUnitBytes - m_fragment.size()) {
+        return ::media::Result<MediaRtpNalUnitBatch>::failure(
+            invalidPayload("HEVC FU exceeds its prepared NAL byte capacity"));
     }
     m_fragment.insert(m_fragment.end(), packet.payload.begin() + 3,
                       packet.payload.end());

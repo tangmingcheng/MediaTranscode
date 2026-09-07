@@ -93,7 +93,7 @@ AVCodecID codecId(const std::string& codec) noexcept
 ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>> MediaRawRtpStreamDescriptorFactory::create(
     const MediaRtpDepacketizerConfig& config)
 {
-    auto validator = MediaRtpDepacketizerFactory::create(config);
+    auto validator = MediaRtpDepacketizerFactory::validate(config);
     if (!validator) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(validator.error());
     auto parameters = ::media::ffmpeg::makeCodecParameters();
     if (!parameters) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(

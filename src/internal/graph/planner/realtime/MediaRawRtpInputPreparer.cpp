@@ -129,7 +129,7 @@ namespace {
     auto observer = MediaRtpVideoSignalingObserver::create(
         video.identity.codecName, video.identity.payloadType,
         video.identity.clockRate,
-        *plan.packetizationPolicy);
+        *plan.packetizationPolicy, plan.maximumBufferedBytes);
     if (!observer) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             observer.error());

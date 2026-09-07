@@ -42,6 +42,12 @@ public:
     virtual void discontinuity(MediaRtpDiscontinuityReason reason) noexcept = 0;
 };
 
+::media::Result<std::size_t> rtpAccessUnitNalCapacity(
+    std::size_t assembledBytes, std::size_t maximumAccessUnitBytes);
+::media::Status appendRtpAccessUnitNal(
+    std::vector<std::uint8_t>& output, std::span<const std::uint8_t> nal,
+    std::size_t maximumAccessUnitBytes);
+
 ::media::Result<MediaRtpAccessUnit> makeRtpAccessUnit(std::vector<uint8_t> bytes,
                                                       uint32_t rtpTimestamp,
                                                       int clockRate,

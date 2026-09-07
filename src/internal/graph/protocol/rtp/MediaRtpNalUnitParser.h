@@ -37,7 +37,8 @@ class MediaH264RtpNalUnitParser final {
 public:
     explicit MediaH264RtpNalUnitParser(std::uint8_t payloadType) noexcept;
 
-    ::media::Result<MediaRtpNalUnitBatch> push(const MediaRtpPacket& packet);
+    ::media::Result<MediaRtpNalUnitBatch> push(
+        const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes);
     void discontinuity() noexcept;
 
 private:
@@ -51,7 +52,8 @@ class MediaHevcRtpNalUnitParser final {
 public:
     explicit MediaHevcRtpNalUnitParser(std::uint8_t payloadType) noexcept;
 
-    ::media::Result<MediaRtpNalUnitBatch> push(const MediaRtpPacket& packet);
+    ::media::Result<MediaRtpNalUnitBatch> push(
+        const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes);
     void discontinuity() noexcept;
 
 private:

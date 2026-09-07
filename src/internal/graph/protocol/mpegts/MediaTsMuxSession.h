@@ -74,6 +74,7 @@ private:
     ::media::Result<AdvanceResult> emitPendingThrough(
         MediaRunningTime masterNow);
     ::media::Result<std::size_t> preparePendingDatagram();
+    ::media::Status validateProtocolBatchCapacity(std::uint64_t bytes) const;
     ::media::Result<AdvanceResult> advanceThroughAvailable(
         MediaRunningTime emitOnMaster,
         MediaRunningTime availableThrough);
@@ -96,6 +97,7 @@ private:
     MediaTsTransportPacketizer m_packetizer;
     MediaTsProgramTables m_tables;
     std::deque<MediaBufferRef> m_protocolBatches;
+    std::uint64_t m_protocolBatchBytes = 0;
     std::optional<MediaTsDatagramEmissionSchedule> m_emissionSchedule;
     std::optional<MediaTsPendingEmission> m_pendingEmission;
     MediaTsEmissionDiagnostics m_emissionDiagnostics;

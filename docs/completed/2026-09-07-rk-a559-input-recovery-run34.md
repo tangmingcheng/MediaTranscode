@@ -19,6 +19,16 @@ D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\
 
 ## 确认的根因
 
+本文件各轮沿用以下输入丢包与恢复命令，作用于本地源实际经过的 lo，eth0 不注入丢包。计划为正常编码出流 20 秒后注入、30 秒后恢复；部分轮次核心提前失败，是否实际执行及执行时间以各轮结果为准，不把计划当成执行证明。
+
+```bash
+tc qdisc change dev lo root netem loss 20%
+tc -s qdisc show dev lo
+# 注入后 30 秒恢复，失败清理同样执行恢复命令
+tc qdisc change dev lo root netem loss 0%
+tc -s qdisc show dev lo
+```
+
 - 14:08:12.871 启动源；14:08:17.939 核心检测 `first_missing=8473 resumed=8474`，进入关键帧等待。
 - 14:08:18.509 收到完整关键帧；14:08:18.540 帧率节点记录 `current_pts=1564692295 previous_pts=1564638295`，保留 54,000/90,000=0.6 秒缺口，没有补齐历史画面。
 - 14:08:19.151，FileMuxNode 失败：`InvalidArgument: MPEG-TS mux session advance exceeded the maximum PCR gap`。workerErrors=1；61884 socket 各次采样 drops=0。源在此时仍运行，故是核心失败。

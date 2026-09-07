@@ -196,8 +196,13 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         return ::media::Result<std::size_t>::failure(
             poison(invalid("MPEG-TS protocol batch geometry is not representable")).error());
     }
+    const std::size_t batchBytes = packetCount * packetSize;
+    if (auto status = validateProtocolBatchCapacity(batchBytes); !status) {
+        return ::media::Result<std::size_t>::failure(
+            poison(status.error()).error());
+    }
     auto emission = m_emissionSchedule->prepareMaintenance(
-        packetCount * packetSize);
+        batchBytes);
     if (!emission) {
         return ::media::Result<std::size_t>::failure(
             poison(emission.error()).error());
@@ -219,6 +224,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             poison(committed.error()).error());
     }
     m_protocolBatches.push_back(std::move(batch).value());
+    m_protocolBatchBytes += batchBytes;
     logEmissionProgress();
     return ::media::Result<std::size_t>::success(packetCount);
 }
@@ -468,11 +474,27 @@ MediaTsMuxSession::emitPendingThrough(
     }
     const std::size_t packets = m_pendingEmission->pendingBytes() /
         m_emissionPlan.packetSizeBytes();
+    const std::size_t batchBytes = m_pendingEmission->pendingBytes();
+    if (auto status = validateProtocolBatchCapacity(batchBytes); !status) {
+        return ::media::Result<std::size_t>::failure(status.error());
+    }
     auto batch = m_pendingEmission->materializeProtocolBatch(
         m_activation.generation, *m_emissionSchedule);
     if (!batch) return ::media::Result<std::size_t>::failure(batch.error());
     m_protocolBatches.push_back(std::move(batch).value());
+    m_protocolBatchBytes += batchBytes;
     return ::media::Result<std::size_t>::success(packets);
+}
+
+::media::Status MediaTsMuxSession::validateProtocolBatchCapacity(
+    std::uint64_t bytes) const
+{
+    const std::uint64_t limit = m_emissionPlan.maximumQueuedBytes();
+    if (m_protocolBatchBytes > limit || bytes > limit - m_protocolBatchBytes) {
+        return ::media::Status::failure(invalid(
+            "MPEG-TS protocol batches exceed the planned queued byte capacity"));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Result<MediaTsMuxSession::AdvanceResult> MediaTsMuxSession::advanceThrough(
@@ -697,6 +719,7 @@ void MediaTsMuxSession::abort() noexcept
     m_pendingEmission.reset();
     m_emissionSchedule.reset();
     m_protocolBatches.clear();
+    m_protocolBatchBytes = 0;
     if (m_state != State::Finished && m_state != State::Poisoned) {
         m_failure = ::media::ErrorInfo::cancelled("MPEG-TS mux session aborted");
         m_state = State::Poisoned;
@@ -743,6 +766,13 @@ bool MediaTsMuxSession::hasScheduledBatch() const noexcept
     const auto* protocolBatch =
         dynamic_cast<const MediaMpegTsProtocolDatagramBatchBuffer*>(
             batch.get());
+    const auto bytes = batch->payloadFootprintBytes();
+    if (!bytes || *bytes > m_protocolBatchBytes) {
+        return ::media::Result<MediaBufferRef>::failure(
+            poison(::media::ErrorInfo::internalError(
+                "MPEG-TS protocol batch byte accounting is inconsistent")).error());
+    }
+    m_protocolBatchBytes -= *bytes;
     auto produced = m_masterClock->now();
     if (!protocolBatch || protocolBatch->datagrams().empty() || !produced) {
         return ::media::Result<MediaBufferRef>::failure(

@@ -363,7 +363,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (auto status = m_accessUnitEnvelope.validate(); !status) {
         return status;
     }
-    auto depacketizer = MediaRtpDepacketizerFactory::create(m_config);
+    auto depacketizer = MediaRtpDepacketizerFactory::create(
+        m_config, m_accessUnitEnvelope.maximumAccessUnitBytes);
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
     if (!snapshot) return ::media::Status::failure(snapshot.error());
@@ -540,13 +541,18 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     MediaRtpReorderResult reordered,
     std::uint64_t generationBeforeObservation)
 {
-    if (!reordered.discontinuities.empty()) {
+    auto nextPacket = reordered.packets.begin();
+    for (const auto& discontinuity : reordered.discontinuities) {
+        // Preserve each loss boundary's position inside a receive batch.
+        while (nextPacket != reordered.packets.end() &&
+               nextPacket->sequenceNumber != discontinuity.resumedSequence) {
+            m_pendingRtpPackets.push_back(std::move(*nextPacket++));
+        }
+        if (auto status = drainPendingRtpPackets(context); !status) return status;
         if (m_clockTracker->generation() == generationBeforeObservation) {
             m_clockTracker->observeContinuityLoss();
         }
         if (m_clockSchedule) m_clockSchedule->reset();
-    }
-    for (const auto& discontinuity : reordered.discontinuities) {
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -573,8 +579,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                     discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
     }
-    for (MediaRtpPacket& packet : reordered.packets) {
-        m_pendingRtpPackets.push_back(std::move(packet));
+    for (; nextPacket != reordered.packets.end(); ++nextPacket) {
+        m_pendingRtpPackets.push_back(std::move(*nextPacket));
     }
     return drainPendingRtpPackets(context);
 }

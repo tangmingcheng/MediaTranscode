@@ -20,7 +20,17 @@ D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\
 D:\VideoLAN\VLC\vlc.exe --file-logging --log-verbose=2 --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-a559-loss20-run33\vlc.log rtp://@192.168.96.122:6200
 ```
 
-输入注入：先 `tc qdisc change dev lo root netem loss 0%`，观察编码输出后等待 20 秒，执行 `tc qdisc change dev lo root netem loss 20%`，30 秒后执行 `tc qdisc change dev lo root netem loss 0%`。源到目标机本地地址经过 lo，出口经过 eth0 的原有 fq，无出口丢包注入。脚本启动与观察产生的实际时刻见下表，不把计划秒数替代实际证据。
+输入注入：先恢复 0% 丢包，观察编码输出后等待 20 秒，注入 30 秒后恢复。源到目标机本地地址经过 lo，无出口丢包注入。实际命令如下；脚本启动与观察产生的实际时刻见下表，不把计划秒数替代实际证据。
+
+```bash
+tc qdisc change dev lo root netem loss 0%
+# 正常编码出流 20 秒后注入
+tc qdisc change dev lo root netem loss 20%
+tc -s qdisc show dev lo
+# 30 秒后恢复
+tc qdisc change dev lo root netem loss 0%
+tc -s qdisc show dev lo
+```
 
 ## 逐次结果与根因
 

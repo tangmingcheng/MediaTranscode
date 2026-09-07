@@ -7,6 +7,37 @@ extern "C" {
 #include <cstring>
 
 namespace media::ffmpeg::graph {
+namespace {
+constexpr std::uint8_t StartCode[] = {0, 0, 0, 1};
+}
+
+::media::Result<std::size_t> rtpAccessUnitNalCapacity(
+    std::size_t assembledBytes, std::size_t maximumAccessUnitBytes)
+{
+    if (assembledBytes > maximumAccessUnitBytes ||
+        maximumAccessUnitBytes - assembledBytes <= sizeof(StartCode)) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP access unit exceeds its prepared byte capacity"));
+    }
+    return ::media::Result<std::size_t>::success(
+        maximumAccessUnitBytes - assembledBytes - sizeof(StartCode));
+}
+
+::media::Status appendRtpAccessUnitNal(
+    std::vector<std::uint8_t>& output, std::span<const std::uint8_t> nal,
+    std::size_t maximumAccessUnitBytes)
+{
+    auto capacity = rtpAccessUnitNalCapacity(output.size(), maximumAccessUnitBytes);
+    if (!capacity) return ::media::Status::failure(capacity.error());
+    if (nal.size() > capacity.value()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP NAL exceeds the remaining prepared access unit capacity"));
+    }
+    output.insert(output.end(), std::begin(StartCode), std::end(StartCode));
+    output.insert(output.end(), nal.begin(), nal.end());
+    return ::media::Status::success();
+}
 
 ::media::Result<MediaRtpAccessUnit> makeRtpAccessUnit(std::vector<uint8_t> bytes,
                                                       uint32_t rtpTimestamp,
