@@ -118,3 +118,13 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 核心代码及二进制未变。原参数输出持续 `224.836184 s`，源停前核心错误、丢弃及 deadline 超限仍为 0。目标机入口输入存在最长 `2516.536 ms` 无包间隔及 21 个 H.264 分片序号缺口；同一 `2478.929 ms` 无包窗口内，源服务内部视频帧计数增加 51 帧。tcpdump 丢弃为 0，目标机网卡丢失、溢出、CRC、PAUSE 等计数前后差值均为 0。
 
 证据只能把责任边界收窄到源服务 RTP 发出端或其到目标机的传输路径，不能进一步区分二者，也不能归因到 MediaTranscode 收包后的核心处理。完整证据、精确时间、PID、序号和 SHA256 见 `docs/rk-a559-input-source-evidence.md`。未据此修改核心代码。
+
+## 第 22 次 RKMPP 本地高规格源完整通过
+
+用户要求在确认外部入口丢包后立即改用目标机本地视频源。本次只使用目标机已有两份 HEVC 2560x1440、30 fps、约 11 Mbps 高规格文件制作 248.267 秒 H.264 2560x1440、30 fps 有限源；没有使用 `testsrc` 或 `-stream_loop`，CLI 参数和核心代码均未改变。
+
+本地源连续发送约 248.10 秒，源流期间 RKMPP CLI 未停止，核心错误、丢弃、pressure failure 和 deadline miss 均为 0。目标机发送 RTP `156268` 包，50 Mbps 服务曲线超额恰为一个最大包 `1356 B`，最大 wire residence `60.303236 ms`。Windows 接收同样 `156268` 包，收发 payload 序列 SHA256 完全一致，RTP/TS 错误为 0；接收数据还原为 248.16 秒、6204 帧 HEVC 1920x1080@25，全帧解码退出码 0。
+
+第 21 次的 VLC 单帧卡住由该播放器 D3D11VA 路径直接触发：日志先报 `not enough decoding slices in the texture (6/28)`，随后 buffer deadlock 和持续晚帧；同一份接收数据可完整解码。第 22 次 VLC 仍直接打开 `rtp://@192.168.96.122:6200`，仅禁用故障硬件解码路径，最终 deadlock、晚帧和 decoder error 均为 0。
+
+当前完整验收判定为 PASS。命令、时间、PID、源文件事实、哈希、资源趋势及失败根因见 `docs/completed/2026-09-07-rk-a559-rkmpp-local-rtp-validation.md`。
