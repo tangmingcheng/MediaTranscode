@@ -112,3 +112,9 @@ D:\Wireshark\dumpcap.exe -i 7 --time-stamp-type host_hiprec_unsynced -f "host 19
 修复检查点 `3f10fb4d` 已推送至 `codex/rk-a559-external-rtp`；[草稿 PR #32](https://github.com/tangmingcheng/MediaTranscode/pull/32) 以仅引用 a5597326 的基线分支为 base，避免混入历史 master 的无关差异。第三位新智能体核对实际 PR 后给出：源码审查 PASS、完整交付门禁 FAIL；维持 Draft，不标记验收成功。
 
 第 17 次源启动 API 完成时间 `16:35:29.879`，主动停止源流时间 `16:39:15.607`。未停止 CLI 结束测试，也未通过改变转码参数消除告警。
+
+## 第 18 次 RKMPP 输入链路证据
+
+核心代码及二进制未变。原参数输出持续 `224.836184 s`，源停前核心错误、丢弃及 deadline 超限仍为 0。目标机入口输入存在最长 `2516.536 ms` 无包间隔及 21 个 H.264 分片序号缺口；同一 `2478.929 ms` 无包窗口内，源服务内部视频帧计数增加 51 帧。tcpdump 丢弃为 0，目标机网卡丢失、溢出、CRC、PAUSE 等计数前后差值均为 0。
+
+证据只能把责任边界收窄到源服务 RTP 发出端或其到目标机的传输路径，不能进一步区分二者，也不能归因到 MediaTranscode 收包后的核心处理。完整证据、精确时间、PID、序号和 SHA256 见 `docs/rk-a559-input-source-evidence.md`。未据此修改核心代码。
