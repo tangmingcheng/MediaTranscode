@@ -711,10 +711,8 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS mux session has no transport emission watermark"));
         }
-        if (*m_nextTransportDeadline > *m_latestAcceptedEmission) {
-            return ::media::Result<MediaMuxSessionPollResult>::success(
-                {false, std::nullopt});
-        }
+        // PCR/PSI maintenance follows its planned transport deadline even
+        // while media is unavailable; an AU watermark cannot stop that clock.
         auto now = m_outputAuthority->now();
         if (!now) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(

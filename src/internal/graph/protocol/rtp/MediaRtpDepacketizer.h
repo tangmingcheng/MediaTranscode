@@ -8,6 +8,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ struct MediaRtpDepacketizerConfig final {
     int clockRate = 0;
     int channels = 0;
     int accessUnitDurationRtpTicks = 0;
+    std::optional<bool> waitForKeyFrameAfterLoss;
 };
 
 struct MediaRtpAccessUnit final {

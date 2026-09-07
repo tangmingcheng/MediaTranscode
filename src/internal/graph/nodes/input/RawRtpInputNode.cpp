@@ -12,6 +12,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 #include "internal/graph/time/MediaSteadyClock.h"
 #include "internal/graph/utils/MediaAsciiStringUtils.h"
 
@@ -336,6 +337,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         lossPolicy = MediaRtpClockLossPolicy::FailOnDegraded;
     } else if (clockLossPolicy.value() == "fail_on_expired") {
         lossPolicy = MediaRtpClockLossPolicy::FailOnExpired;
+    } else if (clockLossPolicy.value() == "wait_for_evidence") {
+        lossPolicy = MediaRtpClockLossPolicy::WaitForEvidence;
     } else {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RawRtpInputNode clock loss policy is invalid"));
@@ -344,9 +347,13 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         (family.value() != "ipv4" && family.value() != "ipv6")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RawRtpInputNode planned numeric option is out of range"));
     }
+    auto waitForKeyFrame = requiredBoolNodeOption(
+        options, "RawRtpInputNode", "rtp.wait_for_keyframe_after_loss");
+    if (!waitForKeyFrame) return ::media::Status::failure(waitForKeyFrame.error());
     m_config = MediaRtpDepacketizerConfig{
         streamKind.value(), codec.value(), fmtp.value(),
-        static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(), accessUnitDuration.value()};
+        static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(),
+        accessUnitDuration.value(), waitForKeyFrame.value()};
     m_accessUnitEnvelope = MediaPreparedRtpAccessUnitEnvelope{
         m_config.streamKind, m_config.codecName,
         static_cast<std::uint64_t>(maximumAccessUnitBytes.value()),
@@ -480,6 +487,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!schedule) return ::media::Status::failure(schedule.error());
     m_clockSchedule = std::make_unique<MediaRtpClockObservationSchedule>(
         std::move(schedule).value());
+    m_clockLossPolicy = lossPolicy;
     m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
     m_requireCname = requireCname.value();
     m_rtcpCompositionMode = std::move(rtcpComposition).value();
@@ -500,6 +508,14 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
     auto parsed = MediaRtpPacketParser::parse(datagram);
     if (!parsed) return ::media::Status::failure(parsed.error());
+    if (parsed.value().payloadType == m_config.payloadType) {
+        const auto activity = context.inputActivity();
+        if (!activity) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "RTP input requires runtime activity evidence"));
+        }
+        activity->observe(observedAtNs);
+    }
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
     if (auto status = queueClockEvidence(context, observedAtNs); !status) {
@@ -542,6 +558,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 " generation_after=" +
                 std::to_string(m_clockTracker->generation()));
         m_depacketizer->discontinuity(discontinuity.reason);
+        m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
         m_pendingPayloadReservations.clear();
         m_reservedAccessUnitTimestamp.reset();
         if (context.findOutputChannel(nodeId(), "event")) {
@@ -574,6 +591,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     MediaGraphExecutionContext& context,
     const MediaRtpPacket& packet)
 {
+    if (m_waitingForClockEvidence) return ::media::Status::success();
     const std::string codec = lowercaseAscii(m_config.codecName);
     if ((codec == "h264" || codec == "hevc") &&
         m_reservedAccessUnitTimestamp &&
@@ -647,6 +665,15 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             MediaRtpAccessUnit& unit = accessUnits[index];
             const bool depacketizedKey =
                 (unit.packet->flags & AV_PKT_FLAG_KEY) != 0;
+            // GStreamer wait-for-keyframe semantics: after loss, admit only a
+            // complete random-access AU before resuming dependent pictures.
+            if (m_waitingForKeyFrame && !depacketizedKey) continue;
+            if (m_waitingForKeyFrame) {
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeNode,
+                    "rtp_recovery state=complete_keyframe_received");
+            }
+            m_waitingForKeyFrame = false;
             const auto actualBytes =
                 static_cast<std::uint64_t>(unit.packet->size);
             auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind, std::nullopt);
@@ -730,6 +757,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!update) return ::media::Status::failure(update.error());
     if (!update.value()) return ::media::Status::success();
     const MediaRtcpClockEvidence& evidence = *update.value();
+    m_waitingForClockEvidence = false;
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
@@ -775,6 +803,17 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     const char* age = *transition.value() == MediaRtpClockAgeTransition::Degraded
         ? "degraded"
         : "expired";
+    if (m_clockLossPolicy == MediaRtpClockLossPolicy::WaitForEvidence) {
+        m_waitingForClockEvidence = true;
+        m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
+        m_depacketizer->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("rtp_recovery state=waiting_for_clock_evidence stream=") + stream);
+        return ::media::Status::success();
+    }
     return ::media::Status::failure(::media::ErrorInfo::ioFailure(
         std::string("RTP ") + stream +
         " source clock evidence " + age +
@@ -845,6 +884,9 @@ void RawRtpInputNode::resetState() noexcept
     m_initialized = false;
     m_formatEmitted = false;
     m_keyTraceEmitted = false;
+    m_waitingForKeyFrame = false;
+    m_waitingForClockEvidence = false;
+    m_clockLossPolicy.reset();
     m_requireCname = false;
     m_rtcpCompositionMode.reset();
     m_cancellableReadTimeoutMs = 0;

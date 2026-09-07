@@ -497,13 +497,9 @@ MediaTsMuxSession::advanceThroughAvailable(
     if (m_lastAdvance && emitOnMaster < *m_lastAdvance) {
         return advanceFailure(invalid("MPEG-TS mux session emission time regressed"));
     }
-    if (m_lastAdvance) {
-        auto gap = emitOnMaster.checkedSubtract(*m_lastAdvance);
-        if (!gap || gap.value() > m_plan.clockPolicy().maximumPcrGap) {
-            return advanceFailure(invalid(
-                "MPEG-TS mux session advance exceeded the maximum PCR gap"));
-        }
-    }
+    // One call may cross multiple PCR deadlines. Materialize each planned
+    // sample below; preparePcr validates every adjacent interval, rather
+    // than mistaking the caller's advancement span for a PCR sample gap.
     auto packetCount = materializeMaintenanceThrough(
         emitOnMaster, availableThrough);
     if (!packetCount) {
@@ -568,8 +564,13 @@ MediaTsMuxSession::writeAccessUnit(
     }
     const MediaRunningTime maintenanceAvailableThrough = (std::max)(
         actualMasterNow, unit.emitOnMaster);
+    // PCR maintenance may already have advanced while waiting for this AU.
+    // Keep that clock monotonic without changing the AU's PTS/DTS or release.
+    const MediaRunningTime maintenanceThrough = m_lastAdvance
+        ? (std::max)(unit.emitOnMaster, *m_lastAdvance)
+        : unit.emitOnMaster;
     auto advanced = advanceThroughAvailable(
-        unit.emitOnMaster, maintenanceAvailableThrough);
+        maintenanceThrough, maintenanceAvailableThrough);
     if (!advanced) {
         return ::media::Result<AdvanceResult>::failure(advanced.error());
     }

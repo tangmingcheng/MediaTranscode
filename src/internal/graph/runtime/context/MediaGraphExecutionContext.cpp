@@ -4,6 +4,7 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 
 #include <sstream>
 #include <algorithm>
@@ -75,6 +76,13 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
             "non-realtime execution rejects a payload credit plan"));
     }
 
+    try {
+        m_inputActivity = std::make_shared<MediaInputActivity>();
+    } catch (const std::bad_alloc&) {
+        reset();
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("input activity evidence"));
+    }
     m_graph = &graph;
     m_compiled = true;
 
@@ -105,6 +113,7 @@ void MediaGraphExecutionContext::reset()
     m_channels.clear();
     if (m_payloadCreditLedger) m_payloadCreditLedger->cancelBlockedWaiters();
     m_payloadCreditLedger.reset();
+    m_inputActivity.reset();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
     m_compiled = false;
@@ -122,6 +131,12 @@ bool MediaGraphExecutionContext::payloadCreditsRequired() const noexcept
     return m_graph && m_graph->payloadCreditMode() &&
            *m_graph->payloadCreditMode() ==
                MediaGraphPayloadCreditMode::RealtimeRequired;
+}
+
+std::shared_ptr<MediaInputActivity>
+MediaGraphExecutionContext::inputActivity() const noexcept
+{
+    return m_inputActivity;
 }
 
 ::media::Result<MediaGraphPayloadReservation>

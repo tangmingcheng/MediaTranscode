@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
@@ -345,6 +346,23 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     }
 
     const MediaNodeOptions* options = nodeOptions(context);
+    auto boundedGap = requiredBoolNodeOption(options, "VideoFrameRateNode",
+        "video.framerate.bound_duplication_gap");
+    if (!boundedGap) return ::media::Status::failure(boundedGap.error());
+    if (boundedGap.value()) {
+        auto numerator = requiredPositiveIntNodeOption(options, "VideoFrameRateNode",
+            "video.framerate.maximum_duplication_gap_num");
+        auto denominator = requiredPositiveIntNodeOption(options, "VideoFrameRateNode",
+            "video.framerate.maximum_duplication_gap_den");
+        if (!numerator) return ::media::Status::failure(numerator.error());
+        if (!denominator) return ::media::Status::failure(denominator.error());
+        if (numerator.value() <= 0 || denominator.value() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode requires positive planned duplication gap"));
+        }
+        state.maximumDuplicationGap = AVRational{
+            numerator.value(), denominator.value()};
+    }
     auto fpsNumOption = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsNum);
     if (!fpsNumOption) {
         return ::media::Status::failure(fpsNumOption.error());
@@ -416,6 +434,26 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
     }
 
+    if (state.maximumDuplicationGap && state.lastInputPts != AV_NOPTS_VALUE) {
+        const auto maximumGap = av_rescale_q_rnd(1, *state.maximumDuplicationGap,
+            state.inputTimeBase, AV_ROUND_UP);
+        if (maximumGap <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode duplication gap cannot be represented"));
+        }
+        if (state.lastInputPts <= std::numeric_limits<int64_t>::max() - maximumGap &&
+            currentPts > state.lastInputPts + maximumGap) {
+            // Preserve source time and start at the recovered picture, matching
+            // videorate's bounded-duplication discontinuity handling.
+            state.startPts = currentPts;
+            state.nextOutputIndex = 0;
+            state.lastInputFrame = {};
+            frameRateLog(MediaGraphDiagnosticLevel::State,
+                "recovery state=skip_missing_interval current_pts=" +
+                std::to_string(currentPts) + " previous_pts=" +
+                std::to_string(state.lastInputPts));
+        }
+    }
     int64_t queued = 0;
     while (true) {
         auto target = targetPtsForIndex(state.nextOutputIndex);

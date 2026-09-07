@@ -6,6 +6,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
 #include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
 
@@ -274,6 +275,7 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastProgressAt = startedAt;
+    bool waitingForInputRecovery = false;
     MediaRealtimeProgressTracker progressTracker;
     const auto workerStartupGrace = std::min(
         policy.progressTimeout(),
@@ -378,6 +380,12 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
         }
         if (progress.value()) {
             lastProgressAt = Clock::now();
+            if (waitingForInputRecovery) {
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeNode,
+                    "realtime_recovery state=output_resumed");
+                waitingForInputRecovery = false;
+            }
         }
 
         if (progressTracker.firstOutputDeadlineExpired(
@@ -396,7 +404,22 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
                 MediaRealtimeVideoRunEndReason::MaximumDuration
             };
         }
-        if (now - lastProgressAt >= policy.progressTimeout()) {
+        const auto nowNanoseconds = std::chrono::duration_cast<
+            std::chrono::nanoseconds>(now.time_since_epoch()).count();
+        const auto inputWindowNanoseconds = std::chrono::duration_cast<
+            std::chrono::nanoseconds>(policy.progressTimeout()).count();
+        const bool inputActive = report.lastInputReceivedAtNanoseconds &&
+            nowNanoseconds >= *report.lastInputReceivedAtNanoseconds &&
+            nowNanoseconds - *report.lastInputReceivedAtNanoseconds <
+                inputWindowNanoseconds;
+        if (now - lastProgressAt >= policy.progressTimeout() && inputActive &&
+            !waitingForInputRecovery) {
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "realtime_recovery state=waiting_for_decodable_input input_active=true");
+            waitingForInputRecovery = true;
+        }
+        if (now - lastProgressAt >= policy.progressTimeout() && !inputActive) {
             return {
                 ::media::Status::failure(::media::ErrorInfo::notInitialized(
                     "realtime runtime made no progress before timeout")),

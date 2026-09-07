@@ -230,6 +230,22 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
 
     const MediaPipelineChainPlan& chain = plan.selected;
+    if (auto status = setOption(graph, nodes.videoFrameRate,
+            "video.framerate.bound_duplication_gap",
+            boolOption(plan.maximumFrameDuplicationGap.has_value())); !status) return status;
+    if (plan.maximumFrameDuplicationGap) {
+        const auto gap = *plan.maximumFrameDuplicationGap;
+        if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                "Video frame-rate duplication gap contract is invalid"));
+        }
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.maximum_duplication_gap_num",
+                std::to_string(gap.num)); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.maximum_duplication_gap_den",
+                std::to_string(gap.den)); !status) return status;
+    }
     std::vector<MediaNodeId> plannedNodes {
         nodes.codecResolver,
         nodes.videoDecode,

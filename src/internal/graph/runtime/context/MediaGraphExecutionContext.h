@@ -17,6 +17,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphPayloadCreditLedger;
+class MediaInputActivity;
 
 class MediaGraphExecutionContext final {
 public:
@@ -68,6 +69,7 @@ public:
     std::shared_ptr<MediaGraphPayloadCreditLedger> payloadCreditLedger()
         const noexcept;
     bool payloadCreditsRequired() const noexcept;
+    std::shared_ptr<MediaInputActivity> inputActivity() const noexcept;
     ::media::Result<MediaGraphPayloadReservation> reservePayload(
         MediaNodeId producer,
         MediaStreamKind streamKind,
@@ -90,6 +92,7 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
     MediaAvSyncGroupRegistry m_avSyncGroups;
     std::shared_ptr<MediaGraphPayloadCreditLedger> m_payloadCreditLedger;
+    std::shared_ptr<MediaInputActivity> m_inputActivity;
     bool m_compiled = false;
     MediaGraphDiagnosticConfig m_diagnosticConfig;
 };

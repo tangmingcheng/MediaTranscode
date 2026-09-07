@@ -208,8 +208,8 @@ openMpegTsRuntimeSession(
             MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
             MediaRtpClockLivenessPolicy::MaximumExtrapolationMs,
             MediaRtpClockLivenessPolicy::CnameTimeoutMs,
-            MediaRtpClockLossPolicy::FailOnExpired,
-            MediaRtpClockLossPolicy::FailOnExpired,
+            MediaRtpClockLossPolicy::WaitForEvidence,
+            MediaRtpClockLossPolicy::WaitForEvidence,
             MediaRtcpCompositionMode::ReducedSizeRfc5506});
     }
     if (!avSync->rtpInput || !avSync->rtpInput->input.requireSenderReports ||

@@ -73,6 +73,7 @@ private:
     std::unique_ptr<MediaRtpDepacketizer> m_depacketizer;
     std::unique_ptr<MediaRtcpSenderReportTracker> m_clockTracker;
     std::unique_ptr<MediaRtpClockObservationSchedule> m_clockSchedule;
+    std::optional<MediaRtpClockLossPolicy> m_clockLossPolicy;
     MediaRtpDepacketizerConfig m_config;
     MediaPreparedRtpAccessUnitEnvelope m_accessUnitEnvelope;
     std::deque<MediaRtpPacket> m_pendingRtpPackets;
@@ -85,6 +86,8 @@ private:
     bool m_requiresPreparedInput = false;
     bool m_formatEmitted = false;
     bool m_keyTraceEmitted = false;
+    bool m_waitingForKeyFrame = false;
+    bool m_waitingForClockEvidence = false;
     bool m_requireCname = false;
     std::optional<MediaRtcpCompositionMode> m_rtcpCompositionMode;
     int m_cancellableReadTimeoutMs = 0;

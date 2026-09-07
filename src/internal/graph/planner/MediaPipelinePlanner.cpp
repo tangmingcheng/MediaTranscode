@@ -5,6 +5,7 @@
 #include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
+#include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -135,10 +136,9 @@ bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcep
         return ::media::Status::success();
     }
 
-    const std::string expectedFilter =
-        "scale_rkrga=w=" + std::to_string(options.targetWidth) +
-        ":h=" + std::to_string(options.targetHeight) + ":format=nv12";
-    if (chain.filter.filterName != expectedFilter ||
+    const auto expectedFilter = MediaVideoCapabilityScanner::planRkmppFilter(options);
+    if (!expectedFilter) return ::media::Status::failure(expectedFilter.error());
+    if (chain.filter.filterName != expectedFilter.value() ||
         !chain.filter.inputFrame || !chain.filter.outputFrame ||
         !completeRkmppFrameContract(*chain.filter.inputFrame) ||
         !completeRkmppFrameContract(*chain.filter.outputFrame) ||

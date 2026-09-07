@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 
 #include <algorithm>
 
@@ -51,6 +52,10 @@ std::string MediaGraphRuntimeReport::summary() const
                 std::to_string(payloadCredits->releases) +
             ", graphPayloadPressureFailures=" +
                 std::to_string(payloadCredits->pressureFailures);
+    }
+    if (lastInputReceivedAtNanoseconds) {
+        result += ", lastInputReceivedAtNs=" +
+            std::to_string(*lastInputReceivedAtNanoseconds);
     }
     if (!droppedEdges.empty()) {
         result += ", droppedEdges=";
@@ -152,6 +157,10 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     }
 
     report.backpressure = MediaBackpressureController::inspect(runtime.context());
+    if (const auto activity = runtime.context().inputActivity()) {
+        report.lastInputReceivedAtNanoseconds =
+            activity->lastReceivedAtNanoseconds();
+    }
     if (const auto ledger = runtime.context().payloadCreditLedger()) {
         report.payloadCredits = ledger->snapshot();
     }

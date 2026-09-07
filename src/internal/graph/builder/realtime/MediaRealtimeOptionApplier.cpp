@@ -130,6 +130,9 @@ const char* boolOption(bool value) noexcept
         case MediaRtpClockLossPolicy::FailOnExpired:
             lossPolicy = "fail_on_expired";
             break;
+        case MediaRtpClockLossPolicy::WaitForEvidence:
+            lossPolicy = "wait_for_evidence";
+            break;
         default:
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -147,6 +150,12 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtcp.composition_mode", std::move(composition).value()); !status) return status;
         if (auto status = set("rtp.stream_kind", depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio"); !status) return status;
         if (auto status = set("rtp.codec", depacketizer.codecName); !status) return status;
+        if (!depacketizer.waitForKeyFrameAfterLoss) {
+            return ::media::Result<void>::failure(::media::ErrorInfo::notInitialized(
+                "raw RTP input requires planned loss recovery policy"));
+        }
+        if (auto status = set("rtp.wait_for_keyframe_after_loss",
+                boolOption(*depacketizer.waitForKeyFrameAfterLoss)); !status) return status;
         if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;
         if (auto status = set("rtp.channels", std::to_string(depacketizer.channels)); !status) return status;
         if (auto status = set("rtp.access_unit_duration_ticks", std::to_string(depacketizer.accessUnitDurationRtpTicks)); !status) return status;

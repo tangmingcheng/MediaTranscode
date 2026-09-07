@@ -1250,6 +1250,18 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                     *selectedTsProgram);
             }
         }
+        if (plan.videoPlan.branchMode == MediaBranchMode::TranscodeFrame) {
+            if (!sourceFrameRate.isKnown() || sourceFrameRate.num <= 0 ||
+                sourceFrameRate.den <= 0) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "VideoOnly frame recovery requires authoritative source cadence"));
+            }
+            // GStreamer videorate max-duplication-time: a missing source
+            // interval must not become a batch of historical output frames.
+            plan.videoPlan.maximumFrameDuplicationGap = MediaRational{
+                sourceFrameRate.den, sourceFrameRate.num};
+        }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,
             outputFrameRate, emission.value());

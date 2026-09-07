@@ -22,6 +22,7 @@ struct MediaGraphRuntimeReport {
     MediaBackpressureReport backpressure;
     std::vector<MediaDroppedEdgeReport> droppedEdges;
     std::optional<MediaGraphPayloadCreditSnapshot> payloadCredits;
+    std::optional<std::int64_t> lastInputReceivedAtNanoseconds;
 
     std::string summary() const;
 };

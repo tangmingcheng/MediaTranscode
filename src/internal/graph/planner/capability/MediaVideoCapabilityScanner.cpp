@@ -1,6 +1,10 @@
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
+extern "C" {
+#include <libavfilter/avfilter.h>
+#include <libavutil/opt.h>
+}
 #include <string>
 #include <utility>
 
@@ -79,14 +83,6 @@ std::string qsvFilterName(const MediaPipelinePlannerOptions& options)
 std::string d3d11FilterName(const MediaPipelinePlannerOptions& options)
 {
     return targetResizeRequested(options) ? "scale_d3d11=" + targetSizeText(options) : "passthrough_d3d11va";
-}
-
-std::string rkmppFilterName(const MediaPipelinePlannerOptions& options)
-{
-    return targetResizeRequested(options)
-               ? "scale_rkrga=w=" + std::to_string(options.targetWidth) +
-                     ":h=" + std::to_string(options.targetHeight) + ":format=nv12"
-               : std::string();
 }
 
 std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
@@ -258,6 +254,30 @@ MediaPipelineChainPlan makeRawChain(std::string label,
 
 } // namespace
 
+::media::Result<std::string> MediaVideoCapabilityScanner::planRkmppFilter(
+    const MediaPipelinePlannerOptions& options)
+{
+    using Result = ::media::Result<std::string>;
+    if (!targetResizeRequested(options)) return Result::success({});
+    std::string description = "scale_rkrga=w=" + std::to_string(options.targetWidth) +
+        ":h=" + std::to_string(options.targetHeight) + ":format=nv12";
+    if (options.lowLatency) {
+        const AVFilter* filter = avfilter_get_by_name("scale_rkrga");
+        const AVClass* filterClass = filter ? filter->priv_class : nullptr;
+        const AVOption* depth = filterClass
+            ? av_opt_find(&filterClass, "async_depth", nullptr, 0, AV_OPT_SEARCH_FAKE_OBJ)
+            : nullptr;
+        // RGA retrieves a completed frame only when its FIFO exceeds this depth.
+        // Live input can pause indefinitely, so no frame may wait for later input.
+        if (!depth || depth->type != AV_OPT_TYPE_INT || depth->min != 0) {
+            return Result::failure(::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP low-latency filter requires advertised zero-frame async depth"));
+        }
+        description += ":async_depth=" + std::to_string(static_cast<int>(depth->min));
+    }
+    return Result::success(std::move(description));
+}
+
 std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTranscodeCandidates(
     const std::string& inputCodecName, const std::string& outputCodecName,
     const MediaPipelinePlannerOptions& options)
@@ -306,17 +326,24 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_mf"), "d3d11va",
                            MediaHardwareDeviceKind::D3D11VA, true, true, 84));
 
+    auto rkmppDescription = planRkmppFilter(options);
+    auto rkmppFilter = makeFilterStage(
+        targetResizeRequested(options) ? "rga/rkmpp scale filter" : "rga/rkmpp passthrough filter",
+        rkmppDescription ? rkmppDescription.value() : std::string(),
+        "rkmpp", MediaHardwareDeviceKind::RKMPP, true, true, 90);
+    if (!rkmppDescription) {
+        rkmppFilter.available = false;
+        rkmppFilter.availabilityReason = rkmppDescription.error().message;
+    }
     add("rkmpp",
             makeCodecStage(MediaPipelineStageRole::Decoder, "rkmpp decoder", inputCodec,
                            codecSpecificName(inputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92),
-            makeFilterStage(targetResizeRequested(options) ? "rga/rkmpp scale filter"
-                                                           : "rga/rkmpp passthrough filter",
-                            rkmppFilterName(options), "rkmpp", MediaHardwareDeviceKind::RKMPP, true,
-                            true, 90),
+            std::move(rkmppFilter),
             makeCodecStage(MediaPipelineStageRole::Encoder, "rkmpp encoder", outputCodec,
                            codecSpecificName(outputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92));
+    chains.back().filterActive = targetResizeRequested(options);
 
     add("vaapi",
             makeCodecStage(MediaPipelineStageRole::Decoder, "vaapi decoder", inputCodec, inputCodec,

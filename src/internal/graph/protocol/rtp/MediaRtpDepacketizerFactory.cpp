@@ -22,6 +22,10 @@ namespace {
 
 ::media::Status validateConfig(const MediaRtpDepacketizerConfig& config)
 {
+    if (!config.waitForKeyFrameAfterLoss) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "RTP depacketizer requires planned loss recovery policy"));
+    }
     if ((config.streamKind != MediaStreamKind::Video && config.streamKind != MediaStreamKind::Audio) ||
         config.codecName.empty() || config.payloadType < 96 || config.payloadType > 127 || config.clockRate <= 0) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(

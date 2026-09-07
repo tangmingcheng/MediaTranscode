@@ -226,7 +226,8 @@ MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
         static_cast<std::uint8_t>(*metadata.payloadType),
         descriptor.clockRate,
         descriptor.channels,
-        descriptor.accessUnitDurationRtpTicks};
+        descriptor.accessUnitDurationRtpTicks,
+        streamKind == MediaStreamKind::Video};
     if (auto status = MediaRtpDepacketizerFactory::validate(config); !status) {
         return ::media::Result<MediaRtpDepacketizerConfig>::failure(
             status.error());

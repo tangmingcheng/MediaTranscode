@@ -144,6 +144,7 @@ struct MediaPipelinePlan {
     bool synthesizeMissingTimestamps = false;
     bool filterActive = false;
     MediaPipelineChainPlan selected;
+    std::optional<MediaRational> maximumFrameDuplicationGap;
     std::vector<MediaPipelineChainPlan> candidates;
 };
 
