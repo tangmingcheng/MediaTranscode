@@ -64,3 +64,11 @@
 - [ ] 出库后调查内核阻塞/唤醒根因，并补64槽输入丢包回归。
 
 本项只修复入站截断退出；run46 的内核出口突发仍独立保留，不能由本项修复冒称解决。
+
+## 2026-09-08 用户明确发送验收边界
+
+用户提出精度只需控制核心发送无突发。后续核心发送门禁以生产发送线程实际提交内核队列的时间与字节量核对服务曲线，不以计划时间、日志频率或平均码率替代。保留原50 Mbps容量、一包余量及全部媒体参数；持续硬解超过三分钟、源不停核心不停、收发无丢包仍为验收项。
+
+内核队列、驱动与物理网卡出口的聚集单独记录部署风险，不再作为核心库修复的阻断项；不将历史按出口口径判FAIL的run48/run46改写为当时PASS。广播ST2110等明确要求线速整形的部署另需相应系统能力，当前MPEG-TS/RTP库验收不引入该范围。
+
+成熟实现依据：[FFmpeg UDP用户态速率/突发控制](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavformat/udp.c)、[SRT发送周期与队列影响](https://github.com/Haivision/srt/blob/master/docs/API/statistics.md)、[Linux发送时间戳层次](https://kernel.org/doc/html/latest/networking/timestamping.html)。这些依据用于明确责任边界，不代表本项目实现与它们完全相同。
