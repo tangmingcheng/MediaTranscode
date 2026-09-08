@@ -108,10 +108,6 @@ mt_beta_completion_reason controllerFailureReason(
             ffmpeg::graph::MediaRealtimeVideoRunEndReason::CallerStop) {
         return MT_BETA_COMPLETION_REQUESTED_STOP;
     }
-    if (errorCode == ::media::ErrorCode::IoFailure &&
-        isRuntimeFailureStage(stage)) {
-        return MT_BETA_COMPLETION_SOURCE_LOSS;
-    }
     return isRuntimeFailureStage(stage)
         ? MT_BETA_COMPLETION_RUNTIME_FAILURE
         : MT_BETA_COMPLETION_STARTUP_FAILURE;
