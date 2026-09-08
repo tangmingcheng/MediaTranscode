@@ -16,12 +16,60 @@ const char* boolOption(bool value) noexcept
     return value ? "1" : "0";
 }
 
+const char* transferDirectionName(MediaHardwareTransferDirection direction) noexcept
+{
+    switch (direction) {
+    case MediaHardwareTransferDirection::Unknown:
+        return "unknown";
+    case MediaHardwareTransferDirection::None:
+        return "none";
+    case MediaHardwareTransferDirection::Upload:
+        return "upload";
+    case MediaHardwareTransferDirection::Download:
+        return "download";
+    case MediaHardwareTransferDirection::Map:
+        return "map";
+    case MediaHardwareTransferDirection::Unmap:
+        return "unmap";
+    }
+    return "unknown";
+}
+
 ::media::Result<void> setOption(MediaGraph& graph,
                                 MediaNodeId nodeId,
                                 const std::string& key,
                                 const std::string& value)
 {
     return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
+}
+
+::media::Result<void> setFrameContractOptions(
+    MediaGraph& graph,
+    MediaNodeId nodeId,
+    const std::string& prefix,
+    const std::optional<MediaHardwareDescriptor>& contract)
+{
+    if (auto status = setOption(graph, nodeId, prefix + ".present", boolOption(contract.has_value())); !status) return status;
+    if (!contract) {
+        return ::media::Result<void>::success();
+    }
+    if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(contract->deviceKind)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(contract->frameKind)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".device_name", contract->deviceName); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".pixel_format", contract->pixelFormat); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".surface_pixel_format", contract->surfacePixelFormat); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".frames_context_name", contract->framesContextName); !status) return status;
+    if (!contract->size.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires valid frame-contract dimensions"));
+    }
+    if (auto status = setOption(graph, nodeId, prefix + ".width", std::to_string(contract->size.width)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".height", std::to_string(contract->size.height)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".transfer_direction", transferDirectionName(contract->transferDirection)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(contract->zeroCopyPreferred)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".requires_hw_device_ctx", boolOption(contract->requiresHardwareDeviceContext)); !status) return status;
+    return setOption(graph, nodeId, prefix + ".requires_hw_frames_ctx", boolOption(contract->requiresHardwareFramesContext));
 }
 
 ::media::Result<void> setStageOptions(MediaGraph& graph,
@@ -34,14 +82,14 @@ const char* boolOption(bool value) noexcept
     if (auto status = setOption(graph, nodeId, prefix + ".ffmpeg", stage.ffmpegName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".filter", stage.filterName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hwaccel", stage.hwaccelName); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind)); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(stage.frameKind)); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".pixel_format", stage.pixelFormat); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".hw_frames_format", stage.hardwareFramesFormat); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware)); !status) return status;
-    if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy)); !status) return status;
-    return setOption(graph, nodeId, prefix + ".priority", std::to_string(stage.priority));
+    if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind())); !status) return status;
+    const auto* contract = stage.frameContract();
+    if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(contract ? contract->frameKind : MediaHardwareFrameKind::Unknown)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware())); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy())); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".priority", std::to_string(stage.priority)); !status) return status;
+    if (auto status = setFrameContractOptions(graph, nodeId, prefix + ".input", stage.inputFrame); !status) return status;
+    return setFrameContractOptions(graph, nodeId, prefix + ".output", stage.outputFrame);
 }
 
 ::media::Result<void> setChainOptions(MediaGraph& graph,
@@ -62,7 +110,7 @@ const char* boolOption(bool value) noexcept
 {
     const MediaPipelineChainPlan& chain = plan.selected;
     if (auto status = setChainOptions(graph, nodeId, chain); !status) return status;
-    if (auto status = setOption(graph, nodeId, "pipeline.filter_required", boolOption(plan.filterRequired)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "pipeline.filter_active", boolOption(plan.filterActive)); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "filter.pipeline", chain.filter); !status) return status;
     return setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder);
@@ -72,22 +120,101 @@ const char* boolOption(bool value) noexcept
                                                            MediaNodeId codecResolver,
                                                            const MediaPipelineStagePlan& encoder)
 {
-    if (auto status = setOption(graph, codecResolver, "encoder.pixel_format", encoder.pixelFormat); !status) return status;
-    if (auto status = setOption(graph, codecResolver, "encoder.hw_frames_format", encoder.hardwareFramesFormat); !status) return status;
-    return setOption(graph, codecResolver, "encoder.surface_pixel_format", encoder.surfacePixelFormat);
+    if (!encoder.inputFrame) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires encoder input frame contract"));
+    }
+    const MediaHardwareDescriptor& input = *encoder.inputFrame;
+    if (auto status = setOption(graph, codecResolver, "encoder.pixel_format", input.pixelFormat); !status) return status;
+    if (auto status = setOption(graph, codecResolver, "encoder.hw_frames_format", input.requiresHardwareFramesContext ? input.pixelFormat : std::string()); !status) return status;
+    if (auto status = setOption(graph, codecResolver, "encoder.surface_pixel_format", input.surfacePixelFormat); !status) return status;
+    if (auto status = setOption(graph, codecResolver, "encoder.requires_hw_device_ctx", boolOption(input.requiresHardwareDeviceContext)); !status) return status;
+    return setOption(graph, codecResolver, "encoder.requires_hw_frames_ctx", boolOption(input.requiresHardwareFramesContext));
 }
 
-std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
+::media::Result<void> setEncoderRateControlOptions(
+    MediaGraph& graph,
+    MediaNodeId codecResolver,
+    const MediaPipelineStagePlan& encoder)
 {
-    if (chain.decoder.frameKind == MediaHardwareFrameKind::Hardware &&
-        chain.filter.frameKind == MediaHardwareFrameKind::Software) {
-        return "download";
+    if (!encoder.encoderRateControl) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner rate-control product"));
     }
-    if (chain.decoder.frameKind == MediaHardwareFrameKind::Software &&
-        chain.filter.frameKind == MediaHardwareFrameKind::Hardware) {
-        return "upload";
+    const auto& plan = *encoder.encoderRateControl;
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoRateControl,
+            mediaRateControlModeName(plan.mode)); !status) return status;
+    const auto setOptional = [&](const char* key, const std::optional<int>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, std::to_string(*value))
+            : ::media::Result<void>::success();
+    };
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoTargetBitrateKbps,
+            plan.targetBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoMinBitrateKbps,
+            plan.minimumBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoMaxBitrateKbps,
+            plan.maximumBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoBufferSizeKbits,
+            plan.bufferSizeKbits); !status) return status;
+    if (!plan.privateOption) return ::media::Result<void>::success();
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoPrivateRateControlName,
+            plan.privateOption->name); !status) return status;
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoPrivateRateControlValue,
+            plan.privateOption->value); !status) return status;
+    return setOption(
+        graph, codecResolver,
+        MediaTranscodeOptionKey::PlannedVideoPrivateRateControlExpected,
+        std::to_string(plan.privateOption->expectedNumericValue));
+}
+
+::media::Result<void> setEncoderOpenContractOptions(
+    MediaGraph& graph,
+    MediaNodeId codecResolver,
+    const MediaPipelineStagePlan& encoder)
+{
+    if (!encoder.encoderOpenContract) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner encoder-open product"));
     }
-    return "none";
+    const auto& plan = *encoder.encoderOpenContract;
+    if (auto status = setOption(graph, codecResolver, "encoder.low_latency",
+            boolOption(plan.lowLatency)); !status) return status;
+    const auto setOptionalInt = [&](const char* key, const std::optional<int>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, std::to_string(*value))
+            : ::media::Result<void>::success();
+    };
+    const auto setOptionalBool = [&](const char* key, const std::optional<bool>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, boolOption(*value))
+            : ::media::Result<void>::success();
+    };
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoWidth, std::to_string(plan.width)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoHeight, std::to_string(plan.height)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoFpsNum, std::to_string(plan.frameRate.num)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoFpsDen, std::to_string(plan.frameRate.den)); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoPreset, plan.preset); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoProfile, plan.profile); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoTune, plan.tune); !status) return status;
+    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::VideoLevel, plan.level); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoQuality, plan.quality); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoGop, plan.gop); !status) return status;
+    if (auto status = setOptionalInt(MediaTranscodeOptionKey::VideoBFrames, plan.bFrames); !status) return status;
+    return setOptionalBool(MediaTranscodeOptionKey::VideoGlobalHeader, plan.globalHeader);
 }
 
 } // namespace
@@ -103,6 +230,22 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
     }
 
     const MediaPipelineChainPlan& chain = plan.selected;
+    if (auto status = setOption(graph, nodes.videoFrameRate,
+            "video.framerate.bound_duplication_gap",
+            boolOption(plan.maximumFrameDuplicationGap.has_value())); !status) return status;
+    if (plan.maximumFrameDuplicationGap) {
+        const auto gap = *plan.maximumFrameDuplicationGap;
+        if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                "Video frame-rate duplication gap contract is invalid"));
+        }
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.maximum_duplication_gap_num",
+                std::to_string(gap.num)); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.maximum_duplication_gap_den",
+                std::to_string(gap.den)); !status) return status;
+    }
     std::vector<MediaNodeId> plannedNodes {
         nodes.codecResolver,
         nodes.videoDecode,
@@ -115,7 +258,20 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
         plannedNodes.push_back(nodes.videoTimestamp);
     }
 
+    if (auto status = setOption(graph, nodes.videoDecode,
+            "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
+        !status) return status;
+    if (chain.decoderReceiveInterval) {
+        if (auto status = setOption(graph, nodes.videoDecode,
+                "video_decode.receive_interval_ns",
+                std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+            !status) return status;
+    }
+
     for (MediaNodeId nodeId : plannedNodes) {
+        if (!nodeId.isValid()) {
+            continue;
+        }
         if (auto status = setFullPlanOptions(graph, nodeId, plan); !status) return status;
     }
 
@@ -123,17 +279,59 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
     if (auto status = setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware)); !status) return status;
+    if (auto status = setEncoderRateControlOptions(
+            graph, nodes.codecResolver, chain.encoder); !status) return status;
+    if (auto status = setEncoderOpenContractOptions(
+            graph, nodes.codecResolver, chain.encoder); !status) return status;
+    if (auto status = setEncoderRateControlOptions(
+            graph, nodes.videoEncode, chain.encoder); !status) return status;
+    if (!chain.decoder.outputFrame) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires decoder output frame contract"));
+    }
+    const MediaHardwareDescriptor& decoderOutput = *chain.decoder.outputFrame;
+    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hardware", boolOption(decoderOutput.isHardwareBacked())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(chain.decoder.deviceKind)); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(chain.decoder.frameKind)); !status) return status;
-    if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionForPlan(chain)); !status) return status;
-    if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
-    if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
-    if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(decoderOutput.deviceKind)); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(decoderOutput.frameKind)); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.pixel_format", decoderOutput.pixelFormat); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.surface_pixel_format", decoderOutput.surfacePixelFormat); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.requires_hw_device_ctx", boolOption(decoderOutput.requiresHardwareDeviceContext)); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.requires_hw_frames_ctx", boolOption(decoderOutput.requiresHardwareFramesContext)); !status) return status;
+    if (chain.transferDirection == MediaHardwareTransferDirection::Unknown) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner-selected transfer direction"));
+    }
+    if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(chain.transferDirection)); !status) return status;
+    if (nodes.videoFilter.isValid()) {
+        if (chain.filterImplementation == MediaVideoFilterImplementation::Unknown ||
+            chain.filterImplementation == MediaVideoFilterImplementation::None) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
+        }
+        if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
+        if (auto status = setOption(
+                graph, nodes.videoFilter, "filter.pipeline.implementation",
+                mediaVideoFilterImplementationName(chain.filterImplementation));
+            !status) return status;
+    }
     if (nodes.videoTimestamp.isValid()) {
         if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
     }
+    if (chain.encoderAbortPolicy == MediaVideoEncoderAbortPolicy::Unknown) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner encoder abort policy"));
+    }
+    if (auto status = setOption(
+            graph, nodes.videoEncode, "video_encode.abort_policy",
+            mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
+        !status) return status;
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
 }
 

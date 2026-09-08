@@ -1,3 +1,14 @@
+# 可复用工业级 Datagram 发送控制与核心参数收口
+
+- [x] Windows 与 RKMPP 单视频 H.264 720p30 → HEVC 1080p25 CBR 6 Mbps → MPEG-TS/RTP 发送控制门禁；RK 使用 50 Mbps 受管出口事实。
+- [x] 三类实时输出复用同一协议无关 materializer → service-scope pacer → nonblocking sender 执行层。
+- [x] 删除对外 input layout、path MTU、receiver decode lead、hardware backend、queue、packet、pacing、socket 与 batch 内部参数；PMTU、backend、wire envelope 和资源边界由 planner 推导。
+- [x] realtime 视频 RC/GOP/target bitrate 收口为显式产品意图；CBR 仅 target，VBR 为 min/target/max；删除 Auto 与输入码率 fallback。
+- [x] 删除 datagram deployment/transport/shaping 中无执行消费者或重复权威的 mode、pacing、socket 和 latency 副本。
+- [x] 删除剩余 graph-resource 与 prepared MPEG-TS final-plan 无执行消费者副本，并完成 Release 全量构建及高、低质量真实链路复验。
+- [ ] 完成独立 RTP、MPEG-TS/UDP 的同 sender 复验及既有 56 链路最终矩阵。
+- [ ] 代码冻结后由两名未参与实现的独立智能体双 PASS，创建 PR，再由新智能体审核 PR。
+
 # Realtime Cross-Layout and MPEG-TS/RTP Implementation Plan
 
 ## RTP Video FMTP Auto-Detection
@@ -519,3 +530,58 @@ Detailed design and execution checklist:
 - [x] Task 4：实现互斥的 VideoOnly runtime 与单视频调度产品。
 - [ ] Task 5：统一 RTP、SDP、Project MPEG-TS 输出及严格 shape 校验。
 - [ ] Task 6：完成 clean-first 构建、56 条真实链路、质量评分、PR 与独立审核。
+
+---
+
+## 2026-08-22 可复用工业级 Datagram 发送控制
+
+设计规格：docs/superpowers/specs/2026-08-22-reusable-datagram-transmit-control-design.md
+
+实施计划：docs/superpowers/plans/2026-08-22-reusable-datagram-transmit-control.md
+
+参数基线：docs/realtime-core-parameter-review-baseline.md
+
+**目标：** 协议节点物化最终 wire datagram，公共 service-scope pacer/shaper 生成 enqueue 预约，公共 sender 在 deadline 内非阻塞原子提交；TX timestamp 与 zero-copy completion 仅作异步证据，不参与发送控制。
+
+**全局约束：** wire sustained/peak rate 由 prepared encoder emission、完整 mux/RTP/IP/UDP overhead 和 deployment service evidence 共同规划，caller bitrate 不得直接复制为 transport rate；input AU/queue 不得推导 socket 或 service 参数；三类 UDP/RTP 输出复用同一 shaper/sender，file output 明确不复用；缺受管 service、connected-route PMTU 或 resource 证据时 DAG 前失败；临时 TDD 不入库；真实验收不得降规格。
+
+- [x] Task 1：建立 MediaWireDatagramBatch、持有不透明 move-only RAII commit lease 的 MediaScheduledWireDatagramBatch 与完整 MediaDatagramShapingPlan 产品。
+- [x] Task 2：将 MPEG-TS/UDP、MPEG-TS/RTP、独立 RTP 统一改为最终 wire bytes 物化，删除协议层 socket/pacing。
+- [x] Task 3：实现跨 batch、跨 RTP/RTCP 的公共 service-scope pacer/shaper，删除 forward-only 经验 pacing。
+- [x] Task 4：实现公共非阻塞 transport 与异步 evidence collector；禁止 await TX completion gate。
+- [x] Task 5：接入公共 sender、Planner、DAG 和参数契约，删除 input AU -> SO_SNDBUF、5/4 headroom、2 包 burst、caller-owned startup gap 与其他内部容量；Windows/RK 三类输出 30 秒门禁已完成，round2 exact `0084a3d1` 的 H.264→HEVC MP2T/RTP 主链再次通过。停止 source 后的 source-clock expiry 与 sender 窗口 PASS 分开记录；receiver loss/order/TS continuity 留给 Task6 固定 120 秒阶段 2。
+- [x] Task 5.1：删除 realtime hardware backend、low-latency、queue、packet/pacing、startup/handoff 与 encoder private controls；CBR 只接受 target，VBR 接受 min/target/max；planner 按 capability 最高评分选择后端。
+- [x] Task 5.2：将 realtime core request 改为专用窄参数类型，禁止通过共享 local 参数结构暴露 queue、quality、preset/profile/tune/level、B-frame 或 global-header；planner 产品不再回写外部 request。
+- [x] Task 5.3：按不可变 inclusive deadline 状态机统一 `WouldBlock` 重试边界；等值 deadline 只允许一次有界提交，超过即终态失败，不 rebase、不追赶。
+- [x] Task 5.4：将 VideoOnly 协议物化与 canonical wire release 解耦；planner 从 prepared emission 与 deployment residence 产品推导内部 `protocolPreparationLead`，scheduler 提前交付 AU，shaper 保持唯一 wire 调度权。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 120 秒门禁通过：RTP loss 0、TS error 0、service-curve draw-up 1050.054 B ≤ 1356 B、VLC 解码异常 0；CPU 仍列为后置风险。
+- [x] Task 5.5：在 exact `f0c52312` 上复验 Windows Release HEVC 2560×1440 30 fps → H.264 1920×1080 25 fps、VBR 5/12/13 Mbps、MPEG-TS/RTP 120 秒链路：RTP loss 0、TS error 0、service-curve draw-up 1043.348 B ≤ 1356 B、稳定播放窗口解码/late/drop 异常 0；关闭 VLC 窗口阶段保留 1 次 late 日志，CPU 继续列为后置风险。
+- [x] Task 5.6：验证相同公共 shaper/sender 的 MPEG-TS/UDP 物化路径。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps 运行 120 秒：64486 UDP datagrams、TS error 0、service-curve draw-up 1026.665 B ≤ UDP burst 1344 B、VLC 视频播放异常 0；CPU 保留为后置风险。
+- [x] Task 5.7：将协议物化后的 wire batch 直接汇入公共 GBRA sender，删除第二级 shaper queue；planner 按 WebRTC 无反馈 2.5×、prepared peak 与 burst/deadline 共同推导 rate，GBRA 从非阻塞 submit-completion 起算下一包 debt。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 运行 120 秒：64515 datagrams、RTP loss 0、TS error 0、service-curve draw-up 1356 B ≤ burst 1356 B、VLC 播放异常 0；CPU 继续列为后置风险。
+- [x] Task 5.8：删除 realtime/Beta 的 `path-mtu` 与 `receiver-transport-decode-lead` 外部参数；planner 从 connected-path PMTU 与所选出口接口 MTU 的较小值推导 packetization 上限，并从 immutable maximum wire residence 形成 transport timing。公共 service-scope queue 采用 WebRTC queue-time drain-rate 公式并受部署容量硬上限约束；queue snapshot 在 ledger 锁内采样权威时钟，submit lifecycle evidence 与 aggregate queue accounting 分离，消除 reserve/snapshot 与 submit/commit 两类 TOCTOU。Windows/Linux sender 强制 PMTUD，不以 IP fragmentation 作为运行期 fallback。Windows Release H.264 1280×720 30 fps → HEVC 1920×1080 25 fps、CBR 6 Mbps、MPEG-TS/RTP 最终复验运行 120 秒：64516 datagrams（RTP 64486、RTCP 30）、RTP loss/order error 0、TS continuity/TEI/AFC error 0、GBRA debt 1356 B 且 violation 0、maximum residence 96.9708 ms、VLC 解码/late/discontinuity error 0；实际 pacing max 2006648 B/s，部署上限来自权威 100 Mbps 出口链路事实且未被消费为发送速率。平均单核 CPU 23.131%，按用户要求暂不优化并继续列为后置风险。
+- [ ] Task 6：完成固定 56 条链路验收（38 VideoOnly + 18 AudioVideo）：Windows 全矩阵实跑，RK 对 capability-admitted 链路实跑、unsupported 链路 DAG 前拒绝；完成 120 秒证据、文档、质量评分、SDD 每 Task 单 reviewer PASS、代码冻结后两名未参与者同时 PASS、PR 与最终审核。
+
+## 2026-09-04 外部 RTP 源 RKMPP 最小范围复验
+
+- 基线：`a5597326464140a319787d123ccc2ffef9c4e40b`；原目录分支 `codex/rk-a559-external-rtp`，没有独立工作树。
+- 目标机：`/home/tang/MediaTranscode`；用户 API 真实源 H.264 1920x1080 25 fps RTP，输出 HEVC 1920x1080 25 fps CBR 6 Mbps、GOP 50、MPEG-TS/RTP、VideoOnly；不改参数。
+- [x] 恢复基线，目标机全量构建，输入使用用户确认的 `192.168.130.229:61884`。
+- [x] 逐次记录真实失败与已确认原因；见 `docs/rk-a559-external-rtp-validation.md`，未将失败记作通过。
+- [x] RKMPP 原参数第 16/17 次分别输出 223.11/224.89 秒，源停前核心错误、丢弃、deadline 超限均为 0。
+- [x] 第 16/17 次完整链路因外部输入缺口、接收抓包超额及 VLC 迟到未通过；第 22 次因使用 VLC 软件解码作废，不把此前持续运行达标冒充完整通过。
+- [x] 第 18 次在不改核心的条件下完成输入证据对照：目标机入口抓包直接证明约 2.48 秒无 RTP；采样 `frames` 字段增加 51 只作辅助关联。异常位于核心收包前，最终区分源发送端与中间路径仍需源机/中间设备同时段抓包。
+- [x] 持续运行修复检查点 `3f10fb4d` 已提交并推送；两名独立源码审查均 PASS，专项评分 82/100；草稿 PR #32 由新智能体审核，源码 PASS、完整交付门禁 FAIL。
+- [x] 完整验收通过后另建成功测试提交；此前检查点与草稿 PR 不作为成功验收。
+- 范围约束：只修导致退出的必要问题，不重新设计、不新增外部参数或诊断库。用户最新要求只做 RKMPP，不再运行 Windows 测试；已有 Windows 通过证据在独立提交 `3ebc551b`，不覆盖后续改动。
+- 当前改动：发送软目标限于硬容量、已有低延迟编码契约落实、RKMPP 异步输出轮询、首次物化驻留期限、全局提交背压、按已有 planner 批次上限逐批物化。Linux timer 精度实验未解决退出，已撤销。
+- 一小时期限已错过，未宣称按时完成。后续继续以真实 RKMPP 结果为准；先测试，后审查。
+- [x] 第 24 次使用全硬件制作的高规格 H.264 2560x1440@30 有限源，原参数 RKMPP 转为 HEVC 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP，源持续 248.018 秒；发送服务曲线超额 1356 B，接收 RTP 零丢失，`hevc_rkmpp` 全帧解码，VLC 默认 D3D11VA 持续硬解且无 deadlock、严重晚帧或解码错误；保留少量 debug late 记录。
+- [x] 使用同规格 HEVC 2560x1440@30 有限源完成 RKMPP HEVC→H.264 1920x1080@25 CBR 6 Mbps MPEG-TS/RTP 全硬件验收，源持续 248.287 秒，发送无突发、接收零丢失、默认 VLC D3D11VA 与 `h264_rkmpp` 全帧解码通过。
+- [x] run27 完成 H.264 2K30→HEVC 1080p25 VBR 5/12/13 Mbps MPEG-TS/RTP：源持续 248.347 秒，默认 VLC D3D11VA 正常持续硬解，收发 302889 个 RTP 包逐包哈希一致、零丢失，发送服务曲线超额 1356 B。
+- [x] run29 完成 HEVC 2K30→H.264 1080p25 VBR 5/12/13 Mbps MPEG-TS/RTP：源持续 248.352 秒，默认 VLC D3D11VA 正常持续硬解，收发 303041 个 RTP 包逐包哈希一致、零丢失，发送服务曲线超额 1356 B；单独归档提交。
+- [x] 四项验收完成并分别提交推送；冻结 `dccf95da` 的生产代码由两名未参与实现的智能体独立审查，均明确 PASS，专项评分 90/100。
+- [x] PR #32 更新后由新的独立智能体审核 `a54ec0c1`，明确 PASS，无阻塞项。
+- [x] run30 完成输入路径 lo 20% 丢包测试，出口维持原 fq；启动探测 FAIL：首个 RTP 缺口触发 5 秒重排等待，约 3.669 秒先耗尽 5 MB 探测预算。证据见 `docs/completed/2026-09-07-rk-a559-input-loss20-validation.md`，不修改核心、不记为通过。
+
+- [x] 按用户要求 run31 先正常运行约 20 秒，再注入输入 lo 20% 丢包；约 25.27 秒后因 12 秒无新编码输出退出，测试 FAIL。实测输入丢包 19.9085%，损伤段完整 IDR 为 0，详细原因见 docs/completed/2026-09-07-rk-a559-runtime-input-loss20-validation.md；不修改核心。
+
+- [x] 根据用户要求对照 FFmpeg、GStreamer、WebRTC 与 AWS Elemental MediaLive 的输入丢包机制；结论与适用边界见 docs/rk-rtp-input-loss-industry-comparison.md。本轮只做调研，不修改核心或新增参数。

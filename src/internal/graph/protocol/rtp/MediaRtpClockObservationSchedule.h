@@ -14,7 +14,8 @@ enum class MediaRtpClockAgeTransition {
 
 enum class MediaRtpClockLossPolicy {
     FailOnDegraded,
-    FailOnExpired
+    FailOnExpired,
+    WaitForEvidence
 };
 
 class MediaRtpClockObservationSchedule final {

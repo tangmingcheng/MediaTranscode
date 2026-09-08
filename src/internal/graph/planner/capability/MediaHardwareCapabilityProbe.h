@@ -11,7 +11,7 @@ struct MediaHardwareCapability {
 class MediaHardwareCapabilityProbe final {
 public:
     using ChainValidator = std::function<MediaHardwareCapability(
-        const MediaPipelineChainPlan&, const MediaPipelinePlannerOptions&)>;
+        MediaPipelineChainPlan&, const MediaPipelinePlannerOptions&)>;
 
     MediaHardwareCapabilityProbe();
     explicit MediaHardwareCapabilityProbe(ChainValidator chainValidator);

@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -166,7 +167,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
 ::media::Status MpegTsDemuxNode::enqueueLockedPacket(
     ::media::ffmpeg::PacketPtr packet,
     MediaStreamKind streamKind,
-    const MediaTsClockProjectionCheckpoint& checkpoint)
+    const MediaTsClockProjectionCheckpoint& checkpoint,
+    MediaGraphPayloadReservation reservation)
 {
     auto timing = timingFor(
         *packet, checkpoint,
@@ -177,6 +179,9 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     auto buffer = wrapTimedPacket(
         std::move(packet), streamKind, timing.value(), timeBase);
     if (!buffer) return ::media::Status::failure(buffer.error());
+    if (auto status = reservation.attachTo(*buffer.value()); !status) {
+        return status;
+    }
     return m_acquiringPackets->stageSingleReplay(
         std::move(buffer).value(), streamKind);
 }
@@ -184,14 +189,17 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
 ::media::Status MpegTsDemuxNode::prepareLockedBatch(
     ::media::ffmpeg::PacketPtr packet,
     MediaStreamKind streamKind,
-    const MediaTsClockProjectionCheckpoint& checkpoint)
+    const MediaTsClockProjectionCheckpoint& checkpoint,
+    MediaGraphPayloadReservation reservation)
 {
     StreamClock videoClock = m_videoClock;
     StreamClock audioClock = m_audioClock;
     auto stage = m_acquiringPackets->stageReplay(
-        *packet, streamKind,
+        *packet, streamKind, std::move(reservation),
         [&](const AVPacket& source,
-            MediaStreamKind kind) -> ::media::Result<MediaBufferRef> {
+            MediaStreamKind kind,
+            const MediaGraphPayloadReservation& sourceReservation)
+            -> ::media::Result<MediaBufferRef> {
         auto timing = timingFor(
             source, checkpoint,
             kind == MediaStreamKind::Video ? videoClock : audioClock);
@@ -205,6 +213,10 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
             std::move(clone), kind, timing.value(),
             MediaRational{source.time_base.num, source.time_base.den});
         if (!buffer) return ::media::Result<MediaBufferRef>::failure(buffer.error());
+        if (auto status = sourceReservation.shareWithAliasingBuffer(
+                *buffer.value()); !status) {
+            return ::media::Result<MediaBufferRef>::failure(status.error());
+        }
         return ::media::Result<MediaBufferRef>::success(std::move(buffer).value());
     });
     if (!stage) return stage;
@@ -246,6 +258,12 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     }
     if (m_eofSent) return processFinished();
     if (m_acquiringPackets->hasReplay()) return emitReadyPacket(context);
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Any, MediaPayloadKind::Packet);
+    if (!reservation) {
+        return processProgress(
+            ::media::Status::failure(reservation.error()));
+    }
     auto read = m_session->readFrame();
     if (!read) return ::media::Result<MediaNodeProcessResult>::failure(read.error());
     auto envelope = std::move(read).value();
@@ -290,6 +308,16 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
                 "MpegTsDemuxNode packet time base conflicts with typed runtime binding"));
     }
     packet->time_base = AVRational{plannedTimeBase->num, plannedTimeBase->den};
+    const auto footprint = ffmpegPacketPayloadFootprintBytes(*packet);
+    if (!footprint || *footprint == 0) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MpegTsDemuxNode packet lacks an exact payload footprint"));
+    }
+    if (auto status = reservation.value().shrinkToActual(*footprint);
+        !status) {
+        return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+    }
     if (envelope.provenance.readiness == MediaSourceClockReadiness::Acquiring) {
         if (envelope.provenance.evidenceByteOffset ||
             envelope.provenance.originByteOffset) {
@@ -298,7 +326,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
                     "MpegTsDemuxNode acquiring provenance cannot identify a PES"));
         }
         if (auto status = m_acquiringPackets->retain(
-                std::move(packet), streamKind); !status) {
+                std::move(packet), streamKind,
+                std::move(reservation).value()); !status) {
             return processProgress(status);
         }
         MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
@@ -347,7 +376,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
                     "MpegTsDemuxNode reacquisition requires a future clock generation"));
         }
         if (auto status = m_acquiringPackets->retain(
-                std::move(packet), streamKind); !status) {
+                std::move(packet), streamKind,
+                std::move(reservation).value()); !status) {
             return processProgress(status);
         }
         if (m_reacquiringSourceGeneration) return processProgress();
@@ -400,9 +430,11 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     ::media::Status prepared =
         m_lockedSourceGeneration && !m_reacquiringSourceGeneration
         ? enqueueLockedPacket(
-              std::move(packet), streamKind, outputCheckpoint)
+              std::move(packet), streamKind, outputCheckpoint,
+              std::move(reservation).value())
         : prepareLockedBatch(
-              std::move(packet), streamKind, outputCheckpoint);
+              std::move(packet), streamKind, outputCheckpoint,
+              std::move(reservation).value());
     if (!prepared) return processProgress(prepared);
     m_lockedSourceGeneration = outputCheckpoint.generation;
     m_lockedProjectionGeneration = checkpoint.value().generation;

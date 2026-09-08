@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 
 #include <cstdint>
 #include <optional>
@@ -47,9 +48,11 @@ public:
 
     ::media::Result<MediaBufferRef> apply(
         const MediaBufferRef& frame,
-        std::uint32_t trimLeadingSamples);
+        std::uint32_t trimLeadingSamples,
+        MediaGraphPayloadReservation reservation);
     ::media::Result<MediaBufferRef> applyDecoded(
-        const MediaBufferRef& decodedTrimInput);
+        const MediaBufferRef& decodedTrimInput,
+        MediaGraphPayloadReservation reservation);
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(

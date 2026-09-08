@@ -18,8 +18,10 @@ public:
 };
 
 struct MediaRuntimePlatformSample {
-    double systemCpuPercent = 0.0;
-    double processCpuPercent = 0.0;
+    double systemMachineCpuPercent = 0.0;
+    double processMachineCpuPercent = 0.0;
+    double processSingleCoreCpuPercent = 0.0;
+    std::size_t logicalProcessorCount = 0;
     std::size_t threadCount = 0;
     std::uint64_t workingSetBytes = 0;
     bool cpuValid = false;

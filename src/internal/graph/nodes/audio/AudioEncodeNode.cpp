@@ -433,6 +433,15 @@ void AudioEncodeNode::resetRuntimeState() noexcept
 ::media::Result<bool> AudioEncodeNode::receivePackets(MediaGraphExecutionContext& context)
 {
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Packet);
+        if (!reservation) {
+            if (reservation.error().code == ::media::ErrorCode::WouldBlock &&
+                !m_flushPending) {
+                m_receivePending = true;
+            }
+            return ::media::Result<bool>::failure(reservation.error());
+        }
         auto packet = ::media::ffmpeg::makePacket();
         if (!packet) {
             return ::media::Result<bool>::failure(
@@ -450,6 +459,20 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Audio, std::nullopt);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
+        }
+        const auto footprint = buffer.value()->payloadFootprintBytes();
+        if (!footprint || *footprint == 0) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "AudioEncodeNode packet lacks an exact payload footprint"));
+        }
+        if (auto status = reservation.value().shrinkToActual(*footprint);
+            !status) {
+            return ::media::Result<bool>::failure(status.error());
+        }
+        if (auto status = reservation.value().attachTo(*buffer.value());
+            !status) {
+            return ::media::Result<bool>::failure(status.error());
         }
 
         MediaTimeDescriptor timeDescriptor;

@@ -60,6 +60,31 @@ private:
     MediaTsPacketCommitToken m_commitToken;
 };
 
+class MediaTsPreparedPacketSeries final {
+public:
+    MediaTsPreparedPacketSeries(const MediaTsPreparedPacketSeries&) = delete;
+    MediaTsPreparedPacketSeries& operator=(const MediaTsPreparedPacketSeries&) = delete;
+    MediaTsPreparedPacketSeries(MediaTsPreparedPacketSeries&&) noexcept = default;
+    MediaTsPreparedPacketSeries& operator=(MediaTsPreparedPacketSeries&&) noexcept = default;
+
+    std::span<const std::array<std::uint8_t, 188>> packets() const noexcept;
+    MediaTsPacketCommitToken takeCommitToken() noexcept;
+
+private:
+    friend class MediaTsPacketCursor;
+    using PacketStorage = std::vector<std::array<std::uint8_t, 188>>;
+    MediaTsPreparedPacketSeries(
+        std::shared_ptr<const PacketStorage> storage,
+        std::size_t begin,
+        std::size_t count,
+        MediaTsPacketCommitToken commitToken) noexcept;
+
+    std::shared_ptr<const PacketStorage> m_storage;
+    std::size_t m_begin;
+    std::size_t m_count;
+    MediaTsPacketCommitToken m_commitToken;
+};
+
 class MediaTsPacketCursor final {
 public:
     ~MediaTsPacketCursor();
@@ -69,8 +94,11 @@ public:
     MediaTsPacketCursor& operator=(MediaTsPacketCursor&& other) noexcept;
 
     ::media::Result<MediaTsPreparedPacketBatch> prepare(std::size_t maximumPackets);
+    ::media::Result<MediaTsPreparedPacketSeries> prepareRemaining();
     ::media::Status commit(MediaTsPacketCommitToken commitToken);
+    void poison() noexcept;
     bool finished() const noexcept;
+    std::size_t remainingPacketCount() const noexcept;
 
 private:
     friend class MediaTsTransportPacketizer;
@@ -95,6 +123,12 @@ public:
     ::media::Result<MediaTsPacketCursor> beginPat(const MediaTsPatSection& section);
     ::media::Result<MediaTsPacketCursor> beginPmt(const MediaTsPmtSection& section);
     ::media::Result<MediaTsPacketCursor> beginPcrOnly(const MediaTsPcrClock& pcr);
+    ::media::Result<std::size_t> patPacketCount(
+        const MediaTsPatSection& section) const;
+    ::media::Result<std::size_t> pmtPacketCount(
+        const MediaTsPmtSection& section) const;
+    ::media::Result<std::size_t> pcrOnlyPacketCount(
+        const MediaTsPcrClock& pcr) const;
     ::media::Result<MediaTsPacketCursor> beginPes(
         MediaScheduledStream stream,
         const MediaTsPesHeader& header,

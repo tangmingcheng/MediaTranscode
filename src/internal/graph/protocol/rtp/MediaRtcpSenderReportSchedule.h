@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/protocol/rtp/MediaRtcpReportingPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -26,12 +27,14 @@ private:
         std::uint64_t generation,
         std::uint64_t revision,
         MediaRunningTime expectedDeadline,
-        MediaRunningTime nextDeadline) noexcept;
+        MediaRunningTime nextDeadline,
+        std::uint64_t nextRandomState) noexcept;
 
     std::uint64_t m_generation;
     std::uint64_t m_revision;
     MediaRunningTime m_expectedDeadline;
     MediaRunningTime m_nextDeadline;
+    std::uint64_t m_nextRandomState;
 };
 
 struct MediaRtcpSenderReportScheduleDecision final {
@@ -55,10 +58,11 @@ struct MediaRtcpSenderReportScheduleDecision final {
 class MediaRtcpSenderReportSchedule final {
 public:
     static ::media::Result<MediaRtcpSenderReportSchedule> create(
-        MediaRunningTime initialDeadline,
-        MediaRunningTime interval,
+        MediaRunningTime activation,
+        MediaRtcpReportingPolicy reportingPolicy,
         MediaRunningTime maximumLateness,
-        std::uint64_t generation) noexcept;
+        std::uint64_t generation,
+        std::uint64_t randomSeed) noexcept;
 
     ::media::Result<std::optional<MediaRtcpSenderReportScheduleDecision>>
     prepare(MediaRunningTime now, std::uint64_t generation) const noexcept;
@@ -66,11 +70,15 @@ public:
     ::media::Status commit(
         const MediaRtcpSenderReportCommitToken& token) noexcept;
 
-    ::media::Status reset(MediaRunningTime initialDeadline,
-                          std::uint64_t generation) noexcept;
+    ::media::Status reset(MediaRunningTime activation,
+                          std::uint64_t generation,
+                          std::uint64_t randomSeed) noexcept;
 
     MediaRunningTime nextDeadline() const noexcept { return m_nextDeadline; }
-    MediaRunningTime interval() const noexcept { return m_interval; }
+    const MediaRtcpReportingPolicy& reportingPolicy() const noexcept
+    {
+        return m_reportingPolicy;
+    }
     MediaRunningTime maximumLateness() const noexcept
     {
         return m_maximumLateness;
@@ -79,15 +87,17 @@ public:
 
 private:
     MediaRtcpSenderReportSchedule(MediaRunningTime initialDeadline,
-                                  MediaRunningTime interval,
+                                  MediaRtcpReportingPolicy reportingPolicy,
                                   MediaRunningTime maximumLateness,
-                                  std::uint64_t generation) noexcept;
+                                  std::uint64_t generation,
+                                  std::uint64_t randomState) noexcept;
 
     MediaRunningTime m_nextDeadline;
-    MediaRunningTime m_interval;
+    MediaRtcpReportingPolicy m_reportingPolicy;
     MediaRunningTime m_maximumLateness;
     std::uint64_t m_generation;
     std::uint64_t m_revision;
+    std::uint64_t m_randomState;
 };
 
 } // namespace media::ffmpeg::graph

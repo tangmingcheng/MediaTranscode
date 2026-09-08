@@ -3,7 +3,6 @@
 #include "internal/graph/nodes/mux/MediaMuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
-#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
@@ -17,7 +16,6 @@ class MediaOutputByteSink;
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
-class MediaUdpDatagramSenderPortFactory;
 struct MediaProjectMpegTsRuntimeOutputPlan;
 
 class ProjectMpegTsGenerationSessionState final
@@ -36,16 +34,21 @@ private:
         Finished,
         Poisoned
     };
+    enum class TimelineState : std::uint8_t {
+        Dormant,
+        StartupMaintenancePending,
+        AwaitingFirstAccessUnit,
+        MediaTimelineActive
+    };
     State state = State::Acquiring;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     std::optional<MediaProtocolOutputActivation> activation;
     std::optional<MediaProtocolOutputSessionKey> plannedSession;
     std::optional<MediaTranscodeStreamSet> streamSet;
     std::unique_ptr<MediaTsMuxSession> session;
-    std::shared_ptr<MediaMpegTsRtpContinuityState> rtpContinuity;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
-    bool mediaTimelineStarted = false;
+    TimelineState timelineState = TimelineState::Dormant;
     std::atomic<std::uint64_t> generation{0};
 };
 
@@ -93,6 +96,7 @@ public:
                           const MediaBufferRef& buffer) override;
     ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) override;
+    bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status finish(MediaGraphExecutionContext& context) override;
@@ -100,6 +104,8 @@ public:
 
 private:
     using State = ProjectMpegTsGenerationSessionState::State;
+    using TimelineState =
+        ProjectMpegTsGenerationSessionState::TimelineState;
     ::media::Status bindRuntimePlan(MediaGraphExecutionContext& context,
                                     const MediaBufferRef& buffer);
     ::media::Status bindSink(const MediaBufferRef& buffer);
@@ -120,10 +126,9 @@ private:
         m_outputPlan;
     std::optional<MediaProtocolOutputActivation>& m_activation;
     std::unique_ptr<MediaTsMuxSession>& m_session;
-    std::shared_ptr<MediaMpegTsRtpContinuityState>& m_rtpContinuity;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
-    bool& m_mediaTimelineStarted;
+    TimelineState& m_timelineState;
     std::atomic<std::uint64_t>& m_generation;
     std::unique_ptr<MediaOutputByteSink> m_sink;
     MediaBufferRef m_videoConfig;

@@ -26,6 +26,16 @@ FFmpegFrameView::canonicalLineage(const MediaBufferRef& buffer) noexcept
     return canonical ? canonical->lineage() : nullptr;
 }
 
+const std::shared_ptr<MediaGraphPayloadCreditLease>&
+FFmpegFrameView::payloadCredit(const MediaBufferRef& buffer) noexcept
+{
+    if (const auto* canonical =
+            dynamic_cast<const MediaCanonicalVideoFrameBuffer*>(buffer.get())) {
+        return payloadCredit(canonical->media());
+    }
+    return buffer->payloadCredit();
+}
+
 bool FFmpegFrameView::isFrame(const MediaBufferRef& buffer) noexcept
 {
     return frame(buffer) != nullptr;

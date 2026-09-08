@@ -52,7 +52,9 @@ namespace {
     if ((transport.clockLossPolicy !=
              MediaRtpClockLossPolicy::FailOnDegraded &&
          transport.clockLossPolicy !=
-             MediaRtpClockLossPolicy::FailOnExpired) ||
+             MediaRtpClockLossPolicy::FailOnExpired &&
+         transport.clockLossPolicy !=
+             MediaRtpClockLossPolicy::WaitForEvidence) ||
         !transport.rtcpCompositionMode) {
         return invalid("clock loss or RTCP composition policy");
     }

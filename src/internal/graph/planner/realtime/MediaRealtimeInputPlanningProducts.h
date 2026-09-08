@@ -2,6 +2,8 @@
 
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
+#include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -34,15 +36,14 @@ struct MediaRealtimeRtpTransportPlan final {
     int cnameTimeoutMs;
     MediaRtpClockLossPolicy clockLossPolicy;
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
+    std::optional<MediaRtpIngressPlan> ingress;
 };
 
 struct MediaRealtimeTsInputPolicy final {
     MediaRealtimeTsInputPolicy() = delete;
 
-    std::string demuxFormat;
     std::size_t packetSize;
     std::size_t avioBufferBytes;
-    std::size_t maximumDatagramBytes;
     std::size_t evidenceTimelineCapacity;
     std::uint64_t maximumPacketPositionRegressionBytes;
     std::size_t pesProvenanceCapacity;
@@ -61,10 +62,8 @@ struct MediaRealtimeTsInputPolicy final {
 
 private:
     MediaRealtimeTsInputPolicy(
-        std::string selectedDemuxFormat,
         std::size_t selectedPacketSize,
         std::size_t selectedAvioBufferBytes,
-        std::size_t selectedMaximumDatagramBytes,
         std::size_t selectedEvidenceTimelineCapacity,
         std::uint64_t selectedMaximumPacketPositionRegressionBytes,
         std::size_t selectedPesProvenanceCapacity,
@@ -114,14 +113,10 @@ struct MediaRealtimeTsInputPlan final {
     };
     using Retention = std::variant<VideoOnlyRetention, AudioVideoRetention>;
 
-    std::string demuxFormat;
     std::size_t packetSize;
-    std::size_t avioBufferBytes;
-    std::size_t maximumDatagramBytes;
     std::size_t evidenceTimelineCapacity;
     std::uint64_t maximumPacketPositionRegressionBytes;
     std::size_t pesProvenanceCapacity;
-    MediaTsPacketOriginPolicy packetOriginPolicy;
     MediaTsSelectedProgramPlan selectedProgram;
     std::int64_t maximumPcrGap27Mhz;
     std::size_t projectionCapacity;
@@ -162,6 +157,7 @@ struct MediaRealtimeRtpInputNodePlan final {
     std::optional<bool> requiresPreparedInput;
     std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
     std::optional<MediaRtpDepacketizerConfig> rtpDepacketizer;
+    std::optional<MediaPreparedRtpAccessUnitEnvelope> rtpAccessUnitEnvelope;
     std::optional<MediaRealtimeTsInputPlan> mpegTs;
 };
 

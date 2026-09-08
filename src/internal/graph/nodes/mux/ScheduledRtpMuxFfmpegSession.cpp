@@ -2,7 +2,7 @@
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegOptions.h"
 
-#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+#include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -165,11 +165,21 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
             ::media::ErrorInfo::invalidArgument(
                 "scheduled RTP mux requires an open session and non-empty access unit"));
     }
-    if (m_config->packetizationMode() ==
-        MediaScheduledRtpPacketizationMode::H264AnnexB) {
-        auto valid = MediaH264AnnexBAccessUnitValidator::validate(
+    if (static_cast<std::uint64_t>(packet.size) >
+        m_config->emissionContract().maximumAccessUnitPayloadBytes()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP access unit exceeds its prepared emission contract"));
+    }
+    const auto packetizationMode = m_config->packetizationMode();
+    if (packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB ||
+        packetizationMode == MediaScheduledRtpPacketizationMode::HevcAnnexB) {
+        auto valid = MediaAnnexBAccessUnitValidator::validate(
             std::span<const std::uint8_t>(
-                packet.data, static_cast<std::size_t>(packet.size)));
+                packet.data, static_cast<std::size_t>(packet.size)),
+            packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB
+                ? MediaAnnexBCodec::H264
+                : MediaAnnexBCodec::Hevc);
         if (!valid) return valid;
     }
     auto copy = ::media::ffmpeg::makePacket();
@@ -194,6 +204,7 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     copy->dts = copy->pts;
     copy->duration = 0;
     m_activeTimestamp = timestamp;
+    m_activeDatagrams = 0;
     const int written = av_write_frame(m_context, copy.get());
     m_activeTimestamp.reset();
     if (auto callback = preserveCallbackFailure(); !callback) {
@@ -202,6 +213,14 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     if (written < 0) {
         return FFmpegGraphError::statusFromCode(
             written, "av_write_frame(scheduled rtp)");
+    }
+    if (m_activeDatagrams == 0 ||
+        m_activeDatagrams >
+            m_config->emissionContract().maximumDatagramsPerAccessUnit()) {
+        const auto error = ::media::ErrorInfo::invalidArgument(
+            "scheduled RTP mux datagram count violates its emission contract");
+        poison(error);
+        return ::media::Status::failure(error);
     }
     return ::media::Status::success();
 }
@@ -234,6 +253,7 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     releaseOutput();
     m_config.reset();
     m_activeTimestamp.reset();
+    m_activeDatagrams = 0;
     m_terminalFailure.reset();
     m_state = State::Empty;
     return ::media::Status::success();
@@ -247,6 +267,13 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
             ::media::ErrorInfo::invalidArgument(
                 "FFmpeg emitted RTP without an active access-unit clock mapping"));
     }
+    if (m_activeDatagrams >=
+        m_config->emissionContract().maximumDatagramsPerAccessUnit()) {
+        const auto error = ::media::ErrorInfo::invalidArgument(
+            "scheduled RTP mux exceeded its per-access-unit datagram contract");
+        poison(error);
+        return ::media::Status::failure(error);
+    }
     const MediaRtpDatagramRewriteParameters parameters(
         m_config->identity(), *m_activeTimestamp);
     auto rewritten = MediaRtpDatagramRewriter::rewrite(
@@ -254,7 +281,9 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     if (!rewritten) {
         return ::media::Status::failure(rewritten.error());
     }
-    return m_sink(m_rewriteScratch, rewritten.value().payloadOctets());
+    auto emitted = m_sink(m_rewriteScratch, rewritten.value().payloadOctets());
+    if (emitted) ++m_activeDatagrams;
+    return emitted;
 }
 
 ::media::Status ScheduledRtpMuxFfmpegSession::preserveCallbackFailure()

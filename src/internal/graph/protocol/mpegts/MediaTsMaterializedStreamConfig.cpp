@@ -1,25 +1,52 @@
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 
+#include <array>
+#include <optional>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-bool canonicalParameterSet(const std::vector<std::uint8_t>& bytes,
-                           std::uint8_t nalType) noexcept
+std::optional<std::uint8_t> parameterSetType(
+    MediaTsVideoCodec codec,
+    const std::vector<std::uint8_t>& bytes) noexcept
 {
-    if (bytes.size() < 5 || bytes[0] != 0 || bytes[1] != 0 ||
-        bytes[2] != 0 || bytes[3] != 1 || (bytes[4] & 0x80) != 0 ||
-        (bytes[4] & 0x1F) != nalType) {
-        return false;
+    const std::size_t minimumSize = codec == MediaTsVideoCodec::H264 ? 5 : 6;
+    if (bytes.size() < minimumSize || bytes[0] != 0 || bytes[1] != 0 ||
+        bytes[2] != 0 || bytes[3] != 1 || (bytes[4] & 0x80) != 0) {
+        return std::nullopt;
     }
-    for (std::size_t offset = 5; offset + 2 < bytes.size(); ++offset) {
+    if (codec == MediaTsVideoCodec::Hevc && (bytes[5] & 0x07) == 0) {
+        return std::nullopt;
+    }
+    for (std::size_t offset = minimumSize;
+         offset + 2 < bytes.size(); ++offset) {
         if (bytes[offset] == 0 && bytes[offset + 1] == 0 &&
             (bytes[offset + 2] == 1 ||
              (offset + 3 < bytes.size() && bytes[offset + 2] == 0 &&
               bytes[offset + 3] == 1))) {
-            return false;
+            return std::nullopt;
         }
+    }
+    return codec == MediaTsVideoCodec::H264
+        ? std::optional<std::uint8_t>(bytes[4] & 0x1F)
+        : std::optional<std::uint8_t>((bytes[4] >> 1) & 0x3F);
+}
+
+bool expectedParameterSetTypes(
+    MediaTsVideoCodec codec,
+    const std::vector<std::vector<std::uint8_t>>& parameterSets) noexcept
+{
+    const std::array<std::uint8_t, 3> expected =
+        codec == MediaTsVideoCodec::H264
+            ? std::array<std::uint8_t, 3>{7, 8, 0}
+            : std::array<std::uint8_t, 3>{32, 33, 34};
+    const std::size_t expectedCount =
+        codec == MediaTsVideoCodec::H264 ? 2 : 3;
+    if (parameterSets.size() != expectedCount) return false;
+    for (std::size_t index = 0; index < expectedCount; ++index) {
+        const auto type = parameterSetType(codec, parameterSets[index]);
+        if (!type || *type != expected[index]) return false;
     }
     return true;
 }
@@ -28,41 +55,25 @@ bool canonicalParameterSet(const std::vector<std::uint8_t>& bytes,
 
 ::media::Result<MediaTsMaterializedVideoConfig>
 MediaTsMaterializedVideoConfig::create(
-    MediaTsH264InputLayout layout,
-    std::uint8_t nalLengthBytes,
-    std::vector<std::uint8_t> spsAnnexB,
-    std::vector<std::uint8_t> ppsAnnexB)
+    MediaTsVideoElementaryStreamContract contract,
+    std::vector<std::vector<std::uint8_t>> parameterSetsAnnexB)
 {
-    switch (layout) {
-    case MediaTsH264InputLayout::AnnexB:
-    case MediaTsH264InputLayout::LengthPrefixed:
-        break;
-    default:
+    if (!expectedParameterSetTypes(
+            contract.codec(), parameterSetsAnnexB)) {
         return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS materialized H.264 layout is invalid"));
-    }
-    if (nalLengthBytes < 1 || nalLengthBytes > 4 ||
-        !canonicalParameterSet(spsAnnexB, 7) ||
-        !canonicalParameterSet(ppsAnnexB, 8)) {
-        return ::media::Result<MediaTsMaterializedVideoConfig>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS materialized H.264 config is invalid"));
+                "MPEG-TS materialized video parameter sets are incomplete, duplicated, out of order, or malformed"));
     }
     return ::media::Result<MediaTsMaterializedVideoConfig>::success(
         MediaTsMaterializedVideoConfig(
-            layout, nalLengthBytes, std::move(spsAnnexB), std::move(ppsAnnexB)));
+            std::move(contract), std::move(parameterSetsAnnexB)));
 }
 
 MediaTsMaterializedVideoConfig::MediaTsMaterializedVideoConfig(
-    MediaTsH264InputLayout layout,
-    std::uint8_t nalLengthBytes,
-    std::vector<std::uint8_t> spsAnnexB,
-    std::vector<std::uint8_t> ppsAnnexB) noexcept
-    : m_layout(layout)
-    , m_nalLengthBytes(nalLengthBytes)
-    , m_spsAnnexB(std::move(spsAnnexB))
-    , m_ppsAnnexB(std::move(ppsAnnexB))
+    MediaTsVideoElementaryStreamContract contract,
+    std::vector<std::vector<std::uint8_t>> parameterSetsAnnexB) noexcept
+    : m_contract(std::move(contract))
+    , m_parameterSetsAnnexB(std::move(parameterSetsAnnexB))
 {
 }
 

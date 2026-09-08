@@ -127,7 +127,6 @@ struct MediaAvSyncRtpOutputStreamPlan {
 
 struct MediaAvSyncRtpOutputPolicy {
     std::optional<bool> useSharedNtpEpoch;
-    std::optional<MediaRunningTime> senderReportIntervalNs;
 };
 
 struct MediaAvSyncRtpInputPlan {

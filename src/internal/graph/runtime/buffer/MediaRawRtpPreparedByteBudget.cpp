@@ -104,6 +104,7 @@ MediaRawRtpPreparedByteBudget::snapshot() const noexcept
     std::size_t bytes)
 {
     if (m_error) return ::media::Status::failure(*m_error);
+    if (m_runtimeActive) return ::media::Status::success();
     if (bytes > m_capacity - m_observedBytes) {
         return failLocked(::media::ErrorInfo::allocationFailed(
             "raw RTP probe exceeded total byte capacity: observed_bytes=" +

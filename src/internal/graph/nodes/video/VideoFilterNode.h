@@ -7,6 +7,9 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 
 #include <cstdint>
 #include <optional>
@@ -21,6 +24,8 @@ extern "C" {
 }
 
 namespace media::ffmpeg::graph {
+
+class MediaGraphPayloadCreditLease;
 
 class VideoFilterLineageState final : public MediaVideoLineageState {
 public:
@@ -42,6 +47,7 @@ public:
     bool flushed = false;
     bool filterEof = false;
     ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     MediaInputTerminalTracker terminals { { "frame" } };
     bool eofEmitted = false;
@@ -90,7 +96,10 @@ private:
     ::media::Status attachPendingLineage();
     ::media::Status flushGraph(MediaGraphExecutionContext& context);
     ::media::Status drainFrames(MediaGraphExecutionContext& context, bool* produced = nullptr);
-    ::media::Status emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame);
+    ::media::Status emitFrame(
+        MediaGraphExecutionContext& context,
+        ::media::ffmpeg::FramePtr frame,
+        MediaGraphPayloadReservation reservation);
     ::media::Result<MediaNodeProcessResult> continueTerminal(MediaGraphExecutionContext& context);
     ::media::Status rescaleAndValidateFrame(AVFrame* frame) noexcept;
     ::media::Status retainPreparedOutput(
@@ -114,6 +123,14 @@ private:
     bool m_preparationFeedArmed = false;
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
+    std::optional<MediaHardwareDescriptor> m_inputContract;
+    std::optional<MediaHardwareDescriptor> m_outputContract;
+    std::uint64_t m_drmPrimeInputFrames = 0;
+    std::uint64_t m_drmPrimeOutputFrames = 0;
+    std::uint64_t m_rgaFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
+    MediaVideoFilterImplementation m_filterImplementation =
+        MediaVideoFilterImplementation::Unknown;
 };
 
 } // namespace media::ffmpeg::graph

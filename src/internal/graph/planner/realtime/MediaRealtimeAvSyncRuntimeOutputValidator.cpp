@@ -67,43 +67,31 @@ bool validRtpStream(
         candidate.packetization.maximumDatagramBytes() > 0 &&
         (video
              ? !candidate.packetization.maximumAccessUnitSamples()
-             : candidate.packetization.maximumAccessUnitSamples() ==
-                   runtime.audioCorrection.protocolBatchSamples) &&
-        candidate.transport.maximumDatagramBytes() ==
-            candidate.packetization.maximumDatagramBytes() &&
+             : runtime.planningFacts.protocolBatchSamples &&
+                   candidate.packetization.maximumAccessUnitSamples() ==
+                       runtime.planningFacts.protocolBatchSamples) &&
         candidate.transport.remoteRtpEndpoint().addressFamily() == family &&
         candidate.transport.remoteRtcpEndpoint().addressFamily() == family &&
-        candidate.transport.localNumericAddress() ==
-            (family == MediaIpAddressFamily::Ipv4 ? "0.0.0.0" : "::") &&
         !candidate.transport.remoteRtpEndpoint().numericAddress().empty() &&
         candidate.transport.remoteRtcpEndpoint().numericAddress() ==
             candidate.transport.remoteRtpEndpoint().numericAddress() &&
         candidate.transport.remoteRtpEndpoint().port() > 0 &&
         candidate.transport.remoteRtcpEndpoint().port() ==
             candidate.transport.remoteRtpEndpoint().port() + 1 &&
-        candidate.transport.localPortPolicy().kind() ==
-            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent &&
-        !candidate.transport.localPortPolicy().rtpPort() &&
-        !candidate.transport.localPortPolicy().rtcpPort() &&
-        candidate.transport.maximumDatagramBytes() <=
+        candidate.packetization.maximumDatagramBytes() <=
             static_cast<std::size_t>(
                 std::numeric_limits<int>::max() / 2) &&
-        candidate.transport.sendBufferBytes() ==
-            static_cast<int>(
-                candidate.transport.maximumDatagramBytes() * 2) &&
-        candidate.transport.ioBehavior() ==
-            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure &&
         candidate.ssrc == *synchronization.ssrc &&
         candidate.baseTimestamp == *synchronization.baseTimestamp &&
         candidate.clockRate == *synchronization.clockRate &&
         candidate.cname == *synchronization.cname &&
         runtime.synchronization.startup.outputLeadNs &&
         runtime.synchronization.rtpOutput &&
-        runtime.synchronization.rtpOutput->output.senderReportIntervalNs &&
         candidate.senderLead ==
             *runtime.synchronization.startup.outputLeadNs &&
-        candidate.senderReportInterval ==
-            *runtime.synchronization.rtpOutput->output.senderReportIntervalNs;
+        candidate.rtcpReporting.steadyBaseInterval().nanoseconds() > 0 &&
+        candidate.rtcpReporting.minimumAdmissionInterval() <=
+            candidate.rtcpReporting.initialBaseInterval();
 }
 
 ::media::Status validateSeparateRtpOutput(
@@ -148,7 +136,8 @@ bool validRtpStream(
             *runtime.planningFacts.outputVideoRtpPacketization,
             outer.videoPlan.outputCodecName,
             MediaScheduledStream::Video,
-            MediaScheduledRtpPacketizationMode::H264AnnexB,
+            runtime.planningFacts.outputVideoRtpPacketization
+                ->packetizationMode(),
             runtime) ||
         !validRtpStream(
             output.audio, synchronization.audioOutput,
@@ -200,14 +189,22 @@ bool validRtpStream(
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
     const auto& mux = output.protocol.muxPlan().parameters();
+    auto expectedEmission = MediaTsDatagramEmissionPlan::create(
+        output.protocol.muxPlan(),
+        output.emission.videoInitialServiceWindow(),
+        output.emission.audioInitialServiceWindow(),
+        output.emission.maximumQueuedBytes(),
+        output.emission.targetServiceResidence());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
+        runtime.planningFacts.outputSampleRate &&
         MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
-            runtime.audioCorrection.outputSampleRate;
+            *runtime.planningFacts.outputSampleRate;
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
-        !sampleRateMatches ||
+        !sampleRateMatches || !expectedEmission ||
+        output.emission != expectedEmission.value() ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {
@@ -218,6 +215,8 @@ bool validRtpStream(
             std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
         if (!udp || mux.transportKind !=
                          MediaOutputTransportKind::UdpDatagrams ||
+            output.scheduledBatchMaximumBytes != 0 ||
+            output.emission.perDatagramOverheadBytes() != 0 ||
             *runtime.synchronization.projectMpegTsOutput
                  ->useSharedNtpEpoch ||
             udp->url.empty() ||
@@ -247,34 +246,28 @@ bool validRtpStream(
         rtp->sdp().originAddressFamily,
         rtp->sdp().originNumericAddress, rtp->sdp().cname);
     if (!maximumPackets || !sdpIdentity ||
+        output.scheduledBatchMaximumBytes == 0 ||
+        output.scheduledBatchMaximumBytes !=
+            runtime.edgePolicies.synchronizedPacket.bufferPolicy
+                .memoryBudget.maxBytes ||
+        output.emission.perDatagramOverheadBytes() != 12 ||
+        output.emission.maximumWireDatagramBytes() >
+            rtp->maximumDatagramBytes() ||
         rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
         rtp->ssrc() == 0 || rtp->cname().empty() ||
         rtp->initialSequenceNumber() !=
             MediaRtpOutputIdentityPlanner::stableSequenceNumber(
                 rtp->sdp().originUsername + ".output.mp2t.sequence") ||
-        rtp->senderReportInterval() <=
+        rtp->rtcpReporting().steadyBaseInterval() <=
             MediaRunningTime::fromNanoseconds(0) ||
         !runtime.synchronization.recovery.reacquisitionTimeoutNs ||
-        rtp->senderReportInterval() >=
+        rtp->rtcpReporting().steadyBaseInterval() >=
             *runtime.synchronization.recovery.reacquisitionTimeoutNs ||
-        rtp->maximumDatagramBytes() != sender.maximumDatagramBytes() ||
         rtp->maximumDatagramBytes() >
             static_cast<std::size_t>(
-                (std::numeric_limits<int>::max)() / 2) ||
-        sender.sendBufferBytes() <
-            static_cast<int>(rtp->maximumDatagramBytes() * 2) ||
+                (std::numeric_limits<int>::max)()) ||
         rtp->tsPacketsPerPayload() != maximumPackets.value() ||
         mux.maximumPacketsPerDatagram != rtp->tsPacketsPerPayload() ||
-        sender.ioBehavior() !=
-            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure ||
-        sender.localPortPolicy().kind() !=
-            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
-        sender.localPortPolicy().rtpPort() ||
-        sender.localPortPolicy().rtcpPort() ||
-        sender.localNumericAddress() !=
-            (remoteRtp.addressFamily() == MediaIpAddressFamily::Ipv4
-                 ? "0.0.0.0"
-                 : "::") ||
         remoteRtp.port() == 0 || (remoteRtp.port() % 2) != 0 ||
         remoteRtcp.port() != remoteRtp.port() + 1 ||
         remoteRtcp.addressFamily() != remoteRtp.addressFamily() ||

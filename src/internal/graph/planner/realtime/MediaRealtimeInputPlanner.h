@@ -22,11 +22,13 @@ struct MediaRealtimeRawInputPlan final {
     MediaInputVideoStreamInfo video;
     MediaRealtimeRtpTransportPlan videoTransport;
     MediaRtpDepacketizerConfig videoDepacketizer;
+    MediaPreparedRtpAccessUnitEnvelope videoAccessUnitEnvelope;
     std::string audioUrl;
     std::string audioSdp;
     std::optional<MediaInputAudioStreamInfo> audio;
     std::optional<MediaRealtimeRtpTransportPlan> audioTransport;
     std::optional<MediaRtpDepacketizerConfig> audioDepacketizer;
+    std::optional<MediaPreparedRtpAccessUnitEnvelope> audioAccessUnitEnvelope;
 };
 
 class MediaRealtimeInputPlanner final {

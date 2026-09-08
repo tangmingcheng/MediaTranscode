@@ -1,4 +1,5 @@
 #include "internal/graph/protocol/sdp/MediaH264SdpCodecDescriptionFactory.h"
+#include "internal/graph/protocol/sdp/MediaSdpBase64Encoder.h"
 
 extern "C" {
 #include <libavcodec/codec_par.h>
@@ -194,25 +195,6 @@ std::size_t startCodeSize(std::span<const std::uint8_t> bytes,
     return ::media::Result<ParameterSets>::success(std::move(result));
 }
 
-std::string base64(std::span<const std::uint8_t> bytes)
-{
-    constexpr char alphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string output;
-    output.reserve(((bytes.size() + 2) / 3) * 4);
-    for (std::size_t index = 0; index < bytes.size(); index += 3) {
-        const std::uint32_t first = bytes[index];
-        const std::uint32_t second = index + 1 < bytes.size() ? bytes[index + 1] : 0;
-        const std::uint32_t third = index + 2 < bytes.size() ? bytes[index + 2] : 0;
-        const std::uint32_t packed = (first << 16) | (second << 8) | third;
-        output.push_back(alphabet[(packed >> 18) & 0x3f]);
-        output.push_back(alphabet[(packed >> 12) & 0x3f]);
-        output.push_back(index + 1 < bytes.size() ? alphabet[(packed >> 6) & 0x3f] : '=');
-        output.push_back(index + 2 < bytes.size() ? alphabet[packed & 0x3f] : '=');
-    }
-    return output;
-}
-
 std::string hexTriple(const std::vector<std::uint8_t>& sps)
 {
     constexpr char digits[] = "0123456789ABCDEF";
@@ -228,27 +210,50 @@ std::string hexTriple(const std::vector<std::uint8_t>& sps)
 } // namespace
 
 ::media::Result<MediaH264SdpCodecDescription>
-MediaH264SdpCodecDescriptionFactory::create(const AVCodecParameters& parameters)
+MediaH264SdpCodecDescriptionFactory::create(
+    const AVCodecParameters& parameters,
+    const std::span<const std::uint8_t> codecConfigurationAccessUnit)
 {
     if (parameters.codec_type != AVMEDIA_TYPE_VIDEO ||
-        parameters.codec_id != AV_CODEC_ID_H264 || !parameters.extradata ||
-        parameters.extradata_size <= 0) {
+        parameters.codec_id != AV_CODEC_ID_H264) {
         return ::media::Result<MediaH264SdpCodecDescription>::failure(
             ::media::ErrorInfo::unsupported("final codec parameters are not complete H264"));
     }
-    const std::span<const std::uint8_t> bytes(
-        parameters.extradata, static_cast<std::size_t>(parameters.extradata_size));
+    const std::span<const std::uint8_t> bytes =
+        parameters.extradata && parameters.extradata_size > 0
+        ? std::span<const std::uint8_t>(
+              parameters.extradata,
+              static_cast<std::size_t>(parameters.extradata_size))
+        : codecConfigurationAccessUnit;
+    if (bytes.empty()) {
+        return ::media::Result<MediaH264SdpCodecDescription>::failure(
+            ::media::ErrorInfo::unsupported(
+                "H264 RTP requires encoder extradata or a configuration access unit"));
+    }
     auto sets = bytes[0] == 1 ? parseAvcc(bytes) : parseAnnexB(bytes);
     if (!sets) {
         return ::media::Result<MediaH264SdpCodecDescription>::failure(sets.error());
     }
     std::string sprop;
     const auto append = [&sprop](const std::vector<std::uint8_t>& nal) {
+        auto encoded = MediaSdpBase64Encoder::encode(nal);
+        if (!encoded) return ::media::Status::failure(encoded.error());
         if (!sprop.empty()) sprop.push_back(',');
-        sprop += base64(nal);
+        sprop += encoded.value();
+        return ::media::Status::success();
     };
-    for (const auto& sps : sets.value().sps) append(sps);
-    for (const auto& pps : sets.value().pps) append(pps);
+    for (const auto& sps : sets.value().sps) {
+        if (auto appended = append(sps); !appended) {
+            return ::media::Result<MediaH264SdpCodecDescription>::failure(
+                appended.error());
+        }
+    }
+    for (const auto& pps : sets.value().pps) {
+        if (auto appended = append(pps); !appended) {
+            return ::media::Result<MediaH264SdpCodecDescription>::failure(
+                appended.error());
+        }
+    }
     return ::media::Result<MediaH264SdpCodecDescription>::success(
         MediaH264SdpCodecDescription(
             hexTriple(sets.value().sps.front()), std::move(sprop), 1));

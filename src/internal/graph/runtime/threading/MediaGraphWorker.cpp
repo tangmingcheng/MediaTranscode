@@ -2,11 +2,17 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/diagnostics/MediaCurrentThreadCpuClock.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <string>
 #include <utility>
+
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 
 namespace media::ffmpeg::graph {
 
@@ -113,6 +119,31 @@ const MediaGraphWorkerMetrics& MediaGraphWorker::metrics() const noexcept
     return m_metrics;
 }
 
+void MediaGraphWorker::recordThreadCpu(
+    const ::media::Result<std::uint64_t>& startedAt) noexcept
+{
+    auto finishedAt = MediaCurrentThreadCpuClock::nowNanoseconds();
+    if (startedAt && finishedAt && finishedAt.value() >= startedAt.value()) {
+        m_metrics.threadCpuNanoseconds =
+            finishedAt.value() - startedAt.value();
+        m_metrics.threadCpuMeasurementAvailable = true;
+    }
+    try {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "worker.thread_cpu node=" + std::to_string(m_node.nodeId().value) +
+                " available=" +
+                (m_metrics.threadCpuMeasurementAvailable.load() ? "1" : "0") +
+                " cpu_ns=" +
+                std::to_string(m_metrics.threadCpuNanoseconds.load()) +
+                " process_calls=" +
+                std::to_string(m_metrics.processCalls.load()));
+    } catch (...) {
+        // Diagnostics cannot escape worker teardown.
+    }
+}
+
 MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
     ::media::ErrorInfo error)
 {
@@ -155,6 +186,17 @@ MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
 
 void MediaGraphWorker::run()
 {
+    const auto threadCpuStartedAt =
+        MediaCurrentThreadCpuClock::nowNanoseconds();
+#if defined(__linux__)
+    char threadName[16]{};
+    std::snprintf(
+        threadName,
+        sizeof(threadName),
+        "mt-n%u",
+        static_cast<unsigned int>(m_node.nodeId().value));
+    pthread_setname_np(pthread_self(), threadName);
+#endif
     m_running = true;
     uint32_t consecutiveErrors = 0;
     m_wakeup.reset();
@@ -205,8 +247,17 @@ void MediaGraphWorker::run()
                         ? std::chrono::duration_cast<std::chrono::nanoseconds>(
                               steady->deadline - now)
                         : std::chrono::nanoseconds{0};
-                    const auto outcome = m_wakeup.wait(
-                        observedSequence, timeout);
+                    const auto waited = m_wakeup.wait(
+                        observedSequence, deadlineWait.wakePolicy, timeout);
+                    if (!waited) {
+                        if (recordFailure(waited.error()) !=
+                            FailureDisposition::CoordinatedCancellation) {
+                            ++m_metrics.errors;
+                        }
+                        m_aborted = true;
+                        break;
+                    }
+                    const auto outcome = waited.value();
                     if (outcome == MediaNodeWakeup::WaitOutcome::Notified) {
                         ++m_metrics.wakeups;
                     } else if (outcome ==
@@ -244,15 +295,36 @@ void MediaGraphWorker::run()
                 }
                 const auto timeout = std::chrono::nanoseconds(
                     std::max<std::int64_t>(0, remaining.value().nanoseconds()));
-                const auto outcome = m_wakeup.wait(observedSequence, timeout);
+                const auto waited = m_wakeup.wait(
+                    observedSequence, deadlineWait.wakePolicy, timeout);
+                if (!waited) {
+                    if (recordFailure(waited.error()) !=
+                        FailureDisposition::CoordinatedCancellation) {
+                        ++m_metrics.errors;
+                    }
+                    m_aborted = true;
+                    break;
+                }
+                const auto outcome = waited.value();
                 if (outcome == MediaNodeWakeup::WaitOutcome::Notified) {
                     ++m_metrics.wakeups;
                 } else if (outcome == MediaNodeWakeup::WaitOutcome::Deadline) {
                     ++m_metrics.deadlines;
                 }
-            } else if (m_wakeup.wait(observedSequence) ==
-                       MediaNodeWakeup::WaitOutcome::Notified) {
-                ++m_metrics.wakeups;
+            } else {
+                const auto waited = m_wakeup.wait(
+                    observedSequence,
+                    MediaNodeDeadlineWakePolicy::InputOrDeadline);
+                if (!waited) {
+                    if (recordFailure(waited.error()) !=
+                        FailureDisposition::CoordinatedCancellation) {
+                        ++m_metrics.errors;
+                    }
+                    m_aborted = true;
+                } else if (waited.value() ==
+                           MediaNodeWakeup::WaitOutcome::Notified) {
+                    ++m_metrics.wakeups;
+                }
             }
             break;
         case MediaNodeProcessState::Finished:
@@ -263,11 +335,13 @@ void MediaGraphWorker::run()
                     std::to_string(m_node.nodeId().value));
             m_finished.store(true, std::memory_order_release);
             m_running = false;
+            recordThreadCpu(threadCpuStartedAt);
             return;
         }
     }
 
     m_running = false;
+    recordThreadCpu(threadCpuStartedAt);
 }
 
 } // namespace media::ffmpeg::graph

@@ -33,6 +33,7 @@ void MediaVideoFrameRateState::resetTimelineLocked() noexcept
     m_data.flushed = false;
     m_data.inputTimeBase = {0, 1};
     m_data.targetFramePeriod = {0, 1};
+    m_data.maximumDuplicationGap.reset();
     m_data.startPts = 0;
     m_data.nextOutputIndex = 0;
     m_data.lastInputPts = AV_NOPTS_VALUE;

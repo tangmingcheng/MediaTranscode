@@ -6,6 +6,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -116,6 +117,23 @@ inline std::string requiredArg(int argc, char** argv, const std::string& key)
     return value;
 }
 
+inline std::uint64_t requiredUint64Arg(
+    int argc, char** argv, const std::string& key)
+{
+    const std::string value = requiredArg(argc, argv, key);
+    if (value.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::invalid_argument(
+            "invalid unsigned integer value for " + key + ": " + value);
+    }
+    std::size_t parsed = 0;
+    const auto result = std::stoull(value, &parsed, 10);
+    if (parsed != value.size()) {
+        throw std::invalid_argument(
+            "invalid unsigned integer value for " + key + ": " + value);
+    }
+    return result;
+}
+
 inline bool requiredExclusiveBoolArg(int argc,
                                      char** argv,
                                      const std::string& trueKey,
@@ -204,14 +222,14 @@ inline ::media::Status printRealtimePlanSummary(const MediaGraph& graph)
     if (!decoder) {
         return ::media::Status::failure(decoder.error());
     }
-    auto filterRequired = requiredNodeOption(&encoder->options,
-                                             "graph CLI realtime plan summary",
-                                             "pipeline.filter_required");
-    if (!filterRequired) {
-        return ::media::Status::failure(filterRequired.error());
+    auto filterActive = requiredNodeOption(&encoder->options,
+                                           "graph CLI realtime plan summary",
+                                           "pipeline.filter_active");
+    if (!filterActive) {
+        return ::media::Status::failure(filterActive.error());
     }
     std::string filterText = "not_required";
-    if (filterRequired.value() != "0") {
+    if (filterActive.value() != "0") {
         auto filter = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "filter.pipeline.filter");
         if (!filter) {
             return ::media::Status::failure(filter.error());

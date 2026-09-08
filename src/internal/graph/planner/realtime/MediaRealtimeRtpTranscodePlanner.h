@@ -11,6 +11,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPlanningDraft.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
@@ -33,6 +35,7 @@ struct MediaRealtimeRtpTranscodePlanCore {
     MediaOutputTransportKind outputTransport;
     MediaPipelinePlan videoPlan;
     MediaVideoTranscodeParameters videoParameters;
+    std::optional<MediaRealtimeGraphResourceLedgerPlan> resourceLedger;
     std::optional<MediaPreparedRealtimeInputKind> requiredPreparedInputKind;
     bool videoInputStartRequiresKeyFrame = false;
     MediaRealtimeRtpInputNodePlan input;
@@ -40,6 +43,7 @@ struct MediaRealtimeRtpTranscodePlanCore {
 
 struct MediaRealtimeRtpTranscodePlanningDraft final
     : MediaRealtimeRtpTranscodePlanCore {
+    std::optional<MediaRealtimeDeploymentEnvelope> deployment;
     std::optional<MediaAudioPipelinePlan> audioPlan;
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
     std::optional<MediaRealtimeAvSyncComponentBounds> avSyncComponentBounds;
@@ -99,8 +103,10 @@ private:
         const MediaTsSelectedProgramPlan* selectedTsProgram,
         const MediaPreparedRealtimeInput* preparedInput,
         const MediaPreparedRealtimeInput* preparedAudioInput,
+        const MediaRtpIngressPlan* preparedVideoIngress,
         std::optional<MediaPipelinePlan> preplannedVideo,
-        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling);
+        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling,
+        const MediaRational* detectedVideoFrameRate);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

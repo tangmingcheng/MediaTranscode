@@ -140,8 +140,21 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
     }
     if (auto status = set(
+            "video_scheduler.activation_lead_ns",
+            std::to_string(plan.scheduling.activationLead.nanoseconds()));
+        !status) {
+        return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
+    }
+    if (auto status = set(
             "video_scheduler.transport_lead_ns",
             std::to_string(plan.scheduling.transportLead.nanoseconds()));
+        !status) {
+        return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.protocol_preparation_lead_ns",
+            std::to_string(
+                plan.scheduling.protocolPreparationLead.nanoseconds()));
         !status) {
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
     }

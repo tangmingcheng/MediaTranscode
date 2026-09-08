@@ -3,6 +3,8 @@
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaMemoryBudget.h"
 
+#include <string>
+
 namespace media::ffmpeg::graph {
 
 enum class MediaBufferOwnership {
@@ -34,6 +36,7 @@ struct MediaBufferPolicy {
 
     MediaHardwareFrameKind memoryKind = MediaHardwareFrameKind::Unknown;
     MediaMemoryBudget memoryBudget;
+    std::string sharedAllocationGroup;
 
     bool allowPoolReuse = true;
     bool requireWritable = false;

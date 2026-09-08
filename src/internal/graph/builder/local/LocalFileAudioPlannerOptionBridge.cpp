@@ -40,10 +40,6 @@ namespace {
     if (!maxBitrate) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(maxBitrate.error());
     }
-    auto bufferSize = positiveValue(audio.bufferSizeKbits, "audio buffer size");
-    if (!bufferSize) {
-        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(bufferSize.error());
-    }
     if (audio.minBitrateKbps && audio.maxBitrateKbps && *audio.minBitrateKbps > *audio.maxBitrateKbps) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(
             ::media::ErrorInfo::invalidArgument("audio min bitrate must be <= audio max bitrate"));
@@ -67,7 +63,6 @@ namespace {
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
     plannerOptions.requestedMinBitrateKbps = audio.minBitrateKbps;
     plannerOptions.requestedMaxBitrateKbps = audio.maxBitrateKbps;
-    plannerOptions.requestedBufferSizeKbits = audio.bufferSizeKbits;
     plannerOptions.requestedSampleRate = audio.sampleRate;
     plannerOptions.requestedChannels = audio.channels;
     plannerOptions.requestedQuality = audio.quality;

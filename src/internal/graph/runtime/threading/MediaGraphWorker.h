@@ -24,6 +24,8 @@ struct MediaGraphWorkerMetrics {
     std::atomic_uint64_t wakeups{ 0 };
     std::atomic_uint64_t deadlines{ 0 };
     std::atomic_uint64_t errors{ 0 };
+    std::atomic_uint64_t threadCpuNanoseconds{ 0 };
+    std::atomic_bool threadCpuMeasurementAvailable{ false };
 };
 
 class MediaGraphWorker final {
@@ -63,6 +65,8 @@ private:
     };
 
     FailureDisposition recordFailure(::media::ErrorInfo error);
+    void recordThreadCpu(
+        const ::media::Result<std::uint64_t>& startedAt) noexcept;
     void run();
 
 private:

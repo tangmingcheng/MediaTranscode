@@ -5,6 +5,7 @@
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/planner/audio/capability/MediaAudioResamplerCapabilityProvider.h"
+#include "internal/graph/planner/MediaPreparedAudioEncoderEmissionEnvelope.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -26,7 +27,6 @@ struct MediaAudioPipelinePlannerOptions {
     std::optional<int> requestedBitrateKbps;
     std::optional<int> requestedMinBitrateKbps;
     std::optional<int> requestedMaxBitrateKbps;
-    std::optional<int> requestedBufferSizeKbits;
     std::optional<int> requestedSampleRate;
     std::optional<int> requestedChannels;
     std::optional<int> requestedQuality;
@@ -43,9 +43,11 @@ struct MediaAudioPipelinePlan {
     std::string sourceCodecName;
     std::optional<MediaResolvedAudioOutputPlan> resolvedOutput;
     bool monotonicPacketTimestamps = false;
+    std::optional<int> maximumAccessUnitSamples;
     std::string reason;
     std::optional<MediaSelectedAudioDecoder> selectedDecoder;
     std::optional<MediaSelectedAudioResampler> selectedResampler;
+    std::optional<MediaPreparedAudioEncoderEmissionEnvelope> preparedEmission;
 };
 
 struct MediaInputAudioStreamInfo {

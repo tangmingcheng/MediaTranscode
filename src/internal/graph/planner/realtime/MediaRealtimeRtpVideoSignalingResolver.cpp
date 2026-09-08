@@ -7,8 +7,8 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<std::string>
-MediaRealtimeRtpVideoSignalingResolver::resolveFmtp(
+::media::Result<MediaResolvedRtpVideoSignaling>
+MediaRealtimeRtpVideoSignalingResolver::resolve(
     const MediaRealtimeRtpInputMetadata& requested,
     const MediaDetectedRtpVideoSignaling* detected)
 {
@@ -17,38 +17,47 @@ MediaRealtimeRtpVideoSignalingResolver::resolveFmtp(
     if (detected) {
         if (requested.fmtp || !requested.payloadType ||
             !requested.clockRate) {
-            return ::media::Result<std::string>::failure(
+            return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "detected raw RTP video signaling requires explicit request identity without manual fmtp"));
         }
         if (detected->codecName != codecName ||
             detected->payloadType != *requested.payloadType ||
             detected->clockRate != *requested.clockRate) {
-            return ::media::Result<std::string>::failure(
+            return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "raw RTP detected signaling identity conflicts with request"));
         }
         facts = detected->facts;
     } else {
         if (!requested.fmtp) {
-            return ::media::Result<std::string>::failure(
+            return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "raw RTP video signaling requires manual fmtp or detected facts"));
         }
         auto parsed = parseRtpVideoSignalingFacts(
             codecName, *requested.fmtp);
         if (!parsed) {
-            return ::media::Result<std::string>::failure(parsed.error());
+            return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
+                parsed.error());
         }
         facts = std::move(parsed).value();
     }
 
-    if (auto status = MediaRtpVideoParameterSetValidator::validate(
-            codecName, facts);
-        !status) {
-        return ::media::Result<std::string>::failure(status.error());
+    auto inspected = MediaRtpVideoParameterSetValidator::inspect(
+        codecName, facts);
+    if (!inspected) {
+        return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
+            inspected.error());
     }
-    return serializeRtpVideoFmtp(facts);
+    auto fmtp = serializeRtpVideoFmtp(facts);
+    if (!fmtp) {
+        return ::media::Result<MediaResolvedRtpVideoSignaling>::failure(
+            fmtp.error());
+    }
+    return ::media::Result<MediaResolvedRtpVideoSignaling>::success(
+        MediaResolvedRtpVideoSignaling{
+            std::move(fmtp).value(), inspected.value().codedSize});
 }
 
 } // namespace media::ffmpeg::graph

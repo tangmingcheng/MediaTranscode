@@ -23,7 +23,13 @@ enum class MediaPayloadKind {
     DiagnosticRecord,
     OutputByteSink,
     ProjectMpegTsRuntimePlan,
-    TsAccessUnit
+    TsAccessUnit,
+    ScheduledDatagramBatch,
+    WireDatagramBatch,
+    ScheduledWireDatagramBatch,
+    DatagramShapingPlan,
+    DatagramTransportPlan,
+    MpegTsProtocolDatagramBatch
 };
 
 } // namespace media::ffmpeg::graph

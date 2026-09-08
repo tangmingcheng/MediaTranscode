@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -35,6 +36,7 @@ using MediaTsInitialPacketRetentionPlan = std::variant<
 struct MediaTsInitialAcquiringPacket final {
     ::media::ffmpeg::PacketPtr packet;
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
+    MediaGraphPayloadReservation reservation;
 };
 
 struct MediaTsInitialReplayPacket final {
@@ -47,12 +49,16 @@ public:
     static ::media::Result<MediaTsInitialAcquiringPacketBuffer> create(
         MediaTsInitialPacketRetentionPlan plan);
 
-    ::media::Status retain(::media::ffmpeg::PacketPtr packet,
-                           MediaStreamKind streamKind);
+    ::media::Status retain(
+        ::media::ffmpeg::PacketPtr packet,
+        MediaStreamKind streamKind,
+        MediaGraphPayloadReservation reservation);
     using Materializer = std::function<::media::Result<MediaBufferRef>(
-        const AVPacket&, MediaStreamKind)>;
+        const AVPacket&, MediaStreamKind,
+        const MediaGraphPayloadReservation&)>;
     ::media::Status stageReplay(const AVPacket& current,
                                 MediaStreamKind streamKind,
+                                MediaGraphPayloadReservation currentReservation,
                                 const Materializer& materializer);
     ::media::Status stageSingleReplay(MediaBufferRef buffer,
                                       MediaStreamKind streamKind);

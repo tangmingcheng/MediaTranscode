@@ -12,7 +12,6 @@
 namespace media::ffmpeg::graph {
 
 struct MediaTsDemuxNodeRuntimePlan final {
-    std::int64_t maximumPcrGap27Mhz;
     std::size_t packetStride;
     std::size_t evidenceCapacity;
     std::size_t projectionCapacity;

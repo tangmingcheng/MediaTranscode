@@ -13,7 +13,6 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaMpegTsRtpDatagramSink;
 
 class ScheduledRtpSenderCounters final {
 public:
@@ -26,7 +25,6 @@ public:
 
 private:
     friend class ScheduledRtpSenderSession;
-    friend class MediaMpegTsRtpDatagramSink;
 
     ScheduledRtpSenderCounters(std::uint64_t packetCount,
                                std::uint64_t octetCount) noexcept;
@@ -56,6 +54,10 @@ public:
     const ScheduledRtpMuxStreamConfig& streamConfig() const noexcept
     {
         return m_streamConfig;
+    }
+    ScheduledRtpMuxStreamConfig releaseStreamConfig() noexcept
+    {
+        return std::move(m_streamConfig);
     }
     const MediaSharedNtpEpoch& ntpEpoch() const noexcept { return m_ntpEpoch; }
     const MediaRtpOutputClockMapper& rtpMapper() const noexcept

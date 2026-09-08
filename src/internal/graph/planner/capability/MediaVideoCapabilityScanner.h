@@ -5,6 +5,7 @@
 namespace media::ffmpeg::graph {
 class MediaVideoCapabilityScanner final {
 public:
+    static ::media::Result<std::string> planRkmppFilter(const MediaPipelinePlannerOptions& options);
     static std::vector<MediaPipelineChainPlan> enumerateTranscodeCandidates(const std::string& inputCodecName, const std::string& outputCodecName, const MediaPipelinePlannerOptions& options);
 private:
     MediaVideoCapabilityScanner() = delete;

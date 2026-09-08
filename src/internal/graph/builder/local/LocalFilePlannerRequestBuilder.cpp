@@ -37,7 +37,6 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         video.bitrateKbps.has_value() ||
         video.minBitrateKbps.has_value() ||
         video.maxBitrateKbps.has_value() ||
-        video.bufferSizeKbits.has_value() ||
         video.quality.has_value() ||
         !video.preset.empty() ||
         !video.tune.empty() ||
@@ -62,21 +61,27 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
 
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
-                                               parameters.execution.disableHardware,
                                                false);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    auto rateControl = MediaEncoderRateControlRequest::create(
+        video.rateControl, video.bitrateKbps, video.minBitrateKbps,
+        video.maxBitrateKbps);
+    if (!rateControl) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            rateControl.error());
+    }
+    plannerOptions.encoderRateControl = std::move(rateControl).value();
+    plannerOptions.encoderOpenRequest = video;
     plannerOptions.probeWidth = plannerOptions.targetWidth;
     plannerOptions.probeHeight = plannerOptions.targetHeight;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
-        plannerOptions.probeFrameRate = MediaRational{
+        plannerOptions.targetFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.preferredHardware =
-        plannerOptions.disableHardware ? "software" : "auto";
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }

@@ -3,16 +3,22 @@
 #include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketCommitter.h"
 
-#include <array>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace media::ffmpeg::graph {
+
+struct MediaTsBatchWriteResult final {
+    std::size_t packetsWritten;
+    std::size_t payloadBytes;
+    bool cursorFinished;
+};
 
 class MediaTsPacketBatchWriter final {
 public:
     static ::media::Result<MediaTsPacketBatchWriter> create(
-        std::uint8_t maximumPacketsPerDatagram,
+        std::uint16_t maximumPacketsPerDatagram,
         std::unique_ptr<MediaTsDatagramSink> sink,
         std::unique_ptr<MediaTsPacketCommitter> committer);
 
@@ -22,23 +28,30 @@ public:
     MediaTsPacketBatchWriter& operator=(MediaTsPacketBatchWriter&&) = delete;
     ~MediaTsPacketBatchWriter();
 
-    ::media::Result<std::size_t> writeCursor(
+    ::media::Result<MediaTsPreparedPacketBatch> prepareNext(
+        MediaTsPacketCursor& cursor);
+    ::media::Result<MediaTsBatchWriteResult> writeNext(
         MediaTsPacketCursor& cursor,
-        MediaRunningTime emitOnMaster);
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
+    ::media::Result<MediaTsBatchWriteResult> writeNext(
+        MediaTsPacketCursor& cursor,
+        MediaTsPreparedPacketBatch&& batch,
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
     ::media::Status finish();
     void abort() noexcept;
 
 private:
-    MediaTsPacketBatchWriter(std::uint8_t maximumPacketsPerDatagram,
+    MediaTsPacketBatchWriter(std::uint16_t maximumPacketsPerDatagram,
                              std::unique_ptr<MediaTsDatagramSink> sink,
-                             std::unique_ptr<MediaTsPacketCommitter> committer);
+                             std::unique_ptr<MediaTsPacketCommitter> committer,
+                             std::vector<std::uint8_t> datagram);
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status firstFailure() const;
 
-    std::uint8_t m_maximumPacketsPerDatagram;
+    std::uint16_t m_maximumPacketsPerDatagram;
     std::unique_ptr<MediaTsDatagramSink> m_sink;
     std::unique_ptr<MediaTsPacketCommitter> m_committer;
-    std::array<std::uint8_t, 7 * 188> m_datagram{};
+    std::vector<std::uint8_t> m_datagram;
     std::optional<::media::ErrorInfo> m_failure;
     bool m_closed = false;
 };

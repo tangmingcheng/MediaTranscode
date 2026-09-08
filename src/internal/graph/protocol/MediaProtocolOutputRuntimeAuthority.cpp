@@ -145,9 +145,11 @@ MediaAvProtocolOutputRuntimeAuthority::sharedNtpEpoch() const noexcept
 
 MediaNodeProcessResult::DeadlineWait
 MediaAvProtocolOutputRuntimeAuthority::deadlineWait(
-    MediaRunningTime deadline) const
+    MediaRunningTime deadline,
+    MediaNodeDeadlineWakePolicy wakePolicy) const
 {
-    return MediaNodeProcessResult::DeadlineWait(m_group->key(), deadline);
+    return MediaNodeProcessResult::DeadlineWait(
+        m_group->key(), deadline, wakePolicy);
 }
 
 void MediaAvProtocolOutputRuntimeAuthority::markAborted() noexcept
@@ -298,11 +300,13 @@ MediaVideoProtocolOutputRuntimeAuthority::sharedNtpEpoch() const noexcept
 
 MediaNodeProcessResult::DeadlineWait
 MediaVideoProtocolOutputRuntimeAuthority::deadlineWait(
-    MediaRunningTime deadline) const
+    MediaRunningTime deadline,
+    MediaNodeDeadlineWakePolicy wakePolicy) const
 {
     return MediaNodeProcessResult::DeadlineWait(
         m_steadyAnchor +
-        std::chrono::nanoseconds(deadline.nanoseconds()));
+        std::chrono::nanoseconds(deadline.nanoseconds()),
+        wakePolicy);
 }
 
 void MediaVideoProtocolOutputRuntimeAuthority::markAborted() noexcept

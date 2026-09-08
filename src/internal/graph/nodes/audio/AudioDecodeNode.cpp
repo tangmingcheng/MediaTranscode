@@ -3,13 +3,17 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
+#include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 extern "C" {
 #include <libavutil/error.h>
@@ -69,6 +73,7 @@ void AudioDecodeLineageState::clearLineageStorage() noexcept
 {
     receivePending = false;
     pendingPacket.reset();
+    pendingPayloadCredit.reset();
     intervals.reset();
     discardPaddingProof.reset();
     activeOrigin.reset();
@@ -145,6 +150,8 @@ void AudioDecodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmp
 void AudioDecodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
+    m_firstPacketDiagnosticEmitted = false;
+    m_firstFrameDiagnosticEmitted = false;
     m_lineageState->resetForLifecycle();
 }
 
@@ -212,11 +219,33 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument(
                 "AudioDecodeNode requires an FFmpeg packet"));
     }
+    if (!m_firstPacketDiagnosticEmitted) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "audio_decode_trace stage=first_packet");
+        m_firstPacketDiagnosticEmitted = true;
+    }
     ::media::ffmpeg::PacketPtr pendingPacket(av_packet_clone(packet));
     if (!pendingPacket) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::allocationFailed(
                 "AudioDecodeNode failed to retain packet ownership"));
+    }
+    const auto& inputPayloadCredit =
+        FFmpegPacketView::payloadCredit(resolved.value().packet);
+    if (!inputPayloadCredit && context.payloadCreditsRequired()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "AudioDecodeNode input packet lacks payload credit ownership"));
+    }
+    if (inputPayloadCredit) {
+        auto opaque = makeMediaFfmpegCodecOpaque(inputPayloadCredit);
+        if (!opaque) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                opaque.error());
+        }
+        pendingPacket->opaque_ref = opaque.value();
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
@@ -298,6 +327,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         m_lineageState->discardPaddingProof = incomingDiscardPadding;
     }
     m_lineageState->pendingPacket = std::move(pendingPacket);
+    m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     return submitPendingPacket(context);
 }
 
@@ -332,6 +362,7 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
     }
     if (sendRet == 0) {
         m_lineageState->pendingPacket.reset();
+        m_lineageState->pendingPayloadCredit.reset();
     }
 
     auto receiveStatus = receiveFrames(context);
@@ -344,6 +375,11 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 ::media::Result<bool> AudioDecodeNode::receiveFrames(MediaGraphExecutionContext& context)
 {
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
+        if (!reservation) {
+            return ::media::Result<bool>::failure(reservation.error());
+        }
         auto frame = ::media::ffmpeg::makeFrame();
         if (!frame) {
             return ::media::Result<bool>::failure(
@@ -360,6 +396,15 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 
         const int decodedSamples = frame->nb_samples;
         const int decodedRate = frame->sample_rate;
+        if (!m_firstFrameDiagnosticEmitted) {
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "audio_decode_trace stage=first_frame samples=" +
+                    std::to_string(decodedSamples) + " rate=" +
+                    std::to_string(decodedRate));
+            m_firstFrameDiagnosticEmitted = true;
+        }
         if (!codecContext() || decodedRate <= 0 ||
             decodedRate != codecContext()->sample_rate) {
             return ::media::Result<bool>::failure(
@@ -370,6 +415,18 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }
+        const AVFrame* decodedFrame = FFmpegFrameView::frame(buffer.value());
+        auto footprint = decodedFrame
+            ? MediaFramePayloadFootprint::logicalBytes(
+                  *decodedFrame, MediaStreamKind::Audio)
+            : ::media::Result<std::uint64_t>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "AudioDecodeNode wrapped frame is unavailable"));
+        if (!footprint) return ::media::Result<bool>::failure(footprint.error());
+        if (auto status = reservation.value().shrinkToActual(footprint.value());
+            !status) return ::media::Result<bool>::failure(status.error());
+        if (auto status = reservation.value().attachTo(*buffer.value()); !status)
+            return ::media::Result<bool>::failure(status.error());
 
         if (codecContext()->pkt_timebase.num > 0 && codecContext()->pkt_timebase.den > 0) {
             MediaTimeDescriptor timeDescriptor;

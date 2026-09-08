@@ -1,18 +1,24 @@
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
 
+#include "internal/graph/nodes/input/MediaRtpIngressNodePlanDecoder.h"
+
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 #include "internal/graph/time/MediaSteadyClock.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 #include <chrono>
 #include <algorithm>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -94,6 +100,16 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         m_packets.pop_front();
         return processProgress(emitOutput(context, "packet", packet));
     }
+    if (!m_pendingRtpItems.empty()) {
+        if (auto status = drainPendingRtpItems(context); !status) {
+            return processProgress(status);
+        }
+        if (!m_packets.empty()) {
+            MediaBufferRef packet = std::move(m_packets.front());
+            m_packets.pop_front();
+            return processProgress(emitOutput(context, "packet", packet));
+        }
+    }
     const auto now = std::chrono::steady_clock::now();
     const std::int64_t nowNs = mediaSteadyClockNowNs();
     if (auto status = queueClockTransition(context, nowNs); !status) {
@@ -137,7 +153,66 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized(
                 "raw RTP receiver is unavailable"));
     std::int64_t observedAtNs = 0;
-    if (m_preparedReceiver) {
+    if (m_preparedReceiver &&
+        m_preparedReceiver->preparedReplayDrained()) {
+        if (!m_runtimeIngressBatch) {
+            auto receivedBatch = m_preparedReceiver->receiveRuntimeBatch(
+                receiveTimeoutMs);
+            if (!receivedBatch) {
+                datagram = ::media::Result<MediaRtpUdpDatagram>::failure(
+                    receivedBatch.error());
+            } else {
+                m_runtimeIngressBatch.emplace(
+                    std::move(receivedBatch).value());
+                m_runtimeIngressBatchIndex = 0;
+                const auto entries = m_runtimeIngressBatch->entries();
+                std::size_t batchBytes = 0;
+                for (const auto& entry : entries) {
+                    batchBytes += entry.bytes.size();
+                }
+                ++m_runtimeIngressBatches;
+                m_runtimeIngressDatagrams += entries.size();
+                m_runtimeIngressBytes += batchBytes;
+                m_runtimeIngressMaximumBatchDatagrams = (std::max)(
+                    m_runtimeIngressMaximumBatchDatagrams, entries.size());
+                m_runtimeIngressMaximumBatchBytes = (std::max)(
+                    m_runtimeIngressMaximumBatchBytes, batchBytes);
+            }
+        }
+        if (m_runtimeIngressBatch) {
+            const auto entries = m_runtimeIngressBatch->entries();
+            while (m_runtimeIngressBatchIndex < entries.size() &&
+                   m_events.empty() && m_packets.empty()) {
+                const auto& entry = entries[m_runtimeIngressBatchIndex++];
+                const auto bytes = std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(entry.bytes.data()),
+                    entry.bytes.size());
+                auto status = entry.channel == MediaRtpUdpChannel::Rtp
+                    ? processRtp(context, bytes,
+                                 entry.observedAtNanoseconds)
+                    : processRtcp(context, bytes,
+                                  entry.observedAtNanoseconds);
+                if (!status) return processProgress(status);
+            }
+            if (m_runtimeIngressBatchIndex == entries.size()) {
+                m_runtimeIngressBatch.reset();
+                m_runtimeIngressBatchIndex = 0;
+            }
+            if (!m_events.empty()) {
+                auto event = std::move(m_events.front());
+                m_events.pop_front();
+                return processProgress(emitOutput(
+                    context, event.first, event.second));
+            }
+            if (!m_packets.empty()) {
+                MediaBufferRef packet = std::move(m_packets.front());
+                m_packets.pop_front();
+                return processProgress(emitOutput(
+                    context, "packet", packet));
+            }
+            return processProgress();
+        }
+    } else if (m_preparedReceiver) {
         auto prepared = m_preparedReceiver->receive(receiveTimeoutMs);
         if (prepared) {
             observedAtNs = prepared.value().observedAtNs;
@@ -177,9 +252,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         }
         return processProgress(::media::Status::failure(datagram.error()));
     }
-    auto status = datagram.value().channel == MediaRtpUdpChannel::Rtp
-        ? processRtp(context, std::move(datagram).value(), observedAtNs)
-        : processRtcp(context, std::move(datagram).value(), observedAtNs);
+    const MediaRtpUdpChannel channel = datagram.value().channel;
+    const auto bytes = std::span<const std::uint8_t>(
+        datagram.value().bytes.data(), datagram.value().bytes.size());
+    auto status = channel == MediaRtpUdpChannel::Rtp
+        ? processRtp(context, bytes, observedAtNs)
+        : processRtcp(context, bytes, observedAtNs);
     if (!status) return processProgress(status);
     if (!m_events.empty()) {
         auto event = std::move(m_events.front());
@@ -221,9 +299,19 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto channels = requiredNonNegativeIntNodeOption(options, "RawRtpInputNode", "rtp.channels");
     auto accessUnitDuration = requiredNonNegativeIntNodeOption(
         options, "RawRtpInputNode", "rtp.access_unit_duration_ticks");
+    auto maximumAccessUnitBytes = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.maximum_access_unit_bytes");
+    auto maximumAccessUnitsPerPush = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtp.maximum_access_units_per_push");
+    auto accessUnitSizeAuthority = requiredNodeOption(
+        options, "RawRtpInputNode", "rtp.access_unit_size_authority");
+    auto accessUnitCompletionAuthority = requiredNodeOption(
+        options, "RawRtpInputNode", "rtp.access_unit_completion_authority");
     if (!family || !address || !rtpPort || !rtcpPort || !payloadType || !clockRate || !receiveBuffer ||
         !datagramBytes || !reorderWindow || !reorderDelay || !readTimeout || !requireSr || !requireCname ||
-        !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration) {
+        !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration ||
+        !maximumAccessUnitBytes || !maximumAccessUnitsPerPush ||
+        !accessUnitSizeAuthority || !accessUnitCompletionAuthority) {
         const ::media::ErrorInfo* error = nullptr;
         if (!family) error = &family.error(); else if (!address) error = &address.error(); else if (!rtpPort) error = &rtpPort.error();
         else if (!rtcpPort) error = &rtcpPort.error(); else if (!payloadType) error = &payloadType.error(); else if (!clockRate) error = &clockRate.error();
@@ -234,7 +322,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         else if (!maximumExtrapolation) error = &maximumExtrapolation.error();
         else if (!compositionMode) error = &compositionMode.error(); else if (!streamKind) error = &streamKind.error(); else if (!codec) error = &codec.error();
         else if (!fmtp) error = &fmtp.error();
-        else if (!channels) error = &channels.error(); else error = &accessUnitDuration.error();
+        else if (!channels) error = &channels.error();
+        else if (!accessUnitDuration) error = &accessUnitDuration.error();
+        else if (!maximumAccessUnitBytes) error = &maximumAccessUnitBytes.error();
+        else if (!maximumAccessUnitsPerPush) error = &maximumAccessUnitsPerPush.error();
+        else if (!accessUnitSizeAuthority) error = &accessUnitSizeAuthority.error();
+        else error = &accessUnitCompletionAuthority.error();
         return ::media::Status::failure(*error);
     }
     auto rtcpComposition = parseMediaRtcpCompositionMode(compositionMode.value());
@@ -244,6 +337,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         lossPolicy = MediaRtpClockLossPolicy::FailOnDegraded;
     } else if (clockLossPolicy.value() == "fail_on_expired") {
         lossPolicy = MediaRtpClockLossPolicy::FailOnExpired;
+    } else if (clockLossPolicy.value() == "wait_for_evidence") {
+        lossPolicy = MediaRtpClockLossPolicy::WaitForEvidence;
     } else {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RawRtpInputNode clock loss policy is invalid"));
@@ -252,14 +347,43 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         (family.value() != "ipv4" && family.value() != "ipv6")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RawRtpInputNode planned numeric option is out of range"));
     }
+    auto waitForKeyFrame = requiredBoolNodeOption(
+        options, "RawRtpInputNode", "rtp.wait_for_keyframe_after_loss");
+    if (!waitForKeyFrame) return ::media::Status::failure(waitForKeyFrame.error());
     m_config = MediaRtpDepacketizerConfig{
         streamKind.value(), codec.value(), fmtp.value(),
-        static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(), accessUnitDuration.value()};
-    auto depacketizer = MediaRtpDepacketizerFactory::create(m_config);
+        static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(),
+        accessUnitDuration.value(), waitForKeyFrame.value()};
+    m_accessUnitEnvelope = MediaPreparedRtpAccessUnitEnvelope{
+        m_config.streamKind, m_config.codecName,
+        static_cast<std::uint64_t>(maximumAccessUnitBytes.value()),
+        static_cast<std::uint64_t>(maximumAccessUnitsPerPush.value()),
+        accessUnitSizeAuthority.value(),
+        accessUnitCompletionAuthority.value()};
+    if (auto status = m_accessUnitEnvelope.validate(); !status) {
+        return status;
+    }
+    auto depacketizer = MediaRtpDepacketizerFactory::create(
+        m_config, m_accessUnitEnvelope.maximumAccessUnitBytes);
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
     if (!snapshot) return ::media::Status::failure(snapshot.error());
+    std::optional<MediaRtpIngressPlan> preparedIngressPlan;
     if (m_requiresPreparedInput) {
+        auto ingressPlan = MediaRtpIngressNodePlanDecoder::decode(options);
+        if (!ingressPlan) {
+            return ::media::Status::failure(ingressPlan.error());
+        }
+        if (ingressPlan.value().maximumDatagramBytes() !=
+                static_cast<std::size_t>(datagramBytes.value()) ||
+            ingressPlan.value().socketReceiveCapacityBytes() !=
+                static_cast<std::size_t>(receiveBuffer.value()) ||
+            ingressPlan.value().reorderWindowPackets() !=
+                static_cast<std::size_t>(reorderWindow.value())) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RawRtpInputNode transport options differ from its ingress product"));
+        }
         if (!m_prepared.valid() || !m_prepared.kind() ||
             *m_prepared.kind() != MediaPreparedRealtimeInputKind::RawRtp) {
             return ::media::Status::failure(
@@ -276,6 +400,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "RawRtpInputNode prepared binding has wrong buffer type"));
         }
+        if (auto status = buffer->validateRuntimeIngressPlan(
+                ingressPlan.value()); !status) {
+            return status;
+        }
+        preparedIngressPlan.emplace(std::move(ingressPlan).value());
         auto replay = buffer->beginReplay();
         if (!replay) return ::media::Status::failure(replay.error());
         if (buffer->streamKind() != m_config.streamKind ||
@@ -339,9 +468,19 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             "rtp_fmtp mode=manual codec=" + m_config.codecName +
                 " payload_type=" + std::to_string(m_config.payloadType));
     }
-    m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{
-        static_cast<std::size_t>(reorderWindow.value()), std::chrono::milliseconds(reorderDelay.value()),
-        static_cast<uint8_t>(payloadType.value())});
+    const MediaRtpReorderConfig reorderConfig{
+        static_cast<std::size_t>(reorderWindow.value()),
+        preparedIngressPlan
+            ? std::chrono::nanoseconds(
+                  preparedIngressPlan->maximumReorderDelayNanoseconds())
+            : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::milliseconds(reorderDelay.value())),
+        static_cast<uint8_t>(payloadType.value())};
+    m_reorder = std::make_unique<MediaRtpReorderBuffer>(reorderConfig);
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_reorder window_packets=" + std::to_string(reorderConfig.windowPackets) +
+        " maximum_delay_ns=" + std::to_string(reorderConfig.maximumDelay.count()));
     m_depacketizer = std::move(depacketizer).value();
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
         requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
@@ -354,6 +493,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!schedule) return ::media::Status::failure(schedule.error());
     m_clockSchedule = std::make_unique<MediaRtpClockObservationSchedule>(
         std::move(schedule).value());
+    m_clockLossPolicy = lossPolicy;
     m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
     m_requireCname = requireCname.value();
     m_rtcpCompositionMode = std::move(rtcpComposition).value();
@@ -364,7 +504,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 
 ::media::Status RawRtpInputNode::processRtp(
     MediaGraphExecutionContext& context,
-    MediaRtpUdpDatagram datagram,
+    std::span<const std::uint8_t> datagram,
     std::int64_t observedAtNs)
 {
     if (observedAtNs <= 0) {
@@ -372,8 +512,16 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument(
                 "RawRtpInputNode requires a monotonic RTP arrival time"));
     }
-    auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
+    auto parsed = MediaRtpPacketParser::parse(datagram);
     if (!parsed) return ::media::Status::failure(parsed.error());
+    if (parsed.value().payloadType == m_config.payloadType) {
+        const auto activity = context.inputActivity();
+        if (!activity) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "RTP input requires runtime activity evidence"));
+        }
+        activity->observe(observedAtNs);
+    }
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
     if (auto status = queueClockEvidence(context, observedAtNs); !status) {
@@ -393,13 +541,40 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     MediaRtpReorderResult reordered,
     std::uint64_t generationBeforeObservation)
 {
-    if (!reordered.discontinuities.empty()) {
+    auto nextPacket = reordered.packets.begin();
+    for (const auto& discontinuity : reordered.discontinuities) {
+        // Retain the entire ordered batch before processing can yield to backpressure.
+        while (nextPacket != reordered.packets.end() &&
+               nextPacket->sequenceNumber != discontinuity.resumedSequence) {
+            m_pendingRtpItems.emplace_back(std::move(*nextPacket++));
+        }
+        m_pendingRtpItems.emplace_back(
+            std::pair{discontinuity, generationBeforeObservation});
+    }
+    for (; nextPacket != reordered.packets.end(); ++nextPacket) {
+        m_pendingRtpItems.emplace_back(std::move(*nextPacket));
+    }
+    return drainPendingRtpItems(context);
+}
+
+::media::Status RawRtpInputNode::drainPendingRtpItems(
+    MediaGraphExecutionContext& context)
+{
+    while (!m_pendingRtpItems.empty()) {
+        auto& item = m_pendingRtpItems.front();
+        if (const auto* packet = std::get_if<MediaRtpPacket>(&item)) {
+            if (auto status = processPendingRtpPacket(context, *packet); !status) {
+                return status;
+            }
+            m_pendingRtpItems.pop_front();
+            continue;
+        }
+        const auto& [discontinuity, generationBeforeObservation] =
+            std::get<std::pair<MediaRtpDiscontinuity, std::uint64_t>>(item);
         if (m_clockTracker->generation() == generationBeforeObservation) {
             m_clockTracker->observeContinuityLoss();
         }
         if (m_clockSchedule) m_clockSchedule->reset();
-    }
-    for (const auto& discontinuity : reordered.discontinuities) {
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -416,21 +591,119 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 " generation_after=" +
                 std::to_string(m_clockTracker->generation()));
         m_depacketizer->discontinuity(discontinuity.reason);
+        m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
         if (context.findOutputChannel(nodeId(), "event")) {
             m_events.emplace_back(
                 "event",
                 makeMediaBufferRef<MediaRtpIngressEventBuffer>(
                     discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
+        m_pendingRtpItems.pop_front();
     }
-    for (const MediaRtpPacket& packet : reordered.packets) {
-        auto depacketized = m_depacketizer->push(packet);
-        if (!depacketized) return ::media::Status::failure(depacketized.error());
-        for (MediaRtpAccessUnit& unit : depacketized.value().accessUnits) {
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::processPendingRtpPacket(
+    MediaGraphExecutionContext& context,
+    const MediaRtpPacket& packet)
+{
+    if (m_waitingForClockEvidence) return ::media::Status::success();
+    const std::string codec = lowercaseAscii(m_config.codecName);
+    if ((codec == "h264" || codec == "hevc") &&
+        m_reservedAccessUnitTimestamp &&
+        *m_reservedAccessUnitTimestamp != packet.timestamp) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+    }
+
+    if (m_pendingPayloadReservations.empty()) {
+        std::vector<std::uint64_t> reservationBytes;
+        try {
+            if (codec == "aac") {
+                auto headerPlan = MediaAacRtpAuHeaderPlanner::plan(
+                    packet.payload);
+                if (!headerPlan) {
+                    return ::media::Status::failure(headerPlan.error());
+                }
+                if (headerPlan.value().accessUnits.size() >
+                    m_accessUnitEnvelope.maximumAccessUnitsPerPush) {
+                    return ::media::Status::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "AAC RTP push exceeds its prepared completion bound"));
+                }
+                reservationBytes.reserve(
+                    headerPlan.value().accessUnits.size());
+                for (const auto& accessUnit :
+                     headerPlan.value().accessUnits) {
+                    reservationBytes.push_back(accessUnit.size);
+                }
+            } else if (codec == "opus") {
+                reservationBytes.push_back(packet.payload.size());
+            } else {
+                reservationBytes.push_back(
+                    m_accessUnitEnvelope.maximumAccessUnitBytes);
+                m_reservedAccessUnitTimestamp = packet.timestamp;
+            }
+        } catch (const std::bad_alloc&) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "RTP payload credit request"));
+        }
+        auto reservations = context.reservePayloadBatch(
+            nodeId(), m_config.streamKind, MediaPayloadKind::Packet,
+            reservationBytes);
+        if (!reservations) {
+            m_reservedAccessUnitTimestamp.reset();
+            return ::media::Status::failure(reservations.error());
+        }
+        m_pendingPayloadReservations = std::move(reservations).value();
+    }
+
+    auto depacketized = m_depacketizer->push(packet);
+    if (!depacketized) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        return ::media::Status::failure(depacketized.error());
+    }
+    auto& accessUnits = depacketized.value().accessUnits;
+    if (accessUnits.size() >
+            m_accessUnitEnvelope.maximumAccessUnitsPerPush ||
+        (!accessUnits.empty() &&
+         accessUnits.size() != m_pendingPayloadReservations.size())) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP depacketizer completion conflicts with its prepared payload reservation"));
+    }
+    if (!accessUnits.empty()) {
+        for (std::size_t index = 0; index < accessUnits.size(); ++index) {
+            MediaRtpAccessUnit& unit = accessUnits[index];
             const bool depacketizedKey =
                 (unit.packet->flags & AV_PKT_FLAG_KEY) != 0;
+            // GStreamer wait-for-keyframe semantics: after loss, admit only a
+            // complete random-access AU before resuming dependent pictures.
+            if (m_waitingForKeyFrame && !depacketizedKey) continue;
+            if (m_waitingForKeyFrame) {
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeNode,
+                    "rtp_recovery state=complete_keyframe_received");
+            }
+            m_waitingForKeyFrame = false;
+            const auto actualBytes =
+                static_cast<std::uint64_t>(unit.packet->size);
             auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind, std::nullopt);
             if (!buffer) return ::media::Status::failure(buffer.error());
+            if (auto status = m_pendingPayloadReservations[index]
+                    .shrinkToActual(actualBytes); !status) {
+                return status;
+            }
+            if (auto status = m_pendingPayloadReservations[index]
+                    .attachTo(*buffer.value()); !status) {
+                return status;
+            }
             if (m_config.streamKind == MediaStreamKind::Video &&
                 depacketizedKey && !m_keyTraceEmitted) {
                 m_keyTraceEmitted = true;
@@ -452,13 +725,18 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             buffer.value()->setFormatDescriptor(std::move(format));
             m_packets.push_back(std::move(buffer).value());
         }
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+    } else if (packet.marker) {
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
     }
     return ::media::Status::success();
 }
 
 ::media::Status RawRtpInputNode::processRtcp(
     MediaGraphExecutionContext& context,
-    MediaRtpUdpDatagram datagram,
+    std::span<const std::uint8_t> datagram,
     std::int64_t observedAtNs)
 {
     if (observedAtNs <= 0) {
@@ -471,7 +749,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized(
                 "RawRtpInputNode requires planned RTCP composition mode"));
     }
-    auto packets = MediaRtcpCompoundParser::parse(datagram.bytes, MediaRtcpCompoundPolicy{
+    auto packets = MediaRtcpCompoundParser::parse(datagram, MediaRtcpCompoundPolicy{
         *m_rtcpCompositionMode, m_requireCname});
     if (!packets) return ::media::Status::failure(packets.error());
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
@@ -497,6 +775,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!update) return ::media::Status::failure(update.error());
     if (!update.value()) return ::media::Status::success();
     const MediaRtcpClockEvidence& evidence = *update.value();
+    m_waitingForClockEvidence = false;
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
@@ -542,6 +821,17 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     const char* age = *transition.value() == MediaRtpClockAgeTransition::Degraded
         ? "degraded"
         : "expired";
+    if (m_clockLossPolicy == MediaRtpClockLossPolicy::WaitForEvidence) {
+        m_waitingForClockEvidence = true;
+        m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
+        m_depacketizer->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("rtp_recovery state=waiting_for_clock_evidence stream=") + stream);
+        return ::media::Status::success();
+    }
     return ::media::Status::failure(::media::ErrorInfo::ioFailure(
         std::string("RTP ") + stream +
         " source clock evidence " + age +
@@ -559,6 +849,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         ? m_preparedReceiver->stop()
         : m_transport.stop();
     m_transport.close();
+    logIngressBatchTelemetry();
     resetState();
     auto baseStatus = FFmpegNodeRuntime::stop(context);
     return !transportStatus ? transportStatus : baseStatus;
@@ -581,6 +872,7 @@ void RawRtpInputNode::abort(MediaGraphExecutionContext& context) noexcept
         (void)m_transport.abort();
     }
     m_transport.close();
+    logIngressBatchTelemetry();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -592,17 +884,49 @@ void RawRtpInputNode::resetState() noexcept
     m_clockTracker.reset();
     m_clockSchedule.reset();
     m_config = {};
+    m_accessUnitEnvelope = {};
+    m_pendingRtpItems.clear();
+    m_pendingPayloadReservations.clear();
+    m_reservedAccessUnitTimestamp.reset();
     m_streamSnapshot.reset();
     m_packets.clear();
     m_events.clear();
     m_preparedReceiver.reset();
+    m_runtimeIngressBatch.reset();
+    m_runtimeIngressBatchIndex = 0;
+    m_runtimeIngressBatches = 0;
+    m_runtimeIngressDatagrams = 0;
+    m_runtimeIngressBytes = 0;
+    m_runtimeIngressMaximumBatchDatagrams = 0;
+    m_runtimeIngressMaximumBatchBytes = 0;
     m_initialized = false;
     m_formatEmitted = false;
     m_keyTraceEmitted = false;
+    m_waitingForKeyFrame = false;
+    m_waitingForClockEvidence = false;
+    m_clockLossPolicy.reset();
     m_requireCname = false;
     m_rtcpCompositionMode.reset();
     m_cancellableReadTimeoutMs = 0;
     m_nextIngressSequence = 1;
+}
+
+void RawRtpInputNode::logIngressBatchTelemetry() const
+{
+    if (m_runtimeIngressBatches == 0) return;
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_ingress_batch stream=" +
+            std::string(m_config.streamKind == MediaStreamKind::Video
+                ? "video" : "audio") +
+            " batches=" + std::to_string(m_runtimeIngressBatches) +
+            " datagrams=" + std::to_string(m_runtimeIngressDatagrams) +
+            " bytes=" + std::to_string(m_runtimeIngressBytes) +
+            " maximum_batch_datagrams=" +
+                std::to_string(m_runtimeIngressMaximumBatchDatagrams) +
+            " maximum_batch_bytes=" +
+                std::to_string(m_runtimeIngressMaximumBatchBytes));
 }
 
 std::uint64_t RawRtpInputNode::nextIngressSequence() noexcept

@@ -1,9 +1,12 @@
 #include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/sync/MediaOutputSchedule.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
+
+#include <sstream>
 
 namespace media::ffmpeg::graph {
 
@@ -74,6 +77,12 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     auto transportLead = requiredPositiveInt64NodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
+    auto protocolPreparationLead = requiredPositiveInt64NodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.protocol_preparation_lead_ns");
+    auto activationLead = requiredPositiveInt64NodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.activation_lead_ns");
     auto pacingEnabled = requiredBoolNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
@@ -88,7 +97,9 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled || !initialGeneration || !session) {
+        !transportLead || !protocolPreparationLead || !activationLead ||
+        !pacingEnabled ||
+        !initialGeneration || !session) {
         const auto& error = !requireKeyFrame ? requireKeyFrame.error()
             : !maximumWait ? maximumWait.error()
             : !packetCapacity ? packetCapacity.error()
@@ -102,6 +113,8 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             : !packetTimeBaseDenominator ? packetTimeBaseDenominator.error()
             : !packetTimingMode ? packetTimingMode.error()
             : !transportLead ? transportLead.error()
+            : !protocolPreparationLead ? protocolPreparationLead.error()
+            : !activationLead ? activationLead.error()
             : !pacingEnabled ? pacingEnabled.error()
             : !initialGeneration ? initialGeneration.error()
             : session.error();
@@ -115,12 +128,12 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     }
     const auto inputs = context.inputChannels(nodeId());
     const auto outputs = context.outputChannels(nodeId());
-    if (inputs.size() != 1 || outputs.size() != 2 ||
+    if (inputs.size() != 1 || outputs.size() < 2 ||
         !context.findInputChannel(nodeId(), "video") ||
         !context.findOutputChannel(nodeId(), "activation") ||
         !context.findOutputChannel(nodeId(), "scheduled_video")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly scheduler requires one video input and exact activation/scheduled outputs"));
+            "VideoOnly scheduler requires one video input and connected activation/scheduled outputs"));
     }
     m_requireKeyFrame = requireKeyFrame.value();
     m_maximumStartupWait =
@@ -128,14 +141,21 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     m_packetCapacity = static_cast<std::size_t>(packetCapacity.value());
     m_maximumUnitBytes = static_cast<std::uint64_t>(maximumUnitBytes.value());
     m_byteCapacity = static_cast<std::uint64_t>(byteCapacity.value());
-    if (m_packetCapacity > m_byteCapacity / m_maximumUnitBytes ||
-        static_cast<std::uint64_t>(m_packetCapacity) * m_maximumUnitBytes !=
-            m_byteCapacity) {
+    if (m_maximumUnitBytes > m_byteCapacity) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoOnly scheduler startup bounds are inconsistent"));
     }
     m_transportLead =
         MediaRunningTime::fromNanoseconds(transportLead.value());
+    m_protocolPreparationLead = MediaRunningTime::fromNanoseconds(
+        protocolPreparationLead.value());
+    m_activationLead =
+        MediaRunningTime::fromNanoseconds(activationLead.value());
+    if (m_protocolPreparationLead > m_transportLead ||
+        m_activationLead < m_transportLead) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoOnly protocol preparation lead exceeds its transport schedule"));
+    }
     m_sourceTimeBase =
         MediaRational{sourceNumerator.value(), sourceDenominator.value()};
     m_outputFrameRate = MediaRational{
@@ -276,7 +296,9 @@ MediaVideoOutputSchedulerNode::emitPending(
     if (now.value() < *m_pendingDeadline) {
         return ::media::Result<MediaNodeProcessResult>::success(
             {MediaNodeProcessState::Waiting,
-             m_authority->deadlineWait(*m_pendingDeadline)});
+             m_authority->deadlineWait(
+                 *m_pendingDeadline,
+                 MediaNodeDeadlineWakePolicy::InputOrDeadline)});
     }
     MediaBufferRef scheduled = std::move(m_pendingScheduled);
     m_pendingDeadline.reset();
@@ -307,7 +329,7 @@ MediaVideoOutputSchedulerNode::onProcess(
                     deadline.error());
             }
             return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waitingUntil(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
                     m_startedAt + std::chrono::nanoseconds(
                         m_maximumStartupWait.nanoseconds())));
         }
@@ -364,7 +386,7 @@ MediaVideoOutputSchedulerNode::onProcess(
                 sourceStart.error());
         }
         auto activation = m_authority->activate(
-            sourceStart.value(), m_transportLead);
+            sourceStart.value(), m_activationLead);
         if (!activation) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 activation.error());
@@ -391,7 +413,19 @@ MediaVideoOutputSchedulerNode::onProcess(
             ::media::ErrorInfo::internalError(
                 "VideoOnly scheduler failed to materialize scheduled AU"));
     }
-    m_pendingDeadline = unit->emitOnMaster();
+    auto ready = m_authority->now();
+    if (!ready) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ready.error());
+    }
+    recordEncodedReady(*unit, ready.value());
+    auto preparationDeadline = unit->emitOnMaster().checkedSubtract(
+        m_protocolPreparationLead);
+    if (!preparationDeadline) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            preparationDeadline.error());
+    }
+    m_pendingDeadline = preparationDeadline.value();
     m_pendingScheduled = std::move(scheduled).value();
     return emitPending(context);
 }
@@ -399,6 +433,7 @@ MediaVideoOutputSchedulerNode::onProcess(
 ::media::Status MediaVideoOutputSchedulerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    emitDiagnostics("stopped");
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -406,9 +441,77 @@ MediaVideoOutputSchedulerNode::onProcess(
 void MediaVideoOutputSchedulerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    emitDiagnostics("aborted");
     if (m_authority) m_authority->markAborted();
     resetState();
     FFmpegNodeRuntime::abort(context);
+}
+
+void MediaVideoOutputSchedulerNode::recordEncodedReady(
+    const MediaScheduledAccessUnit& unit,
+    MediaRunningTime ready) noexcept
+{
+    const auto afterEmit = ready.checkedSubtract(unit.emitOnMaster());
+    if (!afterEmit ||
+        afterEmit.value().nanoseconds() <=
+            m_maximumEncodedReadyAfterEmitNanoseconds) {
+        return;
+    }
+    m_maximumEncodedReadyAfterEmitNanoseconds =
+        afterEmit.value().nanoseconds();
+    m_worstEncodedReadyNanoseconds = ready.nanoseconds();
+    m_worstEncodedEmitNanoseconds = unit.emitOnMaster().nanoseconds();
+    m_worstEncodedDispatchNanoseconds =
+        unit.dispatchOnMaster().nanoseconds();
+    if (m_masterRelease) {
+        const auto afterMasterRelease = ready.checkedSubtract(*m_masterRelease);
+        m_worstEncodedReadyAfterMasterReleaseNanoseconds = afterMasterRelease
+            ? afterMasterRelease.value().nanoseconds() : 0;
+    }
+    if (m_sourceStart) {
+        const auto dtsDelta = unit.canonicalDispatch().checkedSubtract(
+            *m_sourceStart);
+        m_worstEncodedDtsDeltaNanoseconds = dtsDelta
+            ? dtsDelta.value().nanoseconds() : 0;
+    }
+    m_worstEncodedDts = unit.media()->dts();
+    m_worstEncodedSequence = unit.sourceSequence().value();
+}
+
+void MediaVideoOutputSchedulerNode::emitDiagnostics(
+    const char* stage) noexcept
+{
+    if (m_diagnosticsEmitted) return;
+    m_diagnosticsEmitted = true;
+    try {
+        std::ostringstream out;
+        out << "video_output_scheduler stage=" << stage
+            << " activation_lead_ns=" << m_activationLead.nanoseconds()
+            << " transport_lead_ns=" << m_transportLead.nanoseconds()
+            << " protocol_preparation_lead_ns="
+            << m_protocolPreparationLead.nanoseconds()
+            << " source_start_ns="
+            << (m_sourceStart ? m_sourceStart->nanoseconds() : 0)
+            << " master_release_ns="
+            << (m_masterRelease ? m_masterRelease->nanoseconds() : 0)
+            << " maximum_encoded_ready_after_emit_ns="
+            << (m_worstEncodedSequence == 0
+                    ? 0 : m_maximumEncodedReadyAfterEmitNanoseconds)
+            << " worst_ready_ns=" << m_worstEncodedReadyNanoseconds
+            << " worst_emit_ns=" << m_worstEncodedEmitNanoseconds
+            << " worst_dispatch_ns=" << m_worstEncodedDispatchNanoseconds
+            << " worst_ready_after_master_release_ns="
+            << m_worstEncodedReadyAfterMasterReleaseNanoseconds
+            << " worst_packet_dts_delta_ns="
+            << m_worstEncodedDtsDeltaNanoseconds
+            << " worst_packet_dts=" << m_worstEncodedDts
+            << " worst_source_sequence=" << m_worstEncodedSequence;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::Summary,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            out.str());
+    } catch (...) {
+    }
 }
 
 void MediaVideoOutputSchedulerNode::resetState() noexcept
@@ -418,6 +521,8 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_startedMedia = false;
     m_maximumStartupWait = MediaRunningTime::fromNanoseconds(0);
     m_transportLead = MediaRunningTime::fromNanoseconds(0);
+    m_protocolPreparationLead = MediaRunningTime::fromNanoseconds(0);
+    m_activationLead = MediaRunningTime::fromNanoseconds(0);
     m_packetCapacity = 0;
     m_maximumUnitBytes = 0;
     m_byteCapacity = 0;
@@ -434,6 +539,16 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_masterRelease.reset();
     m_lastDispatch.reset();
     m_nextSequence = 1;
+    m_maximumEncodedReadyAfterEmitNanoseconds =
+        (std::numeric_limits<std::int64_t>::min)();
+    m_worstEncodedReadyNanoseconds = 0;
+    m_worstEncodedEmitNanoseconds = 0;
+    m_worstEncodedDispatchNanoseconds = 0;
+    m_worstEncodedReadyAfterMasterReleaseNanoseconds = 0;
+    m_worstEncodedDtsDeltaNanoseconds = 0;
+    m_worstEncodedDts = 0;
+    m_worstEncodedSequence = 0;
+    m_diagnosticsEmitted = false;
 }
 
 } // namespace media::ffmpeg::graph

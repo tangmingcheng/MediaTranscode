@@ -12,6 +12,13 @@ std::uint32_t MediaRtpOutputIdentityPlanner::stableNumeric(
     return hash == 0 ? 1u : hash;
 }
 
+std::uint32_t MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
+    std::string_view identity) noexcept
+{
+    const std::uint32_t constrained = stableNumeric(identity) & 0x7fffffffu;
+    return constrained == 0 ? 1u : constrained;
+}
+
 std::uint16_t MediaRtpOutputIdentityPlanner::stableSequenceNumber(
     std::string_view identity) noexcept
 {

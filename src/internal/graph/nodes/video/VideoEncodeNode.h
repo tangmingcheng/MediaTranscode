@@ -5,12 +5,17 @@
 #include "internal/graph/runtime/ffmpeg/MediaVideoEncoderCodecApi.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 
 #include <set>
 #include <string_view>
 #include <optional>
+#include <deque>
 
 namespace media::ffmpeg::graph {
+
+class MediaGraphPayloadCreditLease;
 
 class VideoEncodeLineageState final : public MediaVideoLineageState {
 public:
@@ -26,8 +31,11 @@ public:
     bool flushSent = false;
     MediaBufferRef flushBuffer;
     ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     std::set<std::uint64_t> lineageGenerations;
+    AVBufferRef* pendingSubmissionLineage = nullptr;
+    std::deque<AVBufferRef*> submissionOrderLineage;
     bool generationStartPending = true;
 
     void bindCodec(MediaBufferRef owner, AVCodecContext* context) noexcept;
@@ -81,11 +89,18 @@ private:
     bool m_firstFrameDiagnosticEmitted = false;
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstPacketDiagnosticEmitted = false;
+    bool m_firstPacketFootprintDiagnosticEmitted = false;
     std::optional<bool> m_sendWouldBlock;
     std::optional<bool> m_forceGenerationStartKeyFrame;
+    std::optional<bool> m_copyOpaqueLineage;
+    MediaVideoEncoderAbortPolicy m_abortPolicy =
+        MediaVideoEncoderAbortPolicy::Unknown;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;
+    std::optional<MediaHardwareDescriptor> m_inputContract;
+    std::uint64_t m_drmPrimeFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
 };
 
 } // namespace media::ffmpeg::graph

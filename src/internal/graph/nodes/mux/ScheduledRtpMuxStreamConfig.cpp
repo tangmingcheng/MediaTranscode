@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/mux/ScheduledRtpMuxStreamConfig.h"
 
-#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+#include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 extern "C" {
@@ -30,12 +30,20 @@ bool validTimeBase(AVRational value) noexcept
     return value.num > 0 && value.den > 0;
 }
 
+bool isDynamicPayloadType(int payloadType) noexcept
+{
+    return payloadType >= 96 && payloadType <= 127;
+}
+
 bool packetizationMatches(MediaScheduledRtpPacketizationMode mode,
                           const AVCodecParameters& parameters) noexcept
 {
     return (mode == MediaScheduledRtpPacketizationMode::H264AnnexB &&
             parameters.codec_type == AVMEDIA_TYPE_VIDEO &&
             parameters.codec_id == AV_CODEC_ID_H264) ||
+           (mode == MediaScheduledRtpPacketizationMode::HevcAnnexB &&
+            parameters.codec_type == AVMEDIA_TYPE_VIDEO &&
+            parameters.codec_id == AV_CODEC_ID_HEVC) ||
            (mode == MediaScheduledRtpPacketizationMode::AacLatm &&
             parameters.codec_type == AVMEDIA_TYPE_AUDIO &&
             parameters.codec_id == AV_CODEC_ID_AAC);
@@ -71,15 +79,18 @@ materializeCodecParameters(
         ::media::Result<::media::ffmpeg::CodecParametersPtr>;
     const AVCodecParameters* source = &parameters;
     BsfPtr normalizer;
-    if (packetizationMode ==
-            MediaScheduledRtpPacketizationMode::H264AnnexB &&
+    if ((packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB ||
+         packetizationMode == MediaScheduledRtpPacketizationMode::HevcAnnexB) &&
         parameters.extradata && parameters.extradata_size > 0) {
+        const bool hevc = packetizationMode ==
+            MediaScheduledRtpPacketizationMode::HevcAnnexB;
         const AVBitStreamFilter* filter = av_bsf_get_by_name(
-            "h264_mp4toannexb");
+            hevc ? "hevc_mp4toannexb" : "h264_mp4toannexb");
         if (!filter) {
             return ParametersResult::failure(
                 ::media::ErrorInfo::unsupported(
-                    "FFmpeg H264 Annex-B codec configuration normalizer is unavailable"));
+                    std::string("FFmpeg ") + (hevc ? "HEVC" : "H264") +
+                    " Annex-B codec configuration normalizer is unavailable"));
         }
         AVBSFContext* raw = nullptr;
         const int allocated = av_bsf_alloc(filter, &raw);
@@ -89,9 +100,9 @@ materializeCodecParameters(
                 allocated < 0
                     ? FFmpegGraphError::fromCode(
                           allocated,
-                          "av_bsf_alloc(scheduled H264 Annex-B configuration)")
+                          "av_bsf_alloc(scheduled video Annex-B configuration)")
                     : ::media::ErrorInfo::allocationFailed(
-                          "scheduled H264 Annex-B configuration"));
+                          "scheduled video Annex-B configuration"));
         }
         const int copied = avcodec_parameters_copy(
             normalizer->par_in, &parameters);
@@ -99,7 +110,7 @@ materializeCodecParameters(
             return ParametersResult::failure(
                 FFmpegGraphError::fromCode(
                     copied,
-                    "avcodec_parameters_copy(scheduled H264 Annex-B input)"));
+                    "avcodec_parameters_copy(scheduled video Annex-B input)"));
         }
         normalizer->time_base_in = streamTimeBase;
         const int initialized = av_bsf_init(normalizer.get());
@@ -107,18 +118,19 @@ materializeCodecParameters(
             return ParametersResult::failure(
                 FFmpegGraphError::fromCode(
                     initialized,
-                    "av_bsf_init(scheduled H264 Annex-B configuration)"));
+                    "av_bsf_init(scheduled video Annex-B configuration)"));
         }
         source = normalizer->par_out;
         if (!source->extradata || source->extradata_size <= 0) {
             return ParametersResult::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "H264 Annex-B configuration normalization produced no parameter sets"));
+                    "Video Annex-B configuration normalization produced no parameter sets"));
         }
-        auto valid = MediaH264AnnexBAccessUnitValidator::validate(
+        auto valid = MediaAnnexBAccessUnitValidator::validate(
             std::span<const std::uint8_t>(
                 source->extradata,
-                static_cast<std::size_t>(source->extradata_size)));
+                static_cast<std::size_t>(source->extradata_size)),
+            hevc ? MediaAnnexBCodec::Hevc : MediaAnnexBCodec::H264);
         if (!valid) return ParametersResult::failure(valid.error());
     }
     auto materialized = ::media::ffmpeg::makeCodecParameters();
@@ -146,13 +158,15 @@ ScheduledRtpMuxStreamConfig::ScheduledRtpMuxStreamConfig(
     AVRational streamTimeBase,
     MediaScheduledRtpPacketizationMode packetizationMode,
     MediaRtpDatagramRewriteIdentity identity,
-    FFmpegDatagramWriteAvioConfig avioConfig) noexcept
+    FFmpegDatagramWriteAvioConfig avioConfig,
+    MediaRtpAccessUnitEmissionContract emissionContract) noexcept
     : m_streamKind(streamKind),
       m_codecParameters(std::move(codecParameters)),
       m_streamTimeBase(streamTimeBase),
       m_packetizationMode(packetizationMode),
       m_identity(identity),
-      m_avioConfig(avioConfig)
+      m_avioConfig(avioConfig),
+      m_emissionContract(std::move(emissionContract))
 {
 }
 
@@ -164,7 +178,8 @@ ScheduledRtpMuxStreamConfig::create(
     MediaScheduledRtpPacketizationMode packetizationMode,
     int payloadType,
     std::uint32_t ssrc,
-    int maximumDatagramBytes)
+    int maximumDatagramBytes,
+    MediaRtpAccessUnitEmissionContract emissionContract)
 {
     if (!isSupportedStreamKind(streamKind) ||
         codecParameters.codec_type != mediaType(streamKind)) {
@@ -174,16 +189,29 @@ ScheduledRtpMuxStreamConfig::create(
     }
     if (codecParameters.codec_id == AV_CODEC_ID_NONE ||
         !packetizationMatches(packetizationMode, codecParameters) ||
-        !validTimeBase(streamTimeBase)) {
+        !validTimeBase(streamTimeBase) ||
+        !isDynamicPayloadType(payloadType)) {
         return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP stream requires matching packetization and a positive time base"));
+                "scheduled RTP stream requires matching packetization, a positive time base, and a dynamic payload type"));
     }
     if (packetizationMode == MediaScheduledRtpPacketizationMode::AacLatm &&
         !isCompleteAacLatmConfig(codecParameters, streamTimeBase)) {
         return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AAC LATM requires sample rate, channel layout, ASC, and time base 1/sample_rate"));
+    }
+    if (emissionContract.maximumAccessUnitPayloadBytes() == 0 ||
+        emissionContract.maximumDatagramsPerAccessUnit() == 0 ||
+        emissionContract.authority().empty() ||
+        emissionContract.packetizationMode() != packetizationMode ||
+        emissionContract.maximumDatagramBytes() !=
+            static_cast<std::size_t>(maximumDatagramBytes) ||
+        ((streamKind == MediaStreamKind::Video) !=
+         emissionContract.packetLayout().has_value())) {
+        return ::media::Result<ScheduledRtpMuxStreamConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP stream requires a matching emission contract"));
     }
     auto identity = MediaRtpDatagramRewriteIdentity::create(payloadType, ssrc);
     if (!identity) {
@@ -209,7 +237,8 @@ ScheduledRtpMuxStreamConfig::create(
             streamTimeBase,
             packetizationMode,
             identity.value(),
-            avioConfig.value()));
+            avioConfig.value(),
+            std::move(emissionContract)));
 }
 
 } // namespace media::ffmpeg::graph

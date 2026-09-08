@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputSessionKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -22,10 +23,6 @@ struct MediaRealtimeVideoStartupPlan final {
     std::uint64_t byteCapacity;
 };
 
-enum class MediaRealtimeVideoTimestampAuthority {
-    DecodeTimestamp
-};
-
 enum class MediaRealtimeVideoPacketTimingMode {
     PacketDuration,
     PlannedCadence
@@ -36,12 +33,13 @@ struct MediaRealtimeVideoTimingPlan final {
     MediaRational outputFrameRate;
     MediaRational scheduledPacketTimeBase;
     MediaRealtimeVideoPacketTimingMode packetTimingMode;
-    MediaRealtimeVideoTimestampAuthority timestampAuthority;
 };
 
 struct MediaRealtimeVideoSchedulingPlan final {
     bool pacingEnabled;
+    MediaRunningTime activationLead;
     MediaRunningTime transportLead;
+    MediaRunningTime protocolPreparationLead;
     std::uint64_t initialGeneration;
 };
 
@@ -56,6 +54,7 @@ struct MediaRealtimeVideoRuntimePlan final {
     MediaProtocolOutputSessionKey sessionKey;
     bool packetCopyNormalizationRequired;
     MediaRealtimeVideoOutputAdapterPlan outputAdapter;
+    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaVideoLineageEdgePolicySet lineageEdgePolicies;

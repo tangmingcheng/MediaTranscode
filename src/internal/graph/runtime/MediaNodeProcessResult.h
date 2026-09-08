@@ -2,6 +2,7 @@
 
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/runtime/threading/MediaNodeDeadlineWakePolicy.h"
 
 #include <chrono>
 #include <optional>
@@ -26,16 +27,21 @@ struct MediaNodeProcessResult {
         };
 
         std::variant<AvSyncMaster, Steady> deadline;
+        MediaNodeDeadlineWakePolicy wakePolicy;
 
         DeadlineWait(MediaAvSyncGroupKey group,
-            MediaRunningTime deadline)
-            : deadline(AvSyncMaster{std::move(group), deadline})
+            MediaRunningTime deadline,
+            MediaNodeDeadlineWakePolicy selectedWakePolicy)
+            : deadline(AvSyncMaster{std::move(group), deadline}),
+              wakePolicy(selectedWakePolicy)
         {
         }
 
         explicit DeadlineWait(
-            std::chrono::steady_clock::time_point deadline)
-            : deadline(Steady{deadline})
+            std::chrono::steady_clock::time_point deadline,
+            MediaNodeDeadlineWakePolicy selectedWakePolicy)
+            : deadline(Steady{deadline}),
+              wakePolicy(selectedWakePolicy)
         {
         }
     };
@@ -53,17 +59,23 @@ struct MediaNodeProcessResult {
         return { MediaNodeProcessState::Waiting, std::nullopt };
     }
 
-    static MediaNodeProcessResult waitingUntil(MediaAvSyncGroupKey group,
-                                               MediaRunningTime deadline)
+    static MediaNodeProcessResult waitingUntilInputOrDeadline(
+        MediaAvSyncGroupKey group,
+        MediaRunningTime deadline)
     {
         return {MediaNodeProcessState::Waiting,
-                DeadlineWait{std::move(group), deadline}};
+                DeadlineWait{
+                    std::move(group), deadline,
+                    MediaNodeDeadlineWakePolicy::InputOrDeadline}};
     }
 
-    static MediaNodeProcessResult waitingUntil(
+    static MediaNodeProcessResult waitingUntilInputOrDeadline(
         std::chrono::steady_clock::time_point deadline)
     {
-        return {MediaNodeProcessState::Waiting, DeadlineWait{deadline}};
+        return {MediaNodeProcessState::Waiting,
+                DeadlineWait{
+                    deadline,
+                    MediaNodeDeadlineWakePolicy::InputOrDeadline}};
     }
 
     static constexpr MediaNodeProcessResult finished() noexcept

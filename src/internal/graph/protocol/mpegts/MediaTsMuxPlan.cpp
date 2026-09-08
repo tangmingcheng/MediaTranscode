@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -10,7 +11,6 @@ namespace {
 constexpr std::uint16_t MinimumAssignablePid = 0x0020;
 constexpr std::uint16_t NullPid = 0x1FFF;
 constexpr std::size_t RtpFixedHeaderBytes = 12;
-constexpr std::size_t MaximumTsPacketsPerDatagram = 7;
 
 ::media::Result<MediaTsMuxPlan> invalid(const char* reason)
 {
@@ -22,16 +22,6 @@ constexpr std::size_t MaximumTsPacketsPerDatagram = 7;
 bool assignablePid(std::uint16_t pid) noexcept
 {
     return pid >= MinimumAssignablePid && pid < NullPid;
-}
-
-bool validH264Layout(MediaTsH264InputLayout layout) noexcept
-{
-    switch (layout) {
-    case MediaTsH264InputLayout::AnnexB:
-    case MediaTsH264InputLayout::LengthPrefixed:
-        return true;
-    }
-    return false;
 }
 
 bool validParameterSetPolicy(MediaTsParameterSetPolicy policy) noexcept
@@ -68,26 +58,41 @@ bool validContinuitySeeds(
 
 } // namespace
 
-::media::Result<std::uint8_t>
+::media::Result<std::uint16_t>
 MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
     std::size_t maximumDatagramBytes)
 {
-    if (maximumDatagramBytes <= RtpFixedHeaderBytes) {
-        return ::media::Result<std::uint8_t>::failure(
+    return maximumPacketsPerDatagram(
+        maximumDatagramBytes, MediaOutputTransportKind::RtpAvp);
+}
+
+::media::Result<std::uint16_t>
+MediaTsMuxPlan::maximumPacketsPerDatagram(
+    std::size_t maximumUdpPayloadBytes,
+    MediaOutputTransportKind transportKind)
+{
+    const auto protocolHeaderBytes =
+        transportKind == MediaOutputTransportKind::RtpAvp
+            ? RtpFixedHeaderBytes
+            : transportKind == MediaOutputTransportKind::UdpDatagrams
+                ? std::size_t{0}
+                : maximumUdpPayloadBytes;
+    if (maximumUdpPayloadBytes <= protocolHeaderBytes) {
+        return ::media::Result<std::uint16_t>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS RTP datagram cannot carry one complete TS packet"));
+                "MPEG-TS datagram cannot carry one complete TS packet"));
     }
     const auto payloadCapacity =
-        maximumDatagramBytes - RtpFixedHeaderBytes;
+        maximumUdpPayloadBytes - protocolHeaderBytes;
     const auto packetCount = payloadCapacity / std::size_t{188};
-    if (packetCount == 0) {
-        return ::media::Result<std::uint8_t>::failure(
+    if (packetCount == 0 ||
+        packetCount > (std::numeric_limits<std::uint16_t>::max)()) {
+        return ::media::Result<std::uint16_t>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS RTP payload would fragment a TS packet"));
+                "MPEG-TS packet geometry is outside the protocol plan range"));
     }
-    return ::media::Result<std::uint8_t>::success(
-        static_cast<std::uint8_t>(
-            (std::min)(packetCount, MaximumTsPacketsPerDatagram)));
+    return ::media::Result<std::uint16_t>::success(
+        static_cast<std::uint16_t>(packetCount));
 }
 
 ::media::Result<MediaTsMuxPlan> MediaTsMuxPlan::create(
@@ -120,21 +125,19 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         return invalid("requires distinct PMT/ES PIDs and an ES PCR PID");
     }
     if (parameters.tableVersion > 31 ||
-        parameters.psiRepeatInterval.nanoseconds() <= 0 ||
-        parameters.psiRepeatInterval <= parameters.clock.pcrInterval) {
+        parameters.timing.psiRepeatInterval().value.nanoseconds() <= 0 ||
+        parameters.timing.psiRepeatInterval().value <=
+            parameters.timing.pcrInterval().value) {
         return invalid("contains an invalid PSI cadence or version");
     }
-    if ((videoOnly && videoOnly->videoStreamType != 0x1B) ||
-        (audioVideo &&
-         (audioVideo->videoStreamType != 0x1B ||
-          audioVideo->audioStreamType != 0x0F))) {
-        return invalid("supports only H.264 video and optional AAC audio stream types");
+    const std::uint8_t programVideoStreamType = videoOnly
+        ? videoOnly->videoStreamType : audioVideo->videoStreamType;
+    if (programVideoStreamType != parameters.video.streamType() ||
+        (audioVideo && audioVideo->audioStreamType != 0x0F)) {
+        return invalid("contains conflicting video or AAC stream types");
     }
-    if (!validH264Layout(parameters.h264InputLayout) ||
-        parameters.h264NalLengthBytes < 1 ||
-        parameters.h264NalLengthBytes > 4 ||
-        !validParameterSetPolicy(parameters.parameterSetPolicy)) {
-        return invalid("contains an invalid H.264 input contract");
+    if (!validParameterSetPolicy(parameters.parameterSetPolicy)) {
+        return invalid("contains an invalid video elementary-stream contract");
     }
     if (audioVideo &&
         (audioVideo->aac.mpegId > 1 ||
@@ -146,12 +149,13 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
          audioVideo->maximumAudioAccessUnitSamples <= 0)) {
         return invalid("contains an invalid AAC ADTS contract");
     }
-    if (parameters.clock.pcrInterval.nanoseconds() <= 0 ||
-        parameters.clock.maximumPcrGap <= parameters.clock.pcrInterval ||
-        parameters.clock.maximumPcrJitter.nanoseconds() <= 0 ||
-        parameters.clock.maximumPcrJitter >= parameters.clock.pcrInterval ||
-        parameters.clock.timestampTimeBaseNumerator != 1 ||
-        parameters.clock.timestampTimeBaseDenominator != 90'000) {
+    const auto clock = parameters.timing.clockPolicy();
+    if (clock.pcrInterval.nanoseconds() <= 0 ||
+        clock.maximumPcrGap <= clock.pcrInterval ||
+        clock.maximumPcrJitter.nanoseconds() <= 0 ||
+        clock.maximumPcrJitter >= clock.pcrInterval ||
+        clock.timestampTimeBaseNumerator != 1 ||
+        clock.timestampTimeBaseDenominator != 90'000) {
         return invalid("contains an invalid output clock policy");
     }
     if (parameters.transportDecodeLead.nanoseconds() <= 0 ||
@@ -162,7 +166,6 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         (videoOnly && !validContinuitySeeds(videoOnly->continuity)) ||
         (audioVideo && !validContinuitySeeds(audioVideo->continuity)) ||
         parameters.maximumPacketsPerDatagram < 1 ||
-        parameters.maximumPacketsPerDatagram > 7 ||
         !validTransportKind(parameters.transportKind)) {
         return invalid("contains an invalid transport contract");
     }
@@ -171,7 +174,8 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
 }
 
 MediaTsMuxPlan::MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept
-    : m_parameters(std::move(parameters))
+    : m_parameters(std::move(parameters)),
+      m_clockPolicy(m_parameters.timing.clockPolicy())
 {
 }
 
@@ -215,7 +219,12 @@ std::uint8_t MediaTsMuxPlan::videoStreamType() const noexcept
 
 const MediaTsOutputClockPolicy& MediaTsMuxPlan::clockPolicy() const noexcept
 {
-    return m_parameters.clock;
+    return m_clockPolicy;
+}
+
+const MediaMpegTsTimingPolicy& MediaTsMuxPlan::timingPolicy() const noexcept
+{
+    return m_parameters.timing;
 }
 
 MediaRunningTime MediaTsMuxPlan::transportDecodeLead() const noexcept

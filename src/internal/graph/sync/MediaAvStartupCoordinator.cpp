@@ -111,13 +111,7 @@ std::size_t MediaAvStartupUnitIdHash::operator()(
 MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
     MediaAvStartupConfig config)
 {
-    const bool videoCapacityOverflow = config.maximumVideoUnitBytes != 0 &&
-        config.videoCapacity > std::numeric_limits<std::uint64_t>::max() /
-                                   config.maximumVideoUnitBytes;
-    const bool audioCapacityOverflow = config.maximumAudioUnitBytes != 0 &&
-        config.audioCapacity > std::numeric_limits<std::uint64_t>::max() /
-                                   config.maximumAudioUnitBytes;
-    if (!config.requireVideoKeyFrame || !config.trimAudioToCommonStart ||
+    if (!config.requireVideoKeyFrame ||
         config.allowDegradedClock ||
         config.maximumWait <= Zero || config.preroll <= Zero ||
         config.keyFrameWait <= Zero || config.maximumAudioTrim <= Zero ||
@@ -133,13 +127,8 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         config.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
         config.videoByteCapacity == 0 || config.audioByteCapacity == 0 ||
         config.maximumVideoUnitBytes == 0 || config.maximumAudioUnitBytes == 0 ||
-        videoCapacityOverflow || audioCapacityOverflow ||
-        (!videoCapacityOverflow &&
-         config.videoByteCapacity != static_cast<std::uint64_t>(config.videoCapacity) *
-                                         config.maximumVideoUnitBytes) ||
-        (!audioCapacityOverflow &&
-         config.audioByteCapacity != static_cast<std::uint64_t>(config.audioCapacity) *
-                                         config.maximumAudioUnitBytes) ||
+        config.maximumVideoUnitBytes > config.videoByteCapacity ||
+        config.maximumAudioUnitBytes > config.audioByteCapacity ||
         config.maximumVideoUnitBytes >
             static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
         config.maximumAudioUnitBytes >
@@ -427,20 +416,32 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
             {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
     }
     const auto& window = *selected.value();
-    auto audioTrimTime = window.sourceStart.checkedSubtract(
-        *window.audio->presentationTime);
-    if (!audioTrimTime || audioTrimTime.value() < Zero ||
-        audioTrimTime.value() > m_config.maximumAudioTrim) {
-        auto failed = markFailed(MediaAvSyncErrorCode::AudioTrimLimitExceeded,
-                                 "audio trim exceeds planned bound");
-        return MediaAvSyncResult<MediaAvStartupDecision>::failure(
-            failed.error());
-    }
-    auto trim = calculateMediaAvAudioTrimSamples(
-        window.sourceStart, *window.audio->audio);
-    if (!trim) {
-        auto failed = markFailed(MediaAvSyncErrorCode::AudioTrimLimitExceeded,
-                                 trim.error().message);
+    std::uint32_t trimLeadingSamples = 0;
+    if (m_config.trimAudioToCommonStart) {
+        auto audioTrimTime = window.sourceStart.checkedSubtract(
+            *window.audio->presentationTime);
+        if (!audioTrimTime || audioTrimTime.value() < Zero ||
+            audioTrimTime.value() > m_config.maximumAudioTrim) {
+            auto failed = markFailed(
+                MediaAvSyncErrorCode::AudioTrimLimitExceeded,
+                "audio trim exceeds planned bound");
+            return MediaAvSyncResult<MediaAvStartupDecision>::failure(
+                failed.error());
+        }
+        auto trim = calculateMediaAvAudioTrimSamples(
+            window.sourceStart, *window.audio->audio);
+        if (!trim) {
+            auto failed = markFailed(
+                MediaAvSyncErrorCode::AudioTrimLimitExceeded,
+                trim.error().message);
+            return MediaAvSyncResult<MediaAvStartupDecision>::failure(
+                failed.error());
+        }
+        trimLeadingSamples = trim.value();
+    } else if (*window.audio->presentationTime < window.sourceStart) {
+        auto failed = markFailed(
+            MediaAvSyncErrorCode::AudioTrimLimitExceeded,
+            "complete access-unit startup selected audio before the epoch");
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(
             failed.error());
     }
@@ -452,7 +453,7 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
     purged.insert(purged.end(), audioPurged.begin(), audioPurged.end());
     m_video->appendSuffixSelections(window.video, 0, batch.video,
                                     m_lastAttemptSelectionWork);
-    m_audio->appendSuffixSelections(window.audio, trim.value(), batch.audio,
+    m_audio->appendSuffixSelections(window.audio, trimLeadingSamples, batch.audio,
                                     m_lastAttemptSelectionWork);
     auto releaseTime = observedAt.checkedAdd(m_config.outputLead);
     if (!releaseTime) {

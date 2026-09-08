@@ -4,6 +4,8 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +20,20 @@ enum class MediaGraphSchedulerState {
     Stopping,
     Stopped,
     Aborted
+};
+
+struct MediaGraphSchedulerNodeIdHash final {
+    std::size_t operator()(std::uint32_t value) const noexcept
+    {
+        return static_cast<std::size_t>(value);
+    }
+};
+
+struct MediaGraphSchedulerNodeIdEqual final {
+    bool operator()(std::uint32_t left, std::uint32_t right) const noexcept
+    {
+        return left == right;
+    }
 };
 
 class MediaGraphScheduler final {
@@ -49,8 +65,13 @@ public:
     bool running() const noexcept;
 
 private:
-    std::unordered_map<uint32_t, std::unique_ptr<MediaRuntimeNode>> m_nodes;
-    std::unordered_set<uint32_t> m_finishedNodes;
+    std::unordered_map<std::uint32_t,
+                       std::unique_ptr<MediaRuntimeNode>,
+                       MediaGraphSchedulerNodeIdHash,
+                       MediaGraphSchedulerNodeIdEqual> m_nodes;
+    std::unordered_set<std::uint32_t,
+                       MediaGraphSchedulerNodeIdHash,
+                       MediaGraphSchedulerNodeIdEqual> m_finishedNodes;
     MediaGraphSchedulerState m_state = MediaGraphSchedulerState::Idle;
 };
 

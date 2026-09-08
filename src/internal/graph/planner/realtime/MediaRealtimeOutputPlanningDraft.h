@@ -1,8 +1,11 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
-#include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
+#include "internal/graph/protocol/mpegts/MediaMpegTsTimingPolicy.h"
+#include "internal/graph/protocol/rtp/MediaRtpRemoteEndpointPair.h"
+#include "internal/graph/time/MediaRunningTime.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,18 +16,19 @@ struct MediaRealtimeScheduledRtpOutputPlanningDraft final {
     std::string url;
     int packetSize;
     std::string mediaId;
-    bool writePacingEnabled = false;
-    std::int64_t writePacingBytesPerSecond = 0;
-    std::int64_t writePacingBurstBytes = 0;
-    std::optional<MediaRtpUdpSenderConfig> scheduledTransport;
+    std::optional<MediaRtpRemoteEndpointPair> scheduledTransport;
     std::optional<MediaScheduledRtpPacketizationPlan> scheduledPacketization;
 };
 
 struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::string url;
     std::string mediaId;
-    std::optional<MediaRtpUdpSenderConfig> rtpTransport;
+    std::optional<MediaRtpRemoteEndpointPair> rtpTransport;
+    std::optional<std::size_t> maximumDatagramBytes;
     std::string sdpPath;
+    std::optional<MediaRunningTime> transportDecodeLead;
+    std::optional<MediaRunningTime> startupEmissionPreroll;
+    std::optional<MediaMpegTsTimingPolicy> timingPolicy;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {

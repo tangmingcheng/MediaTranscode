@@ -6,7 +6,7 @@ namespace media::ffmpeg::graph {
 
 enum class MediaAvStartupVideoPreparationRole {
     ExtractorFeed,
-    FilterReadiness,
+    OutputReadiness,
     SequencerActivation
 };
 
@@ -65,14 +65,14 @@ public:
             return wrongRole();
         return m_state->commitVideoUnit(generation, releaseIdentity, index);
     }
-    ::media::Status markFilterReady(
+    ::media::Status markOutputReady(
         std::uint64_t generation,
         std::uint64_t releaseIdentity,
         MediaOutputCapacityReservationHandle reservation)
     {
-        if (m_role != MediaAvStartupVideoPreparationRole::FilterReadiness)
+        if (m_role != MediaAvStartupVideoPreparationRole::OutputReadiness)
             return wrongRole();
-        return m_state->markFilterReady(
+        return m_state->markOutputReady(
             generation, releaseIdentity, std::move(reservation));
     }
     ::media::Status registerExtractorOutputs(
@@ -123,12 +123,12 @@ public:
             return wrongRole();
         return m_state->bindSequencerWakeup(wakeup);
     }
-    ::media::Status bindFilterWakeup(
+    ::media::Status bindOutputWakeup(
         const std::shared_ptr<MediaNodeWakeup>& wakeup)
     {
-        if (m_role != MediaAvStartupVideoPreparationRole::FilterReadiness)
+        if (m_role != MediaAvStartupVideoPreparationRole::OutputReadiness)
             return wrongRole();
-        return m_state->bindFilterWakeup(wakeup);
+        return m_state->bindOutputWakeup(wakeup);
     }
 
 private:

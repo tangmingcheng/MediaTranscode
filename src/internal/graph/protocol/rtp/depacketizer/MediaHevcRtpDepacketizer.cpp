@@ -3,15 +3,6 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::uint8_t StartCode[] = {0, 0, 0, 1};
-
-void appendNal(std::vector<std::uint8_t>& output,
-               std::span<const std::uint8_t> nal)
-{
-    output.insert(output.end(), std::begin(StartCode), std::end(StartCode));
-    output.insert(output.end(), nal.begin(), nal.end());
-}
-
 bool keyType(std::uint8_t type) noexcept
 {
     return type >= 16 && type <= 21;
@@ -20,8 +11,9 @@ bool keyType(std::uint8_t type) noexcept
 } // namespace
 
 MediaHevcRtpDepacketizer::MediaHevcRtpDepacketizer(
-    MediaRtpDepacketizerConfig config)
-    : m_config(std::move(config)), m_nalParser(m_config.payloadType)
+    MediaRtpDepacketizerConfig config, std::size_t maximumAccessUnitBytes)
+    : m_config(std::move(config)), m_maximumAccessUnitBytes(maximumAccessUnitBytes),
+      m_nalParser(m_config.payloadType)
 {
 }
 
@@ -40,9 +32,16 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
         !m_accessUnit.empty()) {
         discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
     }
+    if (!m_continuity.accept(packet.timestamp)) {
+        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+    }
     if (!m_timestamp) m_timestamp = packet.timestamp;
-
-    auto parsed = m_nalParser.push(packet);
+    auto capacity = rtpAccessUnitNalCapacity(
+        m_accessUnit.size(), m_maximumAccessUnitBytes);
+    if (!capacity) {
+        return ::media::Result<MediaRtpDepacketizerResult>::failure(capacity.error());
+    }
+    auto parsed = m_nalParser.push(packet, capacity.value());
     if (!parsed) {
         return ::media::Result<MediaRtpDepacketizerResult>::failure(
             parsed.error());
@@ -61,7 +60,10 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
         const std::uint8_t type = static_cast<std::uint8_t>(
             (bytes[0] >> 1) & 0x3f);
         m_keyFrame = m_keyFrame || keyType(type);
-        appendNal(m_accessUnit, bytes);
+        if (auto status = appendRtpAccessUnitNal(
+                m_accessUnit, bytes, m_maximumAccessUnitBytes); !status) {
+            return ::media::Result<MediaRtpDepacketizerResult>::failure(status.error());
+        }
     }
     if (!packet.marker) {
         return ::media::Result<MediaRtpDepacketizerResult>::success({});
@@ -96,6 +98,7 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
 void MediaHevcRtpDepacketizer::discontinuity(
     MediaRtpDiscontinuityReason) noexcept
 {
+    m_continuity.markLost();
     m_nalParser.discontinuity();
     m_accessUnit.clear();
     m_timestamp.reset();

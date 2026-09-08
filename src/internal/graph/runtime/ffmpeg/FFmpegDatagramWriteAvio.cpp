@@ -122,7 +122,7 @@ FFmpegDatagramWriteAvio::~FFmpegDatagramWriteAvio()
 }
 
 int FFmpegDatagramWriteAvio::writePacket(void* opaque,
-                                         const std::uint8_t* bytes,
+                                         FFmpegAvioWritePacketByte* bytes,
                                          int size) noexcept
 {
     auto* self = static_cast<FFmpegDatagramWriteAvio*>(opaque);

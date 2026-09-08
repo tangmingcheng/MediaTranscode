@@ -53,7 +53,7 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     request.profile = profile.value();
     const bool encoderOnlyRequest = options.rateControl != MediaRateControlMode::Auto ||
         options.requestedBitrateKbps || options.requestedMinBitrateKbps ||
-        options.requestedMaxBitrateKbps || options.requestedBufferSizeKbits ||
+        options.requestedMaxBitrateKbps ||
         options.requestedQuality || !options.requestedPreset.empty();
     const bool formatChange = options.requestedSampleRate || options.requestedChannels;
     if (!request.profile && targetCodec == "aac" &&
@@ -69,7 +69,6 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     request.bitrateKbps = options.requestedBitrateKbps;
     request.minBitrateKbps = options.requestedMinBitrateKbps;
     request.maxBitrateKbps = options.requestedMaxBitrateKbps;
-    request.bufferSizeKbits = options.requestedBufferSizeKbits;
     request.quality = options.requestedQuality;
     request.preset = options.requestedPreset;
     return ::media::Result<MediaResolvedAudioRequest>::success(std::move(request));
@@ -150,10 +149,25 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     plan.sourceCodecName = source.codecName;
     plan.branchMode = output.value().branchMode();
     plan.monotonicPacketTimestamps = plan.branchMode == MediaBranchMode::CopyPacket;
+    if (plan.branchMode == MediaBranchMode::CopyPacket) {
+        plan.maximumAccessUnitSamples = inputInfo.maximumAccessUnitSamples;
+    }
     plan.reason = plan.branchMode == MediaBranchMode::CopyPacket
-        ? "copy_source_matches_resolved_output" : "transcode_source_differs_from_resolved_output";
+        ? "copy_source_matches_resolved_output"
+        : (options.outputRequirement.requireFrameTranscode
+               ? "transcode_required_by_output_frame_contract"
+               : "transcode_source_differs_from_resolved_output");
     plan.resolvedOutput = std::move(output).value();
-    if (inputInfo.selectedDecoder) {
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
+        if (!encoder || !encoder->preparedEmission) {
+            return ::media::Result<MediaAudioPipelinePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "audio transcode plan lacks opened encoder emission readback"));
+        }
+        plan.preparedEmission = encoder->preparedEmission;
+    }
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame &&
+        inputInfo.selectedDecoder) {
         plan.selectedDecoder = std::move(inputInfo.selectedDecoder);
         auto resampler = MediaAudioResamplerCapabilityProvider::verify(
             *plan.selectedDecoder, *plan.resolvedOutput);

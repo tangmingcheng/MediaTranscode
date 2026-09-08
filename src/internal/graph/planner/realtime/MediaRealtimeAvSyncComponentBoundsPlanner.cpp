@@ -44,6 +44,29 @@ MediaRealtimeAvSyncComponentBoundsPlanner::plan(
     const MediaGraphQueueParameters& queues,
     const MediaAudioPipelinePlan& audio)
 {
+    if (audio.branchMode == MediaBranchMode::CopyPacket) {
+        if (!audio.maximumAccessUnitSamples ||
+            *audio.maximumAccessUnitSamples <= 0 ||
+            audio.selectedDecoder || audio.selectedResampler) {
+            return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "synchronized packet copy requires only an access-unit sample bound"));
+        }
+        auto scheduler = checkedCapacitySamples(
+            queues.mux, *audio.maximumAccessUnitSamples, "scheduler queue");
+        if (!scheduler) {
+            return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+                scheduler.error());
+        }
+        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::success(
+            MediaSynchronizedAudioPacketCopyBounds{
+                *audio.maximumAccessUnitSamples, scheduler.value()});
+    }
+    if (audio.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "synchronized audio requires copy or frame transcode"));
+    }
     if (!audio.selectedDecoder || !audio.selectedResampler ||
         !audio.resolvedOutput ||
         audio.resolvedOutput->codecFrameSamples() <= 0) {
@@ -92,7 +115,7 @@ MediaRealtimeAvSyncComponentBoundsPlanner::plan(
             mailbox.error());
     }
     return ::media::Result<MediaRealtimeAvSyncComponentBounds>::success(
-        MediaRealtimeAvSyncComponentBounds{
+        MediaSynchronizedAudioFrameTranscodeBounds{
             decoderDelay.value(), decode.value(), resample.value(),
             encode.value(), scheduler.value(), mailbox.value(),
             resamplerBlock, queues.metadata});

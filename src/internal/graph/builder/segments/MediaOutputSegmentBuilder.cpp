@@ -83,7 +83,7 @@ const char* boolOption(bool value) noexcept
                 options.expectVideo,
                 options.expectAudio,
                 *options.muxSessionKind,
-                true});
+                true, false});
         if (!mux) {
             return ::media::Result<FileOutputSegment>::failure(
                 mux.error());

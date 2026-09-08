@@ -8,6 +8,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ struct MediaRtpDepacketizerConfig final {
     int clockRate = 0;
     int channels = 0;
     int accessUnitDurationRtpTicks = 0;
+    std::optional<bool> waitForKeyFrameAfterLoss;
 };
 
 struct MediaRtpAccessUnit final {
@@ -39,6 +41,12 @@ public:
     virtual ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) = 0;
     virtual void discontinuity(MediaRtpDiscontinuityReason reason) noexcept = 0;
 };
+
+::media::Result<std::size_t> rtpAccessUnitNalCapacity(
+    std::size_t assembledBytes, std::size_t maximumAccessUnitBytes);
+::media::Status appendRtpAccessUnitNal(
+    std::vector<std::uint8_t>& output, std::span<const std::uint8_t> nal,
+    std::size_t maximumAccessUnitBytes);
 
 ::media::Result<MediaRtpAccessUnit> makeRtpAccessUnit(std::vector<uint8_t> bytes,
                                                       uint32_t rtpTimestamp,

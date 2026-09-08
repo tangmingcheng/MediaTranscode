@@ -71,6 +71,13 @@ void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
         }
     }
 
+    auto reservation = context.reservePayload(
+        nodeId(), m_streamKind, MediaPayloadKind::Packet);
+    if (!reservation) {
+        return processProgress(
+            ::media::Status::failure(reservation.error()));
+    }
+
     auto packetInput = tryPopInputOptional(context, "packet");
     if (!packetInput) {
         return ::media::Result<MediaNodeProcessResult>::failure(packetInput.error());
@@ -85,7 +92,8 @@ void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
         return input->isEof() ? processFinished(status) : processProgress(status);
     }
 
-    auto normalized = normalizePacket(input);
+    auto normalized = normalizePacket(
+        input, std::move(reservation).value());
     if (!normalized) {
         return ::media::Result<MediaNodeProcessResult>::failure(normalized.error());
     }
@@ -171,7 +179,9 @@ void PacketNormalizeNode::releaseInputSnapshots() noexcept
     return ::media::Status::success();
 }
 
-::media::Result<MediaBufferRef> PacketNormalizeNode::normalizePacket(const MediaBufferRef& buffer)
+::media::Result<MediaBufferRef> PacketNormalizeNode::normalizePacket(
+    const MediaBufferRef& buffer,
+    MediaGraphPayloadReservation reservation)
 {
     if (!m_sourceStream || m_sourceStreamIndex == invalidMediaStreamIndex) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -192,6 +202,19 @@ void PacketNormalizeNode::releaseInputSnapshots() noexcept
     auto cloned = FFmpegBufferFactory::clonePacket(sourcePacket, m_streamKind);
     if (!cloned) {
         return cloned;
+    }
+
+    const auto footprint = cloned.value()->payloadFootprintBytes();
+    if (!footprint || *footprint == 0) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "PacketNormalizeNode cloned packet lacks an exact footprint"));
+    }
+    if (auto status = reservation.shrinkToActual(*footprint); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
+    if (auto status = reservation.attachTo(*cloned.value()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
     }
 
     AVPacket* packet = FFmpegPacketView::writablePacket(cloned.value());

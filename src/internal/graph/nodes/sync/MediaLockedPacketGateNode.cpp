@@ -98,7 +98,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
                 MediaAvReacquisitionPhase::Inactive) {
             if (m_acquisitionDeadline->deadline()) {
                 return ::media::Result<MediaNodeProcessResult>::success(
-                    MediaNodeProcessResult::waitingUntil(
+                    MediaNodeProcessResult::waitingUntilInputOrDeadline(
                         *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
             }
             return processWaiting();
@@ -113,7 +113,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     if (!packet.value()) {
         if (m_acquisitionDeadline->deadline()) {
             return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waitingUntil(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
                     *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
         }
         return processWaiting();
@@ -138,7 +138,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         }
         if (m_acquisitionDeadline->deadline()) {
             return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waitingUntil(
+                MediaNodeProcessResult::waitingUntilInputOrDeadline(
                     *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
         }
         return processWaiting();

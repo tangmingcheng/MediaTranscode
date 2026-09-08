@@ -1,12 +1,19 @@
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanner.h"
 
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -14,9 +21,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
-constexpr std::int64_t ProtocolOutputLeadNs = 100'000'000;
-constexpr std::int64_t ProjectTsStartupPrerollNs = 40'000'000;
-constexpr std::int64_t SenderReportIntervalNs = 1'000'000'000;
 constexpr int VideoRtpPayloadType = 96;
 constexpr int VideoRtpClockRate = 90'000;
 constexpr std::uint64_t InitialVideoGeneration = 1;
@@ -24,15 +28,16 @@ constexpr std::uint64_t InitialVideoGeneration = 1;
 ::media::Result<MediaVideoOnlySeparateRtpOutputRuntimePlan>
 planSeparateRtp(
     MediaRealtimeOutputPlanningDraft& output,
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeDeploymentEnvelope& deployment,
+    const MediaPreparedEncoderEmissionEnvelope& preparedEmission)
 {
     if (!output.videoOutput.scheduledTransport ||
-        !output.videoOutput.scheduledPacketization ||
-        output.sdp.path.empty()) {
+        !output.videoOutput.scheduledPacketization || output.sdp.path.empty()) {
         return ::media::Result<
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "VideoOnly scheduled RTP requires complete transport, packetization, and SDP facts"));
+                "VideoOnly scheduled RTP requires complete transport, packetization, SDP, and planner timing facts"));
     }
     const std::string& identity = request.mediaId;
     const std::string cname = MediaRtpOutputIdentityPlanner::cname(identity);
@@ -45,6 +50,23 @@ planSeparateRtp(
         return ::media::Result<
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             sdpIdentity.error());
+    }
+    auto remoteAddress = MediaNumericIpAddress::create(
+        endpoint.addressFamily(), endpoint.numericAddress());
+    auto compoundWireBytes = MediaRtcpWireGeometry::compoundWireBytes(
+        cname.size(), endpoint.addressFamily());
+    auto rtcpPolicy = remoteAddress && compoundWireBytes
+        ? MediaRtcpReportingPolicyPlanner::plan(
+              deployment, remoteAddress.value(),
+              preparedEmission.sustainedPayloadBytesPerSecond,
+              preparedEmission.authority,
+              compoundWireBytes.value())
+        : ::media::Result<MediaRtcpReportingPolicy>::failure(
+              !remoteAddress ? remoteAddress.error() : compoundWireBytes.error());
+    if (!rtcpPolicy) {
+        return ::media::Result<
+            MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
+                rtcpPolicy.error());
     }
     MediaSeparateRtpSdpRuntimePlan sdp{
         output.sdp.path,
@@ -59,14 +81,14 @@ planSeparateRtp(
         MediaScheduledStream::Video,
         std::move(*output.videoOutput.scheduledTransport),
         *output.videoOutput.scheduledPacketization,
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             identity + ".output.video"),
         MediaRtpOutputIdentityPlanner::stableNumeric(
             identity + ".video.timestamp"),
         VideoRtpClockRate,
         cname,
-        MediaRunningTime::fromNanoseconds(ProtocolOutputLeadNs),
-        MediaRunningTime::fromNanoseconds(SenderReportIntervalNs)};
+        deployment.encode().transportTiming.senderTransportLead,
+        std::move(rtcpPolicy).value()};
     return ::media::Result<
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
         MediaVideoOnlySeparateRtpOutputRuntimePlan{
@@ -77,28 +99,35 @@ planSeparateRtp(
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> planProjectMpegTs(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    MediaRational outputFrameRate,
+    const MediaRealtimeVideoStartupPlan& startup,
+    const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
-    if (!layout || outer.videoPlan.outputCodecName != "h264" ||
-        output.muxedOutput.url.empty()) {
+    if (!layout) {
         return ::media::Result<
             MediaProjectMpegTsRuntimeOutputPlan>::failure(
-            layout ? ::media::ErrorInfo::unsupported(
-                         "VideoOnly Project MPEG-TS requires planner-selected H.264 transcode output")
-                   : layout.error());
+            layout.error());
     }
-    std::uint8_t maximumPacketsPerDatagram = 7;
-    if (outer.outputTransport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.output.packetSize || *request.output.packetSize <= 0) {
-            return ::media::Result<
-                MediaProjectMpegTsRuntimeOutputPlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "VideoOnly MPEG-TS/RTP requires an explicit datagram size"));
-        }
-        auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(*request.output.packetSize));
+    if (output.muxedOutput.url.empty()) {
+        return ::media::Result<
+            MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly Project MPEG-TS requires a planned output URL"));
+    }
+    if (!outer.deployment || !output.muxedOutput.maximumDatagramBytes) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly MPEG-TS requires deployment MTU authority"));
+    }
+    std::uint16_t maximumPacketsPerDatagram = 0;
+    if (outer.outputTransport == MediaOutputTransportKind::RtpAvp ||
+        outer.outputTransport == MediaOutputTransportKind::UdpDatagrams) {
+        auto packetCount = MediaTsMuxPlan::maximumPacketsPerDatagram(
+            *output.muxedOutput.maximumDatagramBytes,
+            outer.outputTransport);
         if (!packetCount) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
@@ -112,10 +141,24 @@ planSeparateRtp(
             ::media::ErrorInfo::unsupported(
                 "VideoOnly Project MPEG-TS transport is unsupported"));
     }
+    if (!output.muxedOutput.transportDecodeLead ||
+        !output.muxedOutput.startupEmissionPreroll ||
+        !output.muxedOutput.timingPolicy) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly MPEG-TS output requires a planned transport decode lead"));
+    }
+    auto videoCadence = MediaRunningTime::checkedFromTicks(
+        1, outputFrameRate.den, outputFrameRate.num);
+    if (!videoCadence) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            videoCadence.error());
+    }
     auto protocol = MediaProjectMpegTsOutputPlan::createVideoOnly(
         outer.videoPlan.outputCodecName, layout.value(),
-        MediaRunningTime::fromNanoseconds(ProtocolOutputLeadNs),
-        MediaRunningTime::fromNanoseconds(ProjectTsStartupPrerollNs),
+        *output.muxedOutput.timingPolicy,
+        *output.muxedOutput.transportDecodeLead,
+        *output.muxedOutput.startupEmissionPreroll,
         outer.outputTransport, maximumPacketsPerDatagram);
     if (!protocol) {
         return ::media::Result<
@@ -139,17 +182,37 @@ planSeparateRtp(
                 MediaMuxSessionKind::ProjectMpegTs});
     } else {
         if (!output.muxedOutput.rtpTransport ||
+            !output.muxedOutput.maximumDatagramBytes ||
             output.muxedOutput.sdpPath.empty()) {
             return ::media::Result<
                 MediaProjectMpegTsRuntimeOutputPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "VideoOnly MPEG-TS/RTP requires complete RTP and SDP facts"));
         }
+        const auto& endpoint = output.muxedOutput.rtpTransport->remoteRtpEndpoint();
+        auto remoteAddress = MediaNumericIpAddress::create(
+            endpoint.addressFamily(), endpoint.numericAddress());
+        const auto cname = MediaRtpOutputIdentityPlanner::cname(request.mediaId);
+        auto compoundWireBytes = MediaRtcpWireGeometry::compoundWireBytes(
+            cname.size(), endpoint.addressFamily());
+        const auto& prepared = preparedEmission.video;
+        auto rtcpPolicy = remoteAddress && compoundWireBytes
+            ? MediaRtcpReportingPolicyPlanner::plan(
+                  *outer.deployment, remoteAddress.value(),
+                  prepared.sustainedPayloadBytesPerSecond,
+                  prepared.authority, compoundWireBytes.value())
+            : ::media::Result<MediaRtcpReportingPolicy>::failure(
+                  !remoteAddress ? remoteAddress.error() : compoundWireBytes.error());
+        if (!rtcpPolicy) {
+            return ::media::Result<
+                MediaProjectMpegTsRuntimeOutputPlan>::failure(
+                    rtcpPolicy.error());
+        }
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
+            *output.muxedOutput.maximumDatagramBytes,
             output.muxedOutput.sdpPath,
-            request.mediaId,
-            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
+            request.mediaId, std::move(rtcpPolicy).value());
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<
@@ -163,43 +226,42 @@ planSeparateRtp(
             std::move(rtp).value());
     }
     outer.videoParameters.globalHeader = true;
+    auto emission = MediaTsDatagramEmissionPlan::create(
+        protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
+        startup.byteCapacity,
+        outer.deployment->encode().latency.targetResidence);
+    if (!emission) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            emission.error());
+    }
     return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::success(
         MediaProjectMpegTsRuntimeOutputPlan{
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
+            std::move(emission).value(),
+            outer.outputTransport == MediaOutputTransportKind::RtpAvp
+                ? startup.byteCapacity
+                : 0,
             std::move(*transport)});
 }
 
 ::media::Result<MediaRealtimeVideoStartupPlan> planStartup(
-    const MediaRealtimeRtpTranscodePlanningDraft& outer,
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
-    if (outer.queues.packet == 0 ||
-        !request.avSyncStartup.maximumVideoUnitBytes ||
-        *request.avSyncStartup.maximumVideoUnitBytes == 0) {
+    auto capacity = MediaRealtimeMediaCapacityPlanner::plan(ledger);
+    if (!capacity || capacity.value().audioUnits) {
         return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "VideoOnly runtime requires explicit video startup bounds"));
-    }
-    const auto capacity = static_cast<std::uint64_t>(outer.queues.packet);
-    const auto unitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumVideoUnitBytes);
-    if (capacity > std::numeric_limits<std::uint64_t>::max() / unitBytes ||
-        unitBytes > static_cast<std::uint64_t>(
-            std::numeric_limits<std::int64_t>::max()) ||
-        capacity * unitBytes > static_cast<std::uint64_t>(
-            std::numeric_limits<std::int64_t>::max())) {
-        return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VideoOnly startup byte capacity is not representable"));
+            capacity ? ::media::ErrorInfo::invalidArgument(
+                           "VideoOnly runtime rejects audio capacity")
+                     : capacity.error());
     }
     return ::media::Result<MediaRealtimeVideoStartupPlan>::success(
         MediaRealtimeVideoStartupPlan{
             true,
             MediaRunningTime::fromNanoseconds(VideoStartupMaximumWaitNs),
-            outer.queues.packet,
-            unitBytes,
-            capacity * unitBytes});
+            capacity.value().videoUnits,
+            capacity.value().videoUnitBytes,
+            capacity.value().videoBytes});
 }
 
 void applyStartupMemoryBounds(
@@ -238,7 +300,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
     MediaRealtimeOutputPlanningDraft output,
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaRational sourceTimeBase,
-    MediaRational outputFrameRate)
+    MediaRational outputFrameRate,
+    const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
     if (!sourceTimeBase.isKnown() || sourceTimeBase.num <= 0 ||
         sourceTimeBase.den <= 0 || !outputFrameRate.isKnown() ||
@@ -252,7 +315,12 @@ MediaRealtimeVideoRuntimePlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "VideoOnly runtime requires an explicit media identity"));
     }
-    auto startup = planStartup(outer, request);
+    if (!outer.resourceLedger) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly runtime requires the graph resource ledger"));
+    }
+    auto startup = planStartup(*outer.resourceLedger);
     if (!startup) {
         return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
             startup.error());
@@ -275,31 +343,72 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 "VideoOnly runtime requires an enabled video pipeline"));
     }
 
-    MediaRealtimeEdgePolicySet edgePolicies = outer.edgePolicies;
-    applyStartupMemoryBounds(
-        edgePolicies.synchronizedPacket, startup.value());
+    auto plannedEdges = MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            outer.queues, startup.value().byteCapacity,
+            startup.value().packetCapacity);
+    if (!plannedEdges) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            plannedEdges.error());
+    }
+    MediaRealtimeEdgePolicySet edgePolicies =
+        std::move(plannedEdges).value();
     MediaVideoLineageEdgePolicySet lineageEdgePolicies =
         planLineageEdges(edgePolicies, startup.value());
 
     std::optional<MediaRealtimeVideoOutputAdapterPlan> adapter;
+    std::optional<MediaRunningTime> activationOutputLead;
     std::optional<MediaRunningTime> transportLead;
+    if (!outer.deployment) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly Datagram transport requires planner-owned deployment facts"));
+    }
+    const auto protocolPreparationLead =
+        outer.deployment->encode().latency.targetResidence;
+    if (protocolPreparationLead <= MediaRunningTime::fromNanoseconds(0)) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly protocol preparation requires the planned Datagram target residence"));
+    }
     if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
-        auto planned = planSeparateRtp(output, request);
+        auto planned = planSeparateRtp(
+            output, request, *outer.deployment, preparedEmission.video);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
+        auto activationLead = planned.value().video.senderLead.checkedAdd(
+            protocolPreparationLead);
+        if (!activationLead) {
+            return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+                activationLead.error());
+        }
+        activationOutputLead = activationLead.value();
         transportLead = planned.value().video.senderLead;
         adapter.emplace(
             std::in_place_type<MediaVideoOnlySeparateRtpOutputRuntimePlan>,
             std::move(planned).value());
     } else if (outer.outputLayout ==
                RealtimeOutputStreamLayout::MuxedTransportStream) {
-        auto planned = planProjectMpegTs(outer, output, request);
+        auto planned = planProjectMpegTs(
+            outer, output, request, outputFrameRate, startup.value(),
+            preparedEmission);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
+        const auto startupPreparationLead = (std::max)(
+            planned.value().protocol.muxPlan().startupEmissionPreroll(),
+            protocolPreparationLead);
+        auto projectActivationLead =
+            planned.value().protocol.muxPlan().transportDecodeLead().checkedAdd(
+                startupPreparationLead);
+        if (!projectActivationLead) {
+            return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+                projectActivationLead.error());
+        }
+        activationOutputLead = projectActivationLead.value();
         transportLead =
             planned.value().protocol.muxPlan().transportDecodeLead();
         adapter.emplace(
@@ -311,6 +420,26 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 "VideoOnly runtime output layout is unsupported"));
     }
 
+    auto datagramTransport = std::visit(
+        [&](const auto& plannedOutput) {
+            using Output = std::decay_t<decltype(plannedOutput)>;
+            if constexpr (std::is_same_v<
+                              Output,
+                              MediaProjectMpegTsRuntimeOutputPlan>) {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    request.mediaId, *outer.deployment, plannedOutput,
+                    outer.videoPlan, outputFrameRate, nullptr);
+            } else {
+                return MediaRealtimeDatagramTransportPlanner::plan(
+                    request.mediaId, *outer.deployment, plannedOutput,
+                    outer.videoPlan, outputFrameRate);
+            }
+        },
+        *adapter);
+    if (!datagramTransport) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            datagramTransport.error());
+    }
     return ::media::Result<MediaRealtimeVideoRuntimePlan>::success(
         MediaRealtimeVideoRuntimePlan{
             std::move(startup).value(),
@@ -318,13 +447,15 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 sourceTimeBase,
                 outputFrameRate,
                 scheduledPacketTimeBase,
-                packetTimingMode,
-                MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
+                packetTimingMode},
             MediaRealtimeVideoSchedulingPlan{
-                true, *transportLead, InitialVideoGeneration},
+                true, *activationOutputLead, *transportLead,
+                protocolPreparationLead,
+                InitialVideoGeneration},
             MediaProtocolOutputSessionKey(request.mediaId),
             output.packetCopyNormalizationRequired,
             std::move(*adapter),
+            std::move(datagramTransport).value(),
             outer.queues,
             std::move(edgePolicies),
             std::move(lineageEdgePolicies),

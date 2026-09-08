@@ -20,7 +20,7 @@ MediaAvSyncResult<MediaVideoSyncController> MediaVideoSyncController::create(
     const MediaAvSyncPlan& plan,
     std::uint64_t generation)
 {
-    const auto planStatus = MediaAvSyncPlanValidator::validate(plan);
+    const auto planStatus = MediaAvSyncPlanValidator::validateRuntime(plan);
     if (!planStatus || generation == 0) {
         return MediaAvSyncResult<MediaVideoSyncController>::failure(
             MediaAvSyncError(

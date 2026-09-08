@@ -20,6 +20,8 @@ struct CodecResolverEncoderFormatPlan {
     AVPixelFormat encoderPixelFormat = AV_PIX_FMT_NONE;
     AVPixelFormat hardwareFramesFormat = AV_PIX_FMT_NONE;
     AVPixelFormat surfaceSoftwareFormat = AV_PIX_FMT_NONE;
+    bool requiresHardwareDeviceContext = false;
+    bool requiresHardwareFramesContext = false;
 };
 
 class CodecResolverEncoderFormatPlanner final {

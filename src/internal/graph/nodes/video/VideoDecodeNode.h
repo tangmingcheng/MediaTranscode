@@ -5,11 +5,17 @@
 #include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCodecApi.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 
 #include <set>
 #include <string_view>
+#include <deque>
+#include <optional>
+#include <chrono>
 
 namespace media::ffmpeg::graph {
+
+class MediaGraphPayloadCreditLease;
 
 class VideoDecodeLineageState final : public MediaVideoLineageState {
 public:
@@ -25,8 +31,11 @@ public:
     bool flushSent = false;
     MediaBufferRef flushBuffer;
     ::media::ffmpeg::PacketPtr pendingPacket;
+    std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     std::set<std::uint64_t> lineageGenerations;
+    AVBufferRef* pendingSubmissionLineage = nullptr;
+    std::deque<AVBufferRef*> submissionOrderLineage;
 
     void bindCodec(MediaBufferRef owner, AVCodecContext* context) noexcept;
     void resetCodecBinding() noexcept;
@@ -80,6 +89,11 @@ private:
     bool m_firstPacketDiagnosticEmitted = false;
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstFrameDiagnosticEmitted = false;
+    std::optional<MediaHardwareDescriptor> m_outputContract;
+    std::optional<bool> m_copyOpaqueLineage;
+    std::optional<std::chrono::nanoseconds> m_receiveInterval;
+    std::uint64_t m_drmPrimeFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
 };
 
 } // namespace media::ffmpeg::graph

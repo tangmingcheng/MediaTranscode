@@ -19,7 +19,7 @@ class MediaNodeWakeup;
 enum class MediaAvStartupVideoPreparationPhase {
     Awaiting,
     Feeding,
-    FilterReady,
+    OutputReady,
     ReleaseCommitted,
     Cancelled
 };
@@ -65,7 +65,7 @@ public:
     ::media::Status commitVideoUnit(std::uint64_t generation,
                                     std::uint64_t releaseIdentity,
                                     std::size_t index);
-    ::media::Status markFilterReady(
+    ::media::Status markOutputReady(
         std::uint64_t generation,
         std::uint64_t releaseIdentity,
         MediaOutputCapacityReservationHandle reservation);
@@ -89,7 +89,7 @@ public:
 
     ::media::Status bindSequencerWakeup(
         const std::shared_ptr<MediaNodeWakeup>& wakeup);
-    ::media::Status bindFilterWakeup(
+    ::media::Status bindOutputWakeup(
         const std::shared_ptr<MediaNodeWakeup>& wakeup);
     ::media::Status bindExtractorWakeup(
         const std::shared_ptr<MediaNodeWakeup>& wakeup);
@@ -113,9 +113,9 @@ private:
     std::optional<std::size_t> m_reservedVideoUnit;
     std::optional<::media::ErrorInfo> m_terminalError;
     std::weak_ptr<MediaNodeWakeup> m_sequencerWakeup;
-    std::weak_ptr<MediaNodeWakeup> m_filterWakeup;
+    std::weak_ptr<MediaNodeWakeup> m_outputWakeup;
     std::weak_ptr<MediaNodeWakeup> m_extractorWakeup;
-    MediaOutputCapacityReservationHandle m_filterOutputReservation;
+    MediaOutputCapacityReservationHandle m_outputReservation;
     MediaOutputCapacityReservationHandle m_extractorOutputsReservation;
     std::optional<MediaPlaybackEpoch> m_anchoredEpoch;
     std::optional<MediaAudioPlaybackOrigin> m_anchoredAudioOrigin;

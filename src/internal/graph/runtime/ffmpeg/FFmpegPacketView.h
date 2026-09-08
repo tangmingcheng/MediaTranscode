@@ -14,6 +14,8 @@ public:
     static bool isPacket(const MediaBufferRef& buffer) noexcept;
     static std::shared_ptr<const MediaCanonicalLineage> canonicalLineage(
         const MediaBufferRef& buffer) noexcept;
+    static const std::shared_ptr<MediaGraphPayloadCreditLease>& payloadCredit(
+        const MediaBufferRef& buffer) noexcept;
 };
 
 } // namespace media::ffmpeg::graph

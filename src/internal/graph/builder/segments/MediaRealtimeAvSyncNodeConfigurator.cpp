@@ -390,11 +390,18 @@ MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
     MediaNodeId node,
     const MediaRealtimeAvSyncRuntimePlan& plan)
 {
-    return setOption(
+    if (auto status = setOption(
         graph,
         node,
         "av_bound_release_extractor.sync_group",
-        plan.groupKey.value());
+        plan.groupKey.value()); !status) {
+        return status;
+    }
+    return setOption(
+        graph,
+        node,
+        "av_bound_release_extractor.audio_branch_mode",
+        mediaBranchModeName(plan.audioPipeline.branchMode));
 }
 
 } // namespace media::ffmpeg::graph

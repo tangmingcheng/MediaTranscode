@@ -1,5 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 
+#include "internal/graph/protocol/rtp/MediaH264SpsCodedSizeParser.h"
+#include "internal/graph/protocol/rtp/MediaHevcSpsCodedSizeParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -70,7 +72,8 @@ void appendAnnexBNal(std::vector<std::uint8_t>& output,
 
 } // namespace
 
-::media::Status MediaRtpVideoParameterSetValidator::validate(
+::media::Result<MediaRtpVideoParameterSetInfo>
+MediaRtpVideoParameterSetValidator::inspect(
     const std::string& requestedCodecName,
     const MediaRtpVideoSignalingFacts& facts)
 {
@@ -79,27 +82,34 @@ void appendAnnexBNal(std::vector<std::uint8_t>& output,
         ? AV_CODEC_ID_H264
         : (codecName == "hevc" ? AV_CODEC_ID_HEVC : AV_CODEC_ID_NONE);
     if (codecId == AV_CODEC_ID_NONE) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            ::media::ErrorInfo::unsupported(
             "RTP video parameter-set validation codec is unsupported"));
     }
     auto annexB = annexBParameterSets(codecName, facts);
-    if (!annexB) return ::media::Status::failure(annexB.error());
+    if (!annexB) {
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            annexB.error());
+    }
 
     const AVCodec* decoder = avcodec_find_decoder(codecId);
     if (!decoder) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            ::media::ErrorInfo::unsupported(
             "RTP video parameter-set validation decoder is unavailable"));
     }
     CodecContextOwner context(avcodec_alloc_context3(decoder));
     if (!context) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            ::media::ErrorInfo::allocationFailed(
             "RTP video parameter-set validation context allocation failed"));
     }
     const std::size_t paddedSize = annexB.value().size() +
         AV_INPUT_BUFFER_PADDING_SIZE;
     context->extradata = static_cast<std::uint8_t*>(av_mallocz(paddedSize));
     if (!context->extradata) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            ::media::ErrorInfo::allocationFailed(
             "RTP video parameter-set validation extradata allocation failed"));
     }
     std::memcpy(context->extradata, annexB.value().data(),
@@ -107,10 +117,37 @@ void appendAnnexBNal(std::vector<std::uint8_t>& output,
     context->extradata_size = static_cast<int>(annexB.value().size());
     const int opened = avcodec_open2(context.get(), decoder, nullptr);
     if (opened < 0) {
-        return ::media::Status::failure(FFmpegGraphError::fromCode(
-            opened, "RTP video parameter-set validation"));
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            FFmpegGraphError::fromCode(
+                opened, "RTP video parameter-set validation"));
     }
-    return ::media::Status::success();
+    if (codecName == "h264") {
+        const auto& h264 = std::get<MediaH264SignalingFacts>(facts);
+        auto codedSize = MediaH264SpsCodedSizeParser::parse(h264.sps);
+        if (!codedSize) {
+            return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+                codedSize.error());
+        }
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
+            MediaRtpVideoParameterSetInfo{codedSize.value()});
+    }
+    const auto& hevc = std::get<MediaHevcSignalingFacts>(facts);
+    auto codedSize = MediaHevcSpsCodedSizeParser::parse(hevc.sps);
+    if (!codedSize) {
+        return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
+            codedSize.error());
+    }
+    return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
+        MediaRtpVideoParameterSetInfo{codedSize.value()});
+}
+
+::media::Status MediaRtpVideoParameterSetValidator::validate(
+    const std::string& requestedCodecName,
+    const MediaRtpVideoSignalingFacts& facts)
+{
+    auto inspected = inspect(requestedCodecName, facts);
+    return inspected ? ::media::Status::success()
+                     : ::media::Status::failure(inspected.error());
 }
 
 } // namespace media::ffmpeg::graph

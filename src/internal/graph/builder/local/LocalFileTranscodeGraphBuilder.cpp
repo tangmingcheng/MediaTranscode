@@ -206,6 +206,12 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
         return ::media::Result<MediaGraph>::failure(status.error());
     }
 
+    if (!graph.setPayloadCreditMode(
+            MediaGraphPayloadCreditMode::NonRealtimeNotApplicable)) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "local graph payload credit mode was already assigned"));
+    }
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
 

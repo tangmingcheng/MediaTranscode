@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
@@ -17,10 +18,12 @@ class MediaAvBoundReleaseExtractorNode final : public FFmpegNodeRuntime {
 public:
     MediaAvBoundReleaseExtractorNode(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey groupKey);
+        MediaAvSyncGroupKey groupKey,
+        MediaBranchMode audioBranchMode);
     MediaAvBoundReleaseExtractorNode(
         MediaNodeId nodeId,
         MediaAvSyncGroupKey groupKey,
+        MediaBranchMode audioBranchMode,
         MediaAvStartupVideoPreparationCapability capability);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
@@ -59,6 +62,7 @@ private:
     bool m_firstReleaseDiagnosticEmitted = false;
     bool m_firstCommitDiagnosticEmitted = false;
     MediaAvSyncGroupKey m_groupKey;
+    MediaBranchMode m_audioBranchMode;
     std::optional<MediaAvStartupVideoPreparationCapability>
         m_preparationCapability;
 };

@@ -21,7 +21,7 @@ public:
     static ::media::Status apply(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeOutputUrls& urls,
-        MediaRealtimeRtpTranscodePlanCore& plan,
+        MediaRealtimeRtpTranscodePlanningDraft& plan,
         MediaRealtimeOutputPlanningDraft& output);
 
 private:

@@ -5,8 +5,10 @@
 #include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlan.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <string>
 #include <variant>
 
@@ -53,6 +55,8 @@ struct MediaMpegTsUdpOutputPlan final {
 struct MediaProjectMpegTsRuntimeOutputPlan final {
     MediaProjectMpegTsOutputPlan protocol;
     MediaMuxSessionKind muxSessionKind;
+    MediaTsDatagramEmissionPlan emission;
+    std::uint64_t scheduledBatchMaximumBytes;
     std::variant<MediaMpegTsUdpOutputPlan,
                  MediaMpegTsRtpOutputPlan> transport;
 };

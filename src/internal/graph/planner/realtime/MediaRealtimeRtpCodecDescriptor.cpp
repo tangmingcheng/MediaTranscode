@@ -166,6 +166,11 @@ constexpr int OpusClockRate = 48000;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }
     if (codec == "opus") {
+        if (metadata.fmtp) {
+            return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Raw RTP Opus does not accept fmtp"));
+        }
         if (*metadata.clockRate != OpusClockRate) {
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
                 ::media::ErrorInfo::invalidArgument("Raw RTP Opus clock rate must be 48000"));
@@ -221,7 +226,8 @@ MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
         static_cast<std::uint8_t>(*metadata.payloadType),
         descriptor.clockRate,
         descriptor.channels,
-        descriptor.accessUnitDurationRtpTicks};
+        descriptor.accessUnitDurationRtpTicks,
+        streamKind == MediaStreamKind::Video};
     if (auto status = MediaRtpDepacketizerFactory::validate(config); !status) {
         return ::media::Result<MediaRtpDepacketizerConfig>::failure(
             status.error());

@@ -1,9 +1,11 @@
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 
 extern "C" {
@@ -16,11 +18,6 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
-
-std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string missingValue = {})
-{
-    return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
-}
 
 std::string pixelFormatName(int format)
 {
@@ -47,26 +44,85 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     return MediaNodeKind::HardwareTransfer;
 }
 
+::media::Status HardwareTransferNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    auto direction = requiredNodeOption(
+        nodeOptions(context), "HardwareTransferNode", "transfer.direction");
+    if (!direction) return ::media::Status::failure(direction.error());
+
+    if (direction.value() == "none") m_direction = Direction::None;
+    else if (direction.value() == "download") m_direction = Direction::Download;
+    else if (direction.value() == "upload") m_direction = Direction::Upload;
+    else if (direction.value() == "map") m_direction = Direction::Map;
+    else if (direction.value() == "unmap") m_direction = Direction::Unmap;
+    else {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "HardwareTransferNode unknown transfer.direction: " + direction.value()));
+    }
+    return FFmpegNodeRuntime::start(context);
+}
+
+::media::Status HardwareTransferNode::stop(MediaGraphExecutionContext& context)
+{
+    logSummary();
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
+
+void HardwareTransferNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    FFmpegNodeRuntime::abort(context);
+    resetRuntimeState();
+}
+
+void HardwareTransferNode::resetRuntimeState() noexcept
+{
+    m_terminals.reset();
+    m_eofEmitted = false;
+    m_firstInputDiagnosticEmitted = false;
+    m_firstOutputDiagnosticEmitted = false;
+    m_direction = Direction::None;
+    m_pendingInput.reset();
+    m_forwardedFrames = 0;
+    m_downloads = 0;
+    m_uploads = 0;
+}
+
+void HardwareTransferNode::logSummary() const
+{
+    std::ostringstream summary;
+    summary << "summary forwarded=" << m_forwardedFrames
+            << " download=" << m_downloads
+            << " upload=" << m_uploads;
+    transferLog(MediaGraphDiagnosticLevel::State, summary.str());
+}
+
 ::media::Result<MediaNodeProcessResult> HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
-    auto input = tryPopFirstInputOptional(context);
-    if (!input) {
-        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
-    }
-    if (!input.value()) {
-        MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
-        if (frameInput && frameInput->closed()) {
-            m_terminals.markClosed("frame");
-            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    MediaBufferRef buffer = m_pendingInput;
+    if (!buffer) {
+        auto input = tryPopFirstInputOptional(context);
+        if (!input) {
+            return ::media::Result<MediaNodeProcessResult>::failure(input.error());
         }
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        if (!input.value()) {
+            MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
+            if (frameInput && frameInput->closed()) {
+                m_terminals.markClosed("frame");
+                return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+            }
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        }
+        buffer = std::move(*input.value());
     }
 
-    const MediaBufferRef& buffer = *input.value();
     if (!m_firstInputDiagnosticEmitted) {
         transferLog(MediaGraphDiagnosticLevel::State,
                     "trace stage=first_input " +
@@ -90,10 +146,15 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
             eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
-    auto transferStatus = transferOrForward(context, buffer);
+    m_pendingInput = buffer;
+    auto transferStatus = transferOrForward(context, m_pendingInput);
     if (!transferStatus) {
+        if (pendingOutputBufferCount() != 0) {
+            m_pendingInput.reset();
+        }
         return ::media::Result<MediaNodeProcessResult>::failure(transferStatus.error());
     }
+    m_pendingInput.reset();
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
@@ -119,10 +180,12 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("HardwareTransferNode expected frame buffer"));
     }
 
-    const std::string direction = optionValue(nodeOptions(context), "transfer.direction", "none");
-    const bool hardwareInput = sourceFrame->hw_frames_ctx != nullptr;
+    const AVPixFmtDescriptor* pixelFormat =
+        av_pix_fmt_desc_get(static_cast<AVPixelFormat>(sourceFrame->format));
+    const bool hardwareInput = sourceFrame->hw_frames_ctx != nullptr ||
+                               (pixelFormat && (pixelFormat->flags & AV_PIX_FMT_FLAG_HWACCEL));
 
-    if (direction == "none") {
+    if (m_direction == Direction::None) {
         auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
                                                    "hardware_transfer.none");
         if (decision.shouldLog) {
@@ -134,10 +197,12 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
                 << " size=" << sourceFrame->width << "x" << sourceFrame->height;
             transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
         }
-        return emitTracedOutput(context, buffer);
+        auto status = emitTracedOutput(context, buffer);
+        if (status) ++m_forwardedFrames;
+        return status;
     }
 
-    if (direction == "download") {
+    if (m_direction == Direction::Download) {
         if (!hardwareInput) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("HardwareTransferNode planner requested download but input frame is not hardware-backed"));
@@ -145,19 +210,27 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         return downloadHardwareFrame(context, buffer, sourceFrame);
     }
 
-    if (direction == "upload" || direction == "map" || direction == "unmap") {
+    if (m_direction == Direction::Upload ||
+        m_direction == Direction::Map ||
+        m_direction == Direction::Unmap) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::unsupported("HardwareTransferNode transfer direction is not implemented yet: " + direction));
+            ::media::ErrorInfo::unsupported(
+                "HardwareTransferNode planner-requested transfer direction is not implemented"));
     }
 
     return ::media::Status::failure(
-        ::media::ErrorInfo::invalidArgument("HardwareTransferNode unknown transfer.direction: " + direction));
+        ::media::ErrorInfo::invalidArgument("HardwareTransferNode has no bound transfer direction"));
 }
 
 ::media::Status HardwareTransferNode::downloadHardwareFrame(MediaGraphExecutionContext& context,
                                                             const MediaBufferRef& buffer,
                                                             const AVFrame* sourceFrame)
 {
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
+    if (!reservation) {
+        return ::media::Status::failure(reservation.error());
+    }
     auto softwareFrame = ::media::ffmpeg::makeFrame();
     if (!softwareFrame) {
         return ::media::Status::failure(
@@ -168,6 +241,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     if (transferRet < 0) {
         return FFmpegGraphError::statusFromCode(transferRet, "av_hwframe_transfer_data(download)");
     }
+    ++m_downloads;
 
     const int propsRet = av_frame_copy_props(softwareFrame.get(), sourceFrame);
     if (propsRet < 0) {
@@ -177,6 +251,22 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video);
     if (!output) {
         return ::media::Status::failure(output.error());
+    }
+    const AVFrame* transferredFrame = FFmpegFrameView::frame(output.value());
+    auto footprint = transferredFrame
+        ? MediaFramePayloadFootprint::logicalBytes(
+              *transferredFrame, MediaStreamKind::Video)
+        : ::media::Result<std::uint64_t>::failure(
+              ::media::ErrorInfo::invalidArgument(
+                  "HardwareTransferNode wrapped frame is unavailable"));
+    if (!footprint) return ::media::Status::failure(footprint.error());
+    if (auto status = reservation.value().shrinkToActual(
+            footprint.value()); !status) {
+        return status;
+    }
+    if (auto status = reservation.value().attachTo(*output.value());
+        !status) {
+        return status;
     }
 
     output.value()->setTimeDescriptor(buffer->timeDescriptor());

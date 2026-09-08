@@ -3,6 +3,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
+#include "internal/graph/protocol/rtp/MediaRtpVideoFrameRateObserver.h"
 
 #include <algorithm>
 #include <chrono>
@@ -128,10 +129,16 @@ namespace {
     auto observer = MediaRtpVideoSignalingObserver::create(
         video.identity.codecName, video.identity.payloadType,
         video.identity.clockRate,
-        *plan.packetizationPolicy);
+        *plan.packetizationPolicy, plan.maximumBufferedBytes);
     if (!observer) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             observer.error());
+    }
+    auto frameRateObserver = MediaRtpVideoFrameRateObserver::create(
+        video.identity.clockRate);
+    if (!frameRateObserver) {
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            frameRateObserver.error());
     }
     auto byteBudget = MediaRawRtpPreparedByteBudget::create(
         plan.maximumBufferedBytes);
@@ -141,6 +148,8 @@ namespace {
     }
     auto replayClock =
         std::make_shared<MediaRawRtpPreparedReplayClock>();
+    auto videoIngressObservation =
+        std::make_shared<MediaRtpIngressObservationCollector>();
     std::optional<MediaRtpUdpTransport> audioTransport;
     std::optional<MediaPreparedRealtimeInput> preparedAudio;
     if (audio) {
@@ -161,6 +170,7 @@ namespace {
         auto createdAudio = MediaPreparedRealtimeInput::createRawRtp({
             std::move(*audioTransport), {}, audio->identity,
             std::nullopt, replayClock, byteBudget.value(),
+            std::make_shared<MediaRtpIngressObservationCollector>(),
             audio->transport.cancellableReadTimeoutMs});
         if (!createdAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
@@ -175,7 +185,8 @@ namespace {
     }
     MediaRtpReorderBuffer reorder(MediaRtpReorderConfig{
         plan.reorderWindowPackets,
-        std::chrono::milliseconds(plan.maximumReorderDelayMs),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::milliseconds(plan.maximumReorderDelayMs)),
         video.identity.payloadType});
     std::deque<MediaPreparedRawRtpDatagram> buffered;
     std::size_t bufferedBytes = 0;
@@ -185,7 +196,8 @@ namespace {
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     std::optional<Clock::time_point> firstMatchingPacketAt;
-    bool signalingComplete = false;
+    bool signalingComplete =
+        plan.authoritativeVideoSignaling.has_value();
     const auto observeReordered = [&](MediaRtpReorderResult reordered)
         -> ::media::Status {
         for (const auto& discontinuity : reordered.discontinuities) {
@@ -205,10 +217,17 @@ namespace {
                 packetCount = 0;
                 bufferedRtcpValidated = false;
                 firstMatchingPacketAt = Clock::now();
-                signalingComplete = false;
+                signalingComplete =
+                    plan.authoritativeVideoSignaling.has_value();
+                videoIngressObservation->reset();
             }
-            signalingComplete = signalingComplete ||
-                observation.value().complete;
+            signalingComplete =
+                plan.authoritativeVideoSignaling.has_value() ||
+                signalingComplete || observation.value().complete;
+            if (auto status = frameRateObserver.value().observe(packet);
+                !status) {
+                return status;
+            }
         }
         return ::media::Status::success();
     };
@@ -289,6 +308,7 @@ namespace {
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     observedAt.time_since_epoch()).count();
             bool retainDatagram = true;
+            std::optional<std::uint16_t> observedSequenceNumber;
             if (datagram.channel == MediaRtpUdpChannel::Rtp) {
                 auto packet = MediaRtpPacketParser::parse(datagram.bytes);
                 if (!packet) {
@@ -302,6 +322,7 @@ namespace {
                             video.identity.payloadType,
                             packet.value().payloadType));
                 }
+                observedSequenceNumber = packet.value().sequenceNumber;
                 if (!firstMatchingPacketAt) firstMatchingPacketAt = observedAt;
                 auto reordered = reorder.push(
                     std::move(packet).value(), observedAt);
@@ -351,6 +372,12 @@ namespace {
                     retainDatagram = belongs.value();
                 }
             }
+            if (auto status = videoIngressObservation->observeDatagram(
+                    datagram.bytes.size(), observedSequenceNumber,
+                    observedAtNs); !status) {
+                return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                    status.error());
+            }
             if (retainDatagram) {
                 bufferedBytes += datagram.bytes.size();
                 if (datagram.channel == MediaRtpUdpChannel::Rtp) ++packetCount;
@@ -358,12 +385,29 @@ namespace {
                     std::move(datagram), observedAtNs});
             }
         }
-        if (!signalingComplete) continue;
+        const auto sourceFrameRate = frameRateObserver.value().frameRate();
+        if (!signalingComplete || !sourceFrameRate) continue;
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             Clock::now() - startedAt).count();
-        auto detected = observer.value().detected(
-            packetCount, bufferedBytes, elapsed);
+        ::media::Result<MediaDetectedRtpVideoSignaling> detected =
+            plan.authoritativeVideoSignaling
+            ? observer.value().evidence().ssrc
+                ? ::media::Result<MediaDetectedRtpVideoSignaling>::success(
+                      MediaDetectedRtpVideoSignaling{
+                          video.identity.codecName,
+                          video.identity.payloadType,
+                          video.identity.clockRate,
+                          *observer.value().evidence().ssrc,
+                          *plan.authoritativeVideoSignaling,
+                          packetCount,
+                          bufferedBytes,
+                          elapsed})
+                : ::media::Result<MediaDetectedRtpVideoSignaling>::failure(
+                      ::media::ErrorInfo::notInitialized(
+                          "raw RTP authoritative signaling preparation requires observed SSRC identity"))
+            : observer.value().detected(
+                  packetCount, bufferedBytes, elapsed);
         if (!detected) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 detected.error());
@@ -372,6 +416,7 @@ namespace {
         auto prepared = MediaPreparedRealtimeInput::createRawRtp({
             std::move(transport), std::move(buffered), video.identity,
             detected.value(), replayClock, byteBudget.value(),
+            videoIngressObservation,
             video.transport.cancellableReadTimeoutMs});
         if (!prepared) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
@@ -385,12 +430,14 @@ namespace {
         if (preparedAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::success(
                 MediaPreparedRawRtpAudioVideoProbe{
-                    std::move(signaling), std::move(prepared).value(),
+                    std::move(signaling), *sourceFrameRate,
+                    std::move(prepared).value(),
                     std::move(*preparedAudio)});
         }
         return ::media::Result<MediaPreparedRawRtpProbe>::success(
             MediaPreparedRawRtpVideoOnlyProbe{
-                std::move(signaling), std::move(prepared).value()});
+                std::move(signaling), *sourceFrameRate,
+                std::move(prepared).value()});
     }
 }
 

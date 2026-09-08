@@ -1,23 +1,16 @@
-#include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
-#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
-#include "internal/graph/runtime/MediaGraphRuntime.h"
-#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
-#include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
-#include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
+#include "application/realtime/MediaRealtimeVideoRunController.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
 
-#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -39,7 +32,7 @@ struct RealtimeVideoRuntimeOptions {
 RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
 {
     const std::string value = requiredArg(argc, argv, "--input-type");
-    if (value == "rtsp") {
+    if (value == "url") {
         return RealtimeInputType::Url;
     }
     if (value == "rtp") {
@@ -49,21 +42,6 @@ RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
         return RealtimeInputType::MpegTsUdp;
     }
     throw std::invalid_argument("unsupported --input-type: " + value);
-}
-
-RealtimeInputStreamLayout requiredRealtimeInputLayout(int argc, char** argv)
-{
-    const std::string value = requiredArg(argc, argv, "--input-layout");
-    if (value == "session") {
-        return RealtimeInputStreamLayout::SessionDescribed;
-    }
-    if (value == "separate") {
-        return RealtimeInputStreamLayout::SeparateStreams;
-    }
-    if (value == "mpegts") {
-        return RealtimeInputStreamLayout::MuxedTransportStream;
-    }
-    throw std::invalid_argument("unsupported --input-layout: " + value);
 }
 
 RealtimeOutputStreamLayout requiredRealtimeOutputLayout(int argc, char** argv)
@@ -92,13 +70,29 @@ MediaOutputTransportKind requiredRealtimeOutputTransport(int argc, char** argv)
 
 void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
-    std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
-    const std::vector<std::string> realtimeValueArgs {
+    std::vector<std::string> valueArgs {
+        "--video-codec",
+        "--rc",
+        "--width",
+        "--height",
+        "--fps",
+        "--bitrate",
+        "--min-bitrate",
+        "--max-bitrate",
+        "--gop",
+        "--audio-codec",
+        "--audio-rc",
+        "--audio-bitrate",
+        "--audio-min-bitrate",
+        "--audio-max-bitrate",
+        "--sample-rate",
+        "--channels",
         "--media-id",
         "--input-type",
-        "--input-layout",
         "--output-layout",
         "--output-transport",
+        "--egress-capacity-bps",
+        "--maximum-wire-residence-ms",
         "--input",
         "--rtsp-transport",
         "--open-timeout-ms",
@@ -120,103 +114,95 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--rtp-host",
         "--rtp-port",
         "--sdp",
-        "--packet-size",
         "--output",
         "--max-duration",
         "--progress-timeout-ms",
         "--first-output-timeout-ms",
         "--poll-interval-ms",
-        "--startup-max-video-unit-bytes",
-        "--startup-max-audio-unit-bytes",
-        "--startup-max-gap-ms",
-        "--prepared-handoff-video-packets",
-        "--prepared-handoff-audio-packets",
-        "--prepared-handoff-video-bytes",
-        "--prepared-handoff-audio-bytes",
     };
-    valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
     std::vector<std::string> flagArgs = commonVideoTranscodeFlagArgs();
-    flagArgs.push_back("--no-low-latency");
     rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
 }
 
-void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& input)
+void parseRealtimeInputOptions(
+    int argc,
+    char** argv,
+    RealtimeInputType inputType,
+    MediaRealtimeInputConfig& input)
 {
-    input.type = requiredRealtimeInputType(argc, argv);
-    input.streamLayout = requiredRealtimeInputLayout(argc, argv);
+    input.type = inputType;
     input.openTimeoutMs = requiredIntArg(argc, argv, "--open-timeout-ms");
     input.readTimeoutMs = requiredIntArg(argc, argv, "--read-timeout-ms");
     input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
     input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
-    input.lowLatency = !hasArg(argc, argv, "--no-low-latency");
 
-    if (*input.type != RealtimeInputType::MpegTsUdp &&
-        hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
-        throw std::invalid_argument("--mpegts-max-pcr-gap-ms is valid only for mpegts-udp input");
+    if (hasArg(argc, argv, "--input")) {
+        input.url = requiredArg(argc, argv, "--input");
     }
-
-    if (*input.type == RealtimeInputType::RtpPort) {
-        input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
-        input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
-        input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
-        input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
-        if (hasArg(argc, argv, "--video-rtp-fmtp")) {
-            input.videoRtp.fmtp = requiredArg(argc, argv, "--video-rtp-fmtp");
-        }
-        return;
-    }
-
-    input.url = requiredArg(argc, argv, "--input");
-    if (*input.type == RealtimeInputType::Url) {
+    if (hasArg(argc, argv, "--rtsp-transport")) {
         input.rtspTransport = requiredArg(argc, argv, "--rtsp-transport");
-        return;
     }
-    const int maximumPcrGapMs = requiredIntArg(argc, argv, "--mpegts-max-pcr-gap-ms");
-    if (maximumPcrGapMs <= 0) {
-        throw std::invalid_argument("MPEG-TS maximum PCR gap must be positive");
+    if (hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
+        const int maximumPcrGapMs = requiredIntArg(
+            argc, argv, "--mpegts-max-pcr-gap-ms");
+        input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
     }
-    input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
-        static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
 }
 
-void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig& output)
+void parseRtpInputMetadata(
+    int argc,
+    char** argv,
+    const char* urlArgument,
+    const char* codecArgument,
+    const char* payloadTypeArgument,
+    const char* clockRateArgument,
+    const char* channelsArgument,
+    const char* fmtpArgument,
+    MediaRealtimeRtpInputMetadata& metadata)
 {
-    output.streamLayout = requiredRealtimeOutputLayout(argc, argv);
-    output.transport = requiredRealtimeOutputTransport(argc, argv);
-    if (*output.transport == MediaOutputTransportKind::RtpAvp) {
+    if (hasArg(argc, argv, urlArgument)) {
+        metadata.url = requiredArg(argc, argv, urlArgument);
+    }
+    if (hasArg(argc, argv, codecArgument)) {
+        metadata.codecName = requiredArg(argc, argv, codecArgument);
+    }
+    if (hasArg(argc, argv, payloadTypeArgument)) {
+        metadata.payloadType = requiredIntArg(argc, argv, payloadTypeArgument);
+    }
+    if (hasArg(argc, argv, clockRateArgument)) {
+        metadata.clockRate = requiredIntArg(argc, argv, clockRateArgument);
+    }
+    if (channelsArgument && hasArg(argc, argv, channelsArgument)) {
+        metadata.channels = requiredIntArg(argc, argv, channelsArgument);
+    }
+    if (hasArg(argc, argv, fmtpArgument)) {
+        metadata.fmtp = requiredArg(argc, argv, fmtpArgument);
+    }
+}
+
+void parseRealtimeOutputOptions(
+    int argc,
+    char** argv,
+    RealtimeOutputStreamLayout outputLayout,
+    MediaOutputTransportKind outputTransport,
+    MediaRealtimeOutputConfig& output)
+{
+    output.streamLayout = outputLayout;
+    output.transport = outputTransport;
+    if (hasArg(argc, argv, "--rtp-host")) {
         output.host = requiredArg(argc, argv, "--rtp-host");
-        output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
+    }
+    if (hasArg(argc, argv, "--rtp-port")) {
+        output.basePort = static_cast<std::size_t>(
+            requiredIntArg(argc, argv, "--rtp-port"));
+    }
+    if (hasArg(argc, argv, "--sdp")) {
         output.sdpPath = requiredArg(argc, argv, "--sdp");
-        output.packetSize = requiredIntArg(argc, argv, "--packet-size");
-        return;
     }
-
-    output.url = requiredArg(argc, argv, "--output");
-}
-
-void parseAudioRtpOptions(int argc, char** argv, MediaRealtimeRtpTranscodeRequest& options)
-{
-    if (hasArg(argc, argv, "--audio-rtp-url")) {
-        options.input.audioRtp.url = requiredArg(argc, argv, "--audio-rtp-url");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-codec")) {
-        options.input.audioRtp.codecName = requiredArg(argc, argv, "--audio-rtp-codec");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-payload-type")) {
-        options.input.audioRtp.payloadType = requiredIntArg(
-            argc, argv, "--audio-rtp-payload-type");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-clock-rate")) {
-        options.input.audioRtp.clockRate = requiredIntArg(
-            argc, argv, "--audio-rtp-clock-rate");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-channels")) {
-        options.input.audioRtp.channels = requiredIntArg(
-            argc, argv, "--audio-rtp-channels");
-    }
-    if (hasArg(argc, argv, "--audio-rtp-fmtp")) {
-        options.input.audioRtp.fmtp = requiredArg(argc, argv, "--audio-rtp-fmtp");
+    if (hasArg(argc, argv, "--output")) {
+        output.url = requiredArg(argc, argv, "--output");
     }
 }
 
@@ -224,42 +210,86 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
     rejectUnknownRealtimeArgs(argc, argv);
 
+    MediaTranscodeParameterSet parsedTranscode;
+    parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
+    if (!hasArg(argc, argv, "--rc")) {
+        throw std::invalid_argument("missing required argument: --rc");
+    }
+    if (parsedTranscode.video.rateControl != MediaRateControlMode::Cbr &&
+        parsedTranscode.video.rateControl != MediaRateControlMode::Vbr) {
+        throw std::invalid_argument(
+            "realtime video --rc must be cbr or vbr");
+    }
+    if (!parsedTranscode.video.bitrateKbps) {
+        throw std::invalid_argument(
+            "missing required integer argument: --bitrate");
+    }
+    if (*parsedTranscode.video.bitrateKbps <= 0) {
+        throw std::invalid_argument(
+            "realtime video --bitrate must be positive");
+    }
+    if (!parsedTranscode.video.gop) {
+        throw std::invalid_argument(
+            "missing required integer argument: --gop");
+    }
+    if (*parsedTranscode.video.gop <= 0) {
+        throw std::invalid_argument(
+            "realtime video --gop must be positive");
+    }
+    const RealtimeInputType inputType = requiredRealtimeInputType(argc, argv);
+    const RealtimeOutputStreamLayout outputLayout =
+        requiredRealtimeOutputLayout(argc, argv);
+    const MediaOutputTransportKind outputTransport =
+        requiredRealtimeOutputTransport(argc, argv);
+
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
-    parseRealtimeInputOptions(argc, argv, options.input);
-    parseRealtimeOutputOptions(argc, argv, options.output);
-    parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
-    parseAudioRtpOptions(argc, argv, options);
-    options.avSyncStartup.maximumVideoUnitBytes = requiredSizeArg(
-        argc, argv, "--startup-max-video-unit-bytes");
-    if (hasArg(argc, argv, "--startup-max-audio-unit-bytes")) {
-        options.avSyncStartup.maximumAudioUnitBytes = requiredSizeArg(
-            argc, argv, "--startup-max-audio-unit-bytes");
+    options.deployment.provisionedEgressCapacityBitsPerSecond =
+        requiredUint64Arg(argc, argv, "--egress-capacity-bps");
+    const auto maximumWireResidenceMs = requiredUint64Arg(
+        argc, argv, "--maximum-wire-residence-ms");
+    if (maximumWireResidenceMs == 0 ||
+        maximumWireResidenceMs > static_cast<std::uint64_t>(
+            (std::numeric_limits<std::int64_t>::max)() / 1'000'000)) {
+        throw std::invalid_argument(
+            "--maximum-wire-residence-ms is outside the positive running-time range");
     }
-    if (hasArg(argc, argv, "--startup-max-gap-ms")) {
-        const int maximumGapMs = requiredIntArg(argc, argv, "--startup-max-gap-ms");
-        if (maximumGapMs <= 0) {
-            throw std::invalid_argument("startup maximum gap must be positive");
-        }
-        options.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(maximumGapMs) * 1'000'000);
-    }
-    if (hasArg(argc, argv, "--prepared-handoff-video-packets")) {
-        options.preparedHandoff.videoPacketCapacity = requiredSizeArg(
-            argc, argv, "--prepared-handoff-video-packets");
-    }
-    if (hasArg(argc, argv, "--prepared-handoff-audio-packets")) {
-        options.preparedHandoff.audioPacketCapacity = requiredSizeArg(
-            argc, argv, "--prepared-handoff-audio-packets");
-    }
-    if (hasArg(argc, argv, "--prepared-handoff-video-bytes")) {
-        options.preparedHandoff.videoByteCapacity = requiredSizeArg(
-            argc, argv, "--prepared-handoff-video-bytes");
-    }
-    if (hasArg(argc, argv, "--prepared-handoff-audio-bytes")) {
-        options.preparedHandoff.audioByteCapacity = requiredSizeArg(
-            argc, argv, "--prepared-handoff-audio-bytes");
-    }
+    options.deployment.maximumWireResidence =
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
+            maximumWireResidenceMs * 1'000'000));
+    parseRealtimeInputOptions(argc, argv, inputType, options.input);
+    parseRtpInputMetadata(
+        argc, argv,
+        "--video-rtp-url", "--video-rtp-codec",
+        "--video-rtp-payload-type", "--video-rtp-clock-rate",
+        nullptr, "--video-rtp-fmtp", options.input.videoRtp);
+    parseRtpInputMetadata(
+        argc, argv,
+        "--audio-rtp-url", "--audio-rtp-codec",
+        "--audio-rtp-payload-type", "--audio-rtp-clock-rate",
+        "--audio-rtp-channels", "--audio-rtp-fmtp",
+        options.input.audioRtp);
+    parseRealtimeOutputOptions(
+        argc, argv, outputLayout, outputTransport, options.output);
+    options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
+    options.parameters.execution.diagnosticLogEnabled =
+        parsedTranscode.execution.diagnosticLogEnabled;
+    options.parameters.video.codecName = std::move(parsedTranscode.video.codecName);
+    options.parameters.video.width = parsedTranscode.video.width;
+    options.parameters.video.height = parsedTranscode.video.height;
+    options.parameters.video.frameRate = parsedTranscode.video.frameRate;
+    options.parameters.video.rateControl = parsedTranscode.video.rateControl;
+    options.parameters.video.bitrateKbps = parsedTranscode.video.bitrateKbps;
+    options.parameters.video.minBitrateKbps = parsedTranscode.video.minBitrateKbps;
+    options.parameters.video.maxBitrateKbps = parsedTranscode.video.maxBitrateKbps;
+    options.parameters.video.gop = parsedTranscode.video.gop;
+    options.parameters.audio.codecName = std::move(parsedTranscode.audio.codecName);
+    options.parameters.audio.rateControl = parsedTranscode.audio.rateControl;
+    options.parameters.audio.bitrateKbps = parsedTranscode.audio.bitrateKbps;
+    options.parameters.audio.minBitrateKbps = parsedTranscode.audio.minBitrateKbps;
+    options.parameters.audio.maxBitrateKbps = parsedTranscode.audio.maxBitrateKbps;
+    options.parameters.audio.sampleRate = parsedTranscode.audio.sampleRate;
+    options.parameters.audio.channels = parsedTranscode.audio.channels;
     return options;
 }
 
@@ -286,104 +316,91 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     return options;
 }
 
-::media::Status waitForRealtimeProgress(MediaGraphRuntime& runtime,
-                                        const RealtimeVideoRuntimeOptions& options)
+MediaRealtimeVideoRunPolicy makeRunPolicy(
+    const RealtimeVideoRuntimeOptions& options)
 {
-    using Clock = std::chrono::steady_clock;
-    const auto startedAt = Clock::now();
-    auto lastProgressAt = startedAt;
-    MediaRealtimeProgressTracker progressTracker;
-    const auto firstOutputStartupDeadline =
-        std::chrono::milliseconds(options.firstOutputTimeoutMs);
-    const auto workerStartupGrace = std::chrono::milliseconds(
-        std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
-
-    while (true) {
-        auto lifecycleStatus = runtime.synchronizeThreadedState();
-        if (!lifecycleStatus) {
-            return lifecycleStatus;
-        }
-        if (!runtime.threadedRunning()) {
-            break;
-        }
-        if (runtime.threadedCompleted()) {
-            return ::media::Status::success();
-        }
-        const MediaGraphRuntimeReport progressReport = MediaGraphRuntimeReporter::capture(runtime);
-        auto sampleStatus = runtime.acceptanceCollector().sample(
-            progressReport.metrics.encodedPacketsPushed);
-        if (!sampleStatus) {
-            return sampleStatus;
-        }
-        const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
-        std::cout << "[CLI] " << report.summary() << '\n';
-
-        if (report.metrics.workerErrors > 0) {
-            auto workerFailure = runtime.synchronizeThreadedState();
-            if (!workerFailure) {
-                return workerFailure;
-            }
-            return ::media::Status::failure(::media::ErrorInfo::internalError(
-                "realtime runtime reported worker errors without a preserved primary failure"));
-        }
-        const auto now = Clock::now();
-        if (report.metrics.activeWorkers == 0 &&
-            now - startedAt >= workerStartupGrace) {
-            auto terminalStatus = runtime.synchronizeThreadedState();
-            if (!terminalStatus) {
-                return terminalStatus;
-            }
-            if (runtime.threadedCompleted()) {
-                return ::media::Status::success();
-            }
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
-        }
-        const auto elapsedMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - startedAt);
-        auto progress = progressTracker.observe(
-            report.metrics.workerProgress,
-            report.metrics.encodedPacketsPushed,
-            elapsedMs);
-        if (!progress) {
-            return ::media::Status::failure(progress.error());
-        }
-        if (progress.value()) {
-            lastProgressAt = Clock::now();
-        }
-
-        const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressAt).count();
-        if (progressTracker.firstOutputDeadlineExpired(
-                elapsedMs, firstOutputStartupDeadline)) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "realtime runtime produced no encoded output before startup deadline"));
-        }
-        if (options.maxDurationSeconds &&
-            progressTracker.maximumOutputDurationExpired(
-                elapsedMs, std::chrono::seconds(*options.maxDurationSeconds))) {
-            return ::media::Status::success();
-        }
-        if (idleMs >= options.progressTimeoutMs) {
-            for (const auto& decision : report.backpressure.decisions) {
-                if (decision.kind == MediaBackpressureDecisionKind::QueueFull ||
-                    decision.kind ==
-                        MediaBackpressureDecisionKind::AboveCriticalWatermark) {
-                    std::cerr << "[CLI] stalled edge=" << decision.edgeId.value
-                              << " queued=" << decision.queueSize
-                              << " capacity=" << decision.capacity
-                              << " reason=" << decision.message << '\n';
-                }
-            }
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("realtime runtime made no progress before timeout"));
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(options.pollIntervalMs));
+    std::optional<std::chrono::milliseconds> maximumDuration;
+    if (options.maxDurationSeconds) {
+        maximumDuration = std::chrono::seconds(*options.maxDurationSeconds);
     }
+    auto policy = MediaRealtimeVideoRunPolicy::create(
+        std::chrono::milliseconds(options.progressTimeoutMs),
+        std::chrono::milliseconds(options.firstOutputTimeoutMs),
+        std::chrono::milliseconds(options.pollIntervalMs),
+        maximumDuration);
+    if (!policy) {
+        throw std::invalid_argument(policy.error().message);
+    }
+    return std::move(policy).value();
+}
 
-    return ::media::Status::failure(
-        ::media::ErrorInfo::notInitialized("realtime runtime stopped before progress condition completed"));
+const char* runFailureAction(MediaRealtimeVideoRunStage stage) noexcept
+{
+    switch (stage) {
+    case MediaRealtimeVideoRunStage::Preflight:
+        return "realtime video graph preflight";
+    case MediaRealtimeVideoRunStage::ExecutableGraphBuild:
+        return "realtime video executable graph build";
+    case MediaRealtimeVideoRunStage::PreparedNotification:
+        return "print realtime video plan summary";
+    case MediaRealtimeVideoRunStage::RuntimeCompile:
+        return "compile realtime video graph";
+    case MediaRealtimeVideoRunStage::RuntimeNodeRegistration:
+        return "register realtime video runtime nodes";
+    case MediaRealtimeVideoRunStage::RuntimeStart:
+        return "start realtime video runtime";
+    case MediaRealtimeVideoRunStage::PolicyValidation:
+    case MediaRealtimeVideoRunStage::StopRequested:
+    case MediaRealtimeVideoRunStage::RuntimeProgress:
+    case MediaRealtimeVideoRunStage::RuntimeCompletion:
+    case MediaRealtimeVideoRunStage::Completed:
+        return "realtime video runtime";
+    }
+    return "realtime video runtime";
+}
+
+void printPreparedReport(const MediaRealtimeVideoPreparedReport& report)
+{
+    if (report.audio) {
+        std::cout << "[CLI] audio_plan branch="
+                  << mediaBranchModeName(report.audio->branchMode)
+                  << " reason=" << report.audio->reason;
+        if (report.audio->resolvedOutput) {
+            const auto& output = *report.audio->resolvedOutput;
+            std::cout << " codec=" << output.codecName
+                      << " sample_rate=" << output.sampleRate
+                      << " channels=" << output.channels
+                      << " access_unit_samples=" << output.accessUnitSamples;
+            if (!output.encoderName.empty()) {
+                std::cout << " encoder=" << output.encoderName;
+            }
+            if (output.bitrateKbps) {
+                std::cout << " bitrate_kbps=" << *output.bitrateKbps;
+            }
+        }
+        std::cout << '\n';
+    }
+    std::cout << "[CLI] selected_chain=" << report.selectedChain
+              << " score=" << report.selectedScore
+              << " decoder=" << report.decoderName
+              << " filter="
+              << (report.filterActive ? report.filterName : "not_required")
+              << " encoder=" << report.encoderName
+              << '\n';
+}
+
+void printStalledEdges(const MediaGraphRuntimeReport& report)
+{
+    for (const auto& decision : report.backpressure.decisions) {
+        if (decision.kind == MediaBackpressureDecisionKind::QueueFull ||
+            decision.kind ==
+                MediaBackpressureDecisionKind::AboveCriticalWatermark) {
+            std::cerr << "[CLI] stalled edge=" << decision.edgeId.value
+                      << " queued=" << decision.queueSize
+                      << " capacity=" << decision.capacity
+                      << " reason=" << decision.message << '\n';
+        }
+    }
 }
 
 int runRealtimeVideoCli(int argc, char** argv)
@@ -392,7 +409,8 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --prepared-handoff-video-packets 256 --prepared-handoff-audio-packets 512 --prepared-handoff-video-bytes 268435456 --prepared-handoff-audio-bytes 67108864 --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type url|rtp|mpegts-udp --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --maximum-wire-residence-ms MS [--max-duration SECONDS] [options]\n";
+        std::cout << "Realtime video encoding: --rc cbr requires positive --bitrate; --rc vbr requires positive --min-bitrate, --bitrate, and --max-bitrate; --gop is always a required positive frame count.\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         return helpRequested ? 0 : 2;
@@ -400,6 +418,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     MediaRealtimeRtpTranscodeRequest options = parseRealtimeOptions(argc, argv);
     RealtimeVideoRuntimeOptions runtimeOptions = parseRuntimeOptions(argc, argv);
+    const MediaRealtimeVideoRunPolicy runPolicy = makeRunPolicy(runtimeOptions);
     std::cout << "[CLI] input_type=" << static_cast<int>(*options.input.type)
               << " input=" << redactUrlUserInfo(options.input.url.empty() ? options.input.videoRtp.url : options.input.url)
               << " audio="
@@ -413,53 +432,28 @@ int runRealtimeVideoCli(int argc, char** argv)
         std::cout << "source_driven";
     }
     std::cout
-              << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
+              << " hw=planner-highest-score"
               << '\n';
 
-    auto preflightResult = MediaRealtimeRtpTranscodePlanner::preflight(options);
-    if (!preflightResult) {
-        return failResult("realtime video graph preflight", preflightResult);
+    MediaRealtimeVideoRunControl control;
+    const MediaRealtimeVideoRunObserver observer {
+        printPreparedReport,
+        [](const MediaGraphRuntimeReport& report) {
+            std::cout << "[CLI] " << report.summary() << '\n';
+        }
+    };
+    const MediaRealtimeVideoRunOutcome outcome =
+        MediaRealtimeVideoRunController::run(
+            options, runPolicy, control, observer);
+    if (outcome.endReason == MediaRealtimeVideoRunEndReason::ProgressTimeout &&
+        outcome.failureReport) {
+        printStalledEdges(*outcome.failureReport);
     }
-    MediaRealtimeTranscodePreflight preflight = std::move(preflightResult).value();
-    const MediaThreadingPolicy threadingPolicy = std::visit(
-        [](const auto& runtimePlan) {
-            return runtimePlan.threadingPolicy;
-        },
-        preflight.plan.runtime);
-
-    auto executableResult = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(std::move(preflight));
-    if (!executableResult) {
-        return failResult("realtime video executable graph build", executableResult);
+    if (outcome.finalReport) {
+        std::cout << "[CLI] final " << outcome.finalReport->summary() << '\n';
     }
-    MediaRealtimeExecutableGraph executable = std::move(executableResult).value();
-    auto summaryStatus = printRealtimePlanSummary(executable.graph);
-    if (!summaryStatus) {
-        return failStatus("print realtime video plan summary", summaryStatus);
-    }
-
-    MediaGraphRuntime runtime;
-    runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);
-    runtime.setThreadingPolicy(threadingPolicy);
-    auto compileStatus = runtime.compile(std::move(executable));
-    if (!compileStatus) {
-        return failStatus("compile realtime video graph", compileStatus);
-    }
-    auto registerStatus = runtime.registerDefaultRuntimeNodes();
-    if (!registerStatus) {
-        return failStatus("register realtime video runtime nodes", registerStatus);
-    }
-    auto startStatus = runtime.startThreaded();
-    if (!startStatus) {
-        return failStatus("start realtime video runtime", startStatus);
-    }
-
-    const auto waitStatus = waitForRealtimeProgress(runtime, runtimeOptions);
-    const auto completion = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
-    const MediaGraphRuntimeReport finalReport = MediaGraphRuntimeReporter::capture(runtime);
-    std::cout << "[CLI] final " << finalReport.summary() << '\n';
-    runtime.reset();
-    if (!completion.status) {
-        return failStatus("realtime video runtime", completion.status);
+    if (!outcome.status) {
+        return failStatus(runFailureAction(outcome.stage), outcome.status);
     }
 
     std::cout << "[CLI] realtime video validation stopped successfully\n";

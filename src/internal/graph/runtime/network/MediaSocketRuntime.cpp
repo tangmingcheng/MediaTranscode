@@ -30,8 +30,8 @@ MediaSocketRuntime::~MediaSocketRuntime()
     return ::media::Result<std::shared_ptr<MediaSocketRuntime>>::success(
         std::shared_ptr<MediaSocketRuntime>(new MediaSocketRuntime(true)));
 #else
-    return ::media::Result<std::shared_ptr<MediaSocketRuntime>>::failure(
-        ::media::ErrorInfo::unsupported("Socket runtime is currently implemented for Windows"));
+    return ::media::Result<std::shared_ptr<MediaSocketRuntime>>::success(
+        std::shared_ptr<MediaSocketRuntime>(new MediaSocketRuntime(true)));
 #endif
 }
 

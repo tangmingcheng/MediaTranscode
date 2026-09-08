@@ -3,6 +3,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
@@ -159,7 +160,8 @@ void MediaAudioStartupTrimNode::abort(
 
 ::media::Result<MediaBufferRef> MediaAudioStartupTrimNode::apply(
     const MediaBufferRef& frame,
-    std::uint32_t trimLeadingSamples)
+    std::uint32_t trimLeadingSamples,
+    MediaGraphPayloadReservation reservation)
 {
     if (!m_lineageState) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -238,6 +240,18 @@ void MediaAudioStartupTrimNode::abort(
     auto wrapped = FFmpegBufferFactory::wrapFrame(
         std::move(output), MediaStreamKind::Audio);
     if (!wrapped) return wrapped;
+    const AVFrame* trimmedFrame = FFmpegFrameView::frame(wrapped.value());
+    auto footprint = trimmedFrame
+        ? MediaFramePayloadFootprint::logicalBytes(
+              *trimmedFrame, MediaStreamKind::Audio)
+        : ::media::Result<std::uint64_t>::failure(
+              ::media::ErrorInfo::invalidArgument(
+                  "Audio startup trim wrapped frame is unavailable"));
+    if (!footprint) return ::media::Result<MediaBufferRef>::failure(footprint.error());
+    if (auto status = reservation.shrinkToActual(footprint.value()); !status)
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    if (auto status = reservation.attachTo(*wrapped.value()); !status)
+        return ::media::Result<MediaBufferRef>::failure(status.error());
     const auto interval = canonical->interval();
     MediaAudioIntervalAccumulator fragments;
     for (const auto& fragment : canonical->fragments()) {
@@ -265,7 +279,8 @@ void MediaAudioStartupTrimNode::abort(
 }
 
 ::media::Result<MediaBufferRef> MediaAudioStartupTrimNode::applyDecoded(
-    const MediaBufferRef& decodedTrimInput)
+    const MediaBufferRef& decodedTrimInput,
+    MediaGraphPayloadReservation reservation)
 {
     auto lineageLock = m_lineageState->lock();
     const auto* decoded = dynamic_cast<const MediaDecodedAudioTrimInputBuffer*>(
@@ -286,7 +301,9 @@ void MediaAudioStartupTrimNode::abort(
     if (auto status = m_lineageState->observe(decoded->audioOrigin().generation); !status) {
         return ::media::Result<MediaBufferRef>::failure(status.error());
     }
-    auto trimmed = apply(decoded->media(), decoded->trimLeadingSamples());
+    auto trimmed = apply(
+        decoded->media(), decoded->trimLeadingSamples(),
+        std::move(reservation));
     if (!trimmed || !trimmed.value()) return trimmed;
     return MediaBoundCanonicalAudioBuffer::create(
         std::move(trimmed).value(), decoded->audioOrigin());
@@ -295,6 +312,12 @@ void MediaAudioStartupTrimNode::abort(
 ::media::Result<MediaNodeProcessResult> MediaAudioStartupTrimNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    auto reservation = context.reservePayload(
+        nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
+    if (!reservation) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            reservation.error());
+    }
     auto input = tryPopInputOptional(context, "frame");
     if (!input) return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     if (!input.value()) return processWaiting();
@@ -318,7 +341,8 @@ void MediaAudioStartupTrimNode::abort(
             ? processFinished(std::move(terminalStatus))
             : processProgress(std::move(terminalStatus));
     }
-    auto output = applyDecoded(*input.value());
+    auto output = applyDecoded(
+        *input.value(), std::move(reservation).value());
     if (!output) return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     if (!output.value()) return processProgress();
     return processProgress(emitOutput(context, "frame", output.value()));

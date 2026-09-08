@@ -56,11 +56,13 @@ const char* boolOption(bool value) noexcept
     if (!plan.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
-    if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value()) {
+    if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value() ||
+        plan.rtpTransport.has_value() != plan.rtpAccessUnitEnvelope.has_value()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("raw RTP input requires transport and depacketizer plans together"));
     }
-    if (plan.rtpTransport && plan.rtpDepacketizer) {
+    if (plan.rtpTransport && plan.rtpDepacketizer &&
+        plan.rtpAccessUnitEnvelope) {
         if (!plan.requiresPreparedInput) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -68,6 +70,14 @@ const char* boolOption(bool value) noexcept
         }
         const auto& transport = *plan.rtpTransport;
         const auto& depacketizer = *plan.rtpDepacketizer;
+        const auto& accessUnitEnvelope = *plan.rtpAccessUnitEnvelope;
+        if (auto status = accessUnitEnvelope.validate(); !status ||
+            accessUnitEnvelope.streamKind != depacketizer.streamKind ||
+            accessUnitEnvelope.codecName != depacketizer.codecName) {
+            return ::media::Result<void>::failure(
+                !status ? status.error() : ::media::ErrorInfo::invalidArgument(
+                    "raw RTP access-unit envelope conflicts with depacketizer"));
+        }
         const auto set = [&](const char* key, std::string value) {
             return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, std::move(value));
         };
@@ -84,6 +94,23 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtp.reorder_window_packets", std::to_string(transport.reorderWindowPackets)); !status) return status;
         if (auto status = set("rtp.maximum_reorder_delay_ms", std::to_string(transport.maximumReorderDelayMs)); !status) return status;
         if (auto status = set("rtp.cancellable_read_timeout_ms", std::to_string(transport.cancellableReadTimeoutMs)); !status) return status;
+        if (!transport.ingress) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "prepared raw RTP input requires a planner-owned ingress product"));
+        }
+        const auto ingress = transport.ingress->facts();
+        if (auto status = set("rtp.ingress.adapter_kind", std::to_string(static_cast<int>(ingress.adapterKind))); !status) return status;
+        if (auto status = set("rtp.ingress.socket_receive_capacity_bytes", std::to_string(ingress.socketReceiveCapacityBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.maximum_datagram_bytes", std::to_string(ingress.maximumDatagramBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.batch_byte_capacity", std::to_string(ingress.batchByteCapacity)); !status) return status;
+        if (auto status = set("rtp.ingress.descriptor_capacity", std::to_string(ingress.descriptorCapacity)); !status) return status;
+        if (auto status = set("rtp.ingress.required_buffer_alignment_bytes", std::to_string(ingress.requiredBufferAlignmentBytes)); !status) return status;
+        if (auto status = set("rtp.ingress.reorder_window_packets", std::to_string(ingress.reorderWindowPackets)); !status) return status;
+        if (auto status = set("rtp.ingress.maximum_reorder_delay_ns", std::to_string(ingress.maximumReorderDelayNanoseconds)); !status) return status;
+        if (auto status = set("rtp.ingress.storage_ownership", std::to_string(static_cast<int>(ingress.storageOwnership))); !status) return status;
+        if (auto status = set("rtp.ingress.cancellation_contract", std::to_string(static_cast<int>(ingress.cancellationContract))); !status) return status;
+        if (auto status = set("rtp.ingress.completion_evidence", std::to_string(static_cast<int>(ingress.completionEvidence))); !status) return status;
         if (auto status = set("rtcp.require_sender_reports", boolOption(transport.requireSenderReports)); !status) return status;
         if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
         if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;
@@ -103,6 +130,9 @@ const char* boolOption(bool value) noexcept
         case MediaRtpClockLossPolicy::FailOnExpired:
             lossPolicy = "fail_on_expired";
             break;
+        case MediaRtpClockLossPolicy::WaitForEvidence:
+            lossPolicy = "wait_for_evidence";
+            break;
         default:
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -120,9 +150,19 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtcp.composition_mode", std::move(composition).value()); !status) return status;
         if (auto status = set("rtp.stream_kind", depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio"); !status) return status;
         if (auto status = set("rtp.codec", depacketizer.codecName); !status) return status;
+        if (!depacketizer.waitForKeyFrameAfterLoss) {
+            return ::media::Result<void>::failure(::media::ErrorInfo::notInitialized(
+                "raw RTP input requires planned loss recovery policy"));
+        }
+        if (auto status = set("rtp.wait_for_keyframe_after_loss",
+                boolOption(*depacketizer.waitForKeyFrameAfterLoss)); !status) return status;
         if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;
         if (auto status = set("rtp.channels", std::to_string(depacketizer.channels)); !status) return status;
         if (auto status = set("rtp.access_unit_duration_ticks", std::to_string(depacketizer.accessUnitDurationRtpTicks)); !status) return status;
+        if (auto status = set("rtp.maximum_access_unit_bytes", std::to_string(accessUnitEnvelope.maximumAccessUnitBytes)); !status) return status;
+        if (auto status = set("rtp.maximum_access_units_per_push", std::to_string(accessUnitEnvelope.maximumAccessUnitsPerPush)); !status) return status;
+        if (auto status = set("rtp.access_unit_size_authority", accessUnitEnvelope.sizeAuthority); !status) return status;
+        if (auto status = set("rtp.access_unit_completion_authority", accessUnitEnvelope.completionAuthority); !status) return status;
     } else if (plan.requiresPreparedInput) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(

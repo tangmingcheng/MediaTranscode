@@ -4,20 +4,17 @@ namespace media::ffmpeg::graph {
 
 bool MediaRealtimeRequestClassifier::realtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
-    return request.input.type == RealtimeInputType::Url &&
-           request.input.streamLayout == RealtimeInputStreamLayout::SessionDescribed;
+    return request.input.type == RealtimeInputType::Url;
 }
 
 bool MediaRealtimeRequestClassifier::rawRtpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
-    return request.input.type == RealtimeInputType::RtpPort &&
-           request.input.streamLayout == RealtimeInputStreamLayout::SeparateStreams;
+    return request.input.type == RealtimeInputType::RtpPort;
 }
 
 bool MediaRealtimeRequestClassifier::mpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
-    return request.input.type == RealtimeInputType::MpegTsUdp &&
-           request.input.streamLayout == RealtimeInputStreamLayout::MuxedTransportStream;
+    return request.input.type == RealtimeInputType::MpegTsUdp;
 }
 
 bool MediaRealtimeRequestClassifier::unreliablePacketBoundary(const MediaRealtimeRtpTranscodeRequest& request) noexcept

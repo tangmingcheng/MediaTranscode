@@ -56,6 +56,16 @@ MediaAacLatmSdpCodecDescription::MediaAacLatmSdpCodecDescription(
 {
 }
 
+MediaHevcSdpCodecDescription::MediaHevcSdpCodecDescription(
+    std::string spropVps,
+    std::string spropSps,
+    std::string spropPps) noexcept
+    : m_spropVps(std::move(spropVps)),
+      m_spropSps(std::move(spropSps)),
+      m_spropPps(std::move(spropPps))
+{
+}
+
 MediaSdpSessionIdentity::MediaSdpSessionIdentity(
     std::string originUsername,
     std::uint64_t sessionId,
@@ -166,7 +176,8 @@ MediaRtpSdpMediaDescription::create(
 {
     const bool matches = std::visit([&identity](const auto& typedCodec) {
         using Codec = std::decay_t<decltype(typedCodec)>;
-        if constexpr (std::is_same_v<Codec, MediaH264SdpCodecDescription>) {
+        if constexpr (std::is_same_v<Codec, MediaH264SdpCodecDescription> ||
+                      std::is_same_v<Codec, MediaHevcSdpCodecDescription>) {
             return identity.kind() == MediaSdpMediaKind::Video &&
                    identity.clockRate() == 90'000 && identity.channels() == 0;
         } else {

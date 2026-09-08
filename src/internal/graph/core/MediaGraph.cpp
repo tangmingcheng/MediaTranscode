@@ -8,9 +8,43 @@ void MediaGraph::clear()
 {
     m_nodes.clear();
     m_edges.clear();
+    m_payloadCreditPlan.reset();
+    m_payloadCreditMode.reset();
     m_nextNodeId = 1;
     m_nextPortId = 1;
     m_nextEdgeId = 1;
+}
+
+bool MediaGraph::setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan)
+{
+    if (m_payloadCreditPlan ||
+        (m_payloadCreditMode &&
+         *m_payloadCreditMode != MediaGraphPayloadCreditMode::RealtimeRequired) ||
+        !plan.isStructurallyValid()) return false;
+    m_payloadCreditMode = MediaGraphPayloadCreditMode::RealtimeRequired;
+    m_payloadCreditPlan = std::move(plan);
+    return true;
+}
+
+bool MediaGraph::setPayloadCreditMode(MediaGraphPayloadCreditMode mode)
+{
+    if (m_payloadCreditMode ||
+        (mode == MediaGraphPayloadCreditMode::NonRealtimeNotApplicable &&
+         m_payloadCreditPlan)) return false;
+    m_payloadCreditMode = mode;
+    return true;
+}
+
+const std::optional<MediaGraphPayloadCreditMode>&
+MediaGraph::payloadCreditMode() const noexcept
+{
+    return m_payloadCreditMode;
+}
+
+const std::optional<MediaGraphPayloadCreditPlan>&
+MediaGraph::payloadCreditPlan() const noexcept
+{
+    return m_payloadCreditPlan;
 }
 
 MediaNodeId MediaGraph::addNode(MediaNodeKind kind,

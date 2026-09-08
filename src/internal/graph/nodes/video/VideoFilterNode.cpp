@@ -3,10 +3,12 @@
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 
@@ -57,6 +59,7 @@ void VideoFilterLineageState::clearGenerationLineage() noexcept
     terminalPending = false;
     terminalIsEof = false;
     pendingFrame.reset();
+    pendingPayloadCredit.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
     lastSubmittedPts = AV_NOPTS_VALUE;
@@ -193,8 +196,42 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                         : std::nullopt);
 }
 
-::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
-::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context) { if (m_preparationCapability) m_preparationCapability->cancel(); auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
+::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    auto input = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "filter.pipeline.input", "VideoFilterNode");
+    auto output = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "filter.pipeline.output", "VideoFilterNode");
+    if (!input) return ::media::Status::failure(input.error());
+    if (!output) return ::media::Status::failure(output.error());
+    m_inputContract = std::move(input).value();
+    m_outputContract = std::move(output).value();
+    if (!parseMediaVideoFilterImplementation(
+            nodeOptions(context)->value("filter.pipeline.implementation"),
+            m_filterImplementation) ||
+        m_filterImplementation == MediaVideoFilterImplementation::None) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFilterNode requires planner filter implementation"));
+    }
+    return FFmpegNodeRuntime::start(context);
+}
+::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context)
+{
+    if (m_preparationCapability) m_preparationCapability->cancel();
+    std::ostringstream summary;
+    summary << "video_filter.zero_copy_summary drm_prime_input=" << m_drmPrimeInputFrames
+            << " drm_prime_output=" << m_drmPrimeOutputFrames
+            << " rga=" << m_rgaFrames
+            << " software_frame=" << m_softwareFrames;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            summary.str());
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
 void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { if (m_preparationCapability) m_preparationCapability->cancel(); FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoFilterNode::resetRuntimeState() noexcept
 {
@@ -207,6 +244,13 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_preparationFeedArmed = false;
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
+    m_inputContract.reset();
+    m_outputContract.reset();
+    m_drmPrimeInputFrames = 0;
+    m_drmPrimeOutputFrames = 0;
+    m_rgaFrames = 0;
+    m_softwareFrames = 0;
+    m_filterImplementation = MediaVideoFilterImplementation::Unknown;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
@@ -521,6 +565,24 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
+    const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
+    if (!inputPayloadCredit && context.payloadCreditsRequired()) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "VideoFilterNode input frame lacks payload credit ownership"));
+    }
+    if (!m_inputContract) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("VideoFilterNode input frame contract is not bound"));
+    }
+    auto inputFacts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_inputContract, "VideoFilterNode filter input");
+    if (!inputFacts) return ::media::Status::failure(inputFacts.error());
+    m_drmPrimeInputFrames += inputFacts.value().drmPrime ? 1U : 0U;
+    m_softwareFrames += inputFacts.value().software ? 1U : 0U;
+    if (!m_firstInputDiagnosticEmitted) {
+        filterLog(MediaGraphDiagnosticLevel::State,
+                  "input_contract " + MediaVideoFrameContractValidator::describe(*frame, inputFacts.value()));
+    }
 
     ::media::ffmpeg::FramePtr pendingFrame(av_frame_clone(frame));
     if (!pendingFrame) {
@@ -534,34 +596,53 @@ void VideoFilterNode::resetRuntimeState() noexcept
         }
     }
     m_lineageState->pendingFrame = std::move(pendingFrame);
+    m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     m_lineageState->pendingLineage = std::move(pendingLineage);
     return submitPendingFrame(context);
 }
 
 ::media::Status VideoFilterNode::attachPendingLineage()
 {
-    if (!m_lineageRegistry) return ::media::Status::success();
-    if (!m_lineageState->pendingFrame || !m_lineageState->pendingLineage ||
-        m_lineageState->pendingFrame->opaque_ref) {
+    if (!m_lineageState->pendingFrame ||
+        m_lineageState->pendingFrame->opaque_ref ||
+        (!m_lineageState->pendingPayloadCredit && !m_lineageRegistry)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "VideoFilterNode requires one unowned pending frame lineage"));
+                "VideoFilterNode requires one unowned frame payload credit"));
     }
-    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
-    if (!token) return ::media::Status::failure(token.error());
-    auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
+    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
+        ? [&]() -> ::media::Result<AVBufferRef*> {
+              if (!m_lineageState->pendingLineage) {
+                  return ::media::Result<AVBufferRef*>::failure(
+                      ::media::ErrorInfo::invalidArgument(
+                          "VideoFilterNode requires canonical frame lineage"));
+              }
+              auto token = m_lineageRegistry->submit(
+                  m_lineageState->pendingLineage);
+              return token
+                  ? makeMediaFfmpegCodecOpaque(
+                        std::move(token).value(),
+                        m_lineageState->pendingPayloadCredit)
+                  : ::media::Result<AVBufferRef*>::failure(token.error());
+          }()
+        : makeMediaFfmpegCodecOpaque(
+              m_lineageState->pendingPayloadCredit);
     if (!opaque) return ::media::Status::failure(opaque.error());
     m_lineageState->pendingFrame->opaque_ref = opaque.value();
-    m_lineageState->lineageGenerations.insert(
-        m_lineageState->pendingLineage->generation);
+    if (m_lineageState->pendingLineage) {
+        m_lineageState->lineageGenerations.insert(
+            m_lineageState->pendingLineage->generation);
+    }
     m_lineageState->pendingLineage.reset();
+    m_lineageState->pendingPayloadCredit.reset();
     return ::media::Status::success();
 }
 
 ::media::Status VideoFilterNode::submitPendingFrame(
     MediaGraphExecutionContext& context)
 {
-    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref) {
+    if ((m_lineageRegistry || m_lineageState->pendingPayloadCredit) &&
+        !m_lineageState->pendingFrame->opaque_ref) {
         auto attached = attachPendingLineage();
         if (!attached) return attached;
     }
@@ -601,6 +682,11 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     while (true) {
+        auto reservation = context.reservePayload(
+            nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
+        if (!reservation) {
+            return ::media::Status::failure(reservation.error());
+        }
         auto frame = ::media::ffmpeg::makeFrame();
         if (!frame) {
             return ::media::Status::failure(
@@ -626,7 +712,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
             return rescaleStatus;
         }
 
-        auto emitStatus = emitFrame(context, std::move(frame));
+        auto emitStatus = emitFrame(
+            context, std::move(frame), std::move(reservation).value());
         if (!emitStatus) {
             return emitStatus;
         }
@@ -635,8 +722,22 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 }
 
-::media::Status VideoFilterNode::emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame)
+::media::Status VideoFilterNode::emitFrame(
+    MediaGraphExecutionContext& context,
+    ::media::ffmpeg::FramePtr frame,
+    MediaGraphPayloadReservation reservation)
 {
+    if (!m_outputContract) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("VideoFilterNode output frame contract is not bound"));
+    }
+    auto outputFacts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_outputContract, "VideoFilterNode filter output");
+    if (!outputFacts) return ::media::Status::failure(outputFacts.error());
+    m_drmPrimeOutputFrames += outputFacts.value().drmPrime ? 1U : 0U;
+    m_rgaFrames += m_filterImplementation == MediaVideoFilterImplementation::Rga
+        ? 1U : 0U;
+    m_softwareFrames += outputFacts.value().software ? 1U : 0U;
     std::shared_ptr<const MediaCanonicalLineage> lineage;
     if (m_lineageRegistry) {
         auto resolved = m_lineageRegistry->resolveOutput(frame->opaque_ref);
@@ -648,6 +749,21 @@ void VideoFilterNode::resetRuntimeState() noexcept
     auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
+    }
+    const AVFrame* emittedFrame = FFmpegFrameView::frame(buffer.value());
+    auto footprint = emittedFrame
+        ? MediaFramePayloadFootprint::logicalBytes(
+              *emittedFrame, MediaStreamKind::Video)
+        : ::media::Result<std::uint64_t>::failure(
+              ::media::ErrorInfo::invalidArgument(
+                  "VideoFilterNode wrapped frame is unavailable"));
+    if (!footprint) return ::media::Status::failure(footprint.error());
+    if (auto status = reservation.shrinkToActual(footprint.value());
+        !status) {
+        return status;
+    }
+    if (auto status = reservation.attachTo(*buffer.value()); !status) {
+        return status;
     }
 
     MediaTimeDescriptor timeDescriptor;
@@ -683,7 +799,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     if (status && !m_firstOutputDiagnosticEmitted) {
         filterLog(MediaGraphDiagnosticLevel::State,
                   "trace stage=first_output " +
-                      mediaGraphDiagnosticDescribeBuffer(output));
+                      MediaVideoFrameContractValidator::describe(*outputFrame, outputFacts.value()));
         m_firstOutputDiagnosticEmitted = true;
     }
     return status;
@@ -726,7 +842,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
     m_preparedReservation.emplace(std::move(*reservation.value()));
     m_preparedOutput.reset();
-    auto ready = m_preparationCapability->markFilterReady(
+        auto ready = m_preparationCapability->markOutputReady(
         m_preparedGeneration, m_preparedReleaseIdentity,
         m_preparedReservation->handle());
     if (ready) {

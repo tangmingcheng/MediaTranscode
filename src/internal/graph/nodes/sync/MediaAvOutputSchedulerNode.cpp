@@ -669,7 +669,8 @@ MediaAvOutputSchedulerNode::processSelected(
                 recheck.error());
         }
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_groupKey, recheck.value()));
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                *m_groupKey, recheck.value()));
     }
     m_generationData->heldControllerSequence.reset();
     const auto kind = decision.value().kind();
@@ -802,7 +803,7 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
     if (schedule.value().emit > now.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(
                 *m_groupKey, schedule.value().emit));
     }
     auto output = MediaAvScheduledOutputBuilder::audio(

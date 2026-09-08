@@ -48,6 +48,16 @@ namespace media::ffmpeg::graph {
                            ";profile-level-id=" +
                            codec.profileLevelId() + ";sprop-parameter-sets=" +
                            codec.spropParameterSets());
+            } else if constexpr (
+                std::is_same_v<Codec, MediaHevcSdpCodecDescription>) {
+                MediaSdpWireFormat::appendLine(output,
+                           "a=rtpmap:" + std::to_string(identity.payloadType()) +
+                           " H265/90000");
+                MediaSdpWireFormat::appendLine(output,
+                           "a=fmtp:" + std::to_string(identity.payloadType()) +
+                           " sprop-vps=" + codec.spropVps() +
+                           ";sprop-sps=" + codec.spropSps() +
+                           ";sprop-pps=" + codec.spropPps());
             } else {
                 MediaSdpWireFormat::appendLine(output,
                            "a=rtpmap:" + std::to_string(identity.payloadType()) +

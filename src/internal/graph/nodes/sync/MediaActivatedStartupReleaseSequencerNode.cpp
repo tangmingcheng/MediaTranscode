@@ -176,7 +176,7 @@ MediaActivatedStartupReleaseSequencerNode::process(
                     MediaNodeProcessResult::waiting());
             }
             if (preparation.phase !=
-                    MediaAvStartupVideoPreparationPhase::FilterReady ||
+                MediaAvStartupVideoPreparationPhase::OutputReady ||
                 preparation.generation != release->epoch().generation ||
                 preparation.releaseIdentity != transaction->releaseIdentity()) {
                 return failTerminal(::media::ErrorInfo::invalidArgument(

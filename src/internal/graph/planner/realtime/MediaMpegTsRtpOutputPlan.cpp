@@ -12,21 +12,27 @@ namespace {
 
 constexpr int Mp2tPayloadType = 33;
 constexpr int Mp2tClockRate = 90'000;
+constexpr std::size_t RtpFixedHeaderBytes = 12;
+constexpr std::size_t TsPacketBytes = 188;
 
 } // namespace
 
 ::media::Result<MediaMpegTsRtpOutputPlan>
 MediaMpegTsRtpOutputPlan::create(
-    MediaRtpUdpSenderConfig transport,
+    MediaRtpRemoteEndpointPair transport,
+    std::size_t maximumDatagramBytes,
     std::string sdpPath,
     std::string sessionIdentity,
-    MediaRunningTime senderReportInterval)
+    MediaRtcpReportingPolicy rtcpReporting)
 {
     const auto& rtp = transport.remoteRtpEndpoint();
     const auto& rtcp = transport.remoteRtcpEndpoint();
-    const auto maximumDatagramBytes = transport.maximumDatagramBytes();
     auto packetCount =
         MediaTsMuxPlan::maximumPacketsPerRtpDatagram(maximumDatagramBytes);
+    const std::size_t protocolDatagramBytes = packetCount
+        ? RtpFixedHeaderBytes +
+              static_cast<std::size_t>(packetCount.value()) * TsPacketBytes
+        : 0;
     const auto addressFamily = rtp.addressFamily();
     const std::string numericAddress = rtp.numericAddress();
     const std::string outputIdentity =
@@ -37,25 +43,15 @@ MediaMpegTsRtpOutputPlan::create(
         sessionIdentity, 0, 0, sessionIdentity,
         rtp.addressFamily(), rtp.numericAddress(), cname);
     if (!packetCount || sdpPath.empty() || sessionIdentity.empty() ||
-        senderReportInterval <= MediaRunningTime::fromNanoseconds(0) ||
+        rtcpReporting.steadyBaseInterval() <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        protocolDatagramBytes > maximumDatagramBytes ||
         maximumDatagramBytes >
-            static_cast<std::size_t>((std::numeric_limits<int>::max)() / 2) ||
-        transport.sendBufferBytes() <
-            static_cast<int>(maximumDatagramBytes * 2) ||
+            static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         rtp.port() == 0 || (rtp.port() % 2) != 0 ||
         rtcp.port() != rtp.port() + 1 ||
         rtcp.addressFamily() != rtp.addressFamily() ||
         rtcp.numericAddress() != rtp.numericAddress() ||
-        transport.localPortPolicy().kind() !=
-            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
-        transport.localPortPolicy().rtpPort() ||
-        transport.localPortPolicy().rtcpPort() ||
-        transport.localNumericAddress() !=
-            (rtp.addressFamily() == MediaIpAddressFamily::Ipv4
-                 ? "0.0.0.0"
-                 : "::") ||
-        transport.ioBehavior() !=
-            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure ||
         !sdpIdentity) {
         return ::media::Result<MediaMpegTsRtpOutputPlan>::failure(
             packetCount
@@ -68,12 +64,12 @@ MediaMpegTsRtpOutputPlan::create(
     return ::media::Result<MediaMpegTsRtpOutputPlan>::success(
         MediaMpegTsRtpOutputPlan(
             std::move(transport), Mp2tPayloadType, Mp2tClockRate,
-            MediaRtpOutputIdentityPlanner::stableNumeric(outputIdentity),
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(outputIdentity),
             MediaRtpOutputIdentityPlanner::stableNumeric(
                 outputIdentity + ".timestamp"),
             MediaRtpOutputIdentityPlanner::stableSequenceNumber(
                 outputIdentity + ".sequence"),
-            cname, senderReportInterval, maximumDatagramBytes,
+            cname, std::move(rtcpReporting), protocolDatagramBytes,
             packetCount.value(),
             MediaMpegTsRtpSdpPlan{
                 std::move(sdpPath), sessionIdentity, sessionIdentity,
@@ -81,16 +77,16 @@ MediaMpegTsRtpOutputPlan::create(
 }
 
 MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
-    MediaRtpUdpSenderConfig transport,
+    MediaRtpRemoteEndpointPair transport,
     int payloadType,
     int clockRate,
     std::uint32_t ssrc,
     std::uint32_t baseTimestamp,
     std::uint16_t initialSequenceNumber,
     std::string cname,
-    MediaRunningTime senderReportInterval,
+    MediaRtcpReportingPolicy rtcpReporting,
     std::size_t maximumDatagramBytes,
-    std::uint8_t tsPacketsPerPayload,
+    std::uint16_t tsPacketsPerPayload,
     MediaMpegTsRtpSdpPlan sdp) noexcept
     : m_transport(std::move(transport)),
       m_payloadType(payloadType),
@@ -99,7 +95,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
       m_baseTimestamp(baseTimestamp),
       m_initialSequenceNumber(initialSequenceNumber),
       m_cname(std::move(cname)),
-      m_senderReportInterval(senderReportInterval),
+      m_rtcpReporting(std::move(rtcpReporting)),
       m_maximumDatagramBytes(maximumDatagramBytes),
       m_tsPacketsPerPayload(tsPacketsPerPayload),
       m_sdp(std::move(sdp))
@@ -123,13 +119,13 @@ MediaMpegTsRtpOutputPlan::clone() const
             m_baseTimestamp,
             m_initialSequenceNumber,
             m_cname,
-            m_senderReportInterval,
+            m_rtcpReporting,
             m_maximumDatagramBytes,
             m_tsPacketsPerPayload,
             m_sdp));
 }
 
-const MediaRtpUdpSenderConfig&
+const MediaRtpRemoteEndpointPair&
 MediaMpegTsRtpOutputPlan::transport() const noexcept
 {
     return m_transport;
@@ -166,10 +162,10 @@ const std::string& MediaMpegTsRtpOutputPlan::cname() const noexcept
     return m_cname;
 }
 
-MediaRunningTime
-MediaMpegTsRtpOutputPlan::senderReportInterval() const noexcept
+const MediaRtcpReportingPolicy&
+MediaMpegTsRtpOutputPlan::rtcpReporting() const noexcept
 {
-    return m_senderReportInterval;
+    return m_rtcpReporting;
 }
 
 std::size_t
@@ -178,7 +174,7 @@ MediaMpegTsRtpOutputPlan::maximumDatagramBytes() const noexcept
     return m_maximumDatagramBytes;
 }
 
-std::uint8_t
+std::uint16_t
 MediaMpegTsRtpOutputPlan::tsPacketsPerPayload() const noexcept
 {
     return m_tsPacketsPerPayload;

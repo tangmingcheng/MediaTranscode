@@ -1,7 +1,10 @@
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
-#include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
+extern "C" {
+#include <libavfilter/avfilter.h>
+#include <libavutil/opt.h>
+}
 #include <string>
 #include <utility>
 
@@ -33,17 +36,6 @@ std::string filterRootName(const std::string& name)
 std::string codecSpecificName(const std::string& codec, const std::string& suffix)
 {
     return codec + suffix;
-}
-
-std::string softwareEncoderName(const std::string& outputCodec)
-{
-    if (outputCodec == "h264") {
-        return "libx264";
-    }
-    if (outputCodec == "hevc") {
-        return "libx265";
-    }
-    return outputCodec;
 }
 
 bool decoderExists(const std::string& name)
@@ -93,11 +85,6 @@ std::string d3d11FilterName(const MediaPipelinePlannerOptions& options)
     return targetResizeRequested(options) ? "scale_d3d11=" + targetSizeText(options) : "passthrough_d3d11va";
 }
 
-std::string rkmppFilterName(const MediaPipelinePlannerOptions& options)
-{
-    return targetResizeRequested(options) ? "scale_rkrga=" + targetSizeText(options) : "passthrough_rkmpp";
-}
-
 std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
 {
     return targetResizeRequested(options)
@@ -110,14 +97,7 @@ std::string videotoolboxFilterName(const MediaPipelinePlannerOptions& options)
     return targetResizeRequested(options) ? "scale_videotoolbox=" + targetSizeText(options) : "passthrough_videotoolbox";
 }
 
-std::string softwareFilterName(const MediaPipelinePlannerOptions& options)
-{
-    return targetResizeRequested(options)
-               ? "scale=" + targetSizeText(options) + ":flags=bicubic,format=pix_fmts=yuv420p"
-               : "format=pix_fmts=yuv420p";
-}
-
-std::string hardwareEncoderPixelFormatName(MediaHardwareDeviceKind deviceKind)
+std::string hardwareFramePixelFormatName(MediaHardwareDeviceKind deviceKind)
 {
     switch (deviceKind) {
     case MediaHardwareDeviceKind::CUDA:
@@ -141,17 +121,14 @@ std::string hardwareEncoderPixelFormatName(MediaHardwareDeviceKind deviceKind)
     return {};
 }
 
-std::string hardwareFramesPixelFormatName(MediaHardwareDeviceKind deviceKind)
+bool requiresGenericFramesContext(MediaHardwareDeviceKind deviceKind) noexcept
 {
     switch (deviceKind) {
     case MediaHardwareDeviceKind::CUDA:
-        return "cuda";
     case MediaHardwareDeviceKind::QSV:
-        return "qsv";
     case MediaHardwareDeviceKind::VAAPI:
-        return "vaapi";
     case MediaHardwareDeviceKind::D3D11VA:
-        return "d3d11";
+        return true;
     case MediaHardwareDeviceKind::Unknown:
     case MediaHardwareDeviceKind::None:
     case MediaHardwareDeviceKind::DRMPrime:
@@ -160,35 +137,31 @@ std::string hardwareFramesPixelFormatName(MediaHardwareDeviceKind deviceKind)
     case MediaHardwareDeviceKind::MediaCodec:
         break;
     }
-    return {};
+    return false;
 }
 
-std::string hardwareSurfacePixelFormatName(MediaHardwareDeviceKind deviceKind)
+MediaHardwareDescriptor makeFrameContract(MediaHardwareDeviceKind deviceKind,
+                                          const std::string& deviceName,
+                                          bool hardware,
+                                          bool zeroCopy)
 {
-    return hardwareFramesPixelFormatName(deviceKind).empty() ? std::string() : std::string("nv12");
-}
-
-void assignEncoderPixelFormats(MediaPipelineStagePlan& stage)
-{
-    if (stage.role != MediaPipelineStageRole::Encoder) {
-        return;
+    MediaHardwareDescriptor contract;
+    contract.deviceKind = deviceKind;
+    contract.frameKind = hardware ? MediaHardwareFrameKind::Hardware
+                                  : MediaHardwareFrameKind::Software;
+    contract.transferDirection = MediaHardwareTransferDirection::None;
+    contract.deviceName = deviceName;
+    contract.pixelFormat = hardware ? hardwareFramePixelFormatName(deviceKind) : "yuv420p";
+    if (deviceKind == MediaHardwareDeviceKind::RKMPP ||
+        requiresGenericFramesContext(deviceKind)) {
+        contract.surfacePixelFormat = "nv12";
     }
-
-    if (!stage.hardware) {
-        stage.pixelFormat = "yuv420p";
-        stage.hardwareFramesFormat.clear();
-        stage.surfacePixelFormat.clear();
-    } else {
-        stage.pixelFormat = hardwareEncoderPixelFormatName(stage.deviceKind);
-        stage.hardwareFramesFormat = hardwareFramesPixelFormatName(stage.deviceKind);
-        stage.surfacePixelFormat = hardwareSurfacePixelFormatName(stage.deviceKind);
-    }
-
-    if (stage.pixelFormat.empty()) {
-        stage.available = false;
-        stage.availabilityReason = "encoder pixel format is not planned for backend: " +
-                                   std::string(mediaHardwareDeviceKindName(stage.deviceKind));
-    }
+    contract.zeroCopyPreferred = zeroCopy;
+    contract.requiresHardwareDeviceContext =
+        hardware && deviceKind != MediaHardwareDeviceKind::RKMPP;
+    contract.requiresHardwareFramesContext =
+        hardware && requiresGenericFramesContext(deviceKind);
+    return contract;
 }
 
 MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
@@ -207,16 +180,7 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.codecName = std::move(codecName);
     stage.ffmpegName = std::move(ffmpegName);
     stage.hwaccelName = std::move(hwaccelName);
-    stage.deviceKind = deviceKind;
-    stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
-    stage.hardware = hardware;
-    stage.zeroCopy = zeroCopy;
     stage.priority = priority;
-    if (stage.role == MediaPipelineStageRole::Encoder) {
-        stage.encodedPacketLayout =
-            MediaEncoderPacketLayoutCapabilityProvider::find(stage.ffmpegName);
-    }
-
     const bool codecOk = role == MediaPipelineStageRole::Decoder
                              ? decoderExists(stage.ffmpegName)
                              : encoderExists(stage.ffmpegName);
@@ -224,7 +188,14 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.availabilityReason = codecOk
                                    ? "codec found"
                                    : std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
-    assignEncoderPixelFormats(stage);
+    MediaHardwareDescriptor contract = makeFrameContract(
+        deviceKind, stage.hwaccelName, hardware, zeroCopy);
+    if (role == MediaPipelineStageRole::Decoder) {
+        stage.outputFrame = std::move(contract);
+    } else {
+        contract.requiresHardwareDeviceContext = contract.requiresHardwareFramesContext;
+        stage.inputFrame = std::move(contract);
+    }
     return stage;
 }
 
@@ -241,33 +212,71 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
     stage.componentName = std::move(componentName);
     stage.filterName = std::move(filterName);
     stage.hwaccelName = std::move(hwaccelName);
-    stage.deviceKind = deviceKind;
-    stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
-    stage.hardware = hardware;
-    stage.zeroCopy = zeroCopy;
     stage.priority = priority;
 
-    const bool filterOk = filterExists(stage.filterName);
+    const bool filterOk = stage.filterName.empty() || filterExists(stage.filterName);
     stage.available = filterOk;
     stage.availabilityReason = filterOk ? "filter found" : "filter not found: " + stage.filterName;
+    if (!stage.filterName.empty()) {
+        MediaHardwareDescriptor contract = makeFrameContract(
+            deviceKind, stage.hwaccelName, hardware, zeroCopy);
+        stage.inputFrame = contract;
+        stage.outputFrame = std::move(contract);
+    }
     return stage;
 }
 
 MediaPipelineChainPlan makeRawChain(std::string label,
                                     MediaPipelineStagePlan decoder,
                                     MediaPipelineStagePlan filter,
-                                    MediaPipelineStagePlan encoder)
+                                    MediaPipelineStagePlan encoder,
+                                    const MediaPipelinePlannerOptions& options)
 {
     MediaPipelineChainPlan chain;
     chain.label = std::move(label);
     chain.decoder = std::move(decoder);
     chain.filter = std::move(filter);
     chain.encoder = std::move(encoder);
+    chain.filterActive = !chain.filter.filterName.empty();
+    chain.transferDirection = MediaHardwareTransferDirection::None;
+
+    const MediaSize sourceSize{options.probeWidth, options.probeHeight};
+    const MediaSize outputSize = targetResizeRequested(options)
+        ? MediaSize{options.targetWidth, options.targetHeight}
+        : sourceSize;
+    if (chain.decoder.outputFrame) chain.decoder.outputFrame->size = sourceSize;
+    if (chain.filter.inputFrame) chain.filter.inputFrame->size = sourceSize;
+    if (chain.filter.outputFrame) chain.filter.outputFrame->size = outputSize;
+    if (chain.encoder.inputFrame) chain.encoder.inputFrame->size = outputSize;
 
     return chain;
 }
 
 } // namespace
+
+::media::Result<std::string> MediaVideoCapabilityScanner::planRkmppFilter(
+    const MediaPipelinePlannerOptions& options)
+{
+    using Result = ::media::Result<std::string>;
+    if (!targetResizeRequested(options)) return Result::success({});
+    std::string description = "scale_rkrga=w=" + std::to_string(options.targetWidth) +
+        ":h=" + std::to_string(options.targetHeight) + ":format=nv12";
+    if (options.lowLatency) {
+        const AVFilter* filter = avfilter_get_by_name("scale_rkrga");
+        const AVClass* filterClass = filter ? filter->priv_class : nullptr;
+        const AVOption* depth = filterClass
+            ? av_opt_find(&filterClass, "async_depth", nullptr, 0, AV_OPT_SEARCH_FAKE_OBJ)
+            : nullptr;
+        // RGA retrieves a completed frame only when its FIFO exceeds this depth.
+        // Live input can pause indefinitely, so no frame may wait for later input.
+        if (!depth || depth->type != AV_OPT_TYPE_INT || depth->min != 0) {
+            return Result::failure(::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP low-latency filter requires advertised zero-frame async depth"));
+        }
+        description += ":async_depth=" + std::to_string(static_cast<int>(depth->min));
+    }
+    return Result::success(std::move(description));
+}
 
 std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTranscodeCandidates(
     const std::string& inputCodecName, const std::string& outputCodecName,
@@ -281,12 +290,10 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                    MediaPipelineStagePlan encoder)
     {
         chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter),
-                                      std::move(encoder)));
+                                      std::move(encoder), options));
     };
 
-    if (!options.disableHardware)
-    {
-        add("cuda-nvenc",
+    add("cuda-nvenc",
             makeCodecStage(MediaPipelineStageRole::Decoder, "cuda decoder", inputCodec,
                            inputCodec, "cuda",
                            MediaHardwareDeviceKind::CUDA, true, true, 95),
@@ -297,7 +304,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_nvenc"), "cuda",
                            MediaHardwareDeviceKind::CUDA, true, true, 95));
 
-        add("qsv",
+    add("qsv",
             makeCodecStage(MediaPipelineStageRole::Decoder, "qsv decoder", inputCodec,
                            codecSpecificName(inputCodec, "_qsv"), "qsv",
                            MediaHardwareDeviceKind::QSV, true, true, 90),
@@ -308,7 +315,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_qsv"), "qsv",
                            MediaHardwareDeviceKind::QSV, true, true, 90));
 
-        add("d3d11va-mediafoundation",
+    add("d3d11va-mediafoundation",
             makeCodecStage(MediaPipelineStageRole::Decoder, "d3d11va decoder", inputCodec,
                            inputCodec, "d3d11va", MediaHardwareDeviceKind::D3D11VA, true, true, 84),
             makeFilterStage(targetResizeRequested(options) ? "d3d11va scale filter"
@@ -319,19 +326,26 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_mf"), "d3d11va",
                            MediaHardwareDeviceKind::D3D11VA, true, true, 84));
 
-        add("rkmpp",
+    auto rkmppDescription = planRkmppFilter(options);
+    auto rkmppFilter = makeFilterStage(
+        targetResizeRequested(options) ? "rga/rkmpp scale filter" : "rga/rkmpp passthrough filter",
+        rkmppDescription ? rkmppDescription.value() : std::string(),
+        "rkmpp", MediaHardwareDeviceKind::RKMPP, true, true, 90);
+    if (!rkmppDescription) {
+        rkmppFilter.available = false;
+        rkmppFilter.availabilityReason = rkmppDescription.error().message;
+    }
+    add("rkmpp",
             makeCodecStage(MediaPipelineStageRole::Decoder, "rkmpp decoder", inputCodec,
                            codecSpecificName(inputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92),
-            makeFilterStage(targetResizeRequested(options) ? "rga/rkmpp scale filter"
-                                                           : "rga/rkmpp passthrough filter",
-                            rkmppFilterName(options), "rkmpp", MediaHardwareDeviceKind::RKMPP, true,
-                            true, 90),
+            std::move(rkmppFilter),
             makeCodecStage(MediaPipelineStageRole::Encoder, "rkmpp encoder", outputCodec,
                            codecSpecificName(outputCodec, "_rkmpp"), "rkmpp",
                            MediaHardwareDeviceKind::RKMPP, true, true, 92));
+    chains.back().filterActive = targetResizeRequested(options);
 
-        add("vaapi",
+    add("vaapi",
             makeCodecStage(MediaPipelineStageRole::Decoder, "vaapi decoder", inputCodec, inputCodec,
                            "vaapi", MediaHardwareDeviceKind::VAAPI, true, true, 82),
             makeFilterStage(
@@ -341,7 +355,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            codecSpecificName(outputCodec, "_vaapi"), "vaapi",
                            MediaHardwareDeviceKind::VAAPI, true, true, 82));
 
-        add("videotoolbox",
+    add("videotoolbox",
             makeCodecStage(MediaPipelineStageRole::Decoder, "videotoolbox decoder", inputCodec,
                            inputCodec, "videotoolbox", MediaHardwareDeviceKind::VideoToolbox, true,
                            true, 80),
@@ -352,29 +366,6 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
             makeCodecStage(MediaPipelineStageRole::Encoder, "videotoolbox encoder", outputCodec,
                            codecSpecificName(outputCodec, "_videotoolbox"), "videotoolbox",
                            MediaHardwareDeviceKind::VideoToolbox, true, true, 80));
-    }
-
-    if (options.disableHardware)
-    {
-        add("software",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec,
-                           inputCodec, "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeFilterStage(
-                targetResizeRequested(options) ? "software scale filter" : "software format filter",
-                softwareFilterName(options), "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "software encoder", outputCodec,
-                           softwareEncoderName(outputCodec), "", MediaHardwareDeviceKind::None,
-                           false, false, 30));
-
-        add("software-native-codec",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec,
-                           inputCodec, "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeFilterStage(
-                targetResizeRequested(options) ? "software scale filter" : "software format filter",
-                softwareFilterName(options), "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "native software encoder", outputCodec,
-                           outputCodec, "", MediaHardwareDeviceKind::None, false, false, 20));
-    }
 
     return chains;
 }

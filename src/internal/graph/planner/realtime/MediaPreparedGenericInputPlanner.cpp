@@ -19,11 +19,7 @@ MediaPreparedGenericInputPlanner::plan(
         !startup.videoCapacity || !startup.audioCapacity ||
         !startup.videoByteCapacity || !startup.audioByteCapacity ||
         !startup.maximumVideoUnitBytes || !startup.maximumAudioUnitBytes ||
-        !startup.maximumInitialSkewNs ||
-        !request.preparedHandoff.videoPacketCapacity ||
-        !request.preparedHandoff.audioPacketCapacity ||
-        !request.preparedHandoff.videoByteCapacity ||
-        !request.preparedHandoff.audioByteCapacity) {
+        !startup.maximumInitialSkewNs) {
         return ::media::Result<MediaPreparedGenericInputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "prepared generic A/V input requires the shared startup policy"));
@@ -43,10 +39,10 @@ MediaPreparedGenericInputPlanner::plan(
         *startup.audioByteCapacity,
         *startup.maximumVideoUnitBytes,
         *startup.maximumAudioUnitBytes,
-        *request.preparedHandoff.videoPacketCapacity,
-        *request.preparedHandoff.audioPacketCapacity,
-        *request.preparedHandoff.videoByteCapacity,
-        *request.preparedHandoff.audioByteCapacity,
+        *startup.videoCapacity,
+        *startup.audioCapacity,
+        *startup.videoByteCapacity,
+        *startup.audioByteCapacity,
         MediaRunningTime::fromNanoseconds(
             static_cast<std::int64_t>(*request.input.readTimeoutMs) *
             1'000'000),

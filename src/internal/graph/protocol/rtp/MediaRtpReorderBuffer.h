@@ -26,7 +26,7 @@ struct MediaRtpDiscontinuity final {
 
 struct MediaRtpReorderConfig final {
     std::size_t windowPackets;
-    std::chrono::milliseconds maximumDelay;
+    std::chrono::nanoseconds maximumDelay;
     uint8_t payloadType;
 };
 

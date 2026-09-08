@@ -1,0 +1,161 @@
+# Realtime Datagram 参数收口 RKMPP 验收
+
+## HEVC 2K30 → H.264 1080p25 VBR 5/12/13 Mbps
+
+- 冻结代码：`f5913278`
+- 日期：2026-09-01
+- 输入：HEVC 2560×1440、30 fps、真实连续 120 秒源
+- 输出：H.264 1920×1080、25 fps、VBR min/target/max = 5/12/13 Mbps、GOP 50、MPEG-TS/RTP
+- 部署事实：受管 egress 容量 50 Mbps，最大 wire residence 100 ms
+
+### 实际命令
+
+CLI：
+
+```bash
+/home/tang/task5-f5913278/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-f5913278-high-2k30-hevc-to-1080p25-h264-vbr --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60340 --video-rtp-codec hevc --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61340 --sdp /home/tang/task5-f5913278/out/acceptance/rk-high-pass/output.sdp --video-codec h264 --rc vbr --width 1920 --height 1080 --fps 25 --min-bitrate 5000 --bitrate 12000 --max-bitrate 13000 --gop 50 --no-audio
+```
+
+FFmpeg 源流：
+
+```bash
+/usr/local/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s-2k-hevc.mp4 -map 0:v:0 -an -c:v copy -bsf:v hevc_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:60340?rtcpport=60341&pkt_size=1200"
+```
+
+VLC 接收：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --stats --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-high-pass-f5913278\vlc.log rtp://@192.168.96.122:61340
+```
+
+### 结果
+
+- planner 自动选择 `hevc_rkmpp → scale_rkrga → h264_rkmpp`，`zero_copy=true`；编码 readback 为 1920×1080、25 fps、VBR 5/12/13 Mbps、GOP 50。
+- 生产 DAG 输出 2993 个 access unit；RTP 145451 包、RTCP 30 包，媒体跨度 119.783343 秒。
+- RTP sequence 断点 0，TS continuity 错误 0；RK `eth0` 与 Windows 接收侧均捕获 145481 包，两端捕获丢包均为 0。
+- sender 实际最高服务率 5,760,776 B/s；以最大 IP Datagram 1356 B 为 burst 上限做 GCRA，最大 debt 1356 B、超额 0 B，判定无 burst。
+- sender `would_block=0`、`deadline_misses=0`、`pressure_failures=0`、`partial_submitted_failures=0`、`ambiguous_submitted_failures=0`。
+- VLC 日志确认 `Received first picture`、`Stream buffering done`、H.264 解码器和 1920×1080 D3D11 输出建立；decoder/corrupt/late/lost/black/discontinuity 错误匹配为 0，VLC 正常退出。
+- RK CLI 平均单核 CPU 17.928%，峰值 28.426%；RSS 从 55,590,912 B 增至 62,115,840 B，增长 6,524,928 B。CPU 优化按当前范围暂缓。
+- 源结束后 CLI 以 `RTP video source clock evidence expired` 终止；最终 `queued=0`、`droppedBuffers=0`、资源 reservation/release 相等，无进程残留。
+
+结论：该 RKMPP 高规格参数收口与 MPEG-TS/RTP Datagram 发送控制门禁通过。
+
+## H.264 720p30 → HEVC 1080p25 CBR 6 Mbps
+
+- 冻结代码：`f5913278`
+- 日期：2026-09-01
+- 输入：H.264 1280×720、30 fps、真实连续 120 秒源
+- 输出：HEVC 1920×1080、25 fps、CBR target = 6 Mbps、GOP 50、MPEG-TS/RTP
+- 部署事实：受管 egress 容量 50 Mbps，最大 wire residence 100 ms
+
+### 实际命令
+
+CLI：
+
+```bash
+/home/tang/task5-f5913278/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-f5913278-low-720p30-h264-to-1080p25-hevc-cbr --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60350 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61350 --sdp /home/tang/task5-f5913278/out/acceptance/rk-low-pass/output.sdp --video-codec hevc --rc cbr --width 1920 --height 1080 --fps 25 --bitrate 6000 --gop 50 --no-audio
+```
+
+FFmpeg 源流：
+
+```bash
+/usr/local/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 "rtp://127.0.0.1:60350?rtcpport=60351&pkt_size=1200"
+```
+
+VLC 接收：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --stats --network-caching=1000 --file-logging --logfile=D:\Code\MyCode\MediaTranscode\out\acceptance\rk-low-pass-f5913278\vlc.log rtp://@192.168.96.122:61350
+```
+
+### 结果
+
+- planner 自动选择 `h264_rkmpp → scale_rkrga → hevc_rkmpp`，`zero_copy=true`；对外 CBR 仅输入 target 6 Mbps，编码 readback 内部推导 min/max 为 5.625/6.375 Mbps，并确认 1920×1080、25 fps、GOP 50。
+- 生产 DAG 输出 2993 个 access unit；RTP 75172 包、RTCP 29 包，媒体跨度 119.772097 秒。
+- RTP sequence 断点 0，TS continuity 错误 0；RK `eth0` 与 Windows 接收侧均捕获 75201 包，两端捕获丢包均为 0。
+- sender 实际最高服务率 4,658,117 B/s；以最大 IP Datagram 1356 B 为 burst 上限做 GCRA，最大 debt 1356 B、超额 0 B，判定无 burst。
+- sender `would_block=0`、`deadline_misses=0`、`pressure_failures=0`、`partial_submitted_failures=0`、`ambiguous_submitted_failures=0`。
+- VLC 日志确认 `Received first picture`、`Stream buffering done`、HEVC 解码器和 1920×1080 D3D11 输出建立；decoder/corrupt/late/lost/black/discontinuity 错误匹配为 0，VLC 正常退出。
+- RK CLI 平均单核 CPU 12.191%，峰值 20.725%；RSS 从 60,035,072 B 增至 65,351,680 B，增长 5,316,608 B。CPU 优化按当前范围暂缓。
+- 源结束后 CLI 以 `RTP video source clock evidence expired` 终止；最终 `queued=0`、`droppedBuffers=0`、资源 reservation/release 相等，无进程残留。
+
+结论：该 RKMPP 低规格参数收口与 MPEG-TS/RTP Datagram 发送控制门禁通过。
+
+## 复审期间随机同规格双抓包复测：PASS
+
+- 冻结代码：`5d125054`。
+- 日期：2026-09-01。
+- 输入：真实连续 120 秒 H.264 1280×720、30 fps，raw RTP。
+- 输出：HEVC 1920×1080、25 fps、CBR target 6 Mbps、GOP 50，MPEG-TS/RTP。
+- 部署事实：受管 egress 50 Mbps，最大 wire residence 100 ms。
+
+### 实际命令
+
+CLI：
+
+```bash
+/home/tang/task5-f5913278/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-random-h264720p30-hevc1080p25-cbr6m-egress-pass3 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60680 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61680 --sdp /home/tang/task5-f5913278/out/acceptance/rk-review-random05/output.sdp --video-codec hevc --rc cbr --bitrate 6000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
+```
+
+FFmpeg 源流：
+
+```bash
+/usr/local/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://127.0.0.1:60680?rtcpport=60681&pkt_size=1200'
+```
+
+VLC 接收：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --file-logging --logfile D:\Code\MyCode\MediaTranscode\out\acceptance\rk-review-random05\vlc.log --no-video-title-show rtp://@192.168.96.122:61680
+```
+
+### 结果
+
+- planner 选择 `h264_rkmpp → scale_rkrga=w=1920:h=1080:format=nv12 → hevc_rkmpp`，DRM PRIME、`zero_copy=true`；FFmpeg 完整发送 3600 帧/120 秒。
+- sender 提交 75202 个 datagram；Windows receiver 同步捕获 75202 个，接口丢包 0；RTP 75174 包、loss/reorder 0，MPEG-TS continuity、TEI 与 fragment error 均为 0。
+- 本轮目标机 egress 退出边界落盘 75199/75202 包，1/10/100 ms 最大 IP 字节为 4068/32544/278100 B；紧邻同版本同规格复测完整落盘 75202/75202 包，其 egress 对应值为 4296/34584/297956 B。两轮均低于各自 4045157/4409470 B/s service envelope 加单包余量，没有追赶式 burst。
+- receiver 的 1 ms 最大值为 9492 B，而 10 ms 与 egress 同为 32544 B；同版本完整双抓包复测的两端 100 ms 同为 297956 B，证明短窗差异来自 Windows Npcap 批量时间戳，不是发送端 burst。
+- sender would-block、writable wait、deadline miss、pressure、partial submit、ambiguous submit 均为 0；最终 backlog 为 0，materialized/scheduled/submitted/committed sequence 均为 75202。
+- Linux endpoint 的 planned/effective socket buffer 均为 151122 B，API request 为 75561 B；两个 endpoint aggregate effective 为 302244 B，符合 Linux doubled accounting。
+- VLC 记录 `Received first picture`、`Stream buffering done (1040 ms in 943 ms)`、1920×1080 D3D11 输出；picture too late、corrupt、black、lost、discontinuity、decoder error 均为 0。启动后仅有一次 `might be displayed late (missing 5 ms)`，未形成 late/drop；VLC 主窗口优雅退出。
+- RK CLI 平均单核 CPU 12.113%，峰值 20.833%；峰值 RSS 62156800 B。最终 droppedBuffers、graph payload current 与 backlog 均为 0。
+- 源结束后 CLI 如实以 `RTP video source clock evidence expired` 失败退出，不改写为发送成功或取消。
+
+结论：复审期间 RKMPP 随机低规格真实链路发送控制与完整播放门禁通过。
+
+## 最终平台能力探测回归门禁：PASS
+
+- 日期：2026-09-01。
+- 冻结生产代码：`55d485a9`；验收前文档 HEAD：`b15966a6`。
+- 输入：真实连续 120 秒 H.264 1280x720、30 fps、raw RTP。
+- 输出：HEVC 1920x1080、25 fps、CBR target 6 Mbps、GOP 50、MPEG-TS/RTP。
+- 部署事实：受管 egress 50 Mbps，最大 wire residence 100 ms。
+
+CLI：
+
+```bash
+/home/tang/task5-f5913278/out/build/rk-release/media_transcode_realtime_video_cli --media-id rk-final-sndbuf-h264720p30-hevc1080p25-cbr6m --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60690 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --rtp-host 192.168.96.122 --rtp-port 61690 --sdp /home/tang/task5-f5913278/out/acceptance/rk-final-sndbuf/output.sdp --video-codec hevc --rc cbr --bitrate 6000 --width 1920 --height 1080 --fps 25 --gop 50 --no-audio
+```
+
+FFmpeg 源：
+
+```bash
+/usr/local/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://127.0.0.1:60690?rtcpport=60691&pkt_size=1200'
+```
+
+VLC：
+
+```powershell
+D:\VideoLAN\VLC\vlc.exe --no-one-instance --verbose=2 --file-logging --logfile D:\Code\MyCode\MediaTranscode\out\acceptance\rk-final-sndbuf\vlc-rerun2.log --no-video-title-show rtp://@192.168.96.122:61690
+```
+
+结果：
+
+- FFmpeg 完整发送 3600 帧；生产 DAG 输出 2993 个 access unit。sender 与 Windows receiver 均为 75203 个 datagram；RTP 75174 包，loss/reorder 0，接收端抓包丢包 0。
+- 目标机 egress 在 tcpdump 退出边界落盘 75200 个 datagram，少于 sender/receiver 3 个，内核丢包 0；其 RTP 75171 包、loss/reorder 0。该边界差异不用于缩减 sender/receiver 对账结论。
+- sender 最大 wire rate 为 4089868 B/s、单包 burst 为 1356 B；目标 egress 的 1/10/100 ms 最大 IP 字节为 4068/32544/274488 B，低于对应 service envelope 加单包余量 5446/42255/410343 B。GCRA 最大 debt 为 1356.365 B，与单包余量差 0.365 B，处于抓包时间戳量化误差内，无追赶式 burst。
+- MPEG-TS continuity drop、TEI 均为 0。sender would-block、writable wait、deadline miss、pressure、partial submit、ambiguous submit 均为 0；最大 submit lateness 7.875 ms，最终 backlog 为 0。Linux endpoint target/effective 为 151122 B、API request 为 75561 B，符合内核双倍记账证据。
+- VLC 记录 `Received first picture`、`Stream buffering done`、1920x1080 HEVC D3D11VA 输出；picture too late、black、corrupt、lost、discontinuity、decoder error 均为 0。唯一一次 `might be displayed late (missing 11 ms)` 后立即是窗口主动关闭与 `exiting`，属于 teardown。
+- RK CLI 平均单核 CPU 12.097%，峰值 12.5%；RSS 从 37496 KiB 增至 57988 KiB。源结束后如实以 RTP source-clock evidence expiry 终止，最终 dropped buffer、graph payload、backlog 均为 0。
+- 完全同参数的前一轮发送控制同样无故障且双端 74694 个 datagram 对账，但有限源停止后固定 5 秒 progress watchdog 先于 7–9 秒 RTP source-clock 失活边界触发，终态为 `realtime runtime made no progress before timeout`，且遗留 5 个 payload 对象；该轮为 FAIL，不计入通过证据。该既有生命周期竞态未通过扩展 timeout 或修改发送算法掩盖，保留为待修风险。

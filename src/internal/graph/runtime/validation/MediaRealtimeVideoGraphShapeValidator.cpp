@@ -2,14 +2,14 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaMuxSessionKind.h"
-#include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
-#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRealtimeRuntimeBinding.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
+#include "internal/graph/runtime/validation/MediaDatagramOutputGraphShapeValidator.h"
 #include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 
 #include <initializer_list>
@@ -210,8 +210,14 @@ const MediaEdge* exactEdge(
     const auto gate = shape.nodes(MediaNodeKind::PacketStartGate);
     if (decode.size() != 1 || transfer.size() != 1 ||
         timestamp.size() != 1 || frameRate.size() != 1 ||
-        filter.size() != 1 || encode.size() != 1 || gate.size() > 1) {
+        encode.size() != 1 || gate.size() > 1) {
         return invalid("video lineage node cardinality");
+    }
+    auto filterActive = requiredBoolNodeOption(
+        &encode.front()->options, "VideoEncodeNode", "pipeline.filter_active");
+    if (!filterActive ||
+        filter.size() != (filterActive.value() ? 1U : 0U)) {
+        return invalid("video filter cardinality differs from planner product");
     }
 
     const MediaNode& packetTarget = gate.empty()
@@ -248,16 +254,20 @@ const MediaEdge* exactEdge(
         return invalid("post-gate startup packet policy");
     }
 
+    const bool validPreparedFrameEdge = filterActive.value()
+        ? exactEdge(graph, *frameRate.front(), "frame", *filter.front(),
+                    "frame", runtime.lineageEdgePolicies.frame) != nullptr &&
+              exactEdge(graph, *filter.front(), "frame", *encode.front(),
+                        "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr
+        : exactEdge(graph, *frameRate.front(), "frame", *encode.front(),
+                    "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr;
     if (!exactEdge(graph, *decode.front(), "frame", *transfer.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
         !exactEdge(graph, *transfer.front(), "frame", *timestamp.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
         !exactEdge(graph, *timestamp.front(), "frame", *frameRate.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
-        !exactEdge(graph, *frameRate.front(), "frame", *filter.front(),
-                   "frame", runtime.lineageEdgePolicies.frame) ||
-        !exactEdge(graph, *filter.front(), "frame", *encode.front(),
-                   "frame", runtime.lineageEdgePolicies.preparedFrame)) {
+        !validPreparedFrameEdge) {
         return invalid("lossless video frame lineage policy");
     }
     return ::media::Status::success();
@@ -282,10 +292,13 @@ const MediaEdge* exactEdge(
             scheduler.findOutputPort("scheduled_video"),
             MediaPortDirection::Output, MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
-        scheduler.options.values().size() != 16 ||
         MediaGraphShapeQuery::incomingEdgeCount(
             graph, scheduler.findInputPort("video")->id) != 1) {
         return invalid("scheduler ports or cardinality");
+    }
+    constexpr std::size_t SchedulerOptionCount = 18;
+    if (scheduler.options.values().size() != SchedulerOptionCount) {
+        return invalid("scheduler option cardinality");
     }
     const MediaEdge* schedulerInput = nullptr;
     for (const MediaEdge& edge : graph.edges()) {
@@ -336,6 +349,12 @@ const MediaEdge* exactEdge(
     auto transportLead = requiredPositiveInt64NodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
+    auto protocolPreparationLead = requiredPositiveInt64NodeOption(
+        &scheduler.options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.protocol_preparation_lead_ns");
+    auto activationLead = requiredPositiveInt64NodeOption(
+        &scheduler.options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.activation_lead_ns");
     auto pacingEnabled = requiredBoolNodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
@@ -357,7 +376,9 @@ const MediaEdge* exactEdge(
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled || !initialGeneration || !session ||
+        !transportLead || !protocolPreparationLead || !activationLead ||
+        !pacingEnabled ||
+        !initialGeneration || !session ||
         !expectedTimingMode ||
         requireKeyFrame.value() != runtime.startup.requireKeyFrame ||
         maximumWait.value() != runtime.startup.maximumWait.nanoseconds() ||
@@ -378,6 +399,10 @@ const MediaEdge* exactEdge(
         packetTimingMode.value() != expectedTimingMode ||
         transportLead.value() !=
             runtime.scheduling.transportLead.nanoseconds() ||
+        protocolPreparationLead.value() !=
+            runtime.scheduling.protocolPreparationLead.nanoseconds() ||
+        activationLead.value() !=
+            runtime.scheduling.activationLead.nanoseconds() ||
         pacingEnabled.value() != runtime.scheduling.pacingEnabled ||
         static_cast<std::uint64_t>(initialGeneration.value()) !=
             runtime.scheduling.initialGeneration ||
@@ -395,7 +420,16 @@ const MediaEdge* exactEdge(
 {
     const MediaAvSyncGraphShape shape(graph);
     auto cardinality = shape.requireExact({
-        {MediaNodeKind::ScheduledRtpSender, 1, "video RTP sender"},
+        {MediaNodeKind::ScheduledRtpSender, 0, "legacy video RTP sender"},
+        {MediaNodeKind::RtpDatagramMaterializer, 1,
+         "video RTP datagram materializer"},
+        {MediaNodeKind::DatagramTransportPlanSource, 1,
+         "datagram transport plan source"},
+        {MediaNodeKind::DatagramShaper, 0, "retired datagram shaper"},
+        {MediaNodeKind::ScheduledDatagramSender, 1,
+         "common scheduled datagram sender"},
+        {MediaNodeKind::MpegTsDatagramMaterializer, 0,
+         "MPEG-TS datagram materializer"},
         {MediaNodeKind::RtpSdpPublisher, 1, "video SDP publisher"},
         {MediaNodeKind::ProjectMpegTsPlanSource, 0, "MPEG-TS plan source"},
         {MediaNodeKind::ScheduledTsAccessUnitAdapter, 0, "TS adapter"},
@@ -407,17 +441,24 @@ const MediaEdge* exactEdge(
         {MediaNodeKind::SdpWriter, 0, "legacy SDP writer"}},
         "VideoOnly scheduled RTP output");
     if (!cardinality) return cardinality;
+    if (auto datagram = MediaDatagramOutputGraphShapeValidator::validate(
+            graph, runtime.datagramTransport, runtime.sessionKey,
+            MediaTranscodeStreamSet::VideoOnly,
+            MediaNodeKind::RtpDatagramMaterializer, 1,
+            runtime.edgePolicies); !datagram) {
+        return datagram;
+    }
     const MediaNode& sender =
-        *shape.nodes(MediaNodeKind::ScheduledRtpSender).front();
+        *shape.nodes(MediaNodeKind::RtpDatagramMaterializer).front();
     const MediaNode& sdp =
         *shape.nodes(MediaNodeKind::RtpSdpPublisher).front();
-    auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(sender);
+    auto decoded = MediaRtpDatagramMaterializerNodePlanCodec::decode(sender);
     if (!decoded) return ::media::Status::failure(decoded.error());
     if (decoded.value().sessionKey != runtime.sessionKey ||
         decoded.value().streamSet != MediaTranscodeStreamSet::VideoOnly ||
         decoded.value().output != product.video ||
         decoded.value().sdp != product.sdp ||
-        sender.inputPorts.size() != 3 || sender.outputPorts.size() != 1 ||
+        sender.inputPorts.size() != 4 || sender.outputPorts.size() != 2 ||
         !MediaGraphShapeQuery::validPort(sender.findInputPort("activation"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
@@ -473,19 +514,35 @@ const MediaEdge* exactEdge(
         std::holds_alternative<MediaMpegTsUdpOutputPlan>(product.transport);
     const MediaAvSyncGraphShape shape(graph);
     auto cardinality = shape.requireExact({
-        {MediaNodeKind::ScheduledRtpSender, 0, "video RTP sender"},
+        {MediaNodeKind::ScheduledRtpSender, 0, "legacy video RTP sender"},
+        {MediaNodeKind::RtpDatagramMaterializer, 0,
+         "RTP datagram materializer"},
         {MediaNodeKind::RtpSdpPublisher, 0, "RTP SDP publisher"},
         {MediaNodeKind::ProjectMpegTsPlanSource, 1, "MPEG-TS plan source"},
         {MediaNodeKind::ScheduledTsAccessUnitAdapter, 1, "TS adapter"},
         {MediaNodeKind::MpegTsRtpSdpPublisher, udp ? 0u : 1u,
          "MP2T SDP publisher"},
+        {MediaNodeKind::ScheduledDatagramSender, 1,
+         "common scheduled datagram sender"},
+        {MediaNodeKind::DatagramTransportPlanSource, 1,
+         "datagram transport plan source"},
+        {MediaNodeKind::DatagramShaper, 0, "retired datagram shaper"},
+        {MediaNodeKind::MpegTsDatagramMaterializer, 1,
+         "MPEG-TS datagram materializer"},
         {MediaNodeKind::FileMux, 1, "MPEG-TS mux"},
-        {MediaNodeKind::FileOutput, udp ? 1u : 0u, "MPEG-TS byte sink"},
+        {MediaNodeKind::FileOutput, 0, "legacy MPEG-TS byte sink"},
         {MediaNodeKind::RtpMux, 0, "legacy RTP mux"},
         {MediaNodeKind::RtpOutput, 0, "legacy RTP output"},
         {MediaNodeKind::SdpWriter, 0, "legacy SDP writer"}},
         "VideoOnly Project MPEG-TS output");
     if (!cardinality) return cardinality;
+    if (auto datagram = MediaDatagramOutputGraphShapeValidator::validate(
+            graph, runtime.datagramTransport, runtime.sessionKey,
+            MediaTranscodeStreamSet::VideoOnly,
+            MediaNodeKind::MpegTsDatagramMaterializer, 1,
+            runtime.edgePolicies); !datagram) {
+        return datagram;
+    }
     if (product.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
         !product.protocol.muxPlan().videoOnlyProgram() ||
         product.protocol.muxPlan().audioVideoProgram()) {
@@ -547,8 +604,7 @@ const MediaEdge* exactEdge(
         muxSessionKind.value() != MediaMuxSessionKind::ProjectMpegTs) {
         return invalid("MPEG-TS mux options differ from runtime product");
     }
-    if (!mux.outputPorts.empty() ||
-        mux.inputPorts.size() != (udp ? 4u : 3u)) {
+    if (mux.outputPorts.size() != 1 || mux.inputPorts.size() != 3) {
         return invalid("MPEG-TS mux port count differs from runtime product");
     }
     if (!MediaGraphShapeQuery::validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
@@ -559,7 +615,12 @@ const MediaEdge* exactEdge(
                    MediaPayloadKind::TsAccessUnit) ||
         !MediaGraphShapeQuery::validPort(mux.findInputPort("plan"), MediaPortDirection::Input,
                    MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-                   MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
+                   MediaPayloadKind::ProjectMpegTsRuntimePlan) ||
+        !MediaGraphShapeQuery::validPort(
+            mux.findOutputPort("batch"), MediaPortDirection::Output,
+            MediaStreamKind::Metadata,
+            MediaEdgeKind::ScheduledDatagramBatch,
+            MediaPayloadKind::MpegTsProtocolDatagramBatch)) {
         return invalid("MPEG-TS mux port types differ from runtime product");
     }
     const MediaEdge* activation = MediaGraphShapeQuery::singleEdge(
@@ -589,34 +650,37 @@ const MediaEdge* exactEdge(
         packet->policy != runtime.edgePolicies.synchronizedPacket) {
         return invalid("MPEG-TS edges differ from runtime product");
     }
+    const MediaNode& materializer =
+        *shape.nodes(MediaNodeKind::MpegTsDatagramMaterializer).front();
+    const MediaEdge* planToMaterializer = MediaGraphShapeQuery::singleEdge(
+        graph, source.findOutputPort("plan")->id,
+        materializer.findInputPort("protocol_plan")->id);
+    const MediaEdge* batchToMaterializer = MediaGraphShapeQuery::singleEdge(
+        graph, mux.findOutputPort("batch")->id,
+        materializer.findInputPort("protocol_batch")->id);
+    if (materializer.inputPorts.size() != 3 ||
+        materializer.outputPorts.size() != 1 ||
+        !MediaGraphShapeQuery::validPort(
+            materializer.findInputPort("protocol_plan"),
+            MediaPortDirection::Input, MediaStreamKind::Metadata,
+            MediaEdgeKind::Metadata,
+            MediaPayloadKind::ProjectMpegTsRuntimePlan) ||
+        !MediaGraphShapeQuery::validPort(
+            materializer.findInputPort("protocol_batch"),
+            MediaPortDirection::Input, MediaStreamKind::Metadata,
+            MediaEdgeKind::ScheduledDatagramBatch,
+            MediaPayloadKind::MpegTsProtocolDatagramBatch) ||
+        !planToMaterializer || !batchToMaterializer ||
+        planToMaterializer->policy != runtime.edgePolicies.atomicMetadata ||
+        batchToMaterializer->policy !=
+            runtime.edgePolicies.synchronizedPacket) {
+        return invalid("MPEG-TS materializer differs from runtime product");
+    }
     if (udp) {
-        const auto& udpPlan = std::get<MediaMpegTsUdpOutputPlan>(
-            product.transport);
-        const MediaNode& output =
-            *shape.nodes(MediaNodeKind::FileOutput).front();
-        if (product.protocol.muxPlan().parameters().transportKind !=
-                MediaOutputTransportKind::UdpDatagrams ||
-            udpPlan.resourceKind != MediaOutputResourceKind::ByteSink ||
-            udpPlan.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-            !MediaGraphShapeQuery::hasExactOptionKeys(output.options,
-                       {"url", MediaTranscodeOptionKey::OutputResourceKind}) ||
-            output.options.value("url") != udpPlan.url ||
-            output.options.value(MediaTranscodeOptionKey::OutputResourceKind) !=
-                "byte_sink" ||
-            !output.inputPorts.empty() || output.outputPorts.size() != 1 ||
-            !MediaGraphShapeQuery::validPort(output.findOutputPort("resource"),
-                       MediaPortDirection::Output, MediaStreamKind::Metadata,
-                       MediaEdgeKind::Metadata,
-                       MediaPayloadKind::OutputByteSink) ||
-            !MediaGraphShapeQuery::validPort(mux.findInputPort("resource"),
-                       MediaPortDirection::Input, MediaStreamKind::Metadata,
-                       MediaEdgeKind::Metadata,
-                       MediaPayloadKind::OutputByteSink) ||
-            !MediaGraphShapeQuery::singleEdge(graph, output.findOutputPort("resource")->id,
-                        mux.findInputPort("resource")->id)) {
-            return invalid("MPEG-TS UDP transport differs from runtime product");
-        }
-        return ::media::Status::success();
+        return product.protocol.muxPlan().parameters().transportKind ==
+                MediaOutputTransportKind::UdpDatagrams
+            ? ::media::Status::success()
+            : invalid("MPEG-TS UDP transport differs from runtime product");
     }
     const auto* rtp = std::get_if<MediaMpegTsRtpOutputPlan>(
         &product.transport);
@@ -647,7 +711,7 @@ const MediaEdge* exactEdge(
     return planToPublisher &&
             planToPublisher->policy == runtime.edgePolicies.atomicMetadata
         ? ::media::Status::success()
-        : invalid("MPEG-TS RTP SDP edge differs from runtime product");
+        : invalid("MPEG-TS RTP transport edges differ from runtime product");
 }
 
 } // namespace

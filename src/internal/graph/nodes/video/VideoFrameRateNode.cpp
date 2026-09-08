@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
@@ -13,8 +14,10 @@ extern "C" {
 }
 
 #include <charconv>
+#include <array>
 #include <limits>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 
@@ -89,10 +92,12 @@ VideoFrameRateNode::VideoFrameRateNode(MediaNodeId nodeId)
 
 VideoFrameRateNode::VideoFrameRateNode(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaVideoFrameRateState> state)
+    std::shared_ptr<MediaVideoFrameRateState> state,
+    std::optional<MediaAvStartupVideoPreparationCapability> preparation)
     : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFrameRateNode")
     , m_state(std::move(state))
     , m_exposesGenerationPurgeTarget(true)
+    , m_preparationCapability(std::move(preparation))
 {
 }
 
@@ -130,6 +135,7 @@ bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) co
 ::media::Status VideoFrameRateNode::stop(MediaGraphExecutionContext& context)
 {
     auto guard = m_state->lock();
+    if (m_preparationCapability) (void)m_preparationCapability->cancel();
     auto status = FFmpegNodeRuntime::stop(context);
     resetRuntimeState();
     return status;
@@ -138,6 +144,7 @@ bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) co
 void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept
 {
     auto guard = m_state->lock();
+    if (m_preparationCapability) (void)m_preparationCapability->cancel();
     FFmpegNodeRuntime::abort(context);
     resetRuntimeState();
 }
@@ -147,6 +154,7 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     m_state->resetLifecycle();
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
+    m_preparedReservation.reset();
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
@@ -155,6 +163,18 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     auto& state = m_state->data();
     if (state.terminalPending) {
         return continueTerminal(context);
+    }
+    if (m_preparationCapability) {
+        auto prepared = preparePendingOutput(context);
+        if (!prepared) {
+            return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
+        }
+        if (prepared.value()) return processProgress();
+        const auto phase = m_preparationCapability->snapshot().phase;
+        if (m_preparedReservation ||
+            phase == MediaAvStartupVideoPreparationPhase::OutputReady) {
+            return processWaiting();
+        }
     }
     const bool hadPendingOutput = !state.pendingFrames.empty();
     auto pendingDrain = drainPending(context);
@@ -233,11 +253,62 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
     }
 
+    if (m_preparationCapability) {
+        auto prepared = preparePendingOutput(context);
+        if (!prepared) {
+            return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
+        }
+        if (prepared.value() || m_preparedReservation) return processWaiting();
+    }
+
     auto drainStatus = drainPending(context);
     if (!drainStatus) {
         return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+}
+
+::media::Result<bool> VideoFrameRateNode::preparePendingOutput(
+    MediaGraphExecutionContext& context)
+{
+    if (!m_preparationCapability) {
+        return ::media::Result<bool>::success(false);
+    }
+    const auto snapshot = m_preparationCapability->snapshot();
+    if (m_preparedReservation) {
+        if (snapshot.phase !=
+            MediaAvStartupVideoPreparationPhase::ReleaseCommitted) {
+            return ::media::Result<bool>::success(false);
+        }
+        auto committed = m_preparedReservation->commit();
+        if (!committed) return ::media::Result<bool>::failure(committed.error());
+        m_preparedReservation.reset();
+        return ::media::Result<bool>::success(true);
+    }
+    auto& pending = m_state->data().pendingFrames;
+    if (snapshot.phase != MediaAvStartupVideoPreparationPhase::Feeding ||
+        pending.empty()) {
+        return ::media::Result<bool>::success(false);
+    }
+    const MediaBufferRef output = pending.front().buffer;
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{
+            context.findOutputChannel(nodeId(), "frame"),
+            std::span(&output, 1)}};
+    auto reservation = MediaReservedOutputTransaction::reserve(
+        "VideoFrameRateNode prepared frame", batches);
+    if (!reservation) return ::media::Result<bool>::failure(reservation.error());
+    if (!reservation.value()) return ::media::Result<bool>::success(false);
+    m_preparedReservation.emplace(std::move(*reservation.value()));
+    auto ready = m_preparationCapability->markOutputReady(
+        snapshot.generation, snapshot.releaseIdentity,
+        m_preparedReservation->handle());
+    if (!ready) {
+        m_preparedReservation.reset();
+        return ::media::Result<bool>::failure(ready.error());
+    }
+    pending.pop_front();
+    return ::media::Result<bool>::success(false);
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::continueTerminal(
@@ -275,6 +346,23 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     }
 
     const MediaNodeOptions* options = nodeOptions(context);
+    auto boundedGap = requiredBoolNodeOption(options, "VideoFrameRateNode",
+        "video.framerate.bound_duplication_gap");
+    if (!boundedGap) return ::media::Status::failure(boundedGap.error());
+    if (boundedGap.value()) {
+        auto numerator = requiredPositiveIntNodeOption(options, "VideoFrameRateNode",
+            "video.framerate.maximum_duplication_gap_num");
+        auto denominator = requiredPositiveIntNodeOption(options, "VideoFrameRateNode",
+            "video.framerate.maximum_duplication_gap_den");
+        if (!numerator) return ::media::Status::failure(numerator.error());
+        if (!denominator) return ::media::Status::failure(denominator.error());
+        if (numerator.value() <= 0 || denominator.value() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode requires positive planned duplication gap"));
+        }
+        state.maximumDuplicationGap = AVRational{
+            numerator.value(), denominator.value()};
+    }
     auto fpsNumOption = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsNum);
     if (!fpsNumOption) {
         return ::media::Status::failure(fpsNumOption.error());
@@ -346,6 +434,26 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
     }
 
+    if (state.maximumDuplicationGap && state.lastInputPts != AV_NOPTS_VALUE) {
+        const auto maximumGap = av_rescale_q_rnd(1, *state.maximumDuplicationGap,
+            state.inputTimeBase, AV_ROUND_UP);
+        if (maximumGap <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode duplication gap cannot be represented"));
+        }
+        if (state.lastInputPts <= std::numeric_limits<int64_t>::max() - maximumGap &&
+            currentPts > state.lastInputPts + maximumGap) {
+            // Preserve source time and start at the recovered picture, matching
+            // videorate's bounded-duplication discontinuity handling.
+            state.startPts = currentPts;
+            state.nextOutputIndex = 0;
+            state.lastInputFrame = {};
+            frameRateLog(MediaGraphDiagnosticLevel::State,
+                "recovery state=skip_missing_interval current_pts=" +
+                std::to_string(currentPts) + " previous_pts=" +
+                std::to_string(state.lastInputPts));
+        }
+    }
     int64_t queued = 0;
     while (true) {
         auto target = targetPtsForIndex(state.nextOutputIndex);
@@ -363,7 +471,9 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         auto selectedLineage = sourceFrame == frame
             ? FFmpegFrameView::canonicalLineage(buffer)
             : FFmpegFrameView::canonicalLineage(state.lastInputFrame.buffer);
-        auto queueStatus = queueFrameReference(sourceFrame, targetPts,
+        const MediaBufferRef& sourceBuffer = sourceFrame == frame
+            ? buffer : state.lastInputFrame.buffer;
+        auto queueStatus = queueFrameReference(sourceBuffer, targetPts,
                                                 std::move(selectedLineage));
         if (!queueStatus) {
             return queueStatus;
@@ -422,10 +532,11 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
 }
 
 ::media::Status VideoFrameRateNode::queueFrameReference(
-    const AVFrame* sourceFrame, int64_t outputPts,
+    const MediaBufferRef& sourceBuffer, int64_t outputPts,
     std::shared_ptr<const MediaCanonicalLineage> lineage)
 {
     auto& state = m_state->data();
+    const AVFrame* sourceFrame = FFmpegFrameView::frame(sourceBuffer);
     if (!sourceFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode source frame is null"));
@@ -435,7 +546,8 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Status::success();
     }
 
-    auto cloned = FFmpegBufferFactory::cloneFrame(sourceFrame, MediaStreamKind::Video);
+    auto cloned = FFmpegBufferFactory::cloneFrame(
+        sourceBuffer, MediaStreamKind::Video);
     if (!cloned) {
         return ::media::Status::failure(cloned.error());
     }
@@ -530,7 +642,7 @@ const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* fra
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode expected frame buffer for history"));
     }
 
-    auto cloned = FFmpegBufferFactory::cloneFrame(frame, MediaStreamKind::Video);
+    auto cloned = FFmpegBufferFactory::cloneFrame(buffer, MediaStreamKind::Video);
     if (!cloned) {
         return ::media::Status::failure(cloned.error());
     }

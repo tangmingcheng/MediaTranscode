@@ -48,10 +48,6 @@ public:
         const std::shared_ptr<MediaAvStartupVideoPreparationState>&
             videoPreparationState);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
-    createScheduledRtpSender(
-        const MediaNode& node,
-        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
-    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createVideoOutputScheduler(
         const MediaNode& node,
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);

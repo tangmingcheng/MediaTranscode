@@ -5,6 +5,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/planner/realtime/MediaMpegTsOutputTimingPlanner.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <cstdint>
@@ -131,7 +132,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
     plan.rtpOutput->videoOutput.payloadType = 96;
     plan.rtpOutput->videoOutput.clockRate = 90'000;
     plan.rtpOutput->videoOutput.ssrc =
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             *plan.rtpOutput->videoOutput.identity);
     plan.rtpOutput->videoOutput.baseTimestamp =
         MediaRtpOutputIdentityPlanner::stableNumeric(
@@ -141,14 +142,13 @@ void planRtpOutput(MediaAvSyncPlan& plan,
     plan.rtpOutput->audioOutput.payloadType = 97;
     plan.rtpOutput->audioOutput.clockRate = audioOutputRate;
     plan.rtpOutput->audioOutput.ssrc =
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             *plan.rtpOutput->audioOutput.identity);
     plan.rtpOutput->audioOutput.baseTimestamp =
         MediaRtpOutputIdentityPlanner::stableNumeric(
             groupIdentity + ".audio.timestamp");
     plan.rtpOutput->audioOutput.cname = cname;
     plan.rtpOutput->output.useSharedNtpEpoch = true;
-    plan.rtpOutput->output.senderReportIntervalNs = runningTime(Second);
 }
 
 void planTsInput(MediaAvSyncPlan& plan,
@@ -175,28 +175,27 @@ void planTsInput(MediaAvSyncPlan& plan,
 ::media::Result<MediaTsMuxPlan> planTsOutput(
     const MediaAvSyncPlan& plan,
     const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeDeploymentEnvelope& deploymentEnvelope,
     const MediaProjectMpegTsResolvedPipelineFacts& resolvedFacts)
 {
     if (!plan.startup.outputLeadNs) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "MPEG-TS output requires planner-owned startup output lead"));
+                "MPEG-TS output requires planner-owned startup and transport timing"));
     }
     if (!request.output.transport) {
         return ::media::Result<MediaTsMuxPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "MPEG-TS output requires an explicit transport"));
     }
-    std::uint8_t maximumPacketsPerDatagram = 7;
-    if (*request.output.transport == MediaOutputTransportKind::RtpAvp) {
-        if (!request.output.packetSize ||
-            *request.output.packetSize <= 0) {
-            return ::media::Result<MediaTsMuxPlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS RTP output requires an explicit maximum datagram size"));
-        }
-        auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
-            static_cast<std::size_t>(*request.output.packetSize));
+    std::uint16_t maximumPacketsPerDatagram = 0;
+    if (*request.output.transport == MediaOutputTransportKind::RtpAvp ||
+        *request.output.transport == MediaOutputTransportKind::UdpDatagrams) {
+        const auto maximumDatagram =
+            deploymentEnvelope.encode().mtu.senderMaximumPayloadBytes;
+        auto packetCount = MediaTsMuxPlan::maximumPacketsPerDatagram(
+            static_cast<std::size_t>(maximumDatagram),
+            *request.output.transport);
         if (!packetCount) {
             return ::media::Result<MediaTsMuxPlan>::failure(
                 packetCount.error());
@@ -208,11 +207,42 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::unsupported(
                 "MPEG-TS output transport is unsupported"));
     }
+    if (!request.parameters.video.frameRate.complete() ||
+        !request.parameters.video.frameRate.numerator ||
+        !request.parameters.video.frameRate.denominator) {
+        return ::media::Result<MediaTsMuxPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS transport timing requires prepared video cadence"));
+    }
+    auto audioCadence = MediaRunningTime::checkedFromTicks(
+        resolvedFacts.audioOutput.codecFrameSamples(), 1,
+        resolvedFacts.audioOutput.sampleRate());
+    const auto& deployment = deploymentEnvelope.encode();
+    auto timing = audioCadence
+        ? MediaMpegTsOutputTimingPlanner::planVariableBitrate(
+              deployment.latency.maximumReleaseJitter,
+              deployment.latency.releaseJitterAuthority,
+              MediaRational{
+                  *request.parameters.video.frameRate.numerator,
+                  *request.parameters.video.frameRate.denominator})
+        : ::media::Result<MediaMpegTsTimingPolicy>::failure(
+              audioCadence.error());
+    auto preroll = timing
+        ? MediaMpegTsOutputTimingPlanner::startupEmissionPreroll(
+              deployment.transportTiming.senderTransportLead,
+              MediaRational{
+                  *request.parameters.video.frameRate.numerator,
+                  *request.parameters.video.frameRate.denominator},
+              audioCadence.value(), timing.value())
+        : ::media::Result<MediaRunningTime>::failure(timing.error());
+    if (!preroll) {
+        return ::media::Result<MediaTsMuxPlan>::failure(preroll.error());
+    }
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
-        resolvedFacts.audioOutput,
-        *plan.startup.outputLeadNs,
-        *plan.startup.maximumInitialSkewNs,
+        resolvedFacts.audioOutput, std::move(timing).value(),
+        deployment.transportTiming.senderTransportLead,
+        preroll.value(),
         *request.output.transport,
         maximumPacketsPerDatagram);
     if (!resolvedOutput) {
@@ -240,6 +270,9 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+    const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
+    const MediaRealtimeDeploymentEnvelope& deployment,
+    MediaBranchMode audioBranchMode,
     int resolvedOutputAudioSampleRate)
 {
     if (request.mediaId.empty()) {
@@ -256,16 +289,31 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::notInitialized(
                 "A/V synchronization requires a resolved output audio sample rate"));
     }
+    if (audioBranchMode != MediaBranchMode::CopyPacket &&
+        audioBranchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V synchronization requires a planned audio execution branch"));
+    }
     MediaAvSyncPlan plan;
     if (preparedDemuxFacts) {
-        plan.startup = preparedDemuxFacts->startup;
+        auto finalized = MediaAvSyncStartupPolicyPlanner::finalizePrepared(
+            preparedDemuxFacts->startup, resourceLedger, deployment);
+        if (!finalized) {
+            return ::media::Result<MediaAvSyncPlan>::failure(
+                finalized.error());
+        }
+        plan.startup = std::move(finalized).value();
     } else {
-        auto startup = MediaAvSyncStartupPolicyPlanner::plan(request);
+        auto startup = MediaAvSyncStartupPolicyPlanner::plan(
+            request, resourceLedger, deployment);
         if (!startup) {
             return ::media::Result<MediaAvSyncPlan>::failure(startup.error());
         }
         plan.startup = std::move(startup).value();
     }
+    plan.startup.trimAudioToCommonStart =
+        audioBranchMode == MediaBranchMode::TranscodeFrame;
     planSharedNonStartupPolicy(plan);
     plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
 
@@ -351,7 +399,8 @@ void planTsInput(MediaAvSyncPlan& plan,
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output requires resolved H.264/AAC pipeline facts"));
         }
-        auto outputMux = planTsOutput(plan, request, *resolvedTsFacts);
+        auto outputMux = planTsOutput(
+            plan, request, deployment, *resolvedTsFacts);
         if (!outputMux) {
             return ::media::Result<MediaAvSyncPlan>::failure(outputMux.error());
         }

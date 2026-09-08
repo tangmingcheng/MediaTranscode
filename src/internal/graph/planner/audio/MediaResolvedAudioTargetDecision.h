@@ -37,7 +37,6 @@ struct MediaResolvedAudioRequest final {
     std::optional<int> bitrateKbps;
     std::optional<int> minBitrateKbps;
     std::optional<int> maxBitrateKbps;
-    std::optional<int> bufferSizeKbits;
     std::optional<int> quality;
     std::string preset;
 };
@@ -60,7 +59,6 @@ public:
     const std::optional<int>& bitrateKbps() const noexcept;
     const std::optional<int>& minBitrateKbps() const noexcept;
     const std::optional<int>& maxBitrateKbps() const noexcept;
-    const std::optional<int>& bufferSizeKbits() const noexcept;
     const std::optional<int>& quality() const noexcept;
     const std::string& preset() const noexcept;
 
@@ -78,7 +76,6 @@ private:
     std::optional<int> m_bitrateKbps;
     std::optional<int> m_minBitrateKbps;
     std::optional<int> m_maxBitrateKbps;
-    std::optional<int> m_bufferSizeKbits;
     std::optional<int> m_quality;
     std::string m_preset;
 };

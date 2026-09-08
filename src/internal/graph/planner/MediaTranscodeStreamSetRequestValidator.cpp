@@ -10,7 +10,6 @@ bool audioControlSpecified(const MediaAudioTranscodeParameters& audio) noexcept
         audio.bitrateKbps.has_value() ||
         audio.minBitrateKbps.has_value() ||
         audio.maxBitrateKbps.has_value() ||
-        audio.bufferSizeKbits.has_value() ||
         audio.sampleRate.has_value() ||
         audio.channels.has_value() ||
         audio.quality.has_value() ||

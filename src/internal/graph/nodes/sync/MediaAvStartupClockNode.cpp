@@ -134,7 +134,8 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
     }
     if (m_nextTick && now.value() < *m_nextTick) {
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_groupKey, *m_nextTick));
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                *m_groupKey, *m_nextTick));
     }
     auto next = now.value().checkedAdd(*m_interval);
     if (!next) {

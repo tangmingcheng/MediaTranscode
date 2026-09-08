@@ -15,6 +15,7 @@ int requiredClockRate(const ScheduledRtpMuxStreamConfig& stream) noexcept
 {
     switch (stream.packetizationMode()) {
     case MediaScheduledRtpPacketizationMode::H264AnnexB:
+    case MediaScheduledRtpPacketizationMode::HevcAnnexB:
         return 90'000;
     case MediaScheduledRtpPacketizationMode::AacLatm:
         return stream.codecParameters().sample_rate;

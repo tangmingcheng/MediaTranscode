@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <string>
 
 namespace media::ffmpeg::graph {

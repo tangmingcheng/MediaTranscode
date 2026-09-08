@@ -8,6 +8,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -34,6 +35,7 @@ public:
         bool flushed = false;
         AVRational inputTimeBase {0, 1};
         AVRational targetFramePeriod {0, 1};
+        std::optional<AVRational> maximumDuplicationGap;
         std::int64_t startPts = 0;
         std::int64_t nextOutputIndex = 0;
         std::int64_t lastInputPts = AV_NOPTS_VALUE;

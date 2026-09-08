@@ -41,8 +41,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         std::numeric_limits<std::int64_t>::max());
     return positive(units) && positive(maximumUnitBytes) && positive(bytes) &&
            *maximumUnitBytes <= MaximumSerialized && *bytes <= MaximumSerialized &&
-           *units <= std::numeric_limits<std::uint64_t>::max() / *maximumUnitBytes &&
-           *bytes == static_cast<std::uint64_t>(*units) * *maximumUnitBytes;
+           *maximumUnitBytes <= *bytes;
 }
 
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
@@ -62,7 +61,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
     const auto& startup = plan.startup;
     if (!startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
-        !startup.trimAudioToCommonStart || !*startup.trimAudioToCommonStart ||
+        !startup.trimAudioToCommonStart ||
         !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
         !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
         !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
@@ -410,10 +409,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !validRtpOutputStream(rtp.audioOutput) ||
         *rtp.videoOutput.ssrc == *rtp.audioOutput.ssrc ||
         *rtp.videoOutput.cname != *rtp.audioOutput.cname ||
-        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch ||
-        !positive(rtp.output.senderReportIntervalNs) ||
-        *rtp.output.senderReportIntervalNs >=
-            *plan.recovery.reacquisitionTimeoutNs) {
+        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch) {
         return invalid("RTP output identities, CNAME, or sender report policy");
     }
     return ::media::Status::success();
@@ -477,6 +473,20 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     if (auto status = validateShared(plan, false); !status) return status;
     if (auto status = validateInputClock(plan); !status) return status;
     return validateOutput(plan);
+}
+
+::media::Status MediaAvSyncPlanValidator::validateRuntime(
+    const MediaAvSyncPlan& plan)
+{
+    const bool commandLead = plan.audioServo.commandLeadNs.has_value();
+    const bool compensation =
+        plan.audioServo.compensationWindowNs.has_value();
+    const bool frequency =
+        plan.audioServo.frequencyFilterTimeConstantNs.has_value();
+    if (commandLead != compensation || commandLead != frequency) {
+        return invalid("runtime audio correction timing product");
+    }
+    return commandLead ? validate(plan) : validatePolicy(plan);
 }
 
 } // namespace media::ffmpeg::graph

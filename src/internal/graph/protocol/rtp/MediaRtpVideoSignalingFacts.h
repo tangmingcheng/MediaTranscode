@@ -61,7 +61,8 @@ public:
         std::string codecName,
         std::uint8_t payloadType,
         int clockRate,
-        MediaRtpVideoPacketizationPolicy packetizationPolicy);
+        MediaRtpVideoPacketizationPolicy packetizationPolicy,
+        std::size_t maximumNalUnitBytes);
 
     ::media::Result<MediaRtpVideoSignalingObservation> observe(
         const MediaRtpPacket& packet);
@@ -79,7 +80,8 @@ private:
     MediaRtpVideoSignalingObserver(std::string codecName,
                                    std::uint8_t payloadType,
                                    int clockRate,
-                                   NalParser parser);
+                                   NalParser parser,
+                                   std::size_t maximumNalUnitBytes);
     void resetEpoch(std::uint32_t ssrc) noexcept;
     bool complete() const noexcept;
 
@@ -87,6 +89,7 @@ private:
     std::uint8_t m_payloadType = 0;
     int m_clockRate = 0;
     NalParser m_parser;
+    std::size_t m_maximumNalUnitBytes;
     std::optional<std::uint32_t> m_ssrc;
     std::optional<std::vector<std::uint8_t>> m_vps;
     std::optional<std::vector<std::uint8_t>> m_sps;

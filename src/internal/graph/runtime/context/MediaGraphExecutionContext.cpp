@@ -3,8 +3,12 @@
 #include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 
 #include <sstream>
+#include <algorithm>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -42,6 +46,43 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         return orderStatus;
     }
 
+    if (!graph.payloadCreditMode()) {
+        reset();
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "MediaGraphExecutionContext requires a typed payload credit mode"));
+    }
+    if (*graph.payloadCreditMode() ==
+        MediaGraphPayloadCreditMode::RealtimeRequired) {
+        if (!graph.payloadCreditPlan()) {
+            reset();
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "realtime execution requires its installed payload credit plan"));
+        }
+        if (!graph.payloadCreditPlan()->isCompleteAndValid()) {
+            reset();
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "MediaGraphExecutionContext rejects an incomplete payload credit producer registry"));
+        }
+        auto ledger = MediaGraphPayloadCreditLedger::create(
+            *graph.payloadCreditPlan());
+        if (!ledger) {
+            reset();
+            return ::media::Status::failure(ledger.error());
+        }
+        m_payloadCreditLedger = std::move(ledger).value();
+    } else if (graph.payloadCreditPlan()) {
+        reset();
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "non-realtime execution rejects a payload credit plan"));
+    }
+
+    try {
+        m_inputActivity = std::make_shared<MediaInputActivity>();
+    } catch (const std::bad_alloc&) {
+        reset();
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("input activity evidence"));
+    }
     m_graph = &graph;
     m_compiled = true;
 
@@ -70,10 +111,146 @@ void MediaGraphExecutionContext::reset()
     shutdownAvSyncGroups();
     m_graph = nullptr;
     m_channels.clear();
+    if (m_payloadCreditLedger) m_payloadCreditLedger->cancelBlockedWaiters();
+    m_payloadCreditLedger.reset();
+    m_inputActivity.reset();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+}
+
+std::shared_ptr<MediaGraphPayloadCreditLedger>
+MediaGraphExecutionContext::payloadCreditLedger() const noexcept
+{
+    return m_payloadCreditLedger;
+}
+
+bool MediaGraphExecutionContext::payloadCreditsRequired() const noexcept
+{
+    return m_graph && m_graph->payloadCreditMode() &&
+           *m_graph->payloadCreditMode() ==
+               MediaGraphPayloadCreditMode::RealtimeRequired;
+}
+
+std::shared_ptr<MediaInputActivity>
+MediaGraphExecutionContext::inputActivity() const noexcept
+{
+    return m_inputActivity;
+}
+
+::media::Result<MediaGraphPayloadReservation>
+MediaGraphExecutionContext::reservePayload(
+    MediaNodeId producer,
+    MediaStreamKind streamKind,
+    MediaPayloadKind payloadKind) noexcept
+{
+    auto strategy = reservePayloadBatch(
+        producer, streamKind, payloadKind, {});
+    if (!strategy) {
+        return ::media::Result<MediaGraphPayloadReservation>::failure(
+            strategy.error());
+    }
+    auto reservations = std::move(strategy).value();
+    return ::media::Result<MediaGraphPayloadReservation>::success(
+        std::move(reservations.front()));
+}
+
+::media::Result<std::vector<MediaGraphPayloadReservation>>
+MediaGraphExecutionContext::reservePayloadBatch(
+    MediaNodeId producer,
+    MediaStreamKind streamKind,
+    MediaPayloadKind payloadKind,
+    std::span<const std::uint64_t> actualBytes) noexcept
+{
+    using Result =
+        ::media::Result<std::vector<MediaGraphPayloadReservation>>;
+    if (!m_payloadCreditLedger) {
+        if (!payloadCreditsRequired()) {
+            std::vector<MediaGraphPayloadReservation> reservations;
+            const std::size_t count = actualBytes.empty() ? 1 : actualBytes.size();
+            reservations.reserve(count);
+            for (std::size_t index = 0; index < count; ++index) {
+                reservations.push_back(
+                    MediaGraphPayloadReservation::nonRealtimeNotApplicable());
+            }
+            return Result::success(std::move(reservations));
+        }
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "runtime graph has no activated payload credit ledger"));
+    }
+    const auto& strategies = m_payloadCreditLedger->plan().producers;
+    const MediaGraphPayloadProducerStrategy* selected = nullptr;
+    for (const auto& strategy : strategies) {
+        if (strategy.nodeId != producer ||
+            strategy.payloadKind != payloadKind ||
+            (streamKind != MediaStreamKind::Any &&
+             strategy.streamKind != streamKind)) {
+            continue;
+        }
+        if (!selected || strategy.maximumReservationBytes >
+                selected->maximumReservationBytes) {
+            selected = &strategy;
+        }
+    }
+    if (!selected) {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "runtime payload producer is absent from the final DAG registry"));
+    }
+    if (selected->payloadKind == MediaPayloadKind::Frame &&
+        !selected->frameCredit) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "runtime frame producer lacks its typed credit contract"));
+    }
+    const bool accountsBytes = selected->payloadKind == MediaPayloadKind::Frame
+        ? selected->frameCredit->allocationScope ==
+            MediaFrameCreditAllocationScope::EngineLogicalBytes
+        : selected->accounting ==
+            MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject;
+    const auto expectedAccounting = accountsBytes
+        ? MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject
+        : MediaGraphPayloadAllocationAccounting::
+            ObservedOnlyExternalBytesAndEngineManagedObject;
+    if (selected->accounting != expectedAccounting) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "runtime payload producer accounting conflicts with its typed frame contract"));
+    }
+    const std::uint64_t defaultBytes = accountsBytes
+        ? selected->maximumReservationBytes : 0;
+    std::vector<std::uint64_t> ledgerBytes;
+    try {
+        ledgerBytes.reserve(actualBytes.empty() ? 1 : actualBytes.size());
+        if (actualBytes.empty()) {
+            ledgerBytes.push_back(defaultBytes);
+        } else {
+            for (const auto bytes : actualBytes) {
+                if (bytes == 0 || bytes > selected->maximumReservationBytes) {
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "runtime payload batch exceeds its prepared single-unit bound"));
+                }
+                ledgerBytes.push_back(accountsBytes ? bytes : 0);
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "runtime payload batch credit request"));
+    }
+    auto leases = m_payloadCreditLedger->tryReserveOrArm(
+        producer, ledgerBytes, sharedNodeWakeup(producer));
+    if (!leases) return Result::failure(leases.error());
+    try {
+        std::vector<MediaGraphPayloadReservation> reservations;
+        reservations.reserve(leases.value().size());
+        for (auto& lease : leases.value()) {
+            reservations.emplace_back(
+                selected->accounting, selected->maximumReservationBytes,
+                std::move(lease));
+        }
+        return Result::success(std::move(reservations));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "runtime payload reservation identities"));
+    }
 }
 
 void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) noexcept
