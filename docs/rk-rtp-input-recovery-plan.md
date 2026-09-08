@@ -72,3 +72,12 @@
 内核队列、驱动与物理网卡出口的聚集单独记录部署风险，不再作为核心库修复的阻断项；不将历史按出口口径判FAIL的run48/run46改写为当时PASS。广播ST2110等明确要求线速整形的部署另需相应系统能力，当前MPEG-TS/RTP库验收不引入该范围。
 
 成熟实现依据：[FFmpeg UDP用户态速率/突发控制](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavformat/udp.c)、[SRT发送周期与队列影响](https://github.com/Haivision/srt/blob/master/docs/API/statistics.md)、[Linux发送时间戳层次](https://kernel.org/doc/html/latest/networking/timestamping.html)。这些依据用于明确责任边界，不代表本项目实现与它们完全相同。
+## 当前容量版本73ad5fbd的验证进度
+
+- [x] run51实际H.264 1080p25 → HEVC 1080p25 CBR6M零损伤PASS，独立提交5f9ac9cd。
+- [x] run53同一实际源正常启动后20%输入丢包恢复PASS，独立提交e923e4b8；同会话恢复后连续硬解181.19秒，121337 RTP全量收发一致，核心发送单包余量。源实际持续230.80秒后先结束，末10.80秒为缓存视频解码，停止API返回源不存在，已单列记录。
+- [ ] 同容量HEVC → H.264 CBR6M损伤回归。
+- [ ] 同容量H.264 → HEVC VBR损伤回归。
+- [ ] 同容量HEVC → H.264 VBR损伤回归。
+
+上述三个待办继续沿用既有高规格有限源和既定VBR规格；当前实际源为H.264，不能代替HEVC输入覆盖。内核入队后聚集按用户更新边界保留为部署风险，当前不继续扩大内核优化范围。
