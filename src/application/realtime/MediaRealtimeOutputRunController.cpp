@@ -1,6 +1,10 @@
 #include "application/realtime/MediaRealtimeOutputRunController.h"
 
 #include "application/realtime/MediaRealtimeOutputPreparer.h"
+#include "application/realtime/MediaRealtimeEncodingGroupRegistry.h"
+#include "application/realtime/MediaRealtimeSegmentFactory.h"
+#include "internal/graph/nodes/video/EncodedVideoOutputFanoutNode.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 #include "internal/graph/runtime/network/MediaDatagramServiceScopeArbiter.h"
 #include "internal/graph/planner/realtime/MediaRealtimeBranchDrainPlanner.h"
@@ -28,6 +32,33 @@ namespace {
 
 struct OutputObserverFailure final { std::exception_ptr exception; };
 
+MediaRealtimeOutputFailureStage outputFailureStage(MediaGraphWorkerFailurePhase phase)
+{
+    switch (phase) {
+    case MediaGraphWorkerFailurePhase::Preparation: return MediaRealtimeOutputFailureStage::Preparation;
+    case MediaGraphWorkerFailurePhase::Publication: return MediaRealtimeOutputFailureStage::Publication;
+    case MediaGraphWorkerFailurePhase::Runtime: return MediaRealtimeOutputFailureStage::Runtime;
+    case MediaGraphWorkerFailurePhase::Drain: return MediaRealtimeOutputFailureStage::Drain;
+    case MediaGraphWorkerFailurePhase::Release: return MediaRealtimeOutputFailureStage::Release;
+    }
+    std::terminate();
+}
+
+MediaGraphWorkerFailure outputFailure(::media::ErrorInfo error, MediaRealtimeOutputFailureStage stage)
+{
+    MediaGraphWorkerFailurePhase phase;
+    switch (stage) {
+    case MediaRealtimeOutputFailureStage::Planning:
+    case MediaRealtimeOutputFailureStage::Preparation: phase = MediaGraphWorkerFailurePhase::Preparation; break;
+    case MediaRealtimeOutputFailureStage::Publication: phase = MediaGraphWorkerFailurePhase::Publication; break;
+    case MediaRealtimeOutputFailureStage::Runtime: phase = MediaGraphWorkerFailurePhase::Runtime; break;
+    case MediaRealtimeOutputFailureStage::Drain: phase = MediaGraphWorkerFailurePhase::Drain; break;
+    case MediaRealtimeOutputFailureStage::Release: phase = MediaGraphWorkerFailurePhase::Release; break;
+    default: std::terminate();
+    }
+    return {{}, MediaNodeKind::Unknown, "output lifecycle", std::move(error), phase};
+}
+
 struct EgressAccount final {
     std::uint64_t capacity;
     std::atomic<std::uint64_t> reserved{0};
@@ -46,6 +77,19 @@ private:
     std::uint64_t m_bytes;
     std::shared_ptr<MediaGraphPayloadBranchReservation> m_payload;
     std::shared_ptr<MediaGraphPayloadRetentionReservation> m_retention;
+};
+
+class EncodingReservation final : public MediaRuntimeBranchResourceReservation {
+public:
+    EncodingReservation(std::shared_ptr<MediaGraphPayloadBranchReservation> payload,
+        std::shared_ptr<MediaGraphPayloadRetentionReservation> retention,
+        std::shared_ptr<MediaGraphPayloadBranchReservation> fixedStorage)
+        : m_payload(std::move(payload)), m_retention(std::move(retention)),
+          m_fixedStorage(std::move(fixedStorage)) {}
+private:
+    std::shared_ptr<MediaGraphPayloadBranchReservation> m_payload;
+    std::shared_ptr<MediaGraphPayloadRetentionReservation> m_retention;
+    std::shared_ptr<MediaGraphPayloadBranchReservation> m_fixedStorage;
 };
 
 void addMetrics(MediaGraphRuntimeMetrics& target, const MediaGraphRuntimeMetrics& value)
@@ -74,6 +118,7 @@ class MediaRealtimeOutputRunController::Impl final {
 public:
     struct Output final {
         std::uint64_t id;
+        std::uint64_t groupId;
         std::shared_ptr<MediaRuntimeBranch> branch;
         std::vector<MediaNodeId> nodes;
         MediaEdgeId frame;
@@ -94,6 +139,7 @@ public:
         ::media::ffmpeg::BufferRefPtr hardware;
         std::shared_ptr<const MediaGraph> graph;
         MediaDecoderRuntimeFacts decoderFacts;
+        std::vector<MediaRealtimeExistingVideoEncodingGroup> groups;
         std::chrono::steady_clock::time_point deadline;
         bool expired = false;
     };
@@ -127,12 +173,24 @@ public:
         // Notify retirement only after the enclosing transaction has unwound.
         pendingTerminal = MediaRealtimeOutputSnapshot{
             id, MediaRealtimeOutputState::Retired, stage, error.message, path, error};
+        if (changingGroup) {
+            auto group = registry.groups().find(*changingGroup);
+            if (group != registry.groups().end() && group->second.outputCount == 0) {
+                fanout->unsubscribe(group->second.branch->id());
+                group->second.draining = true;
+                group->second.branch->fail(outputFailure(error, stage));
+                pendingTerminalGroup = *changingGroup;
+            }
+            changingGroup.reset();
+        }
         return ::media::Status::success();
     }
 
     void publishPendingTerminal()
     {
         if (!pendingTerminal) return;
+        if (pendingTerminalGroup && registry.groups().contains(*pendingTerminalGroup)) return;
+        pendingTerminalGroup.reset();
         auto terminal = std::move(*pendingTerminal);
         pendingTerminal.reset();
         control.completeOutputChange();
@@ -140,8 +198,8 @@ public:
         publish(std::move(terminal));
     }
 
-    ::media::Result<std::shared_ptr<MediaRuntimeBranchResourceReservation>> reserve(
-        std::uint64_t bytes, const MediaGraphPayloadCreditPlan* payload,
+    ::media::Result<std::shared_ptr<MediaRuntimeBranchResourceReservation>> reserveProtocol(
+        std::uint64_t bytes,
         std::shared_ptr<MediaGraphPayloadBranchReservation> payloadLease,
         const MediaGraphPayloadRetentionGrowth* retentionGrowth)
     {
@@ -149,13 +207,6 @@ public:
         const auto used = egress->reserved.load();
         if (!bytes || used > egress->capacity || bytes > egress->capacity - used)
             return Result::failure(::media::ErrorInfo::unsupported("aggregate output peak wire traffic exceeds session egress capacity"));
-        if (payload) {
-            auto ledger = runtime.context().payloadCreditLedger();
-            if (!ledger) return Result::failure(::media::ErrorInfo::notInitialized("session payload ledger is unavailable"));
-            auto admitted = ledger->reserveBranch(*payload);
-            if (!admitted) return Result::failure(admitted.error());
-            payloadLease = std::move(admitted).value();
-        }
         std::shared_ptr<MediaGraphPayloadRetentionReservation> retentionLease;
         if (retentionGrowth) {
             auto ledger = runtime.context().payloadCreditLedger();
@@ -169,90 +220,203 @@ public:
         return Result::success(std::move(result));
     }
 
+    ::media::Result<MediaRuntimeSegmentOutputBinding> exportSource(MediaNodeId node, MediaPortId port)
+    {
+        for (auto& [id, group] : registry.groups()) {
+            if (std::find(group.nodes.begin(), group.nodes.end(), node) != group.nodes.end())
+                return group.branch->context().exportOutput(port);
+        }
+        return runtime.context().exportOutput(port);
+    }
+
+    ::media::Result<MediaEdgeId> incomingEdge(const MediaRuntimeBranch& branch,
+        const MediaGraph& graph, const MediaEndpoint& endpoint) const
+    {
+        const auto* port = graph.findOutputPort(endpoint.node, endpoint.port);
+        if (port) for (const auto id : branch.inputEdges()) {
+            const auto* edge = graph.findEdge(id);
+            if (edge && edge->from.nodeId == endpoint.node && edge->from.portId == port->id)
+                return ::media::Result<MediaEdgeId>::success(id);
+        }
+        return ::media::Result<MediaEdgeId>::failure(
+            ::media::ErrorInfo::notInitialized("segment lacks its planned media input"));
+    }
+
+    void unsubscribe(Output& output)
+    {
+        const auto group = registry.groups().find(output.groupId);
+        if (group != registry.groups().end()) group->second.fanout->unsubscribe(output.branch->id());
+    }
+
     ::media::Status initialize(std::uint64_t id)
     {
-        for (const auto& node : graph->nodes()) {
-            if (node.kind == MediaNodeKind::VideoOutputFanout) {
-                if (fanout) return ::media::Status::failure(::media::ErrorInfo::invalidArgument("video session has multiple decoded-frame fanouts"));
-                fanout = dynamic_cast<VideoOutputFanoutNode*>(runtime.scheduler().findNode(node.id));
-                fanoutId = node.id;
+        auto topology = MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(*graph);
+        if (!topology) return ::media::Status::failure(topology.error());
+        fanoutId = topology.value().sourceFanout;
+        fanout = dynamic_cast<VideoOutputFanoutNode*>(runtime.scheduler().findNode(fanoutId));
+        if (!fanout) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial graph lacks its shared frame fanout"));
+        for (const auto nodeId : topology.value().sharedNodeIds) {
+            const auto* node = graph->findNode(nodeId);
+            if (node && node->kind == MediaNodeKind::CodecResolver) {
+                resolver = dynamic_cast<CodecResolverNode*>(runtime.scheduler().findNode(nodeId));
+                resolverId = nodeId;
             }
         }
-        if (!fanout) return ::media::Status::failure(::media::ErrorInfo::notInitialized("video session has no shared decoded-frame fanout"));
-        std::set<std::uint32_t> shared{fanoutId.value};
-        bool changed;
-        do {
-            changed = false;
-            for (const auto& edge : graph->edges()) {
-                if (shared.contains(edge.to.nodeId.value))
-                    changed = shared.insert(edge.from.nodeId.value).second || changed;
-            }
-        } while (changed);
-        std::vector<MediaNodeId> outputNodes;
-        MediaScheduledDatagramSenderNode* sender = nullptr;
-        for (const auto& node : graph->nodes()) {
-            if (!shared.contains(node.id.value)) {
-                outputNodes.push_back(node.id);
-                if (node.kind == MediaNodeKind::ScheduledDatagramSender)
-                    sender = dynamic_cast<MediaScheduledDatagramSenderNode*>(runtime.scheduler().findNode(node.id));
-            } else if (node.kind == MediaNodeKind::CodecResolver) {
-                resolver = dynamic_cast<CodecResolverNode*>(runtime.scheduler().findNode(node.id));
-                resolverId = node.id;
-            }
-        }
-        if (!resolver || !sender) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial output lacks source resolver or datagram sender"));
-        serviceScopeArbiter = sender->serviceScopeArbiter();
-        if (!serviceScopeArbiter) return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("Initial sender lacks its registered shared service scope"));
+        if (!resolver) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial graph lacks its shared source resolver"));
         for (const auto& edge : graph->edges()) {
-            if (edge.to.nodeId == resolverId) {
-                const auto* target = graph->findPort(edge.to.portId);
-                const auto* source = graph->findPort(edge.from.portId);
-                if (target && source && target->name == "format") formatSource = {edge.from.nodeId, source->name};
-            }
+            const auto* target = graph->findPort(edge.to.portId);
+            const auto* source = graph->findPort(edge.from.portId);
+            if (edge.to.nodeId == resolverId && target && source && target->name == "format")
+                formatSource = {edge.from.nodeId, source->name};
         }
-        if (!formatSource.node.isValid() || !graph->findOutputPort(resolverId, "timestamp_source"))
-            return ::media::Status::failure(::media::ErrorInfo::notInitialized("shared video source metadata endpoints are unavailable"));
-        if (!plan.resourceLedger || !runtime.context().payloadCreditLedger())
-            return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial output resource ledger is unavailable"));
-        auto partition = MediaRealtimeInitialOutputResourcePartitionPlanner::plan(*graph, *plan.resourceLedger, outputNodes);
+        if (!formatSource.valid()) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial source format endpoint is missing"));
+        for (const auto nodeId : topology.value().outputNodeIds) {
+            auto* sender = dynamic_cast<MediaScheduledDatagramSenderNode*>(runtime.scheduler().findNode(nodeId));
+            if (sender) serviceScopeArbiter = sender->serviceScopeArbiter();
+        }
+        if (!serviceScopeArbiter) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial sender has no shared interface arbiter"));
+        auto ledger = runtime.context().payloadCreditLedger();
+        if (!plan.resourceLedger || !ledger) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial resource ledger is missing"));
+        auto partition = MediaRealtimeInitialOutputResourcePartitionPlanner::plan(*graph, *plan.resourceLedger, topology.value());
         if (!partition) return ::media::Status::failure(partition.error());
-        auto payloadLease = runtime.context().payloadCreditLedger()->extractInitialBranch(
-            std::move(partition.value().shared.payloadCreditPlan), std::move(partition.value().output.payloadCreditPlan));
-        if (!payloadLease) return ::media::Status::failure(payloadLease.error());
-        auto lease = reserve(initial.peakWireBytesPerSecond, nullptr, std::move(payloadLease).value(), nullptr);
-        if (!lease) return ::media::Status::failure(lease.error());
+        auto encodingLease = ledger->extractInitialBranch(std::move(partition.value().shared.payloadCreditPlan),
+            std::move(partition.value().encoding.payloadCreditPlan));
+        if (!encodingLease) return ::media::Status::failure(encodingLease.error());
+        auto sharedStorage = ledger->extractInitialFixedStorage(
+            partition.value().shared.admittedGraphPayloadAndReservedStorageBytes);
+        if (!sharedStorage) return ::media::Status::failure(sharedStorage.error());
+        sharedStorageLease = std::move(sharedStorage).value();
+        auto encodingStorage = ledger->extractInitialFixedStorage(
+            partition.value().encoding.admittedGraphPayloadAndReservedStorageBytes);
+        if (!encodingStorage) return ::media::Status::failure(encodingStorage.error());
+        auto protocolLease = ledger->extractInitialFixedStorage(partition.value().protocolFixedStorageBytes);
+        if (!protocolLease) return ::media::Status::failure(protocolLease.error());
+        auto groupId = registry.allocateGroupId();
+        auto groupSegmentId = registry.allocateSegmentId();
+        auto outputSegmentId = registry.allocateSegmentId();
+        if (!groupId || !groupSegmentId || !outputSegmentId) return ::media::Status::failure(
+            !groupId ? groupId.error() : !groupSegmentId ? groupSegmentId.error() : outputSegmentId.error());
+        auto resources = std::make_shared<EncodingReservation>(std::move(encodingLease).value(), nullptr,
+            std::move(encodingStorage).value());
         const std::array retirementProducers{resolverId};
-        auto branch = runtime.extractInitialBranch(id, outputNodes, std::move(lease).value(), retirementProducers);
-        if (!branch) return ::media::Status::failure(branch.error());
-        MediaEdgeId frame;
-        for (const auto edgeId : branch.value()->inputEdges()) {
-            const auto* edge = graph->findEdge(edgeId);
-            if (edge && edge->from.nodeId == fanoutId) frame = edgeId;
-        }
-        if (!frame.isValid()) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial output has no decoded-frame input"));
-        outputs.emplace(id, Output{id, std::move(branch).value(), std::move(outputNodes), frame,
-            runtime.protocolOutputAuthority(),
-            initial.maximumStartupWait, initial.initialGeneration, {},
+        std::vector<MediaRuntimeSegmentOutputBinding> upstream;
+        const auto gather = [&](const std::vector<MediaNodeId>& nodes) -> ::media::Status {
+            std::set<std::uint32_t> ports;
+            upstream.clear();
+            for (const auto& edge : graph->edges()) {
+                if (std::find(nodes.begin(), nodes.end(), edge.to.nodeId) == nodes.end() ||
+                    std::find(nodes.begin(), nodes.end(), edge.from.nodeId) != nodes.end() ||
+                    !ports.insert(edge.from.portId.value).second) continue;
+                auto exported = exportSource(edge.from.nodeId, edge.from.portId);
+                if (!exported) return ::media::Status::failure(exported.error());
+                upstream.push_back(std::move(exported).value());
+            }
+            return ::media::Status::success();
+        };
+        auto inputs = gather(topology.value().encodingNodeIds);
+        if (!inputs) return inputs;
+        auto encoding = runtime.extractInitialBranch(groupSegmentId.value(), topology.value().encodingNodeIds,
+            std::move(resources), retirementProducers, upstream);
+        if (!encoding) return ::media::Status::failure(encoding.error());
+        auto* encodedFanout = dynamic_cast<EncodedVideoOutputFanoutNode*>(encoding.value()->findNode(topology.value().encoded.packet.node));
+        if (!encodedFanout) return ::media::Status::failure(::media::ErrorInfo::notInitialized("initial encoding segment has no packet fanout"));
+        auto join = MediaRealtimeVideoEncodingGroupContractPlanner::joinPlan(plan.videoPlan);
+        if (!join) return ::media::Status::failure(join.error());
+        auto bound = encodedFanout->bindJoinPlan(join.value());
+        if (!bound) return bound;
+        auto frame = incomingEdge(*encoding.value(), *graph, {fanoutId, "frame"});
+        if (!frame) return ::media::Status::failure(frame.error());
+        registry.groups().emplace(groupId.value(), MediaRealtimeEncodingGroup{groupId.value(), initial.initialGeneration,
+            encoding.value(), topology.value().encodingNodeIds, frame.value(), topology.value().encoded,
+            encodedFanout, nullptr, nullptr, 0, false, true});
+        changingGroup = groupId.value();
+        initialGroupId = groupId.value();
+        inputs = gather(topology.value().outputNodeIds);
+        if (!inputs) return inputs;
+        auto outputLease = reserveProtocol(initial.peakWireBytesPerSecond, std::move(protocolLease).value(), nullptr);
+        if (!outputLease) return ::media::Status::failure(outputLease.error());
+        auto protocol = runtime.extractInitialBranch(outputSegmentId.value(), topology.value().outputNodeIds,
+            std::move(outputLease).value(), {}, upstream);
+        if (!protocol) return ::media::Status::failure(protocol.error());
+        auto packet = incomingEdge(*protocol.value(), *graph, topology.value().encoded.packet);
+        if (!packet) return ::media::Status::failure(packet.error());
+        outputs.emplace(id, Output{id, groupId.value(), protocol.value(), topology.value().outputNodeIds, packet.value(),
+            runtime.protocolOutputAuthority(), initial.maximumStartupWait, initial.initialGeneration, {},
             {id, MediaRealtimeOutputState::Preparing, MediaRealtimeOutputFailureStage::Preparation,
                 {}, request.output.sdpPath, std::nullopt}});
+        registry.groups().at(groupId.value()).outputCount = 1;
+        changingGroup.reset();
         return ::media::Status::success();
     }
 
     ::media::Status startInitial()
     {
         auto& output = outputs.begin()->second;
-        auto started = output.branch->start();
+        auto& group = registry.groups().at(output.groupId);
+        auto started = group.branch->start();
+        if (!started) return started;
+        started = output.branch->start();
         if (!started) return started;
         output.snapshot.stage = MediaRealtimeOutputFailureStage::Publication;
-        auto subscribed = fanout->subscribe(output.branch, output.frame);
-        if (!subscribed) { output.branch->fail(subscribed.error()); return subscribed; }
+        auto subscribed = group.fanout->subscribe(output.branch, output.frame);
+        if (!subscribed) { output.branch->fail(outputFailure(subscribed.error(), MediaRealtimeOutputFailureStage::Publication)); return subscribed; }
         output.startedAt = std::chrono::steady_clock::now();
         output.snapshot.state = MediaRealtimeOutputState::WaitingForRandomAccess;
         output.snapshot.stage = MediaRealtimeOutputFailureStage::Runtime;
         publish(output.snapshot);
         control.setOutputChangesEnabled(true);
         return ::media::Status::success();
+    }
+
+    void refreshInitialWitness() try
+    {
+        if (!initialGroupId) return;
+        auto group = registry.groups().find(*initialGroupId);
+        if (group == registry.groups().end() || group->second.witness || group->second.draining || group->second.branch->failure()) {
+            initialGroupId.reset();
+            return;
+        }
+        auto readback = resolver->encoderReadback();
+        auto metadata = resolver->encoderParametersSnapshot();
+        auto generation = fanout->sourceGeneration();
+        auto hardware = fanout->hardwareFrames();
+        if (!readback || !metadata || !generation || !hardware) return;
+        auto actual = MediaRealtimeVideoEncodingGroupContractPlanner::plan(plan.videoPlan, fanoutId,
+            generation.value(), plan.sourceTimeBase, plan.preparedVideoSource.frameRate, readback.value());
+        if (!actual) { group->second.branch->fail(outputFailure(actual.error(), MediaRealtimeOutputFailureStage::Preparation)); return; }
+        auto join = MediaRealtimeVideoEncodingGroupContractPlanner::joinPlan(plan.videoPlan);
+        if (!join) { group->second.branch->fail(outputFailure(join.error(), MediaRealtimeOutputFailureStage::Preparation)); return; }
+        group->second.witness = std::make_shared<const MediaRealtimeVideoEncodingWitness>(
+            MediaRealtimeVideoEncodingWitness{plan.videoPlan, std::move(actual).value(), std::move(hardware).value(), join.value()});
+        group->second.codecParameters = std::move(metadata);
+        const auto* codecPort = graph->findOutputPort(group->second.encoded.codec.node, group->second.encoded.codec.port);
+        if (!codecPort) {
+            group->second.branch->fail(outputFailure(::media::ErrorInfo::notInitialized("initial protocol codec endpoint is missing"), MediaRealtimeOutputFailureStage::Publication));
+            return;
+        }
+        for (auto& [id, output] : outputs) {
+            if (output.groupId != group->first) continue;
+            for (const auto edgeId : output.branch->inputEdges()) {
+                if (edgeId == output.frame) continue;
+                const auto* edge = graph->findEdge(edgeId);
+                if (!edge || edge->from.portId != codecPort->id ||
+                    output.branch->tryPublish(edgeId, group->second.codecParameters).outcome != MediaQueuePushOutcome::Accepted) {
+                    group->second.branch->fail(outputFailure(::media::ErrorInfo::internalError("initial protocol codec replay was not accepted"), MediaRealtimeOutputFailureStage::Publication));
+                    return;
+                }
+            }
+        }
+        auto subscribed = fanout->subscribe(group->second.branch, group->second.frameInput);
+        if (!subscribed) { group->second.branch->fail(outputFailure(subscribed.error(), MediaRealtimeOutputFailureStage::Publication)); return; }
+        initialGroupId.reset();
+    }
+    catch (const std::exception& error) {
+        if (initialGroupId) {
+            auto group = registry.groups().find(*initialGroupId);
+            if (group != registry.groups().end()) group->second.branch->fail(
+                outputFailure(::media::ErrorInfo::internalError(std::string("initial encoding witness publication failed: ") + error.what()),
+                    MediaRealtimeOutputFailureStage::Preparation));
+        }
     }
 
     template<class Action>
@@ -281,9 +445,9 @@ public:
         MediaRealtimeOutputFailureStage stage, const ::media::ErrorInfo& error)
     {
         if (auto found = outputs.find(id); found != outputs.end()) {
-            fanout->unsubscribe(id);
+            unsubscribe(found->second);
             found->second.snapshot.stage = stage;
-            found->second.branch->fail(error);
+            found->second.branch->fail(outputFailure(error, stage));
             return ::media::Status::success();
         }
         if (preparation && !preparationResult.valid()) preparation.reset();
@@ -318,11 +482,11 @@ public:
         if (!hardware) return reject(change.outputId, change.addition->output.sdpPath,
             MediaRealtimeOutputFailureStage::Preparation, hardware.error());
         preparation = std::make_shared<Preparation>(Preparation{change.outputId, graphVersion, generation.value(),
-            std::move(*change.addition), std::move(source), std::move(timestamp), std::move(hardware).value(), graph, std::move(decoderFacts).value(),
+            std::move(*change.addition), std::move(source), std::move(timestamp), std::move(hardware).value(), graph, std::move(decoderFacts).value(), registry.available(),
             std::chrono::steady_clock::now() + policy.firstOutputTimeout()});
         auto task = preparation;
         publish({task->id, MediaRealtimeOutputState::Preparing, MediaRealtimeOutputFailureStage::Preparation,
-            "preparing an owned output encoder", task->request.output.sdpPath, std::nullopt});
+            "preparing output and resolving encoding-group reuse", task->request.output.sdpPath, std::nullopt});
         try {
         preparationResult = std::async(std::launch::async, [this, task]() {
             try {
@@ -330,7 +494,7 @@ public:
                 return MediaRealtimeOutputPreparer::prepare({task->request, request, plan,
                     *snapshot->inputStreamSnapshot(plan.videoPlan.sourceStreamIndex), task->hardware.get(), *task->graph,
                     formatSource, {{fanoutId, "frame"}, {resolverId, "timestamp_source"}},
-                    "output." + std::to_string(task->id), task->generation, task->decoderFacts});
+                    "output." + std::to_string(task->id), task->generation, task->decoderFacts, task->groups});
             } catch (const std::exception& error) {
                 return ::media::Result<MediaPreparedRealtimeOutput>::failure(::media::ErrorInfo::internalError(error.what()));
             }
@@ -369,85 +533,130 @@ public:
             task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning,
             service ? ::media::ErrorInfo::unsupported("Output changes its prepared interface service contract")
                     : service.error());
-        auto lease = reserve(video.datagramTransport.encode().wireTraffic.peakWireBytesPerSecond,
-            &prepared.branch.resources.payloadCreditPlan, nullptr, &prepared.branch.sourceRetentionGrowth);
-        if (!lease) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning, lease.error());
+        const auto publishedGraph = prepared.output.graph;
+        if (!publishedGraph) return reject(task.id, task.request.output.sdpPath,
+            MediaRealtimeOutputFailureStage::Preparation, ::media::ErrorInfo::notInitialized("prepared protocol graph is missing"));
         auto parentAuthority = std::dynamic_pointer_cast<MediaVideoProtocolOutputRuntimeAuthority>(runtime.protocolOutputAuthority());
         if (!parentAuthority) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Publication,
             ::media::ErrorInfo::notInitialized("shared video protocol clock is unavailable"));
         auto authority = parentAuthority->fork(video.sessionKey, task.generation);
         if (!authority) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Publication, authority.error());
-        auto publishedGraph = std::make_shared<const MediaGraph>(std::move(prepared.branch.graph));
-        std::vector<std::unique_ptr<MediaRuntimeNode>> nodes;
-        MediaScheduledDatagramSenderNode* sender = nullptr;
-        for (const auto id : prepared.branch.nodeIds) {
-            const auto* node = publishedGraph->findNode(id);
-            if (!node) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation,
-                ::media::ErrorInfo::internalError("prepared output node disappeared"));
-            auto created = node->kind == MediaNodeKind::VideoOutputScheduler
-                ? MediaRuntimeNodeFactory::createVideoOutputScheduler(*node, authority.value())
-                : node->kind == MediaNodeKind::MpegTsRtpSdpPublisher
-                ? MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(*node, authority.value())
-                : MediaRuntimeNodeFactory::create(*node, nullptr, nullptr, authority.value(), serviceScopeArbiter);
+        auto ledger = runtime.context().payloadCreditLedger();
+        if (!ledger) return reject(task.id, task.request.output.sdpPath,
+            MediaRealtimeOutputFailureStage::Preparation, ::media::ErrorInfo::notInitialized("session resource ledger is missing"));
+        const auto exporter = [this](MediaNodeId node, MediaPortId port) { return exportSource(node, port); };
+        std::uint64_t groupId;
+        const bool newGroup = std::holds_alternative<MediaRealtimeNewEncodingGroup>(prepared.encoding);
+        if (newGroup) {
+            auto& candidate = std::get<MediaRealtimeNewEncodingGroup>(prepared.encoding);
+            if (!candidate.witness) return reject(task.id, task.request.output.sdpPath,
+                MediaRealtimeOutputFailureStage::Preparation, ::media::ErrorInfo::notInitialized("encoding witness is missing"));
+            auto allocatedGroup = registry.allocateGroupId();
+            auto allocatedSegment = registry.allocateSegmentId();
+            if (!allocatedGroup || !allocatedSegment) return reject(task.id, task.request.output.sdpPath,
+                MediaRealtimeOutputFailureStage::Preparation, !allocatedGroup ? allocatedGroup.error() : allocatedSegment.error());
+            groupId = allocatedGroup.value();
+            auto payload = ledger->reserveBranch(candidate.segment.resources.payloadCreditPlan);
+            if (!payload) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning, payload.error());
+            auto retention = ledger->reserveRetentionGrowth(candidate.segment.sourceRetentionGrowth);
+            if (!retention) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning, retention.error());
+            auto fixedStorage = ledger->reserveFixedStorage(candidate.segment.resources.admittedGraphPayloadAndReservedStorageBytes);
+            if (!fixedStorage) return reject(task.id, task.request.output.sdpPath,
+                MediaRealtimeOutputFailureStage::Preparation, fixedStorage.error());
+            auto resources = std::make_shared<EncodingReservation>(std::move(payload).value(), std::move(retention).value(),
+                std::move(fixedStorage).value());
+            auto created = MediaRealtimeSegmentFactory::create(allocatedSegment.value(), publishedGraph,
+                candidate.segment.nodeIds, candidate.segment.threading, std::move(resources), nullptr, nullptr,
+                candidate.encoder, runtime.context(), exporter);
             if (!created) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, created.error());
-            if (auto* encoderResolver = dynamic_cast<CodecResolverNode*>(created.value().get())) {
-                auto bound = encoderResolver->bindPreparedEncoder(prepared.encoder);
-                if (!bound) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, bound.error());
-            }
-            if (auto* candidate = dynamic_cast<MediaScheduledDatagramSenderNode*>(created.value().get())) sender = candidate;
-            nodes.push_back(std::move(created).value());
+            if (!created.value().resolver || !created.value().encodedFanout) return reject(task.id, task.request.output.sdpPath,
+                MediaRealtimeOutputFailureStage::Preparation, ::media::ErrorInfo::notInitialized("encoding segment lacks resolver or packet fanout"));
+            auto metadata = created.value().resolver->encoderParametersSnapshot();
+            if (!metadata) return reject(task.id, task.request.output.sdpPath,
+                MediaRealtimeOutputFailureStage::Preparation, ::media::ErrorInfo::notInitialized("prepared encoder has no immutable codec parameters"));
+            auto joined = created.value().encodedFanout->bindJoinPlan(candidate.witness->joinPlan);
+            if (!joined) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, joined.error());
+            auto frame = incomingEdge(*created.value().branch, *publishedGraph, {fanoutId, "frame"});
+            if (!frame) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, frame.error());
+            registry.groups().emplace(groupId, MediaRealtimeEncodingGroup{groupId, task.generation,
+                created.value().branch, candidate.segment.nodeIds, frame.value(), candidate.segment.encoded,
+                created.value().encodedFanout, candidate.witness, std::move(metadata)});
+            changingGroup = groupId;
+        } else {
+            groupId = std::get<MediaRealtimeExistingEncodingGroup>(prepared.encoding).groupId;
+            auto group = registry.groups().find(groupId);
+            if (group == registry.groups().end() || group->second.draining || group->second.branch->failure() ||
+                group->second.generation != task.generation || !group->second.codecParameters ||
+                group->second.branch->state() != MediaRuntimeBranchState::Running)
+                return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Publication,
+                    ::media::ErrorInfo::cancelled("selected encoding group is no longer available"));
         }
-        if (!sender) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation,
-            ::media::ErrorInfo::notInitialized("prepared output has no datagram sender"));
-        std::vector<MediaRuntimeSegmentOutputBinding> upstreamInputs;
-        std::set<std::uint32_t> exportedPorts;
-        const auto belongs = [&](MediaNodeId id) {
-            return std::find(prepared.branch.nodeIds.begin(), prepared.branch.nodeIds.end(), id) != prepared.branch.nodeIds.end();
-        };
-        for (const auto& edge : publishedGraph->edges()) {
-            if (!belongs(edge.to.nodeId) || belongs(edge.from.nodeId) ||
-                !exportedPorts.insert(edge.from.portId.value).second) continue;
-            auto binding = runtime.context().exportOutput(edge.from.portId);
-            if (!binding) return reject(task.id, task.request.output.sdpPath,
-                MediaRealtimeOutputFailureStage::Preparation, binding.error());
-            upstreamInputs.push_back(std::move(binding).value());
-        }
-        auto branch = MediaRuntimeBranch::prepare({task.id, prepared.branch.threading, publishedGraph,
-            prepared.branch.nodeIds, std::move(upstreamInputs), std::move(nodes), std::move(lease).value()}, runtime.context());
-        if (!branch) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, branch.error());
-        MediaEdgeId frame;
-        for (const auto id : branch.value()->inputEdges()) {
-            const auto* edge = publishedGraph->findEdge(id);
-            if (edge->from.nodeId == fanoutId) frame = id;
-        }
-        if (!frame.isValid()) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation,
-            ::media::ErrorInfo::notInitialized("prepared output lacks its fanout input edge"));
-        auto inserted = outputs.emplace(task.id, Output{task.id, branch.value(), prepared.branch.nodeIds, frame,
-            authority.value(),
-            video.startup.maximumWait, task.generation, std::chrono::steady_clock::now(),
-            {task.id, MediaRealtimeOutputState::WaitingForRandomAccess, MediaRealtimeOutputFailureStage::Publication,
+        auto& group = registry.groups().at(groupId);
+        auto storage = ledger->reserveFixedStorage(prepared.output.fixedStorageBytes);
+        if (!storage) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning, storage.error());
+        auto lease = reserveProtocol(video.datagramTransport.encode().wireTraffic.peakWireBytesPerSecond,
+            std::move(storage).value(), &prepared.output.encodedRetentionGrowth);
+        if (!lease) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Planning, lease.error());
+        auto allocatedSegment = registry.allocateSegmentId();
+        if (!allocatedSegment) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, allocatedSegment.error());
+        auto created = MediaRealtimeSegmentFactory::create(allocatedSegment.value(), publishedGraph,
+            prepared.output.nodeIds, prepared.output.threading, std::move(lease).value(), authority.value(),
+            serviceScopeArbiter, nullptr, runtime.context(), exporter);
+        if (!created) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, created.error());
+        auto packet = incomingEdge(*created.value().branch, *publishedGraph, group.encoded.packet);
+        if (!packet) return reject(task.id, task.request.output.sdpPath, MediaRealtimeOutputFailureStage::Preparation, packet.error());
+        auto inserted = outputs.emplace(task.id, Output{task.id, groupId, created.value().branch,
+            prepared.output.nodeIds, packet.value(), authority.value(), video.startup.maximumWait,
+            task.generation, std::chrono::steady_clock::now(),
+            {task.id, MediaRealtimeOutputState::WaitingForRandomAccess, MediaRealtimeOutputFailureStage::Preparation,
                 {}, task.request.output.sdpPath, std::nullopt}});
+        ++group.outputCount;
+        changingGroup.reset();
         auto& output = inserted.first->second;
         output.transactionDeadline = task.deadline;
-        output.snapshot.stage = MediaRealtimeOutputFailureStage::Preparation;
+        if (newGroup) {
+            auto status = group.branch->start();
+            if (!status) { group.branch->fail(status.error()); return ::media::Status::success(); }
+            for (const auto edgeId : group.branch->inputEdges()) {
+                if (edgeId == group.frameInput) continue;
+                const auto* edge = publishedGraph->findEdge(edgeId);
+                MediaBufferRef metadata;
+                if (edge->from.nodeId == formatSource.node) metadata = task.source;
+                else if (edge->from.nodeId == resolverId) metadata = task.timestamp;
+                if (!metadata || group.branch->tryPublish(edgeId, metadata).outcome != MediaQueuePushOutcome::Accepted) {
+                    group.branch->fail(outputFailure(::media::ErrorInfo::internalError("encoding group metadata replay was not accepted"), MediaRealtimeOutputFailureStage::Publication));
+                    return ::media::Status::success();
+                }
+            }
+        }
         auto started = output.branch->start();
         if (!started) { output.branch->fail(started.error()); return ::media::Status::success(); }
         output.snapshot.stage = MediaRealtimeOutputFailureStage::Publication;
-        for (const auto id : output.branch->inputEdges()) {
-            if (id == frame) continue;
-            const auto* edge = publishedGraph->findEdge(id);
-            MediaBufferRef metadata;
-            if (edge->from.nodeId == formatSource.node) metadata = task.source;
-            else if (edge->from.nodeId == resolverId) metadata = task.timestamp;
-            if (!metadata || output.branch->tryPublish(id, metadata).outcome != MediaQueuePushOutcome::Accepted) {
-                output.branch->fail(::media::ErrorInfo::internalError("prepared output metadata replay was not accepted"));
+        for (const auto edgeId : output.branch->inputEdges()) {
+            if (edgeId == output.frame) continue;
+            const auto* edge = publishedGraph->findEdge(edgeId);
+            const auto* codecPort = publishedGraph->findOutputPort(group.encoded.codec.node, group.encoded.codec.port);
+            if (!codecPort || edge->from.portId != codecPort->id ||
+                output.branch->tryPublish(edgeId, group.codecParameters).outcome != MediaQueuePushOutcome::Accepted) {
+                output.branch->fail(outputFailure(::media::ErrorInfo::internalError("protocol codec parameter replay was not accepted"), MediaRealtimeOutputFailureStage::Publication));
                 return ::media::Status::success();
             }
         }
-        auto subscribed = fanout->subscribe(output.branch, frame);
-        if (!subscribed) { output.branch->fail(subscribed.error()); return ::media::Status::success(); }
-        graph = std::move(publishedGraph);
+        auto subscribed = group.fanout->subscribe(output.branch, output.frame);
+        if (!subscribed) { output.branch->fail(outputFailure(subscribed.error(), MediaRealtimeOutputFailureStage::Publication)); return ::media::Status::success(); }
+        if (newGroup) {
+            auto status = fanout->subscribe(group.branch, group.frameInput);
+            if (!status) { group.branch->fail(outputFailure(status.error(), MediaRealtimeOutputFailureStage::Publication)); return ::media::Status::success(); }
+        }
+        graph = publishedGraph;
+        group.graphPublished = true;
         ++graphVersion;
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeLifecycle,
+            "output_encoding_group output_id=" + std::to_string(output.id) +
+            " group_id=" + std::to_string(group.groupId) +
+            " encoding_segment_id=" + std::to_string(group.branch->id()) +
+            " protocol_segment_id=" + std::to_string(output.branch->id()) +
+            " action=" + (newGroup ? "created" : "reused"));
         output.snapshot.stage = MediaRealtimeOutputFailureStage::Runtime;
         publish(output.snapshot);
         // Keep the change busy until the branch is ready or has physically retired.
@@ -456,18 +665,69 @@ public:
 
     ::media::Status drain(Output& output)
     {
-        fanout->unsubscribe(output.id);
+        unsubscribe(output);
         auto generation = fanout->sourceGeneration();
         if (generation) output.generation = generation.value();
         output.snapshot.stage = MediaRealtimeOutputFailureStage::Drain;
         auto status = output.branch->beginDrain(output.generation, drainPlan);
-        if (!status) output.branch->fail(status.error());
+        if (!status) output.branch->fail(outputFailure(status.error(), MediaRealtimeOutputFailureStage::Drain));
         else { output.snapshot.state = MediaRealtimeOutputState::Draining; output.snapshot.stage = MediaRealtimeOutputFailureStage::Drain; publish(output.snapshot); }
         return ::media::Status::success();
     }
 
+    void pollGroups()
+    {
+        for (auto it = registry.groups().begin(); it != registry.groups().end();) {
+            auto& group = it->second;
+            if (const auto failure = group.branch->failure()) {
+                fanout->unsubscribe(group.branch->id());
+                for (auto& [outputId, output] : outputs) {
+                    if (output.groupId != group.groupId) continue;
+                    unsubscribe(output);
+                    if (!output.branch->failure()) {
+                        output.branch->fail(*failure);
+                    }
+                }
+            }
+            if (group.outputCount != 0) { ++it; continue; }
+            if (!group.draining) {
+                fanout->unsubscribe(group.branch->id());
+                group.draining = true;
+                if (group.branch->state() == MediaRuntimeBranchState::Running) {
+                    auto status = group.branch->beginDrain(group.generation, drainPlan);
+                    if (!status) group.branch->fail(outputFailure(status.error(), MediaRealtimeOutputFailureStage::Drain));
+                } else if (group.branch->state() == MediaRuntimeBranchState::Prepared) {
+                    group.branch->fail(::media::ErrorInfo::cancelled("unpublished encoding group has no consumers"));
+                }
+            }
+            auto retired = group.branch->poll();
+            if (!retired) group.branch->fail(retired.error());
+            if (!retired || !retired.value()) { ++it; continue; }
+            if (const auto failure = group.branch->failure(); failure && finishing && !finishFailure)
+                finishFailure = failure->error;
+            if (pendingTerminalGroup == group.groupId && pendingTerminal && !pendingTerminal->error && group.branch->failure()) {
+                const auto failure = group.branch->failure();
+                pendingTerminal->error = failure->error;
+                pendingTerminal->detail = failure->error.message;
+                pendingTerminal->stage = outputFailureStage(failure->phase);
+                auto failed = *pendingTerminal;
+                failed.state = MediaRealtimeOutputState::Failed;
+                publish(std::move(failed));
+            }
+            addMetrics(retiredMetrics, group.branch->metrics());
+            if (group.graphPublished) {
+                auto nextGraph = std::make_shared<MediaGraph>(*graph);
+                nextGraph->removeNodes(group.nodes);
+                graph = std::move(nextGraph);
+                ++graphVersion;
+            }
+            it = registry.groups().erase(it);
+        }
+    }
+
     ::media::Status poll()
     {
+        refreshInitialWitness();
         // The application startup budget bounds the transaction logically; an
         // expired driver operation remains owned until it actually returns.
         if (preparation && !preparation->expired && std::chrono::steady_clock::now() >= preparation->deadline) {
@@ -487,10 +747,12 @@ public:
                 return publishPrepared(std::move(result).value(), *task);
             });
         }
+        pollGroups();
         publishPendingTerminal();
         for (auto it = outputs.begin(); it != outputs.end();) {
             auto& output = it->second;
             if (output.snapshot.state == MediaRealtimeOutputState::WaitingForRandomAccess &&
+                !output.branch->failure() &&
                 std::chrono::steady_clock::now() < output.transactionDeadline &&
                 std::chrono::steady_clock::now() - output.startedAt < std::chrono::nanoseconds(output.startupWait.nanoseconds()) &&
                 output.authority->currentActivation() && output.branch->videoReadyEvidence() &&
@@ -504,24 +766,20 @@ public:
                 (std::chrono::steady_clock::now() >= output.transactionDeadline ||
                     std::chrono::steady_clock::now() - output.startedAt >= std::chrono::nanoseconds(output.startupWait.nanoseconds())))
                 output.branch->fail(::media::ErrorInfo::notInitialized("output produced no independently decodable media before its planned startup deadline"));
-            if (output.branch->failure()) fanout->unsubscribe(output.id);
+            if (output.branch->failure()) unsubscribe(output);
             auto retired = output.branch->poll();
-            if (!retired) {
-                if (output.branch->state() == MediaRuntimeBranchState::Retiring ||
-                    output.branch->state() == MediaRuntimeBranchState::Retired)
-                    output.snapshot.stage = MediaRealtimeOutputFailureStage::Release;
-                output.branch->fail(retired.error());
-            }
+            if (!retired) output.branch->fail(retired.error());
             if (const auto failure = output.branch->failure(); failure && output.snapshot.state != MediaRealtimeOutputState::Failed) {
-                fanout->unsubscribe(output.id);
+                unsubscribe(output);
                 output.snapshot.state = MediaRealtimeOutputState::Failed;
                 output.snapshot.detail = failure->error.message;
                 output.snapshot.error = failure->error;
+                output.snapshot.stage = outputFailureStage(failure->phase);
                 if (finishing && !finishFailure) finishFailure = failure->error;
                 publish(output.snapshot);
             }
             if (retired && retired.value()) {
-                fanout->unsubscribe(output.id);
+                unsubscribe(output);
                 addMetrics(retiredMetrics, output.branch->metrics());
                 auto nextGraph = std::make_shared<MediaGraph>(*graph);
                 nextGraph->removeNodes(output.nodes);
@@ -529,12 +787,22 @@ public:
                 ++graphVersion;
                 output.snapshot.state = MediaRealtimeOutputState::Retired;
                 auto terminal = std::move(output.snapshot);
+                const auto groupId = output.groupId;
                 it = outputs.erase(it);
-                if (changingOutput == terminal.outputId) { control.completeOutputChange(); changingOutput.reset(); }
-                publish(std::move(terminal));
+                auto group = registry.groups().find(groupId);
+                if (group != registry.groups().end()) --group->second.outputCount;
+                if (changingOutput == terminal.outputId && group != registry.groups().end() && group->second.outputCount == 0) {
+                    pendingTerminal = std::move(terminal);
+                    pendingTerminalGroup = groupId;
+                } else {
+                    if (changingOutput == terminal.outputId) { control.completeOutputChange(); changingOutput.reset(); }
+                    publish(std::move(terminal));
+                }
             } else ++it;
         }
-        if (!finishing && !preparation) {
+        pollGroups();
+        publishPendingTerminal();
+        if (!finishing && !preparation && !pendingTerminal) {
             if (auto change = control.takeOutputChange()) {
                 changingOutput = change->outputId;
                 if (change->addition) {
@@ -565,18 +833,20 @@ public:
         if (!cause && (runtime.state() == MediaGraphRuntimeState::Compiled ||
             runtime.state() == MediaGraphRuntimeState::DefaultRegistrationPending))
             runtime.abort();
+        else if (runtime.threadedRunning())
+            runtime.threadedExecutor().requestStop(runtime.context());
         if (auto change = control.takeOutputChange()) reject(change->outputId,
             change->addition ? change->addition->output.sdpPath : std::string{}, MediaRealtimeOutputFailureStage::Publication,
             ::media::ErrorInfo::cancelled("session is finishing"));
         publishPendingTerminal();
         for (auto& [id, output] : outputs) {
-            fanout->unsubscribe(id);
+            unsubscribe(output);
             if (!cause) output.branch->fail(cause.error());
             else if (output.branch->state() == MediaRuntimeBranchState::Running) drain(output);
         }
-        while (preparation || !outputs.empty()) {
+        while (preparation || !outputs.empty() || !registry.groups().empty()) {
             poll();
-            if (preparation || !outputs.empty()) std::this_thread::sleep_for(policy.pollInterval());
+            if (preparation || !outputs.empty() || !registry.groups().empty()) std::this_thread::sleep_for(policy.pollInterval());
         }
         control.completeOutputChange();
         finished = true;
@@ -593,6 +863,7 @@ public:
     const MediaRealtimeVideoRunPolicy& policy;
     std::shared_ptr<const MediaGraph> graph;
     std::shared_ptr<EgressAccount> egress;
+    std::shared_ptr<MediaGraphPayloadBranchReservation> sharedStorageLease;
     // Retained through zero outputs; joining a branch never resets virtual time.
     std::shared_ptr<MediaDatagramServiceScopeArbiter> serviceScopeArbiter;
     VideoOutputFanoutNode* fanout = nullptr;
@@ -601,10 +872,14 @@ public:
     MediaNodeId resolverId;
     MediaEndpoint formatSource;
     std::map<std::uint64_t, Output> outputs;
+    MediaRealtimeEncodingGroupRegistry registry;
+    std::optional<std::uint64_t> initialGroupId;
     std::shared_ptr<Preparation> preparation;
     std::future<::media::Result<MediaPreparedRealtimeOutput>> preparationResult;
     std::optional<std::uint64_t> changingOutput;
     std::optional<MediaRealtimeOutputSnapshot> pendingTerminal;
+    std::optional<std::uint64_t> pendingTerminalGroup;
+    std::optional<std::uint64_t> changingGroup;
     MediaGraphRuntimeMetrics retiredMetrics;
     std::uint64_t graphVersion = 0;
     std::optional<::media::ErrorInfo> finishFailure;
@@ -641,7 +916,7 @@ MediaRealtimeOutputRunController::create(const MediaRealtimeRtpTranscodeRequest&
     if (!initialized) {
         impl->reject(initialOutputId, request.output.sdpPath,
             MediaRealtimeOutputFailureStage::Preparation, initialized.error());
-        impl->publishPendingTerminal();
+        impl->finish(::media::Status::failure(initialized.error()));
         return Result::failure(initialized.error());
     }
     return Result::success(std::unique_ptr<MediaRealtimeOutputRunController>(new MediaRealtimeOutputRunController(std::move(impl))));
@@ -655,6 +930,7 @@ void MediaRealtimeOutputRunController::aggregate(MediaGraphRuntimeReport& report
 {
     addMetrics(report.metrics, m_impl->retiredMetrics);
     for (const auto& [id, output] : m_impl->outputs) addMetrics(report.metrics, output.branch->metrics());
+    for (const auto& [id, group] : m_impl->registry.groups()) addMetrics(report.metrics, group.branch->metrics());
 }
 
 } // namespace media::ffmpeg::graph

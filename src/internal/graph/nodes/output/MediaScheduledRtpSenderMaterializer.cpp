@@ -179,13 +179,14 @@ MediaScheduledRtpSenderMaterialization::releaseDescription() noexcept
 MediaScheduledRtpSenderMaterializer::materialize(
     const MediaScheduledRtpOutputPlan& outputPlan,
     const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
-    const AVCodecContext& codecContext,
+    const AVCodecParameters& codecParameters,
+    MediaRational codecTimeBase,
     const AVPacket* codecConfigurationAccessUnit,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
     const MediaProtocolOutputActivation& activation)
 {
     auto parameters = MediaScheduledRtpCodecParametersMaterializer::materialize(
-        codecContext, outputPlan.packetization);
+        codecParameters, codecTimeBase, outputPlan.packetization);
     if (!parameters) {
         return ::media::Result<
             MediaScheduledRtpSenderMaterialization>::failure(

@@ -69,7 +69,6 @@ protected:
     bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept override;
 
 private:
-    ::media::Status emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Result<bool> receivePackets(MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> encodeQueuedFrame(MediaGraphExecutionContext& context,
                                                               bool allowPartial);
@@ -77,7 +76,6 @@ private:
     void resetRuntimeState() noexcept;
 
 private:
-    bool m_encoderConfigEmitted = false;
     bool m_queuedFrameBeforeCodecTraced = false;
     bool m_codecBoundTraced = false;
     bool m_firstFrameTraced = false;

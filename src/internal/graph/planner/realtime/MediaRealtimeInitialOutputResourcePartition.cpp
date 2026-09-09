@@ -175,57 +175,51 @@ using Arithmetic = MediaCheckedArithmetic;
 MediaRealtimeInitialOutputResourcePartitionPlanner::plan(
     const MediaGraph& graph,
     const MediaRealtimeGraphResourceLedgerPlan& ledger,
-    std::span<const MediaNodeId> outputNodes)
+    const MediaRealtimeInitialVideoOutputTopology& topology)
 {
     using Result = ::media::Result<MediaRealtimeInitialOutputResourcePartition>;
-    if (outputNodes.empty() || outputNodes.size() >= graph.nodeCount()) return Result::failure(
-        ::media::ErrorInfo::invalidArgument("initial resource partition requires two nonempty execution segments"));
-    for (std::size_t index = 0; index < outputNodes.size(); ++index) {
-        if (!graph.findNode(outputNodes[index]) ||
-            std::find(outputNodes.begin(), outputNodes.begin() + index, outputNodes[index]) !=
-                outputNodes.begin() + index) return Result::failure(
-            ::media::ErrorInfo::invalidArgument("initial resource partition contains invalid or duplicate nodes"));
-    }
-    std::vector<MediaNodeId> sharedNodes;
-    for (const auto& node : graph.nodes()) {
-        if (std::find(outputNodes.begin(), outputNodes.end(), node.id) == outputNodes.end()) {
-            sharedNodes.push_back(node.id);
+    std::vector<MediaNodeId> all;
+    for (const auto* nodes : {&topology.sharedNodeIds, &topology.encodingNodeIds, &topology.outputNodeIds}) {
+        if (nodes->empty()) return Result::failure(::media::ErrorInfo::invalidArgument("Initial execution segment is empty"));
+        for (auto id : *nodes) {
+            if (!graph.findNode(id) || std::find(all.begin(), all.end(), id) != all.end()) return Result::failure(
+                ::media::ErrorInfo::invalidArgument("Initial execution segments overlap or reference missing nodes"));
+            all.push_back(id);
         }
     }
+    if (all.size() != graph.nodeCount()) return Result::failure(::media::ErrorInfo::invalidArgument("Initial execution partition omits nodes"));
     auto complete = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, {});
     if (!complete) return Result::failure(complete.error());
-    auto shared = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, sharedNodes);
+    auto shared = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.sharedNodeIds);
     if (!shared) return Result::failure(shared.error());
-    auto output = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, outputNodes);
-    if (!output) return Result::failure(output.error());
-    for (auto* segment : {&shared.value(), &output.value()}) {
-        if (auto status = boundProducerResidence(graph, complete.value(), ledger, *segment); !status) {
+    auto encoding = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.encodingNodeIds);
+    if (!encoding) return Result::failure(encoding.error());
+    auto protocol = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, ledger, topology.outputNodeIds);
+    if (!protocol) return Result::failure(protocol.error());
+    for (auto* segment : {&shared.value(), &encoding.value()}) {
+        if (auto status = boundProducerResidence(graph, complete.value(), ledger, *segment); !status)
             return Result::failure(status.error());
-        }
-    }
-    auto storage = Arithmetic::add(shared.value().admittedGraphPayloadAndReservedStorageBytes,
-        output.value().admittedGraphPayloadAndReservedStorageBytes, "partition reserved storage");
-    auto payload = Arithmetic::add(shared.value().payloadCreditPlan.maximumBytes,
-        output.value().payloadCreditPlan.maximumBytes, "partition payload budget");
-    if (!storage || !payload) return Result::failure(!storage ? storage.error() : payload.error());
-    auto total = Arithmetic::add(storage.value(), payload.value(), "initial partition admission");
-    if (!total) return Result::failure(total.error());
-    // The earlier single-pipeline estimate is not an external deployment cap.
-    // Publish the sum of independent allocation quotas and reserved storage.
-    for (auto* segment : {&shared.value(), &output.value()}) {
         auto maximum = Arithmetic::add(segment->payloadCreditPlan.maximumBytes,
-            segment->admittedGraphPayloadAndReservedStorageBytes,
-            "execution segment allocation and storage envelope");
+            segment->admittedGraphPayloadAndReservedStorageBytes, "initial segment allocation and fixed storage");
         if (!maximum) return Result::failure(maximum.error());
         segment->maximumGraphPayloadAndReservedStorageBytes = maximum.value();
     }
-    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
-        MediaGraphDiagnosticPhase::GraphBuild,
-        "initial_partition engine_bytes=" + std::to_string(total.value()) +
-        " shared_payload_bytes=" + std::to_string(shared.value().payloadCreditPlan.maximumBytes) +
-        " output_payload_bytes=" + std::to_string(output.value().payloadCreditPlan.maximumBytes) +
-        " reserved_storage_bytes=" + std::to_string(storage.value()));
-    return Result::success({std::move(shared).value(), std::move(output).value()});
+    // Initial publication extracts all three fixed-storage accounts before any
+    // worker starts. These bytes are never available to media producers.
+    auto detachedStorage = Arithmetic::add(encoding.value().admittedGraphPayloadAndReservedStorageBytes,
+        protocol.value().reservedStorageBytes, "initial encoding and protocol fixed storage");
+    if (!detachedStorage) return Result::failure(detachedStorage.error());
+    auto allStorage = Arithmetic::add(shared.value().admittedGraphPayloadAndReservedStorageBytes,
+        detachedStorage.value(), "initial complete fixed storage");
+    if (!allStorage) return Result::failure(allStorage.error());
+    auto stagedStorage = Arithmetic::add(shared.value().payloadCreditPlan.maximumBytes,
+        allStorage.value(), "initial fixed storage awaiting account extraction");
+    if (!stagedStorage) return Result::failure(stagedStorage.error());
+    shared.value().maximumGraphPayloadAndReservedStorageBytes = stagedStorage.value();
+    shared.value().payloadCreditPlan.maximumBytes = stagedStorage.value();
+    shared.value().payloadCreditPlan.authority += "+initial-fixed-storage-awaiting-extraction";
+    return Result::success({std::move(shared).value(), std::move(encoding).value(),
+        protocol.value().reservedStorageBytes});
 }
 
 } // namespace media::ffmpeg::graph

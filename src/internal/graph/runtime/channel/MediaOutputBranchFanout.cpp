@@ -63,7 +63,7 @@ void MediaOutputBranchFanout::unsubscribe(std::uint64_t outputId)
         bool allocationFailed = false;
         auto copy = [&]() -> ::media::Result<MediaBufferRef> {
             try {
-                return replica(source);
+                return replica(source, boundary);
             } catch (const std::bad_alloc&) {
                 // Prepared before publication so the exception path need not
                 // allocate an error string. Other semantic exceptions propagate.

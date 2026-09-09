@@ -48,10 +48,13 @@ public:
     // remains owned and charged until its workers have actually exited.
     ::media::Result<bool> poll();
     void fail(::media::ErrorInfo error);
+    void fail(MediaGraphWorkerFailure failure);
     std::uint64_t id() const noexcept { return m_id; }
     MediaRuntimeBranchState state() const;
     std::optional<MediaGraphWorkerFailure> failure() const;
     MediaGraphExecutionContext& context() noexcept { return m_context; }
+    // The caller retains this branch and serializes lookup with retirement.
+    MediaRuntimeNode* findNode(MediaNodeId id) noexcept { return m_scheduler.findNode(id); }
     std::vector<MediaEdgeId> inputEdges() const;
     MediaGraphRuntimeMetrics metrics() const;
     std::optional<MediaVideoOutputReadyEvidence> videoReadyEvidence() const;

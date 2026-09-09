@@ -34,6 +34,7 @@ bool productionRealtimeNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketFanout:
     case MediaNodeKind::FrameRoute:
     case MediaNodeKind::VideoOutputFanout:
+    case MediaNodeKind::EncodedVideoOutputFanout:
     case MediaNodeKind::VideoDecode:
     case MediaNodeKind::VideoTimestamp:
     case MediaNodeKind::HardwareTransfer:
@@ -176,10 +177,10 @@ bool globallyCreditedPayload(MediaPayloadKind kind) noexcept
 } // namespace
 
 ::media::Result<MediaFinalGraphResourceLedger>
-MediaFinalGraphResourceLedgerCompiler::compile(
+compileLedger(
     const MediaGraph& graph,
     const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
-    std::span<const MediaNodeId> selectedNodes)
+    std::span<const MediaNodeId> selectedNodes, bool credits)
 {
     const auto selected = [&](MediaNodeId id) {
         return selectedNodes.empty() ||
@@ -533,6 +534,10 @@ MediaFinalGraphResourceLedgerCompiler::compile(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             message.str()));
     }
+    if (!credits) {
+        ledger.videoPipelinePendingSurfaces = pipelinePendingSurfaces;
+        return Result::success(std::move(ledger));
+    }
     std::uint64_t maximumPayloadObjects = 0;
     for (const auto& entry : ledger.entries) {
         auto objects = Arithmetic::add(
@@ -551,6 +556,25 @@ MediaFinalGraphResourceLedgerCompiler::compile(
     ledger.payloadCreditPlan = std::move(payloadPlan).value();
     ledger.videoPipelinePendingSurfaces = pipelinePendingSurfaces;
     return Result::success(std::move(ledger));
+}
+
+::media::Result<MediaFinalGraphResourceLedger> MediaFinalGraphResourceLedgerCompiler::compile(
+    const MediaGraph& graph, const MediaRealtimeGraphResourceLedgerPlan& planning,
+    std::span<const MediaNodeId> nodes)
+{
+    return compileLedger(graph, planning, nodes, true);
+}
+
+::media::Result<MediaFinalGraphReferenceStoragePlan> MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(
+    const MediaGraph& graph, const MediaRealtimeGraphResourceLedgerPlan& planning,
+    std::span<const MediaNodeId> nodes)
+{
+    using Result = ::media::Result<MediaFinalGraphReferenceStoragePlan>;
+    if (nodes.empty()) return Result::failure(::media::ErrorInfo::invalidArgument("Reference segment is empty"));
+    auto ledger = compileLedger(graph, planning, nodes, false);
+    if (!ledger) return Result::failure(ledger.error());
+    return Result::success({ledger.value().admittedGraphPayloadAndReservedStorageBytes,
+        std::move(ledger.value().entries)});
 }
 
 } // namespace media::ffmpeg::graph

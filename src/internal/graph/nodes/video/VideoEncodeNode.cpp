@@ -271,7 +271,6 @@ void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept
 }
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
-    m_encoderConfigEmitted = false;
     m_firstFrameDiagnosticEmitted = false;
     m_firstSubmitDiagnosticEmitted = false;
     m_firstPacketDiagnosticEmitted = false;
@@ -330,6 +329,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
 ::media::Result<MediaNodeProcessResult> VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (hasCodecContext() && !codecMetadataPublished())
+        return processProgress(publishCodecMetadata(context));
     auto lineageLock = m_lineageState->lock();
     if (m_lineageState->flushPending) {
         return continueFlush(context);
@@ -387,9 +388,9 @@ void VideoEncodeNode::resetRuntimeState() noexcept
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +
                       " hw_frames_ctx=" + (encoder && encoder->hw_frames_ctx ? "set" : "none"));
-        auto emitStatus = emitEncoderConfig(context, buffer);
+        auto emitStatus = publishCodecMetadata(context);
         if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+            return processProgress(std::move(emitStatus));
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
@@ -595,27 +596,6 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     auto status = FFmpegCodecNodeRuntime::stop(context);
     resetRuntimeState();
     return status;
-}
-
-::media::Status VideoEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context,
-                                                   const MediaBufferRef& buffer)
-{
-    if (m_encoderConfigEmitted || !buffer) {
-        return ::media::Status::success();
-    }
-
-    if (!context.findOutputChannel(nodeId(), "codec")) {
-        m_encoderConfigEmitted = true;
-        return ::media::Status::success();
-    }
-
-    auto status = emitOutput(context, "codec", buffer);
-    if (!status) {
-        return status;
-    }
-
-    m_encoderConfigEmitted = true;
-    return ::media::Status::success();
 }
 
 ::media::Result<bool> VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)

@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
 
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/protocol/codec/MediaVideoNalUnitScanner.h"
 
 #include <algorithm>
 #include <limits>
@@ -15,125 +16,6 @@ using PacketResult =
 std::size_t headerBytes(MediaAnnexBCodec codec) noexcept
 {
     return codec == MediaAnnexBCodec::H264 ? 1U : 2U;
-}
-
-bool validNal(std::span<const std::uint8_t> nal,
-              MediaAnnexBCodec codec) noexcept
-{
-    if (nal.size() < headerBytes(codec)) return false;
-    if (codec == MediaAnnexBCodec::H264) {
-        const auto type = nal[0] & 0x1fU;
-        return (nal[0] & 0x80U) == 0 && type >= 1U && type <= 23U;
-    }
-    const auto type = (nal[0] >> 1U) & 0x3fU;
-    return (nal[0] & 0x80U) == 0 && type <= 47U &&
-        (nal[1] & 0x07U) != 0;
-}
-
-std::size_t startCodeSize(std::span<const std::uint8_t> bytes,
-                          std::size_t offset) noexcept
-{
-    if (offset + 4U <= bytes.size() && bytes[offset] == 0 &&
-        bytes[offset + 1U] == 0 && bytes[offset + 2U] == 0 &&
-        bytes[offset + 3U] == 1) return 4U;
-    if (offset + 3U <= bytes.size() && bytes[offset] == 0 &&
-        bytes[offset + 1U] == 0 && bytes[offset + 2U] == 1) return 3U;
-    return 0;
-}
-
-::media::Result<std::vector<std::span<const std::uint8_t>>> parseAnnexB(
-    std::span<const std::uint8_t> bytes,
-    MediaAnnexBCodec codec)
-{
-    auto valid = MediaAnnexBAccessUnitValidator::validate(bytes, codec);
-    if (!valid) {
-        return ::media::Result<
-            std::vector<std::span<const std::uint8_t>>>::failure(
-                valid.error());
-    }
-    std::vector<std::span<const std::uint8_t>> units;
-    try {
-        std::size_t cursor = 0;
-        while (cursor < bytes.size()) {
-            const auto prefix = startCodeSize(bytes, cursor);
-            const auto begin = cursor + prefix;
-            std::size_t end = begin + headerBytes(codec);
-            while (end < bytes.size() && startCodeSize(bytes, end) == 0) {
-                ++end;
-            }
-            units.push_back(bytes.subspan(begin, end - begin));
-            cursor = end;
-        }
-    } catch (const std::bad_alloc&) {
-        return ::media::Result<
-            std::vector<std::span<const std::uint8_t>>>::failure(
-                ::media::ErrorInfo::allocationFailed(
-                    "video RTP Annex-B unit index"));
-    }
-    return ::media::Result<
-        std::vector<std::span<const std::uint8_t>>>::success(
-            std::move(units));
-}
-
-::media::Result<std::vector<std::span<const std::uint8_t>>> parseLengthPrefixed(
-    std::span<const std::uint8_t> bytes,
-    MediaAnnexBCodec codec,
-    std::uint8_t width)
-{
-    using Result = ::media::Result<
-        std::vector<std::span<const std::uint8_t>>>;
-    if (bytes.empty() || width == 0 || width > sizeof(std::uint64_t)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "video RTP length-prefixed access unit has invalid geometry"));
-    }
-    std::vector<std::span<const std::uint8_t>> units;
-    try {
-        std::size_t cursor = 0;
-        while (cursor < bytes.size()) {
-            if (width > bytes.size() - cursor) {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "video RTP NAL length field is truncated"));
-            }
-            std::uint64_t length = 0;
-            for (std::uint8_t index = 0; index < width; ++index) {
-                length = (length << 8U) | bytes[cursor + index];
-            }
-            cursor += width;
-            if (length == 0 || length > bytes.size() - cursor ||
-                length > (std::numeric_limits<std::size_t>::max)()) {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "video RTP NAL length exceeds the access unit"));
-            }
-            auto nal = bytes.subspan(cursor, static_cast<std::size_t>(length));
-            if (!validNal(nal, codec)) {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "video RTP length-prefixed access unit has an invalid NAL"));
-            }
-            units.push_back(nal);
-            cursor += static_cast<std::size_t>(length);
-        }
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "video RTP length-prefixed unit index"));
-    }
-    return Result::success(std::move(units));
-}
-
-::media::Result<std::vector<std::span<const std::uint8_t>>> parseUnits(
-    std::span<const std::uint8_t> bytes,
-    MediaAnnexBCodec codec,
-    const MediaEncodedPacketLayout& layout)
-{
-    if (layout.kind() == MediaEncodedPacketLayoutKind::StartCodeDelimited) {
-        return parseAnnexB(bytes, codec);
-    }
-    if (!layout.lengthFieldBytes()) {
-        return ::media::Result<
-            std::vector<std::span<const std::uint8_t>>>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "video RTP packet layout lacks a length-field width"));
-    }
-    return parseLengthPrefixed(bytes, codec, *layout.lengthFieldBytes());
 }
 
 std::vector<std::uint8_t> aggregate(
@@ -274,7 +156,7 @@ PacketResult MediaDeterministicVideoRtpPacketizer::packetize(
         return PacketResult::failure(::media::ErrorInfo::invalidArgument(
             "video RTP payload bound cannot carry a fragmentation unit"));
     }
-    auto parsed = parseUnits(accessUnit, codec, layout);
+    auto parsed = MediaVideoNalUnitScanner::scan(accessUnit, codec, layout);
     if (!parsed) return PacketResult::failure(parsed.error());
     std::vector<MediaVideoRtpPayloadPacket> output;
     try {

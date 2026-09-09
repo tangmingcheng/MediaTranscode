@@ -59,7 +59,8 @@ private:
         Secondary
     };
 
-    FailureDisposition recordFailure(::media::ErrorInfo error);
+    FailureDisposition recordFailure(::media::ErrorInfo error,
+        std::optional<MediaGraphWorkerFailurePhase> phase = std::nullopt);
     void recordThreadCpu(
         const ::media::Result<std::uint64_t>& startedAt) noexcept;
     void run();

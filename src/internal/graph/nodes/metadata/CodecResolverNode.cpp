@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
@@ -106,11 +107,14 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Output branch requires one opened encoder before runtime start"));
     }
+    auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*codec->context());
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
     auto readback = MediaVideoEncoderReadback::capture(*codec->context());
     if (!readback) return ::media::Status::failure(readback.error());
     {
         std::lock_guard lock(m_snapshotMutex);
         m_encoderReadback = std::move(readback).value();
+        m_encoderParametersSnapshot = std::move(snapshot).value();
     }
     m_preparedEncoder = std::move(encoder);
     return ::media::Status::success();
@@ -122,6 +126,12 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     if (!m_encoderReadback) return ::media::Result<MediaVideoEncoderReadback>::failure(
         ::media::ErrorInfo::notInitialized("encoder has not published immutable opened readback"));
     return ::media::Result<MediaVideoEncoderReadback>::success(*m_encoderReadback);
+}
+
+MediaBufferRef CodecResolverNode::encoderParametersSnapshot() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    return m_encoderParametersSnapshot;
 }
 
 MediaBufferRef CodecResolverNode::inputSnapshot() const
@@ -443,11 +453,14 @@ MediaBufferRef CodecResolverNode::timestampSource() const
                          " hw_device_ctx=" + (encoderContext && encoderContext->hw_device_ctx ? "set" : "none") +
                          " hw_frames_ctx=" + (encoderContext && encoderContext->hw_frames_ctx ? "set" : "none"));
 
+    auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*encoderContext);
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
     auto readback = MediaVideoEncoderReadback::capture(*encoderContext);
     if (!readback) return ::media::Status::failure(readback.error());
     {
         std::lock_guard lock(m_snapshotMutex);
         m_encoderReadback = std::move(readback).value();
+        m_encoderParametersSnapshot = std::move(snapshot).value();
     }
     auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderBuild.context));
     if (!buffer) {

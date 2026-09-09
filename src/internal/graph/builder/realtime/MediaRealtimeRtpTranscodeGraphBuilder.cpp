@@ -3,6 +3,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputSourceRetentionPlanner.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/realtime/MediaRealtimeVideoEncodingGroupBuilder.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 #include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
@@ -703,8 +705,14 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                     "Synchronized realtime output requires a production adapter"));
         }
     } else if (videoRuntime) {
+        if (!videoOptions.plan.encodedOutputFanout) return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::notInitialized("Initial video output lacks an encoding group fanout plan"));
+        auto encoded = MediaRealtimeVideoEncodingGroupBuilder::appendFanout(graph,
+            "realtime.video", video.value(), *videoOptions.plan.encodedOutputFanout,
+            videoRuntime->edgePolicies.synchronizedPacket);
+        if (!encoded) return ::media::Result<MediaGraph>::failure(encoded.error());
         if (auto status = appendVideoProtocolOutput(
-                graph, "realtime.video_only", video.value(), *videoRuntime); !status) {
+                graph, "realtime.video_only", encoded.value(), *videoRuntime); !status) {
             return ::media::Result<MediaGraph>::failure(status.error());
         }
     } else {
@@ -796,15 +804,15 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
 
-::media::Result<MediaRealtimeVideoOutputBranchGraph>
-MediaRealtimeRtpTranscodeGraphBuilder::appendOutputBranch(
+::media::Result<MediaRealtimeVideoEncodingGroupGraph>
+MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
     MediaGraph graph,
     const MediaRealtimeRtpTranscodePlan& plan,
     const std::string& prefix,
     MediaEndpoint formatSource,
     MediaSharedVideoDecodeEndpoints sharedDecode)
 {
-    using Result = ::media::Result<MediaRealtimeVideoOutputBranchGraph>;
+    using Result = ::media::Result<MediaRealtimeVideoEncodingGroupGraph>;
     const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
     if (!runtime || !plan.resourceLedger || prefix.empty() || !graph.payloadCreditPlan()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -839,9 +847,11 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendOutputBranch(
     options.sharedDecode = std::move(sharedDecode);
     auto video = MediaVideoTranscodeBranchBuilder::build(graph, options);
     if (!video) return Result::failure(video.error());
-    if (auto status = appendVideoProtocolOutput(graph, prefix, video.value(), *runtime); !status) {
-        return Result::failure(status.error());
-    }
+    if (!plan.videoPlan.encodedOutputFanout) return Result::failure(
+        ::media::ErrorInfo::notInitialized("Encoding group requires its planned packet fanout"));
+    auto encoded = MediaRealtimeVideoEncodingGroupBuilder::appendFanout(graph, prefix,
+        video.value(), *plan.videoPlan.encodedOutputFanout, runtime->edgePolicies.synchronizedPacket);
+    if (!encoded) return Result::failure(encoded.error());
     std::vector<MediaNodeId> nodes;
     for (std::size_t index = previousNodes; index < graph.nodeCount(); ++index) {
         nodes.push_back(graph.nodes()[index].id);
@@ -871,9 +881,104 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendOutputBranch(
     if (!growth) return Result::failure(growth.error());
     auto threading = runtime->threadingPolicy;
     threading.maxWorkerThreads = nodes.size();
-    return Result::success(MediaRealtimeVideoOutputBranchGraph{
-        std::move(graph), std::move(nodes), std::move(resources).value(), threading,
-        {}, {}, {}, std::move(growth).value()});
+    return Result::success(MediaRealtimeVideoEncodingGroupGraph{std::move(graph),
+        {std::move(nodes), threading, std::move(resources).value(),
+         std::move(growth).value(), std::move(encoded).value()}});
+}
+
+::media::Result<MediaRealtimeVideoProtocolOutputGraph>
+MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
+    MediaGraph graph, const MediaRealtimeRtpTranscodePlan& plan,
+    const std::string& prefix, MediaEncodedBranchEndpoints encoded)
+{
+    using Result = ::media::Result<MediaRealtimeVideoProtocolOutputGraph>;
+    const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
+    const auto* fanout = graph.findNode(encoded.packet.node);
+    if (!runtime || !plan.resourceLedger || !fanout ||
+        fanout->kind != MediaNodeKind::EncodedVideoOutputFanout || !graph.payloadCreditPlan())
+        return Result::failure(::media::ErrorInfo::notInitialized("Protocol output requires an admitted encoding group"));
+    const auto previous = graph.nodeCount();
+    if (auto status = appendVideoProtocolOutput(graph, prefix, encoded, *runtime); !status)
+        return Result::failure(status.error());
+    std::vector<MediaNodeId> nodes;
+    for (std::size_t index = previous; index < graph.nodeCount(); ++index) nodes.push_back(graph.nodes()[index].id);
+    auto storage = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, *plan.resourceLedger, nodes);
+    if (!storage) return Result::failure(storage.error());
+    MediaNodeId producer;
+    for (const auto& edge : graph.edges()) {
+        if (edge.to.nodeId == encoded.packet.node && edge.payloadKind == MediaPayloadKind::Packet) producer = edge.from.nodeId;
+    }
+    const auto& strategies = graph.payloadCreditPlan()->producers;
+    if (std::none_of(strategies.begin(), strategies.end(), [&](const auto& strategy) {
+            return strategy.nodeId == producer && strategy.payloadKind == MediaPayloadKind::Packet;
+        })) return Result::failure(::media::ErrorInfo::notInitialized("Encoded fanout has no packet allocation producer"));
+    std::uint64_t references = 0;
+    std::vector<MediaNodeId> packetConsumers;
+    for (const auto& edge : graph.edges()) {
+        if (edge.payloadKind != MediaPayloadKind::Packet ||
+            std::find(nodes.begin(), nodes.end(), edge.to.nodeId) == nodes.end()) continue;
+        auto count = MediaCheckedArithmetic::add(references, edge.policy.queuePolicy.capacity,
+            "protocol retained packet queue references");
+        if (!count) return Result::failure(count.error());
+        references = count.value();
+        if (std::find(packetConsumers.begin(), packetConsumers.end(), edge.to.nodeId) == packetConsumers.end())
+            packetConsumers.push_back(edge.to.nodeId);
+    }
+    auto active = MediaCheckedArithmetic::add(references, packetConsumers.size(), "protocol active packet input slots");
+    auto count = active ? MediaCheckedArithmetic::add(active.value(), runtime->startup.packetCapacity,
+        "protocol scheduler prepared startup retention slots") : active;
+    if (!count || count.value() == 0) return Result::failure(count ?
+        ::media::ErrorInfo::invalidArgument("Protocol retention is empty") : count.error());
+    auto threading = runtime->threadingPolicy;
+    threading.maxWorkerThreads = nodes.size();
+    return Result::success({std::make_shared<const MediaGraph>(std::move(graph)),
+        std::move(nodes), threading, storage.value().reservedStorageBytes,
+        {producer, plan.resourceLedger->media.videoBytes, count.value()}});
+}
+
+::media::Result<MediaRealtimeInitialVideoOutputTopology>
+MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& graph)
+{
+    using Result = ::media::Result<MediaRealtimeInitialVideoOutputTopology>;
+    MediaRealtimeInitialVideoOutputTopology topology;
+    MediaNodeId packetFanout;
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == MediaNodeKind::VideoOutputFanout) {
+            if (topology.sourceFanout.isValid()) return Result::failure(::media::ErrorInfo::invalidArgument("Duplicate initial frame fanout"));
+            topology.sourceFanout = node.id;
+        }
+        if (node.kind == MediaNodeKind::EncodedVideoOutputFanout) {
+            if (packetFanout.isValid()) return Result::failure(::media::ErrorInfo::invalidArgument("Duplicate initial encoding group"));
+            packetFanout = node.id;
+        }
+    }
+    if (!topology.sourceFanout.isValid() || !packetFanout.isValid()) return Result::failure(
+        ::media::ErrorInfo::notInitialized("Initial video topology requires frame and encoded distributors"));
+    const auto dependencies = [&](MediaNodeId root) {
+        std::vector<MediaNodeId> ids{root};
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            for (const auto& edge : graph.edges()) {
+                if (edge.to.nodeId == ids[i] && std::find(ids.begin(), ids.end(), edge.from.nodeId) == ids.end()) ids.push_back(edge.from.nodeId);
+            }
+        }
+        return ids;
+    };
+    topology.sharedNodeIds = dependencies(topology.sourceFanout);
+    topology.encodingNodeIds = dependencies(packetFanout);
+    std::erase_if(topology.encodingNodeIds, [&](MediaNodeId node) {
+        return std::find(topology.sharedNodeIds.begin(), topology.sharedNodeIds.end(), node) != topology.sharedNodeIds.end();
+    });
+    for (const auto& node : graph.nodes()) {
+        if (std::find(topology.sharedNodeIds.begin(), topology.sharedNodeIds.end(), node.id) == topology.sharedNodeIds.end() &&
+            std::find(topology.encodingNodeIds.begin(), topology.encodingNodeIds.end(), node.id) == topology.encodingNodeIds.end())
+            topology.outputNodeIds.push_back(node.id);
+    }
+    for (const auto& edge : graph.edges()) {
+        if (edge.to.nodeId == packetFanout && edge.payloadKind == MediaPayloadKind::Packet)
+            topology.encoded = {{edge.from.nodeId, "codec_parameters"}, {packetFanout, "packet"}};
+    }
+    if (!topology.encoded.codec.valid()) return Result::failure(::media::ErrorInfo::notInitialized("Initial encoding metadata endpoint is absent"));
+    return Result::success(std::move(topology));
 }
 
 ::media::Result<MediaRealtimeExecutableGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(

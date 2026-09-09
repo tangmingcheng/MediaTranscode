@@ -89,6 +89,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.videoEncode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.videoEncode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.videoEncode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.videoEncode, "codec_parameters", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecParameters, false, true); !status) return status;
     return MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.videoEncode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
 }
 

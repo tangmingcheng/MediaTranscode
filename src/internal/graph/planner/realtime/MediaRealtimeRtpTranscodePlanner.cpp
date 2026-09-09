@@ -658,13 +658,14 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     return ::media::Status::success();
 }
 
-::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planOutputBranch(
+static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
     const MediaRealtimeVideoOutputRequest& requestedOutput,
     const MediaRealtimeRtpTranscodeRequest& sessionRequest,
     const MediaRealtimeVideoSessionFacts& sessionPlan,
     const MediaInputVideoStreamInfo& source,
     std::uint64_t sourceGeneration,
-    MediaHardwareCapabilityProbe& outputProbe)
+    MediaHardwareCapabilityProbe* outputProbe,
+    const MediaPipelinePlan* existing)
 {
     using Result = ::media::Result<MediaRealtimeRtpTranscodePlan>;
     if (!sessionPlan.resourceLedger || !sessionPlan.sourceTimeBase.isKnown() || sourceGeneration == 0 ||
@@ -680,16 +681,24 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     auto request = sessionRequest;
     request.output = requestedOutput.output;
     request.parameters.video = requestedOutput.video;
-    if (auto status = validateRealtimeRequestNoIo(request); !status) {
+    if (auto status = MediaRealtimeRtpTranscodePlanner::validateRealtimeRequestNoIo(request); !status) {
         return Result::failure(status.error());
     }
     auto urls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
     if (!urls) return Result::failure(urls.error());
     auto options = planVideoPipelineOptions(request, urls.value().video);
     if (!options) return Result::failure(options.error());
-    auto pipeline = MediaPipelinePlanner::planVideoOutputBranch(
-        source, sessionPlan.videoPlan.inputPath,
-        sessionPlan.videoPlan.selected.decoder, std::move(options).value(), outputProbe);
+    if (existing) {
+        auto matched = MediaRealtimeRtpTranscodePlanner::matchesEncodingRequest(
+            requestedOutput, sessionRequest, source, *existing);
+        if (!matched) return Result::failure(matched.error());
+        if (!matched.value()) return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Existing encoding group differs from the complete normalized request"));
+    }
+    auto pipeline = existing
+        ? ::media::Result<MediaPipelinePlan>::success(*existing)
+        : MediaPipelinePlanner::planVideoOutputBranch(source, sessionPlan.videoPlan.inputPath,
+            sessionPlan.videoPlan.selected.decoder, std::move(options).value(), *outputProbe);
     if (!pipeline) return Result::failure(pipeline.error());
     const auto& open = pipeline.value().selected.encoder.encoderOpenContract;
     if (!open) return Result::failure(::media::ErrorInfo::notInitialized(
@@ -749,6 +758,51 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     runtime.value().scheduling.initialGeneration = sourceGeneration;
     return Result::success(MediaRealtimeRtpTranscodePlan(
         std::move(draft), MediaRealtimeRuntimePlan(std::move(runtime).value())));
+}
+
+::media::Result<bool> MediaRealtimeRtpTranscodePlanner::matchesEncodingRequest(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+    const MediaInputVideoStreamInfo& source,
+    const MediaPipelinePlan& existing)
+{
+    using Result = ::media::Result<bool>;
+    if (!existing.encodingRequest) return Result::failure(::media::ErrorInfo::notInitialized(
+        "Encoding group lacks its pre-probe request witness"));
+    auto request = sessionRequest;
+    request.output = output.output;
+    request.parameters.video = output.video;
+    if (auto status = validateRealtimeRequestNoIo(request); !status) return Result::failure(status.error());
+    auto urls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
+    if (!urls) return Result::failure(urls.error());
+    auto options = planVideoPipelineOptions(request, urls.value().video);
+    if (!options) return Result::failure(options.error());
+    auto normalized = MediaPipelinePlanner::normalizeEncodingRequest(source, options.value(), existing.selected.encoder);
+    // A request unsupported by this existing backend is not a witness match.
+    // Fresh planning still validates it against every ranked candidate and
+    // reports the authoritative failure if none can implement the request.
+    if (!normalized) return Result::success(false);
+    return Result::success(normalized.value() == *existing.encodingRequest);
+}
+
+::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planOutputBranch(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeVideoSessionFacts& session,
+    const MediaInputVideoStreamInfo& source, std::uint64_t generation,
+    MediaHardwareCapabilityProbe& probe)
+{
+    return planOutputBranchImpl(output, request, session, source, generation, &probe, nullptr);
+}
+
+::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planOutputForEncodingGroup(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeVideoSessionFacts& session,
+    const MediaInputVideoStreamInfo& source, std::uint64_t generation,
+    const MediaPipelinePlan& existing)
+{
+    return planOutputBranchImpl(output, request, session, source, generation, nullptr, &existing);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::plan(

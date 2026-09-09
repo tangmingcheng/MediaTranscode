@@ -25,6 +25,9 @@ MediaRealtimeVideoEncodingGroupBuilder::appendFanout(
     }
     codec->required = false;
     codec->multiple = true;
+    if (!graph.findOutputPort(encoded.codec.node, "codec_parameters")) return Result::failure(
+        ::media::ErrorInfo::notInitialized("Encoding group has no immutable codec parameters output"));
+    encoded.codec.port = "codec_parameters";
     const auto format = packet->format;
     const auto fanout = graph.addNode(MediaNodeKind::EncodedVideoOutputFanout,
         prefix + ".encoded_output_fanout", "Encoded video output distributor");

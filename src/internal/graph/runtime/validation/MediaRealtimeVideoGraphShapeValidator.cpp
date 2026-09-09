@@ -82,10 +82,10 @@ const MediaEdge* exactCodecEdge(
     const MediaNode* source = graph.findNode(match->from.nodeId);
     const MediaPort* port = graph.findPort(match->from.portId);
     return source && source->kind == sourceKind && port &&
-            port->nodeId == source->id && port->name == "codec" &&
+            port->nodeId == source->id && port->name == "codec_parameters" &&
             MediaGraphShapeQuery::validPort(port, MediaPortDirection::Output, stream,
                       MediaEdgeKind::Metadata,
-                      MediaPayloadKind::CodecContext)
+                      MediaPayloadKind::CodecParameters)
         ? match
         : nullptr;
 }
@@ -334,6 +334,15 @@ const MediaEdge* exactEdge(
     if (scheduler.options.values().size() != SchedulerOptionCount) {
         return invalid("scheduler option cardinality");
     }
+    const MediaAvSyncGraphShape shape(graph);
+    const auto distributors = shape.nodes(MediaNodeKind::EncodedVideoOutputFanout);
+    const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
+    if (distributors.size() != 1 || encoders.size() != 1 ||
+        !exactEdge(graph, *encoders.front(), "packet", *distributors.front(), "packet", runtime.edgePolicies.synchronizedPacket) ||
+        !exactEdge(graph, *distributors.front(), "packet", scheduler, "video", runtime.edgePolicies.synchronizedPacket) ||
+        distributors.front()->options.value("fanout.zero_outputs") != "consume" ||
+        distributors.front()->options.value("fanout.overflow") != "fail_branch")
+        return invalid("encoded group distributor or scheduler edge contract");
     const MediaEdge* schedulerInput = nullptr;
     for (const MediaEdge& edge : graph.edges()) {
         if (edge.to.portId == scheduler.findInputPort("video")->id) {
@@ -498,7 +507,7 @@ const MediaEdge* exactEdge(
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
         !MediaGraphShapeQuery::validPort(sender.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Video, MediaEdgeKind::Metadata,
-                   MediaPayloadKind::CodecContext) ||
+                   MediaPayloadKind::CodecParameters) ||
         !MediaGraphShapeQuery::validPort(sender.findInputPort("scheduled"),
                    MediaPortDirection::Input, MediaStreamKind::Video,
                    MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
@@ -643,7 +652,7 @@ const MediaEdge* exactEdge(
     }
     if (!MediaGraphShapeQuery::validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::Metadata,
-                   MediaPayloadKind::CodecContext) ||
+                   MediaPayloadKind::CodecParameters) ||
         !MediaGraphShapeQuery::validPort(mux.findInputPort("packet"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::EncodedPacket,
                    MediaPayloadKind::TsAccessUnit) ||

@@ -70,3 +70,7 @@ RKMPP 只读能力核查：目标机 FFmpeg 及 `/root/ffmpeg-rockchip` 均为 `
 ## Windows 第13轮基础动态链路通过
 
 2026-09-09：Release全量构建成功。固定120秒H.264 RTP 720p30约8Mbps输入，HEVC/H.264 MPEG-TS/RTP 1080p25 CBR6Mbps GOP50输出，动态新增、删除至零及恢复通过；聚合50Mbps服务曲线超额1356B，RTP零丢包、最终payload引用归零。命令与边界见 docs/dynamic-video-windows-13.md。此前各轮失败仍保留，不回写为通过。编码组复用、RKMPP与最终双审仍未完成。
+
+## Windows 第16轮编码组验收通过
+
+同规格输出复用单一生产encoder、异规格新组、共享消费者删除后继续运行、删除至零与恢复均通过。固定H.264 RTP 720p30约8Mbps连续120秒源，HEVC/H.264 MPEG-TS/RTP 1080p25 CBR6Mbps GOP50，RTP零丢失、聚合50Mbps服务曲线1356B、VLC D3D11VA与四路实际画面通过、最终payload引用归零。完整命令与边界见dynamic-video-windows-16.md；14轮控制窗口遗漏、15轮晚帧与截图失败保持未通过。RKMPP、最终双审、PR与评分尚未完成。

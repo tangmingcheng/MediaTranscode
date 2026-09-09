@@ -53,8 +53,17 @@ struct MediaFinalGraphResourceLedger final {
     std::uint64_t terminalControlObjects;
 };
 
+struct MediaFinalGraphReferenceStoragePlan final {
+    std::uint64_t reservedStorageBytes;
+    std::vector<MediaFinalGraphResourceLedgerEntry> entries;
+};
+
 class MediaFinalGraphResourceLedgerCompiler final {
 public:
+    static ::media::Result<MediaFinalGraphReferenceStoragePlan> compileReferenceStorage(
+        const MediaGraph& graph,
+        const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
+        std::span<const MediaNodeId> selectedNodes);
     static ::media::Result<MediaFinalGraphResourceLedger> compile(
         const MediaGraph& graph,
         const MediaRealtimeGraphResourceLedgerPlan& planningLedger,

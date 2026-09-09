@@ -166,7 +166,7 @@ void MediaGraphWorker::recordThreadCpu(
 }
 
 MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
-    ::media::ErrorInfo error)
+    ::media::ErrorInfo error, std::optional<MediaGraphWorkerFailurePhase> phase)
 {
     const MediaGraph* graph = m_context.graph();
     const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
@@ -176,7 +176,8 @@ MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
         : std::string{};
     const ::media::ErrorInfo diagnosticError = error;
     const bool primary = m_failureRecorder->recordFirst(
-        MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error) });
+        MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error),
+            phase.value_or(m_failureRecorder->phase()) });
     if (!primary) {
         if (diagnosticError.code == ::media::ErrorCode::Cancelled &&
             (stopRequested() || aborted())) {
@@ -236,7 +237,7 @@ void MediaGraphWorker::run()
             auto completed = worker.m_node.finishExecution(worker.m_context);
             if (!completed && !(completed.error().code == ::media::ErrorCode::Cancelled &&
                                 (worker.stopRequested() || worker.aborted()))) {
-                if (worker.recordFailure(completed.error()) !=
+                if (worker.recordFailure(completed.error(), MediaGraphWorkerFailurePhase::Release) !=
                     FailureDisposition::CoordinatedCancellation) ++worker.m_metrics.errors;
             }
             exited.store(true, std::memory_order_release);

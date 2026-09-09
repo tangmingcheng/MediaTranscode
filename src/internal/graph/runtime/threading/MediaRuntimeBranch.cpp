@@ -69,10 +69,11 @@ MediaRuntimeBranch::~MediaRuntimeBranch()
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "runtime branch can only start once"));
     }
+    m_failures.setPhase(MediaGraphWorkerFailurePhase::Preparation);
     auto started = m_scheduler.start(m_context);
     if (!started) {
         m_failures.recordFirst(MediaGraphWorkerFailure{
-            {}, MediaNodeKind::Unknown, "output branch preparation", started.error()});
+            {}, MediaNodeKind::Unknown, "output branch preparation", started.error(), MediaGraphWorkerFailurePhase::Preparation});
         m_state = MediaRuntimeBranchState::Failed;
         return started;
     }
@@ -81,12 +82,19 @@ MediaRuntimeBranch::~MediaRuntimeBranch()
             *node, m_context, m_failures, m_supervisor));
     }
     m_supervisor.arm([this] { requestFailureStop(); });
+    m_failures.setPhase(MediaGraphWorkerFailurePhase::Runtime);
     try {
         for (auto& worker : m_workers) {
             auto status = worker->start();
-            if (!status) { requestFailureStop(); m_state = MediaRuntimeBranchState::Failed; return status; }
+            if (!status) {
+                m_failures.recordFirst(MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
+                    "output worker creation", status.error(), MediaGraphWorkerFailurePhase::Preparation});
+                requestFailureStop(); m_state = MediaRuntimeBranchState::Failed; return status;
+            }
         }
     } catch (const std::exception& error) {
+        m_failures.recordFirst(MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
+            "output worker creation", ::media::ErrorInfo::internalError(error.what()), MediaGraphWorkerFailurePhase::Preparation});
         requestFailureStop();
         m_state = MediaRuntimeBranchState::Failed;
         return ::media::Status::failure(::media::ErrorInfo::internalError(error.what()));
@@ -116,6 +124,7 @@ MediaChannelPushResult MediaRuntimeBranch::tryPublish(MediaEdgeId edge, MediaBuf
             "runtime branch drain requires a running branch and positive planned progress timeout"));
     }
     m_drainPlan = plan;
+    m_failures.setPhase(MediaGraphWorkerFailurePhase::Drain);
     m_state = MediaRuntimeBranchState::Draining;
     for (auto* channel : m_inputs) {
         // Configuration remains publishable by the shared resolver during
@@ -125,7 +134,7 @@ MediaChannelPushResult MediaRuntimeBranch::tryPublish(MediaEdgeId edge, MediaBuf
         auto closed = channel->closeWithTerminal(eos);
         if (!closed) {
             m_failures.recordFirst(MediaGraphWorkerFailure{
-                {}, MediaNodeKind::Unknown, "output branch drain", closed.error()});
+                {}, MediaNodeKind::Unknown, "output branch drain", closed.error(), MediaGraphWorkerFailurePhase::Drain});
             m_state = MediaRuntimeBranchState::Failed;
             requestFailureStop();
             return closed;
@@ -144,12 +153,17 @@ void MediaRuntimeBranch::requestFailureStop() noexcept
 
 void MediaRuntimeBranch::fail(::media::ErrorInfo error)
 {
+    fail(MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown, "output branch",
+        std::move(error), m_failures.phase()});
+}
+
+void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
+{
     {
         std::lock_guard lock(m_publicationMutex);
         if (m_state == MediaRuntimeBranchState::Retired ||
             m_state == MediaRuntimeBranchState::Retiring) return;
-        m_failures.recordFirst(MediaGraphWorkerFailure{
-            {}, MediaNodeKind::Unknown, "output branch", std::move(error)});
+        m_failures.recordFirst(std::move(failure));
         m_state = MediaRuntimeBranchState::Failed;
     }
     requestFailureStop();
@@ -199,7 +213,7 @@ void MediaRuntimeBranch::fail(::media::ErrorInfo error)
         auto stopped = m_scheduler.stop(m_context);
         if (!stopped) {
             m_failures.recordFirst(MediaGraphWorkerFailure{
-                {}, MediaNodeKind::Unknown, "output branch teardown", stopped.error()});
+                {}, MediaNodeKind::Unknown, "output branch teardown", stopped.error(), MediaGraphWorkerFailurePhase::Release});
             m_scheduler.abort(m_context);
         }
     }

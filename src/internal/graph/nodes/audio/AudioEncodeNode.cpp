@@ -171,7 +171,6 @@ void AudioEncodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmp
 void AudioEncodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
-    m_encoderConfigEmitted = false;
     m_queuedFrameBeforeCodecTraced = false;
     m_codecBoundTraced = false;
     m_firstFrameTraced = false;
@@ -181,6 +180,8 @@ void AudioEncodeNode::resetRuntimeState() noexcept
 
 ::media::Result<MediaNodeProcessResult> AudioEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (hasCodecContext() && !codecMetadataPublished())
+        return processProgress(publishCodecMetadata(context));
     auto lineageLock = m_lineageState->lock();
     if (m_flushPending) return continueFlush(context);
     if (m_receivePending) {
@@ -232,9 +233,9 @@ void AudioEncodeNode::resetRuntimeState() noexcept
                 return ::media::Result<MediaNodeProcessResult>::failure(queueStatus.error());
             }
         }
-        auto emitStatus = emitEncoderConfig(context, *codecInput.value());
+        auto emitStatus = publishCodecMetadata(context);
         if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+            return processProgress(std::move(emitStatus));
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
@@ -255,9 +256,9 @@ void AudioEncodeNode::resetRuntimeState() noexcept
     const MediaBufferRef& buffer = *input.value();
     if (tryBindCodecContext(buffer)) {
         m_lineageState->bindCodec(buffer, codecContext());
-        auto emitStatus = emitEncoderConfig(context, buffer);
+        auto emitStatus = publishCodecMetadata(context);
         if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+            return processProgress(std::move(emitStatus));
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
@@ -407,27 +408,6 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(receiveStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-}
-
-::media::Status AudioEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
-{
-    if (m_encoderConfigEmitted || !buffer) {
-        return ::media::Status::success();
-    }
-    if (!context.findOutputChannel(nodeId(), "codec")) {
-        m_encoderConfigEmitted = true;
-        return ::media::Status::success();
-    }
-    auto status = emitOutput(context, "codec", buffer);
-    if (!status) {
-        return status;
-    }
-    m_encoderConfigEmitted = true;
-    mediaGraphDiagnosticLog(
-        MediaGraphDiagnosticLevel::State,
-        MediaGraphDiagnosticPhase::RuntimeNode,
-        "audio_encode_trace stage=encoder_config_emitted");
-    return ::media::Status::success();
 }
 
 ::media::Result<bool> AudioEncodeNode::receivePackets(MediaGraphExecutionContext& context)

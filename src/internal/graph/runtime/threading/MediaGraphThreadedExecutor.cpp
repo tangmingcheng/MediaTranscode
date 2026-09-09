@@ -56,13 +56,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
 
     m_failureSupervisor.arm([this, &context] {
         context.cancelSessionPayloadWaiters();
-        for (auto& worker : m_workers) {
-            if (worker) worker->requestStop();
-        }
-        for (auto& worker : m_workers) {
-            if (worker) worker->interrupt();
-        }
-        context.interruptNodeWakeups();
+        requestStop(context);
     });
 
     for (auto& worker : m_workers) {
@@ -86,6 +80,13 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     return ::media::Status::success();
 }
 
+void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context) noexcept
+{
+    for (auto& worker : m_workers) if (worker) worker->requestStop();
+    for (auto& worker : m_workers) if (worker) worker->interrupt();
+    context.interruptNodeWakeups();
+}
+
 ::media::Status MediaGraphThreadedExecutor::stop(MediaGraphExecutionContext& context,
                                                   MediaGraphScheduler& scheduler)
 {
@@ -97,16 +98,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
 
     m_state = MediaGraphThreadedExecutorState::Stopping;
 
-    for (auto& worker : m_workers) {
-        if (worker) {
-            worker->requestStop();
-        }
-    }
-    for (auto& worker : m_workers) {
-        if (worker) {
-            worker->interrupt();
-        }
-    }
+    requestStop(context);
 
     auto closeStatus = MediaGraphLifecycle::closeChannels(context);
     if (!closeStatus) {

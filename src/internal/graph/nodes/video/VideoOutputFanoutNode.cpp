@@ -191,7 +191,7 @@ VideoOutputFanoutNode::hardwareFrames() const
     const auto boundary = source->isEof() || source->isFlush()
         ? MediaBranchPublicationBoundary::Control : MediaBranchPublicationBoundary::Ordinary;
     auto published = m_fanout.publish(source, boundary,
-        [](const MediaBufferRef& input) -> ::media::Result<MediaBufferRef> {
+        [](const MediaBufferRef& input, MediaBranchPublicationBoundary) -> ::media::Result<MediaBufferRef> {
             if (input->isEof() || input->isFlush())
                 return ::media::Result<MediaBufferRef>::success(input);
             auto cloned = FFmpegBufferFactory::cloneFrame(input, MediaStreamKind::Video);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaVideoJoinPlan.h"
+
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/core/MediaNodeId.h"
 
@@ -46,6 +48,7 @@ struct MediaRealtimeVideoEncodingGroupContract final {
 
 class MediaRealtimeVideoEncodingGroupContractPlanner final {
 public:
+    static ::media::Result<MediaVideoJoinPlan> joinPlan(const MediaPipelinePlan& pipeline);
     static ::media::Result<MediaRealtimeVideoEncodingGroupContract> plan(
         const MediaPipelinePlan& pipeline,
         MediaNodeId sourceFanout,

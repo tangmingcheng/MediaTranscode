@@ -31,6 +31,7 @@ void MediaGraphWorkerFailureRecorder::clear()
 {
     std::lock_guard lock(m_mutex);
     m_primaryFailure.reset();
+    m_phase.store(MediaGraphWorkerFailurePhase::Runtime, std::memory_order_release);
     m_hasFailure.store(false, std::memory_order_release);
 }
 

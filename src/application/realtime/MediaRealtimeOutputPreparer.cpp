@@ -64,32 +64,62 @@ namespace media::ffmpeg::graph {
     sourceFormat.video.size = {source.width, source.height};
     sourceFormat.video.frameRate = source.frameRate;
     sourceFormat.time = sourceTime;
+    auto identity = request.sessionRequest;
+    identity.mediaId += ":" + request.prefix;
+    for (const auto& group : request.groups) {
+        if (!group.witness || group.groupId == 0) return Result::failure(
+            ::media::ErrorInfo::invalidArgument("Existing encoding group has no immutable witness"));
+        const auto& witness = *group.witness;
+        if (witness.actual.sourceFanout != request.sharedDecode.frame.node ||
+            witness.actual.sourceGeneration != request.sourceGeneration ||
+            witness.actual.sourceStreamIndex != source.streamIndex ||
+            witness.actual.sourceTimeBase != request.sessionPlan.sourceTimeBase ||
+            witness.actual.sourceFrameRate != source.frameRate ||
+            (witness.sourceFramesOwner ? witness.sourceFramesOwner->data : nullptr) !=
+                (request.liveFrames ? request.liveFrames->data : nullptr)) continue;
+        auto matched = MediaRealtimeRtpTranscodePlanner::matchesEncodingRequest(
+            request.output, identity, source, witness.pipeline);
+        if (!matched) return Result::failure(matched.error());
+        if (!matched.value()) continue;
+        auto planned = MediaRealtimeRtpTranscodePlanner::planOutputForEncodingGroup(
+            request.output, identity, request.sessionPlan, source,
+            request.sourceGeneration, witness.pipeline);
+        if (!planned) return Result::failure(planned.error());
+        auto output = MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
+            request.graph, planned.value(), request.prefix, group.encoded);
+        if (!output) return Result::failure(output.error());
+        if (auto status = MediaRealtimeVideoGraphShapeValidator::validateOutputBranch(
+                *output.value().graph, output.value().nodeIds, request.sessionPlan,
+                std::get<MediaRealtimeVideoRuntimePlan>(planned.value().runtime)); !status)
+            return Result::failure(status.error());
+        return Result::success({std::move(planned).value(), std::move(output).value(),
+            MediaRealtimeExistingEncodingGroup{group.groupId}});
+    }
     MediaHardwareCapabilityProbe probe([&](MediaPipelineChainPlan& candidate,
                                           const MediaPipelinePlannerOptions& options) {
         return MediaHardwareCapabilityProbe::validateOutputBranch(
             candidate, options, request.liveFrames, request.decoderFacts);
     });
-    auto identity = request.sessionRequest;
-    identity.mediaId += ":" + request.prefix;
     auto planned = MediaRealtimeRtpTranscodePlanner::planOutputBranch(
         request.output, identity, request.sessionPlan, source,
         request.sourceGeneration, probe);
     if (!planned) return Result::failure(planned.error());
-    auto branch = MediaRealtimeRtpTranscodeGraphBuilder::appendOutputBranch(
+    auto branch = MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
         request.graph, planned.value(), request.prefix,
         request.formatSource, request.sharedDecode);
     if (!branch) return Result::failure(branch.error());
-    std::get<MediaRealtimeVideoRuntimePlan>(planned.value().runtime).threadingPolicy =
-        branch.value().threading;
+    auto output = MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
+        branch.value().graph, planned.value(), request.prefix, branch.value().segment.encoded);
+    if (!output) return Result::failure(output.error());
     if (auto status = MediaRealtimeVideoGraphShapeValidator::validateOutputBranch(
-            branch.value().graph, branch.value().nodeIds,
+            *output.value().graph, output.value().nodeIds,
             request.sessionPlan,
             std::get<MediaRealtimeVideoRuntimePlan>(planned.value().runtime)); !status) {
         return Result::failure(status.error());
     }
-    if (branch.value().nodeIds.empty()) return Result::failure(
+    if (branch.value().segment.nodeIds.empty()) return Result::failure(
         ::media::ErrorInfo::internalError("prepared output contains no executable nodes"));
-    const auto* resolver = branch.value().graph.findNode(branch.value().nodeIds.front());
+    const auto* resolver = branch.value().graph.findNode(branch.value().segment.nodeIds.front());
     if (!resolver || resolver->kind != MediaNodeKind::CodecResolver) return Result::failure(
         ::media::ErrorInfo::internalError("prepared output has no encoder resolver"));
     AVBufferRef* device = nullptr;
@@ -137,9 +167,16 @@ namespace media::ffmpeg::graph {
     if (!encodingContract) return Result::failure(encodingContract.error());
     auto wrapped = FFmpegBufferFactory::wrapCodecContext(std::move(encoder).value().context);
     if (!wrapped) return Result::failure(wrapped.error());
+    auto join = MediaRealtimeVideoEncodingGroupContractPlanner::joinPlan(planned.value().videoPlan);
+    if (!join) return Result::failure(join.error());
+    ::media::ffmpeg::BufferRefPtr sourceFrames(request.liveFrames ? av_buffer_ref(request.liveFrames) : nullptr);
+    if (request.liveFrames && !sourceFrames) return Result::failure(::media::ErrorInfo::allocationFailed("Encoding source frame context identity"));
+    auto witness = std::make_shared<const MediaRealtimeVideoEncodingWitness>(
+        MediaRealtimeVideoEncodingWitness{planned.value().videoPlan, std::move(encodingContract).value(),
+            std::move(sourceFrames), std::move(join).value()});
     return Result::success(MediaPreparedRealtimeOutput{
-        std::move(planned).value(), std::move(branch).value(), std::move(wrapped).value(),
-        std::move(encodingContract).value()});
+        std::move(planned).value(), std::move(output).value(),
+        MediaRealtimeNewEncodingGroup{std::move(branch.value().segment), std::move(wrapped).value(), std::move(witness)}});
 }
 
 } // namespace media::ffmpeg::graph

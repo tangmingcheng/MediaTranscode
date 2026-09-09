@@ -4,7 +4,9 @@
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshot.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/planner/capability/MediaDecoderRuntimeFacts.h"
-#include "internal/graph/planner/realtime/MediaRealtimeVideoEncodingGroupContract.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoEncodingWitness.h"
+#include <span>
+#include <variant>
 
 struct AVBufferRef;
 
@@ -22,13 +24,23 @@ struct MediaRealtimeOutputPreparationRequest final {
     std::string prefix;
     std::uint64_t sourceGeneration;
     const MediaDecoderRuntimeFacts& decoderFacts;
+    std::span<const MediaRealtimeExistingVideoEncodingGroup> groups;
+};
+
+struct MediaRealtimeExistingEncodingGroup final {
+    std::uint64_t groupId;
+};
+
+struct MediaRealtimeNewEncodingGroup final {
+    MediaRealtimeVideoEncodingSegmentGraph segment;
+    MediaBufferRef encoder;
+    std::shared_ptr<const MediaRealtimeVideoEncodingWitness> witness;
 };
 
 struct MediaPreparedRealtimeOutput final {
     MediaRealtimeRtpTranscodePlan plan;
-    MediaRealtimeVideoOutputBranchGraph branch;
-    MediaBufferRef encoder;
-    MediaRealtimeVideoEncodingGroupContract encodingContract;
+    MediaRealtimeVideoProtocolOutputGraph output;
+    std::variant<MediaRealtimeExistingEncodingGroup, MediaRealtimeNewEncodingGroup> encoding;
 };
 
 class MediaRealtimeOutputPreparer final {

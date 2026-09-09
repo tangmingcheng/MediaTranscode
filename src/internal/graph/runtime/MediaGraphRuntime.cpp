@@ -21,7 +21,8 @@ MediaGraphRuntime::MediaGraphRuntime(
 MediaGraphRuntime::extractInitialBranch(
     std::uint64_t id, std::span<const MediaNodeId> nodes,
     std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
-    std::span<const MediaNodeId> retirementProducerIds)
+    std::span<const MediaNodeId> retirementProducerIds,
+    std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs)
 {
     using Result = ::media::Result<std::shared_ptr<MediaRuntimeBranch>>;
     if (m_state != MediaGraphRuntimeState::Compiled || !id || !reservation || nodes.empty()) {
@@ -30,8 +31,6 @@ MediaGraphRuntime::extractInitialBranch(
     }
     auto branch = std::shared_ptr<MediaRuntimeBranch>(new MediaRuntimeBranch());
     branch->m_id = id;
-    if (retirementProducerIds.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
-        "initial branch requires explicit shared metadata producer retirement prerequisites"));
     for (const auto producer : retirementProducerIds) {
         auto token = m_context.nodeExitToken(producer);
         if (!token || std::find(nodes.begin(), nodes.end(), producer) != nodes.end())
@@ -47,17 +46,6 @@ MediaGraphRuntime::extractInitialBranch(
             "initial output extraction requires its planned per-node worker budget"));
     }
     branch->m_resourceLease = std::move(reservation);
-    std::vector<MediaRuntimeSegmentOutputBinding> upstreamInputs;
-    for (const auto& edge : m_graph.edges()) {
-        if (std::find(nodes.begin(), nodes.end(), edge.to.nodeId) == nodes.end() ||
-            std::find(nodes.begin(), nodes.end(), edge.from.nodeId) != nodes.end()) continue;
-        if (std::any_of(upstreamInputs.begin(), upstreamInputs.end(), [&edge](const auto& input) {
-                return input.port().id == edge.from.portId;
-            })) continue;
-        auto exported = m_context.exportOutput(edge.from.portId);
-        if (!exported) return Result::failure(exported.error());
-        upstreamInputs.push_back(std::move(exported).value());
-    }
     auto compiled = branch->m_context.compileSegment(
         std::make_shared<const MediaGraph>(m_graph), nodes, m_context, upstreamInputs);
     if (!compiled) return Result::failure(compiled.error());

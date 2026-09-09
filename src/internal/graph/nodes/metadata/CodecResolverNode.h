@@ -23,6 +23,7 @@ public:
     MediaBufferRef inputSnapshot() const;
     ::media::Result<MediaVideoEncoderReadback> encoderReadback() const;
     MediaBufferRef timestampSource() const;
+    MediaBufferRef encoderParametersSnapshot() const;
     ::media::Result<MediaDecoderRuntimeFacts> decoderRuntimeFacts() const;
 
 protected:
@@ -41,6 +42,7 @@ private:
     MediaBufferRef m_timestampSource;
     MediaBufferRef m_preparedDecoder;
     MediaBufferRef m_preparedEncoder;
+    MediaBufferRef m_encoderParametersSnapshot;
     std::optional<MediaDecoderRuntimeFacts> m_decoderRuntimeFacts;
     std::optional<MediaVideoEncoderReadback> m_encoderReadback;
 };

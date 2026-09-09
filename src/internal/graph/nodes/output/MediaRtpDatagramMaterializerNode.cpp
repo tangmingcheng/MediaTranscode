@@ -2,6 +2,8 @@
 
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderMaterializer.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -140,6 +142,12 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
     if (auto status = acquire("codec", m_codec); !status) {
         return ::media::Result<bool>::failure(status.error());
     }
+    if (const auto* contextMetadata = dynamic_cast<const FFmpegCodecContextBuffer*>(m_codec.get())) {
+        if (!contextMetadata->context()) return ::media::Result<bool>::failure(invalid("RTP codec context metadata is empty"));
+        auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*contextMetadata->context());
+        if (!snapshot) return ::media::Result<bool>::failure(snapshot.error());
+        m_codec = std::move(snapshot).value();
+    }
     if (auto status = acquire("transport_plan", m_transportPlan); !status) {
         return ::media::Result<bool>::failure(status.error());
     }
@@ -155,18 +163,18 @@ MediaNodeKind MediaRtpDatagramMaterializerNode::staticKind() noexcept
             : ::media::Status::failure(::media::ErrorInfo::notInitialized(
                   "RTP protocol materializer bindings are incomplete"));
     }
-    const auto* codec = dynamic_cast<const FFmpegCodecContextBuffer*>(
+    const auto* codec = dynamic_cast<const FFmpegCodecParametersBuffer*>(
         m_codec.get());
     const auto* transport = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
         m_transportPlan.get());
-    if (!codec || !codec->context() || !transport ||
+    if (!codec || !codec->parameters() || !transport ||
         transport->plan().shaping.sessionKey() != m_plannedSessionKey.value() ||
         transport->plan().shaping.generation() != m_activationFacts->generation) {
         return ::media::Status::failure(invalid(
             "RTP codec and datagram transport bindings differ from activation"));
     }
     auto materialized = MediaScheduledRtpSenderMaterializer::materialize(
-        m_outputPlan, m_sdpPlan, *codec->context(), configurationPacket,
+        m_outputPlan, m_sdpPlan, *codec->parameters(), m_codec->timeDescriptor().timeBase, configurationPacket,
         *m_dependencies.authority->sharedNtpEpoch(), *m_activationFacts);
     if (!materialized) return ::media::Status::failure(materialized.error());
     m_pendingDescription = materialized.value().releaseDescription();
@@ -412,15 +420,15 @@ MediaRtpDatagramMaterializerNode::onProcess(
         return bindings.value() ? processProgress() : processWaiting();
     }
     if (!m_packetizer) {
-        const auto* codec = dynamic_cast<const FFmpegCodecContextBuffer*>(
+        const auto* codec = dynamic_cast<const FFmpegCodecParametersBuffer*>(
             m_codec.get());
-        const bool needsAccessUnit = codec && codec->context() &&
+        const bool needsAccessUnit = codec && codec->parameters() &&
             (m_outputPlan.packetization.packetizationMode() ==
                  MediaScheduledRtpPacketizationMode::H264AnnexB ||
              m_outputPlan.packetization.packetizationMode() ==
                  MediaScheduledRtpPacketizationMode::HevcAnnexB) &&
-            (!codec->context()->extradata ||
-             codec->context()->extradata_size <= 0);
+            (!codec->parameters()->extradata ||
+             codec->parameters()->extradata_size <= 0);
         const AVPacket* configurationPacket = nullptr;
         if (needsAccessUnit) {
             auto input = tryPopInputOptional(context, "scheduled");

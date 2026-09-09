@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaVideoEncodingRequestContract.h"
+
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaDecoderInputRetention.h"
 #include "internal/graph/model/MediaVideoSourceEpochPlan.h"
@@ -160,6 +162,7 @@ struct MediaPipelinePlan {
     MediaPipelineChainPlan selected;
     std::optional<MediaRational> maximumFrameDuplicationGap;
     std::vector<MediaPipelineChainPlan> candidates;
+    std::optional<MediaVideoEncodingRequestContract> encodingRequest;
 };
 
 const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept;
@@ -168,6 +171,11 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept;
 
 class MediaPipelinePlanner final {
 public:
+    static ::media::Result<MediaVideoEncodingRequestContract> normalizeEncodingRequest(
+        const MediaInputVideoStreamInfo& source,
+        const MediaPipelinePlannerOptions& options,
+        const MediaPipelineStagePlan& selectedEncoder);
+
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
         MediaPipelinePlannerOptions options);

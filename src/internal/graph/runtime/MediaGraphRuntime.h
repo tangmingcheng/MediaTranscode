@@ -68,7 +68,8 @@ public:
     ::media::Result<std::shared_ptr<MediaRuntimeBranch>> extractInitialBranch(
         std::uint64_t id, std::span<const MediaNodeId> nodes,
         std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
-        std::span<const MediaNodeId> retirementProducerIds);
+        std::span<const MediaNodeId> retirementProducerIds,
+        std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs);
 
     void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
     const MediaThreadingPolicy& threadingPolicy() const noexcept;

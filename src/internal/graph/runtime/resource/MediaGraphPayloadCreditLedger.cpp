@@ -21,7 +21,18 @@ public:
         std::shared_ptr<MediaGraphPayloadAggregate> aggregate)
         : plan(std::move(plan)), aggregate(std::move(aggregate)) {}
 
+    explicit MediaGraphPayloadCreditState(std::uint64_t fixedStorageBytes,
+        std::shared_ptr<MediaGraphPayloadAggregate> aggregate)
+        : fixedStorageBytes(fixedStorageBytes), aggregate(std::move(aggregate)) {}
+
+    std::uint64_t admittedBytes() const noexcept
+    {
+        return plan.maximumBytes + fixedStorageBytes;
+    }
+
     MediaGraphPayloadCreditPlan plan;
+    // Storage-only accounts have no producer registry and no payload capacity.
+    std::uint64_t fixedStorageBytes = 0;
     std::shared_ptr<MediaGraphPayloadAggregate> aggregate;
     mutable std::mutex mutex;
     MediaGraphPayloadCreditSnapshot snapshot;
@@ -156,10 +167,10 @@ MediaGraphPayloadCreditLedger::reserveRetentionGrowth(MediaGraphPayloadRetention
     std::uint64_t objects = growth.additionalObjects;
     const auto accumulate = [&bytes, &objects](const auto& account) {
         std::lock_guard accountLock(account->mutex);
-        if (account->plan.maximumBytes > (std::numeric_limits<std::uint64_t>::max)() - bytes ||
+        if (account->admittedBytes() > (std::numeric_limits<std::uint64_t>::max)() - bytes ||
             account->plan.maximumObjects > (std::numeric_limits<std::uint64_t>::max)() - objects)
             return false;
-        bytes += account->plan.maximumBytes;
+        bytes += account->admittedBytes();
         objects += account->plan.maximumObjects;
         return true;
     };
@@ -313,28 +324,28 @@ MediaGraphPayloadCreditLedger::reserveBranch(MediaGraphPayloadCreditPlan plan)
     }
     std::uint64_t bytes = 0;
     std::uint64_t objects = 0;
-    const auto accumulate = [&bytes, &objects](const MediaGraphPayloadCreditPlan& account) {
-        if (account.maximumBytes > (std::numeric_limits<std::uint64_t>::max)() - bytes ||
-            account.maximumObjects > (std::numeric_limits<std::uint64_t>::max)() - objects) return false;
-        bytes += account.maximumBytes;
-        objects += account.maximumObjects;
+    const auto accumulate = [&bytes, &objects](std::uint64_t accountBytes, std::uint64_t accountObjects) {
+        if (accountBytes > (std::numeric_limits<std::uint64_t>::max)() - bytes ||
+            accountObjects > (std::numeric_limits<std::uint64_t>::max)() - objects) return false;
+        bytes += accountBytes;
+        objects += accountObjects;
         return true;
     };
     {
         std::lock_guard stateLock(m_state->mutex);
         if (m_state->cancelled) return Result::failure(::media::ErrorInfo::cancelled(
             "branch admission cannot revive a terminated session"));
-        if (!accumulate(m_state->plan)) return Result::failure(::media::ErrorInfo::invalidArgument(
+        if (!accumulate(m_state->admittedBytes(), m_state->plan.maximumObjects)) return Result::failure(::media::ErrorInfo::invalidArgument(
             "session admitted payload budget is not representable"));
     }
     for (const auto& weak : m_branchAccounts) {
         if (const auto account = weak.lock()) {
             std::lock_guard stateLock(account->mutex);
-            if (!accumulate(account->plan)) return Result::failure(::media::ErrorInfo::invalidArgument(
+            if (!accumulate(account->admittedBytes(), account->plan.maximumObjects)) return Result::failure(::media::ErrorInfo::invalidArgument(
                 "session admitted payload budget is not representable"));
         }
     }
-    if (!accumulate(plan)) return Result::failure(::media::ErrorInfo::invalidArgument(
+    if (!accumulate(plan.maximumBytes, plan.maximumObjects)) return Result::failure(::media::ErrorInfo::invalidArgument(
         "branch would overflow the session admitted payload budget"));
     try {
         auto account = std::make_shared<MediaGraphPayloadCreditState>(
@@ -354,6 +365,73 @@ MediaGraphPayloadCreditLedger::reserveBranch(MediaGraphPayloadCreditPlan plan)
         return Result::success(std::move(reservation));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed("branch payload admission"));
+    }
+}
+
+::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>
+MediaGraphPayloadCreditLedger::reserveFixedStorage(std::uint64_t bytes)
+{
+    return admitFixedStorage(bytes, FixedStorageAdmission::Additional);
+}
+
+::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>
+MediaGraphPayloadCreditLedger::extractInitialFixedStorage(std::uint64_t bytes)
+{
+    return admitFixedStorage(bytes, FixedStorageAdmission::InitialPartition);
+}
+
+::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>
+MediaGraphPayloadCreditLedger::admitFixedStorage(
+    std::uint64_t bytes, FixedStorageAdmission admission)
+{
+    using Result = ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>;
+    if (!bytes) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "fixed storage admission requires a nonzero planner storage product"));
+    std::lock_guard accountsLock(m_accountsMutex);
+    try {
+        // Hold all live accounts through initial publication: no payload request
+        // may race the proof that this partition precedes execution.
+        std::vector<std::shared_ptr<MediaGraphPayloadCreditState>> live{m_state};
+        for (const auto& weak : m_branchAccounts)
+            if (auto account = weak.lock()) live.push_back(std::move(account));
+        std::vector<std::unique_lock<std::mutex>> locks;
+        locks.reserve(live.size());
+        for (const auto& account : live) locks.emplace_back(account->mutex);
+        if (m_state->cancelled) return Result::failure(::media::ErrorInfo::cancelled(
+            "fixed storage admission cannot revive a terminated session"));
+        const bool initial = admission == FixedStorageAdmission::InitialPartition;
+        std::uint64_t total = initial ? 0 : bytes;
+        for (const auto& account : live) {
+            if (initial && (account->cancelled || account->snapshot.reservations ||
+                account->snapshot.currentBytes || account->snapshot.currentObjects ||
+                !account->waiters.empty()))
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "initial fixed storage partition must precede payload execution"));
+            if (account->admittedBytes() > (std::numeric_limits<std::uint64_t>::max)() - total)
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "fixed storage would overflow the session admitted budget"));
+            total += account->admittedBytes();
+        }
+        if (initial && (bytes >= m_state->plan.maximumBytes ||
+            m_state->plan.maximumBytes != m_plan.maximumBytes ||
+            m_state->plan.maximumObjects != m_plan.maximumObjects))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "initial fixed storage must be included in the unchanged source account"));
+        auto account = std::make_shared<MediaGraphPayloadCreditState>(bytes, m_state->aggregate);
+        auto reservation = std::shared_ptr<MediaGraphPayloadBranchReservation>(
+            new MediaGraphPayloadBranchReservation(account));
+        auto accounts = m_branchAccounts;
+        std::erase_if(accounts, [](const auto& weak) { return weak.expired(); });
+        accounts.push_back(account);
+        // All fallible work precedes publication. No producer maps to storage.
+        if (initial) {
+            m_state->plan.maximumBytes -= bytes;
+            m_plan.maximumBytes -= bytes;
+        }
+        m_branchAccounts.swap(accounts);
+        return Result::success(std::move(reservation));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed("fixed storage admission"));
     }
 }
 
@@ -653,13 +731,13 @@ MediaGraphPayloadCreditLedger::snapshot() const noexcept
     }
     {
         std::lock_guard stateLock(m_state->mutex);
-        result.admittedMaximumBytes = m_state->plan.maximumBytes;
+        result.admittedMaximumBytes = m_state->admittedBytes();
         result.admittedMaximumObjects = m_state->plan.maximumObjects;
     }
     for (const auto& weak : m_branchAccounts) {
         if (const auto account = weak.lock()) {
             std::lock_guard stateLock(account->mutex);
-            result.admittedMaximumBytes += account->plan.maximumBytes;
+            result.admittedMaximumBytes += account->admittedBytes();
             result.admittedMaximumObjects += account->plan.maximumObjects;
         }
     }

@@ -88,7 +88,7 @@ struct CommonPlan final {
              std::tuple{options.activation, MediaStreamKind::Metadata,
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent},
              std::tuple{options.videoCodec, MediaStreamKind::Video,
-                        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext},
+                        MediaEdgeKind::Metadata, expectAudio ? MediaPayloadKind::CodecContext : MediaPayloadKind::CodecParameters},
              std::tuple{options.scheduled,
                         expectAudio ? MediaStreamKind::Any
                                     : MediaStreamKind::Video,
@@ -146,6 +146,7 @@ struct CommonPlan final {
             plan.output.muxSessionKind, false, true});
     if (!addedMux) return Result::failure(addedMux.error());
     mux = addedMux.value();
+    if (!expectAudio) graph.findInputPort(mux, "codec")->payloadKind = MediaPayloadKind::CodecParameters;
     if (rtpTransport) {
         rtpSdpPublisher = graph.addNode(
             MediaNodeKind::MpegTsRtpSdpPublisher,

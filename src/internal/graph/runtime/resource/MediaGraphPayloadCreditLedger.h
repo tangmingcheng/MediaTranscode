@@ -101,6 +101,10 @@ public:
         MediaGraphPayloadCreditPlan outputPlan);
     ::media::Result<std::shared_ptr<MediaGraphPayloadRetentionReservation>> reserveRetentionGrowth(
         MediaGraphPayloadRetentionGrowth growth);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> reserveFixedStorage(
+        std::uint64_t bytes);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> extractInitialFixedStorage(
+        std::uint64_t bytes);
     void cancelBlockedWaiters() noexcept;
     MediaGraphPayloadCreditSnapshot snapshot() const noexcept;
     const MediaGraphPayloadCreditPlan& plan() const noexcept { return m_plan; }
@@ -112,6 +116,9 @@ private:
 
     ::media::Result<std::shared_ptr<MediaGraphPayloadCreditState>> accountForProducer(
         MediaNodeId producer) const;
+    enum class FixedStorageAdmission { Additional, InitialPartition };
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> admitFixedStorage(
+        std::uint64_t bytes, FixedStorageAdmission admission);
     MediaGraphPayloadCreditPlan m_plan;
     std::shared_ptr<MediaGraphPayloadCreditState> m_state;
     mutable std::mutex m_accountsMutex;

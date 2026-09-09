@@ -185,6 +185,8 @@ add_library(${TARGET_REALTIME_APPLICATION} STATIC
     src/application/realtime/MediaRealtimeOutputControl.cpp
     src/application/realtime/MediaRealtimeOutputPreparer.cpp
     src/application/realtime/MediaRealtimeOutputRunController.cpp
+    src/application/realtime/MediaRealtimeEncodingGroupRegistry.cpp
+    src/application/realtime/MediaRealtimeSegmentFactory.cpp
     src/application/realtime/MediaRealtimeVideoRunController.cpp
     src/application/realtime/MediaRealtimeVideoRunController.h
 )

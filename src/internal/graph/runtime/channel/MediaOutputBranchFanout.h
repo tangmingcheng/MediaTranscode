@@ -13,7 +13,8 @@ enum class MediaBranchPublicationBoundary { Ordinary, RandomAccessUnit, Control 
 // their header/reference replica operation and authoritative start boundaries.
 class MediaOutputBranchFanout final {
 public:
-    using ReplicaFactory = ::media::Result<MediaBufferRef> (*)(const MediaBufferRef&);
+    using ReplicaFactory = ::media::Result<MediaBufferRef> (*)(
+        const MediaBufferRef&, MediaBranchPublicationBoundary);
     ::media::Status subscribe(std::shared_ptr<MediaRuntimeBranch> branch,
                              MediaEdgeId edge, MediaBranchStartGate gate);
     void unsubscribe(std::uint64_t outputId);

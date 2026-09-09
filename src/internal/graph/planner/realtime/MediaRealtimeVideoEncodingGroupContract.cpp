@@ -44,4 +44,15 @@ MediaRealtimeVideoEncodingGroupContractPlanner::plan(
     return Result::success(std::move(contract));
 }
 
+::media::Result<MediaVideoJoinPlan> MediaRealtimeVideoEncodingGroupContractPlanner::joinPlan(
+    const MediaPipelinePlan& pipeline)
+{
+    using Result = ::media::Result<MediaVideoJoinPlan>;
+    if (!pipeline.selected.encoder.encodedPacketLayout ||
+        (pipeline.outputCodecName != "h264" && pipeline.outputCodecName != "hevc"))
+        return Result::failure(::media::ErrorInfo::unsupported("Independent video join requires a prepared H264 or HEVC NAL layout"));
+    return Result::success({pipeline.outputCodecName == "h264" ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc,
+        *pipeline.selected.encoder.encodedPacketLayout});
+}
+
 } // namespace media::ffmpeg::graph

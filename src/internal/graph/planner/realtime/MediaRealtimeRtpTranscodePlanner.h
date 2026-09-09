@@ -107,6 +107,19 @@ public:
     static ::media::Status validatePlannedProduct(
         const MediaRealtimeRtpTranscodePlan& plan);
 
+    static ::media::Result<bool> matchesEncodingRequest(
+        const MediaRealtimeVideoOutputRequest& output,
+        const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+        const MediaInputVideoStreamInfo& source,
+        const MediaPipelinePlan& existing);
+    static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputForEncodingGroup(
+        const MediaRealtimeVideoOutputRequest& output,
+        const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+        const MediaRealtimeVideoSessionFacts& sessionPlan,
+        const MediaInputVideoStreamInfo& source,
+        std::uint64_t sourceGeneration,
+        const MediaPipelinePlan& existing);
+
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranch(
         const MediaRealtimeVideoOutputRequest& output,
         const MediaRealtimeRtpTranscodeRequest& sessionRequest,

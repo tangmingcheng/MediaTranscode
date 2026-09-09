@@ -18,11 +18,16 @@ protected:
     AVCodecContext* codecContext() noexcept;
     const AVCodecContext* codecContext() const noexcept;
     bool hasCodecContext() const noexcept;
+    bool codecMetadataPublished() const noexcept;
+    ::media::Status publishCodecMetadata(MediaGraphExecutionContext& context);
 
 private:
     void resetCodecContext() noexcept;
     MediaBufferRef m_codecContextOwner;
     AVCodecContext* m_codecContext = nullptr;
+    MediaBufferRef m_codecParametersSnapshot;
+    bool m_contextMetadataPublished = false;
+    bool m_parametersMetadataPublished = false;
 };
 
 } // namespace media::ffmpeg::graph
