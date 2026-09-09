@@ -643,7 +643,7 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     }
     for (std::size_t index = 0; index < channels.size(); ++index) {
         MediaChannel* channel = channels[index];
-        const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
+        const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer).outcome;
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
             m_pendingTransfer = PendingTransfer{ buffer, channels, index };
             return ::media::Status::failure(
@@ -772,7 +772,7 @@ FFmpegNodeRuntime::publishAtomicOutput(
             continue;
         }
         MediaChannel* channel = transfer.channels[transfer.nextChannel];
-        const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
+        const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer).outcome;
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
             waiting = true;
             return ::media::Status::success();

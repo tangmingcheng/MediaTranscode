@@ -22,6 +22,12 @@ class MediaAtomicOutputTransaction;
 class MediaReservedOutputTransaction;
 struct MediaChannelAtomicOutputTestAccess;
 
+struct MediaChannelPushResult final {
+    MediaQueuePushOutcome outcome;
+    std::size_t capacity;
+    std::size_t queued;
+};
+
 class MediaChannel final {
 public:
     MediaChannel(MediaChannelId id, const MediaEdge& edge);
@@ -34,10 +40,13 @@ public:
     const MediaChannelBinding& binding() const noexcept;
 
     ::media::Status push(MediaBufferRef buffer);
-    MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer);
+    MediaChannelPushResult pushOutcome(MediaBufferRef buffer);
     ::media::Status pop(MediaBufferRef& out);
     bool tryPop(MediaBufferRef& out);
 
+    // Revoke new producers now; expose exactly one terminal after all accepted
+    // and already-authorized media. The terminal owns no media payload credit.
+    ::media::Status closeWithTerminal(MediaBufferRef terminal);
     void close();
     void abort();
     void clear();
@@ -52,8 +61,8 @@ public:
     const MediaTimeDescriptor& timeDescriptor() const noexcept;
     const MediaHardwareDescriptor& hardwareDescriptor() const noexcept;
     const MediaChannelMetrics& metrics() const noexcept;
-    void setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept;
-    void setProducerWakeup(MediaNodeWakeup& wakeup) noexcept;
+    void setConsumerWakeup(std::shared_ptr<MediaNodeWakeup> wakeup) noexcept;
+    void setProducerWakeup(std::shared_ptr<MediaNodeWakeup> wakeup) noexcept;
 
 private:
     friend class MediaAtomicOutputTransaction;
@@ -67,6 +76,7 @@ private:
     void publishAcceptedMutation() noexcept;
     void publishReservedCapacityMutation() noexcept;
     void finalizeDeferredCloseLocked() noexcept;
+    bool popTerminalLocked(MediaBufferRef& out) noexcept;
     void signalMutationWaiters() noexcept;
     void refreshQueueMetrics() noexcept;
     bool hardByteLimitEnabled() const noexcept;
@@ -86,8 +96,8 @@ private:
     MediaHardwareDescriptor m_hardware;
     std::unique_ptr<MediaQueue> m_queue;
     MediaChannelMetrics m_metrics;
-    MediaNodeWakeup* m_consumerWakeup = nullptr;
-    MediaNodeWakeup* m_producerWakeup = nullptr;
+    std::shared_ptr<MediaNodeWakeup> m_consumerWakeup;
+    std::shared_ptr<MediaNodeWakeup> m_producerWakeup;
     mutable std::mutex m_mutationMutex;
     std::condition_variable m_mutationChanged;
     std::atomic_uint64_t m_mutationSequence{0};
@@ -100,6 +110,7 @@ private:
     std::uint64_t m_queuedPayloadBytes = 0;
     bool m_byteBudgetConfigurationValid = true;
     bool m_closeRequested = false;
+    MediaBufferRef m_terminal;
 };
 
 } // namespace media::ffmpeg::graph

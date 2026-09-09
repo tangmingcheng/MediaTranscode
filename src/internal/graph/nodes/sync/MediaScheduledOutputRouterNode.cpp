@@ -147,7 +147,7 @@ MediaScheduledOutputRouterNode::routeScheduledUnit(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled output router output is missing"));
     }
-    switch (output->pushOutcome(m_pending)) {
+    switch (output->pushOutcome(m_pending).outcome) {
     case MediaQueuePushOutcome::Accepted:
         m_pending.reset();
         return processProgress();
@@ -185,7 +185,7 @@ MediaScheduledOutputRouterNode::routeControl(
     }
     if (m_mode == Mode::SerializedAv) {
         MediaChannel* output = context.findOutputChannel(nodeId(), "serialized");
-        switch (output->pushOutcome(m_pending)) {
+        switch (output->pushOutcome(m_pending).outcome) {
         case MediaQueuePushOutcome::Accepted:
             m_pending.reset();
             return processFinished();

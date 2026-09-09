@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
+#include "internal/graph/runtime/compilation/MediaDatagramServiceScopeAssembler.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/runtime/validation/MediaRealtimeVideoGraphShapeValidator.h"
@@ -468,6 +469,9 @@ public:
                     "MP2T SDP publisher requires its exact RTP output authority"));
         }
     }
+    auto serviceScopes = MediaDatagramServiceScopeAssembler::assemble(
+        *context.graph(), protocolOutputAuthority);
+    if (!serviceScopes) return ::media::Status::failure(serviceScopes.error());
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer ||
             node.kind == MediaNodeKind::VideoOutputScheduler ||
@@ -483,9 +487,13 @@ public:
         for (auto& candidate : inputBindings) {
             if (candidate.nodeId == node.id) { binding = &candidate; break; }
         }
+        std::shared_ptr<MediaDatagramServiceScopeArbiter> serviceScope;
+        for (const auto& scope : serviceScopes.value()) {
+            if (scope.sender == node.id) { serviceScope = scope.arbiter; break; }
+        }
         auto runtimeNode = MediaRuntimeNodeFactory::create(
             node, binding, videoPreparationState,
-            protocolOutputAuthority);
+            protocolOutputAuthority, serviceScope);
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeNode,
                                 "register node=" + std::to_string(node.id.value) +

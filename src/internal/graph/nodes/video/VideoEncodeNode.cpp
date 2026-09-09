@@ -12,6 +12,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 extern "C" {
@@ -293,23 +294,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoEncodeNode requires one unowned frame payload credit"));
     }
-    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
-        ? [&]() -> ::media::Result<AVBufferRef*> {
-              if (!m_lineageState->pendingLineage) {
-                  return ::media::Result<AVBufferRef*>::failure(
-                      ::media::ErrorInfo::invalidArgument(
-                          "VideoEncodeNode requires canonical frame lineage"));
-              }
-              auto token = m_lineageRegistry->submit(
-                  m_lineageState->pendingLineage);
-              return token
-                  ? makeMediaFfmpegCodecOpaque(
-                        std::move(token).value(),
-                        m_lineageState->pendingPayloadCredit)
-                  : ::media::Result<AVBufferRef*>::failure(token.error());
-          }()
-        : makeMediaFfmpegCodecOpaque(
-              m_lineageState->pendingPayloadCredit);
+    if (m_lineageState->pendingPayloadCredit) {
+        auto retained = retainMediaFfmpegPayload(*m_lineageState->pendingFrame,
+                                                m_lineageState->pendingPayloadCredit);
+        if (!retained) return retained;
+        m_lineageState->pendingPayloadCredit.reset();
+    }
+    if (!m_lineageRegistry) return ::media::Status::success();
+    if (!m_lineageState->pendingLineage) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoEncodeNode requires canonical input lineage"));
+    }
+    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
+    if (!token) return ::media::Status::failure(token.error());
+    auto opaque = makeMediaFfmpegCodecOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
     if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
         m_lineageState->pendingFrame->opaque_ref = opaque.value();

@@ -283,13 +283,15 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             m_pendingAccessUnit.get())) {
         if (control->controlKind() == MediaControlBufferKind::Eof) {
-            return processFinished();
+            m_terminal = std::move(m_pendingAccessUnit);
+            return finishProtocol(context);
         }
         return control->controlKind() == MediaControlBufferKind::Abort
             ? ::media::Result<MediaNodeProcessResult>::failure(
                   ::media::ErrorInfo::cancelled(
                       "RTP datagram materializer received abort"))
-            : processProgress();
+            : ::media::Result<MediaNodeProcessResult>::failure(invalid(
+                  "RTP protocol materializer requires a new activation for non-EOF control"));
     }
     const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
         m_pendingAccessUnit.get());
@@ -342,7 +344,12 @@ MediaRtpDatagramMaterializerNode::processAccessUnit(
             views.push_back(MediaPacketizedRtpDatagramView{
                 m_packetizedBytes[index], m_packetizedPayloadOctets[index],
                 scheduled->presentationOnMaster(),
-                scheduled->emitOnMaster()});
+                scheduled->emitOnMaster(),
+                scheduled->stream() == MediaScheduledStream::Video &&
+                    (packet->flags & AV_PKT_FLAG_KEY) != 0 &&
+                    index + 1 == m_packetizedBytes.size()
+                    ? MediaWireMediaBoundary::VideoRandomAccessUnitEnd
+                    : MediaWireMediaBoundary::None});
         }
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -395,6 +402,7 @@ MediaRtpDatagramMaterializerNode::onProcess(
         return emitted ? processProgress()
                        : processProgress(std::move(emitted));
     }
+    if (m_terminal) return finishProtocol(context);
     auto bindings = acquireBindings(context);
     if (!bindings) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -422,6 +430,10 @@ MediaRtpDatagramMaterializerNode::onProcess(
             }
             if (!input.value()) return processWaiting();
             m_stagedConfigurationAccessUnit = std::move(*input.value());
+            if (m_stagedConfigurationAccessUnit->isEof()) {
+                m_terminal = std::move(m_stagedConfigurationAccessUnit);
+                return finishProtocol(context);
+            }
             const auto* scheduled =
                 dynamic_cast<const MediaScheduledAccessUnit*>(
                     m_stagedConfigurationAccessUnit.get());
@@ -462,6 +474,27 @@ MediaRtpDatagramMaterializerNode::onProcess(
         "RTP materializer output commit differs from pending output"));
 }
 
+::media::Result<MediaNodeProcessResult>
+MediaRtpDatagramMaterializerNode::finishProtocol(MediaGraphExecutionContext& context)
+{
+    if (!m_terminalReportPrepared) {
+        if (auto* rtp = m_wireMaterializer ? &*m_wireMaterializer : nullptr) {
+            auto now = m_dependencies.authority->now();
+            if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+            auto report = rtp->materializeTerminalReport(now.value(), now.value(), now.value());
+            if (!report) return processProgress(::media::Status::failure(report.error()));
+            if (report.value()) m_pendingWireOutputs.push_back(std::move(report).value());
+        }
+        m_terminalReportPrepared = true;
+    }
+    if (!m_pendingWireOutputs.empty())
+        return processProgress(emitOutput(context, "wire_batch", m_pendingWireOutputs.front()));
+    auto* wire = context.findOutputChannel(nodeId(), "wire_batch");
+    if (!wire) return ::media::Result<MediaNodeProcessResult>::failure(invalid(
+        "protocol termination requires its planned wire output"));
+    return processFinished(wire->closeWithTerminal(m_terminal));
+}
+
 ::media::Status MediaRtpDatagramMaterializerNode::stop(
     MediaGraphExecutionContext& context)
 {
@@ -485,6 +518,8 @@ void MediaRtpDatagramMaterializerNode::resetState() noexcept
     m_packetizer.reset();
     m_pendingDescription.reset();
     m_pendingWireOutputs.clear();
+    m_terminal.reset();
+    m_terminalReportPrepared = false;
     m_descriptionEmitted = false;
     m_stagedConfigurationAccessUnit.reset();
     m_pendingAccessUnit.reset();

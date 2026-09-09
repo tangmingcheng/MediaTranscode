@@ -264,7 +264,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
     const MediaInputVideoStreamInfo& inputInfo,
     std::string inputPath,
-    MediaPipelinePlannerOptions options)
+    MediaPipelinePlannerOptions options,
+    const MediaPipelineStagePlan* runningDecoder,
+    MediaHardwareCapabilityProbe* outputProbe)
 {
     MediaPipelinePlan plan;
     plan.inputPath = std::move(inputPath);
@@ -313,6 +315,27 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         plan.inputCodecName,
         plan.outputCodecName,
         options);
+    if (runningDecoder) {
+        std::erase_if(candidates, [&](const MediaPipelineChainPlan& candidate) {
+            const auto& decoder = candidate.decoder;
+            if (decoder.ffmpegName != runningDecoder->ffmpegName ||
+                decoder.hwaccelName != runningDecoder->hwaccelName ||
+                !decoder.outputFrame || !runningDecoder->outputFrame) return true;
+            const auto& proposed = *decoder.outputFrame;
+            const auto& active = *runningDecoder->outputFrame;
+            return proposed.deviceKind != active.deviceKind ||
+                proposed.frameKind != active.frameKind ||
+                proposed.deviceName != active.deviceName ||
+                proposed.pixelFormat != active.pixelFormat ||
+                proposed.surfacePixelFormat != active.surfacePixelFormat ||
+                proposed.framesContextName != active.framesContextName ||
+                proposed.requiresHardwareDeviceContext != active.requiresHardwareDeviceContext ||
+                proposed.requiresHardwareFramesContext != active.requiresHardwareFramesContext ||
+                proposed.size.width != active.size.width ||
+                proposed.size.height != active.size.height;
+        });
+        for (auto& candidate : candidates) candidate.decoder = *runningDecoder;
+    }
     plan.candidates = MediaPipelineScorer::scoreAndSortChains(std::move(candidates), options);
 
     if (plan.candidates.empty()) {
@@ -381,7 +404,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             requestedOpen.globalHeader,
             options.lowLatency};
         auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
-            candidate, options, hardwareProbe);
+            candidate, options, outputProbe ? *outputProbe : hardwareProbe);
         if (!preflight) {
             candidate.available = false;
             candidate.reason = preflight.error().message;
@@ -508,7 +531,7 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!inputInfo) {
         return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
     }
-    return buildVideoTranscodePlan(inputInfo.value(), inputPath, std::move(options));
+    return buildVideoTranscodePlan(inputInfo.value(), inputPath, std::move(options), nullptr, nullptr);
 }
 
 ::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
@@ -528,7 +551,7 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!inputInfo) {
         return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
     }
-    return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options));
+    return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options), nullptr, nullptr);
 }
 
 ::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeKnownInput(
@@ -548,7 +571,32 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!optionsStatus) {
         return ::media::Result<MediaPipelinePlan>::failure(optionsStatus.error());
     }
-    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options));
+    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options), nullptr, nullptr);
+}
+
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoOutputBranch(
+    MediaInputVideoStreamInfo inputInfo,
+    const std::string& inputUrl,
+    const MediaPipelineStagePlan& runningDecoder,
+    MediaPipelinePlannerOptions options,
+    MediaHardwareCapabilityProbe& outputProbe)
+{
+    if (inputUrl.empty() || inputInfo.streamIndex < 0 ||
+        inputInfo.codecName.empty() || inputInfo.width <= 0 ||
+        inputInfo.height <= 0 || !inputInfo.frameRate.isKnown() ||
+        runningDecoder.role != MediaPipelineStageRole::Decoder ||
+        !runningDecoder.available || !runningDecoder.outputFrame ||
+        runningDecoder.ffmpegName.empty() || options.allowPacketCopy ||
+        !outputProbe.hasSuppliedValidator()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "video output planning requires a complete running decoder contract and frame transcode"));
+    }
+    if (auto status = validateCommonPlannerOptions(options, "planVideoOutputBranch"); !status) {
+        return ::media::Result<MediaPipelinePlan>::failure(status.error());
+    }
+    return buildVideoTranscodePlan(inputInfo, inputUrl, std::move(options),
+                                  &runningDecoder, &outputProbe);
 }
 
 } // namespace media::ffmpeg::graph

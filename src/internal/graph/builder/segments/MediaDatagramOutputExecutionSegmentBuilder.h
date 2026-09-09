@@ -26,6 +26,9 @@ struct MediaDatagramOutputExecutionSegmentResult final {
 
 class MediaDatagramOutputExecutionSegmentBuilder final {
 public:
+    static ::media::Status validateSessionAvailable(
+        const MediaGraph& graph,
+        const MediaProtocolOutputSessionKey& sessionKey);
     static ::media::Result<MediaDatagramOutputExecutionSegmentResult> build(
         MediaGraph& graph,
         const MediaDatagramOutputExecutionSegmentOptions& options);

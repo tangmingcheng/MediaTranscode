@@ -56,6 +56,7 @@ struct MediaPacketizedRtpDatagramView final {
     std::size_t payloadOctets;
     MediaRunningTime presentationOnMaster;
     MediaRunningTime canonicalRelease;
+    MediaWireMediaBoundary mediaBoundary;
 };
 
 class MediaRtpWireProtocolState;
@@ -81,6 +82,8 @@ public:
         MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
         MediaRunningTime materializedAt);
 
+    // A null successful result means no RTP/RTCP participation: no BYE
+    // is permitted (RFC 3550 section 6.3.7).
     ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
     materializeTerminalReport(
         MediaRunningTime reportInstant,

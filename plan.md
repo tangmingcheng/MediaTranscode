@@ -585,3 +585,17 @@ Detailed design and execution checklist:
 - [x] 按用户要求 run31 先正常运行约 20 秒，再注入输入 lo 20% 丢包；约 25.27 秒后因 12 秒无新编码输出退出，测试 FAIL。实测输入丢包 19.9085%，损伤段完整 IDR 为 0，详细原因见 docs/completed/2026-09-07-rk-a559-runtime-input-loss20-validation.md；不修改核心。
 
 - [x] 根据用户要求对照 FFmpeg、GStreamer、WebRTC 与 AWS Elemental MediaLive 的输入丢包机制；结论与适用边界见 docs/rk-rtp-input-loss-industry-comparison.md。本轮只做调研，不修改核心或新增参数。
+## 2026-09-09 动态视频多输出
+
+实施与完成记录：`docs/dynamic-video-outputs-progress.md`。本节覆盖本轮要求，历史未完成矩阵不作为本轮已通过证据。
+
+- [x] 核对 GStreamer 动态管线、tee 与 FFmpeg 引用、硬件池和协议物化的成熟契约。
+- [x] 建立本轮分支 `feat/dynamic-video-outputs`，保留原目录构建环境。
+- [ ] 固定共享输入与 decoder；planner 独立规划输出，准备阶段保留真实 encoder readback 产品。
+- [ ] 完成不可变执行分段、独立输出故障域、硬边界准入、零输出消费和有序排空回收。
+- [ ] 接入逐输出状态与 CLI/Beta 动态增删；新增输出从可解码随机访问点启动，完整契约相等时复用编码组。
+- [ ] 先以固定连续 120 秒源完成 Windows RTP → MPEG-TS/RTP 动态多输出真实验收，再进行 RKMPP 同规格验证；不降低原源规格。
+- [ ] 每项完整验收通过立即独立 commit/push，标题与报告写明链路、编解码、分辨率、帧率、码率和 RC；失败不记为通过。
+- [ ] 自查全部改动、更新架构与质量评分、提交 PR，由两名未参与实现的智能体逐功能对照行业方案，均明确 PASS 后交付。
+
+测试原始日志、抓包和截图只存放 D 盘的本轮目录；每次测试结束提取简短命令/结果后删除原始材料并核查进程，不累积到 C 盘或版本库。RKMPP 临时脚本与原始材料在对应测试结束后删除。

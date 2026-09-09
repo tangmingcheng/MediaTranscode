@@ -114,9 +114,14 @@ struct CommonPlan final {
                    node.kind == MediaNodeKind::MpegTsDatagramMaterializer ||
                    node.kind == MediaNodeKind::MpegTsRtpSdpPublisher;
         });
-    if (duplicate) {
+    if (expectAudio && duplicate) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled MPEG-TS output rejects duplicate output authority"));
+    }
+
+    if (auto available = MediaDatagramOutputExecutionSegmentBuilder::validateSessionAvailable(
+            graph, plan.sessionKey); !available) {
+        return Result::failure(available.error());
     }
 
     MediaNodeId mux = MediaNodeId::invalid();

@@ -38,6 +38,7 @@ struct MediaTsReadFrameEnvelope final {
     MediaTsReadFrameState state = MediaTsReadFrameState::Waiting;
     ::media::ffmpeg::PacketPtr packet;
     MediaTsPacketProvenance provenance;
+    std::optional<std::int64_t> receivedAtNanoseconds;
 };
 
 class MediaTsDemuxSession {

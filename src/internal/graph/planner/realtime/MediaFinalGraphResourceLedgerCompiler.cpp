@@ -2,6 +2,12 @@
 
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/network/MediaDatagramServiceScopeArbiter.h"
+#include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNodePlanCodec.h"
+#include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
+#include "internal/graph/time/MediaClockDomainIdentity.h"
 #include <algorithm>
 #include <charconv>
 #include <map>
@@ -27,6 +33,7 @@ bool productionRealtimeNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::StreamSplit:
     case MediaNodeKind::PacketFanout:
     case MediaNodeKind::FrameRoute:
+    case MediaNodeKind::VideoOutputFanout:
     case MediaNodeKind::VideoDecode:
     case MediaNodeKind::VideoTimestamp:
     case MediaNodeKind::HardwareTransfer:
@@ -171,8 +178,13 @@ bool globallyCreditedPayload(MediaPayloadKind kind) noexcept
 ::media::Result<MediaFinalGraphResourceLedger>
 MediaFinalGraphResourceLedgerCompiler::compile(
     const MediaGraph& graph,
-    const MediaRealtimeGraphResourceLedgerPlan& planningLedger)
+    const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
+    std::span<const MediaNodeId> selectedNodes)
 {
+    const auto selected = [&](MediaNodeId id) {
+        return selectedNodes.empty() ||
+            std::find(selectedNodes.begin(), selectedNodes.end(), id) != selectedNodes.end();
+    };
     using Result = ::media::Result<MediaFinalGraphResourceLedger>;
     if (auto status = MediaRealtimeGraphResourceLedgerPlanner::validate(
             planningLedger); !status) {
@@ -187,16 +199,78 @@ MediaFinalGraphResourceLedgerCompiler::compile(
         planningLedger.resourceScope,
         planningLedger.maximumGraphPayloadAndReservedStorageBytes,
         0, 0, {}, {}, std::nullopt, {}};
+    ledger.terminalReferenceSlots = 0;
+    ledger.terminalControlObjects = 0;
     std::uint64_t videoFrameEdgeSurfaces = 0;
     std::uint64_t pipelinePendingSurfaces = 0;
     const bool hasVideoFilter = std::any_of(
-        graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::VideoFilter;
+        graph.nodes().begin(), graph.nodes().end(), [&](const MediaNode& node) {
+            return selected(node.id) && node.kind == MediaNodeKind::VideoFilter;
         });
 
     try {
         ledger.entries.reserve(graph.edges().size() + graph.nodes().size());
+        const auto reserveFixedStorage = [&](std::string owner, std::uint64_t bytes,
+                                              std::uint64_t objects, std::string authority) -> ::media::Status {
+            auto total = addTo(ledger.admittedGraphPayloadAndReservedStorageBytes,
+                bytes, "shared service fixed runtime storage");
+            if (!total) return ::media::Status::failure(total.error());
+            ledger.admittedGraphPayloadAndReservedStorageBytes = total.value();
+            ledger.entries.push_back({std::move(owner), {},
+                MediaFinalGraphResourceScope::EngineManagedPayloadAndReservedStorage,
+                bytes, 0, 0, objects, false, std::move(authority)});
+            return ::media::Status::success();
+        };
+        // Root scope ownership stays with the shared execution domain after
+        // the initial output is extracted. Dynamic suffixes only add members.
+        const bool ownsRootService = selectedNodes.empty() || std::any_of(
+            graph.nodes().begin(), graph.nodes().end(), [&](const MediaNode& node) {
+                return selected(node.id) && node.kind == MediaNodeKind::VideoOutputFanout;
+            });
+        if (ownsRootService) {
+            std::map<std::pair<MediaDatagramServiceScopeKind, std::string>,
+                MediaDatagramServiceScopeContract> scopes;
+            bool videoClock = false;
+            for (const auto& node : graph.nodes()) {
+                videoClock = videoClock || node.kind == MediaNodeKind::VideoOutputScheduler;
+                if (node.kind != MediaNodeKind::DatagramTransportPlanSource) continue;
+                auto transport = MediaDatagramTransportPlanSourceNodePlanCodec::decode(node);
+                if (!transport) return Result::failure(transport.error());
+                auto scope = MediaDatagramServiceScopePlanner::plan(transport.value());
+                if (!scope) return Result::failure(scope.error());
+                const auto key = std::pair{scope.value().kind, scope.value().scopeId};
+                const auto [found, inserted] = scopes.emplace(key, scope.value());
+                if (!inserted && found->second != scope.value()) return Result::failure(
+                    ::media::ErrorInfo::invalidArgument("Shared service scope has conflicting prepared contracts"));
+            }
+            for (const auto& entry : scopes) {
+                if (auto reserved = reserveFixedStorage("service-scope:" + entry.first.second,
+                        sizeof(MediaDatagramServiceScopeArbiter), 1,
+                        "one persistent service-scope arbiter object sizeof"); !reserved)
+                    return Result::failure(reserved.error());
+            }
+            if (videoClock && !scopes.empty()) {
+                if (auto reserved = reserveFixedStorage("service-clock-domain",
+                        sizeof(MediaSteadyClockDomain), 1,
+                        "one shared video steady clock anchor object sizeof"); !reserved)
+                    return Result::failure(reserved.error());
+            }
+            if (!scopes.empty()) ledger.outOfScopeAuthorities.push_back(
+                "service scope strings and shared ownership allocator/control-block bookkeeping bytes");
+        }
+        for (const auto& node : graph.nodes()) {
+            if (!selected(node.id) || node.kind != MediaNodeKind::ScheduledDatagramSender) continue;
+            if (auto reserved = reserveFixedStorage("service-member:" + node.name,
+                    sizeof(MediaDatagramServiceScopeArbiter::Member) +
+                        sizeof(MediaDatagramServiceScopeArbiter::SubmitGuard), 2,
+                    "one intrusive member and at most one live submit guard per sender sizeof"); !reserved)
+                return Result::failure(reserved.error());
+            ledger.outOfScopeAuthorities.push_back(
+                "service member shared ownership allocator/control-block bookkeeping bytes");
+        }
+
         for (const auto& edge : graph.edges()) {
+            if (!selected(edge.to.nodeId)) continue;
             if (!edge.isValid() || edge.payloadKind == MediaPayloadKind::Unknown) {
                 return Result::failure(::media::ErrorInfo::invalidArgument(
                     "final graph resource ledger rejects an unknown edge"));
@@ -205,6 +279,25 @@ MediaFinalGraphResourceLedgerCompiler::compile(
             if (!slots) {
                 return Result::failure(slots.error());
             }
+            // MediaChannel embeds one terminal reference even when this edge
+            // never receives a branch EOS. The allocation belongs to its
+            // consuming execution segment, exactly once across partitions.
+            auto terminalStorage = addTo(
+                ledger.admittedGraphPayloadAndReservedStorageBytes,
+                sizeof(MediaBufferRef), "channel terminal reference storage");
+            if (!terminalStorage) return Result::failure(terminalStorage.error());
+            ledger.admittedGraphPayloadAndReservedStorageBytes = terminalStorage.value();
+            ++ledger.terminalReferenceSlots;
+            if (!selectedNodes.empty() && !selected(edge.from.nodeId) &&
+                (edge.payloadKind == MediaPayloadKind::Frame ||
+                 edge.payloadKind == MediaPayloadKind::Packet)) {
+                ledger.terminalControlObjects = 1;
+            }
+            ledger.entries.push_back(MediaFinalGraphResourceLedgerEntry{
+                "terminal-cell:" + edge.name, {},
+                MediaFinalGraphResourceScope::EngineManagedPayloadAndReservedStorage,
+                sizeof(MediaBufferRef), 1, 0, 1, false,
+                "MediaChannel embedded terminal MediaBufferRef sizeof"});
             std::uint64_t payloadBytes = 0;
             bool coveredByGlobalPayloadLedger = false;
             MediaFinalGraphResourceScope scope =
@@ -262,7 +355,28 @@ MediaFinalGraphResourceLedgerCompiler::compile(
                 0, coveredByGlobalPayloadLedger, std::move(authority)});
         }
 
+        if (ledger.terminalControlObjects != 0) {
+            auto controlStorage = addTo(
+                ledger.admittedGraphPayloadAndReservedStorageBytes,
+                sizeof(MediaControlBuffer), "branch shared terminal control object");
+            if (!controlStorage) return Result::failure(controlStorage.error());
+            ledger.admittedGraphPayloadAndReservedStorageBytes = controlStorage.value();
+            ledger.entries.push_back(MediaFinalGraphResourceLedgerEntry{
+                "branch-terminal-control", {},
+                MediaFinalGraphResourceScope::EngineManagedPayloadAndReservedStorage,
+                sizeof(MediaControlBuffer), 0, 1, 0, false,
+                "one shared MediaControlBuffer per draining execution segment sizeof"});
+            ledger.entries.push_back(MediaFinalGraphResourceLedgerEntry{
+                "branch-terminal-shared-control-block", {},
+                MediaFinalGraphResourceScope::ObservedOnlyExternalAllocation,
+                0, 0, 1, 0, false,
+                "one std::make_shared control block; allocator bookkeeping size is implementation-owned"});
+            ledger.outOfScopeAuthorities.push_back(
+                "branch terminal std::make_shared control block allocator bookkeeping bytes");
+        }
+
         for (const auto& node : graph.nodes()) {
+            if (!selected(node.id)) continue;
             if (!productionRealtimeNode(node.kind)) {
                 return Result::failure(::media::ErrorInfo::unsupported(
                     "final graph resource ledger has no retention contract for node: " +
@@ -352,7 +466,9 @@ MediaFinalGraphResourceLedgerCompiler::compile(
             "final graph resource ledger"));
     }
 
-    if (planningLedger.hardwareEncoderSurfacePool) {
+    const bool hasSelectedEncoder = std::any_of(graph.nodes().begin(), graph.nodes().end(),
+        [&](const auto& node) { return selected(node.id) && node.kind == MediaNodeKind::VideoEncode; });
+    if (planningLedger.hardwareEncoderSurfacePool && hasSelectedEncoder) {
         auto graphSurfaces = Arithmetic::add(
             videoFrameEdgeSurfaces,
             pipelinePendingSurfaces,
@@ -430,9 +546,10 @@ MediaFinalGraphResourceLedgerCompiler::compile(
         ledger.admittedGraphPayloadAndReservedStorageBytes;
     auto payloadPlan = MediaGraphPayloadProducerRegistryCompiler::compile(
         graph, planningLedger, availablePayloadBytes,
-        maximumPayloadObjects);
+        maximumPayloadObjects, selectedNodes);
     if (!payloadPlan) return Result::failure(payloadPlan.error());
     ledger.payloadCreditPlan = std::move(payloadPlan).value();
+    ledger.videoPipelinePendingSurfaces = pipelinePendingSurfaces;
     return Result::success(std::move(ledger));
 }
 

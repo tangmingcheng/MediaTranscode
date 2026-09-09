@@ -83,6 +83,20 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodeId, prefix + ".filter", stage.filterName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hwaccel", stage.hwaccelName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind())); !status) return status;
+    if (stage.preparedInputRetention) {
+        const auto& retention = *stage.preparedInputRetention;
+        for (const auto& field : std::vector<std::pair<std::string, std::string>>{
+                 {"thread_count", std::to_string(retention.threadCount)},
+                 {"thread_type", std::to_string(retention.threadType)},
+                 {"main_handoff_packets", std::to_string(retention.mainHandoffPackets)},
+                 {"frame_worker_packets", std::to_string(retention.frameWorkerPackets)},
+                 {"serial_private_packets", std::to_string(retention.serialPrivatePackets)},
+                 {"maximum_internal_packets", std::to_string(retention.maximumInternalPackets())},
+                 {"authority", retention.authority}}) {
+            if (auto status = setOption(graph, nodeId,
+                prefix + ".input_retention." + field.first, field.second); !status) return status;
+        }
+    }
     const auto* contract = stage.frameContract();
     if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(contract ? contract->frameKind : MediaHardwareFrameKind::Unknown)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware())); !status) return status;
@@ -258,14 +272,16 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         plannedNodes.push_back(nodes.videoTimestamp);
     }
 
-    if (auto status = setOption(graph, nodes.videoDecode,
-            "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
-        !status) return status;
-    if (chain.decoderReceiveInterval) {
+    if (nodes.videoDecode.isValid()) {
         if (auto status = setOption(graph, nodes.videoDecode,
-                "video_decode.receive_interval_ns",
-                std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+                "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
             !status) return status;
+        if (chain.decoderReceiveInterval) {
+            if (auto status = setOption(graph, nodes.videoDecode,
+                    "video_decode.receive_interval_ns",
+                    std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+                !status) return status;
+        }
     }
 
     for (MediaNodeId nodeId : plannedNodes) {

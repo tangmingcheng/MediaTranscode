@@ -92,10 +92,11 @@ const MediaChannelBinding& MediaChannel::binding() const noexcept
     }
 }
 
-MediaQueuePushOutcome MediaChannel::pushOutcome(MediaBufferRef buffer)
+MediaChannelPushResult MediaChannel::pushOutcome(MediaBufferRef buffer)
 {
     std::lock_guard lock(m_mutationMutex);
-    return pushOutcomeLocked(std::move(buffer));
+    const auto outcome = pushOutcomeLocked(std::move(buffer));
+    return {outcome, m_queue ? m_queue->capacity() : 0, m_queue ? m_queue->size() : 0};
 }
 
 MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
@@ -184,7 +185,17 @@ void MediaChannel::finalizeDeferredCloseLocked() noexcept
     if (m_closeRequested && m_authorizedCapacity == 0 && m_queue &&
         !m_queue->closed() && !m_queue->aborted()) {
         m_queue->close();
+        if (m_consumerWakeup) m_consumerWakeup->notify();
+        signalMutationWaiters();
     }
+}
+
+bool MediaChannel::popTerminalLocked(MediaBufferRef& out) noexcept
+{
+    if (!m_terminal || !m_queue || m_queue->aborted() ||
+        m_authorizedCapacity != 0 || m_queue->size() != 0) return false;
+    out = std::move(m_terminal);
+    return true;
 }
 
 ::media::Status MediaChannel::pop(MediaBufferRef& out)
@@ -214,6 +225,7 @@ void MediaChannel::finalizeDeferredCloseLocked() noexcept
             1, std::memory_order_release);
         m_externalBlockedConsumers.notify_all();
     }
+    if (!status && popTerminalLocked(out)) status = ::media::Status::success();
     if (status) {
         accountPoppedPayload(out);
         m_metrics.popped++;
@@ -231,7 +243,7 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
         return false;
     }
 
-    const bool ok = m_queue->tryPop(out);
+    const bool ok = m_queue->tryPop(out) || popTerminalLocked(out);
     if (ok) {
         accountPoppedPayload(out);
         m_metrics.popped++;
@@ -242,6 +254,29 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
     if (ok) signalMutationWaiters();
     refreshQueueMetrics();
     return ok;
+}
+
+::media::Status MediaChannel::closeWithTerminal(MediaBufferRef terminal)
+{
+    if (!terminal || !terminal->isEof())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "channel terminal close requires EOF"));
+    std::lock_guard lock(m_mutationMutex);
+    if (!m_queue || m_queue->aborted())
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "channel terminal close requires a live queue"));
+    // An upstream producer may already have completed ordered EOF and close.
+    if (m_closeRequested || m_queue->closed()) return ::media::Status::success();
+    m_terminal = std::move(terminal);
+    m_closeRequested = true;
+    m_metrics.pushed++;
+    m_metrics.closed++;
+    finalizeDeferredCloseLocked();
+    if (m_consumerWakeup) m_consumerWakeup->notify();
+    if (m_producerWakeup) m_producerWakeup->notify();
+    refreshQueueMetrics();
+    signalMutationWaiters();
+    return ::media::Status::success();
 }
 
 void MediaChannel::close()
@@ -274,6 +309,7 @@ void MediaChannel::abort()
     m_externalLifecycleMutations.fetch_sub(1, std::memory_order_release);
     m_externalLifecycleMutations.notify_all();
     m_closeRequested = true;
+    m_terminal.reset();
     if (m_queue) {
         m_queue->abort();
     }
@@ -294,6 +330,7 @@ void MediaChannel::clear()
     if (m_queue) {
         m_queue->clear();
     }
+    m_terminal.reset();
     m_queuedPayloadBytes = 0;
     m_metrics.cleared++;
     if (m_consumerWakeup) {
@@ -315,7 +352,7 @@ void MediaChannel::signalMutationWaiters() noexcept
 bool MediaChannel::closed() const
 {
     std::lock_guard lock(m_mutationMutex);
-    return m_closeRequested || !m_queue || m_queue->closed();
+    return !m_queue || (m_queue->closed() && !m_terminal && m_authorizedCapacity == 0);
 }
 
 bool MediaChannel::aborted() const
@@ -326,7 +363,7 @@ bool MediaChannel::aborted() const
 std::size_t MediaChannel::size() const
 {
     std::lock_guard lock(m_mutationMutex);
-    return m_queue ? m_queue->size() : 0;
+    return m_queue ? m_queue->size() + (m_terminal && m_authorizedCapacity == 0 ? 1 : 0) : 0;
 }
 
 std::size_t MediaChannel::capacity() const
@@ -359,20 +396,27 @@ const MediaChannelMetrics& MediaChannel::metrics() const noexcept
     return m_metrics;
 }
 
-void MediaChannel::setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept
+void MediaChannel::setConsumerWakeup(std::shared_ptr<MediaNodeWakeup> wakeup) noexcept
 {
-    m_consumerWakeup = &wakeup;
+    m_consumerWakeup = std::move(wakeup);
 }
 
-void MediaChannel::setProducerWakeup(MediaNodeWakeup& wakeup) noexcept
+void MediaChannel::setProducerWakeup(std::shared_ptr<MediaNodeWakeup> wakeup) noexcept
 {
-    m_producerWakeup = &wakeup;
+    m_producerWakeup = std::move(wakeup);
 }
 
 void MediaChannel::refreshQueueMetrics() noexcept
 {
     if (m_queue) {
         m_metrics.queue = m_queue->metrics();
+        // The fixed terminal cell is protocol storage, separate from media
+        // capacity, but remains visible in queue residence diagnostics.
+        if (m_terminal) {
+            const auto queued = m_metrics.queue.currentSize.fetch_add(1) + 1;
+            if (m_metrics.queue.peakSize.load() < queued)
+                m_metrics.queue.peakSize.store(queued);
+        }
         m_metrics.queue.blockedPushes.fetch_add(
             m_externalBlockedPushes.load(std::memory_order_relaxed));
         m_metrics.queue.blockedProducers.fetch_add(

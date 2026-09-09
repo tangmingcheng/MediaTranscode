@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaDatagramServiceScopeContract.h"
+
 #include "internal/graph/model/MediaLatencyPolicy.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
@@ -15,6 +17,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoOutputRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "media_transcode/Result.h"
@@ -34,11 +37,19 @@ struct MediaRealtimeRtpTranscodePlanCore {
     RealtimeOutputStreamLayout outputLayout;
     MediaOutputTransportKind outputTransport;
     MediaPipelinePlan videoPlan;
+    MediaInputVideoStreamInfo preparedVideoSource;
     MediaVideoTranscodeParameters videoParameters;
     std::optional<MediaRealtimeGraphResourceLedgerPlan> resourceLedger;
     std::optional<MediaPreparedRealtimeInputKind> requiredPreparedInputKind;
     bool videoInputStartRequiresKeyFrame = false;
     MediaRealtimeRtpInputNodePlan input;
+};
+
+struct MediaRealtimeVideoSessionFacts final : MediaRealtimeRtpTranscodePlanCore {
+    MediaRational sourceTimeBase;
+    MediaThreadingPolicy threadingPolicy;
+    MediaVideoLineageEdgePolicySet lineageEdgePolicies;
+    MediaDatagramServiceScopeContract serviceScope;
 };
 
 struct MediaRealtimeRtpTranscodePlanningDraft final
@@ -95,6 +106,14 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Status validatePlannedProduct(
         const MediaRealtimeRtpTranscodePlan& plan);
+
+    static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranch(
+        const MediaRealtimeVideoOutputRequest& output,
+        const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+        const MediaRealtimeVideoSessionFacts& sessionPlan,
+        const MediaInputVideoStreamInfo& source,
+        std::uint64_t sourceGeneration,
+        MediaHardwareCapabilityProbe& outputProbe);
 
 private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(

@@ -109,11 +109,13 @@ MediaMpegTsProtocolDatagram::MediaMpegTsProtocolDatagram(
     std::span<const std::uint8_t> bytes,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline) noexcept
+    MediaRunningTime canonicalDeadline,
+    MediaWireMediaBoundary mediaBoundary) noexcept
     : m_bytes(bytes),
       m_presentationOnMaster(presentationOnMaster),
       m_canonicalRelease(canonicalRelease),
-      m_canonicalDeadline(canonicalDeadline)
+      m_canonicalDeadline(canonicalDeadline),
+      m_mediaBoundary(mediaBoundary)
 {
 }
 
@@ -133,7 +135,8 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     std::uint16_t maximumPacketsPerDatagram,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime canonicalRelease,
-    MediaRunningTime canonicalDeadline)
+    MediaRunningTime canonicalDeadline,
+    MediaWireMediaBoundary finalBoundary)
 {
     using Result = ::media::Result<
         std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>;
@@ -174,7 +177,8 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
             output->m_datagrams.push_back(MediaMpegTsProtocolDatagram(
                 std::span<const std::uint8_t>(
                     output->m_payload.data() + byteOffset, byteCount),
-                presentationOnMaster, canonicalRelease, canonicalDeadline));
+                presentationOnMaster, canonicalRelease, canonicalDeadline,
+                index + 1 == entryCount ? finalBoundary : MediaWireMediaBoundary::None));
             packetOffset += packetCount;
         }
     } catch (const std::bad_alloc&) {

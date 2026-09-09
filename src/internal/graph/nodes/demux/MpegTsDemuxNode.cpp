@@ -1,3 +1,4 @@
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
 
 #include "internal/graph/nodes/demux/MediaTsDemuxNodePlanDecoder.h"
@@ -293,6 +294,15 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     if (!plannedStreamKind) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode packet stream/PID mismatch"));
     const MediaStreamKind streamKind = *plannedStreamKind;
+    if (packet->data && packet->size > 0 &&
+        (streamKind == MediaStreamKind::Video || streamKind == MediaStreamKind::Audio)) {
+        const auto activity = context.inputActivity();
+        if (!activity || !envelope.receivedAtNanoseconds || *envelope.receivedAtNanoseconds <= 0)
+            return processProgress(::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "MPEG-TS packet lacks authoritative media-read activity evidence")));
+        // Preflight replay keeps the original read time; draining it is not a new arrival.
+        activity->observe(*envelope.receivedAtNanoseconds);
+    }
     const auto plannedTimeBase = MediaTsRuntimeBindingCodec::timeBaseForIndex(
         *m_binding, packet->stream_index);
     if (!plannedTimeBase) {

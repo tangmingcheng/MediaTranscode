@@ -1,10 +1,12 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/runtime/context/MediaRuntimeSegmentOutputBinding.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaChannelRegistry.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/runtime/threading/MediaGraphWorkerExitToken.h"
 #include "internal/graph/runtime/context/MediaAvSyncGroupRegistry.h"
 #include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "media_transcode/Result.h"
@@ -30,6 +32,15 @@ public:
     MediaGraphExecutionContext& operator=(MediaGraphExecutionContext&&) = default;
 
     ::media::Status compile(const MediaGraph& graph);
+    ::media::Status compileSegment(
+        std::shared_ptr<const MediaGraph> graph,
+        std::span<const MediaNodeId> nodes,
+        MediaGraphExecutionContext& session,
+        std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs);
+    ::media::Result<MediaRuntimeSegmentOutputBinding> exportOutput(MediaPortId port) const;
+    void detachExecutionNodes(std::span<const MediaNodeId> nodes);
+    void cancelUnstartedExecution() noexcept;
+    void cancelSessionPayloadWaiters() noexcept;
     void reset();
     void rebindCompiledGraph(const MediaGraph& graph) noexcept;
 
@@ -56,6 +67,8 @@ public:
     std::vector<MediaChannel*> outputChannels(MediaNodeId nodeId);
     MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
     std::shared_ptr<MediaNodeWakeup> sharedNodeWakeup(MediaNodeId nodeId);
+    std::shared_ptr<MediaNodeWakeup> findNodeWakeup(MediaNodeId nodeId) const noexcept;
+    std::shared_ptr<MediaGraphWorkerExitToken> nodeExitToken(MediaNodeId nodeId) const noexcept;
     void interruptNodeWakeups() noexcept;
     void shutdownAvSyncGroups() noexcept;
     ::media::Status registerAvSyncGroup(
@@ -87,9 +100,13 @@ private:
 
 private:
     const MediaGraph* m_graph = nullptr;
+    std::shared_ptr<const MediaGraph> m_graphOwner;
+    bool m_ownsPayloadLedger = true;
+    bool m_ownsGlobalDiagnostics = true;
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
     std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
+    std::unordered_map<uint32_t, std::shared_ptr<MediaGraphWorkerExitToken>> m_nodeExitTokens;
     MediaAvSyncGroupRegistry m_avSyncGroups;
     std::shared_ptr<MediaGraphPayloadCreditLedger> m_payloadCreditLedger;
     std::shared_ptr<MediaInputActivity> m_inputActivity;

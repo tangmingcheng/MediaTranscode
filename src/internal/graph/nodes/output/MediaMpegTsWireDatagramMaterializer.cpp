@@ -123,7 +123,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materialize(
     MediaRunningTime materializedAt)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
-        {completeTsPackets, canonicalRelease}}};
+        {completeTsPackets, canonicalRelease, MediaWireMediaBoundary::None}}};
     return materializeBatch(datagrams, materializedAt);
 }
 
@@ -155,7 +155,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeProtocolBatch(
              index < datagrams.size(); ++index) {
             const auto& datagram = datagrams[index];
             views.push_back(MediaMpegTsDatagramView{
-                datagram.bytes(), datagram.canonicalRelease()});
+                datagram.bytes(), datagram.canonicalRelease(), datagram.mediaBoundary()});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -241,7 +241,7 @@ MediaMpegTsUdpWireDatagramMaterializer::materializeBatchReserved(
         auto appended = builder.append(
             datagrams[index].completeTsPackets, m_config.endpointId,
             datagrams[index].canonicalRelease,
-            deadlines[index], sequence);
+            deadlines[index], sequence, datagrams[index].mediaBoundary);
         if (!appended) return Result::failure(appended.error());
     }
     return builder.finish();
@@ -318,7 +318,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materialize(
     MediaRunningTime materializedAt)
 {
     const std::array<MediaMpegTsDatagramView, 1> datagrams{{
-        {completeTsPackets, canonicalRelease}}};
+        {completeTsPackets, canonicalRelease, MediaWireMediaBoundary::None}}};
     return materializeBatch(datagrams, materializedAt);
 }
 
@@ -351,7 +351,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeBatch(
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
                 datagrams[index].canonicalRelease,
-                datagrams[index].canonicalRelease});
+                datagrams[index].canonicalRelease, datagrams[index].mediaBoundary});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
@@ -392,7 +392,7 @@ MediaMpegTsRtpWireDatagramMaterializer::materializeProtocolBatch(
             packetized.push_back(MediaPacketizedRtpDatagramView{
                 payloads[index], payloadOctets[index],
                 datagrams[index].canonicalRelease(),
-                datagrams[index].canonicalRelease()});
+                datagrams[index].canonicalRelease(), datagrams[index].mediaBoundary()});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

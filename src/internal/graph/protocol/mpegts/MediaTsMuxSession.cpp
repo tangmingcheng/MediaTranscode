@@ -212,7 +212,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
         m_activation.generation, std::move(cursor),
         m_plan.parameters().maximumPacketsPerDatagram,
-        availableThrough, release, deadline);
+        availableThrough, release, deadline, MediaWireMediaBoundary::None);
     if (!batch) {
         return ::media::Result<std::size_t>::failure(
             poison(batch.error()).error());
@@ -661,7 +661,10 @@ MediaTsMuxSession::writeAccessUnit(
     m_pendingEmission.emplace(
         std::move(packetCursor), unit.emitOnMaster,
         std::move(clock).value(), m_emissionPlan.packetSizeBytes(),
-        m_plan.parameters().maximumPacketsPerDatagram);
+        m_plan.parameters().maximumPacketsPerDatagram,
+        unit.stream == MediaScheduledStream::Video && unit.randomAccess
+            ? MediaWireMediaBoundary::VideoRandomAccessUnitEnd
+            : MediaWireMediaBoundary::None);
     m_emissionDiagnostics.recordPendingBytes(
         m_pendingEmission->pendingBytes());
     auto schedulingNow = m_masterClock->now();

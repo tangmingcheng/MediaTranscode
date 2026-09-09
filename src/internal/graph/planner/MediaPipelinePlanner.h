@@ -1,6 +1,8 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaDecoderInputRetention.h"
+#include "internal/graph/model/MediaVideoSourceEpochPlan.h"
 #include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/model/MediaEncoderOpenContract.h"
 #include "internal/graph/model/MediaEncoderRateControlPlan.h"
@@ -43,6 +45,7 @@ struct MediaPipelineStagePlan {
     std::optional<MediaEncoderRateControlPlan> encoderRateControl;
     std::optional<MediaEncoderOpenContract> encoderOpenContract;
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
+    std::optional<MediaDecoderInputRetention> preparedInputRetention;
 
     const MediaHardwareDescriptor* frameContract() const noexcept
     {
@@ -131,7 +134,18 @@ struct MediaInputVideoStreamInfo {
     MediaRational frameRate;
 };
 
+enum class MediaVideoNoOutputPolicy { Consume };
+enum class MediaVideoOutputOverflowPolicy { FailBranch };
+
+struct MediaVideoOutputFanoutPlan final {
+    MediaVideoNoOutputPolicy noOutputs;
+    MediaVideoOutputOverflowPolicy overflow;
+};
+
 struct MediaPipelinePlan {
+    std::optional<MediaVideoOutputFanoutPlan> outputFanout;
+    std::optional<MediaVideoSourceEpochPlan> sourcePlaybackEpoch;
+    std::optional<MediaVideoOutputFanoutPlan> encodedOutputFanout;
     bool enabled = false;
     MediaBranchMode branchMode = MediaBranchMode::Drop;
     int sourceStreamIndex = invalidMediaStreamIndex;
@@ -171,6 +185,13 @@ public:
         MediaPipelineChainPlan& selected,
         const MediaPipelinePlannerOptions& options,
         MediaHardwareCapabilityProbe& hardwareProbe);
+
+    static ::media::Result<MediaPipelinePlan> planVideoOutputBranch(
+        MediaInputVideoStreamInfo inputInfo,
+        const std::string& inputUrl,
+        const MediaPipelineStagePlan& runningDecoder,
+        MediaPipelinePlannerOptions options,
+        MediaHardwareCapabilityProbe& outputProbe);
 
 private:
     MediaPipelinePlanner() = default;

@@ -14,9 +14,7 @@ const MediaRealtimeBetaFixedProfile::Product CurrentProfile{
     10000,
     30000,
     100,
-    ffmpeg::graph::MediaTranscodeStreamSet::VideoOnly,
-    ffmpeg::graph::RealtimeOutputStreamLayout::MuxedTransportStream,
-    ffmpeg::graph::MediaOutputTransportKind::RtpAvp
+    ffmpeg::graph::MediaTranscodeStreamSet::VideoOnly
 };
 
 } // namespace
@@ -40,7 +38,7 @@ std::string MediaRealtimeBetaFixedProfile::diagnosticSummary()
            " low_latency=planner-realtime-product" +
            " stream_set=VideoOnly" +
            " hardware_backend=planner-highest-score" +
-           " input_layout=planner-derived-from-input-type output_layout=MuxedTransportStream output_transport=RtpAvp";
+           " input_layout=planner-derived-from-input-type output_protocol=caller-explicit";
 }
 
 } // namespace media::beta

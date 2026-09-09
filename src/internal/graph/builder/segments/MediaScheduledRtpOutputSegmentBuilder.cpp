@@ -270,15 +270,9 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
             std::get<2>(fact), std::get<3>(fact));
         if (!valid) return Result::failure(valid.error());
     }
-    const bool duplicate = std::any_of(
-        graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::RtpDatagramMaterializer ||
-                node.kind == MediaNodeKind::DatagramTransportPlanSource ||
-                node.kind == MediaNodeKind::RtpSdpPublisher;
-        });
-    if (duplicate) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly RTP output rejects duplicate output authority"));
+    if (auto available = MediaDatagramOutputExecutionSegmentBuilder::validateSessionAvailable(
+            graph, plan.sessionKey); !available) {
+        return Result::failure(available.error());
     }
     const MediaNodeId video = graph.addNode(
         MediaNodeKind::RtpDatagramMaterializer,

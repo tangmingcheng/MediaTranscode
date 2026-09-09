@@ -30,12 +30,14 @@ MediaTsPendingEmission::MediaTsPendingEmission(
     MediaRunningTime notBefore,
     MediaTsPreparedPacketClock packetClock,
     std::size_t packetSizeBytes,
-    std::size_t maximumPacketsPerDatagram) noexcept
+    std::size_t maximumPacketsPerDatagram,
+    MediaWireMediaBoundary finalBoundary) noexcept
     : m_cursor(std::move(cursor))
     , m_notBefore(notBefore)
     , m_packetClock(std::move(packetClock))
     , m_packetSizeBytes(packetSizeBytes)
-    , m_maximumPacketsPerDatagram(maximumPacketsPerDatagram)
+    , m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
+      m_finalBoundary(finalBoundary)
 {
 }
 
@@ -86,7 +88,7 @@ MediaTsPendingEmission::materializeProtocolBatch(
     auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
         generation, std::move(m_cursor),
         static_cast<std::uint16_t>(m_maximumPacketsPerDatagram),
-        m_notBefore, release, deadline);
+        m_notBefore, release, deadline, m_finalBoundary);
     if (!batch) return ::media::Result<MediaBufferRef>::failure(batch.error());
     auto committed = schedule.commit(
         std::move(emission).value(), release);

@@ -12,7 +12,6 @@ extern "C" {
 namespace media::ffmpeg::graph {
 
 class MediaFfmpegLineageLeaseControl;
-class MediaGraphPayloadCreditLease;
 
 class MediaFfmpegLineageToken final {
 public:
@@ -36,15 +35,11 @@ private:
     friend ::media::Result<MediaFfmpegLineageToken> mediaFfmpegLineageToken(
         const AVBufferRef* opaque);
     friend ::media::Result<AVBufferRef*> makeMediaFfmpegCodecOpaque(
-        MediaFfmpegLineageToken token,
-        std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit);
+        MediaFfmpegLineageToken token);
 };
 
 ::media::Result<AVBufferRef*> makeMediaFfmpegCodecOpaque(
-    MediaFfmpegLineageToken token,
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit);
-::media::Result<AVBufferRef*> makeMediaFfmpegCodecOpaque(
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit);
+    MediaFfmpegLineageToken token);
 ::media::Result<MediaFfmpegLineageToken> mediaFfmpegLineageToken(
     const AVBufferRef* opaque);
 

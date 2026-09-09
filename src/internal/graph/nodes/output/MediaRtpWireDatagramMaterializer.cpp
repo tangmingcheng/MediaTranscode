@@ -88,7 +88,7 @@ MediaRtpWireDatagramMaterializer::materialize(
 {
     const std::array<MediaPacketizedRtpDatagramView, 1> datagrams{{
         {packetizedRtp, payloadOctets, presentationOnMaster,
-         canonicalRelease}}};
+         canonicalRelease, MediaWireMediaBoundary::None}}};
     return materializeBatch(datagrams, materializedAt);
 }
 
@@ -372,7 +372,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
             m_state->rtcpEndpointId,
             datagrams.front().canonicalRelease,
             rtcpDeadline.value(),
-            sequence);
+            sequence, MediaWireMediaBoundary::None);
         if (!appended) return Result::failure(appended.error());
         ++index;
     }
@@ -385,7 +385,7 @@ MediaRtpWireDatagramMaterializer::materializeBatchReserved(
             m_state->rtpEndpointId,
             datagrams[datagramIndex].canonicalRelease,
             rtpDeadlines[datagramIndex],
-            sequence);
+            sequence, datagrams[datagramIndex].mediaBoundary);
         if (!appended) return Result::failure(appended.error());
     }
     return builder.finish();
@@ -399,14 +399,23 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
 {
     using Result =
         ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    std::unique_lock protocolLock(m_state->mutex);
+    // BYE follows every projected media reservation, including media whose
+    // release instant is still in the future. Preserve that temporal order
+    // as well as the global wire sequence before deriving its deadline.
+    if (m_state->projectedLastCanonicalRelease &&
+        canonicalRelease < *m_state->projectedLastCanonicalRelease)
+        canonicalRelease = *m_state->projectedLastCanonicalRelease;
     auto canonicalDeadline = m_state->rtcpDeadline.canonicalDeadline(
         canonicalRelease, materializedAt);
     if (!canonicalDeadline) return Result::failure(canonicalDeadline.error());
-    std::unique_lock protocolLock(m_state->mutex);
     if (m_state->poisoned || m_state->projectedTerminal) {
         return Result::failure(::media::ErrorInfo::internalError(
             "RTP terminal report state is already terminal or poisoned"));
     }
+    // RFC 3550 section 6.3.7: a source that never sent RTP or RTCP
+    // leaves silently. Sender reports here are only projected with media.
+    if (m_state->projectedPacketCount == 0) return Result::success(nullptr);
     auto datagram = MediaRtcpWireDatagramComposer::composeTerminalReport(
         m_state->identity.ssrc(),
         m_state->cname,
@@ -490,7 +499,7 @@ MediaRtpWireDatagramMaterializer::materializeTerminalReport(
         m_state->rtcpEndpointId,
         canonicalRelease,
         canonicalDeadline.value(),
-        sequence);
+        sequence, MediaWireMediaBoundary::None);
     if (!appended) return Result::failure(appended.error());
     auto finished = builder.finish();
     if (!finished) return Result::failure(finished.error());

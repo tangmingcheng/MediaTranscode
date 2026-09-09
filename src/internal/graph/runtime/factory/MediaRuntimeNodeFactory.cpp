@@ -68,6 +68,8 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
+#include "internal/graph/nodes/video/VideoOutputFanoutNode.h"
+#include "internal/graph/nodes/video/EncodedVideoOutputFanoutNode.h"
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
@@ -253,14 +255,14 @@ template <typename Node>
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
 {
-    return create(node, nullptr, nullptr, nullptr);
+    return create(node, nullptr, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
     const MediaNode& node,
     MediaPreparedRealtimeInputBinding* binding)
 {
-    return create(node, binding, nullptr, nullptr);
+    return create(node, binding, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
@@ -269,7 +271,7 @@ template <typename Node>
     const std::shared_ptr<MediaAvStartupVideoPreparationState>&
         videoPreparationState)
 {
-    return create(node, binding, videoPreparationState, nullptr);
+    return create(node, binding, videoPreparationState, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
@@ -278,7 +280,8 @@ template <typename Node>
     const std::shared_ptr<MediaAvStartupVideoPreparationState>&
         videoPreparationState,
     const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
-        protocolOutputAuthority)
+        protocolOutputAuthority,
+    const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter)
 {
     switch (node.kind) {
     case MediaNodeKind::FileInput:
@@ -342,6 +345,12 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FrameRouteNode>(node.id));
     case MediaNodeKind::VideoDecode:
         return createVideoLineageStage<VideoDecodeNode>(node);
+    case MediaNodeKind::EncodedVideoOutputFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<EncodedVideoOutputFanoutNode>(node.id));
+    case MediaNodeKind::VideoOutputFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<VideoOutputFanoutNode>(node.id));
     case MediaNodeKind::VideoTimestamp:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoTimestampNode>(node.id));
     case MediaNodeKind::HardwareTransfer:
@@ -680,6 +689,11 @@ template <typename Node>
     }
     case MediaNodeKind::ScheduledDatagramSender:
     {
+        if (!serviceScopeArbiter) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "scheduled datagram sender requires its injected service scope arbiter"));
+        }
         auto session = requiredNodeOption(
             &node.options, "MediaScheduledDatagramSenderNode",
             "scheduled_datagram_sender.session");
@@ -719,6 +733,10 @@ template <typename Node>
         if (!created) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 created.error());
+        }
+        auto bound = created.value()->bindServiceScopeArbiter(serviceScopeArbiter);
+        if (!bound) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(bound.error());
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::move(created).value());
@@ -1027,6 +1045,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketFanout:
     case MediaNodeKind::FrameRoute:
     case MediaNodeKind::VideoDecode:
+    case MediaNodeKind::EncodedVideoOutputFanout:
+    case MediaNodeKind::VideoOutputFanout:
     case MediaNodeKind::VideoTimestamp:
     case MediaNodeKind::HardwareTransfer:
     case MediaNodeKind::VideoFrameRate:

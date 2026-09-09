@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/time/MediaClockDomainIdentity.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "media_transcode/Result.h"
 
@@ -54,6 +55,7 @@ public:
     virtual ~MediaProtocolOutputRuntimeAuthority() = default;
     virtual const MediaProtocolOutputSessionKey& sessionKey() const noexcept = 0;
     virtual MediaTranscodeStreamSet streamSet() const noexcept = 0;
+    virtual MediaClockDomainIdentity clockDomainIdentity() const noexcept = 0;
     virtual ::media::Result<MediaProtocolOutputActivation>
     validateActivation(const MediaBufferRef& buffer) const = 0;
     virtual ::media::Result<MediaProtocolOutputActivation>
@@ -80,6 +82,7 @@ public:
 
     const MediaProtocolOutputSessionKey& sessionKey() const noexcept override;
     MediaTranscodeStreamSet streamSet() const noexcept override;
+    MediaClockDomainIdentity clockDomainIdentity() const noexcept override;
     ::media::Result<MediaProtocolOutputActivation>
     validateActivation(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaProtocolOutputActivation>
@@ -110,12 +113,16 @@ public:
         std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>> create(
         MediaProtocolOutputSessionKey sessionKey,
         std::uint64_t initialGeneration);
+    ::media::Result<std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>>
+    fork(MediaProtocolOutputSessionKey sessionKey,
+         std::uint64_t initialGeneration) const;
 
     ::media::Result<MediaBufferRef> activate(
         MediaRunningTime sourceStart,
         MediaRunningTime transportLead);
     const MediaProtocolOutputSessionKey& sessionKey() const noexcept override;
     MediaTranscodeStreamSet streamSet() const noexcept override;
+    MediaClockDomainIdentity clockDomainIdentity() const noexcept override;
     ::media::Result<MediaProtocolOutputActivation>
     validateActivation(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaProtocolOutputActivation>
@@ -134,12 +141,12 @@ private:
     MediaVideoProtocolOutputRuntimeAuthority(
         MediaProtocolOutputSessionKey sessionKey,
         std::uint64_t initialGeneration,
-        std::chrono::steady_clock::time_point steadyAnchor,
+        std::shared_ptr<const MediaSteadyClockDomain> steadyDomain,
         std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch) noexcept;
 
     MediaProtocolOutputSessionKey m_sessionKey;
     std::uint64_t m_initialGeneration;
-    std::chrono::steady_clock::time_point m_steadyAnchor;
+    std::shared_ptr<const MediaSteadyClockDomain> m_steadyDomain;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     mutable std::mutex m_mutex;
     std::optional<MediaProtocolOutputActivation> m_activation;

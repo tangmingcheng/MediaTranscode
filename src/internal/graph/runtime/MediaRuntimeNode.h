@@ -21,6 +21,9 @@ public:
     virtual ::media::Status start(MediaGraphExecutionContext& context);
     virtual ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) = 0;
     virtual ::media::Status flush(MediaGraphExecutionContext& context);
+    // Called on the execution owner before its thread-exit publication.
+    // Releases thread-affine sessions; stop subsequently reclaims node state.
+    virtual ::media::Status finishExecution(MediaGraphExecutionContext& context) noexcept;
     virtual ::media::Status stop(MediaGraphExecutionContext& context);
     virtual void interrupt(MediaGraphExecutionContext& context) noexcept;
     virtual void abort(MediaGraphExecutionContext& context) noexcept;

@@ -4,6 +4,8 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
+#include "application/realtime/MediaRealtimeOutputSnapshot.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoOutputRequest.h"
 #include "media_transcode/Result.h"
 
 #include <atomic>
@@ -14,8 +16,16 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
+
+class MediaRealtimeOutputRunController;
+
+struct MediaRealtimeOutputChange final {
+    std::uint64_t outputId;
+    std::optional<MediaRealtimeVideoOutputRequest> addition;
+};
 
 class MediaRealtimeVideoRunPolicy final {
 public:
@@ -89,12 +99,17 @@ public:
     void requestStop() noexcept;
     bool stopRequested() const noexcept;
     bool waitForStop(std::chrono::milliseconds timeout);
+    ::media::Result<std::uint64_t> addOutput(
+        const MediaRealtimeVideoOutputRequest& request);
+    ::media::Status removeOutput(std::uint64_t outputId);
+    std::vector<MediaRealtimeOutputSnapshot> outputSnapshots() const;
     MediaRealtimeVideoRunStage activeStage() const noexcept;
     std::optional<MediaRealtimeVideoRunFailureSignal>
         firstFailureSignal() const noexcept;
 
 private:
     friend class MediaRealtimeVideoRunController;
+    friend class MediaRealtimeOutputRunController;
 
     enum class State : std::uint8_t {
         Ready,
@@ -110,13 +125,25 @@ private:
         MediaRealtimeVideoRunStage stage,
         MediaRealtimeVideoRunEndReason endReason) noexcept;
 
+    std::optional<MediaRealtimeOutputChange> takeOutputChange();
+    void completeOutputChange() noexcept;
+    void publishOutputSnapshot(MediaRealtimeOutputSnapshot snapshot);
+    ::media::Result<std::uint64_t> registerInitialOutput(
+        const std::string& descriptionPath);
+    void setOutputChangesEnabled(bool enabled);
+
     std::atomic<State> m_state{ State::Ready };
     std::atomic<MediaRealtimeVideoRunStage> m_activeStage{
         MediaRealtimeVideoRunStage::PolicyValidation };
     MediaRealtimeVideoRunFailureSignal m_firstFailureSignal;
     std::atomic_bool m_hasFirstFailureSignal{ false };
-    std::mutex m_waitMutex;
+    mutable std::mutex m_waitMutex;
     std::condition_variable m_waitCondition;
+    std::uint64_t m_nextOutputId = 1;
+    std::optional<MediaRealtimeOutputChange> m_pendingOutputChange;
+    std::vector<MediaRealtimeOutputSnapshot> m_outputSnapshots;
+    bool m_outputChangeInProgress = false;
+    bool m_outputChangesEnabled = false;
 };
 
 enum class MediaRealtimeVideoOutputDescriptionKind {
@@ -146,6 +173,7 @@ struct MediaRealtimeVideoPreparedAudioReport final {
 };
 
 struct MediaRealtimeVideoPreparedReport final {
+    std::uint64_t outputId = 0;
     RealtimeInputType inputType = RealtimeInputType::Url;
     RealtimeInputStreamLayout inputLayout =
         RealtimeInputStreamLayout::SessionDescribed;
@@ -171,6 +199,7 @@ struct MediaRealtimeVideoPreparedReport final {
 struct MediaRealtimeVideoRunObserver final {
     std::function<void(const MediaRealtimeVideoPreparedReport&)> prepared;
     std::function<void(const MediaGraphRuntimeReport&)> progress;
+    std::function<void(const MediaRealtimeOutputSnapshot&)> outputChanged;
 };
 
 struct MediaRealtimeVideoRunOutcome final {

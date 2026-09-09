@@ -22,6 +22,10 @@ struct mt_beta_realtime_session final {
     media::beta::MediaRealtimeBetaSession implementation;
 };
 
+struct mt_beta_output_snapshots final {
+    std::vector<media::ffmpeg::graph::MediaRealtimeOutputSnapshot> outputs;
+};
+
 namespace {
 
 mt_beta_status betaStatus(media::ErrorCode errorCode) noexcept
@@ -35,8 +39,9 @@ mt_beta_status betaStatus(media::ErrorCode errorCode) noexcept
         return MT_BETA_STATUS_ALLOCATION_FAILED;
     case media::ErrorCode::NotInitialized:
     case media::ErrorCode::Cancelled:
-    case media::ErrorCode::WouldBlock:
         return MT_BETA_STATUS_INVALID_STATE;
+    case media::ErrorCode::WouldBlock:
+        return MT_BETA_STATUS_BUSY;
     case media::ErrorCode::Unsupported:
     case media::ErrorCode::FFmpegFailure:
     case media::ErrorCode::IoFailure:
@@ -50,6 +55,18 @@ mt_beta_status betaStatus(media::ErrorCode errorCode) noexcept
 mt_beta_status betaStatus(const media::Status& status) noexcept
 {
     return status ? MT_BETA_STATUS_OK : betaStatus(status.error().code);
+}
+
+template <typename Operation>
+mt_beta_status invokeStatus(Operation&& operation) noexcept
+{
+    try {
+        return operation();
+    } catch (const std::bad_alloc&) {
+        return MT_BETA_STATUS_ALLOCATION_FAILED;
+    } catch (...) {
+        return MT_BETA_STATUS_INTERNAL_ERROR;
+    }
 }
 
 } // namespace
@@ -152,4 +169,60 @@ extern "C" void mt_beta_realtime_release(mt_beta_realtime_session** session)
     } catch (const std::exception&) {
     } catch (...) {
     }
+}
+
+extern "C" mt_beta_status mt_beta_realtime_add_output(
+    mt_beta_realtime_session* session,
+    const mt_beta_video_output* output,
+    uint64_t* output_id)
+{
+    if (output_id) *output_id = 0;
+    if (!session || !output || !output_id) return MT_BETA_STATUS_INVALID_ARGUMENT;
+    return invokeStatus([&] {
+        auto result = session->implementation.addOutput(*output);
+        if (!result) return betaStatus(result.error().code);
+        *output_id = result.value();
+        return MT_BETA_STATUS_OK;
+    });
+}
+
+extern "C" mt_beta_status mt_beta_realtime_remove_output(
+    mt_beta_realtime_session* session, uint64_t output_id)
+{
+    if (!session || !output_id) return MT_BETA_STATUS_INVALID_ARGUMENT;
+    return invokeStatus([&] { return betaStatus(session->implementation.removeOutput(output_id)); });
+}
+
+extern "C" mt_beta_status mt_beta_realtime_get_output_snapshots(
+    mt_beta_realtime_session* session, mt_beta_output_snapshots** snapshots)
+{
+    if (snapshots) *snapshots = nullptr;
+    if (!session || !snapshots) return MT_BETA_STATUS_INVALID_ARGUMENT;
+    return invokeStatus([&] {
+        auto result = std::make_unique<mt_beta_output_snapshots>();
+        result->outputs = session->implementation.outputSnapshots();
+        *snapshots = result.release();
+        return MT_BETA_STATUS_OK;
+    });
+}
+
+extern "C" size_t mt_beta_output_snapshots_count(const mt_beta_output_snapshots* snapshots)
+{
+    return snapshots ? snapshots->outputs.size() : 0;
+}
+
+extern "C" mt_beta_status mt_beta_output_snapshots_get(
+    const mt_beta_output_snapshots* snapshots, size_t index, mt_beta_output_snapshot* snapshot)
+{
+    if (!snapshots || !snapshot || index >= snapshots->outputs.size())
+        return MT_BETA_STATUS_INVALID_ARGUMENT;
+    *snapshot = media::beta::MediaRealtimeBetaSession::projectOutput(snapshots->outputs[index]);
+    return MT_BETA_STATUS_OK;
+}
+
+extern "C" void mt_beta_output_snapshots_release(mt_beta_output_snapshots** snapshots)
+{
+    if (!snapshots) return;
+    delete *snapshots;
+    *snapshots = nullptr;
 }

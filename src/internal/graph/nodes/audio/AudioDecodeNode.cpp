@@ -6,7 +6,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
-#include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
@@ -240,12 +240,8 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 "AudioDecodeNode input packet lacks payload credit ownership"));
     }
     if (inputPayloadCredit) {
-        auto opaque = makeMediaFfmpegCodecOpaque(inputPayloadCredit);
-        if (!opaque) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                opaque.error());
-        }
-        pendingPacket->opaque_ref = opaque.value();
+        auto retained = retainMediaFfmpegPayload(*pendingPacket, inputPayloadCredit);
+        if (!retained) return ::media::Result<MediaNodeProcessResult>::failure(retained.error());
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;

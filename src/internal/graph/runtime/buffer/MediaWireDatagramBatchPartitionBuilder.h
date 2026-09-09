@@ -29,7 +29,8 @@ public:
         std::uint64_t endpointId,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline,
-        std::uint64_t globalSequence);
+        std::uint64_t globalSequence,
+        MediaWireMediaBoundary mediaBoundary);
 
     ::media::Result<MediaWireDatagramBatchCollection> finish();
 

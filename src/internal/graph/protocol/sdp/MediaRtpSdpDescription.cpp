@@ -17,16 +17,12 @@ bool hasForbiddenTextByte(const std::string& value) noexcept
     });
 }
 
-bool isToken(const std::string& value) noexcept
+bool isOriginUsername(const std::string& value) noexcept
 {
-    return !hasForbiddenTextByte(value) &&
-           std::all_of(value.begin(), value.end(), [](unsigned char byte) {
-               return byte > 0x20 && byte < 0x7f &&
-                      byte != '(' && byte != ')' && byte != '<' && byte != '>' &&
-                      byte != '@' && byte != ',' && byte != ';' && byte != ':' &&
-                      byte != '\\' && byte != '"' && byte != '/' && byte != '[' &&
-                      byte != ']' && byte != '?' && byte != '=' && byte != '{' && byte != '}';
-           });
+    // RFC 8866 sections 5.2 and 9: username is non-ws-string, not token.
+    // Punctuation such as ':' and '@' is legal; whitespace, controls and DEL
+    // are not. Preserve the full identity rather than lossy sanitization.
+    return !hasForbiddenTextByte(value) && value.find(' ') == std::string::npos;
 }
 
 bool isUnsupportedIpv4Multicast(const MediaNumericIpAddress& address) noexcept
@@ -91,8 +87,12 @@ MediaSdpSessionIdentity::MediaSdpSessionIdentity(
 {
     auto originAddress = MediaNumericIpAddress::create(
         addressFamily, std::move(numericAddress));
-    if (!isToken(originUsername) || originUsername.size() > 255 ||
-        !MediaUtf8TextValidator::validateNonControlText(
+    if (!isOriginUsername(originUsername) || originUsername.size() > 255) {
+        return ::media::Result<MediaSdpSessionIdentity>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "SDP origin username requires a nonempty non-whitespace identity within its size bound"));
+    }
+    if (!MediaUtf8TextValidator::validateNonControlText(
             sessionName, 255, "SDP session name") ||
         !MediaRtcpSdesTextValidator::validateCname(cname) ||
         !originAddress || originAddress.value().isMulticast()) {

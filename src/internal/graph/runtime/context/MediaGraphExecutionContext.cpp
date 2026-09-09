@@ -21,10 +21,11 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
 
 ::media::Status MediaGraphExecutionContext::compile(const MediaGraph& graph)
 {
+    m_ownsGlobalDiagnostics = true;
     const MediaGraphDiagnosticConfig diagnosticConfig = m_diagnosticConfig;
     reset();
     m_diagnosticConfig = diagnosticConfig;
-    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+    if (m_ownsGlobalDiagnostics) mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 
     auto report = MediaGraphValidation::validate(graph);
     if (!report.ok()) {
@@ -106,18 +107,193 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
     return ::media::Status::success();
 }
 
+::media::Result<MediaRuntimeSegmentOutputBinding>
+MediaGraphExecutionContext::exportOutput(MediaPortId id) const
+{
+    using Result = ::media::Result<MediaRuntimeSegmentOutputBinding>;
+    const auto* port = m_graph ? m_graph->findPort(id) : nullptr;
+    if (!m_compiled || !port || !port->isOutput() ||
+        std::find(m_executionOrder.begin(), m_executionOrder.end(), port->nodeId) == m_executionOrder.end())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Segment output must belong to an executing upstream node"));
+    auto wakeup = findNodeWakeup(port->nodeId);
+    auto exit = nodeExitToken(port->nodeId);
+    if (!wakeup || !exit || !m_payloadCreditLedger)
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "Segment output has no prepared execution identity"));
+    return Result::success(MediaRuntimeSegmentOutputBinding(
+        *port, std::move(wakeup), std::move(exit), m_payloadCreditLedger));
+}
+
+::media::Status MediaGraphExecutionContext::compileSegment(
+    std::shared_ptr<const MediaGraph> graph,
+    std::span<const MediaNodeId> nodes,
+    MediaGraphExecutionContext& session,
+    std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs)
+{
+    if (!graph || nodes.empty() || !session.compiled() || !session.graph()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "runtime segment requires a complete DAG snapshot and an active session"));
+    }
+    const auto report = MediaGraphValidation::validate(*graph);
+    if (!report.ok() || !graph->payloadCreditPlan() ||
+        !graph->payloadCreditPlan()->isCompleteAndValid() ||
+        !session.payloadCreditLedger()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "runtime segment requires validated topology and shared payload credits"));
+    }
+    std::vector<MediaNodeId> selected(nodes.begin(), nodes.end());
+    const auto contains = [&selected](MediaNodeId id) {
+        return std::find(selected.begin(), selected.end(), id) != selected.end();
+    };
+    const bool extracting = std::all_of(selected.begin(), selected.end(),
+        [&session](MediaNodeId id) {
+            const auto& order = session.executionOrder();
+            return std::find(order.begin(), order.end(), id) != order.end();
+        });
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+        if (!graph->findNode(selected[i]) ||
+            (!extracting && session.graph()->findNode(selected[i])) ||
+            std::find(selected.begin(), selected.begin() + i, selected[i]) !=
+                selected.begin() + i) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "runtime segment node IDs must be new, valid and unique"));
+        }
+    }
+    auto topology = MediaGraphTopology::build(*graph);
+    if (!topology) return ::media::Status::failure(topology.error());
+    m_ownsGlobalDiagnostics = false;
+    m_diagnosticConfig = session.diagnosticConfig();
+    reset();
+    m_graphOwner = std::move(graph);
+    m_graph = m_graphOwner.get();
+    m_ownsPayloadLedger = false;
+    m_payloadCreditLedger = session.payloadCreditLedger();
+    m_inputActivity = session.inputActivity();
+    for (const auto id : selected) {
+        if (extracting) {
+            auto wakeup = session.findNodeWakeup(id);
+            if (!wakeup) {
+                reset();
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "initial segment node has no prepared wakeup"));
+            }
+            m_nodeWakeups.emplace(id.value, std::move(wakeup));
+        } else sharedNodeWakeup(id);
+        auto exitToken = extracting ? session.nodeExitToken(id)
+            : std::make_shared<MediaGraphWorkerExitToken>();
+        if (!exitToken) {
+            reset();
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "initial segment node has no prepared exit token"));
+        }
+        m_nodeExitTokens.emplace(id.value, std::move(exitToken));
+    }
+    bool externalInput = false;
+    for (const auto& edge : m_graph->edges()) {
+        // The consumer segment owns each cross-segment channel. Outgoing edges
+        // remain in the logical DAG and are instantiated by that consumer.
+        if (!contains(edge.to.nodeId)) continue;
+        const bool external = !contains(edge.from.nodeId);
+        const MediaRuntimeSegmentOutputBinding* upstream = nullptr;
+        if (external) {
+            for (const auto& candidate : upstreamInputs) {
+                if (candidate.m_port.id != edge.from.portId) continue;
+                if (upstream) {
+                    reset();
+                    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                        "Segment input has duplicate upstream bindings"));
+                }
+                upstream = &candidate;
+            }
+            const auto* declared = m_graph->findPort(edge.from.portId);
+            if (!upstream || !declared || upstream->m_port.nodeId != edge.from.nodeId ||
+                upstream->m_ledger != session.payloadCreditLedger() || !upstream->m_wakeup ||
+                !upstream->m_exit || upstream->m_port.name != declared->name ||
+                upstream->m_port.streamKind != declared->streamKind ||
+                upstream->m_port.edgeKind != declared->edgeKind ||
+                upstream->m_port.payloadKind != declared->payloadKind) {
+                reset();
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Segment input differs from its executing upstream endpoint"));
+            }
+        }
+        if (extracting) {
+            auto retained = session.channels().retainByEdge(edge.id);
+            auto adopted = m_channels.adopt(std::move(retained));
+            if (!adopted) { reset(); return adopted; }
+            externalInput = externalInput || external;
+            continue;
+        }
+        auto created = m_channels.createChannel(edge);
+        if (!created) { reset(); return ::media::Status::failure(created.error()); }
+        created.value()->setConsumerWakeup(sharedNodeWakeup(edge.to.nodeId));
+        created.value()->setProducerWakeup(external
+            ? upstream->m_wakeup
+            : sharedNodeWakeup(edge.from.nodeId));
+        externalInput = externalInput || external;
+    }
+    if (!externalInput) {
+        reset();
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "runtime output segment requires an explicit cross-segment input edge"));
+    }
+    for (const auto id : topology.value().order) {
+        if (contains(id)) m_executionOrder.push_back(id);
+    }
+    m_compiled = true;
+    return ::media::Status::success();
+}
+
+void MediaGraphExecutionContext::detachExecutionNodes(std::span<const MediaNodeId> nodes)
+{
+    const auto contains = [nodes](MediaNodeId id) {
+        return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
+    };
+    std::erase_if(m_executionOrder, contains);
+    for (const auto id : nodes) {
+        m_nodeWakeups.erase(id.value);
+        m_nodeExitTokens.erase(id.value);
+    }
+    for (const auto& edge : m_graph->edges()) {
+        if (contains(edge.from.nodeId) && contains(edge.to.nodeId))
+            m_channels.removeByEdge(edge.id);
+    }
+}
+
+void MediaGraphExecutionContext::cancelUnstartedExecution() noexcept
+{
+    for (const auto id : m_executionOrder) {
+        const auto found = m_nodeExitTokens.find(id.value);
+        if (found != m_nodeExitTokens.end())
+            found->second->m_cancelledBeforeStart.store(true, std::memory_order_release);
+    }
+}
+
+void MediaGraphExecutionContext::cancelSessionPayloadWaiters() noexcept
+{
+    // Segment failure must never revoke another failure domain's admission.
+    // Session termination withdraws only pending/granted-but-unclaimed demands;
+    // live payload leases remain charged until their last actual reference dies.
+    if (m_payloadCreditLedger && m_ownsPayloadLedger)
+        m_payloadCreditLedger->cancelBlockedWaiters();
+}
+
 void MediaGraphExecutionContext::reset()
 {
     shutdownAvSyncGroups();
     m_graph = nullptr;
+    m_graphOwner.reset();
     m_channels.clear();
-    if (m_payloadCreditLedger) m_payloadCreditLedger->cancelBlockedWaiters();
+    cancelSessionPayloadWaiters();
+    m_ownsPayloadLedger = true;
     m_payloadCreditLedger.reset();
     m_inputActivity.reset();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
+    m_nodeExitTokens.clear();
     m_compiled = false;
-    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+    if (m_ownsGlobalDiagnostics) mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
 std::shared_ptr<MediaGraphPayloadCreditLedger>
@@ -179,7 +355,7 @@ MediaGraphExecutionContext::reservePayloadBatch(
         return Result::failure(::media::ErrorInfo::notInitialized(
             "runtime graph has no activated payload credit ledger"));
     }
-    const auto& strategies = m_payloadCreditLedger->plan().producers;
+    const auto& strategies = m_graph->payloadCreditPlan()->producers;
     const MediaGraphPayloadProducerStrategy* selected = nullptr;
     for (const auto& strategy : strategies) {
         if (strategy.nodeId != producer ||
@@ -261,7 +437,7 @@ void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) no
 void MediaGraphExecutionContext::setDiagnosticsEnabled(bool enabled) noexcept
 {
     m_diagnosticConfig.level = enabled ? MediaGraphDiagnosticLevel::State : MediaGraphDiagnosticLevel::Off;
-    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+    if (m_ownsGlobalDiagnostics) mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
 bool MediaGraphExecutionContext::diagnosticsEnabled() const noexcept
@@ -272,7 +448,7 @@ bool MediaGraphExecutionContext::diagnosticsEnabled() const noexcept
 void MediaGraphExecutionContext::setDiagnosticConfig(MediaGraphDiagnosticConfig config) noexcept
 {
     m_diagnosticConfig = config;
-    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+    if (m_ownsGlobalDiagnostics) mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
 const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const noexcept
@@ -393,6 +569,20 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
     return result;
 }
 
+std::shared_ptr<MediaGraphWorkerExitToken> MediaGraphExecutionContext::nodeExitToken(
+    MediaNodeId nodeId) const noexcept
+{
+    const auto found = m_nodeExitTokens.find(nodeId.value);
+    return found == m_nodeExitTokens.end() ? nullptr : found->second;
+}
+
+std::shared_ptr<MediaNodeWakeup> MediaGraphExecutionContext::findNodeWakeup(
+    MediaNodeId nodeId) const noexcept
+{
+    const auto found = m_nodeWakeups.find(nodeId.value);
+    return found == m_nodeWakeups.end() ? nullptr : found->second;
+}
+
 MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
 {
     return *sharedNodeWakeup(nodeId);
@@ -401,6 +591,8 @@ MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
 std::shared_ptr<MediaNodeWakeup>
 MediaGraphExecutionContext::sharedNodeWakeup(MediaNodeId nodeId)
 {
+    const auto existing = m_nodeWakeups.find(nodeId.value);
+    if (existing != m_nodeWakeups.end()) return existing->second;
     auto& wakeup = m_nodeWakeups[nodeId.value];
     if (!wakeup) {
         wakeup = std::make_shared<MediaNodeWakeup>();
@@ -452,8 +644,8 @@ MediaGraphExecutionContext::findAvSyncGroup(
         }
 
         if (MediaChannel* channel = result.value()) {
-            channel->setConsumerWakeup(nodeWakeup(edge.to.nodeId));
-            channel->setProducerWakeup(nodeWakeup(edge.from.nodeId));
+            channel->setConsumerWakeup(sharedNodeWakeup(edge.to.nodeId));
+            channel->setProducerWakeup(sharedNodeWakeup(edge.from.nodeId));
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeChannel,
                                     std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));
@@ -471,6 +663,8 @@ MediaGraphExecutionContext::findAvSyncGroup(
     }
 
     m_executionOrder = std::move(topology).value().order;
+    for (const auto id : m_executionOrder)
+        m_nodeExitTokens.emplace(id.value, std::make_shared<MediaGraphWorkerExitToken>());
     return ::media::Status::success();
 }
 

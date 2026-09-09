@@ -15,6 +15,27 @@ constexpr const char* Owner =
 
 } // namespace
 
+::media::Status MediaDatagramOutputExecutionSegmentBuilder::validateSessionAvailable(
+    const MediaGraph& graph,
+    const MediaProtocolOutputSessionKey& sessionKey)
+{
+    if (!sessionKey.valid()) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("Datagram output requires a planned session authority"));
+    // Every complete RTP or MPEG-TS output owns exactly one common transport
+    // plan source. Its typed session, not protocol kind or node prefix, defines
+    // the authority domain even when different protocols share one DAG.
+    for (const auto& node : graph.nodes()) {
+        if (node.kind != MediaNodeKind::DatagramTransportPlanSource) continue;
+        auto existing = MediaDatagramTransportPlanSourceNodePlanCodec::decode(node);
+        if (!existing) return ::media::Status::failure(existing.error());
+        if (existing.value().sessionKey() == sessionKey.value()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Datagram output rejects duplicate authority in its output session"));
+        }
+    }
+    return ::media::Status::success();
+}
+
 ::media::Result<MediaDatagramOutputExecutionSegmentResult>
 MediaDatagramOutputExecutionSegmentBuilder::build(
     MediaGraph& graph,
@@ -30,6 +51,9 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
         options.transportPlan->sessionKey() != options.sessionKey.value()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Datagram execution segment requires activation and one complete transport product"));
+    }
+    if (auto available = validateSessionAvailable(graph, options.sessionKey); !available) {
+        return Result::failure(available.error());
     }
     const MediaNodeId source = graph.addNode(
         MediaNodeKind::DatagramTransportPlanSource,

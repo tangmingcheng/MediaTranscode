@@ -96,7 +96,9 @@ enum class MediaNodeKind {
     DatagramShaper = 70,
     RtpDatagramMaterializer = 71,
     MpegTsDatagramMaterializer = 72,
-    DatagramTransportPlanSource = 73
+    DatagramTransportPlanSource = 73,
+    VideoOutputFanout = 74,
+    EncodedVideoOutputFanout = 75
 };
 
 } // namespace media::ffmpeg::graph

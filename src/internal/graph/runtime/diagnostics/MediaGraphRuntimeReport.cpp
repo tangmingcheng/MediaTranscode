@@ -1,3 +1,4 @@
+#include "internal/graph/runtime/diagnostics/MediaRuntimeMetricsCollector.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 
@@ -103,18 +104,12 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         if (channel) {
             queued += channel->size();
             channelQueuePeaks += channel->metrics().queue.peakSize;
-            report.metrics.totalPushed += channel->metrics().pushed;
-            report.metrics.totalPopped += channel->metrics().popped;
-            report.metrics.droppedBuffers += channel->metrics().queue.dropped;
+            MediaRuntimeMetricsCollector::includeChannel(report.metrics, *channel);
             if (channel->metrics().queue.dropped != 0) {
                 report.droppedEdges.push_back(
                     MediaDroppedEdgeReport{
                         channel->edgeId(),
                         channel->metrics().queue.dropped});
-            }
-            if (channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
-                report.metrics.encodedPacketsPushed += channel->metrics().pushed;
-                report.metrics.encodedPacketsPopped += channel->metrics().popped;
             }
         }
     }

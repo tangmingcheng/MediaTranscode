@@ -52,6 +52,31 @@ static_assert(noexcept(MediaGraphSchedulerNodeIdEqual{}(
     return ::media::Status::success();
 }
 
+::media::Result<std::vector<std::unique_ptr<MediaRuntimeNode>>>
+MediaGraphScheduler::takeNodes(std::span<const MediaNodeId> nodes)
+{
+    using Result = ::media::Result<std::vector<std::unique_ptr<MediaRuntimeNode>>>;
+    if (m_state != MediaGraphSchedulerState::Idle || nodes.empty()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "runtime nodes can only be extracted before configuration"));
+    }
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        if (!m_nodes.contains(nodes[i].value) ||
+            std::find(nodes.begin(), nodes.begin() + i, nodes[i]) != nodes.begin() + i) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "runtime extraction requires an existing unique node set"));
+        }
+    }
+    std::vector<std::unique_ptr<MediaRuntimeNode>> result;
+    result.reserve(nodes.size());
+    for (const auto id : nodes) {
+        auto found = m_nodes.find(id.value);
+        result.push_back(std::move(found->second));
+        m_nodes.erase(found);
+    }
+    return Result::success(std::move(result));
+}
+
 MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId)
 {
     const auto it = m_nodes.find(nodeId.value);
@@ -152,6 +177,8 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
             return ::media::Status::failure(result.error());
         }
         if (result.value().state == MediaNodeProcessState::Finished) {
+            auto completed = node->finishExecution(context);
+            if (!completed) return completed;
             m_finishedNodes.insert(node->nodeId().value);
         }
     }

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -47,13 +48,17 @@ struct MediaFinalGraphResourceLedger final {
     std::vector<std::string> outOfScopeAuthorities;
     std::optional<MediaEncoderHardwareFramesPoolPlan> encoderFramesPool;
     MediaGraphPayloadCreditPlan payloadCreditPlan;
+    std::uint64_t videoPipelinePendingSurfaces;
+    std::uint64_t terminalReferenceSlots;
+    std::uint64_t terminalControlObjects;
 };
 
 class MediaFinalGraphResourceLedgerCompiler final {
 public:
     static ::media::Result<MediaFinalGraphResourceLedger> compile(
         const MediaGraph& graph,
-        const MediaRealtimeGraphResourceLedgerPlan& planningLedger);
+        const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
+        std::span<const MediaNodeId> selectedNodes);
 };
 
 } // namespace media::ffmpeg::graph

@@ -36,6 +36,7 @@ enum class MediaHardwareTransferDirection {
 };
 
 struct MediaHardwareDescriptor {
+    friend bool operator==(const MediaHardwareDescriptor&, const MediaHardwareDescriptor&) = default;
     MediaHardwareDeviceKind deviceKind = MediaHardwareDeviceKind::Unknown;
     MediaHardwareFrameKind frameKind = MediaHardwareFrameKind::Unknown;
     MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
