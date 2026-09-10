@@ -47,8 +47,6 @@ status = mt_beta_realtime_remove_output(session, another_id);
 source /opt/mt-tools/mtenv.sh
 mtenv on
 ffenv on
-export PKG_CONFIG_PATH=/home/tang/ffmpeg-ab1e61a/lib/pkgconfig:$PKG_CONFIG_PATH
-export LD_LIBRARY_PATH=/home/tang/ffmpeg-ab1e61a/lib:$LD_LIBRARY_PATH
 gcc -std=c11 -Wall -Wextra -Werror -Iinclude -c examples/beta_minimal.c -o /home/tang/beta_minimal.o
 g++ /home/tang/beta_minimal.o lib/libmedia_transcode_beta.a $(pkg-config --libs libavfilter libavcodec libavformat libavutil libswscale libswresample) -pthread -ldl -o bin/beta_minimal
 rm /home/tang/beta_minimal.o
@@ -58,7 +56,7 @@ rm /home/tang/beta_minimal.o
 先启动示例，再发送真实源。固定120秒源命令：
 
 ```bash
-/home/tang/ffmpeg-ab1e61a/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://192.168.130.229:61884?rtcpport=61885&pkt_size=1200'
+ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://192.168.130.229:61884?rtcpport=61885&pkt_size=1200'
 ```
 
 Windows VLC 使用默认硬解，分别打开 `rtp://@:6200`、`rtp://@:6202`、`rtp://@:6204`、`rtp://@:6206`。

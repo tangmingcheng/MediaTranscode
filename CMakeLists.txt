@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.21.1)
 
 project(MediaTranscode LANGUAGES CXX)
 
+# Runtime library selection belongs to the deployment environment.
+set(CMAKE_SKIP_RPATH TRUE)
+
 find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)

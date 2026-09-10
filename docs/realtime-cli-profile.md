@@ -10,8 +10,6 @@ RKMPP终端先执行：
 source /opt/mt-tools/mtenv.sh
 mtenv on
 ffenv on
-export PATH=/home/tang/ffmpeg-ab1e61a/bin:$PATH
-export LD_LIBRARY_PATH=/home/tang/ffmpeg-ab1e61a/lib:$LD_LIBRARY_PATH
 ```
 
 运行库检查（必须在运行CLI的同一终端执行）：
@@ -20,7 +18,7 @@ export LD_LIBRARY_PATH=/home/tang/ffmpeg-ab1e61a/lib:$LD_LIBRARY_PATH
 ldd /home/tang/packages/media-transcode-beta-rkmpp-038f069c-20260910/bin/media_transcode_realtime_video_cli | grep -E 'libav(codec|filter|util)'
 ```
 
-三项必须解析到 `/home/tang/ffmpeg-ab1e61a/lib/`。`ffenv on` 会把 `/usr/local/lib` 提到前面，该目录当前为旧版本 `d90e3a1`，会触发 `shared source copy requires a verified independent allocation and synchronous completion implementation`。务必在最后一次 `ffenv on` **之后**执行上面的 `export LD_LIBRARY_PATH=...`；每个新终端都需要设置。FFmpeg可执行文件的 `-version` 首行不能证明CLI实际加载的共享库版本，应以CLI的 `ldd` 为准。
+三项应解析到 `/home/tang/ffmpeg-ab1e61a/lib/`。目标机的 `ffenv on` 已按用户授权统一选择该修复版本，调用方无需额外export。已有终端先执行 `source /etc/profile.d/ffenv.sh` 重新加载函数，再执行 `ffenv on`；新登录终端直接启用即可。构建禁用RPATH/RUNPATH，实际依赖以CLI的 `ldd` 为准。
 
 先在Windows的四个终端分别执行以下命令，使用默认硬件解码。然后启动RKMPP CLI，在30秒打开超时内启动源流。动态命令应在120秒源流结束前执行。
 
@@ -52,7 +50,7 @@ H264 Baseline、1920×1080@25、CBR6Mbps、GOP50，RTP输入→MPEG-TS/RTP输出
 另一个RKMPP终端发送固定连续120秒H264源：
 
 ```bash
-/home/tang/ffmpeg-ab1e61a/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://192.168.130.229:61884?rtcpport=61885&pkt_size=1200'
+ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 'rtp://192.168.130.229:61884?rtcpport=61885&pkt_size=1200'
 ```
 
 ## CLI动态增加及删除
