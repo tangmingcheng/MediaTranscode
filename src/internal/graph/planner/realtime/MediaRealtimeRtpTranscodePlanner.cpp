@@ -1,4 +1,6 @@
+#include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
 
@@ -178,6 +180,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(
 {
     MediaVideoTranscodeParameters planned;
     planned.codecName = requested.codecName;
+    planned.profile = requested.profile;
     planned.width = requested.width;
     planned.height = requested.height;
     planned.frameRate = requested.frameRate;
@@ -657,6 +660,154 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     return ::media::Status::success();
 }
 
+static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
+    const MediaRealtimeVideoOutputRequest& requestedOutput,
+    const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+    const MediaRealtimeVideoSessionFacts& sessionPlan,
+    const MediaInputVideoStreamInfo& source,
+    std::uint64_t sourceGeneration,
+    MediaHardwareCapabilityProbe* outputProbe,
+    const MediaPipelinePlan* existing)
+{
+    using Result = ::media::Result<MediaRealtimeRtpTranscodePlan>;
+    if (!sessionPlan.resourceLedger || !sessionPlan.sourceTimeBase.isKnown() || sourceGeneration == 0 ||
+        !sessionPlan.preparedVideoSource.frameRate.isKnown() ||
+        source.streamIndex != sessionPlan.preparedVideoSource.streamIndex ||
+        source.width != sessionPlan.preparedVideoSource.width ||
+        source.height != sessionPlan.preparedVideoSource.height ||
+        source.frameRate != sessionPlan.preparedVideoSource.frameRate ||
+        sessionRequest.parameters.execution.streamSet != MediaTranscodeStreamSet::VideoOnly) {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "dynamic video output requires a video-only running session"));
+    }
+    auto request = sessionRequest;
+    request.output = requestedOutput.output;
+    request.parameters.video = requestedOutput.video;
+    if (auto status = MediaRealtimeRtpTranscodePlanner::validateRealtimeRequestNoIo(request); !status) {
+        return Result::failure(status.error());
+    }
+    auto urls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
+    if (!urls) return Result::failure(urls.error());
+    auto options = planVideoPipelineOptions(request, urls.value().video);
+    if (!options) return Result::failure(options.error());
+    if (existing) {
+        auto matched = MediaRealtimeRtpTranscodePlanner::matchesEncodingRequest(
+            requestedOutput, sessionRequest, source, *existing);
+        if (!matched) return Result::failure(matched.error());
+        if (!matched.value()) return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Existing encoding group differs from the complete normalized request"));
+    }
+    auto pipeline = existing
+        ? ::media::Result<MediaPipelinePlan>::success(*existing)
+        : MediaPipelinePlanner::planVideoOutputBranch(source, sessionPlan.videoPlan.inputPath,
+            sessionPlan.videoPlan.selected.decoder, std::move(options).value(), *outputProbe);
+    if (!pipeline) return Result::failure(pipeline.error());
+    const auto& open = pipeline.value().selected.encoder.encoderOpenContract;
+    if (!open) return Result::failure(::media::ErrorInfo::notInitialized(
+        "dynamic output requires prepared encoder open readback"));
+    const auto cadence = open->frameRate;
+    auto emission = MediaPreparedEmissionResolver::resolve(pipeline.value(), cadence, nullptr);
+    if (!emission) return Result::failure(emission.error());
+    auto surfaces = preparedVideoSurfaceFacts(pipeline.value(), source.frameRate, cadence);
+    if (!surfaces) return Result::failure(surfaces.error());
+    auto deploymentBase = MediaRealtimeDeploymentPlanner::planBase(request, emission.value());
+    if (!deploymentBase) return Result::failure(deploymentBase.error());
+    auto ledger = MediaRealtimeGraphResourceLedgerPlanner::plan(
+        deploymentBase.value().latency, emission.value(), surfaces.value(),
+        pipeline.value().selected.encoder.hardware());
+    if (!ledger) return Result::failure(ledger.error());
+    auto deployment = MediaRealtimeDeploymentPlanner::complete(std::move(deploymentBase).value());
+    if (!deployment) return Result::failure(deployment.error());
+    MediaRealtimeRtpTranscodePlanningDraft draft;
+    draft.inputType = sessionPlan.inputType;
+    draft.preparedVideoSource = sessionPlan.preparedVideoSource;
+    draft.inputLayout = sessionPlan.inputLayout;
+    draft.input = sessionPlan.input;
+    draft.requiredPreparedInputKind = sessionPlan.requiredPreparedInputKind;
+    draft.outputLayout = *request.output.streamLayout;
+    draft.outputTransport = *request.output.transport;
+    draft.videoPlan = std::move(pipeline).value();
+    draft.videoPlan.sharedSource = sessionPlan.videoPlan.sharedSource;
+    draft.videoPlan.encodedOutputFanout = MediaVideoOutputFanoutPlan{
+        MediaVideoNoOutputPolicy::Consume, MediaVideoOutputOverflowPolicy::FailBranch};
+    draft.videoPlan.maximumFrameDuplicationGap = MediaRational{source.frameRate.den, source.frameRate.num};
+    auto parameters = resolveRealtimeVideoParameters(request.parameters.video, source);
+    if (!parameters) return Result::failure(parameters.error());
+    draft.videoParameters = std::move(parameters).value();
+    draft.queues = ledger.value().queues;
+    draft.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(draft.queues);
+    draft.threadingPolicy = sessionPlan.threadingPolicy;
+    draft.resourceLedger = std::move(ledger).value();
+    draft.deployment = std::move(deployment).value();
+    MediaRealtimeOutputPlanningDraft output;
+    output.packetCopyNormalizationRequired = false;
+    if (auto status = MediaRealtimeOutputPolicyPlanner::apply(request, urls.value(), draft, output); !status) {
+        return Result::failure(status.error());
+    }
+    if (MediaRealtimeRequestClassifier::separateStreamsOutput(request)) {
+        auto packetization = planVideoScheduledRtpPacketization(
+            draft, output.videoOutput, 90'000, 96);
+        if (!packetization) return Result::failure(packetization.error());
+        output.videoOutput.scheduledPacketization = std::move(packetization).value();
+    }
+    auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
+        draft, std::move(output), request, sessionPlan.sourceTimeBase,
+        cadence, emission.value());
+    if (!runtime) return Result::failure(runtime.error());
+    auto serviceScope = MediaDatagramServiceScopePlanner::plan(runtime.value().datagramTransport);
+    if (!serviceScope) return Result::failure(serviceScope.error());
+    if (serviceScope.value() != sessionPlan.serviceScope) return Result::failure(
+        ::media::ErrorInfo::unsupported("Output changes its prepared interface service contract"));
+    runtime.value().scheduling.initialGeneration = sourceGeneration;
+    return Result::success(MediaRealtimeRtpTranscodePlan(
+        std::move(draft), MediaRealtimeRuntimePlan(std::move(runtime).value())));
+}
+
+::media::Result<bool> MediaRealtimeRtpTranscodePlanner::matchesEncodingRequest(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& sessionRequest,
+    const MediaInputVideoStreamInfo& source,
+    const MediaPipelinePlan& existing)
+{
+    using Result = ::media::Result<bool>;
+    if (!existing.encodingRequest) return Result::failure(::media::ErrorInfo::notInitialized(
+        "Encoding group lacks its pre-probe request witness"));
+    auto request = sessionRequest;
+    request.output = output.output;
+    request.parameters.video = output.video;
+    if (auto status = validateRealtimeRequestNoIo(request); !status) return Result::failure(status.error());
+    auto urls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
+    if (!urls) return Result::failure(urls.error());
+    auto options = planVideoPipelineOptions(request, urls.value().video);
+    if (!options) return Result::failure(options.error());
+    auto normalized = MediaPipelinePlanner::normalizeEncodingRequest(source, options.value(), existing.selected.encoder);
+    // A request unsupported by this existing backend is not a witness match.
+    // Fresh planning still validates it against every ranked candidate and
+    // reports the authoritative failure if none can implement the request.
+    if (!normalized) return Result::success(false);
+    return Result::success(normalized.value() == *existing.encodingRequest);
+}
+
+::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planOutputBranch(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeVideoSessionFacts& session,
+    const MediaInputVideoStreamInfo& source, std::uint64_t generation,
+    MediaHardwareCapabilityProbe& probe)
+{
+    return planOutputBranchImpl(output, request, session, source, generation, &probe, nullptr);
+}
+
+::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planOutputForEncodingGroup(
+    const MediaRealtimeVideoOutputRequest& output,
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeVideoSessionFacts& session,
+    const MediaInputVideoStreamInfo& source, std::uint64_t generation,
+    const MediaPipelinePlan& existing)
+{
+    return planOutputBranchImpl(output, request, session, source, generation, nullptr, &existing);
+}
+
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
@@ -686,6 +837,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     }
     MediaRealtimeRtpTranscodeRequest options = requestedOptions;
     std::optional<MediaSize> rawRtpCodedSize;
+    std::optional<MediaRational> rawRtpSampleAspectRatio;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
         auto resolvedSignaling =
             MediaRealtimeRtpVideoSignalingResolver::resolve(
@@ -696,6 +848,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         }
         options.input.videoRtp.fmtp = resolvedSignaling.value().fmtp;
         rawRtpCodedSize = resolvedSignaling.value().codedSize;
+        rawRtpSampleAspectRatio = resolvedSignaling.value().sampleAspectRatio;
     } else if (detectedVideoSignaling) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -758,6 +911,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         rawInput->video.width = pipelineOptions.probeWidth;
         rawInput->video.height = pipelineOptions.probeHeight;
         rawInput->video.frameRate = pipelineOptions.sourceFrameRate;
+        rawInput->video.sampleAspectRatio = *rawRtpSampleAspectRatio;
 
         if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(*rawInput->audio, audioOptions);
@@ -949,6 +1103,10 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     plan.outputLayout = *options.output.streamLayout;
     plan.outputTransport = *options.output.transport;
     plan.videoPlan = std::move(videoPlan);
+    if (rawInput) plan.preparedVideoSource = rawInput->video;
+    else if (preparedInput) plan.preparedVideoSource = preparedInput->video;
+    else return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+        ::media::ErrorInfo::notInitialized("realtime video plan lacks its prepared source facts"));
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
     plan.queues = resourceLedger.value().queues;
@@ -1261,6 +1419,14 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             // interval must not become a batch of historical output frames.
             plan.videoPlan.maximumFrameDuplicationGap = MediaRational{
                 sourceFrameRate.den, sourceFrameRate.num};
+            plan.videoPlan.encodedOutputFanout = MediaVideoOutputFanoutPlan{
+                MediaVideoNoOutputPolicy::Consume, MediaVideoOutputOverflowPolicy::FailBranch};
+            plan.videoPlan.outputFanout = MediaVideoOutputFanoutPlan{
+                MediaVideoNoOutputPolicy::Consume,
+                MediaVideoOutputOverflowPolicy::FailBranch};
+            auto sharedSource = MediaVideoSharedSourcePlanner::plan(plan.videoPlan.selected, plan.preparedVideoSource);
+            if (!sharedSource) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(sharedSource.error());
+            plan.videoPlan.sharedSource = std::move(sharedSource).value();
         }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,
@@ -1268,6 +1434,12 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
+        }
+        if (plan.videoPlan.outputFanout) {
+            plan.videoPlan.sourcePlaybackEpoch = MediaVideoSourceEpochPlan{
+                MediaVideoSourceEpochAuthority::ProtocolSession,
+                runtime.value().scheduling.initialGeneration,
+                MediaVideoSourceIdentityTransition::ReplanSession};
         }
         MediaRealtimeRuntimePlan selectedRuntime(
             std::in_place_type<MediaRealtimeVideoRuntimePlan>,

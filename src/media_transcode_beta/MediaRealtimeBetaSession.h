@@ -11,6 +11,8 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <map>
+#include <vector>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,6 +33,11 @@ public:
 
     ::media::Status start();
     void requestStop() noexcept;
+    ::media::Result<std::uint64_t> addOutput(const mt_beta_video_output& output);
+    ::media::Status removeOutput(std::uint64_t outputId);
+    std::vector<ffmpeg::graph::MediaRealtimeOutputSnapshot> outputSnapshots() const;
+    static mt_beta_output_snapshot projectOutput(
+        const ffmpeg::graph::MediaRealtimeOutputSnapshot& output) noexcept;
     mt_beta_realtime_snapshot snapshot() const noexcept;
     bool isCurrentThreadEventThread() const noexcept;
 
@@ -69,7 +76,7 @@ private:
         const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report);
     void handleProgress(
         const ffmpeg::graph::MediaGraphRuntimeReport& report);
-    ::media::Status publishOutputDescription(bool finalAttempt);
+    void handleOutputChanged(const ffmpeg::graph::MediaRealtimeOutputSnapshot& output);
     void handleOutcome(
         const ffmpeg::graph::MediaRealtimeVideoRunOutcome& outcome);
 
@@ -90,7 +97,6 @@ private:
     void setCompletionReason(mt_beta_completion_reason completionReason);
     void invokeCallback(const mt_beta_realtime_event& event) noexcept;
     void emitState(mt_beta_realtime_state state) noexcept;
-    void emitOutputReady() noexcept;
     void emitError(const SessionFailure& failure) noexcept;
     void emitEmergencyError(const EmergencyFailure& failure) noexcept;
     void emitCompleted(mt_beta_completion_reason completionReason) noexcept;
@@ -112,8 +118,8 @@ private:
     mt_beta_realtime_event_callback m_callback = nullptr;
     void* m_callbackUserData = nullptr;
     std::optional<MediaRealtimeBetaTemporaryDescription> m_description;
-    std::string m_outputDescriptionPath;
-    std::string m_outputDescription;
+    std::mutex m_descriptionMutex;
+    std::map<std::uint64_t, MediaRealtimeBetaTemporaryDescription> m_descriptions;
     std::optional<SessionFailure> m_firstFailure;
     EmergencyFailure m_emergencyFailure;
     std::array<char, 256U> m_emergencyDetail{};
@@ -121,7 +127,6 @@ private:
     SessionPhase m_phase = SessionPhase::SessionCreation;
     bool m_controllerActive = false;
     bool m_hasEmergencyFailure = false;
-    bool m_outputReady = false;
     bool m_runningStateEmitted = false;
     bool m_terminalStateEmitted = false;
 };

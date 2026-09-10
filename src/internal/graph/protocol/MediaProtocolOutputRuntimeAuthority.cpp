@@ -55,6 +55,11 @@ MediaAvProtocolOutputRuntimeAuthority::sessionKey() const noexcept
     return m_sessionKey;
 }
 
+MediaClockDomainIdentity MediaAvProtocolOutputRuntimeAuthority::clockDomainIdentity() const noexcept
+{
+    return MediaClockDomainIdentity(std::shared_ptr<const MediaMasterClock>(m_group->clock()));
+}
+
 MediaTranscodeStreamSet
 MediaAvProtocolOutputRuntimeAuthority::streamSet() const noexcept
 {
@@ -161,13 +166,30 @@ MediaVideoProtocolOutputRuntimeAuthority::
 MediaVideoProtocolOutputRuntimeAuthority(
     MediaProtocolOutputSessionKey sessionKey,
     std::uint64_t initialGeneration,
-    std::chrono::steady_clock::time_point steadyAnchor,
+    std::shared_ptr<const MediaSteadyClockDomain> steadyDomain,
     std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch) noexcept
     : m_sessionKey(std::move(sessionKey)),
       m_initialGeneration(initialGeneration),
-      m_steadyAnchor(steadyAnchor),
+      m_steadyDomain(std::move(steadyDomain)),
       m_sharedNtpEpoch(std::move(sharedNtpEpoch))
 {
+}
+
+::media::Result<std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>>
+MediaVideoProtocolOutputRuntimeAuthority::fork(
+    MediaProtocolOutputSessionKey sessionKey,
+    std::uint64_t initialGeneration) const
+{
+    using Result = ::media::Result<
+        std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>>;
+    if (!sessionKey.valid() || initialGeneration == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Output branch clock requires a session key and generation"));
+    }
+    return Result::success(std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>(
+        new MediaVideoProtocolOutputRuntimeAuthority(
+            std::move(sessionKey), initialGeneration, m_steadyDomain,
+            m_sharedNtpEpoch)));
 }
 
 ::media::Result<std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>>
@@ -195,7 +217,8 @@ MediaVideoProtocolOutputRuntimeAuthority::create(
         MediaVideoProtocolOutputRuntimeAuthority>>::success(
         std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>(
             new MediaVideoProtocolOutputRuntimeAuthority(
-                std::move(sessionKey), initialGeneration, steadyAnchor,
+                std::move(sessionKey), initialGeneration,
+                std::make_shared<const MediaSteadyClockDomain>(steadyAnchor),
                 std::make_shared<const MediaSharedNtpEpoch>(
                     std::move(ntp).value()))));
 }
@@ -230,6 +253,11 @@ const MediaProtocolOutputSessionKey&
 MediaVideoProtocolOutputRuntimeAuthority::sessionKey() const noexcept
 {
     return m_sessionKey;
+}
+
+MediaClockDomainIdentity MediaVideoProtocolOutputRuntimeAuthority::clockDomainIdentity() const noexcept
+{
+    return MediaClockDomainIdentity(m_steadyDomain);
 }
 
 MediaTranscodeStreamSet
@@ -287,7 +315,7 @@ MediaVideoProtocolOutputRuntimeAuthority::reserveCommit(
 MediaVideoProtocolOutputRuntimeAuthority::now() const noexcept
 {
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - m_steadyAnchor);
+        std::chrono::steady_clock::now() - m_steadyDomain->anchor);
     return ::media::Result<MediaRunningTime>::success(
         MediaRunningTime::fromNanoseconds(elapsed.count()));
 }
@@ -304,7 +332,7 @@ MediaVideoProtocolOutputRuntimeAuthority::deadlineWait(
     MediaNodeDeadlineWakePolicy wakePolicy) const
 {
     return MediaNodeProcessResult::DeadlineWait(
-        m_steadyAnchor +
+        m_steadyDomain->anchor +
         std::chrono::nanoseconds(deadline.nanoseconds()),
         wakePolicy);
 }

@@ -264,7 +264,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
     const MediaInputVideoStreamInfo& inputInfo,
     std::string inputPath,
-    MediaPipelinePlannerOptions options)
+    MediaPipelinePlannerOptions options,
+    const MediaPipelineStagePlan* runningDecoder,
+    MediaHardwareCapabilityProbe* outputProbe)
 {
     MediaPipelinePlan plan;
     plan.inputPath = std::move(inputPath);
@@ -313,6 +315,27 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         plan.inputCodecName,
         plan.outputCodecName,
         options);
+    if (runningDecoder) {
+        std::erase_if(candidates, [&](const MediaPipelineChainPlan& candidate) {
+            const auto& decoder = candidate.decoder;
+            if (decoder.ffmpegName != runningDecoder->ffmpegName ||
+                decoder.hwaccelName != runningDecoder->hwaccelName ||
+                !decoder.outputFrame || !runningDecoder->outputFrame) return true;
+            const auto& proposed = *decoder.outputFrame;
+            const auto& active = *runningDecoder->outputFrame;
+            return proposed.deviceKind != active.deviceKind ||
+                proposed.frameKind != active.frameKind ||
+                proposed.deviceName != active.deviceName ||
+                proposed.pixelFormat != active.pixelFormat ||
+                proposed.surfacePixelFormat != active.surfacePixelFormat ||
+                proposed.framesContextName != active.framesContextName ||
+                proposed.requiresHardwareDeviceContext != active.requiresHardwareDeviceContext ||
+                proposed.requiresHardwareFramesContext != active.requiresHardwareFramesContext ||
+                proposed.size.width != active.size.width ||
+                proposed.size.height != active.size.height;
+        });
+        for (auto& candidate : candidates) candidate.decoder = *runningDecoder;
+    }
     plan.candidates = MediaPipelineScorer::scoreAndSortChains(std::move(candidates), options);
 
     if (plan.candidates.empty()) {
@@ -320,29 +343,6 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             ::media::ErrorInfo::unsupported("no media pipeline candidates were generated"));
     }
 
-    MediaEncoderRateControlRequest rateControlRequest =
-        options.encoderRateControl;
-    if (!rateControlRequest.targetBitrateKbps() &&
-        inputInfo.bitrateBitsPerSecond > 0) {
-        const std::int64_t kbps =
-            (inputInfo.bitrateBitsPerSecond + 999) / 1000;
-        if (kbps > std::numeric_limits<int>::max()) {
-            return ::media::Result<MediaPipelinePlan>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "input bitrate exceeds planner rate-control range"));
-        }
-        if (auto status = rateControlRequest.setPlannerDerivedTargetBitrate(
-                static_cast<int>(kbps)); !status) {
-            return ::media::Result<MediaPipelinePlan>::failure(status.error());
-        }
-    }
-    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
-        ? options.targetFrameRate : options.sourceFrameRate;
-    const int encoderWidth = options.targetWidth > 0
-        ? options.targetWidth : options.probeWidth;
-    const int encoderHeight = options.targetHeight > 0
-        ? options.targetHeight : options.probeHeight;
-    const auto& requestedOpen = options.encoderOpenRequest;
     MediaHardwareCapabilityProbe hardwareProbe;
     std::optional<::media::ErrorInfo> lastCapabilityFailure;
     bool selected = false;
@@ -351,37 +351,18 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             continue;
         }
         MediaPipelineChainPlan candidate = ranked;
-        auto rateControl = MediaEncoderRateControlPlanner::plan(
-            candidate.encoder.ffmpegName,
-            candidate.encoder.deviceKind(),
-            rateControlRequest,
-            encoderFrameRate,
-            options.lowLatency);
-        if (!rateControl) {
+        auto intent = MediaPipelinePlanner::normalizeEncodingRequest(inputInfo, options, candidate.encoder);
+        if (!intent) {
             candidate.available = false;
-            candidate.reason = rateControl.error().message;
+            candidate.reason = intent.error().message;
             ranked = std::move(candidate);
-            lastCapabilityFailure = rateControl.error();
+            lastCapabilityFailure = intent.error();
             continue;
         }
-        candidate.encoder.encoderRateControl = std::move(rateControl).value();
-        candidate.encoder.encoderOpenContract = MediaEncoderOpenContract{
-            candidate.encoder.ffmpegName,
-            encoderWidth,
-            encoderHeight,
-            encoderFrameRate,
-            *candidate.encoder.encoderRateControl,
-            requestedOpen.quality,
-            requestedOpen.preset,
-            requestedOpen.tune,
-            requestedOpen.profile,
-            requestedOpen.level,
-            requestedOpen.gop,
-            requestedOpen.bFrames,
-            requestedOpen.globalHeader,
-            options.lowLatency};
+        candidate.encoder.encoderRateControl = intent.value().open.rateControl;
+        candidate.encoder.encoderOpenContract = intent.value().open;
         auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
-            candidate, options, hardwareProbe);
+            candidate, options, outputProbe ? *outputProbe : hardwareProbe);
         if (!preflight) {
             candidate.available = false;
             candidate.reason = preflight.error().message;
@@ -390,6 +371,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             continue;
         }
         ranked = candidate;
+        plan.encodingRequest = std::move(intent).value();
         plan.selected = std::move(candidate);
         selected = true;
         break;
@@ -508,7 +490,7 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!inputInfo) {
         return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
     }
-    return buildVideoTranscodePlan(inputInfo.value(), inputPath, std::move(options));
+    return buildVideoTranscodePlan(inputInfo.value(), inputPath, std::move(options), nullptr, nullptr);
 }
 
 ::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
@@ -528,7 +510,7 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!inputInfo) {
         return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
     }
-    return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options));
+    return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options), nullptr, nullptr);
 }
 
 ::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeKnownInput(
@@ -548,7 +530,65 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     if (!optionsStatus) {
         return ::media::Result<MediaPipelinePlan>::failure(optionsStatus.error());
     }
-    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options));
+    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options), nullptr, nullptr);
+}
+
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoOutputBranch(
+    MediaInputVideoStreamInfo inputInfo,
+    const std::string& inputUrl,
+    const MediaPipelineStagePlan& runningDecoder,
+    MediaPipelinePlannerOptions options,
+    MediaHardwareCapabilityProbe& outputProbe)
+{
+    if (inputUrl.empty() || inputInfo.streamIndex < 0 ||
+        inputInfo.codecName.empty() || inputInfo.width <= 0 ||
+        inputInfo.height <= 0 || !inputInfo.frameRate.isKnown() ||
+        runningDecoder.role != MediaPipelineStageRole::Decoder ||
+        !runningDecoder.available || !runningDecoder.outputFrame ||
+        runningDecoder.ffmpegName.empty() || options.allowPacketCopy ||
+        !outputProbe.hasSuppliedValidator()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "video output planning requires a complete running decoder contract and frame transcode"));
+    }
+    if (auto status = validateCommonPlannerOptions(options, "planVideoOutputBranch"); !status) {
+        return ::media::Result<MediaPipelinePlan>::failure(status.error());
+    }
+    return buildVideoTranscodePlan(inputInfo, inputUrl, std::move(options),
+                                  &runningDecoder, &outputProbe);
+}
+
+::media::Result<MediaVideoEncodingRequestContract> MediaPipelinePlanner::normalizeEncodingRequest(
+    const MediaInputVideoStreamInfo& source,
+    const MediaPipelinePlannerOptions& options,
+    const MediaPipelineStagePlan& selectedEncoder)
+{
+    using Result = ::media::Result<MediaVideoEncodingRequestContract>;
+    MediaEncoderRateControlRequest rateControlRequest = options.encoderRateControl;
+    if (!rateControlRequest.targetBitrateKbps() && source.bitrateBitsPerSecond > 0) {
+        const auto kbps = source.bitrateBitsPerSecond / 1000 + (source.bitrateBitsPerSecond % 1000 != 0);
+        if (kbps > std::numeric_limits<int>::max()) return Result::failure(
+            ::media::ErrorInfo::invalidArgument("input bitrate exceeds planner rate-control range"));
+        if (auto status = rateControlRequest.setPlannerDerivedTargetBitrate(static_cast<int>(kbps)); !status)
+            return Result::failure(status.error());
+    }
+    const auto sourceRate = source.frameRate.isKnown() ? source.frameRate : options.sourceFrameRate;
+    const auto frameRate = options.targetFrameRate.isKnown() ? options.targetFrameRate : sourceRate;
+    const int sourceWidth = source.width > 0 ? source.width : options.probeWidth;
+    const int sourceHeight = source.height > 0 ? source.height : options.probeHeight;
+    auto rateControl = MediaEncoderRateControlPlanner::plan(selectedEncoder.ffmpegName,
+        selectedEncoder.deviceKind(), rateControlRequest, frameRate, options.lowLatency);
+    if (!rateControl) return Result::failure(rateControl.error());
+    const auto& request = options.encoderOpenRequest;
+    return Result::success({canonicalCodecName(source.codecName),
+        canonicalCodecName(options.outputCodecName.empty() ? source.codecName : options.outputCodecName),
+        sourceWidth, sourceHeight, sourceRate,
+        MediaEncoderOpenContract{selectedEncoder.ffmpegName,
+            options.targetWidth > 0 ? options.targetWidth : sourceWidth,
+            options.targetHeight > 0 ? options.targetHeight : sourceHeight,
+            frameRate, std::move(rateControl).value(), request.quality, request.preset,
+            request.tune, request.profile, request.level, request.gop, request.bFrames,
+            request.globalHeader, options.lowLatency}, options.filterRequired, options.allowPacketCopy});
 }
 
 } // namespace media::ffmpeg::graph

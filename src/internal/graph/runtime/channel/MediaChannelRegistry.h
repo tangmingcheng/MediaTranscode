@@ -16,6 +16,8 @@ class MediaChannelRegistry final {
 public:
     ::media::Result<MediaChannel*> createChannel(const MediaEdge& edge);
 
+    std::shared_ptr<MediaChannel> retainByEdge(MediaEdgeId edgeId) const;
+    ::media::Status adopt(std::shared_ptr<MediaChannel> channel);
     MediaChannel* find(MediaChannelId id);
     const MediaChannel* find(MediaChannelId id) const;
 
@@ -37,7 +39,7 @@ private:
 
 private:
     uint32_t m_nextId = 1;
-    std::unordered_map<uint32_t, std::unique_ptr<MediaChannel>> m_channels;
+    std::unordered_map<uint32_t, std::shared_ptr<MediaChannel>> m_channels;
     std::unordered_map<uint32_t, uint32_t> m_edgeToChannel;
 };
 

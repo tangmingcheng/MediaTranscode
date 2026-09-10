@@ -12,6 +12,11 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaSharedVideoDecodeEndpoints final {
+    MediaEndpoint frame;
+    MediaEndpoint codec;
+};
+
 struct MediaVideoTranscodeBranchOptions {
     std::string prefix = "video.transcode";
     MediaPipelinePlan plan;
@@ -28,6 +33,8 @@ struct MediaVideoTranscodeBranchOptions {
 
     MediaNodeId packetSourceNode = MediaNodeId::invalid();
     std::string packetSourcePort = "video";
+
+    std::optional<MediaSharedVideoDecodeEndpoints> sharedDecode;
 
 };
 

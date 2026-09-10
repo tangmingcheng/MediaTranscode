@@ -1,12 +1,14 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
+
 #include "internal/graph/nodes/mux/ScheduledRtpSenderConfig.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
-struct AVCodecContext;
+struct AVCodecParameters;
 struct AVPacket;
 
 namespace media::ffmpeg::graph {
@@ -41,7 +43,8 @@ public:
     static ::media::Result<MediaScheduledRtpSenderMaterialization> materialize(
         const MediaScheduledRtpOutputPlan& outputPlan,
         const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
-        const AVCodecContext& codecContext,
+        const AVCodecParameters& codecParameters,
+        MediaRational codecTimeBase,
         const AVPacket* codecConfigurationAccessUnit,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
         const MediaProtocolOutputActivation& activation);

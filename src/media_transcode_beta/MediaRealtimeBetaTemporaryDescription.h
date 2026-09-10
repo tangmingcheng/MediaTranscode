@@ -22,7 +22,6 @@ public:
         MediaRealtimeBetaTemporaryDescription&& other) noexcept;
 
     const std::string& path() const noexcept;
-    ::media::Result<std::string> readCompletedText() const;
 
 private:
     static ::media::Result<MediaRealtimeBetaTemporaryDescription>

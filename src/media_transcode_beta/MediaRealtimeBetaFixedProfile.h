@@ -20,8 +20,6 @@ public:
         int firstOutputTimeoutMs;
         int pollIntervalMs;
         ffmpeg::graph::MediaTranscodeStreamSet streamSet;
-        ffmpeg::graph::RealtimeOutputStreamLayout outputLayout;
-        ffmpeg::graph::MediaOutputTransportKind outputTransport;
     };
 
     MediaRealtimeBetaFixedProfile() = delete;

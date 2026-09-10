@@ -1,5 +1,4 @@
 #include "internal/graph/sync/lineage/MediaCodecLineageRegistry.h"
-#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <cstring>
 #include <limits>
@@ -27,7 +26,6 @@ constexpr std::size_t tokenBytes = sizeof(SerializedMediaFfmpegLineageToken);
 
 struct MediaFfmpegCodecOpaqueOwner final {
     std::optional<MediaFfmpegLineageToken> lineage;
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit;
 };
 
 void releaseOpaqueLease(void* opaque, std::uint8_t* data) noexcept
@@ -92,16 +90,12 @@ MediaFfmpegLineageToken::MediaFfmpegLineageToken(
 namespace {
 
 ::media::Result<AVBufferRef*> makeCodecOpaque(
-    std::optional<MediaFfmpegLineageToken> token,
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit)
+    MediaFfmpegLineageToken token)
 {
-    const bool lineageValid = token && token->identifier != 0 &&
-        token->generation != 0;
-    const bool payloadValid = payloadCredit && *payloadCredit;
-    if ((!lineageValid && token) || (!lineageValid && !payloadValid)) {
+    if (!token.identifier || !token.generation) {
         return ::media::Result<AVBufferRef*>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "FFmpeg codec opaque requires lineage or payload-credit ownership"));
+                "FFmpeg codec opaque requires canonical lineage ownership"));
     }
 
     auto* data = static_cast<std::uint8_t*>(av_malloc(tokenBytes));
@@ -112,12 +106,12 @@ namespace {
     }
     const SerializedMediaFfmpegLineageToken serialized{
         CodecOpaqueMagic,
-        token ? token->identifier : 0,
-        token ? token->generation : 0};
+        token.identifier,
+        token.generation};
     std::memcpy(data, &serialized, tokenBytes);
 
     auto* owner = new (std::nothrow) MediaFfmpegCodecOpaqueOwner{
-        std::move(token), std::move(payloadCredit)};
+        std::optional<MediaFfmpegLineageToken>(std::move(token))};
     if (!owner) {
         av_free(data);
         return ::media::Result<AVBufferRef*>::failure(
@@ -138,23 +132,14 @@ namespace {
 } // namespace
 
 ::media::Result<AVBufferRef*> makeMediaFfmpegCodecOpaque(
-    MediaFfmpegLineageToken token,
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit)
+    MediaFfmpegLineageToken token)
 {
     if (!token.m_lease) {
         return ::media::Result<AVBufferRef*>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "FFmpeg codec opaque lineage has no owned lease"));
     }
-    return makeCodecOpaque(
-        std::optional<MediaFfmpegLineageToken>(std::move(token)),
-        std::move(payloadCredit));
-}
-
-::media::Result<AVBufferRef*> makeMediaFfmpegCodecOpaque(
-    std::shared_ptr<MediaGraphPayloadCreditLease> payloadCredit)
-{
-    return makeCodecOpaque(std::nullopt, std::move(payloadCredit));
+    return makeCodecOpaque(std::move(token));
 }
 
 ::media::Result<MediaFfmpegLineageToken> mediaFfmpegLineageToken(

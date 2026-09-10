@@ -72,7 +72,10 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
         ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: runtime is not compiled and ready"));
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "start.begin mode=single_thread");
     auto started = runtime.m_scheduler.start(runtime.m_context);
-    if (!started) return ::media::Result<MediaGraphRunResult>::failure(started.error());
+    if (!started) {
+        abort(runtime);
+        return ::media::Result<MediaGraphRunResult>::failure(started.error());
+    }
     runtime.m_state = MediaGraphRuntimeState::Running;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "start.done state=Running");
 
@@ -116,7 +119,10 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "start.begin mode=threaded");
     runtime.m_threadedExecutor.setPolicy(runtime.m_threadingPolicy);
     auto started = runtime.m_threadedExecutor.start(runtime.m_context, runtime.m_scheduler);
-    if (!started) return started;
+    if (!started) {
+        abort(runtime);
+        return started;
+    }
     runtime.m_state = MediaGraphRuntimeState::ThreadedRunning;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "start.done state=ThreadedRunning");
     return ::media::Status::success();
@@ -136,6 +142,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 ::media::Status MediaGraphRuntimeLifecycleExecutor::synchronizeThreadedState(MediaGraphRuntime& runtime)
 {
     if (runtime.m_state != MediaGraphRuntimeState::ThreadedRunning || !runtime.m_threadedExecutor.failed()) return ::media::Status::success();
+    runtime.m_context.cancelSessionPayloadWaiters();
     const auto primaryFailure = runtime.m_threadedExecutor.primaryFailure();
     runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
@@ -156,6 +163,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("MediaGraphRuntime stop failed: runtime is not running"));
     }
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.begin");
+    runtime.m_context.cancelSessionPayloadWaiters();
     auto schedulerStatus = runtime.m_state == MediaGraphRuntimeState::ThreadedRunning
         ? runtime.m_threadedExecutor.stop(runtime.m_context, runtime.m_scheduler)
         : runtime.m_scheduler.stop(runtime.m_context);
@@ -181,6 +189,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexcept
 {
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.begin");
+    runtime.m_context.cancelSessionPayloadWaiters();
     if (runtime.m_state == MediaGraphRuntimeState::ThreadedRunning) runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     else runtime.m_scheduler.abort(runtime.m_context);
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);

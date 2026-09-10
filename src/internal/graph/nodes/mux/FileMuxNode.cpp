@@ -122,8 +122,7 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     if (m_phase == Phase::Streaming && m_session->hasPendingOutput()) {
         return pollOrWait(context);
     }
-    auto forwarded = remember(forwardIfOutputsExist(context, buffer));
-    return forwarded ? processProgress() : terminalResult();
+    return processProgress(forwardIfOutputsExist(context, buffer));
 }
 
 ::media::Status FileMuxNode::flush(MediaGraphExecutionContext& context)
@@ -322,20 +321,17 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
 {
     if (m_phase != Phase::Streaming ||
         !m_completion || !m_completion->finished()) {
-        if (terminalBuffer) {
-            auto forwarded = remember(forwardIfOutputsExist(context, terminalBuffer));
-            if (!forwarded) return terminalResult();
-        }
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::progress());
+        return terminalBuffer
+            ? processProgress(forwardIfOutputsExist(context, terminalBuffer))
+            : processProgress();
     }
     auto finished = remember(m_session->finish(context));
     if (!finished) return terminalResult();
-    if (terminalBuffer) {
-        auto forwarded = remember(forwardIfOutputsExist(context, terminalBuffer));
-        if (!forwarded) return terminalResult();
-    }
-    return processFinished();
+    // The base owns a blocked terminal transfer and must remember completion
+    // while it retries that transfer. WouldBlock is never a mux failure.
+    return terminalBuffer
+        ? processFinished(forwardIfOutputsExist(context, terminalBuffer))
+        : processFinished();
 }
 
 ::media::Result<MediaNodeProcessResult> FileMuxNode::pollOrWait(
@@ -386,15 +382,21 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
     MediaGraphExecutionContext& context,
     const MediaBufferRef& buffer)
 {
-    if (outputChannels(context).empty()) return ::media::Status::success();
-    if (buffer->isEof() || buffer->isFlush()) {
-        return broadcastControlToAllOutputs(context, buffer);
-    }
-    if (buffer->payloadKind() ==
-            MediaPayloadKind::MpegTsProtocolDatagramBatch) {
-        return pushToAllOutputs(context, buffer);
-    }
-    return ::media::Status::success();
+    auto forwarded = [&]() -> ::media::Status {
+        if (outputChannels(context).empty()) return ::media::Status::success();
+        if (buffer->isEof() || buffer->isFlush()) {
+            return broadcastControlToAllOutputs(context, buffer);
+        }
+        if (buffer->payloadKind() == MediaPayloadKind::MpegTsProtocolDatagramBatch) {
+            return pushToAllOutputs(context, buffer);
+        }
+        return ::media::Status::success();
+    }();
+    // Pending publication is owned by FFmpegNodeRuntime; caching this status
+    // as m_terminalFailure would strand the mux after the pending EOF is sent.
+    if (!forwarded && forwarded.error().code == ::media::ErrorCode::WouldBlock)
+        return forwarded;
+    return remember(std::move(forwarded));
 }
 
 void FileMuxNode::releaseSession() noexcept

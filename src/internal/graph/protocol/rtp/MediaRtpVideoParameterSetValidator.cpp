@@ -129,7 +129,8 @@ MediaRtpVideoParameterSetValidator::inspect(
                 codedSize.error());
         }
         return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
-            MediaRtpVideoParameterSetInfo{codedSize.value()});
+            MediaRtpVideoParameterSetInfo{codedSize.value(),
+                {context->sample_aspect_ratio.num, context->sample_aspect_ratio.den}});
     }
     const auto& hevc = std::get<MediaHevcSignalingFacts>(facts);
     auto codedSize = MediaHevcSpsCodedSizeParser::parse(hevc.sps);
@@ -138,7 +139,8 @@ MediaRtpVideoParameterSetValidator::inspect(
             codedSize.error());
     }
     return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
-        MediaRtpVideoParameterSetInfo{codedSize.value()});
+        MediaRtpVideoParameterSetInfo{codedSize.value(),
+            {context->sample_aspect_ratio.num, context->sample_aspect_ratio.den}});
 }
 
 ::media::Status MediaRtpVideoParameterSetValidator::validate(

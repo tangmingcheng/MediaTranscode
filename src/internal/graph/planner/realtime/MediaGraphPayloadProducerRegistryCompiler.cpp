@@ -258,7 +258,8 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
     const MediaGraph& graph,
     const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
     std::uint64_t availablePayloadBytes,
-    std::uint64_t maximumPayloadObjects)
+    std::uint64_t maximumPayloadObjects,
+    std::span<const MediaNodeId> selectedNodes)
 {
     using Result = ::media::Result<MediaGraphPayloadCreditPlan>;
     if (availablePayloadBytes == 0 || maximumPayloadObjects == 0) {
@@ -274,6 +275,8 @@ MediaGraphPayloadProducerRegistryCompiler::compile(
         "final-dag-producer-registry+prepared-emission+global-payload-budget";
     try {
         for (const auto& node : graph.nodes()) {
+            if (!selectedNodes.empty() &&
+                std::find(selectedNodes.begin(), selectedNodes.end(), node.id) == selectedNodes.end()) continue;
             if (!allocatesPayload(node.kind)) continue;
             bool foundProducerEdge = false;
             for (const auto& edge : graph.edges()) {

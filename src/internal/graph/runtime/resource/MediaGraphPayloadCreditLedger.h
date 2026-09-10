@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
+#include "internal/graph/model/MediaGraphPayloadRetentionGrowth.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 #include "media_transcode/Result.h"
 
@@ -9,10 +10,14 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <unordered_map>
 
 namespace media::ffmpeg::graph {
 
 struct MediaGraphPayloadCreditSnapshot final {
+    std::uint64_t admittedMaximumBytes = 0;
+    std::uint64_t admittedMaximumObjects = 0;
     std::uint64_t currentBytes = 0;
     std::uint64_t currentObjects = 0;
     std::uint64_t highWaterBytes = 0;
@@ -23,6 +28,32 @@ struct MediaGraphPayloadCreditSnapshot final {
 };
 
 class MediaGraphPayloadCreditState;
+
+class MediaGraphPayloadRetentionReservation final {
+public:
+    ~MediaGraphPayloadRetentionReservation();
+    MediaGraphPayloadRetentionReservation(const MediaGraphPayloadRetentionReservation&) = delete;
+    MediaGraphPayloadRetentionReservation& operator=(const MediaGraphPayloadRetentionReservation&) = delete;
+private:
+    friend class MediaGraphPayloadCreditLedger;
+    MediaGraphPayloadRetentionReservation(std::shared_ptr<MediaGraphPayloadCreditState> state,
+        MediaGraphPayloadRetentionGrowth growth) noexcept
+        : m_state(std::move(state)), m_growth(growth) {}
+    std::shared_ptr<MediaGraphPayloadCreditState> m_state;
+    MediaGraphPayloadRetentionGrowth m_growth;
+};
+
+class MediaGraphPayloadBranchReservation final {
+public:
+    ~MediaGraphPayloadBranchReservation();
+    MediaGraphPayloadBranchReservation(const MediaGraphPayloadBranchReservation&) = delete;
+    MediaGraphPayloadBranchReservation& operator=(const MediaGraphPayloadBranchReservation&) = delete;
+private:
+    friend class MediaGraphPayloadCreditLedger;
+    explicit MediaGraphPayloadBranchReservation(
+        std::shared_ptr<MediaGraphPayloadCreditState> state) noexcept;
+    std::shared_ptr<MediaGraphPayloadCreditState> m_state;
+};
 
 class MediaGraphPayloadCreditLease final {
 public:
@@ -63,6 +94,17 @@ public:
         MediaNodeId producer,
         std::span<const std::uint64_t> bytes,
         std::shared_ptr<MediaNodeWakeup> wakeup) noexcept;
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> reserveBranch(
+        MediaGraphPayloadCreditPlan plan);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> extractInitialBranch(
+        MediaGraphPayloadCreditPlan sharedPlan,
+        MediaGraphPayloadCreditPlan outputPlan);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadRetentionReservation>> reserveRetentionGrowth(
+        MediaGraphPayloadRetentionGrowth growth);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> reserveFixedStorage(
+        std::uint64_t bytes);
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> extractInitialFixedStorage(
+        std::uint64_t bytes);
     void cancelBlockedWaiters() noexcept;
     MediaGraphPayloadCreditSnapshot snapshot() const noexcept;
     const MediaGraphPayloadCreditPlan& plan() const noexcept { return m_plan; }
@@ -72,8 +114,16 @@ private:
         MediaGraphPayloadCreditPlan plan,
         std::shared_ptr<MediaGraphPayloadCreditState> state) noexcept;
 
+    ::media::Result<std::shared_ptr<MediaGraphPayloadCreditState>> accountForProducer(
+        MediaNodeId producer) const;
+    enum class FixedStorageAdmission { Additional, InitialPartition };
+    ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> admitFixedStorage(
+        std::uint64_t bytes, FixedStorageAdmission admission);
     MediaGraphPayloadCreditPlan m_plan;
     std::shared_ptr<MediaGraphPayloadCreditState> m_state;
+    mutable std::mutex m_accountsMutex;
+    std::vector<std::weak_ptr<MediaGraphPayloadCreditState>> m_branchAccounts;
+    std::unordered_map<std::uint32_t, std::weak_ptr<MediaGraphPayloadCreditState>> m_producerAccounts;
 };
 
 } // namespace media::ffmpeg::graph

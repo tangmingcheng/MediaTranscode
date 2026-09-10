@@ -1,8 +1,24 @@
 #include "internal/graph/core/MediaGraph.h"
 
 #include <utility>
+#include <algorithm>
 
 namespace media::ffmpeg::graph {
+
+void MediaGraph::removeNodes(std::span<const MediaNodeId> nodes)
+{
+    const auto selected = [nodes](MediaNodeId id) {
+        return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
+    };
+    std::erase_if(m_edges, [&selected](const MediaEdge& edge) {
+        return selected(edge.from.nodeId) || selected(edge.to.nodeId);
+    });
+    std::erase_if(m_nodes, [&selected](const MediaNode& node) { return selected(node.id); });
+    if (m_payloadCreditPlan) {
+        std::erase_if(m_payloadCreditPlan->producers,
+            [&selected](const auto& producer) { return selected(producer.nodeId); });
+    }
+}
 
 void MediaGraph::clear()
 {
@@ -22,6 +38,15 @@ bool MediaGraph::setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan)
          *m_payloadCreditMode != MediaGraphPayloadCreditMode::RealtimeRequired) ||
         !plan.isStructurallyValid()) return false;
     m_payloadCreditMode = MediaGraphPayloadCreditMode::RealtimeRequired;
+    m_payloadCreditPlan = std::move(plan);
+    return true;
+}
+
+bool MediaGraph::replacePayloadCreditPlan(MediaGraphPayloadCreditPlan plan)
+{
+    if (!m_payloadCreditMode ||
+        *m_payloadCreditMode != MediaGraphPayloadCreditMode::RealtimeRequired ||
+        !m_payloadCreditPlan || !plan.isCompleteAndValid()) return false;
     m_payloadCreditPlan = std::move(plan);
     return true;
 }

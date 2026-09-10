@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef enum mt_beta_video_codec {
+    MT_BETA_VIDEO_CODEC_UNKNOWN = 0,
     MT_BETA_VIDEO_CODEC_H264 = 1,
     MT_BETA_VIDEO_CODEC_HEVC = 2
 } mt_beta_video_codec;
@@ -23,7 +24,8 @@ typedef enum mt_beta_status {
     MT_BETA_STATUS_INVALID_ARGUMENT = 1,
     MT_BETA_STATUS_ALLOCATION_FAILED = 2,
     MT_BETA_STATUS_INVALID_STATE = 3,
-    MT_BETA_STATUS_INTERNAL_ERROR = 4
+    MT_BETA_STATUS_INTERNAL_ERROR = 4,
+    MT_BETA_STATUS_BUSY = 5
 } mt_beta_status;
 
 typedef enum mt_beta_realtime_state {
@@ -43,7 +45,9 @@ typedef enum mt_beta_error_code {
     MT_BETA_ERROR_IO_FAILURE = 5,
     MT_BETA_ERROR_FFMPEG_FAILURE = 6,
     MT_BETA_ERROR_CANCELLED = 7,
-    MT_BETA_ERROR_INTERNAL = 8
+    MT_BETA_ERROR_INTERNAL = 8,
+    MT_BETA_ERROR_WOULD_BLOCK = 9,
+    MT_BETA_ERROR_NOT_INITIALIZED = 10
 } mt_beta_error_code;
 
 typedef enum mt_beta_failure_stage {
@@ -72,7 +76,8 @@ typedef enum mt_beta_realtime_event_type {
     MT_BETA_EVENT_STATE_CHANGED = 1,
     MT_BETA_EVENT_OUTPUT_READY = 2,
     MT_BETA_EVENT_ERROR = 3,
-    MT_BETA_EVENT_COMPLETED = 4
+    MT_BETA_EVENT_COMPLETED = 4,
+    MT_BETA_EVENT_OUTPUT_STATE_CHANGED = 5
 } mt_beta_realtime_event_type;
 
 typedef enum mt_beta_selected_backend {
@@ -94,13 +99,55 @@ typedef enum mt_beta_selected_filter {
     MT_BETA_FILTER_HARDWARE = 3
 } mt_beta_selected_filter;
 
+typedef enum mt_beta_realtime_input_kind {
+    MT_BETA_INPUT_RTP_VIDEO = 1,
+    MT_BETA_INPUT_URL = 2,
+    MT_BETA_INPUT_MPEGTS_UDP = 3
+} mt_beta_realtime_input_kind;
+
+typedef enum mt_beta_video_output_protocol {
+    MT_BETA_OUTPUT_ELEMENTARY_RTP = 1,
+    MT_BETA_OUTPUT_MPEGTS_UDP = 2,
+    MT_BETA_OUTPUT_MPEGTS_RTP = 3
+} mt_beta_video_output_protocol;
+
+typedef enum mt_beta_output_state {
+    MT_BETA_OUTPUT_PREPARING = 1,
+    MT_BETA_OUTPUT_WAITING_FOR_RANDOM_ACCESS = 2,
+    MT_BETA_OUTPUT_RUNNING = 3,
+    MT_BETA_OUTPUT_DRAINING = 4,
+    MT_BETA_OUTPUT_RETIRED = 5,
+    MT_BETA_OUTPUT_FAILED = 6
+} mt_beta_output_state;
+
 typedef struct mt_beta_rtp_video_input {
     const char* bind_address;
     uint16_t port;
     mt_beta_video_codec codec;
     uint8_t payload_type;
     uint32_t clock_rate;
+    const char* fmtp;
 } mt_beta_rtp_video_input;
+
+typedef struct mt_beta_url_video_input {
+    const char* url;
+    const char* rtsp_transport;
+} mt_beta_url_video_input;
+
+typedef struct mt_beta_mpegts_udp_video_input {
+    const char* url;
+    /* Maximum PCR gap guaranteed by the source protocol session. */
+    uint32_t maximum_pcr_gap_ms;
+} mt_beta_mpegts_udp_video_input;
+
+typedef struct mt_beta_realtime_input {
+    mt_beta_realtime_input_kind kind;
+    union {
+        mt_beta_rtp_video_input rtp;
+        mt_beta_url_video_input url;
+        mt_beta_mpegts_udp_video_input mpegts_udp;
+    } source;
+} mt_beta_realtime_input;
 
 typedef struct mt_beta_cbr {
     uint64_t bitrate_bps;
@@ -113,6 +160,7 @@ typedef struct mt_beta_vbr {
 } mt_beta_vbr;
 
 typedef struct mt_beta_video_output {
+    mt_beta_video_output_protocol protocol;
     const char* destination_address;
     uint16_t destination_port;
     mt_beta_video_codec codec;
@@ -126,6 +174,10 @@ typedef struct mt_beta_video_output {
         mt_beta_cbr cbr;
         mt_beta_vbr vbr;
     } rate_control;
+    /* Optional encoder profile name, copied before start/add returns.
+     * NULL or empty means no caller profile constraint. Supported names depend
+     * on the selected encoder; unsupported values fail during preparation. */
+    const char* profile;
 } mt_beta_video_output;
 
 typedef struct mt_beta_realtime_deployment {
@@ -135,8 +187,8 @@ typedef struct mt_beta_realtime_deployment {
 
 typedef struct mt_beta_realtime_config {
     const char* media_id;
-    mt_beta_rtp_video_input input;
-    mt_beta_video_output output;
+    mt_beta_realtime_input input;
+    mt_beta_video_output initial_output;
     mt_beta_realtime_deployment deployment;
 } mt_beta_realtime_config;
 
@@ -160,7 +212,10 @@ struct mt_beta_realtime_event {
     mt_beta_completion_reason completion_reason;
     int32_t native_code;
     const char* detail;
-    const char* output_description;
+    /* Strings are borrowed only for the duration of the callback. */
+    const char* output_description_path;
+    uint64_t output_id;
+    mt_beta_output_state output_state;
 };
 
 typedef struct mt_beta_realtime_snapshot {
@@ -168,9 +223,6 @@ typedef struct mt_beta_realtime_snapshot {
     mt_beta_completion_reason completion_reason;
     mt_beta_selected_backend selected_backend;
     mt_beta_video_codec input_codec;
-    mt_beta_video_codec output_codec;
-    mt_beta_selected_filter selected_filter;
-    uint8_t zero_copy_planned;
     uint64_t running_time_ms;
     uint64_t queued_buffers;
     uint64_t peak_queued_buffers;
@@ -193,6 +245,43 @@ typedef struct mt_beta_realtime_snapshot {
     double average_process_single_core_cpu_percent;
     double peak_process_single_core_cpu_percent;
 } mt_beta_realtime_snapshot;
+
+typedef struct mt_beta_output_snapshot {
+    uint64_t output_id;
+    mt_beta_output_state state;
+    mt_beta_error_code error_code;
+    mt_beta_failure_stage failure_stage;
+    int32_t native_code;
+    const char* detail;
+    const char* output_description_path;
+} mt_beta_output_snapshot;
+
+/* A copied, immutable collection. Its strings live until collection release.
+ * A description path names a file owned by the session; copy the file before
+ * retiring the output or releasing the session if it must be retained. */
+typedef struct mt_beta_output_snapshots mt_beta_output_snapshots;
+
+/* Input strings are copied before start/add returns.
+ * Add/remove acknowledge command admission; observe final state via events.
+ * Output IDs are session-local, nonzero, and never reused.
+ * Calls may originate in callbacks. Release must originate outside callbacks.
+ * Session release must be externally synchronized with all other API calls. */
+mt_beta_status mt_beta_realtime_add_output(
+    mt_beta_realtime_session* session,
+    const mt_beta_video_output* output,
+    uint64_t* output_id);
+mt_beta_status mt_beta_realtime_remove_output(
+    mt_beta_realtime_session* session,
+    uint64_t output_id);
+mt_beta_status mt_beta_realtime_get_output_snapshots(
+    mt_beta_realtime_session* session,
+    mt_beta_output_snapshots** snapshots);
+size_t mt_beta_output_snapshots_count(const mt_beta_output_snapshots* snapshots);
+mt_beta_status mt_beta_output_snapshots_get(
+    const mt_beta_output_snapshots* snapshots,
+    size_t index,
+    mt_beta_output_snapshot* snapshot);
+void mt_beta_output_snapshots_release(mt_beta_output_snapshots** snapshots);
 
 mt_beta_status mt_beta_realtime_start(
     const mt_beta_realtime_config* config,

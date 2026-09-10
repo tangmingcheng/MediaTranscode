@@ -202,7 +202,7 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
                 "Encoded audio canonicalizer requires blocking output"));
     }
     if (output->size() >= output->capacity()) return processWaiting();
-    if (output->pushOutcome(m_state->pending->output) !=
+    if (output->pushOutcome(m_state->pending->output).outcome !=
         MediaQueuePushOutcome::Accepted) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::internalError(

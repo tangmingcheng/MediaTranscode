@@ -19,7 +19,7 @@ struct VideoFilterGraphBuildRequest {
     const AVFrame* firstFrame = nullptr;
     AVRational inputTimeBase { 0, 1 };
     AVRational inputFrameRate { 0, 1 };
-    AVRational sampleAspectRatio { 1, 1 };
+    AVRational sampleAspectRatio { 0, 1 };
 };
 
 struct VideoFilterGraphBuildResult {

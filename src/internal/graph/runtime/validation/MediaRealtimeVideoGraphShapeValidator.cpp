@@ -1,10 +1,12 @@
 #include "internal/graph/runtime/validation/MediaRealtimeVideoGraphShapeValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaMuxSessionKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRealtimeRuntimeBinding.h"
@@ -13,6 +15,7 @@
 #include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 
 #include <initializer_list>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -80,10 +83,10 @@ const MediaEdge* exactCodecEdge(
     const MediaNode* source = graph.findNode(match->from.nodeId);
     const MediaPort* port = graph.findPort(match->from.portId);
     return source && source->kind == sourceKind && port &&
-            port->nodeId == source->id && port->name == "codec" &&
+            port->nodeId == source->id && port->name == "codec_parameters" &&
             MediaGraphShapeQuery::validPort(port, MediaPortDirection::Output, stream,
                       MediaEdgeKind::Metadata,
-                      MediaPayloadKind::CodecContext)
+                      MediaPayloadKind::CodecParameters)
         ? match
         : nullptr;
 }
@@ -109,6 +112,10 @@ const MediaEdge* exactCodecEdge(
         return invalid("raw RTP input cardinality");
     }
     const MediaNodeOptions& options = inputs.front()->options;
+    if (!shape.nodes(MediaNodeKind::VideoOutputFanout).empty() &&
+        options.value("source.playback_epoch.identity_transition") != "replan_session") {
+        return invalid("shared RTP playback source lacks identity transition authority");
+    }
     auto senderReportTimeout = requiredPositiveIntNodeOption(
         &options, "RawRtpInputNode", "rtcp.sender_report_timeout_ms");
     auto maximumExtrapolation = requiredPositiveInt64NodeOption(
@@ -150,7 +157,8 @@ const MediaEdge* exactEdge(
 
 ::media::Status validateLineageEdges(
     const MediaGraph& graph,
-    const MediaRealtimeVideoRuntimePlan& runtime)
+    const MediaRealtimeVideoRuntimePlan& runtime,
+    const MediaVideoLineageEdgePolicySet& sharedInput)
 {
     const MediaAvSyncGraphShape shape(graph);
     const auto demux = shape.nodes(MediaNodeKind::Demux);
@@ -160,7 +168,7 @@ const MediaEdge* exactEdge(
     }
     if (!demux.empty() &&
         !exactEdge(graph, *demux.front(), "packet", *split.front(),
-                   "packet", runtime.lineageEdgePolicies.ingressPacket)) {
+                   "packet", sharedInput.ingressPacket)) {
         return invalid("generic ingress packet policy");
     }
 
@@ -205,7 +213,17 @@ const MediaEdge* exactEdge(
     const auto transfer = shape.nodes(MediaNodeKind::HardwareTransfer);
     const auto timestamp = shape.nodes(MediaNodeKind::VideoTimestamp);
     const auto frameRate = shape.nodes(MediaNodeKind::VideoFrameRate);
-    const auto filter = shape.nodes(MediaNodeKind::VideoFilter);
+    std::vector<const MediaNode*> filter;
+    const MediaNode* sourceCopy = nullptr;
+    for (const auto* node : shape.nodes(MediaNodeKind::VideoFilter)) {
+        auto execution = MediaVideoFilterExecutionPlanCodec::decode(node->options);
+        if (!execution) return invalid("video filter lacks a valid execution contract");
+        if (execution.value().timing == MediaVideoFilterTimingAuthority::SourceFrame) {
+            if (sourceCopy || node->inputPorts.size() != 1 || node->outputPorts.size() != 1)
+                return invalid("shared source copy cardinality or metadata dependency");
+            sourceCopy = node;
+        } else filter.push_back(node);
+    }
     const auto encode = shape.nodes(MediaNodeKind::VideoEncode);
     const auto gate = shape.nodes(MediaNodeKind::PacketStartGate);
     if (decode.size() != 1 || transfer.size() != 1 ||
@@ -245,12 +263,12 @@ const MediaEdge* exactEdge(
          (startupSource->kind == MediaNodeKind::RawRtpInput &&
           startupPort->name == "packet"));
     if (!validSource ||
-        startup->policy != runtime.lineageEdgePolicies.startupPacket) {
+        startup->policy != sharedInput.startupPacket) {
         return invalid("startup packet edge source or policy");
     }
     if (!gate.empty() &&
         !exactEdge(graph, *gate.front(), "packet", *decode.front(),
-                   "packet", runtime.lineageEdgePolicies.startupPacket)) {
+                   "packet", sharedInput.startupPacket)) {
         return invalid("post-gate startup packet policy");
     }
 
@@ -261,7 +279,39 @@ const MediaEdge* exactEdge(
                         "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr
         : exactEdge(graph, *frameRate.front(), "frame", *encode.front(),
                     "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr;
-    if (!exactEdge(graph, *decode.front(), "frame", *transfer.front(),
+    const auto fanout = shape.nodes(MediaNodeKind::VideoOutputFanout);
+    if (fanout.size() > 1) return invalid("video output distributor cardinality");
+    const MediaNode* frameSource = decode.front();
+    if (sourceCopy) {
+        if (fanout.empty() || !exactEdge(graph, *frameSource, "frame", *sourceCopy, "frame", sharedInput.frame))
+            return invalid("shared source copy differs from its decoder frame contract");
+        frameSource = sourceCopy;
+    }
+    if (!fanout.empty()) {
+        const auto& distributor = *fanout.front();
+        if (distributor.inputPorts.size() != 1 || distributor.outputPorts.size() != 1 ||
+            !MediaGraphShapeQuery::validPort(distributor.findInputPort("frame"),
+                MediaPortDirection::Input, MediaStreamKind::Video,
+                MediaEdgeKind::RawFrame, MediaPayloadKind::Frame) ||
+            !MediaGraphShapeQuery::validPort(distributor.findOutputPort("frame"),
+                MediaPortDirection::Output, MediaStreamKind::Video,
+                MediaEdgeKind::RawFrame, MediaPayloadKind::Frame) ||
+            !MediaGraphShapeQuery::hasExactOptionKeys(distributor.options,
+                {"fanout.zero_outputs", "fanout.overflow", "fanout.epoch.authority",
+                 "fanout.epoch.protocol_session", "fanout.epoch.identity_transition"}) ||
+            distributor.options.value("fanout.zero_outputs") != "consume" ||
+            distributor.options.value("fanout.overflow") != "fail_branch" ||
+            distributor.options.value("fanout.epoch.authority") != "protocol_session" ||
+            distributor.options.value("fanout.epoch.identity_transition") != "replan_session" ||
+            distributor.options.value("fanout.epoch.protocol_session") !=
+                std::to_string(runtime.scheduling.initialGeneration) ||
+            !exactEdge(graph, *frameSource, "frame", distributor, "frame",
+                       sharedInput.frame)) {
+            return invalid("video output distributor differs from shared source contract");
+        }
+        frameSource = &distributor;
+    }
+    if (!exactEdge(graph, *frameSource, "frame", *transfer.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
         !exactEdge(graph, *transfer.front(), "frame", *timestamp.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
@@ -300,6 +350,15 @@ const MediaEdge* exactEdge(
     if (scheduler.options.values().size() != SchedulerOptionCount) {
         return invalid("scheduler option cardinality");
     }
+    const MediaAvSyncGraphShape shape(graph);
+    const auto distributors = shape.nodes(MediaNodeKind::EncodedVideoOutputFanout);
+    const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
+    if (distributors.size() != 1 || encoders.size() != 1 ||
+        !exactEdge(graph, *encoders.front(), "packet", *distributors.front(), "packet", runtime.edgePolicies.synchronizedPacket) ||
+        !exactEdge(graph, *distributors.front(), "packet", scheduler, "video", runtime.edgePolicies.synchronizedPacket) ||
+        distributors.front()->options.value("fanout.zero_outputs") != "consume" ||
+        distributors.front()->options.value("fanout.overflow") != "fail_branch")
+        return invalid("encoded group distributor or scheduler edge contract");
     const MediaEdge* schedulerInput = nullptr;
     for (const MediaEdge& edge : graph.edges()) {
         if (edge.to.portId == scheduler.findInputPort("video")->id) {
@@ -464,7 +523,7 @@ const MediaEdge* exactEdge(
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
         !MediaGraphShapeQuery::validPort(sender.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Video, MediaEdgeKind::Metadata,
-                   MediaPayloadKind::CodecContext) ||
+                   MediaPayloadKind::CodecParameters) ||
         !MediaGraphShapeQuery::validPort(sender.findInputPort("scheduled"),
                    MediaPortDirection::Input, MediaStreamKind::Video,
                    MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
@@ -609,7 +668,7 @@ const MediaEdge* exactEdge(
     }
     if (!MediaGraphShapeQuery::validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::Metadata,
-                   MediaPayloadKind::CodecContext) ||
+                   MediaPayloadKind::CodecParameters) ||
         !MediaGraphShapeQuery::validPort(mux.findInputPort("packet"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::EncodedPacket,
                    MediaPayloadKind::TsAccessUnit) ||
@@ -714,19 +773,18 @@ const MediaEdge* exactEdge(
         : invalid("MPEG-TS RTP transport edges differ from runtime product");
 }
 
-} // namespace
-
-::media::Status MediaRealtimeVideoGraphShapeValidator::validate(
+::media::Status validateVideoGraph(
     const MediaGraph& graph,
-    const MediaRealtimeVideoRuntimeBinding& binding)
+    const MediaRealtimeVideoRuntimePlan& runtime,
+    const std::optional<MediaRealtimeRtpTransportPlan>& inputTransport,
+    const MediaVideoLineageEdgePolicySet& sharedInput)
 {
-    const auto& runtime = binding.runtime;
     if (!runtime.sessionKey.valid()) return invalid("protocol session");
-    if (auto valid = validateRawRtpInput(graph, binding.inputTransport);
+    if (auto valid = validateRawRtpInput(graph, inputTransport);
         !valid) {
         return valid;
     }
-    if (auto valid = validateLineageEdges(graph, runtime); !valid) {
+    if (auto valid = validateLineageEdges(graph, runtime, sharedInput); !valid) {
         return valid;
     }
     const MediaNode* scheduler = nullptr;
@@ -763,6 +821,56 @@ const MediaEdge* exactEdge(
         return validateProjectMpegTs(graph, *scheduler, runtime, *mpegTs);
     }
     return invalid("unknown output adapter variant");
+}
+
+} // namespace
+
+::media::Status MediaRealtimeVideoGraphShapeValidator::validate(
+    const MediaGraph& graph,
+    const MediaRealtimeVideoRuntimeBinding& binding)
+{
+    return validateVideoGraph(graph, binding.runtime, binding.inputTransport, binding.runtime.lineageEdgePolicies);
+}
+
+::media::Status MediaRealtimeVideoGraphShapeValidator::validateOutputBranch(
+    const MediaGraph& graph,
+    std::span<const MediaNodeId> outputNodes,
+    const MediaRealtimeVideoSessionFacts& sharedInput,
+    const MediaRealtimeVideoRuntimePlan& output)
+{
+    if (outputNodes.empty()) return invalid("empty output branch");
+    std::vector<MediaNodeId> retained(outputNodes.begin(), outputNodes.end());
+    const auto contains = [&](MediaNodeId id) {
+        return std::find(retained.begin(), retained.end(), id) != retained.end();
+    };
+    for (std::size_t index = 0; index < outputNodes.size(); ++index) {
+        const auto* node = graph.findNode(outputNodes[index]);
+        if (!node || node->kind == MediaNodeKind::VideoDecode ||
+            node->kind == MediaNodeKind::VideoOutputFanout ||
+            node->kind == MediaNodeKind::RawRtpInput ||
+            node->kind == MediaNodeKind::RealtimeInput ||
+            std::find(outputNodes.begin(), outputNodes.begin() + index, outputNodes[index]) !=
+                outputNodes.begin() + index) {
+            return invalid("output branch redeclares its shared input or has duplicate nodes");
+        }
+    }
+    // Walk only incoming dependencies. Other outputs of a shared source are
+    // not part of this output's authority or resource contract.
+    for (std::size_t index = 0; index < retained.size(); ++index) {
+        const auto target = retained[index];
+        for (const auto& edge : graph.edges()) {
+            if (edge.to.nodeId == target && !contains(edge.from.nodeId)) {
+                retained.push_back(edge.from.nodeId);
+            }
+        }
+    }
+    std::vector<MediaNodeId> excluded;
+    for (const auto& node : graph.nodes()) {
+        if (!contains(node.id)) excluded.push_back(node.id);
+    }
+    auto projection = graph;
+    projection.removeNodes(excluded);
+    return validateVideoGraph(projection, output, sharedInput.input.rtpTransport, sharedInput.lineageEdgePolicies);
 }
 
 ::media::Status MediaRealtimeVideoGraphShapeValidator::validateAbsent(

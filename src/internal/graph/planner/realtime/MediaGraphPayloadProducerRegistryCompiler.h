@@ -6,6 +6,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -15,7 +16,8 @@ public:
         const MediaGraph& graph,
         const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
         std::uint64_t availablePayloadBytes,
-        std::uint64_t maximumPayloadObjects);
+        std::uint64_t maximumPayloadObjects,
+        std::span<const MediaNodeId> selectedNodes);
 
 private:
     MediaGraphPayloadProducerRegistryCompiler() = delete;

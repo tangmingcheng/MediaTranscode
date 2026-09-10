@@ -3,6 +3,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
@@ -196,6 +197,7 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return emitted ? processProgress()
                        : processProgress(std::move(emitted));
     }
+    if (m_terminal) return finishProtocol(context);
     if (!m_protocolPlan) {
         auto input = tryPopInputOptional(context, "protocol_plan");
         if (!input) {
@@ -231,6 +233,14 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         }
         if (!input.value()) return processWaiting();
         m_pendingProtocolBatch = std::move(*input.value());
+    }
+    if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
+            m_pendingProtocolBatch.get())) {
+        if (control->controlKind() != MediaControlBufferKind::Eof)
+            return ::media::Result<MediaNodeProcessResult>::failure(invalid(
+                "MPEG-TS protocol materializer requires a new activation for non-EOF control"));
+        m_terminal = std::move(m_pendingProtocolBatch);
+        return finishProtocol(context);
     }
     auto* batch = dynamic_cast<MediaMpegTsProtocolDatagramBatchBuffer*>(
         m_pendingProtocolBatch.get());
@@ -286,6 +296,27 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         if (!protocol || protocol->datagrams().empty()) m_pendingProtocolBatch.reset();
     }
     return ::media::Status::success();
+}
+
+::media::Result<MediaNodeProcessResult>
+MediaMpegTsDatagramMaterializerNode::finishProtocol(MediaGraphExecutionContext& context)
+{
+    if (!m_terminalReportPrepared) {
+        if (auto* rtp = std::get_if<MediaMpegTsRtpWireDatagramMaterializer>(&*m_materializer)) {
+            auto now = m_authority->now();
+            if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+            auto report = rtp->materializeTerminalReport(now.value(), now.value(), now.value());
+            if (!report) return processProgress(::media::Status::failure(report.error()));
+            if (report.value()) m_pendingOutputs.push_back(std::move(report).value());
+        }
+        m_terminalReportPrepared = true;
+    }
+    if (!m_pendingOutputs.empty())
+        return processProgress(emitOutput(context, "wire_batch", m_pendingOutputs.front()));
+    auto* wire = context.findOutputChannel(nodeId(), "wire_batch");
+    if (!wire) return ::media::Result<MediaNodeProcessResult>::failure(invalid(
+        "protocol termination requires its planned wire output"));
+    return processFinished(wire->closeWithTerminal(m_terminal));
 }
 
 ::media::Status MediaMpegTsDatagramMaterializerNode::stop(
@@ -359,6 +390,9 @@ void MediaMpegTsDatagramMaterializerNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
     m_pendingOutputs.clear();
+    m_pendingProtocolBatch.reset();
+    m_terminal.reset();
+    m_terminalReportPrepared = false;
     m_materializer.reset();
     m_transportPlan.reset();
     m_protocolPlan.reset();

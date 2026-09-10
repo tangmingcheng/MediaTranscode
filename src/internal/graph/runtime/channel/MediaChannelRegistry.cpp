@@ -15,13 +15,35 @@ namespace media::ffmpeg::graph {
     }
 
     MediaChannelId id = nextId();
-    auto channel = std::make_unique<MediaChannel>(id, edge);
+    auto channel = std::make_shared<MediaChannel>(id, edge);
     MediaChannel* raw = channel.get();
 
     m_edgeToChannel[edge.id.value] = id.value;
     m_channels[id.value] = std::move(channel);
 
     return ::media::Result<MediaChannel*>::success(raw);
+}
+
+std::shared_ptr<MediaChannel> MediaChannelRegistry::retainByEdge(MediaEdgeId edgeId) const
+{
+    const auto edge = m_edgeToChannel.find(edgeId.value);
+    if (edge == m_edgeToChannel.end()) return {};
+    const auto channel = m_channels.find(edge->second);
+    return channel == m_channels.end() ? nullptr : channel->second;
+}
+
+::media::Status MediaChannelRegistry::adopt(std::shared_ptr<MediaChannel> channel)
+{
+    if (!channel || m_channels.contains(channel->id().value) ||
+        m_edgeToChannel.contains(channel->edgeId().value)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "channel adoption requires unique channel and edge IDs"));
+    }
+    const auto id = channel->id().value;
+    m_edgeToChannel.emplace(channel->edgeId().value, id);
+    m_channels.emplace(id, std::move(channel));
+    if (id >= m_nextId) m_nextId = id + 1;
+    return ::media::Status::success();
 }
 
 MediaChannel* MediaChannelRegistry::find(MediaChannelId id)

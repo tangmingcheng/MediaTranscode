@@ -1,4 +1,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
+
+#include <algorithm>
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
 #include "internal/graph/runtime/lifecycle/MediaGraphRuntimeLifecycleExecutor.h"
 
@@ -12,6 +15,60 @@ MediaGraphRuntime::MediaGraphRuntime(
     std::shared_ptr<MediaAvSyncClockSource> avSyncClockSource)
     : m_avSyncClockSource(std::move(avSyncClockSource))
 {
+}
+
+::media::Result<std::shared_ptr<MediaRuntimeBranch>>
+MediaGraphRuntime::extractInitialBranch(
+    std::uint64_t id, std::span<const MediaNodeId> nodes,
+    std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
+    std::span<const MediaNodeId> retirementProducerIds,
+    std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
+{
+    using Result = ::media::Result<std::shared_ptr<MediaRuntimeBranch>>;
+    if (m_state != MediaGraphRuntimeState::Compiled || !id || !reservation || nodes.empty()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "initial output extraction requires a registered, unstarted DAG and resource reservation"));
+    }
+    auto branch = std::shared_ptr<MediaRuntimeBranch>(new MediaRuntimeBranch());
+    branch->m_id = id;
+    auto reclamation = branch->prepareReclamation(reclamationPlan);
+    if (!reclamation) return Result::failure(reclamation.error());
+    for (const auto producer : retirementProducerIds) {
+        auto token = m_context.nodeExitToken(producer);
+        if (!token || std::find(nodes.begin(), nodes.end(), producer) != nodes.end())
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "initial branch retirement producer must be a compiled shared node"));
+        branch->m_retirementPrerequisites.push_back(std::move(token));
+    }
+    branch->m_inputsAccountedBySession = true;
+    branch->m_threadingPolicy = m_threadingPolicy;
+    if (m_threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
+        m_threadingPolicy.maxWorkerThreads < nodes.size()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "initial output extraction requires its planned per-node worker budget"));
+    }
+    branch->m_resourceLease = std::move(reservation);
+    auto compiled = branch->m_context.compileSegment(
+        std::make_shared<const MediaGraph>(m_graph), nodes, m_context, upstreamInputs);
+    if (!compiled) return Result::failure(compiled.error());
+    // Complete allocations before moving factory-bound runtime node ownership.
+    for (auto* channel : branch->m_context.channels().channels()) {
+        if (std::find(nodes.begin(), nodes.end(), channel->binding().from.nodeId) == nodes.end())
+            branch->m_inputs.push_back(channel);
+    }
+    auto extracted = m_scheduler.takeNodes(nodes);
+    if (!extracted) return Result::failure(extracted.error());
+    auto registered = branch->m_scheduler.registerNodes(std::move(extracted).value());
+    if (!registered) return Result::failure(registered.error());
+    m_context.detachExecutionNodes(nodes);
+    return Result::success(std::move(branch));
+}
+
+std::shared_ptr<MediaProtocolOutputRuntimeAuthority>
+MediaGraphRuntime::protocolOutputAuthority() const noexcept
+{
+    return m_protocolOutputAuthority;
 }
 
 void MediaGraphRuntime::setDiagnosticsEnabled(bool enabled) noexcept
@@ -123,7 +180,10 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
 
 void MediaGraphRuntime::abort() noexcept
 {
+    const bool unstarted = m_state == MediaGraphRuntimeState::Compiled ||
+        m_state == MediaGraphRuntimeState::DefaultRegistrationPending;
     MediaGraphRuntimeLifecycleExecutor::abort(*this);
+    if (unstarted) m_context.cancelUnstartedExecution();
 }
 
 void MediaGraphRuntime::reset()

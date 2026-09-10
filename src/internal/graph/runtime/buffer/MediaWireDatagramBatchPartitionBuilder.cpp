@@ -87,7 +87,8 @@ MediaWireDatagramBatchPartitionBuilder::create(
     std::uint64_t endpointId,
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline,
-    std::uint64_t globalSequence)
+    std::uint64_t globalSequence,
+    MediaWireMediaBoundary mediaBoundary)
 {
     if (m_finished || bytes.empty() ||
         bytes.size() > m_batchPlan.maximumBytes) {
@@ -116,7 +117,7 @@ MediaWireDatagramBatchPartitionBuilder::create(
     }
     auto appended = m_current->append(
         bytes, endpointId, canonicalRelease, canonicalDeadline,
-        globalSequence);
+        globalSequence, mediaBoundary);
     if (!appended) return appended;
     ++m_currentDatagrams;
     m_currentBytes += bytes64;

@@ -1,4 +1,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
@@ -96,9 +99,77 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return MediaNodeKind::CodecResolver;
 }
 
+::media::Status CodecResolverNode::bindPreparedEncoder(MediaBufferRef encoder)
+{
+    auto* codec = dynamic_cast<FFmpegCodecContextBuffer*>(encoder.get());
+    if (m_emitted || m_preparedEncoder || !codec || !codec->context() ||
+        !avcodec_is_open(codec->context())) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Output branch requires one opened encoder before runtime start"));
+    }
+    auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*codec->context());
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
+    auto readback = MediaVideoEncoderReadback::capture(*codec->context());
+    if (!readback) return ::media::Status::failure(readback.error());
+    {
+        std::lock_guard lock(m_snapshotMutex);
+        m_encoderReadback = std::move(readback).value();
+        m_encoderParametersSnapshot = std::move(snapshot).value();
+    }
+    m_preparedEncoder = std::move(encoder);
+    return ::media::Status::success();
+}
+
+::media::Result<MediaVideoEncoderReadback> CodecResolverNode::encoderReadback() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    if (!m_encoderReadback) return ::media::Result<MediaVideoEncoderReadback>::failure(
+        ::media::ErrorInfo::notInitialized("encoder has not published immutable opened readback"));
+    return ::media::Result<MediaVideoEncoderReadback>::success(*m_encoderReadback);
+}
+
+MediaBufferRef CodecResolverNode::encoderParametersSnapshot() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    return m_encoderParametersSnapshot;
+}
+
+MediaBufferRef CodecResolverNode::inputSnapshot() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    return m_inputSnapshot;
+}
+
+MediaBufferRef CodecResolverNode::timestampSource() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    return m_timestampSource;
+}
+
+::media::Result<MediaDecoderRuntimeFacts> CodecResolverNode::decoderRuntimeFacts() const
+{
+    std::lock_guard lock(m_snapshotMutex);
+    if (!m_decoderRuntimeFacts) return ::media::Result<MediaDecoderRuntimeFacts>::failure(
+        ::media::ErrorInfo::notInitialized("Shared decoder has not published opened codec facts"));
+    return ::media::Result<MediaDecoderRuntimeFacts>::success(*m_decoderRuntimeFacts);
+}
+
 ::media::Result<MediaNodeProcessResult> CodecResolverNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
+        return processFinished();
+    }
+
+    if (nodeOption(context, "codec_resolver.mode") == "output_branch") {
+        if (!m_preparedEncoder) {
+            return processProgress(::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Output branch encoder was not prepared before publication")));
+        }
+        auto status = emitOutput(context, "encoder", m_preparedEncoder);
+        if (!status) return processProgress(std::move(status));
+        m_preparedEncoder.reset();
+        m_emitted = true;
         return processFinished();
     }
 
@@ -125,21 +196,39 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("CodecResolverNode requires video input snapshot"));
     }
 
-    auto decoderStatus = resolveDecoder(context, *stream);
+    {
+        std::lock_guard lock(m_snapshotMutex);
+        m_inputSnapshot = *input.value();
+    }
+
+    auto decoderStatus = prepareDecoder(context, *stream);
     if (!decoderStatus) {
         return processProgress(decoderStatus);
     }
 
-    auto encoderStatus = resolveEncoder(context, *stream);
+    auto encoderStatus = prepareEncoder(context, *stream);
     if (!encoderStatus) {
         return processProgress(encoderStatus);
     }
 
+    // Prepare both codecs before publishing either. The decoder port releases
+    // live frames, so publish its configuration only after all target timing
+    // metadata is available to downstream workers.
+    auto encoderPublished = emitOutput(context, "encoder", m_preparedEncoder);
+    if (!encoderPublished) return processProgress(encoderPublished);
+    m_preparedEncoder.reset();
+    if (auto timestamp = timestampSource()) {
+        auto timingPublished = emitOutput(context, "timestamp_source", std::move(timestamp));
+        if (!timingPublished) return processProgress(timingPublished);
+    }
+    auto decoderPublished = emitOutput(context, "decoder", m_preparedDecoder);
+    if (!decoderPublished) return processProgress(decoderPublished);
+    m_preparedDecoder.reset();
     m_emitted = true;
     return processFinished();
 }
 
-::media::Status CodecResolverNode::resolveDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
+::media::Status CodecResolverNode::prepareDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
     auto codecParameters = stream.cloneCodecParameters();
     if (!codecParameters) return ::media::Status::failure(codecParameters.error());
@@ -265,33 +354,72 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         << " pkt_tb=" << stream.time.timeBase.num << "/" << stream.time.timeBase.den;
     codecResolverLog(MediaGraphDiagnosticLevel::State, out.str());
 
+    const bool hasInputRetention = options && options->has(
+        "decoder.pipeline.input_retention.maximum_internal_packets");
+    if (hasInputRetention) {
+        auto count = requiredPositiveIntNodeOption(options, "CodecResolverNode",
+            "decoder.pipeline.input_retention.thread_count");
+        auto type = requiredNonNegativeIntNodeOption(options, "CodecResolverNode",
+            "decoder.pipeline.input_retention.thread_type");
+        if (!count || !type) return ::media::Status::failure(!count ? count.error() : type.error());
+        decoderContext->thread_count = count.value();
+        decoderContext->thread_type = type.value();
+    }
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
     if (openRet < 0) {
         return FFmpegGraphError::statusFromCode(openRet, "avcodec_open2(video decoder)");
     }
+
+    if (hasInputRetention) {
+        auto planned = requiredPositiveInt64NodeOption(options, "CodecResolverNode",
+            "decoder.pipeline.input_retention.maximum_internal_packets");
+        auto observed = MediaDecoderInputRetentionAdapter::readAfterOpen(*decoderContext, hwaccelName);
+        if (!planned) return ::media::Status::failure(planned.error());
+        if (!observed || observed->maximumInternalPackets() >
+            static_cast<std::uint64_t>(planned.value())) {
+            return ::media::Status::failure(::media::ErrorInfo::unsupported(
+                "opened decoder input retention exceeds its prepared allocation contract"));
+        }
+    }
+    {
+        std::lock_guard lock(m_snapshotMutex);
+        m_decoderRuntimeFacts = MediaDecoderRuntimeFacts{
+            decoder->name, decoderContext->hwaccel_flags};
+    }
+    codecResolverLog(MediaGraphDiagnosticLevel::State,
+        std::string("decoder.runtime name=") + decoder->name +
+        " hwaccel_flags=" + std::to_string(decoderContext->hwaccel_flags));
 
     auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(decoderContext));
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
 
-    MediaBufferRef decoderConfig = std::move(buffer).value();
-    auto decoderStatus = emitOutput(context, "decoder", decoderConfig);
-    if (!decoderStatus) {
-        return decoderStatus;
-    }
+    m_preparedDecoder = std::move(buffer).value();
 
     if (context.findOutputChannel(nodeId(), "timestamp_source")) {
-        auto timestampStatus = emitOutput(context, "timestamp_source", decoderConfig);
-        if (!timestampStatus) {
-            return timestampStatus;
+        auto timestampContext = ::media::ffmpeg::makeCodecContext(nullptr);
+        if (!timestampContext) {
+            return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+                "Could not allocate immutable decoder timing metadata"));
+        }
+        timestampContext->pkt_timebase =
+            AVRational{stream.time.timeBase.num, stream.time.timeBase.den};
+        timestampContext->time_base = timestampContext->pkt_timebase;
+        timestampContext->codec_type = AVMEDIA_TYPE_VIDEO;
+        auto timestampBuffer = FFmpegBufferFactory::wrapCodecContext(
+            std::move(timestampContext));
+        if (!timestampBuffer) return ::media::Status::failure(timestampBuffer.error());
+        {
+            std::lock_guard lock(m_snapshotMutex);
+            m_timestampSource = timestampBuffer.value();
         }
     }
 
     return ::media::Status::success();
 }
 
-::media::Status CodecResolverNode::resolveEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
+::media::Status CodecResolverNode::prepareEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
     const MediaNodeOptions* options = nodeOptions(context);
 
@@ -325,12 +453,22 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
                          " hw_device_ctx=" + (encoderContext && encoderContext->hw_device_ctx ? "set" : "none") +
                          " hw_frames_ctx=" + (encoderContext && encoderContext->hw_frames_ctx ? "set" : "none"));
 
+    auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*encoderContext);
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
+    auto readback = MediaVideoEncoderReadback::capture(*encoderContext);
+    if (!readback) return ::media::Status::failure(readback.error());
+    {
+        std::lock_guard lock(m_snapshotMutex);
+        m_encoderReadback = std::move(readback).value();
+        m_encoderParametersSnapshot = std::move(snapshot).value();
+    }
     auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderBuild.context));
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
 
-    return emitOutput(context, "encoder", std::move(buffer).value());
+    m_preparedEncoder = std::move(buffer).value();
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

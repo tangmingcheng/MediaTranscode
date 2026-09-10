@@ -403,6 +403,7 @@ openMpegTsRuntimeSession(
     result.streams.video.streamIndex = video->index;
     result.streams.video.codecName = video->format.codec.codecName;
     result.streams.video.width = video->format.video.size.width;
+    result.streams.video.sampleAspectRatio = video->format.video.sampleAspectRatio;
     result.streams.video.height = video->format.video.size.height;
     result.streams.video.bitrateBitsPerSecond = video->format.codec.bitrate;
     auto resolvedVideoFrameRate = resolveMpegTsVideoFrameRate(

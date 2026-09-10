@@ -571,6 +571,18 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         }
         const auto& [discontinuity, generationBeforeObservation] =
             std::get<std::pair<MediaRtpDiscontinuity, std::uint64_t>>(item);
+        const auto* sourceOptions = nodeOptions(context);
+        if (sourceOptions && sourceOptions->has("source.playback_epoch.identity_transition")) {
+            if (sourceOptions->value("source.playback_epoch.identity_transition") != "replan_session") {
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "raw RTP input has an unsupported playback source identity transition policy"));
+            }
+            if (discontinuity.reason == MediaRtpDiscontinuityReason::SsrcChanged ||
+                discontinuity.reason == MediaRtpDiscontinuityReason::PayloadTypeChanged) {
+                return ::media::Status::failure(::media::ErrorInfo::unsupported(
+                    "RTP source identity changed; shared playback session requires replanning"));
+            }
+        }
         if (m_clockTracker->generation() == generationBeforeObservation) {
             m_clockTracker->observeContinuityLoss();
         }

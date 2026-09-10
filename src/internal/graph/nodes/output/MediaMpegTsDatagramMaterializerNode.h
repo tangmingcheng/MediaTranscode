@@ -46,11 +46,15 @@ private:
         const MediaWireDatagramBatchCollection& batches,
         MediaRunningTime materializedAt) noexcept;
     void emitDiagnostics(const char* stage) noexcept;
+    ::media::Result<MediaNodeProcessResult> finishProtocol(
+        MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     MediaBufferRef m_protocolPlan;
     MediaBufferRef m_transportPlan;
+    MediaBufferRef m_terminal;
+    bool m_terminalReportPrepared = false;
     MediaBufferRef m_pendingProtocolBatch;
     std::deque<MediaBufferRef> m_pendingOutputs;
     std::optional<Materializer> m_materializer;

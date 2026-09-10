@@ -1,5 +1,7 @@
 #include "internal/graph/nodes/demux/DemuxNode.h"
 #include "internal/graph/protocol/FFmpegInputReadTermination.h"
+#include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
+#include "internal/graph/time/MediaSteadyClock.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -69,6 +71,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     }
 
     ::media::ffmpeg::PacketPtr packet;
+    std::optional<std::int64_t> receivedAtNs;
     MediaDemuxPacketProvenance provenance{
         MediaDemuxPacketOrigin::LiveDemuxRead,
         m_session->nextLiveOrdinal};
@@ -93,6 +96,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
             return processProgress(
                 ::media::Status::failure(*termination.error()));
         }
+        receivedAtNs = mediaSteadyClockNowNs();
         provenance.ordinal = m_session->nextLiveOrdinal++;
     }
 
@@ -100,6 +104,14 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     if (packet->stream_index >= 0 && packet->stream_index < static_cast<int>(m_formatContext->nb_streams)) {
         streamKind = FFmpegDescriptorMapper::toStreamKind(
             m_formatContext->streams[packet->stream_index]->codecpar->codec_type);
+    }
+
+    if (receivedAtNs && packet->data && packet->size > 0 &&
+        (streamKind == MediaStreamKind::Video || streamKind == MediaStreamKind::Audio)) {
+        const auto activity = context.inputActivity();
+        if (!activity) return processProgress(::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("Demux input requires runtime activity evidence")));
+        activity->observe(*receivedAtNs);
     }
 
     auto buffer = FFmpegBufferFactory::wrapPacket(

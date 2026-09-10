@@ -17,6 +17,11 @@ namespace media::ffmpeg::graph {
     return ::media::Status::success();
 }
 
+::media::Status MediaRuntimeNode::finishExecution(MediaGraphExecutionContext&) noexcept
+{
+    return ::media::Status::success();
+}
+
 ::media::Status MediaRuntimeNode::stop(MediaGraphExecutionContext&)
 {
     return ::media::Status::success();

@@ -57,6 +57,8 @@ private:
     ::media::Status collectPacketizedDatagram(
         std::span<const std::uint8_t> bytes,
         std::size_t payloadOctets);
+    ::media::Result<MediaNodeProcessResult> finishProtocol(
+        MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
     MediaProtocolOutputSessionKey m_plannedSessionKey;
@@ -67,6 +69,8 @@ private:
     std::optional<MediaProtocolOutputActivation> m_activationFacts;
     MediaBufferRef m_codec;
     MediaBufferRef m_transportPlan;
+    MediaBufferRef m_terminal;
+    bool m_terminalReportPrepared = false;
     MediaBufferRef m_stagedConfigurationAccessUnit;
     MediaBufferRef m_pendingAccessUnit;
     MediaBufferRef m_pendingDescription;

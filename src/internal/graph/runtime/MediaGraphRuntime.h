@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaRuntimeReclamationPlan.h"
+
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -21,6 +23,8 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphRuntimeLifecycleExecutor;
+class MediaRuntimeBranch;
+class MediaRuntimeBranchResourceReservation;
 class MediaAvSyncClockSource;
 class MediaAvStartupVideoPreparationState;
 class MediaProtocolOutputRuntimeAuthority;
@@ -63,6 +67,12 @@ public:
     ::media::Status compile(MediaRealtimeExecutableGraph executable);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
     ::media::Status registerDefaultRuntimeNodes();
+    ::media::Result<std::shared_ptr<MediaRuntimeBranch>> extractInitialBranch(
+        std::uint64_t id, std::span<const MediaNodeId> nodes,
+        std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
+        std::span<const MediaNodeId> retirementProducerIds,
+        std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs,
+        const MediaRuntimeReclamationPlan& reclamationPlan);
 
     void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
     const MediaThreadingPolicy& threadingPolicy() const noexcept;
@@ -91,6 +101,7 @@ public:
     const MediaGraphThreadedExecutor& threadedExecutor() const noexcept;
 
     const MediaGraph* graph() const noexcept;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> protocolOutputAuthority() const noexcept;
     MediaRuntimeAcceptanceCollector& acceptanceCollector() noexcept;
     const MediaRuntimeAcceptanceCollector& acceptanceCollector() const noexcept;
     std::size_t observeQueueHighWatermark(std::size_t queued) const noexcept;

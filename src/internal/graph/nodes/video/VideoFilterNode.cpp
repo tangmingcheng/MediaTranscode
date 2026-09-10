@@ -5,12 +5,15 @@
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 
 extern "C" {
 #include <libavfilter/buffersink.h>
@@ -75,8 +78,9 @@ void VideoFilterLineageState::resetForLifecycle() noexcept
 {
     auto lineageLock = lock();
     clearLineageStorage();
-    encoderConfig.reset();
-    encoderContext = nullptr;
+    outputTimeBase = AVRational{0, 1};
+    inputFrameRate = AVRational{0, 1};
+    sourceFramesOwner.reset();
     resetGenerationLifecycle();
 }
 namespace {
@@ -97,36 +101,6 @@ std::string rationalText(AVRational rational)
         return "unknown";
     }
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
-}
-
-AVRational sanitizeSampleAspectRatio(AVRational ratio) noexcept
-{
-    return rationalKnown(ratio) ? ratio : AVRational{ 1, 1 };
-}
-
-bool frameRateAcceptable(AVRational frameRate) noexcept
-{
-    if (!rationalKnown(frameRate)) {
-        return false;
-    }
-
-    const double fps = av_q2d(frameRate);
-    return fps > 1.0 && fps < 240.0;
-}
-
-AVRational chooseInputFrameRate(const MediaBufferRef& buffer, AVRational plannedFrameRate) noexcept
-{
-    if (buffer) {
-        const MediaRational frameRate = buffer->timeDescriptor().frameRate;
-        if (frameRate.isKnown()) {
-            const AVRational avFrameRate = toAVRational(frameRate);
-            if (frameRateAcceptable(avFrameRate)) {
-                return avFrameRate;
-            }
-        }
-    }
-
-    return frameRateAcceptable(plannedFrameRate) ? plannedFrameRate : AVRational{ 0, 1 };
 }
 
 std::string pixelFormatName(AVPixelFormat format)
@@ -199,6 +173,15 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 ::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context)
 {
     resetRuntimeState();
+    const auto* options = nodeOptions(context);
+    if (!options) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "VideoFilterNode requires planned execution options"));
+    auto execution = MediaVideoFilterExecutionPlanCodec::decode(*options);
+    if (!execution) return ::media::Status::failure(execution.error());
+    if (execution.value().output.filterDescription != options->value("filter.pipeline.filter"))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode filter description differs from its execution authority"));
+    m_executionPlan = std::move(execution).value();
     auto input = MediaVideoFrameContractValidator::contractFromOptions(
         nodeOptions(context), "filter.pipeline.input", "VideoFilterNode");
     auto output = MediaVideoFrameContractValidator::contractFromOptions(
@@ -244,6 +227,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_preparationFeedArmed = false;
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
+    m_executionPlan.reset();
     m_inputContract.reset();
     m_outputContract.reset();
     m_drmPrimeInputFrames = 0;
@@ -311,7 +295,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
-    if (!m_lineageState->encoderContext) {
+    if (m_executionPlan->timing == MediaVideoFilterTimingAuthority::PreparedEncoderMetadata &&
+        !rationalKnown(m_lineageState->outputTimeBase)) {
         auto codecInput = tryPopInputOptional(context, "codec");
         if (!codecInput) {
             return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
@@ -424,23 +409,14 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected encoder codec context buffer"));
     }
 
-    if (!rationalKnown(codecContext->time_base)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterNode requires encoder time_base"));
-    }
-
-    if (codecContext->pix_fmt == AV_PIX_FMT_NONE) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterNode requires encoder pix_fmt"));
-    }
-
-    m_lineageState->encoderConfig = buffer;
-    m_lineageState->encoderContext = codecContext;
-
-    filterLog(MediaGraphDiagnosticLevel::State,
-              std::string("bind_encoder codec_tb=") + rationalText(codecContext->time_base) +
-                  " pix_fmt=" + pixelFormatName(codecContext->pix_fmt) +
-                  " size=" + std::to_string(codecContext->width) + "x" + std::to_string(codecContext->height));
+    auto snapshot = FFmpegCodecParametersMaterializer::snapshot(*codecContext);
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
+    const auto& time = snapshot.value()->timeDescriptor();
+    if (!time.timeBase.isKnown() || !time.frameRate.isKnown())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode requires immutable prepared encoder time base and frame rate"));
+    m_lineageState->outputTimeBase = toAVRational(time.timeBase);
+    m_lineageState->inputFrameRate = toAVRational(time.frameRate);
 
     if (context.findOutputChannel(nodeId(), "codec")) {
         return emitOutput(context, "codec", buffer);
@@ -457,25 +433,30 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected first frame"));
     }
 
-    if (!m_lineageState->encoderContext) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("VideoFilterNode encoder context is not bound"));
+    if (!m_executionPlan) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "VideoFilterNode execution plan is not bound"));
+    const MediaRational inputTimeBase = firstFrameBuffer->timeDescriptor().timeBase;
+    if (!inputTimeBase.isKnown()) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "VideoFilterNode requires authoritative input frame time base"));
+    AVRational pixelAspect = firstFrame->sample_aspect_ratio;
+    if (m_executionPlan->timing == MediaVideoFilterTimingAuthority::SourceFrame) {
+        m_lineageState->outputTimeBase = toAVRational(inputTimeBase);
+        m_lineageState->inputFrameRate = toAVRational(m_executionPlan->sourceFrameRate);
+        const auto preparedAspect = toAVRational(m_executionPlan->sourceSampleAspectRatio);
+        if (rationalKnown(pixelAspect) && rationalKnown(preparedAspect) &&
+            av_cmp_q(pixelAspect, preparedAspect) != 0)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFilterNode source aspect ratio differs from prepared source facts"));
+        if (!firstFrame->hw_frames_ctx) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode independent output pool requires a hardware source pool"));
+        m_lineageState->sourceFramesOwner = ::media::ffmpeg::makeBufferRef(firstFrame->hw_frames_ctx);
+        if (!m_lineageState->sourceFramesOwner) return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("VideoFilterNode source pool identity"));
     }
-
-    const MediaRational inputTimeBase = firstFrameBuffer ? firstFrameBuffer->timeDescriptor().timeBase : MediaRational{};
-    if (!inputTimeBase.isKnown()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterNode requires input frame time_base"));
-    }
-
-    const AVRational inputFrameRate = chooseInputFrameRate(
-        firstFrameBuffer, m_lineageState->encoderContext->framerate);
-    if (!rationalKnown(inputFrameRate)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterNode cannot resolve input frame rate; upstream must provide frame rate or encoder framerate"));
-    }
-
-    const AVRational pixelAspect = sanitizeSampleAspectRatio(firstFrame->sample_aspect_ratio);
+    const AVRational inputFrameRate = m_lineageState->inputFrameRate;
+    if (!rationalKnown(inputFrameRate) || !rationalKnown(m_lineageState->outputTimeBase) ||
+        pixelAspect.num < 0 || pixelAspect.den <= 0) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode requires explicit frame rate, output time base and source sample aspect ratio"));
 
     VideoFilterGraphBuildRequest request;
     request.options = nodeOptions(context);
@@ -514,15 +495,14 @@ void VideoFilterNode::resetRuntimeState() noexcept
     out << "initialize input_tb=" << rationalText(m_lineageState->inputTimeBase)
         << " input_fps=" << rationalText(inputFrameRate)
         << " sink_tb=" << rationalText(m_lineageState->sinkTimeBase)
-        << " encoder_tb=" << rationalText(m_lineageState->encoderContext->time_base)
+        << " output_tb=" << rationalText(m_lineageState->outputTimeBase)
         << " input_fmt=" << pixelFormatName(inputFormat)
-        << " encoder_fmt=" << pixelFormatName(m_lineageState->encoderContext->pix_fmt)
         << " input_size=" << firstFrame->width << "x" << firstFrame->height
-        << " encoder_size=" << m_lineageState->encoderContext->width << "x"
-        << m_lineageState->encoderContext->height
         << " hardware_source=" << (built.hardwareSource ? "true" : "false")
         << " planner_filter=" << built.plannerFilter
         << " desc=" << built.filterDescription
+        << " allocation_authority=" << m_executionPlan->output.allocationAuthority
+        << " completion_authority=" << m_executionPlan->output.completionAuthority
         << " initialize_elapsed_ms=" << initializeElapsed.count();
     filterLog(MediaGraphDiagnosticLevel::State, out.str());
 
@@ -565,6 +545,11 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
+    if (m_executionPlan->output.allocation == MediaVideoFilterAllocation::IndependentOutputPool &&
+        (!frame->hw_frames_ctx || !m_lineageState->sourceFramesOwner ||
+         frame->hw_frames_ctx->data != m_lineageState->sourceFramesOwner->data))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode source pool changed after independent output negotiation"));
     const auto& inputPayloadCredit = FFmpegFrameView::payloadCredit(buffer);
     if (!inputPayloadCredit && context.payloadCreditsRequired()) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
@@ -610,23 +595,20 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument(
                 "VideoFilterNode requires one unowned frame payload credit"));
     }
-    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
-        ? [&]() -> ::media::Result<AVBufferRef*> {
-              if (!m_lineageState->pendingLineage) {
-                  return ::media::Result<AVBufferRef*>::failure(
-                      ::media::ErrorInfo::invalidArgument(
-                          "VideoFilterNode requires canonical frame lineage"));
-              }
-              auto token = m_lineageRegistry->submit(
-                  m_lineageState->pendingLineage);
-              return token
-                  ? makeMediaFfmpegCodecOpaque(
-                        std::move(token).value(),
-                        m_lineageState->pendingPayloadCredit)
-                  : ::media::Result<AVBufferRef*>::failure(token.error());
-          }()
-        : makeMediaFfmpegCodecOpaque(
-              m_lineageState->pendingPayloadCredit);
+    if (m_lineageState->pendingPayloadCredit) {
+        auto retained = retainMediaFfmpegPayload(*m_lineageState->pendingFrame,
+                                                m_lineageState->pendingPayloadCredit);
+        if (!retained) return retained;
+        m_lineageState->pendingPayloadCredit.reset();
+    }
+    if (!m_lineageRegistry) return ::media::Status::success();
+    if (!m_lineageState->pendingLineage) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode requires canonical input lineage"));
+    }
+    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
+    if (!token) return ::media::Status::failure(token.error());
+    auto opaque = makeMediaFfmpegCodecOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
     m_lineageState->pendingFrame->opaque_ref = opaque.value();
     if (m_lineageState->pendingLineage) {
@@ -731,6 +713,11 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("VideoFilterNode output frame contract is not bound"));
     }
+    if (m_executionPlan->output.allocation == MediaVideoFilterAllocation::IndependentOutputPool &&
+        (!frame->hw_frames_ctx || !m_lineageState->sourceFramesOwner ||
+         frame->hw_frames_ctx->data == m_lineageState->sourceFramesOwner->data))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode output aliases the source pool despite its independent allocation contract"));
     auto outputFacts = MediaVideoFrameContractValidator::validate(
         *frame, *m_outputContract, "VideoFilterNode filter output");
     if (!outputFacts) return ::media::Status::failure(outputFacts.error());
@@ -768,8 +755,9 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
     MediaTimeDescriptor timeDescriptor;
     timeDescriptor.timeBase = MediaRational{
-        m_lineageState->encoderContext->time_base.num,
-        m_lineageState->encoderContext->time_base.den};
+        m_lineageState->outputTimeBase.num,
+        m_lineageState->outputTimeBase.den};
+    timeDescriptor.frameRate = MediaRational{m_lineageState->inputFrameRate.num, m_lineageState->inputFrameRate.den};
     buffer.value()->setTimeDescriptor(timeDescriptor);
 
     AVFrame* outputFrame = FFmpegFrameView::writableFrame(buffer.value());
@@ -855,7 +843,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
 ::media::Status VideoFilterNode::rescaleAndValidateFrame(AVFrame* frame) noexcept
 {
-    if (!frame || !m_lineageState->encoderContext) {
+    if (!frame || !rationalKnown(m_lineageState->outputTimeBase)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode filtered frame is invalid"));
     }
@@ -868,7 +856,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     const int64_t ptsIn = frame->pts;
     auto rescaledPts = rescaleStrictlyIncreasingTimestamp(frame->pts,
                                                           m_lineageState->sinkTimeBase,
-                                                          m_lineageState->encoderContext->time_base,
+                                                          m_lineageState->outputTimeBase,
                                                           m_lineageState->lastSubmittedPts);
     if (!rescaledPts) {
         return ::media::Status::failure(rescaledPts.error());
@@ -884,8 +872,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
         std::ostringstream out;
         out << "frame seq=" << decision.sequence
             << " sink_tb=" << rationalText(m_lineageState->sinkTimeBase)
-            << " encoder_tb=" << rationalText(
-                   m_lineageState->encoderContext->time_base)
+            << " output_tb=" << rationalText(
+                   m_lineageState->outputTimeBase)
             << " pts_in=" << ptsIn
             << " pts_out=" << frame->pts
             << " fmt=" << pixelFormatName(static_cast<AVPixelFormat>(frame->format))

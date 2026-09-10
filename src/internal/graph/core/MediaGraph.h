@@ -16,6 +16,7 @@
 #include <string>
 #include <optional>
 #include <vector>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -24,6 +25,7 @@ public:
     MediaGraph() = default;
 
     void clear();
+    void removeNodes(std::span<const MediaNodeId> nodes);
 
     MediaNodeId addNode(MediaNodeKind kind,
                         std::string name,
@@ -91,6 +93,7 @@ public:
     std::size_t nodeCount() const;
     std::size_t edgeCount() const;
     bool setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan);
+    bool replacePayloadCreditPlan(MediaGraphPayloadCreditPlan plan);
     bool setPayloadCreditMode(MediaGraphPayloadCreditMode mode);
     const std::optional<MediaGraphPayloadCreditMode>& payloadCreditMode()
         const noexcept;

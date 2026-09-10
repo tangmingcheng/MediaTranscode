@@ -1,7 +1,10 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeOutputSourceRetentionPlanner.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/realtime/MediaRealtimeVideoEncodingGroupBuilder.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 #include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
@@ -16,6 +19,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
+#include <algorithm>
 #include <string>
 #include <optional>
 #include <string_view>
@@ -26,6 +30,34 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
+
+::media::Status appendVideoProtocolOutput(
+    MediaGraph& graph, const std::string& prefix,
+    const MediaEncodedBranchEndpoints& video,
+    const MediaRealtimeVideoRuntimePlan& runtime)
+{
+    MediaRealtimeVideoSchedulerSegmentOptions options;
+    options.prefix = prefix + ".output";
+    options.encodedVideo = video.packet;
+    auto scheduled = MediaRealtimeVideoSchedulerSegmentBuilder::build(graph, options, runtime);
+    if (!scheduled) return ::media::Status::failure(scheduled.error());
+    if (std::holds_alternative<MediaVideoOnlySeparateRtpOutputRuntimePlan>(runtime.outputAdapter)) {
+        auto output = MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
+            graph, MediaVideoOnlyScheduledRtpOutputSegmentOptions{
+                prefix + ".rtp_output", scheduled.value().activation,
+                video.codec, scheduled.value().scheduledVideo}, runtime);
+        return output ? ::media::Status::success() : ::media::Status::failure(output.error());
+    }
+    if (std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(runtime.outputAdapter)) {
+        auto output = MediaScheduledMpegTsOutputSegmentBuilder::buildVideoOnly(
+            graph, MediaVideoOnlyScheduledMpegTsOutputSegmentOptions{
+                prefix + ".mpegts_output", scheduled.value().activation,
+                video.codec, scheduled.value().scheduledVideo}, runtime);
+        return output ? ::media::Status::success() : ::media::Status::failure(output.error());
+    }
+    return ::media::Status::failure(::media::ErrorInfo::unsupported(
+        "video output requires a production protocol adapter"));
+}
 
 struct RealtimePacketInputChain {
     MediaNodeId input;
@@ -673,47 +705,15 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                     "Synchronized realtime output requires a production adapter"));
         }
     } else if (videoRuntime) {
-        MediaRealtimeVideoSchedulerSegmentOptions schedulerOptions;
-        schedulerOptions.prefix = "realtime.video_only.output";
-        schedulerOptions.encodedVideo = video.value().packet;
-        auto scheduled = MediaRealtimeVideoSchedulerSegmentBuilder::build(
-            graph, schedulerOptions, *videoRuntime);
-        if (!scheduled) {
-            return ::media::Result<MediaGraph>::failure(scheduled.error());
-        }
-        if (std::holds_alternative<
-                MediaVideoOnlySeparateRtpOutputRuntimePlan>(
-                videoRuntime->outputAdapter)) {
-            auto output = MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
-                graph,
-                MediaVideoOnlyScheduledRtpOutputSegmentOptions{
-                    "realtime.video_only.rtp_output",
-                    scheduled.value().activation,
-                    video.value().codec,
-                    scheduled.value().scheduledVideo},
-                *videoRuntime);
-            if (!output) {
-                return ::media::Result<MediaGraph>::failure(output.error());
-            }
-        } else if (std::holds_alternative<
-                       MediaProjectMpegTsRuntimeOutputPlan>(
-                       videoRuntime->outputAdapter)) {
-            auto output =
-                MediaScheduledMpegTsOutputSegmentBuilder::buildVideoOnly(
-                    graph,
-                    MediaVideoOnlyScheduledMpegTsOutputSegmentOptions{
-                        "realtime.video_only.mpegts_output",
-                        scheduled.value().activation,
-                        video.value().codec,
-                        scheduled.value().scheduledVideo},
-                    *videoRuntime);
-            if (!output) {
-                return ::media::Result<MediaGraph>::failure(output.error());
-            }
-        } else {
-            return ::media::Result<MediaGraph>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "VideoOnly runtime requires a production output adapter"));
+        if (!videoOptions.plan.encodedOutputFanout) return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::notInitialized("Initial video output lacks an encoding group fanout plan"));
+        auto encoded = MediaRealtimeVideoEncodingGroupBuilder::appendFanout(graph,
+            "realtime.video", video.value(), *videoOptions.plan.encodedOutputFanout,
+            videoRuntime->edgePolicies.synchronizedPacket);
+        if (!encoded) return ::media::Result<MediaGraph>::failure(encoded.error());
+        if (auto status = appendVideoProtocolOutput(
+                graph, "realtime.video_only", encoded.value(), *videoRuntime); !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
         }
     } else {
         return ::media::Result<MediaGraph>::failure(
@@ -726,8 +726,22 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             ::media::ErrorInfo::notInitialized(
                 "final realtime graph requires its resource planning ledger"));
     }
+    if (plan.videoPlan.sourcePlaybackEpoch) {
+        if (plan.videoPlan.sourcePlaybackEpoch->identityTransition !=
+            MediaVideoSourceIdentityTransition::ReplanSession) {
+            return ::media::Result<MediaGraph>::failure(::media::ErrorInfo::unsupported(
+                "unsupported shared video source identity transition"));
+        }
+        for (const auto& node : graph.nodes()) {
+            if (node.kind != MediaNodeKind::RawRtpInput) continue;
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner,
+                    node.id, "source.playback_epoch.identity_transition", "replan_session"); !status) {
+                return ::media::Result<MediaGraph>::failure(status.error());
+            }
+        }
+    }
     auto finalLedger = MediaFinalGraphResourceLedgerCompiler::compile(
-        graph, *plan.resourceLedger);
+        graph, *plan.resourceLedger, {});
     if (!finalLedger) {
         return ::media::Result<MediaGraph>::failure(finalLedger.error());
     }
@@ -784,7 +798,190 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(status.error());
         }
     }
+    std::visit([&](auto& runtime) {
+        runtime.threadingPolicy.maxWorkerThreads = graph.nodeCount();
+    }, plan.runtime);
     return ::media::Result<MediaGraph>::success(std::move(graph));
+}
+
+::media::Result<MediaRealtimeVideoEncodingGroupGraph>
+MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
+    MediaGraph graph,
+    const MediaRealtimeRtpTranscodePlan& plan,
+    const std::string& prefix,
+    MediaEndpoint formatSource,
+    MediaSharedVideoDecodeEndpoints sharedDecode,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
+{
+    using Result = ::media::Result<MediaRealtimeVideoEncodingGroupGraph>;
+    const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
+    if (!runtime || !plan.resourceLedger || prefix.empty() || !graph.payloadCreditPlan()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "output branch requires a video runtime, resource ledger, prefix and admitted session graph"));
+    }
+    for (const auto& node : graph.nodes()) {
+        if (node.name.starts_with(prefix + ".")) return Result::failure(
+            ::media::ErrorInfo::invalidArgument("output branch prefix is already allocated"));
+    }
+    const auto previousNodes = graph.nodeCount();
+    auto* sourceCodec = graph.findOutputPort(sharedDecode.codec.node, sharedDecode.codec.port);
+    auto* sourceFormat = graph.findOutputPort(formatSource.node, formatSource.port);
+    auto* sourceFrame = graph.findOutputPort(sharedDecode.frame.node, sharedDecode.frame.port);
+    if (!sourceCodec || !sourceFormat || !sourceFrame ||
+        sourceCodec->payloadKind != MediaPayloadKind::CodecContext ||
+        sourceFrame->payloadKind != MediaPayloadKind::Frame) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "output branch requires existing decoded frame and metadata endpoints"));
+    }
+    sourceCodec->multiple = true;
+    sourceFormat->multiple = true;
+    sourceFrame->multiple = true;
+    MediaVideoTranscodeBranchOptions options;
+    options.prefix = prefix;
+    options.plan = plan.videoPlan;
+    options.parameters = plan.videoParameters;
+    options.queues = runtime->queues;
+    options.edgePolicies = runtime->edgePolicies;
+    options.lineageEdgePolicies = runtime->lineageEdgePolicies;
+    options.formatSourceNode = formatSource.node;
+    options.formatSourcePort = formatSource.port;
+    options.sharedDecode = std::move(sharedDecode);
+    auto video = MediaVideoTranscodeBranchBuilder::build(graph, options);
+    if (!video) return Result::failure(video.error());
+    if (!plan.videoPlan.encodedOutputFanout) return Result::failure(
+        ::media::ErrorInfo::notInitialized("Encoding group requires its planned packet fanout"));
+    auto encoded = MediaRealtimeVideoEncodingGroupBuilder::appendFanout(graph, prefix,
+        video.value(), *plan.videoPlan.encodedOutputFanout, runtime->edgePolicies.synchronizedPacket);
+    if (!encoded) return Result::failure(encoded.error());
+    std::vector<MediaNodeId> nodes;
+    for (std::size_t index = previousNodes; index < graph.nodeCount(); ++index) {
+        nodes.push_back(graph.nodes()[index].id);
+    }
+    auto resources = MediaFinalGraphResourceLedgerCompiler::compile(
+        graph, *plan.resourceLedger, nodes);
+    if (!resources) return Result::failure(resources.error());
+    auto* resolver = graph.findNode(nodes.front());
+    if (!resolver || resolver->kind != MediaNodeKind::CodecResolver) return Result::failure(
+        ::media::ErrorInfo::internalError("output branch lost its prepared encoder resolver"));
+    if (resources.value().encoderFramesPool) {
+        resolver->options.set("encoder.hardware_frames.initial_pool_surfaces",
+            std::to_string(resources.value().encoderFramesPool->initialPoolSurfaces));
+        resolver->options.set("encoder.hardware_frames.pool_authority",
+            resources.value().encoderFramesPool->authority);
+    }
+    // Keep existing producers' contracts. The session manager admits aggregate
+    // limits before publishing this immutable description to any worker.
+    auto merged = *graph.payloadCreditPlan();
+    const auto& added = resources.value().payloadCreditPlan;
+    merged.producers.insert(merged.producers.end(), added.producers.begin(), added.producers.end());
+    merged.maximumUnitBytes = (std::max)(merged.maximumUnitBytes, added.maximumUnitBytes);
+    if (!graph.replacePayloadCreditPlan(std::move(merged))) return Result::failure(
+        ::media::ErrorInfo::invalidArgument("output branch producer contract merge failed"));
+    auto growth = MediaRealtimeOutputSourceRetentionPlanner::plan(
+        graph, nodes, options.sharedDecode->frame.node, *plan.resourceLedger, resources.value());
+    if (!growth) return Result::failure(growth.error());
+    auto threading = runtime->threadingPolicy;
+    threading.maxWorkerThreads = nodes.size();
+    return Result::success(MediaRealtimeVideoEncodingGroupGraph{std::move(graph),
+        {std::move(nodes), threading, std::move(resources).value(),
+         std::move(growth).value(), std::move(encoded).value(), reclamationPlan}});
+}
+
+::media::Result<MediaRealtimeVideoProtocolOutputGraph>
+MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
+    MediaGraph graph, const MediaRealtimeRtpTranscodePlan& plan,
+    const std::string& prefix, MediaEncodedBranchEndpoints encoded,
+    const MediaRealtimeVideoJoinWaitPlan& joinWaitPlan,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
+{
+    using Result = ::media::Result<MediaRealtimeVideoProtocolOutputGraph>;
+    const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
+    const auto* fanout = graph.findNode(encoded.packet.node);
+    if (!runtime || !plan.resourceLedger || !fanout ||
+        fanout->kind != MediaNodeKind::EncodedVideoOutputFanout || !graph.payloadCreditPlan())
+        return Result::failure(::media::ErrorInfo::notInitialized("Protocol output requires an admitted encoding group"));
+    const auto previous = graph.nodeCount();
+    if (auto status = appendVideoProtocolOutput(graph, prefix, encoded, *runtime); !status)
+        return Result::failure(status.error());
+    std::vector<MediaNodeId> nodes;
+    for (std::size_t index = previous; index < graph.nodeCount(); ++index) nodes.push_back(graph.nodes()[index].id);
+    auto storage = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, *plan.resourceLedger, nodes);
+    if (!storage) return Result::failure(storage.error());
+    MediaNodeId producer;
+    for (const auto& edge : graph.edges()) {
+        if (edge.to.nodeId == encoded.packet.node && edge.payloadKind == MediaPayloadKind::Packet) producer = edge.from.nodeId;
+    }
+    const auto& strategies = graph.payloadCreditPlan()->producers;
+    if (std::none_of(strategies.begin(), strategies.end(), [&](const auto& strategy) {
+            return strategy.nodeId == producer && strategy.payloadKind == MediaPayloadKind::Packet;
+        })) return Result::failure(::media::ErrorInfo::notInitialized("Encoded fanout has no packet allocation producer"));
+    std::uint64_t references = 0;
+    std::vector<MediaNodeId> packetConsumers;
+    for (const auto& edge : graph.edges()) {
+        if (edge.payloadKind != MediaPayloadKind::Packet ||
+            std::find(nodes.begin(), nodes.end(), edge.to.nodeId) == nodes.end()) continue;
+        auto count = MediaCheckedArithmetic::add(references, edge.policy.queuePolicy.capacity,
+            "protocol retained packet queue references");
+        if (!count) return Result::failure(count.error());
+        references = count.value();
+        if (std::find(packetConsumers.begin(), packetConsumers.end(), edge.to.nodeId) == packetConsumers.end())
+            packetConsumers.push_back(edge.to.nodeId);
+    }
+    auto active = MediaCheckedArithmetic::add(references, packetConsumers.size(), "protocol active packet input slots");
+    auto count = active ? MediaCheckedArithmetic::add(active.value(), runtime->startup.packetCapacity,
+        "protocol scheduler prepared startup retention slots") : active;
+    if (!count || count.value() == 0) return Result::failure(count ?
+        ::media::ErrorInfo::invalidArgument("Protocol retention is empty") : count.error());
+    auto threading = runtime->threadingPolicy;
+    threading.maxWorkerThreads = nodes.size();
+    return Result::success({std::make_shared<const MediaGraph>(std::move(graph)),
+        std::move(nodes), threading, storage.value().reservedStorageBytes,
+        {producer, plan.resourceLedger->media.videoBytes, count.value()}, joinWaitPlan, reclamationPlan});
+}
+
+::media::Result<MediaRealtimeInitialVideoOutputTopology>
+MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& graph)
+{
+    using Result = ::media::Result<MediaRealtimeInitialVideoOutputTopology>;
+    MediaRealtimeInitialVideoOutputTopology topology;
+    MediaNodeId packetFanout;
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == MediaNodeKind::VideoOutputFanout) {
+            if (topology.sourceFanout.isValid()) return Result::failure(::media::ErrorInfo::invalidArgument("Duplicate initial frame fanout"));
+            topology.sourceFanout = node.id;
+        }
+        if (node.kind == MediaNodeKind::EncodedVideoOutputFanout) {
+            if (packetFanout.isValid()) return Result::failure(::media::ErrorInfo::invalidArgument("Duplicate initial encoding group"));
+            packetFanout = node.id;
+        }
+    }
+    if (!topology.sourceFanout.isValid() || !packetFanout.isValid()) return Result::failure(
+        ::media::ErrorInfo::notInitialized("Initial video topology requires frame and encoded distributors"));
+    const auto dependencies = [&](MediaNodeId root) {
+        std::vector<MediaNodeId> ids{root};
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            for (const auto& edge : graph.edges()) {
+                if (edge.to.nodeId == ids[i] && std::find(ids.begin(), ids.end(), edge.from.nodeId) == ids.end()) ids.push_back(edge.from.nodeId);
+            }
+        }
+        return ids;
+    };
+    topology.sharedNodeIds = dependencies(topology.sourceFanout);
+    topology.encodingNodeIds = dependencies(packetFanout);
+    std::erase_if(topology.encodingNodeIds, [&](MediaNodeId node) {
+        return std::find(topology.sharedNodeIds.begin(), topology.sharedNodeIds.end(), node) != topology.sharedNodeIds.end();
+    });
+    for (const auto& node : graph.nodes()) {
+        if (std::find(topology.sharedNodeIds.begin(), topology.sharedNodeIds.end(), node.id) == topology.sharedNodeIds.end() &&
+            std::find(topology.encodingNodeIds.begin(), topology.encodingNodeIds.end(), node.id) == topology.encodingNodeIds.end())
+            topology.outputNodeIds.push_back(node.id);
+    }
+    for (const auto& edge : graph.edges()) {
+        if (edge.to.nodeId == packetFanout && edge.payloadKind == MediaPayloadKind::Packet)
+            topology.encoded = {{edge.from.nodeId, "codec_parameters"}, {packetFanout, "packet"}};
+    }
+    if (!topology.encoded.codec.valid()) return Result::failure(::media::ErrorInfo::notInitialized("Initial encoding metadata endpoint is absent"));
+    return Result::success(std::move(topology));
 }
 
 ::media::Result<MediaRealtimeExecutableGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(

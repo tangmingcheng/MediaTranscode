@@ -1,8 +1,10 @@
 #pragma once
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/capability/MediaDecoderRuntimeFacts.h"
 
 #include <functional>
 #include <string>
+struct AVBufferRef;
 namespace media::ffmpeg::graph {
 struct MediaHardwareCapability {
     bool available = false;
@@ -22,8 +24,16 @@ public:
 
     ::media::Status validate(MediaPipelineChainPlan& chain,
                              const MediaPipelinePlannerOptions& options) const;
+    bool hasSuppliedValidator() const noexcept { return m_suppliedValidator; }
+    static MediaHardwareCapability validateOutputBranch(
+        MediaPipelineChainPlan& chain,
+        const MediaPipelinePlannerOptions& options,
+        AVBufferRef* runningFrames,
+        const MediaDecoderRuntimeFacts& decoderFacts,
+        const MediaVideoSharedSourcePlan& sourceAllocation);
 
 private:
     ChainValidator m_chainValidator;
+    bool m_suppliedValidator = false;
 };
 }

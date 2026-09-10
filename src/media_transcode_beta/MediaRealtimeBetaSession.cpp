@@ -33,8 +33,10 @@ mt_beta_error_code betaErrorCode(::media::ErrorCode code) noexcept
     case ::media::ErrorCode::Cancelled:
         return MT_BETA_ERROR_CANCELLED;
     case ::media::ErrorCode::NotInitialized:
-    case ::media::ErrorCode::InternalError:
+        return MT_BETA_ERROR_NOT_INITIALIZED;
     case ::media::ErrorCode::WouldBlock:
+        return MT_BETA_ERROR_WOULD_BLOCK;
+    case ::media::ErrorCode::InternalError:
         return MT_BETA_ERROR_INTERNAL;
     }
     return MT_BETA_ERROR_INTERNAL;
@@ -217,6 +219,97 @@ void MediaRealtimeBetaSession::requestStop() noexcept
     }
 }
 
+::media::Result<std::uint64_t> MediaRealtimeBetaSession::addOutput(
+    const mt_beta_video_output& output)
+{
+    auto mapped = MediaRealtimeBetaRequestMapper::mapOutput(output);
+    if (!mapped) return ::media::Result<std::uint64_t>::failure(mapped.error());
+    std::map<std::uint64_t, MediaRealtimeBetaTemporaryDescription> pending;
+    if (mapped.value().output.transport == ffmpeg::graph::MediaOutputTransportKind::RtpAvp) {
+        auto description = MediaRealtimeBetaTemporaryDescription::create();
+        if (!description) return ::media::Result<std::uint64_t>::failure(description.error());
+        mapped.value().output.sdpPath = description.value().path();
+        // Allocate the ownership node before the command is admitted.
+        pending.emplace(0, std::move(description).value());
+    }
+    std::lock_guard lock(m_descriptionMutex);
+    auto admitted = m_runControl.addOutput(mapped.value());
+    if (!admitted) return admitted;
+    if (!pending.empty()) {
+        auto ownership = pending.extract(pending.begin());
+        ownership.key() = admitted.value();
+        m_descriptions.insert(std::move(ownership));
+    }
+    return admitted;
+}
+
+::media::Status MediaRealtimeBetaSession::removeOutput(std::uint64_t outputId)
+{
+    return m_runControl.removeOutput(outputId);
+}
+
+std::vector<ffmpeg::graph::MediaRealtimeOutputSnapshot>
+MediaRealtimeBetaSession::outputSnapshots() const
+{
+    return m_runControl.outputSnapshots();
+}
+
+mt_beta_output_snapshot MediaRealtimeBetaSession::projectOutput(
+    const ffmpeg::graph::MediaRealtimeOutputSnapshot& output) noexcept
+{
+    mt_beta_output_snapshot snapshot{};
+    snapshot.output_id = output.outputId;
+    using State = ffmpeg::graph::MediaRealtimeOutputState;
+    switch (output.state) {
+    case State::Preparing: snapshot.state = MT_BETA_OUTPUT_PREPARING; break;
+    case State::WaitingForRandomAccess: snapshot.state = MT_BETA_OUTPUT_WAITING_FOR_RANDOM_ACCESS; break;
+    case State::Running: snapshot.state = MT_BETA_OUTPUT_RUNNING; break;
+    case State::Draining: snapshot.state = MT_BETA_OUTPUT_DRAINING; break;
+    case State::Retired: snapshot.state = MT_BETA_OUTPUT_RETIRED; break;
+    case State::Failed: snapshot.state = MT_BETA_OUTPUT_FAILED; break;
+    }
+    snapshot.detail = output.detail.c_str();
+    snapshot.output_description_path = output.descriptionPath.c_str();
+    if (output.error) {
+        snapshot.error_code = betaErrorCode(output.error->code);
+        snapshot.native_code = betaNativeCode(output.error->nativeCode);
+        using Stage = ffmpeg::graph::MediaRealtimeOutputFailureStage;
+        switch (output.stage) {
+        case Stage::Planning: snapshot.failure_stage = MT_BETA_FAILURE_GRAPH_BUILD; break;
+        case Stage::Preparation: snapshot.failure_stage = MT_BETA_FAILURE_PREFLIGHT; break;
+        case Stage::Publication: snapshot.failure_stage = MT_BETA_FAILURE_RUNTIME_START; break;
+        case Stage::Runtime: snapshot.failure_stage = MT_BETA_FAILURE_RUNTIME_EXECUTION; break;
+        case Stage::Drain: snapshot.failure_stage = MT_BETA_FAILURE_STOP; break;
+        case Stage::Release: snapshot.failure_stage = MT_BETA_FAILURE_RELEASE; break;
+        }
+    }
+    return snapshot;
+}
+
+void MediaRealtimeBetaSession::handleOutputChanged(
+    const ffmpeg::graph::MediaRealtimeOutputSnapshot& output)
+{
+    const auto projected = projectOutput(output);
+    mt_beta_realtime_event event{};
+    event.type = MT_BETA_EVENT_OUTPUT_STATE_CHANGED;
+    event.output_id = projected.output_id;
+    event.output_state = projected.state;
+    event.detail = projected.detail;
+    event.error_code = projected.error_code;
+    event.failure_stage = projected.failure_stage;
+    event.native_code = projected.native_code;
+    event.output_description_path = projected.output_description_path;
+    invokeCallback(event);
+    if (output.state == ffmpeg::graph::MediaRealtimeOutputState::Running) {
+        event.type = MT_BETA_EVENT_OUTPUT_READY;
+        invokeCallback(event);
+    }
+    if (output.state == ffmpeg::graph::MediaRealtimeOutputState::Retired) {
+        std::lock_guard lock(m_descriptionMutex);
+        m_descriptions.erase(output.outputId);
+    }
+}
+
 mt_beta_realtime_snapshot MediaRealtimeBetaSession::snapshot() const noexcept
 {
     std::lock_guard lock(m_snapshotMutex);
@@ -285,24 +378,17 @@ void MediaRealtimeBetaSession::runOnEventThread()
 {
     transitionState(MT_BETA_REALTIME_STARTING);
 
-    auto description = MediaRealtimeBetaTemporaryDescription::create();
-    if (!description) {
-        recordFirstFailure({
-            description.error(), MT_BETA_FAILURE_SESSION_CREATION,
-            MT_BETA_COMPLETION_STARTUP_FAILURE });
-        finishFailure();
-        return;
-    }
-    m_description.emplace(std::move(description).value());
-
-    auto request = MediaRealtimeBetaRequestMapper::map(
-        m_config, *m_description);
-    if (!request) {
-        recordFirstFailure({
-            request.error(), MT_BETA_FAILURE_SESSION_CREATION,
-            MT_BETA_COMPLETION_STARTUP_FAILURE });
-        finishFailure();
-        return;
+    auto request = m_config.request();
+    if (request.output.transport == ffmpeg::graph::MediaOutputTransportKind::RtpAvp) {
+        auto description = MediaRealtimeBetaTemporaryDescription::create();
+        if (!description) {
+            recordFirstFailure({ description.error(), MT_BETA_FAILURE_SESSION_CREATION,
+                MT_BETA_COMPLETION_STARTUP_FAILURE });
+            finishFailure();
+            return;
+        }
+        m_description.emplace(std::move(description).value());
+        request.output.sdpPath = m_description->path();
     }
 
     const auto& profile = MediaRealtimeBetaFixedProfile::current();
@@ -326,10 +412,11 @@ void MediaRealtimeBetaSession::runOnEventThread()
     observer.progress = [this](const auto& report) {
         handleProgress(report);
     };
+    observer.outputChanged = [this](const auto& output) { handleOutputChanged(output); };
     m_phase = SessionPhase::Preflight;
     m_controllerActive = true;
     const auto outcome = ffmpeg::graph::MediaRealtimeVideoRunController::run(
-        request.value(), policy.value(), m_runControl, observer);
+        request, policy.value(), m_runControl, observer);
     m_controllerActive = false;
     handleOutcome(outcome);
 }
@@ -338,20 +425,18 @@ void MediaRealtimeBetaSession::handlePrepared(
     const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report)
 {
     m_phase = SessionPhase::RuntimeStart;
-    if (!m_description ||
-        report.outputDescription.kind !=
-            ffmpeg::graph::MediaRealtimeVideoOutputDescriptionKind::
-                SessionDescriptionProtocol ||
-        report.outputDescription.path != m_description->path()) {
-        recordFirstFailure({
-            ::media::ErrorInfo::invalidArgument(
-                "selected output description does not match the session-owned path"),
-            MT_BETA_FAILURE_RUNTIME_START,
-            MT_BETA_COMPLETION_STARTUP_FAILURE });
-        requestStop();
-        return;
+    if (m_description) {
+        if (report.outputDescription.path != m_description->path() || !report.outputId) {
+            recordFirstFailure({ ::media::ErrorInfo::internalError(
+                "prepared output identity does not match the owned description"),
+                MT_BETA_FAILURE_RUNTIME_START, MT_BETA_COMPLETION_STARTUP_FAILURE });
+            requestStop();
+            return;
+        }
+        std::lock_guard lock(m_descriptionMutex);
+        m_descriptions.emplace(report.outputId, std::move(*m_description));
+        m_description.reset();
     }
-    m_outputDescriptionPath = report.outputDescription.path;
 
     auto projected = snapshot();
     auto status = MediaRealtimeBetaSnapshotProjector::projectPrepared(
@@ -397,44 +482,6 @@ void MediaRealtimeBetaSession::handleProgress(
         m_runningStateEmitted = true;
         transitionState(MT_BETA_REALTIME_RUNNING);
     }
-    auto output = publishOutputDescription(false);
-    if (!output) {
-        recordFirstFailure({
-            output.error(), MT_BETA_FAILURE_RUNTIME_EXECUTION,
-            MT_BETA_COMPLETION_RUNTIME_FAILURE });
-        requestStop();
-    }
-}
-
-::media::Status MediaRealtimeBetaSession::publishOutputDescription(
-    bool finalAttempt)
-{
-    if (m_outputReady) {
-        return ::media::Status::success();
-    }
-    if (!m_description || m_outputDescriptionPath.empty()) {
-        return finalAttempt
-            ? ::media::Status::failure(::media::ErrorInfo::ioFailure(
-                  "controller did not provide a session-owned output description"))
-            : ::media::Status::success();
-    }
-
-    auto text = m_description->readCompletedText();
-    if (!text) {
-        if (text.error().code == ::media::ErrorCode::WouldBlock &&
-            !finalAttempt) {
-            return ::media::Status::success();
-        }
-        if (text.error().code == ::media::ErrorCode::WouldBlock) {
-            return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-                "Beta output description was not completed"));
-        }
-        return ::media::Status::failure(text.error());
-    }
-    m_outputDescription = std::move(text).value();
-    m_outputReady = true;
-    emitOutputReady();
-    return ::media::Status::success();
 }
 
 void MediaRealtimeBetaSession::handleOutcome(
@@ -463,14 +510,6 @@ void MediaRealtimeBetaSession::handleOutcome(
         }
     }
 
-    if (!hasRecordedFailure()) {
-        auto output = publishOutputDescription(true);
-        if (!output) {
-            recordFirstFailure({
-                output.error(), MT_BETA_FAILURE_RUNTIME_EXECUTION,
-                MT_BETA_COMPLETION_RUNTIME_FAILURE });
-        }
-    }
     if (hasRecordedFailure()) {
         finishFailure();
         return;
@@ -645,14 +684,6 @@ void MediaRealtimeBetaSession::emitState(mt_beta_realtime_state state) noexcept
     mt_beta_realtime_event event{};
     event.type = MT_BETA_EVENT_STATE_CHANGED;
     event.state = state;
-    invokeCallback(event);
-}
-
-void MediaRealtimeBetaSession::emitOutputReady() noexcept
-{
-    mt_beta_realtime_event event{};
-    event.type = MT_BETA_EVENT_OUTPUT_READY;
-    event.output_description = m_outputDescription.c_str();
     invokeCallback(event);
 }
 

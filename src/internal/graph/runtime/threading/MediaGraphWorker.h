@@ -13,10 +13,6 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaGraphWorkerConfig {
-    uint32_t maxConsecutiveErrors = 1;
-};
-
 struct MediaGraphWorkerMetrics {
     std::atomic_uint64_t processCalls{ 0 };
     std::atomic_uint64_t progress{ 0 };
@@ -31,13 +27,11 @@ struct MediaGraphWorkerMetrics {
 class MediaGraphWorker final {
 public:
     MediaGraphWorker(MediaRuntimeNode& node,
-                     MediaGraphExecutionContext& context,
-                     MediaGraphWorkerConfig config = {});
+                     MediaGraphExecutionContext& context);
     MediaGraphWorker(MediaRuntimeNode& node,
                      MediaGraphExecutionContext& context,
                      MediaGraphWorkerFailureRecorder& failureRecorder,
-                     MediaGraphWorkerFailureSupervisor& failureSupervisor,
-                     MediaGraphWorkerConfig config = {});
+                     MediaGraphWorkerFailureSupervisor& failureSupervisor);
     ~MediaGraphWorker();
 
     MediaGraphWorker(const MediaGraphWorker&) = delete;
@@ -51,6 +45,7 @@ public:
 
     bool running() const noexcept;
     bool finished() const noexcept;
+    bool exited() const noexcept;
     bool stopRequested() const noexcept;
     bool aborted() const noexcept;
 
@@ -64,22 +59,26 @@ private:
         Secondary
     };
 
-    FailureDisposition recordFailure(::media::ErrorInfo error);
+    FailureDisposition recordFailure(::media::ErrorInfo error,
+        std::optional<MediaGraphWorkerFailurePhase> phase = std::nullopt);
     void recordThreadCpu(
         const ::media::Result<std::uint64_t>& startedAt) noexcept;
     void run();
+    void recordWaitOutcome(MediaNodeWakeup::WaitOutcome outcome);
 
 private:
     MediaRuntimeNode& m_node;
     MediaGraphExecutionContext& m_context;
     MediaNodeWakeup& m_wakeup;
+    std::shared_ptr<MediaGraphWorkerExitToken> m_exitToken;
     MediaGraphWorkerFailureRecorder m_localFailureRecorder;
     MediaGraphWorkerFailureRecorder* m_failureRecorder = nullptr;
     MediaGraphWorkerFailureSupervisor* m_failureSupervisor = nullptr;
-    MediaGraphWorkerConfig m_config;
     std::thread m_thread;
+    bool m_started = false;
     std::atomic_bool m_running{ false };
     std::atomic_bool m_finished{ false };
+    std::atomic_bool m_exited{ true };
     std::atomic_bool m_stopRequested{ false };
     std::atomic_bool m_aborted{ false };
     MediaGraphWorkerMetrics m_metrics;

@@ -11,7 +11,9 @@ MediaWireDatagramDescriptorValidator::MediaWireDatagramDescriptorValidator(
     const MediaWireDatagramDescriptor& descriptor)
 {
     const auto zero = MediaRunningTime::fromNanoseconds(0);
-    if (descriptor.generation == 0 || descriptor.endpointId == 0 ||
+    if ((descriptor.mediaBoundary != MediaWireMediaBoundary::None &&
+         descriptor.mediaBoundary != MediaWireMediaBoundary::VideoRandomAccessUnitEnd) ||
+        descriptor.generation == 0 || descriptor.endpointId == 0 ||
         descriptor.payloadSize == 0 ||
         descriptor.payloadOffset != m_expectedOffset ||
         descriptor.payloadOffset > m_payloadBytes ||

@@ -18,7 +18,8 @@ public:
         MediaRunningTime notBefore,
         MediaTsPreparedPacketClock packetClock,
         std::size_t packetSizeBytes,
-        std::size_t maximumPacketsPerDatagram) noexcept;
+        std::size_t maximumPacketsPerDatagram,
+        MediaWireMediaBoundary finalBoundary) noexcept;
 
     MediaTsPendingEmission(MediaTsPendingEmission&&) noexcept = default;
     MediaTsPendingEmission& operator=(MediaTsPendingEmission&&) noexcept = default;
@@ -55,6 +56,7 @@ private:
     std::optional<MediaTsPreparedPacketClock> m_packetClock;
     std::size_t m_packetSizeBytes;
     std::size_t m_maximumPacketsPerDatagram;
+    MediaWireMediaBoundary m_finalBoundary;
     bool m_materialized = false;
 };
 

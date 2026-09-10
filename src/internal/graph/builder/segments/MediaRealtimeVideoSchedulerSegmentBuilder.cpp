@@ -2,7 +2,6 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
-#include <algorithm>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
@@ -34,17 +33,33 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
             ::media::ErrorInfo::invalidArgument(
                 "VideoOnly scheduler source has the wrong type"));
     }
-    const bool schedulingAuthorityExists = std::any_of(
-        graph.nodes().begin(), graph.nodes().end(),
-        [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::VideoOutputScheduler ||
-                node.kind == MediaNodeKind::AvOutputScheduler ||
-                node.kind == MediaNodeKind::ScheduledOutputRouter;
-        });
-    if (schedulingAuthorityExists) {
+    if (!plan.sessionKey.valid()) {
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "VideoOnly scheduler rejects duplicate scheduling authority"));
+                "VideoOnly scheduler requires a planned output session"));
+    }
+    // A logical DAG contains independent output scheduling domains. Only the
+    // planner's protocol session identifies a domain; node names and shared
+    // encoded input endpoints do not establish scheduling authority.
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == MediaNodeKind::AvOutputScheduler ||
+            node.kind == MediaNodeKind::ScheduledOutputRouter) {
+            return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoOnly scheduler rejects an A/V scheduling domain"));
+        }
+        if (node.kind != MediaNodeKind::VideoOutputScheduler) continue;
+        const auto existing = node.options.values().find("protocol_output.session");
+        if (existing == node.options.values().end() || existing->second.empty()) {
+            return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Existing VideoOnly scheduler has no output session authority"));
+        }
+        if (existing->second == plan.sessionKey.value()) {
+            return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoOnly scheduler rejects duplicate authority in its output session"));
+        }
     }
     const auto& queue = plan.edgePolicies.synchronizedPacket.queuePolicy;
     if (!queue.bounded || queue.capacity == 0 ||

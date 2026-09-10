@@ -88,7 +88,7 @@ struct CommonPlan final {
              std::tuple{options.activation, MediaStreamKind::Metadata,
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent},
              std::tuple{options.videoCodec, MediaStreamKind::Video,
-                        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext},
+                        MediaEdgeKind::Metadata, expectAudio ? MediaPayloadKind::CodecContext : MediaPayloadKind::CodecParameters},
              std::tuple{options.scheduled,
                         expectAudio ? MediaStreamKind::Any
                                     : MediaStreamKind::Video,
@@ -114,9 +114,14 @@ struct CommonPlan final {
                    node.kind == MediaNodeKind::MpegTsDatagramMaterializer ||
                    node.kind == MediaNodeKind::MpegTsRtpSdpPublisher;
         });
-    if (duplicate) {
+    if (expectAudio && duplicate) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled MPEG-TS output rejects duplicate output authority"));
+    }
+
+    if (auto available = MediaDatagramOutputExecutionSegmentBuilder::validateSessionAvailable(
+            graph, plan.sessionKey); !available) {
+        return Result::failure(available.error());
     }
 
     MediaNodeId mux = MediaNodeId::invalid();
@@ -141,6 +146,7 @@ struct CommonPlan final {
             plan.output.muxSessionKind, false, true});
     if (!addedMux) return Result::failure(addedMux.error());
     mux = addedMux.value();
+    if (!expectAudio) graph.findInputPort(mux, "codec")->payloadKind = MediaPayloadKind::CodecParameters;
     if (rtpTransport) {
         rtpSdpPublisher = graph.addNode(
             MediaNodeKind::MpegTsRtpSdpPublisher,

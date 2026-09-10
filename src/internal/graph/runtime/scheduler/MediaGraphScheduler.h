@@ -46,6 +46,8 @@ public:
     ::media::Status registerNode(std::unique_ptr<MediaRuntimeNode> node);
     ::media::Status registerNodes(
         std::vector<std::unique_ptr<MediaRuntimeNode>> nodes);
+    ::media::Result<std::vector<std::unique_ptr<MediaRuntimeNode>>> takeNodes(
+        std::span<const MediaNodeId> nodes);
     MediaRuntimeNode* findNode(MediaNodeId nodeId);
     const MediaRuntimeNode* findNode(MediaNodeId nodeId) const;
 

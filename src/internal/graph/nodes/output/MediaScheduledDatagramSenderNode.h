@@ -1,12 +1,15 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/runtime/diagnostics/MediaVideoOutputReadyEvidence.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/runtime/network/MediaDatagramPacingController.h"
+#include "internal/graph/runtime/network/MediaDatagramServiceScopeArbiter.h"
 #include "internal/graph/runtime/network/MediaDatagramTransmitSession.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <unordered_map>
@@ -33,7 +36,11 @@ public:
            MediaScheduledDatagramSenderNodeDependencies dependencies);
 
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status bindServiceScopeArbiter(std::shared_ptr<MediaDatagramServiceScopeArbiter> arbiter);
+    const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter() const noexcept { return m_scopeArbiter; }
+    std::optional<MediaVideoOutputReadyEvidence> videoReadyEvidence() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Status finishExecution(MediaGraphExecutionContext& context) noexcept override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
@@ -76,13 +83,15 @@ private:
         MediaRunningTime submitCompletedAt);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void emitDiagnostics(const char* stage) noexcept;
-    void closeSender(::media::ErrorInfo cause) noexcept;
 
     MediaProtocolOutputSessionKey m_plannedSession;
     MediaTranscodeStreamSet m_streamSet;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_clock;
     std::unique_ptr<MediaDatagramTransmitPortFactory> m_portFactory;
     std::unique_ptr<MediaDatagramPacingController> m_pacingController;
+    std::shared_ptr<MediaDatagramServiceScopeArbiter> m_scopeArbiter;
+    std::shared_ptr<MediaDatagramServiceScopeArbiter::Member> m_scopeMember;
+    std::shared_ptr<MediaNodeWakeup> m_scopeWakeup;
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
     std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
     std::shared_ptr<MediaWireDatagramBatchBuffer> m_pendingBatch;
@@ -134,6 +143,8 @@ private:
     std::uint64_t m_partialSubmittedFailures = 0;
     std::uint64_t m_ambiguousSubmittedFailures = 0;
     bool m_diagnosticsEmitted = false;
+    mutable std::mutex m_videoReadyMutex;
+    std::optional<MediaVideoOutputReadyEvidence> m_videoReadyEvidence;
 };
 
 } // namespace media::ffmpeg::graph

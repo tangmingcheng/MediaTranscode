@@ -75,7 +75,6 @@ protected:
     ::media::Status stop(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& codecBuffer);
     ::media::Result<bool> receivePackets(MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> submitPendingFrame(
         MediaGraphExecutionContext& context);
@@ -85,7 +84,6 @@ private:
     ::media::Status attachPendingLineage();
 
 private:
-    bool m_encoderConfigEmitted = false;
     bool m_firstFrameDiagnosticEmitted = false;
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstPacketDiagnosticEmitted = false;

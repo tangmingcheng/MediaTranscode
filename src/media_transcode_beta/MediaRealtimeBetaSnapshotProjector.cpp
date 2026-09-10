@@ -30,45 +30,6 @@ mt_beta_selected_backend selectedBackend(
     return MT_BETA_BACKEND_UNKNOWN;
 }
 
-mt_beta_selected_filter selectedFilter(
-    const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report) noexcept
-{
-    if (!report.filterActive) {
-        return MT_BETA_FILTER_NONE;
-    }
-    const std::string_view name(report.filterName);
-    if (name.starts_with("scale_rkrga=")) {
-        return MT_BETA_FILTER_RGA;
-    }
-    if (name.starts_with("scale_d3d11=") ||
-        name.starts_with("scale_qsv=") ||
-        name.starts_with("scale_cuda=") ||
-        name.starts_with("scale_vaapi=") ||
-        name.starts_with("scale_videotoolbox=") ||
-        name == "passthrough_d3d11va" || name == "passthrough_qsv" ||
-        name == "passthrough_cuda" || name == "passthrough_vaapi" ||
-        name == "passthrough_videotoolbox") {
-        return MT_BETA_FILTER_HARDWARE;
-    }
-    return MT_BETA_FILTER_UNKNOWN;
-}
-
-::media::Status validateOutputCodec(
-    mt_beta_realtime_snapshot& snapshot,
-    std::string_view codecName)
-{
-    if (codecName == "h264") {
-        snapshot.output_codec = MT_BETA_VIDEO_CODEC_H264;
-        return ::media::Status::success();
-    }
-    if (codecName == "hevc") {
-        snapshot.output_codec = MT_BETA_VIDEO_CODEC_HEVC;
-        return ::media::Status::success();
-    }
-    return ::media::Status::failure(::media::ErrorInfo::unsupported(
-        "selected output codec has no Beta representation"));
-}
-
 template <typename Destination, typename Source>
 ::media::Result<Destination> checkedUnsigned(
     Source value,
@@ -94,9 +55,9 @@ mt_beta_realtime_snapshot MediaRealtimeBetaSnapshotProjector::initial(
     snapshot.state = MT_BETA_REALTIME_STARTING;
     snapshot.completion_reason = MT_BETA_COMPLETION_NONE;
     snapshot.selected_backend = MT_BETA_BACKEND_UNKNOWN;
-    snapshot.input_codec = config.inputCodec();
-    snapshot.output_codec = config.outputCodec();
-    snapshot.selected_filter = MT_BETA_FILTER_UNKNOWN;
+    const auto& codec = config.request().input.videoRtp.codecName;
+    snapshot.input_codec = codec == "h264" ? MT_BETA_VIDEO_CODEC_H264
+        : codec == "hevc" ? MT_BETA_VIDEO_CODEC_HEVC : MT_BETA_VIDEO_CODEC_UNKNOWN;
     return snapshot;
 }
 
@@ -104,13 +65,7 @@ mt_beta_realtime_snapshot MediaRealtimeBetaSnapshotProjector::initial(
     mt_beta_realtime_snapshot& snapshot,
     const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report)
 {
-    auto codec = validateOutputCodec(snapshot, report.outputCodecName);
-    if (!codec) {
-        return codec;
-    }
     snapshot.selected_backend = selectedBackend(report.hardwareDeviceKind);
-    snapshot.selected_filter = selectedFilter(report);
-    snapshot.zero_copy_planned = report.zeroCopyPlanned ? 1U : 0U;
     return ::media::Status::success();
 }
 

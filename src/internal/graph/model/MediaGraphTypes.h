@@ -19,6 +19,7 @@ constexpr MediaStreamIndex invalidMediaStreamIndex = -1;
 constexpr MediaTimeValue invalidMediaTimeValue = static_cast<MediaTimeValue>(INT64_MIN);
 
 struct MediaRational {
+    friend bool operator==(const MediaRational&, const MediaRational&) = default;
     int num = 0;
     int den = 1;
 
@@ -34,6 +35,7 @@ struct MediaRational {
 };
 
 struct MediaSize {
+    friend bool operator==(const MediaSize&, const MediaSize&) = default;
     int width = 0;
     int height = 0;
 

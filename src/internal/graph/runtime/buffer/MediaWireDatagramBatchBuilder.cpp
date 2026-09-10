@@ -41,7 +41,8 @@ MediaWireDatagramBatchBuilder::create(
     std::uint64_t endpointId,
     MediaRunningTime canonicalRelease,
     MediaRunningTime canonicalDeadline,
-    std::uint64_t globalSequence)
+    std::uint64_t globalSequence,
+    MediaWireMediaBoundary mediaBoundary)
 {
     if (m_finished || m_generation == 0 || endpointId == 0 ||
         bytes.empty() || canonicalRelease < MediaRunningTime::fromNanoseconds(0) ||
@@ -63,7 +64,7 @@ MediaWireDatagramBatchBuilder::create(
                 static_cast<std::uint64_t>(bytes.size()),
                 canonicalRelease,
                 canonicalDeadline,
-                globalSequence}});
+                globalSequence, mediaBoundary}});
     } catch (const std::bad_alloc&) {
         return ::media::Status::failure(
             ::media::ErrorInfo::allocationFailed(

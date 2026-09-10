@@ -1,6 +1,12 @@
 #pragma once
+#include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
+#include "internal/graph/model/MediaVideoSharedSourcePlan.h"
+
+#include "internal/graph/model/MediaVideoEncodingRequestContract.h"
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaDecoderInputRetention.h"
+#include "internal/graph/model/MediaVideoSourceEpochPlan.h"
 #include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/model/MediaEncoderOpenContract.h"
 #include "internal/graph/model/MediaEncoderRateControlPlan.h"
@@ -43,6 +49,8 @@ struct MediaPipelineStagePlan {
     std::optional<MediaEncoderRateControlPlan> encoderRateControl;
     std::optional<MediaEncoderOpenContract> encoderOpenContract;
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
+    std::optional<MediaDecoderInputRetention> preparedInputRetention;
+    std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
 
     const MediaHardwareDescriptor* frameContract() const noexcept
     {
@@ -129,9 +137,22 @@ struct MediaInputVideoStreamInfo {
     int height = 0;
     int64_t bitrateBitsPerSecond = 0;
     MediaRational frameRate;
+    MediaRational sampleAspectRatio;
+};
+
+enum class MediaVideoNoOutputPolicy { Consume };
+enum class MediaVideoOutputOverflowPolicy { FailBranch };
+
+struct MediaVideoOutputFanoutPlan final {
+    MediaVideoNoOutputPolicy noOutputs;
+    MediaVideoOutputOverflowPolicy overflow;
 };
 
 struct MediaPipelinePlan {
+    std::optional<MediaVideoSharedSourcePlan> sharedSource;
+    std::optional<MediaVideoOutputFanoutPlan> outputFanout;
+    std::optional<MediaVideoSourceEpochPlan> sourcePlaybackEpoch;
+    std::optional<MediaVideoOutputFanoutPlan> encodedOutputFanout;
     bool enabled = false;
     MediaBranchMode branchMode = MediaBranchMode::Drop;
     int sourceStreamIndex = invalidMediaStreamIndex;
@@ -146,6 +167,7 @@ struct MediaPipelinePlan {
     MediaPipelineChainPlan selected;
     std::optional<MediaRational> maximumFrameDuplicationGap;
     std::vector<MediaPipelineChainPlan> candidates;
+    std::optional<MediaVideoEncodingRequestContract> encodingRequest;
 };
 
 const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept;
@@ -154,6 +176,11 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept;
 
 class MediaPipelinePlanner final {
 public:
+    static ::media::Result<MediaVideoEncodingRequestContract> normalizeEncodingRequest(
+        const MediaInputVideoStreamInfo& source,
+        const MediaPipelinePlannerOptions& options,
+        const MediaPipelineStagePlan& selectedEncoder);
+
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
         MediaPipelinePlannerOptions options);
@@ -171,6 +198,13 @@ public:
         MediaPipelineChainPlan& selected,
         const MediaPipelinePlannerOptions& options,
         MediaHardwareCapabilityProbe& hardwareProbe);
+
+    static ::media::Result<MediaPipelinePlan> planVideoOutputBranch(
+        MediaInputVideoStreamInfo inputInfo,
+        const std::string& inputUrl,
+        const MediaPipelineStagePlan& runningDecoder,
+        MediaPipelinePlannerOptions options,
+        MediaHardwareCapabilityProbe& outputProbe);
 
 private:
     MediaPipelinePlanner() = default;

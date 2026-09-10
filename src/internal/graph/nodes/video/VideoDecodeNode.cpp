@@ -9,6 +9,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
@@ -193,23 +194,20 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoDecodeNode requires one unowned packet payload credit"));
     }
-    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
-        ? [&]() -> ::media::Result<AVBufferRef*> {
-              if (!m_lineageState->pendingLineage) {
-                  return ::media::Result<AVBufferRef*>::failure(
-                      ::media::ErrorInfo::invalidArgument(
-                          "VideoDecodeNode requires canonical packet lineage"));
-              }
-              auto token = m_lineageRegistry->submit(
-                  m_lineageState->pendingLineage);
-              return token
-                  ? makeMediaFfmpegCodecOpaque(
-                        std::move(token).value(),
-                        m_lineageState->pendingPayloadCredit)
-                  : ::media::Result<AVBufferRef*>::failure(token.error());
-          }()
-        : makeMediaFfmpegCodecOpaque(
-              m_lineageState->pendingPayloadCredit);
+    if (m_lineageState->pendingPayloadCredit) {
+        auto retained = retainMediaFfmpegPayload(*m_lineageState->pendingPacket,
+                                                m_lineageState->pendingPayloadCredit);
+        if (!retained) return retained;
+        m_lineageState->pendingPayloadCredit.reset();
+    }
+    if (!m_lineageRegistry) return ::media::Status::success();
+    if (!m_lineageState->pendingLineage) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoDecodeNode requires canonical input lineage"));
+    }
+    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
+    if (!token) return ::media::Status::failure(token.error());
+    auto opaque = makeMediaFfmpegCodecOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
     if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
         m_lineageState->pendingPacket->opaque_ref = opaque.value();
@@ -465,10 +463,24 @@ void VideoDecodeNode::resetRuntimeState() noexcept
             }
             if (!lineage) continue;
         }
+        if (!codecContext() || codecContext()->pkt_timebase.num <= 0 ||
+            codecContext()->pkt_timebase.den <= 0) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "VideoDecodeNode requires decoder packet time base"));
+        }
+        // As in FFmpeg's decoder output boundary, decoded timestamps use the
+        // input packet time base. Publish it for every video frame, including
+        // video-only consumers before any encoder timestamp conversion.
+        frame->time_base = codecContext()->pkt_timebase;
+        MediaTimeDescriptor timeDescriptor;
+        timeDescriptor.timeBase = MediaRational{
+            frame->time_base.num, frame->time_base.den};
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }
+        buffer.value()->setTimeDescriptor(timeDescriptor);
         const AVFrame* receivedFrame = FFmpegFrameView::frame(buffer.value());
         auto footprint = receivedFrame
             ? MediaFramePayloadFootprint::logicalBytes(
@@ -490,17 +502,6 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
         MediaBufferRef output = buffer.value();
         if (lineage) {
-            if (!codecContext() || codecContext()->pkt_timebase.num <= 0 ||
-                codecContext()->pkt_timebase.den <= 0) {
-                return ::media::Result<bool>::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "Synchronized VideoDecodeNode requires decoder packet time base"));
-            }
-            MediaTimeDescriptor timeDescriptor;
-            timeDescriptor.timeBase = MediaRational{
-                codecContext()->pkt_timebase.num,
-                codecContext()->pkt_timebase.den};
-            output->setTimeDescriptor(timeDescriptor);
             auto canonical = MediaCanonicalVideoFrameBuffer::create(output, std::move(lineage));
             if (!canonical) return ::media::Result<bool>::failure(canonical.error());
             output = std::move(canonical).value();

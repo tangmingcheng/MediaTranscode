@@ -70,6 +70,8 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::DebugDump: return "DebugDump";
     case MediaNodeKind::TraceProbe: return "TraceProbe";
     case MediaNodeKind::CodecResolver: return "CodecResolver";
+    case MediaNodeKind::VideoOutputFanout: return "VideoOutputFanout";
+    case MediaNodeKind::EncodedVideoOutputFanout: return "EncodedVideoOutputFanout";
     case MediaNodeKind::Unknown:
     default:
         return "Unknown";

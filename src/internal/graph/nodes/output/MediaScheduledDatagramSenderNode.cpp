@@ -111,13 +111,31 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
+::media::Status MediaScheduledDatagramSenderNode::bindServiceScopeArbiter(
+    std::shared_ptr<MediaDatagramServiceScopeArbiter> arbiter)
+{
+    if (!arbiter || m_scopeArbiter || m_scopeWakeup)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "sender requires exactly one prestart planned service scope"));
+    m_scopeArbiter = std::move(arbiter);
+    return ::media::Status::success();
+}
+
 ::media::Status MediaScheduledDatagramSenderNode::start(
     MediaGraphExecutionContext& context)
 {
+    if (!m_scopeArbiter) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "sender requires its planned shared service scope before start"));
+    m_scopeWakeup = context.sharedNodeWakeup(nodeId());
+    m_scopeMember.reset();
     m_session.reset();
     m_pacingController.reset();
     m_serviceLedger.reset();
     m_pendingBatch.reset();
+    {
+        std::lock_guard lock(m_videoReadyMutex);
+        m_videoReadyEvidence.reset();
+    }
     m_generation.reset();
     m_serviceScopeId.clear();
     m_executionMode = MediaDatagramTransmitExecutionMode::UserspaceNonblocking;
@@ -209,6 +227,18 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         auto closed = m_session->close(now.value());
         if (!closed) return closed;
         m_session.reset();
+    }
+    const auto& scope = m_scopeArbiter->contract();
+    const auto& plannedScope = plan.shaping.serviceScope();
+    if (scope.kind != plannedScope.kind || scope.scopeId != plannedScope.scopeId ||
+        scope.coverageAuthority != plannedScope.coverageAuthority ||
+        scope.capacityWireBytesPerSecond != plan.shaping.serviceCurve().maximumWireBytesPerSecond)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "sender transport plan differs from shared physical service scope"));
+    if (!m_scopeMember) {
+        auto joined = m_scopeArbiter->join(m_scopeWakeup, m_clock->clockDomainIdentity());
+        if (!joined) return ::media::Status::failure(joined.error());
+        m_scopeMember = std::move(joined).value();
     }
     auto session = MediaDatagramTransmitSession::create(
         shaping.value(), std::move(bindings), std::move(execution),
@@ -527,6 +557,13 @@ bool MediaScheduledDatagramSenderNode::allBatchInputsDrained(
     return found;
 }
 
+std::optional<MediaVideoOutputReadyEvidence>
+MediaScheduledDatagramSenderNode::videoReadyEvidence() const noexcept
+{
+    std::lock_guard lock(m_videoReadyMutex);
+    return m_videoReadyEvidence;
+}
+
 ::media::Status MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
     std::size_t count,
     MediaRunningTime submitCompletedAt)
@@ -551,6 +588,15 @@ bool MediaScheduledDatagramSenderNode::allBatchInputsDrained(
         auto endpointBytes = m_endpointBytes.find(datagram.endpointId());
         ++endpointDatagrams->second;
         endpointBytes->second += bytes;
+        if (datagram.m_descriptor.mediaBoundary ==
+                MediaWireMediaBoundary::VideoRandomAccessUnitEnd) {
+            std::lock_guard lock(m_videoReadyMutex);
+            if (!m_videoReadyEvidence) {
+                m_videoReadyEvidence = MediaVideoOutputReadyEvidence{
+                    datagram.generation(), datagram.globalSequence(),
+                    submitCompletedAt.nanoseconds()};
+            }
+        }
     }
     m_datagrams += static_cast<std::uint64_t>(count);
     m_bytes += submittedBytes;
@@ -666,11 +712,24 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 }
                 m_groupDeadlineSubmitAttempted = true;
             }
+            const auto& physicalDatagram = m_pendingBatch->m_datagrams[m_groupBegin];
+            const auto physicalWireBytes = static_cast<std::uint64_t>(physicalDatagram.bytes().size()) +
+                m_wireOverheadBytes.at(physicalDatagram.endpointId());
+            auto acquired = m_scopeMember->tryAcquire(now.value(), physicalWireBytes, m_groupDeadline);
+            if (!acquired) return failTerminal(acquired.error());
+            if (!acquired.value().permit) {
+                return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult{
+                    MediaNodeProcessState::Waiting,
+                    m_clock->deadlineWait(*acquired.value().notBefore,
+                        MediaNodeDeadlineWakePolicy::InputOrDeadline)});
+            }
+            auto permit = std::move(*acquired.value().permit);
             MediaDatagramTransmitSubmitResult submitted =
                 MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(::media::ErrorInfo::internalError(
                         "scheduled datagram sender did not issue a submit")));
             if (m_session->hasPendingRetry()) {
+                permit.submissionStarted();
                 submitted = m_session->retryPending(now.value());
             } else {
                 m_submitEntries.clear();
@@ -681,16 +740,27 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                         datagram.bytes(), datagram.globalSequence(),
                         m_groupDeadline, std::nullopt});
                 }
+                permit.submissionStarted();
                 submitted = m_session->trySubmitNew(
                     m_groupEndpointId, m_submitEntries, now.value());
             }
+            auto physicalCompletedAt = m_clock->now();
+            if (!physicalCompletedAt) {
+                permit.poison(physicalCompletedAt.error());
+                return failTerminal(physicalCompletedAt.error());
+            }
+            std::uint64_t chargedWireBytes = 0;
+            if (submitted && submitted.value() == MediaDatagramTransmitAttempt::Submitted)
+                chargedWireBytes = physicalWireBytes;
+            else if (!submitted &&
+                     (submitted.error().submittedPrefixDatagrams != 0 ||
+                      submitted.error().kind == MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix))
+                chargedWireBytes = physicalWireBytes;
+            auto charged = permit.complete(chargedWireBytes, physicalCompletedAt.value());
+            if (!charged) return failTerminal(submitted ? charged.error() : submitted.error().cause);
             if (!submitted) {
-                auto submitCompletedAt = m_clock->now();
-                if (!submitCompletedAt) {
-                    return failTerminal(submitCompletedAt.error());
-                }
                 return failSubmit(
-                    submitted.error(), now.value(), submitCompletedAt.value());
+                    submitted.error(), now.value(), physicalCompletedAt.value());
             }
             if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
                 ++m_wouldBlockEvents;
@@ -703,15 +773,11 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             }
             const auto submittedSequence =
                 m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
-            auto submitCompletedAt = m_clock->now();
-            if (!submitCompletedAt) {
-                return failTerminal(submitCompletedAt.error());
-            }
             auto committed = recordSubmittedPrefix(
-                m_groupCount, submitCompletedAt.value());
+                m_groupCount, physicalCompletedAt.value());
             if (!committed) return failTerminal(committed.error());
             auto paced = m_pacingController->markSubmitted(
-                submittedSequence, now.value(), submitCompletedAt.value());
+                submittedSequence, now.value(), physicalCompletedAt.value());
             if (!paced) return failTerminal(paced.error());
             m_state = SubmitState::WaitReservation;
         }
@@ -794,6 +860,13 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                 << " last_committed_sequence="
                 << backlog.lastCommittedSequence.value_or(0);
         }
+        if (m_scopeArbiter) {
+            const auto scope = m_scopeArbiter->snapshot();
+            diagnostic << " shared_scope_charged_datagrams=" << scope.chargedDatagrams
+                       << " shared_scope_charged_wire_bytes=" << scope.chargedWireBytes
+                       << " shared_scope_waiting_members=" << scope.waitingMembers
+                       << " shared_scope_failed=" << scope.failed;
+        }
         if (m_session) {
             const auto& evidence = m_session->evidenceTelemetry();
             diagnostic << " evidence_submitted=" << evidence.submitted
@@ -846,7 +919,7 @@ MediaScheduledDatagramSenderNode::failTerminal(::media::ErrorInfo error)
             if (now) m_session->abort(*m_terminalFailure, now.value());
         }
     }
-    emitDiagnostics("failed");
+    // Final evidence is sampled by finishExecution after owner-local close.
     return ::media::Result<MediaNodeProcessResult>::failure(*m_terminalFailure);
 }
 
@@ -897,7 +970,8 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
             return failTerminal(::media::ErrorInfo::internalError(
                 "common pacing sender inputs closed with a global sequence gap"));
         }
-        return processFinished();
+        auto completed = finishExecution(context);
+        return completed ? processFinished() : failTerminal(completed.error());
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             batchInput.value()->buffer.get())) {
@@ -924,19 +998,25 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     return activated.value() ? progressPendingBatch() : processProgress();
 }
 
-void MediaScheduledDatagramSenderNode::closeSender(
-    ::media::ErrorInfo cause) noexcept
+::media::Status MediaScheduledDatagramSenderNode::finishExecution(
+    MediaGraphExecutionContext&) noexcept
 {
-    if (m_session && !m_terminalFailure) {
-        auto now = m_clock ? m_clock->now()
-                           : ::media::Result<MediaRunningTime>::failure(cause);
-        if (now) m_session->abort(std::move(cause), now.value());
-    }
+    m_scopeMember.reset();
+    if (!m_session) return ::media::Status::success();
+    auto now = m_clock->now();
+    ::media::Status completed = now
+        ? m_session->close(now.value())
+        : ::media::Status::failure(now.error());
+    if (!completed && !m_terminalFailure) m_terminalFailure = completed.error();
+    emitDiagnostics(m_terminalFailure ? "failed" : "finished");
+    // Evidence and adapter shutdown above run on the same thread that bound
+    // and submitted this session. Controller reclamation only sees null.
     m_session.reset();
     m_pendingBatch.reset();
     m_queuedWireBatches.clear();
     m_queuedWireDatagrams = 0;
     m_queuedWireBytes = 0;
+    return completed;
 }
 
 ::media::Status MediaScheduledDatagramSenderNode::stop(
@@ -944,22 +1024,11 @@ void MediaScheduledDatagramSenderNode::closeSender(
 {
     m_stopSource.request_stop();
     m_wakeup.interrupt();
-    std::optional<::media::ErrorInfo> closeFailure;
-    if (m_session) {
-        auto now = m_clock->now();
-        if (!now) {
-            if (!closeFailure) closeFailure = now.error();
-        } else {
-            auto closed = m_session->close(now.value());
-            if (!closed && !closeFailure) closeFailure = closed.error();
-        }
-    }
-    emitDiagnostics(closeFailure ? "failed" : "finished");
-    m_session.reset();
-    m_pendingBatch.reset();
+    // Sequential execution has no worker-exit hook; its owner reaches stop
+    // directly. For worker execution the session was already closed there.
+    auto completed = finishExecution(context);
     auto base = FFmpegNodeRuntime::stop(context);
-    if (closeFailure) return ::media::Status::failure(*closeFailure);
-    return base;
+    return completed ? base : completed;
 }
 
 void MediaScheduledDatagramSenderNode::interrupt(
@@ -978,8 +1047,9 @@ void MediaScheduledDatagramSenderNode::abort(
             "scheduled datagram sender was aborted");
         m_terminalFailure = std::move(cause);
     }
+    auto completed = finishExecution(context);
+    if (!completed && !m_terminalFailure) m_terminalFailure = completed.error();
     emitDiagnostics("aborted");
-    closeSender(*m_terminalFailure);
     FFmpegNodeRuntime::abort(context);
 }
 

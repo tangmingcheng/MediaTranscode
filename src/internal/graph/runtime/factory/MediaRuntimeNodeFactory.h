@@ -16,6 +16,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaDemuxTimestampClockMapper;
+class MediaDatagramServiceScopeArbiter;
 struct MediaDecodedDemuxPacketClockBinderNodePlan;
 
 struct MediaRuntimeGenerationPurgeRegistration final {
@@ -40,7 +41,8 @@ public:
         const std::shared_ptr<MediaAvStartupVideoPreparationState>&
             videoPreparationState,
         const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
-            protocolOutputAuthority);
+            protocolOutputAuthority,
+        const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createActivatedStartupReleaseSequencer(
         const MediaNode& node,

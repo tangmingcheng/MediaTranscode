@@ -34,6 +34,9 @@ public:
 
     ::media::Status start(MediaGraphExecutionContext& context,
                           MediaGraphScheduler& scheduler);
+    // Interrupt execution while retaining nodes, channels and metadata owners.
+    // The existing stop/abort operation performs the later join and teardown.
+    void requestStop(MediaGraphExecutionContext& context) noexcept;
     ::media::Status stop(MediaGraphExecutionContext& context,
                          MediaGraphScheduler& scheduler);
     void abort(MediaGraphExecutionContext& context,

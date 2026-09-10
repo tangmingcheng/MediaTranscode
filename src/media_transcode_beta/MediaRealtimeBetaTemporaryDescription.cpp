@@ -3,8 +3,6 @@
 #include <array>
 #include <cerrno>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <limits>
 #include <new>
 #include <string>
@@ -51,24 +49,6 @@ public:
 
 private:
     const wchar_t* m_path;
-};
-
-class WindowsHandleGuard final {
-public:
-    explicit WindowsHandleGuard(HANDLE handle) noexcept
-        : m_handle(handle)
-    {
-    }
-
-    ~WindowsHandleGuard() noexcept
-    {
-        if (m_handle != INVALID_HANDLE_VALUE) {
-            CloseHandle(m_handle);
-        }
-    }
-
-private:
-    HANDLE m_handle;
 };
 
 ::media::Result<std::string> checkedUtf8Path(const wchar_t* nativePath)
@@ -286,99 +266,6 @@ MediaRealtimeBetaTemporaryDescription::operator=(
 const std::string& MediaRealtimeBetaTemporaryDescription::path() const noexcept
 {
     return m_plannerPath;
-}
-
-::media::Result<std::string>
-MediaRealtimeBetaTemporaryDescription::readCompletedText() const
-{
-    if (m_nativePath.empty()) {
-        return ::media::Result<std::string>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "temporary Beta description has no owned path"));
-    }
-
-    try {
-#ifdef _WIN32
-        const HANDLE file = CreateFileW(
-            m_nativePath.c_str(), GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::ioFailure(
-                    "failed to open the completed Beta output description",
-                    checkedWindowsError(GetLastError())));
-        }
-        WindowsHandleGuard closeFile(file);
-
-        LARGE_INTEGER nativeSize{};
-        if (GetFileSizeEx(file, &nativeSize) == FALSE ||
-            nativeSize.QuadPart < 0 ||
-            static_cast<unsigned long long>(nativeSize.QuadPart) >
-                static_cast<unsigned long long>(
-                    std::numeric_limits<std::size_t>::max())) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::ioFailure(
-                    "failed to size the completed Beta output description",
-                    checkedWindowsError(GetLastError())));
-        }
-        if (nativeSize.QuadPart == 0) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::wouldBlock(
-                    "Beta output description is not complete"));
-        }
-
-        std::string text(
-            static_cast<std::size_t>(nativeSize.QuadPart), '\0');
-        std::size_t totalRead = 0U;
-        while (totalRead < text.size()) {
-            const std::size_t remaining = text.size() - totalRead;
-            const DWORD requested = remaining > MAXDWORD
-                ? MAXDWORD
-                : static_cast<DWORD>(remaining);
-            DWORD bytesRead = 0U;
-            if (ReadFile(
-                    file, text.data() + totalRead, requested, &bytesRead,
-                    nullptr) == FALSE ||
-                bytesRead == 0U) {
-                return ::media::Result<std::string>::failure(
-                    ::media::ErrorInfo::ioFailure(
-                        "failed to read the completed Beta output description",
-                        checkedWindowsError(GetLastError())));
-            }
-            totalRead += bytesRead;
-        }
-#else
-        std::ifstream input(m_nativePath, std::ios::binary);
-        if (!input) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::ioFailure(
-                    "failed to open the completed Beta output description"));
-        }
-        const std::istreambuf_iterator<char> end;
-        std::string text(std::istreambuf_iterator<char>(input), end);
-        if (input.bad()) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::ioFailure(
-                    "failed to read the completed Beta output description"));
-        }
-        if (text.empty()) {
-            return ::media::Result<std::string>::failure(
-                ::media::ErrorInfo::wouldBlock(
-                    "Beta output description is not complete"));
-        }
-#endif
-        return ::media::Result<std::string>::success(std::move(text));
-    } catch (const std::bad_alloc&) {
-        return ::media::Result<std::string>::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "completed Beta output description allocation failed"));
-    } catch (const std::exception& error) {
-        return ::media::Result<std::string>::failure(
-            ::media::ErrorInfo::ioFailure(
-                std::string("completed Beta output description read failed: ") +
-                error.what()));
-    }
 }
 
 void MediaRealtimeBetaTemporaryDescription::removeOwnedFile() noexcept

@@ -2,6 +2,8 @@
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
+#include "RealtimeVideoOutputOptions.h"
+#include "RealtimeOutputControl.h"
 
 #include <chrono>
 #include <exception>
@@ -44,42 +46,9 @@ RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
     throw std::invalid_argument("unsupported --input-type: " + value);
 }
 
-RealtimeOutputStreamLayout requiredRealtimeOutputLayout(int argc, char** argv)
-{
-    const std::string value = requiredArg(argc, argv, "--output-layout");
-    if (value == "separate") {
-        return RealtimeOutputStreamLayout::SeparateStreams;
-    }
-    if (value == "mpegts") {
-        return RealtimeOutputStreamLayout::MuxedTransportStream;
-    }
-    throw std::invalid_argument("unsupported --output-layout: " + value);
-}
-
-MediaOutputTransportKind requiredRealtimeOutputTransport(int argc, char** argv)
-{
-    const std::string value = requiredArg(argc, argv, "--output-transport");
-    if (value == "udp") {
-        return MediaOutputTransportKind::UdpDatagrams;
-    }
-    if (value == "rtp") {
-        return MediaOutputTransportKind::RtpAvp;
-    }
-    throw std::invalid_argument("unsupported --output-transport: " + value);
-}
-
 void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
     std::vector<std::string> valueArgs {
-        "--video-codec",
-        "--rc",
-        "--width",
-        "--height",
-        "--fps",
-        "--bitrate",
-        "--min-bitrate",
-        "--max-bitrate",
-        "--gop",
         "--audio-codec",
         "--audio-rc",
         "--audio-bitrate",
@@ -89,8 +58,6 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--channels",
         "--media-id",
         "--input-type",
-        "--output-layout",
-        "--output-transport",
         "--egress-capacity-bps",
         "--maximum-wire-residence-ms",
         "--input",
@@ -111,16 +78,14 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--audio-rtp-clock-rate",
         "--audio-rtp-channels",
         "--audio-rtp-fmtp",
-        "--rtp-host",
-        "--rtp-port",
-        "--sdp",
-        "--output",
         "--max-duration",
         "--progress-timeout-ms",
         "--first-output-timeout-ms",
         "--poll-interval-ms",
     };
 
+    const auto outputArgs = realtimeVideoOutputValueArgs();
+    valueArgs.insert(valueArgs.end(), outputArgs.begin(), outputArgs.end());
     std::vector<std::string> flagArgs = commonVideoTranscodeFlagArgs();
     rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
 }
@@ -182,65 +147,14 @@ void parseRtpInputMetadata(
     }
 }
 
-void parseRealtimeOutputOptions(
-    int argc,
-    char** argv,
-    RealtimeOutputStreamLayout outputLayout,
-    MediaOutputTransportKind outputTransport,
-    MediaRealtimeOutputConfig& output)
-{
-    output.streamLayout = outputLayout;
-    output.transport = outputTransport;
-    if (hasArg(argc, argv, "--rtp-host")) {
-        output.host = requiredArg(argc, argv, "--rtp-host");
-    }
-    if (hasArg(argc, argv, "--rtp-port")) {
-        output.basePort = static_cast<std::size_t>(
-            requiredIntArg(argc, argv, "--rtp-port"));
-    }
-    if (hasArg(argc, argv, "--sdp")) {
-        output.sdpPath = requiredArg(argc, argv, "--sdp");
-    }
-    if (hasArg(argc, argv, "--output")) {
-        output.url = requiredArg(argc, argv, "--output");
-    }
-}
-
 MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
     rejectUnknownRealtimeArgs(argc, argv);
 
     MediaTranscodeParameterSet parsedTranscode;
     parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
-    if (!hasArg(argc, argv, "--rc")) {
-        throw std::invalid_argument("missing required argument: --rc");
-    }
-    if (parsedTranscode.video.rateControl != MediaRateControlMode::Cbr &&
-        parsedTranscode.video.rateControl != MediaRateControlMode::Vbr) {
-        throw std::invalid_argument(
-            "realtime video --rc must be cbr or vbr");
-    }
-    if (!parsedTranscode.video.bitrateKbps) {
-        throw std::invalid_argument(
-            "missing required integer argument: --bitrate");
-    }
-    if (*parsedTranscode.video.bitrateKbps <= 0) {
-        throw std::invalid_argument(
-            "realtime video --bitrate must be positive");
-    }
-    if (!parsedTranscode.video.gop) {
-        throw std::invalid_argument(
-            "missing required integer argument: --gop");
-    }
-    if (*parsedTranscode.video.gop <= 0) {
-        throw std::invalid_argument(
-            "realtime video --gop must be positive");
-    }
+    const auto output = parseRealtimeVideoOutputOptions(argc, argv, parsedTranscode);
     const RealtimeInputType inputType = requiredRealtimeInputType(argc, argv);
-    const RealtimeOutputStreamLayout outputLayout =
-        requiredRealtimeOutputLayout(argc, argv);
-    const MediaOutputTransportKind outputTransport =
-        requiredRealtimeOutputTransport(argc, argv);
 
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
@@ -269,20 +183,10 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
         "--audio-rtp-payload-type", "--audio-rtp-clock-rate",
         "--audio-rtp-channels", "--audio-rtp-fmtp",
         options.input.audioRtp);
-    parseRealtimeOutputOptions(
-        argc, argv, outputLayout, outputTransport, options.output);
+    options.output = output.output;
+    options.parameters.video = output.video;
     options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
-    options.parameters.execution.diagnosticLogEnabled =
-        parsedTranscode.execution.diagnosticLogEnabled;
-    options.parameters.video.codecName = std::move(parsedTranscode.video.codecName);
-    options.parameters.video.width = parsedTranscode.video.width;
-    options.parameters.video.height = parsedTranscode.video.height;
-    options.parameters.video.frameRate = parsedTranscode.video.frameRate;
-    options.parameters.video.rateControl = parsedTranscode.video.rateControl;
-    options.parameters.video.bitrateKbps = parsedTranscode.video.bitrateKbps;
-    options.parameters.video.minBitrateKbps = parsedTranscode.video.minBitrateKbps;
-    options.parameters.video.maxBitrateKbps = parsedTranscode.video.maxBitrateKbps;
-    options.parameters.video.gop = parsedTranscode.video.gop;
+    options.parameters.execution.diagnosticLogEnabled = parsedTranscode.execution.diagnosticLogEnabled;
     options.parameters.audio.codecName = std::move(parsedTranscode.audio.codecName);
     options.parameters.audio.rateControl = parsedTranscode.audio.rateControl;
     options.parameters.audio.bitrateKbps = parsedTranscode.audio.bitrateKbps;
@@ -380,6 +284,7 @@ void printPreparedReport(const MediaRealtimeVideoPreparedReport& report)
         }
         std::cout << '\n';
     }
+    std::cout << "[CLI] prepared_output_id=" << report.outputId << '\n';
     std::cout << "[CLI] selected_chain=" << report.selectedChain
               << " score=" << report.selectedScore
               << " decoder=" << report.decoderName
@@ -413,6 +318,8 @@ int runRealtimeVideoCli(int argc, char** argv)
         std::cout << "Realtime video encoding: --rc cbr requires positive --bitrate; --rc vbr requires positive --min-bitrate, --bitrate, and --max-bitrate; --gop is always a required positive frame count.\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
+        std::cout << "Control on stdin: add [the same video encoding and output endpoint options], remove ID, list, status ID. Each command ends with a newline; EOF closes only control.\n";
+        std::cout << "The add command does not accept input, deployment, audio, or runtime options. Quote arguments containing spaces; no shell expansion is performed.\n";
         return helpRequested ? 0 : 2;
     }
 
@@ -436,12 +343,14 @@ int runRealtimeVideoCli(int argc, char** argv)
               << '\n';
 
     MediaRealtimeVideoRunControl control;
-    const MediaRealtimeVideoRunObserver observer {
-        printPreparedReport,
-        [](const MediaGraphRuntimeReport& report) {
-            std::cout << "[CLI] " << report.summary() << '\n';
-        }
+    RealtimeOutputControl outputControl(control);
+    MediaRealtimeVideoRunObserver observer;
+    observer.prepared = printPreparedReport;
+    observer.progress = [&](const MediaGraphRuntimeReport& report) {
+        std::cout << "[CLI] " << report.summary() << '\n';
+        outputControl.poll();
     };
+    observer.outputChanged = printRealtimeOutput;
     const MediaRealtimeVideoRunOutcome outcome =
         MediaRealtimeVideoRunController::run(
             options, runPolicy, control, observer);

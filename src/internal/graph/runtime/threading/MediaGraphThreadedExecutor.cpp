@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
+#include "internal/graph/runtime/diagnostics/MediaRuntimeMetricsCollector.h"
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
@@ -36,7 +37,6 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         return startStatus;
     }
 
-    MediaGraphWorkerConfig workerConfig;
     const auto runtimeNodes = scheduler.orderedRuntimeNodes(context);
     m_workers.clear();
     m_failureRecorder.clear();
@@ -51,17 +51,12 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         }
 
         m_workers.push_back(std::make_unique<MediaGraphWorker>(
-            *node, context, m_failureRecorder, m_failureSupervisor, workerConfig));
+            *node, context, m_failureRecorder, m_failureSupervisor));
     }
 
     m_failureSupervisor.arm([this, &context] {
-        for (auto& worker : m_workers) {
-            if (worker) worker->requestStop();
-        }
-        for (auto& worker : m_workers) {
-            if (worker) worker->interrupt();
-        }
-        context.interruptNodeWakeups();
+        context.cancelSessionPayloadWaiters();
+        requestStop(context);
     });
 
     for (auto& worker : m_workers) {
@@ -85,6 +80,13 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     return ::media::Status::success();
 }
 
+void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context) noexcept
+{
+    for (auto& worker : m_workers) if (worker) worker->requestStop();
+    for (auto& worker : m_workers) if (worker) worker->interrupt();
+    context.interruptNodeWakeups();
+}
+
 ::media::Status MediaGraphThreadedExecutor::stop(MediaGraphExecutionContext& context,
                                                   MediaGraphScheduler& scheduler)
 {
@@ -96,16 +98,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
 
     m_state = MediaGraphThreadedExecutorState::Stopping;
 
-    for (auto& worker : m_workers) {
-        if (worker) {
-            worker->requestStop();
-        }
-    }
-    for (auto& worker : m_workers) {
-        if (worker) {
-            worker->interrupt();
-        }
-    }
+    requestStop(context);
 
     auto closeStatus = MediaGraphLifecycle::closeChannels(context);
     if (!closeStatus) {
@@ -217,32 +210,7 @@ MediaGraphRuntimeMetrics MediaGraphThreadedExecutor::metrics() const noexcept
 void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
 {
     std::lock_guard<std::mutex> lock(m_metricsMutex);
-    m_metrics.threadCount = m_workers.size();
-    m_metrics.activeWorkers = 0;
-    m_metrics.workerIterations = 0;
-    m_metrics.workerProcessCalls = 0;
-    m_metrics.workerProgress = 0;
-    m_metrics.workerWaits = 0;
-    m_metrics.workerWakeups = 0;
-    m_metrics.workerErrors = 0;
-
-    for (const auto& worker : m_workers) {
-        if (!worker) {
-            continue;
-        }
-
-        if (worker->running()) {
-            ++m_metrics.activeWorkers;
-        }
-
-        m_metrics.workerProgress += worker->metrics().progress;
-        m_metrics.workerProcessCalls += worker->metrics().processCalls;
-        m_metrics.workerIterations = m_metrics.workerProcessCalls;
-        m_metrics.workerWaits += worker->metrics().waits;
-        m_metrics.workerWakeups += worker->metrics().wakeups;
-        m_metrics.workerErrors += worker->metrics().errors;
-    }
-    m_metrics.errorCount = m_metrics.workerErrors;
+    m_metrics = MediaRuntimeMetricsCollector::workers(m_workers);
 }
 
 } // namespace media::ffmpeg::graph

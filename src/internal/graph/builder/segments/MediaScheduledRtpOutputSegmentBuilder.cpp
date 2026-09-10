@@ -55,7 +55,7 @@ constexpr std::string_view Owner = "MediaScheduledRtpOutputSegmentBuilder";
 ::media::Status addSenderPorts(
     MediaGraph& graph,
     MediaNodeId node,
-    MediaStreamKind stream)
+    MediaStreamKind stream, MediaPayloadKind codecKind)
 {
     using namespace MediaGraphBuildSupport;
     if (auto added = addInputPortChecked(
@@ -64,7 +64,7 @@ constexpr std::string_view Owner = "MediaScheduledRtpOutputSegmentBuilder";
         !added) return ::media::Status::failure(added.error());
     if (auto added = addInputPortChecked(
             graph, Owner, node, "codec", stream, MediaEdgeKind::Metadata,
-            MediaPayloadKind::CodecContext, true, false);
+            codecKind, true, false);
         !added) return ::media::Status::failure(added.error());
     if (auto added = addInputPortChecked(
             graph, Owner, node, "scheduled", stream,
@@ -175,9 +175,9 @@ MediaScheduledRtpOutputSegmentBuilder::build(
             MediaTranscodeStreamSet::AudioVideo); !set) {
         return SegmentResult::failure(set.error());
     }
-    if (auto added = addSenderPorts(graph, video, MediaStreamKind::Video);
+    if (auto added = addSenderPorts(graph, video, MediaStreamKind::Video, MediaPayloadKind::CodecContext);
         !added) return SegmentResult::failure(added.error());
-    if (auto added = addSenderPorts(graph, audio, MediaStreamKind::Audio);
+    if (auto added = addSenderPorts(graph, audio, MediaStreamKind::Audio, MediaPayloadKind::CodecContext);
         !added) return SegmentResult::failure(added.error());
     for (const auto& [name, stream] : {
              std::pair{"video", MediaStreamKind::Metadata},
@@ -261,7 +261,7 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent},
              std::tuple{options.videoCodec, MediaStreamKind::Video,
                         MediaEdgeKind::Metadata,
-                        MediaPayloadKind::CodecContext},
+                        MediaPayloadKind::CodecParameters},
              std::tuple{options.scheduledVideo, MediaStreamKind::Video,
                         MediaEdgeKind::EncodedPacket,
                         MediaPayloadKind::Packet}}) {
@@ -270,15 +270,9 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
             std::get<2>(fact), std::get<3>(fact));
         if (!valid) return Result::failure(valid.error());
     }
-    const bool duplicate = std::any_of(
-        graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
-            return node.kind == MediaNodeKind::RtpDatagramMaterializer ||
-                node.kind == MediaNodeKind::DatagramTransportPlanSource ||
-                node.kind == MediaNodeKind::RtpSdpPublisher;
-        });
-    if (duplicate) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly RTP output rejects duplicate output authority"));
+    if (auto available = MediaDatagramOutputExecutionSegmentBuilder::validateSessionAvailable(
+            graph, plan.sessionKey); !available) {
+        return Result::failure(available.error());
     }
     const MediaNodeId video = graph.addNode(
         MediaNodeKind::RtpDatagramMaterializer,
@@ -303,7 +297,7 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
         graph, sdp, output->sdp.path,
         MediaTranscodeStreamSet::VideoOnly);
     if (!sdpOptions) return Result::failure(sdpOptions.error());
-    auto senderPorts = addSenderPorts(graph, video, MediaStreamKind::Video);
+    auto senderPorts = addSenderPorts(graph, video, MediaStreamKind::Video, MediaPayloadKind::CodecParameters);
     if (!senderPorts) return Result::failure(senderPorts.error());
     auto sdpPort = MediaGraphBuildSupport::addInputPortChecked(
         graph, Owner, sdp, "video", MediaStreamKind::Metadata,

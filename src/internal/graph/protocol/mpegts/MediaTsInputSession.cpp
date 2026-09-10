@@ -1,3 +1,4 @@
+#include "internal/graph/time/MediaSteadyClock.h"
 #include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
@@ -436,6 +437,7 @@ MediaTsInputSession::readFrameFromSource()
                 "failed to allocate MPEG-TS packet"));
     }
     const int result = av_read_frame(m_formatContext, packet.get());
+    const auto receivedAtNs = mediaSteadyClockNowNs();
     const auto observerStatus = m_observedAvio->status();
     if (!observerStatus) {
         return ::media::Result<MediaTsReadFrameEnvelope>::failure(
@@ -459,7 +461,7 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::Frame,
                                      std::move(packet),
-                                     provenance.value()});
+                                     provenance.value(), receivedAtNs});
     }
     if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
         return ::media::Result<MediaTsReadFrameEnvelope>::success(

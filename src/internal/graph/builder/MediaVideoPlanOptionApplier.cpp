@@ -1,6 +1,8 @@
 #include "internal/graph/builder/MediaVideoPlanOptionApplier.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 
 #include <array>
 #include <string>
@@ -83,6 +85,20 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodeId, prefix + ".filter", stage.filterName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hwaccel", stage.hwaccelName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind())); !status) return status;
+    if (stage.preparedInputRetention) {
+        const auto& retention = *stage.preparedInputRetention;
+        for (const auto& field : std::vector<std::pair<std::string, std::string>>{
+                 {"thread_count", std::to_string(retention.threadCount)},
+                 {"thread_type", std::to_string(retention.threadType)},
+                 {"main_handoff_packets", std::to_string(retention.mainHandoffPackets)},
+                 {"frame_worker_packets", std::to_string(retention.frameWorkerPackets)},
+                 {"serial_private_packets", std::to_string(retention.serialPrivatePackets)},
+                 {"maximum_internal_packets", std::to_string(retention.maximumInternalPackets())},
+                 {"authority", retention.authority}}) {
+            if (auto status = setOption(graph, nodeId,
+                prefix + ".input_retention." + field.first, field.second); !status) return status;
+        }
+    }
     const auto* contract = stage.frameContract();
     if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(contract ? contract->frameKind : MediaHardwareFrameKind::Unknown)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware())); !status) return status;
@@ -258,14 +274,16 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         plannedNodes.push_back(nodes.videoTimestamp);
     }
 
-    if (auto status = setOption(graph, nodes.videoDecode,
-            "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
-        !status) return status;
-    if (chain.decoderReceiveInterval) {
+    if (nodes.videoDecode.isValid()) {
         if (auto status = setOption(graph, nodes.videoDecode,
-                "video_decode.receive_interval_ns",
-                std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+                "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
             !status) return status;
+        if (chain.decoderReceiveInterval) {
+            if (auto status = setOption(graph, nodes.videoDecode,
+                    "video_decode.receive_interval_ns",
+                    std::to_string(chain.decoderReceiveInterval->nanoseconds()));
+                !status) return status;
+        }
     }
 
     for (MediaNodeId nodeId : plannedNodes) {
@@ -291,6 +309,17 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 "MediaVideoPlanOptionApplier requires decoder output frame contract"));
     }
     const MediaHardwareDescriptor& decoderOutput = *chain.decoder.outputFrame;
+    if (nodes.sourceCopy.isValid()) {
+        if (!plan.sharedSource || !plan.sharedSource->copy ||
+            plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::Unknown ||
+            plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::None)
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument("source copy lacks its planned filter implementation"));
+        if (auto status = setFrameContractOptions(graph, nodes.sourceCopy, "filter.pipeline.input", chain.decoder.outputFrame); !status) return status;
+        if (auto status = setFrameContractOptions(graph, nodes.sourceCopy, "filter.pipeline.output", chain.decoder.outputFrame); !status) return status;
+        if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.filter", plan.sharedSource->copy->output.filterDescription); !status) return status;
+        if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.implementation",
+                mediaVideoFilterImplementationName(plan.sharedSource->copyImplementation)); !status) return status;
+    }
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hardware", boolOption(decoderOutput.isHardwareBacked())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(decoderOutput.deviceKind)); !status) return status;
@@ -312,6 +341,9 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 ::media::ErrorInfo::invalidArgument(
                     "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
         }
+        auto execution = MediaVideoFilterExecutionPlanner::forEncoder(chain.filter.filterName);
+        if (!execution) return ::media::Result<void>::failure(execution.error());
+        if (auto status = applyFilterExecutionPlan(graph, nodes.videoFilter, execution.value()); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
@@ -333,6 +365,17 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
         !status) return status;
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+}
+
+::media::Result<void> MediaVideoPlanOptionApplier::applyFilterExecutionPlan(
+    MediaGraph& graph, MediaNodeId node, const MediaVideoFilterExecutionPlan& plan)
+{
+    auto encoded = MediaVideoFilterExecutionPlanCodec::encode(plan);
+    if (!encoded) return ::media::Result<void>::failure(encoded.error());
+    for (const auto& [key, value] : encoded.value().values()) {
+        if (auto status = setOption(graph, node, key, value); !status) return status;
+    }
+    return ::media::Result<void>::success();
 }
 
 } // namespace media::ffmpeg::graph

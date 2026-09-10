@@ -12,6 +12,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 extern "C" {
@@ -270,7 +271,6 @@ void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept
 }
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
-    m_encoderConfigEmitted = false;
     m_firstFrameDiagnosticEmitted = false;
     m_firstSubmitDiagnosticEmitted = false;
     m_firstPacketDiagnosticEmitted = false;
@@ -293,23 +293,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoEncodeNode requires one unowned frame payload credit"));
     }
-    ::media::Result<AVBufferRef*> opaque = m_lineageRegistry
-        ? [&]() -> ::media::Result<AVBufferRef*> {
-              if (!m_lineageState->pendingLineage) {
-                  return ::media::Result<AVBufferRef*>::failure(
-                      ::media::ErrorInfo::invalidArgument(
-                          "VideoEncodeNode requires canonical frame lineage"));
-              }
-              auto token = m_lineageRegistry->submit(
-                  m_lineageState->pendingLineage);
-              return token
-                  ? makeMediaFfmpegCodecOpaque(
-                        std::move(token).value(),
-                        m_lineageState->pendingPayloadCredit)
-                  : ::media::Result<AVBufferRef*>::failure(token.error());
-          }()
-        : makeMediaFfmpegCodecOpaque(
-              m_lineageState->pendingPayloadCredit);
+    if (m_lineageState->pendingPayloadCredit) {
+        auto retained = retainMediaFfmpegPayload(*m_lineageState->pendingFrame,
+                                                m_lineageState->pendingPayloadCredit);
+        if (!retained) return retained;
+        m_lineageState->pendingPayloadCredit.reset();
+    }
+    if (!m_lineageRegistry) return ::media::Status::success();
+    if (!m_lineageState->pendingLineage) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoEncodeNode requires canonical input lineage"));
+    }
+    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
+    if (!token) return ::media::Status::failure(token.error());
+    auto opaque = makeMediaFfmpegCodecOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
     if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
         m_lineageState->pendingFrame->opaque_ref = opaque.value();
@@ -332,6 +329,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
 ::media::Result<MediaNodeProcessResult> VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (hasCodecContext() && !codecMetadataPublished())
+        return processProgress(publishCodecMetadata(context));
     auto lineageLock = m_lineageState->lock();
     if (m_lineageState->flushPending) {
         return continueFlush(context);
@@ -389,9 +388,9 @@ void VideoEncodeNode::resetRuntimeState() noexcept
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +
                       " hw_frames_ctx=" + (encoder && encoder->hw_frames_ctx ? "set" : "none"));
-        auto emitStatus = emitEncoderConfig(context, buffer);
+        auto emitStatus = publishCodecMetadata(context);
         if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+            return processProgress(std::move(emitStatus));
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
@@ -597,27 +596,6 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     auto status = FFmpegCodecNodeRuntime::stop(context);
     resetRuntimeState();
     return status;
-}
-
-::media::Status VideoEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context,
-                                                   const MediaBufferRef& buffer)
-{
-    if (m_encoderConfigEmitted || !buffer) {
-        return ::media::Status::success();
-    }
-
-    if (!context.findOutputChannel(nodeId(), "codec")) {
-        m_encoderConfigEmitted = true;
-        return ::media::Status::success();
-    }
-
-    auto status = emitOutput(context, "codec", buffer);
-    if (!status) {
-        return status;
-    }
-
-    m_encoderConfigEmitted = true;
-    return ::media::Status::success();
 }
 
 ::media::Result<bool> VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)

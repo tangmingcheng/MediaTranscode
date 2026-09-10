@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsTransportPacketizer.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramDescriptor.h"
 #include "internal/graph/runtime/buffer/MediaProtocolDatagramCommitLease.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -18,6 +19,7 @@ struct MediaMpegTsProtocolCommitState;
 class MediaMpegTsProtocolDatagram final {
 public:
     std::span<const std::uint8_t> bytes() const noexcept { return m_bytes; }
+    MediaWireMediaBoundary mediaBoundary() const noexcept { return m_mediaBoundary; }
     MediaRunningTime presentationOnMaster() const noexcept
     {
         return m_presentationOnMaster;
@@ -37,12 +39,14 @@ private:
         std::span<const std::uint8_t> bytes,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline) noexcept;
+        MediaRunningTime canonicalDeadline,
+        MediaWireMediaBoundary mediaBoundary) noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaRunningTime m_presentationOnMaster;
     MediaRunningTime m_canonicalRelease;
     MediaRunningTime m_canonicalDeadline;
+    MediaWireMediaBoundary m_mediaBoundary;
 };
 
 class MediaMpegTsProtocolDatagramBatchBuffer final : public MediaBuffer {
@@ -54,7 +58,8 @@ public:
            std::uint16_t maximumPacketsPerDatagram,
            MediaRunningTime presentationOnMaster,
            MediaRunningTime canonicalRelease,
-           MediaRunningTime canonicalDeadline);
+           MediaRunningTime canonicalDeadline,
+           MediaWireMediaBoundary finalBoundary);
 
     MediaBufferType type() const noexcept override
     {

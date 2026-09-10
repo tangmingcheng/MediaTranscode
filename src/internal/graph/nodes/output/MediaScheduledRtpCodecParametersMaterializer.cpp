@@ -1,7 +1,7 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpCodecParametersMaterializer.h"
 
 #include "internal/graph/nodes/mux/MediaFfmpegAacAscDialectMaterializer.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 extern "C" {
@@ -21,7 +21,8 @@ using ParametersResult =
     ::media::Result<::media::ffmpeg::CodecParametersPtr>;
 
 ::media::Status validateEncoderMetadata(
-    const AVCodecContext& context,
+    const AVCodecParameters& context,
+    MediaRational timeBase,
     const MediaScheduledRtpPacketizationPlan& packetization)
 {
     const AVMediaType expectedType =
@@ -31,7 +32,7 @@ using ParametersResult =
     if (context.codec_type != expectedType ||
         canonicalCodecName(avcodec_get_name(context.codec_id)) !=
             packetization.codecName() ||
-        context.time_base.num <= 0 || context.time_base.den <= 0) {
+        timeBase.num <= 0 || timeBase.den <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Runtime encoder metadata does not match planned RTP codec"));
@@ -84,14 +85,18 @@ using ParametersResult =
 } // namespace
 
 ParametersResult MediaScheduledRtpCodecParametersMaterializer::materialize(
-    const AVCodecContext& context,
+    const AVCodecParameters& context,
+    MediaRational timeBase,
     const MediaScheduledRtpPacketizationPlan& packetization)
 {
-    if (auto valid = validateEncoderMetadata(context, packetization); !valid) {
+    if (auto valid = validateEncoderMetadata(context, timeBase, packetization); !valid) {
         return ParametersResult::failure(valid.error());
     }
-    auto parameters = FFmpegCodecParametersMaterializer::fromContext(context);
-    if (!parameters) return parameters;
+    auto copied = ::media::ffmpeg::makeCodecParameters();
+    if (!copied) return ParametersResult::failure(::media::ErrorInfo::allocationFailed("RTP codec parameter snapshot"));
+    const int copyResult = avcodec_parameters_copy(copied.get(), &context);
+    if (copyResult < 0) return ParametersResult::failure(FFmpegGraphError::fromCode(copyResult, "avcodec_parameters_copy(RTP snapshot)"));
+    auto parameters = ParametersResult::success(std::move(copied));
     if (packetization.streamKind() == MediaStreamKind::Audio) {
         if (auto canonical = canonicalizeAacAsc(*parameters.value());
             !canonical) {

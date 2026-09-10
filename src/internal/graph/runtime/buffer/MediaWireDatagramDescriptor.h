@@ -6,6 +6,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaWireMediaBoundary : std::uint8_t {
+    None,
+    VideoRandomAccessUnitEnd
+};
+
 struct MediaWireDatagramDescriptor final {
     std::uint64_t generation;
     std::uint64_t endpointId;
@@ -14,6 +19,7 @@ struct MediaWireDatagramDescriptor final {
     MediaRunningTime canonicalRelease;
     MediaRunningTime canonicalDeadline;
     std::uint64_t globalSequence;
+    MediaWireMediaBoundary mediaBoundary;
 
     friend bool operator==(const MediaWireDatagramDescriptor&,
                            const MediaWireDatagramDescriptor&) = default;
