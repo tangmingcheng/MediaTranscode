@@ -43,3 +43,5 @@
 | bin/media_transcode_realtime_video_cli | 26d80ed6c90d0f1882a3f162f8f4a067aad68bdbf86d8a1f27634cc21a2a26aa |
 
 实际打包调用：`/home/tang/package_media_transcode_beta.sh /home/tang/dynamic-video-543f8565/out/build/rk-release /home/tang/packages/media-transcode-beta-rkmpp-f41a6554-20260910`。示例源码开头完整列出每路转码配置及动态add API，删除按返回ID；不依赖隐式复制初始输出。ldd再次确认FFmpeg来自ab1e61a前缀。此扩展目前只在Beta暴露，realtime CLI未增加profile选项。
+
+最终独立PR审查者final_delivery_pr33复核58a2b33d：Standards PASS / Spec PASS / 本范围交付 PASS，无阻塞项；代码冻结未变。PR #33转为ready，不自动合并。
