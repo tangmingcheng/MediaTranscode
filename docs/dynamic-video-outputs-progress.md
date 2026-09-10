@@ -22,7 +22,7 @@
 
 - Windows26补充诊断：仅增加VLC RC统计唤醒，四路完整日志无晚帧、RTP到达序号连续、引用归零；可能存在观测调度扰动，不替代Windows正式门禁，详见[记录](dynamic-video-windows-26.md)。
 
-- Windows27撤除周期RC后，恢复路实际晚帧22ms/lost1，判FAIL；动态增删时刻与26不同，不据此宣称RC因果。用户已明确授权一次管理员WPR CPU/GPU及UAC，Windows28限定诊断采集正在进行。
+- Windows27撤除周期RC后，恢复路实际晚帧22ms/lost1，判FAIL；动态增删时刻与26不同，不据此宣称RC因果。用户已明确授权一次管理员WPR CPU/GPU及UAC，[Windows28](dynamic-video-windows-28.md)诊断已完成，第三路实际晚帧20ms/lost1，仍FAIL。所查显示线程Ready最多1.778ms，Present API最多2.062ms；长间隔主要为条件等待，但缺请求期限及picture映射，根因未定。单次WPR已停止，不扩大为RKMPP放行或生产修复依据。
 
 ## 行业依据与设计边界
 
