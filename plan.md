@@ -605,5 +605,5 @@ Detailed design and execution checklist:
 - [x] 基于指定旧包示例补齐动态add/remove/list，独立双审PASS。
 - [x] 使用既有打包脚本，纠正其头文件路径来源为实际CMakeCache；d11b25a7全量615项重建、打包及C11示例编译链接成功。
 - [x] 按用户明确授权在Beta输出暴露profile，初始/动态输出统一映射既有planner契约；不新增level或音频字段。
-- [ ] 最新profile提交重新全量构建并出包，先RKMPP同规格真实流核对profile参数集、动态增删、发送及VLC解码。
-- [ ] 清理原始材料、补齐示例与校验清单，双审及最终PR复核后交付最新profile包。
+- [x] 最新profile核心543f8565全量615项构建，f41a6554清晰示例重新编译链接并出包；RKMPP Profile01同规格120秒三门禁及参数集通过，独立成功提交1efc1f50。
+- [x] 新包和清晰示例已交付，11项校验通过；双审Standards/Spec PASS，原始材料及进程残留已清理。最终PR文档复核收尾。

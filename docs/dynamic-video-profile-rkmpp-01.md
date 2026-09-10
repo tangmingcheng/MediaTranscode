@@ -1,6 +1,6 @@
 # RKMPP Profile01：H264 RTP 720p30 8Mbps → HEVC/H264 MPEGTS/RTP 1080p25 CBR6Mbps（PASS）
 
-2026-09-10。使用最新Beta库和清晰版C示例走生产DAG，固定120秒连续源，不循环、不降规格。三项门禁发送无超契约突发、动态增删正常、VLC正常解码全部通过；新增profile的实际参数集核验通过。源码/包来源和哈希见[交付记录](dynamic-video-beta-package.md)。core543f8565，example f41a6554；后者未修改库源码及头文件。此轮独立成功提交，双审原始证据和清理随后补记。
+2026-09-10。使用最新Beta库和清晰版C示例走生产DAG，固定120秒连续源，不循环、不降规格。三项门禁发送无超契约突发、动态增删正常、VLC正常解码全部通过；新增profile的实际参数集核验通过。源码/包来源和哈希见[交付记录](dynamic-video-beta-package.md)。core543f8565，example f41a6554；后者未修改库源码及头文件。此轮独立成功提交1efc1f50已推送；两名未参与实现者windows_scope_review_a/b独立复算原始材料，Standards/Spec均PASS。
 
 源H264 1280×720 30fps 8,013,434bps，SHA256 6e0de760672a6b8386b59b22f824de442e2a5ef7594d7b872c6851b64cabca9b；所有输出1920×1080 25fps CBR6Mbps GOP50，出口容量50Mbps、最大wire residence100ms。按用户要求profile首先验收RKMPP，不宣称Windows新版profile已验收。
 
@@ -124,5 +124,5 @@ $ErrorActionPreference='Stop'; foreach($port in @(62720,62722,62724,62726)){ $cl
 
 仅覆盖本次RKMPP的显式main/baseline/high及拒绝错误组合，不扩展为所有后端/输入布局/多小时保证。物理TX时间未跟踪，delivery_evidence=not_proven；长期资源、驱动释放以及未来音视频同步仍属后续。
 
-待两位独立审查者完成原始材料复算后，删除D盘及/home/tang本轮前缀、传输归档、构建日志和临时对象，并记录进程/文件残留；固定源、源码构建目录及交付包保留。
+两位独立审查者完成原始复算及四张画面检查后，已删除D盘本轮22文件594681170B及2个源码传输归档；目标机16个普通文件及1个FIFO共467159511B，包含本轮媒体材料、传输归档、两次构建日志及临时对象。两端本轮文件/媒体/抓包进程残留0，五个Beta临时SDP也由RAII删除。固定源、源码构建目录和两个交付包保留。远程新包11项SHA256SUMS再次全部成功，由主Agent执行后交两位审查者复核；不冒称两人各自执行远程哈希。
 

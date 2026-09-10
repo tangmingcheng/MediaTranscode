@@ -28,11 +28,11 @@
 
 ## Profile扩展
 
-待最新冻结重建及RKMPP实流。public output末尾增加profile字符串，初始和动态输出在返回前复制到既有video.profile；不新增默认值、fallback、独立编码链或level参数。调用方必须使用同包头文件重新编译。实际profile以输出SPS/PPS或HEVC PTL为准，不以readback捕获成功替代码流证明。
+最新冻结重建及RKMPP实流已完成，见[Profile01验收](dynamic-video-profile-rkmpp-01.md)。public output末尾增加profile字符串，初始和动态输出在返回前复制到既有video.profile；不新增默认值、fallback、独立编码链或level参数。调用方必须使用同包头文件重新编译。实际profile以输出SPS/PPS或HEVC PTL为准，不以readback捕获成功替代码流证明。
 
 0b71a44c首次全量构建失败：Beta mapper引用了实时请求中不存在的profile成员；此前两份源码PASS未发现该遗漏，已撤销其profile结论并要求复审。修复补齐实时请求自有字符串及planRealtimeVideoParameters到既有编码请求的传递，初始、动态和编码组匹配统一复用；不更改发送、队列或线程模型。失败构建不作为验收通过。
 
-最新候选包：`/home/tang/packages/media-transcode-beta-rkmpp-f41a6554-20260910/`。修正核心543f8565重新全量615项构建退出0，PID1893711；其后f41a6554仅修改示例及README，库源码/头文件与543f8565完全相同。示例取f41a6554重新C11严格编译、链接均退出0，目标打包脚本退出0，最终11文件SHA256SUMS全部成功；版本来源分别写入VERSION。两名原审查者明确撤回0b结论，逐类型重新核对修正核心及新版示例均源码PASS，实流另记。
+最新已验收交付包：`/home/tang/packages/media-transcode-beta-rkmpp-f41a6554-20260910/`。修正核心543f8565重新全量615项构建退出0，PID1893711；其后f41a6554仅修改示例及README，库源码/头文件与543f8565完全相同。示例取f41a6554重新C11严格编译、链接均退出0，目标打包脚本退出0，最终11文件SHA256SUMS全部成功；版本来源分别写入VERSION。两名原审查者明确撤回0b结论，逐类型重新核对修正核心及新版示例均源码PASS，实流及参数集双审均PASS。
 
 | 最新文件 | SHA256 |
 |---|---|
