@@ -607,3 +607,10 @@ Detailed design and execution checklist:
 - [x] 按用户明确授权在Beta输出暴露profile，初始/动态输出统一映射既有planner契约；不新增level或音频字段。
 - [x] 最新profile核心543f8565全量615项构建，f41a6554清晰示例重新编译链接并出包；RKMPP Profile01同规格120秒三门禁及参数集通过，独立成功提交1efc1f50。
 - [x] 新包和清晰示例已交付，11项校验通过；双审Standards/Spec PASS，原始材料及进程残留已清理。最终独立PR复核58a2b33d的Standards/Spec/本范围交付均PASS。
+
+## 2026-09-10 CLI与库统一profile入口
+
+- [x] 用户明确要求两个入口均支持profile；旧真实CLI带--profile main退出2，错误为unsupported argument。
+- [x] 对照目标FFmpeg RKMPP AVOption，CLI初始/add统一允许并映射--profile，复用已验证的库/planner契约。
+- [ ] RKMPP全量重建，真实120秒CLI链路核对profile、增删、发送及VLC，成功后立即独立提交推送并交付新包。
+- [ ] 双人独立审查、评分及新PR复核，记录命令结果并清理临时材料。

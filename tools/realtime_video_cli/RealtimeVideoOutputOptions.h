@@ -9,6 +9,7 @@ inline std::vector<std::string> realtimeVideoOutputValueArgs()
 {
     return {
         "--video-codec",
+        "--profile",
         "--rc",
         "--width",
         "--height",
@@ -105,6 +106,7 @@ inline MediaRealtimeVideoOutputRequest parseRealtimeVideoOutputOptions(
     parseRealtimeOutputOptions(argc, argv, requiredRealtimeOutputLayout(argc, argv),
         requiredRealtimeOutputTransport(argc, argv), request.output);
     request.video.codecName = parsedTranscode.video.codecName;
+    request.video.profile = parsedTranscode.video.profile;
     request.video.width = parsedTranscode.video.width;
     request.video.height = parsedTranscode.video.height;
     request.video.frameRate = parsedTranscode.video.frameRate;

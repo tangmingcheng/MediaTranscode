@@ -86,3 +86,7 @@ EOF不停止媒体会话；验收由120秒源自然结束驱动。裸RTP没有�
 初始输出设置config.initial_output.profile，动态输出设置传给mt_beta_realtime_add_output的output.profile。字符串在start/add返回前复制；NULL或空串表示调用方不约束profile，mapper不填默认值。字段直接进入既有planner/open/readback及完整编码组契约，不建立额外链路。
 
 目标FFmpeg ab1e61a的h264_rkmpp支持baseline/main/high，hevc_rkmpp公开main；不同后端的可用值以编码器能力为准，不能推断通用main10支持。示例要求每次add显式传profile，编码器不支持的值在准备阶段报告失败；add返回0本身不代表请求达成，须观察输出状态并核对实际参数集。
+
+## 同包 realtime CLI 的 profile
+
+新版CLI初始输出以及标准输入的add命令均可使用--profile，例如--video-codec hevc --profile main，或--video-codec h264 --profile baseline。未传--profile表示调用方不约束，和库的NULL/空串语义一致；实际支持值由所选编码器在准备阶段校验。库和CLI共用实时请求、planner及编码组契约。
