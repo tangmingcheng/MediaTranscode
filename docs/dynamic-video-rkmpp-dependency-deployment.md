@@ -9,7 +9,7 @@
 --prefix=/home/tang/ffmpeg-ab1e61a --enable-gpl --enable-version3 --enable-libdrm --enable-gnutls --enable-rkmpp --enable-rkrga --disable-static --enable-shared --enable-pic --extra-cflags='-I/usr/local/include -I/usr/local/include/rga' --extra-ldflags='-L/usr/local/lib -L/usr/local/lib/aarch64-linux-gnu'
 ```
 
-安装后的FFmpeg ldd确认全部七个FFmpeg共享库来自同一独立prefix；MPP来自/usr/local/lib，RGA来自/usr/local/lib/aarch64-linux-gnu。新CLI的ldd及真实进程映射仍须在新目标构建、运行时核实，本报告不先行宣称实流通过。
+安装后的FFmpeg ldd确认全部七个FFmpeg共享库来自同一独立prefix；MPP来自/usr/local/lib，RGA来自/usr/local/lib/aarch64-linux-gnu。核心98742fd6在/home/tang/dynamic-video-98742fd6全量构建615项成功，PID3919127的wait实际退出0；新CLI SHA256为9b7789cd6b9713fe36571f7b9e5ac057ce51f0afa85a601ce263c433f073eb5f。其ldd确认实际依赖的六个FFmpeg库均来自新prefix（CLI未链接libavdevice），MPP/RGA路径与上表一致，CMakeCache头文件/库目录也为新prefix。真实媒体进程映射仍须运行时核实，本报告不先行宣称实流通过。
 
 | 文件 | SHA256 |
 |---|---|

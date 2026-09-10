@@ -2,18 +2,18 @@
 
 ## 2026-09-10 动态视频多输出增量审查
 
-两名未参与实现的独立审查者 A/B 对当前冻结生产源码均 PASS；停止请求与回收竞态修复文件SHA256为 `838F1E716CF57CA60B84F1BB8B0E23F5B9E3F43E7A7D9E1EBF9BE17E9970DC72`。完整交付门禁尚未通过，下表不替换历史全仓评分。
+两名未参与实现的独立审查者 A/B 及新 PR 审查者对冻结 `98742fd6` 源码均 PASS，完整交付均 FAIL。下表是本冻结增量评分，不替换历史全仓评分；分差保留，不由实现者平均或提高。
 
-| 维度 | 满分 | A | B | 依据与边界 |
-|---|---:|---:|---:|---|
-| 工业实现依据 | 25 | 23 | 23 | 对照GStreamer动态管线/排空、FFmpeg tee、NVENC/HEVC随机访问及固定版本RKMPP/RGA。 |
-| Planner契约 | 20 | 19 | 19 | prepared readback、原事务期限、完整编码契约复用与类型化资源产品；依赖更换需重建证据。 |
-| 生命周期与约束 | 25 | 23 | 22 | 停止请求屏障、异步候选/驱动清理、引用最终计账；不可取消驱动与高频增删长期风险保留。 |
-| 平台边界 | 10 | 7 | 7 | 共享DAG与VideoFilter，只有能力adapter不同；RK新版本尚无真实通过证据。 |
-| 真实验收 | 20 | 10 | 10 | 历史Windows13/16通过；当前Windows21仍有VLC晚帧，长GOP和RKMPP未闭环。 |
-| **合计** | **100** | **82** | **81** | **源码双PASS，完整交付未通过。** |
+| 维度 | 满分 | A | B | 新PR审查 | 依据与边界 |
+|---|---:|---:|---:|---:|---|
+| 工业实现依据 | 25 | 24 | 24 | 23 | GStreamer动态管线、FFmpeg tee/解码边界/私有包关闭、NVENC/HEVC随机访问及版本限定RKMPP/RGA。 |
+| Planner契约 | 20 | 19 | 19 | 19 | 真实时间基、prepared readback、原事务期限、完整编码契约复用及统一依赖身份。 |
+| 生命周期与约束 | 25 | 23 | 23 | 22 | 停止屏障、异步回收、真实引用计账；RK关闭修复有源码证据，待新实流归零。 |
+| 平台边界 | 10 | 8 | 8 | 7 | 共享DAG，新依赖全量构建及七库哈希；新CLI实际映射与完整RK链路仍待验证。 |
+| 真实验收 | 20 | 12 | 11 | 10 | Windows22/23/24动态及长GOP通过；最新25晚帧FAIL，不能以历史结果替代。 |
+| **合计** | **100** | **86** | **85** | **81** | **源码审查PASS，完整交付FAIL。** |
 
-待优化：controller文件职责继续拆分；次级Release失败可观测性；READONLY引用可能触发COW；多小时资源趋势；未来音视频共同激活与持续漂移验收。最终冻结commit/PR仍须复核。
+优先风险：Windows晚帧根因未闭环；新RK链路和依赖关闭实流未通过；不可取消驱动的最终释放无时限保证。待优化：controller职责拆分、次级Release失败可观测性、READONLY引用可能触发COW、多小时资源趋势、未来音视频共同激活与持续漂移验收。
 
 > Baseline scope: `codex/rkmpp-zero-copy`, scored 2026-08-17. Task5 evidence was appended on 2026-08-26; numeric scores remain frozen until the required two independent reviewers complete the current branch review.
 
