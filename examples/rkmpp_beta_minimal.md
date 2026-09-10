@@ -4,6 +4,37 @@
 
 示例配置沿用原部署事实：H264 RTP 输入 `192.168.130.229:61884`，PT96、90kHz；初始 HEVC MPEG-TS/RTP 发往 `192.168.96.122:6200`，1920×1080、25fps、CBR6Mbps、GOP50，出口50Mbps、最大wire residence100ms。按实际部署修改这些已有配置字段，库内部时序与容量仍由planner推导。
 
+## 先看这三步
+
+源码开头的make_video_output集中列出每一路的完整配置：目的地址/端口、MPEG-TS/RTP、codec、profile、宽高、帧率、GOP、RC和码率。add_video_output紧接其后直接调用库的动态增加API；后面的stdin解析仅用于交互演示。
+
+在已有session运行时增加另一路H264 Baseline输出，核心代码是：
+
+```c
+mt_beta_video_output another = make_video_output(
+    MT_BETA_VIDEO_CODEC_H264, "baseline", 6204);
+/* another是独立配置；可在这里设置这一路自己的转码目标。 */
+another.width = 1920;
+another.height = 1080;
+another.frame_rate_num = 25;
+another.frame_rate_den = 1;
+another.gop_frames = 50;
+another.rate_control_mode = MT_BETA_RATE_CONTROL_CBR;
+another.rate_control.cbr.bitrate_bps = UINT64_C(6000000);
+uint64_t another_id = 0;
+mt_beta_status status = mt_beta_realtime_add_output(session, &another, &another_id);
+/* status == MT_BETA_STATUS_OK后保存another_id，等待对应RUNNING事件。 */
+```
+
+本演示先等待RUNNING，后续不需要该路时使用保存的ID删除：
+
+```c
+status = mt_beta_realtime_remove_output(session, another_id);
+/* 等待对应RETIRED事件；不停止session和其他输出。 */
+```
+
+输入与部署配置属于session，不必为新增一路再次start。动态输出的转码配置独立提交；完整编码契约相同时库内部自动复用编码组。
+
 ## 编译与运行
 
 在 RKMPP 目标机进入包目录后执行（包依赖已安装的指定FFmpeg、MPP/RGA及编译环境，不是独立于系统的全静态包）：

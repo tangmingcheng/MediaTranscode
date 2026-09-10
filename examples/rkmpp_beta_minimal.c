@@ -14,6 +14,40 @@
 #include <time.h>
 #include <unistd.h>
 
+/* 1. Complete configuration for EACH output; these are caller-selected values. */
+static mt_beta_video_output make_video_output(
+    mt_beta_video_codec codec, const char* profile, uint16_t destination_port)
+{
+    mt_beta_video_output output = {0};
+    output.protocol = MT_BETA_OUTPUT_MPEGTS_RTP;
+    output.destination_address = "192.168.96.122";
+    output.destination_port = destination_port; /* RTP; RTCP uses port + 1. */
+    output.codec = codec;
+    output.profile = profile; /* H264: baseline/main/high; HEVC: main on this RKMPP. */
+    output.width = 1920;
+    output.height = 1080;
+    output.frame_rate_num = 25;
+    output.frame_rate_den = 1;
+    output.gop_frames = 50;
+    output.rate_control_mode = MT_BETA_RATE_CONTROL_CBR;
+    output.rate_control.cbr.bitrate_bps = UINT64_C(6000000);
+    return output;
+}
+
+/* 2. Add another output to the RUNNING session; the input stays shared.
+ * Example: add_video_output(session, MT_BETA_VIDEO_CODEC_H264, "baseline", 6204, &id).
+ * Change the output fields below before add_output for a different transcode intent.
+ * OK means admitted; wait for this ID's MT_BETA_OUTPUT_RUNNING event.
+ * 3. Remove it later: mt_beta_realtime_remove_output(session, id).
+ * Wait for MT_BETA_OUTPUT_RETIRED; other outputs continue running.
+ */
+static mt_beta_status add_video_output(mt_beta_realtime_session* session,
+    mt_beta_video_codec codec, const char* profile, uint16_t port, uint64_t* output_id)
+{
+    mt_beta_video_output output = make_video_output(codec, profile, port);
+    return mt_beta_realtime_add_output(session, &output, output_id);
+}
+
 static atomic_int terminal_state = ATOMIC_VAR_INIT(0);
 static volatile sig_atomic_t stop_requested = 0;
 
@@ -113,8 +147,7 @@ static int parse_id(const char* text, uint64_t* value)
     return 1;
 }
 
-static void run_command(mt_beta_realtime_session* session,
-    const mt_beta_video_output* initial_output, char* line)
+static void run_command(mt_beta_realtime_session* session, char* line)
 {
     char* cursor = NULL;
     char* command = strtok_r(line, " \t\r", &cursor);
@@ -134,14 +167,11 @@ static void run_command(mt_beta_realtime_session* session,
     } else if (strcmp(command, "add") == 0 && argument != NULL && profile_text != NULL && extra == NULL &&
         parse_id(port_text, &id) && id < UINT16_MAX &&
         (strcmp(argument, "h264") == 0 || strcmp(argument, "hevc") == 0)) {
-        /* Copy the caller's complete output intent; codec, profile and destination change. */
-        mt_beta_video_output output = *initial_output;
-        output.destination_port = (uint16_t)id;
-        output.codec = strcmp(argument, "h264") == 0
+        const uint16_t port = (uint16_t)id;
+        const mt_beta_video_codec codec = strcmp(argument, "h264") == 0
             ? MT_BETA_VIDEO_CODEC_H264 : MT_BETA_VIDEO_CODEC_HEVC;
-        output.profile = profile_text;
         id = 0;
-        status = mt_beta_realtime_add_output(session, &output, &id);
+        status = add_video_output(session, codec, profile_text, port, &id);
     } else {
         fprintf(stderr, "commands: list | add <h264|hevc> <rtp-port> <profile> | remove <output-id>\n");
         return;
@@ -157,24 +187,13 @@ int main(void)
     (void)signal(SIGTERM, on_signal);
     mt_beta_realtime_config config = {0};
     config.input.kind = MT_BETA_INPUT_RTP_VIDEO;
-    config.initial_output.protocol = MT_BETA_OUTPUT_MPEGTS_RTP;
     config.media_id = "rk-beta-dynamic-c-example";
     config.input.source.rtp.bind_address = "192.168.130.229";
     config.input.source.rtp.port = 61884;
     config.input.source.rtp.codec = MT_BETA_VIDEO_CODEC_H264;
     config.input.source.rtp.payload_type = 96;
     config.input.source.rtp.clock_rate = 90000;
-    config.initial_output.destination_address = "192.168.96.122";
-    config.initial_output.destination_port = 6200;
-    config.initial_output.codec = MT_BETA_VIDEO_CODEC_HEVC;
-    config.initial_output.profile = "main";
-    config.initial_output.width = 1920;
-    config.initial_output.height = 1080;
-    config.initial_output.frame_rate_num = 25;
-    config.initial_output.frame_rate_den = 1;
-    config.initial_output.gop_frames = 50;
-    config.initial_output.rate_control_mode = MT_BETA_RATE_CONTROL_CBR;
-    config.initial_output.rate_control.cbr.bitrate_bps = UINT64_C(6000000);
+    config.initial_output = make_video_output(MT_BETA_VIDEO_CODEC_HEVC, "main", 6200);
     config.deployment.provisioned_egress_capacity_bps = UINT64_C(50000000);
     config.deployment.maximum_wire_residence_ms = 100;
 
@@ -234,7 +253,7 @@ int main(void)
                     if (oversized) fprintf(stderr, "command exceeds input line limit\n");
                     else {
                         line[line_length] = '\0';
-                        run_command(session, &config.initial_output, line);
+                        run_command(session, line);
                     }
                     line_length = 0;
                     oversized = 0;
