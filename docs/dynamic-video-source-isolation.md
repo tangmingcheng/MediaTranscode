@@ -10,4 +10,4 @@
 
 源 SAR 来自已有真实参数集 decoder readback 或输入格式快照，沿 session source facts 保留。`0/1` 表示未知，保持未知；运行时使用实际首帧 SAR，不替换为 `1/1`。输入池身份变化、输出仍引用原池或 fence 失败均终止对应共享源。
 
-状态：源码接线完成，尚未通过本轮 Windows/RKMPP 真实流验收。
+状态：冻结98742fd6已完成[Windows三项范围复核](dynamic-video-acceptance-scope.md)及[RKMPP03同规格实流](dynamic-video-rkmpp-03.md)，均PASS；实际加载身份、共享隔离路径及引擎引用归零已确认，不外推驱动内部字节硬边界。

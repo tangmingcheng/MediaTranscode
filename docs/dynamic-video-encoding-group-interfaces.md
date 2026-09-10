@@ -1,6 +1,6 @@
 # 动态视频编码组实现与验证
 
-状态：Windows 第 16 轮真实链路验收通过，对应提交 `4bf43635090bbe8b9d58c7bcf07b91ecd57d06a2`。RKMPP 动态多输出尚未验证，整体双审、质量评分和 PR 尚未完成。完整命令与结果见 [Windows 第 16 轮报告](dynamic-video-windows-16.md)。
+状态：Windows 第 16 轮真实链路验收通过，对应提交 `4bf43635090bbe8b9d58c7bcf07b91ecd57d06a2`。后续冻结98742fd6源码双审PASS，[Windows三项范围复核](dynamic-video-acceptance-scope.md)及[RKMPP03同规格实流](dynamic-video-rkmpp-03.md)均PASS，独立证据评分93/93，PR #33已提交。完整命令与结果见 [Windows 第 16 轮报告](dynamic-video-windows-16.md)。
 
 ## 已实现
 
@@ -24,10 +24,10 @@
 
 四路 VLC 硬解画面均已查看；RTP 零丢包，TS 连续性无错。聚合出口服务曲线最大超额 1356 B，等于最大 datagram；最终 payload bytes/objects 为零。RTP 源结束后按既有无进展超时策略退出，不能描述为会话自然 EOS。
 
-算法与生命周期对照 GStreamer [tee 独立队列](https://gstreamer.freedesktop.org/documentation/coreelements/tee.html)、[动态管线移除](https://gstreamer.freedesktop.org/documentation/application-development/advanced/pipeline-manipulation.html)，编码 session 生命周期参照 [NVENC 文档](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html)。本轮通过不代表 RKMPP 固定池适配、全部链路矩阵或最终独立审查通过。
+算法与生命周期对照 GStreamer [tee 独立队列](https://gstreamer.freedesktop.org/documentation/coreelements/tee.html)、[动态管线移除](https://gstreamer.freedesktop.org/documentation/application-development/advanced/pipeline-manipulation.html)，编码 session 生命周期参照 [NVENC 文档](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html)。该历史第16轮不外推RKMPP或全部矩阵；后续RKMPP及独立审查结果见开头的当前状态。
 
 ## 第 17 轮失败后的修复状态
 
 GOP 750 单变量真实诊断暴露动态复用错误沿用静态 10 秒启动期限：新消费者尚未等到自然 IDR 即被 scheduler 拒绝，初始输出继续运行。已实现内部随机访问周期产品，NVENC 在 probe 和真实 encoder open 后实读 GOP、帧率以及两个 intra-refresh 私有选项。动态 planner 按运行组完整 IDR 间隔或新组首帧启动，加已有组合 activation lead 检查剩余 first-output 事务预算；同一产品同时驱动 scheduler 和 controller，不能只修其中一层。周期是连续媒体条件下的事实，不构成 CPU/driver 墙钟执行保证。
 
-执行段新增单次 reclamation owner 产品，固定存储按实际运行段与 owner 对象布局计费，原生线程栈及库分配仍为观测范围。固定存储由 planner 统一计入各段，不并入媒体 producer 额度。41bb17a1整批源码双审通过，Windows22完成原规格动态矩阵，Windows23/24分别完成GOP500真实IDR等待与GOP750原事务期限拒绝。RKMPP第2轮暴露共享解码时间基及依赖关闭所有权缺口，正在修复和重新验证；不能以Windows历史通过替代新修改验收。版本适用边界见[适配记录](dynamic-video-rkmpp-adapter-evidence.md)。
+执行段新增单次 reclamation owner 产品，固定存储按实际运行段与 owner 对象布局计费，原生线程栈及库分配仍为观测范围。固定存储由 planner 统一计入各段，不并入媒体 producer 额度。41bb17a1整批源码双审通过，Windows22完成原规格动态矩阵，Windows23/24分别完成GOP500真实IDR等待与GOP750原事务期限拒绝。RKMPP第2轮暴露共享解码时间基及依赖关闭所有权缺口，98742fd6与独立FFmpeg修订已修复；最新Windows范围复核及RKMPP03实流通过，不以历史结果替代新修改验收。版本适用边界见[适配记录](dynamic-video-rkmpp-adapter-evidence.md)。
