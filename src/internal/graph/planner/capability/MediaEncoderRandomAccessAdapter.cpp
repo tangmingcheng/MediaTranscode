@@ -1,4 +1,5 @@
 #include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
+#include "internal/graph/planner/capability/MediaRkmppDependencyIdentity.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/opt.h>
@@ -15,6 +16,7 @@ MediaEncoderRandomAccessAdapter::readAfterOpen(AVCodecContext& encoder)
         ::media::ErrorInfo::notInitialized("Random access evidence requires an opened encoder"));
     const std::string_view name(encoder.codec->name);
     if (name == "h264_rkmpp" || name == "hevc_rkmpp") {
+        if (!MediaRkmppDependencyIdentity::matchesRuntime()) return Result::success(std::nullopt);
         std::int64_t refresh = 0;
         std::int64_t refreshRows = 0;
         if (!encoder.priv_data ||
@@ -32,14 +34,15 @@ MediaEncoderRandomAccessAdapter::readAfterOpen(AVCodecContext& encoder)
         if (!av_reduce(&backendNumerator, &backendDenominator,
                        encoder.framerate.num, encoder.framerate.den, 65535))
             return Result::success(std::nullopt);
-        // d90e3a1 opens with rc:gop and no custom reference configuration.
+        // The verified revision opens with rc:gop and no custom references.
         // c08762ebf uses the default temporal-zero reference cycle; igop
         // resets seq_idx to zero when refresh is disabled, producing IDR.
         // H264 maps is_idr to NAL 5; HEVC temporal-zero intra maps to NAL 19.
         return Result::success(MediaPreparedVideoRandomAccessEnvelope{
             static_cast<std::uint64_t>(encoder.gop_size),
             {backendNumerator, backendDenominator}, true,
-            "ffmpeg-rockchip-d90e3a1+mpp-c08762ebf-rc-gop-default-refs-refresh-disabled"});
+            std::string(MediaRkmppDependencyIdentity::sourceRevision) +
+                ":mpp-c08762ebf-rc-gop-default-refs-refresh-disabled"});
     }
     if (name != "h264_nvenc" && name != "hevc_nvenc") return Result::success(std::nullopt);
     std::int64_t refresh = 0;

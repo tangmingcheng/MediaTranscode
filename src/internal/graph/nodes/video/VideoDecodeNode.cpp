@@ -463,10 +463,24 @@ void VideoDecodeNode::resetRuntimeState() noexcept
             }
             if (!lineage) continue;
         }
+        if (!codecContext() || codecContext()->pkt_timebase.num <= 0 ||
+            codecContext()->pkt_timebase.den <= 0) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "VideoDecodeNode requires decoder packet time base"));
+        }
+        // As in FFmpeg's decoder output boundary, decoded timestamps use the
+        // input packet time base. Publish it for every video frame, including
+        // video-only consumers before any encoder timestamp conversion.
+        frame->time_base = codecContext()->pkt_timebase;
+        MediaTimeDescriptor timeDescriptor;
+        timeDescriptor.timeBase = MediaRational{
+            frame->time_base.num, frame->time_base.den};
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }
+        buffer.value()->setTimeDescriptor(timeDescriptor);
         const AVFrame* receivedFrame = FFmpegFrameView::frame(buffer.value());
         auto footprint = receivedFrame
             ? MediaFramePayloadFootprint::logicalBytes(
@@ -488,17 +502,6 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
         MediaBufferRef output = buffer.value();
         if (lineage) {
-            if (!codecContext() || codecContext()->pkt_timebase.num <= 0 ||
-                codecContext()->pkt_timebase.den <= 0) {
-                return ::media::Result<bool>::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "Synchronized VideoDecodeNode requires decoder packet time base"));
-            }
-            MediaTimeDescriptor timeDescriptor;
-            timeDescriptor.timeBase = MediaRational{
-                codecContext()->pkt_timebase.num,
-                codecContext()->pkt_timebase.den};
-            output->setTimeDescriptor(timeDescriptor);
             auto canonical = MediaCanonicalVideoFrameBuffer::create(output, std::move(lineage));
             if (!canonical) return ::media::Result<bool>::failure(canonical.error());
             output = std::move(canonical).value();

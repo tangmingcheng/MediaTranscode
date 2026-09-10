@@ -15,6 +15,8 @@
 - 整批双审发现fail停止请求与后台回收竞态，已以同一publication锁完成停止请求屏障修复；两者复审源码PASS，完整交付仍未完成。
 - 架构与增量评分已更新；冻结41bb17a1在Windows第22轮通过原规格完整动态验收：H.264 RTP 720p30约8Mbps → HEVC/H.264 MPEG-TS/RTP 1080p25 CBR6Mbps GOP50。长GOP与RKMPP实流仍待验证。
 - 草稿PR #33已创建，新独立智能体对41bb17a1源码审查PASS；完整交付待长GOP、RKMPP及最终证据复核，当前评分不自行上调。
+- Windows第23/24轮分别通过GOP500实际等待17.114秒加入、GOP750超原事务期限提前拒绝，独立提交5cfdf3f6/de1344da。
+- RKMPP第2轮共享源滤镜暴露VideoOnly解码帧时间基缺失，未输出媒体；共享解码边界修复已获双审源码PASS，正在Windows回归。另确认目标FFmpeg私有last_pkt关闭所有权缺陷，按硬件解码器成熟释放方式修复独立依赖版本，尚未验收。
 
 ## 行业依据与设计边界
 
@@ -44,6 +46,9 @@
 | [Windows21](dynamic-video-windows-21.md) | FAIL | 排空正常，VLC90/51ms晚帧；RC统计冻结不可用于验收。 |
 | [Windows22](dynamic-video-windows-22.md) | PASS | 原规格动态增删/复用/零输出恢复、D3D11VA画面、无晚帧丢弃、RTP/TS/时钟/共享整形及引用归零。 |
 | [RKMPP01](dynamic-video-rkmpp-01.md) | FAIL | 同规格准备阶段缺压缩输入持有adapter，输出0包。 |
+| [Windows23](dynamic-video-windows-23.md) | PASS | 原规格GOP500，复用组等待真实IDR17.114秒后运行，源持续120秒，引用归零。 |
+| [Windows24](dynamic-video-windows-24.md) | PASS | 原规格GOP750，原30秒事务期限内无法容纳完整加入预算，新增输出在发布前拒绝，原输出完成120秒。 |
+| [RKMPP02](dynamic-video-rkmpp-02.md) | FAIL | 共享源隔离滤镜缺时间基，输出0包；payload单对象残留及依赖关闭缺陷单独保留，接收VLC绑定设置也需纠正。 |
 
 Windows NVDEC safe-output可证明独立CUDA帧。RKMPP固定解码池关系不同，复用既有VideoFilterNode在分发前执行独立分配复制；统一滤镜时序事实，不建立平台专用媒体链路。适用范围见[源隔离证据](dynamic-video-source-isolation.md)及[RKMPP adapter证据](dynamic-video-rkmpp-adapter-evidence.md)。
 

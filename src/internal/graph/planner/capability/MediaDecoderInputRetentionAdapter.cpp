@@ -1,4 +1,5 @@
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
+#include "internal/graph/planner/capability/MediaRkmppDependencyIdentity.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -44,14 +45,17 @@ MediaDecoderInputRetentionAdapter::readAfterOpen(
         return facts;
     }
     if ((name == "h264_rkmpp" || name == "hevc_rkmpp") && workers == 0) {
-        // ffmpeg-rockchip d90e3a1 rkmpp_decode_receive_frame has one last_pkt.
+        if (!MediaRkmppDependencyIdentity::matchesRuntime()) return {};
+        // The verified rkmpp_decode_receive_frame has one last_pkt, released
+        // unconditionally by decoder close in the deployed ownership fix.
         // EAGAIN may return a decoded frame while retaining that packet; a
         // successful put_packet immediately unrefs it. MPP c08762ebf copies
         // non-MppBuffer input in mpp_put_packet -> mpp_packet_copy_init before
         // submission, so its internal bitstream does not pin our AVBuffer.
         // The common decode buffer_pkt handoff remains a separate slot.
         facts.serialPrivatePackets = 1;
-        facts.authority = "ffmpeg-rockchip-d90e3a1-last_pkt+mpp-c08762ebf-copy-on-put";
+        facts.authority = std::string(MediaRkmppDependencyIdentity::sourceRevision) +
+            ":last_pkt-close-release+mpp-c08762ebf-copy-on-put";
         return facts;
     }
     return {};

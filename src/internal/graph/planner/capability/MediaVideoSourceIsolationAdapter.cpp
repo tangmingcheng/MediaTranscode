@@ -1,16 +1,16 @@
 #include "internal/graph/planner/capability/MediaVideoSourceIsolationAdapter.h"
+#include "internal/graph/planner/capability/MediaRkmppDependencyIdentity.h"
 extern "C" {
 #include <libavfilter/avfilter.h>
-#include <libavutil/avutil.h>
 }
-#include <string_view>
+#include <string>
 
 namespace media::ffmpeg::graph {
 ::media::Result<MediaVideoFilterIsolationEvidence> MediaVideoSourceIsolationAdapter::inspect(MediaHardwareDeviceKind device)
 {
     using Result = ::media::Result<MediaVideoFilterIsolationEvidence>;
     if (device != MediaHardwareDeviceKind::RKMPP ||
-        std::string_view(av_version_info()) != "d90e3a1" || !avfilter_get_by_name("scale_rkrga"))
+        !MediaRkmppDependencyIdentity::matchesRuntime() || !avfilter_get_by_name("scale_rkrga"))
         return Result::failure(::media::ErrorInfo::hardwareUnavailable(
             "shared source copy requires a verified independent allocation and synchronous completion implementation"));
     // Verified deployed FFmpeg commit. Identity scaling does not bypass RGA:
@@ -21,9 +21,12 @@ namespace media::ffmpeg::graph {
     return Result::success({"scale_rkrga=w=iw:h=ih:async_depth=0",
         MediaVideoFilterAllocation::IndependentOutputPool,
         MediaVideoFilterCompletion::SynchronousOnReturn,
-        "ffmpeg-rockchip/d90e3a1c18d7929383cf88c1b3da2e2d1c966cbf:rkrga_common.init_hwframes_ctx/query_frame;hwcontext_rkmpp",
-        "ffmpeg-rockchip/d90e3a1c18d7929383cf88c1b3da2e2d1c966cbf:rkrga_common.ff_rkrga_filter_frame async_depth=0 fence wait",
+        std::string(MediaRkmppDependencyIdentity::sourceRevision) +
+            ":rkrga_common.init_hwframes_ctx/query_frame;hwcontext_rkmpp",
+        std::string(MediaRkmppDependencyIdentity::sourceRevision) +
+            ":rkrga_common.ff_rkrga_filter_frame async_depth=0 fence wait",
         1,
-        "ffmpeg-rockchip/d90e3a1c18d7929383cf88c1b3da2e2d1c966cbf:rkrga_common src frame cache until clear_unused"});
+        std::string(MediaRkmppDependencyIdentity::sourceRevision) +
+            ":rkrga_common src frame cache until clear_unused"});
 }
 } // namespace media::ffmpeg::graph

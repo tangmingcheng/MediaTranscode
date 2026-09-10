@@ -30,4 +30,4 @@
 
 GOP 750 单变量真实诊断暴露动态复用错误沿用静态 10 秒启动期限：新消费者尚未等到自然 IDR 即被 scheduler 拒绝，初始输出继续运行。已实现内部随机访问周期产品，NVENC 在 probe 和真实 encoder open 后实读 GOP、帧率以及两个 intra-refresh 私有选项。动态 planner 按运行组完整 IDR 间隔或新组首帧启动，加已有组合 activation lead 检查剩余 first-output 事务预算；同一产品同时驱动 scheduler 和 controller，不能只修其中一层。周期是连续媒体条件下的事实，不构成 CPU/driver 墙钟执行保证。
 
-执行段新增单次 reclamation owner 产品，固定存储按实际运行段与 owner 对象布局计费，原生线程栈及库分配仍为观测范围。固定存储由 planner 统一计入各段，不并入媒体 producer 额度。此批修复尚待新构建、原规格真实流及独立复审；RKMPP 压缩驻留及自然 IDR adapter 已按目标依赖版本补齐，证据见 [适配记录](dynamic-video-rkmpp-adapter-evidence.md)，尚未通过新版本真实流验证。
+执行段新增单次 reclamation owner 产品，固定存储按实际运行段与 owner 对象布局计费，原生线程栈及库分配仍为观测范围。固定存储由 planner 统一计入各段，不并入媒体 producer 额度。41bb17a1整批源码双审通过，Windows22完成原规格动态矩阵，Windows23/24分别完成GOP500真实IDR等待与GOP750原事务期限拒绝。RKMPP第2轮暴露共享解码时间基及依赖关闭所有权缺口，正在修复和重新验证；不能以Windows历史通过替代新修改验收。版本适用边界见[适配记录](dynamic-video-rkmpp-adapter-evidence.md)。

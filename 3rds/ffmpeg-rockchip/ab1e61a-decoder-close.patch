@@ -1,0 +1,12 @@
+diff --git a/libavcodec/rkmppdec.c b/libavcodec/rkmppdec.c
+index 2cf2080..731b705 100644
+--- a/libavcodec/rkmppdec.c
++++ b/libavcodec/rkmppdec.c
+@@ -158,6 +158,7 @@ static av_cold int rkmpp_decode_close(AVCodecContext *avctx)
+         mpp_destroy(r->mctx);
+         r->mctx = NULL;
+     }
++    av_packet_unref(&r->last_pkt);
+     if (r->buf_group &&
+         r->buf_mode == RKMPP_DEC_PURE_EXTERNAL) {
+         mpp_buffer_group_put(r->buf_group);
