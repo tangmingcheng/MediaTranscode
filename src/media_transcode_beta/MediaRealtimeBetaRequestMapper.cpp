@@ -172,6 +172,7 @@ MediaRealtimeBetaRequestMapper::mapOutput(const mt_beta_video_output& output)
     video.frameRate.numerator = static_cast<int>(output.frame_rate_num);
     video.frameRate.denominator = static_cast<int>(output.frame_rate_den);
     video.gop = static_cast<int>(output.gop_frames);
+    if (output.profile != nullptr) video.profile = output.profile;
     if (const auto* cbr = std::get_if<CbrRateControl>(&rate.value())) {
         video.rateControl = ffmpeg::graph::MediaRateControlMode::Cbr;
         video.bitrateKbps = cbr->targetBitrateKbps;

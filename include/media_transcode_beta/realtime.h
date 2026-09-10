@@ -174,6 +174,10 @@ typedef struct mt_beta_video_output {
         mt_beta_cbr cbr;
         mt_beta_vbr vbr;
     } rate_control;
+    /* Optional encoder profile name, copied before start/add returns.
+     * NULL or empty means no caller profile constraint. Supported names depend
+     * on the selected encoder; unsupported values fail during preparation. */
+    const char* profile;
 } mt_beta_video_output;
 
 typedef struct mt_beta_realtime_deployment {

@@ -120,6 +120,7 @@ static void run_command(mt_beta_realtime_session* session,
     char* command = strtok_r(line, " \t\r", &cursor);
     char* argument = strtok_r(NULL, " \t\r", &cursor);
     char* port_text = strtok_r(NULL, " \t\r", &cursor);
+    char* profile_text = strtok_r(NULL, " \t\r", &cursor);
     char* extra = strtok_r(NULL, " \t\r", &cursor);
     uint64_t id = 0;
     if (command == NULL) return;
@@ -130,18 +131,19 @@ static void run_command(mt_beta_realtime_session* session,
     mt_beta_status status;
     if (strcmp(command, "remove") == 0 && port_text == NULL && parse_id(argument, &id)) {
         status = mt_beta_realtime_remove_output(session, id);
-    } else if (strcmp(command, "add") == 0 && argument != NULL && extra == NULL &&
+    } else if (strcmp(command, "add") == 0 && argument != NULL && profile_text != NULL && extra == NULL &&
         parse_id(port_text, &id) && id < UINT16_MAX &&
         (strcmp(argument, "h264") == 0 || strcmp(argument, "hevc") == 0)) {
-        /* Copy the caller's complete output intent; only codec and destination change. */
+        /* Copy the caller's complete output intent; codec, profile and destination change. */
         mt_beta_video_output output = *initial_output;
         output.destination_port = (uint16_t)id;
         output.codec = strcmp(argument, "h264") == 0
             ? MT_BETA_VIDEO_CODEC_H264 : MT_BETA_VIDEO_CODEC_HEVC;
+        output.profile = profile_text;
         id = 0;
         status = mt_beta_realtime_add_output(session, &output, &id);
     } else {
-        fprintf(stderr, "commands: list | add <h264|hevc> <rtp-port> | remove <output-id>\n");
+        fprintf(stderr, "commands: list | add <h264|hevc> <rtp-port> <profile> | remove <output-id>\n");
         return;
     }
     /* OK means admitted. Events/list confirm RUNNING or RETIRED asynchronously. */
@@ -165,6 +167,7 @@ int main(void)
     config.initial_output.destination_address = "192.168.96.122";
     config.initial_output.destination_port = 6200;
     config.initial_output.codec = MT_BETA_VIDEO_CODEC_HEVC;
+    config.initial_output.profile = "main";
     config.initial_output.width = 1920;
     config.initial_output.height = 1080;
     config.initial_output.frame_rate_num = 25;
@@ -189,7 +192,7 @@ int main(void)
     int oversized = 0;
     int input_fd = STDIN_FILENO;
     int application_failed = 0;
-    puts("commands: list | add <h264|hevc> <rtp-port> | remove <output-id>");
+    puts("commands: list | add <h264|hevc> <rtp-port> <profile> | remove <output-id>");
     puts("EOF leaves the session running; stop the source to finish the real RTP example.");
     while (!atomic_load_explicit(&terminal_state, memory_order_acquire)) {
         if (!print_snapshot(session)) {
