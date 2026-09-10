@@ -32,23 +32,13 @@ bool startsWith(const std::string& value, const std::string& prefix) noexcept
 
 std::string plannedFilterName(const MediaNodeOptions* options)
 {
-    std::string filter = optionValue(options, "filter.pipeline.filter");
-    if (filter.empty()) {
-        filter = optionValue(options, "filter.name");
-    }
-    if (filter.empty()) {
-        filter = optionValue(options, "filter");
-    }
-    if (filter.empty()) {
-        filter = "passthrough_software";
-    }
-    return filter;
+    return optionValue(options, "filter.pipeline.filter");
 }
 
 std::string buildFilterDescription(const MediaNodeOptions* options)
 {
     const std::string filter = plannedFilterName(options);
-    if (filter.empty() || startsWith(filter, "passthrough")) {
+    if (startsWith(filter, "passthrough")) {
         return "null";
     }
     return filter;
@@ -78,7 +68,7 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
             ::media::ErrorInfo::invalidArgument("VideoFilterGraphBuilder requires input frame rate"));
     }
 
-    if (!rationalKnown(request.sampleAspectRatio)) {
+    if (request.sampleAspectRatio.num < 0 || request.sampleAspectRatio.den <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterGraphBuilder requires sample aspect ratio"));
     }

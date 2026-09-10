@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
+#include "internal/graph/model/MediaVideoSharedSourcePlan.h"
 
 #include "internal/graph/model/MediaVideoEncodingRequestContract.h"
 
@@ -48,6 +50,7 @@ struct MediaPipelineStagePlan {
     std::optional<MediaEncoderOpenContract> encoderOpenContract;
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
     std::optional<MediaDecoderInputRetention> preparedInputRetention;
+    std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
 
     const MediaHardwareDescriptor* frameContract() const noexcept
     {
@@ -134,6 +137,7 @@ struct MediaInputVideoStreamInfo {
     int height = 0;
     int64_t bitrateBitsPerSecond = 0;
     MediaRational frameRate;
+    MediaRational sampleAspectRatio;
 };
 
 enum class MediaVideoNoOutputPolicy { Consume };
@@ -145,6 +149,7 @@ struct MediaVideoOutputFanoutPlan final {
 };
 
 struct MediaPipelinePlan {
+    std::optional<MediaVideoSharedSourcePlan> sharedSource;
     std::optional<MediaVideoOutputFanoutPlan> outputFanout;
     std::optional<MediaVideoSourceEpochPlan> sourcePlaybackEpoch;
     std::optional<MediaVideoOutputFanoutPlan> encodedOutputFanout;

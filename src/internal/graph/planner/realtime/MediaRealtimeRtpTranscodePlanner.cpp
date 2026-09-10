@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
 
@@ -725,6 +726,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
     draft.outputLayout = *request.output.streamLayout;
     draft.outputTransport = *request.output.transport;
     draft.videoPlan = std::move(pipeline).value();
+    draft.videoPlan.sharedSource = sessionPlan.videoPlan.sharedSource;
     draft.videoPlan.encodedOutputFanout = MediaVideoOutputFanoutPlan{
         MediaVideoNoOutputPolicy::Consume, MediaVideoOutputOverflowPolicy::FailBranch};
     draft.videoPlan.maximumFrameDuplicationGap = MediaRational{source.frameRate.den, source.frameRate.num};
@@ -834,6 +836,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
     }
     MediaRealtimeRtpTranscodeRequest options = requestedOptions;
     std::optional<MediaSize> rawRtpCodedSize;
+    std::optional<MediaRational> rawRtpSampleAspectRatio;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
         auto resolvedSignaling =
             MediaRealtimeRtpVideoSignalingResolver::resolve(
@@ -844,6 +847,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
         }
         options.input.videoRtp.fmtp = resolvedSignaling.value().fmtp;
         rawRtpCodedSize = resolvedSignaling.value().codedSize;
+        rawRtpSampleAspectRatio = resolvedSignaling.value().sampleAspectRatio;
     } else if (detectedVideoSignaling) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -906,6 +910,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
         rawInput->video.width = pipelineOptions.probeWidth;
         rawInput->video.height = pipelineOptions.probeHeight;
         rawInput->video.frameRate = pipelineOptions.sourceFrameRate;
+        rawInput->video.sampleAspectRatio = *rawRtpSampleAspectRatio;
 
         if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(*rawInput->audio, audioOptions);
@@ -1418,6 +1423,9 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             plan.videoPlan.outputFanout = MediaVideoOutputFanoutPlan{
                 MediaVideoNoOutputPolicy::Consume,
                 MediaVideoOutputOverflowPolicy::FailBranch};
+            auto sharedSource = MediaVideoSharedSourcePlanner::plan(plan.videoPlan.selected, plan.preparedVideoSource);
+            if (!sharedSource) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(sharedSource.error());
+            plan.videoPlan.sharedSource = std::move(sharedSource).value();
         }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,

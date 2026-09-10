@@ -135,6 +135,12 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     }
     auto sourceFrame = options.sharedDecode
         ? options.sharedDecode->frame : MediaEndpoint{nodes.videoDecode, "frame"};
+    if (nodes.sourceCopy.isValid()) {
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner,
+                sourceFrame.node, sourceFrame.port, nodes.sourceCopy, "frame",
+                options.prefix + ".decode.frame -> source_copy.frame", videoFramePolicy); !status) return status;
+        sourceFrame = {nodes.sourceCopy, "frame"};
+    }
     if (nodes.outputFanout.isValid()) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner,
                 sourceFrame.node, sourceFrame.port, nodes.outputFanout, "frame",
@@ -259,6 +265,24 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                                                                   options.plan.filterActive,
                                                                   options.sharedDecode.has_value());
     if (options.plan.outputFanout && !options.sharedDecode) {
+        if (!options.plan.sharedSource) return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized("shared video output requires its source allocation contract"));
+        const auto& source = *options.plan.sharedSource;
+        if ((source.allocation == MediaVideoSourceAllocation::IndependentFilterOutput) != source.copy.has_value())
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument("shared video source allocation contradicts its copy contract"));
+        if (source.copy) {
+            nodes.sourceCopy = graph.addNode(MediaNodeKind::VideoFilter,
+                options.prefix + ".source_copy", "Shared video source isolation");
+            if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.sourceCopy,
+                    "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status)
+                return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+            if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.sourceCopy,
+                    "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status)
+                return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+            if (auto status = MediaVideoPlanOptionApplier::applyFilterExecutionPlan(graph, nodes.sourceCopy, *source.copy); !status)
+                return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        }
         if (options.plan.outputFanout->noOutputs != MediaVideoNoOutputPolicy::Consume ||
             options.plan.outputFanout->overflow != MediaVideoOutputOverflowPolicy::FailBranch) {
             return ::media::Result<MediaEncodedBranchEndpoints>::failure(

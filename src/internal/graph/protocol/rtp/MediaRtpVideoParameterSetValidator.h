@@ -10,6 +10,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaRtpVideoParameterSetInfo final {
     MediaSize codedSize;
+    MediaRational sampleAspectRatio;
 };
 
 class MediaRtpVideoParameterSetValidator final {

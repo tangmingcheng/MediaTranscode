@@ -6,6 +6,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRealtimeRuntimeBinding.h"
@@ -212,7 +213,17 @@ const MediaEdge* exactEdge(
     const auto transfer = shape.nodes(MediaNodeKind::HardwareTransfer);
     const auto timestamp = shape.nodes(MediaNodeKind::VideoTimestamp);
     const auto frameRate = shape.nodes(MediaNodeKind::VideoFrameRate);
-    const auto filter = shape.nodes(MediaNodeKind::VideoFilter);
+    std::vector<const MediaNode*> filter;
+    const MediaNode* sourceCopy = nullptr;
+    for (const auto* node : shape.nodes(MediaNodeKind::VideoFilter)) {
+        auto execution = MediaVideoFilterExecutionPlanCodec::decode(node->options);
+        if (!execution) return invalid("video filter lacks a valid execution contract");
+        if (execution.value().timing == MediaVideoFilterTimingAuthority::SourceFrame) {
+            if (sourceCopy || node->inputPorts.size() != 1 || node->outputPorts.size() != 1)
+                return invalid("shared source copy cardinality or metadata dependency");
+            sourceCopy = node;
+        } else filter.push_back(node);
+    }
     const auto encode = shape.nodes(MediaNodeKind::VideoEncode);
     const auto gate = shape.nodes(MediaNodeKind::PacketStartGate);
     if (decode.size() != 1 || transfer.size() != 1 ||
@@ -271,6 +282,11 @@ const MediaEdge* exactEdge(
     const auto fanout = shape.nodes(MediaNodeKind::VideoOutputFanout);
     if (fanout.size() > 1) return invalid("video output distributor cardinality");
     const MediaNode* frameSource = decode.front();
+    if (sourceCopy) {
+        if (fanout.empty() || !exactEdge(graph, *frameSource, "frame", *sourceCopy, "frame", sharedInput.frame))
+            return invalid("shared source copy differs from its decoder frame contract");
+        frameSource = sourceCopy;
+    }
     if (!fanout.empty()) {
         const auto& distributor = *fanout.front();
         if (distributor.inputPorts.size() != 1 || distributor.outputPorts.size() != 1 ||
@@ -289,7 +305,7 @@ const MediaEdge* exactEdge(
             distributor.options.value("fanout.epoch.identity_transition") != "replan_session" ||
             distributor.options.value("fanout.epoch.protocol_session") !=
                 std::to_string(runtime.scheduling.initialGeneration) ||
-            !exactEdge(graph, *decode.front(), "frame", distributor, "frame",
+            !exactEdge(graph, *frameSource, "frame", distributor, "frame",
                        sharedInput.frame)) {
             return invalid("video output distributor differs from shared source contract");
         }

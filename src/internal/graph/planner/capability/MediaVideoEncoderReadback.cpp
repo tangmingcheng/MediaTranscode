@@ -1,4 +1,5 @@
 #include "internal/graph/planner/capability/MediaVideoEncoderReadback.h"
+#include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
@@ -10,7 +11,10 @@ namespace media::ffmpeg::graph {
     if (!c.codec || !avcodec_is_open(&c) || c.extradata_size < 0 ||
         (c.extradata_size > 0 && !c.extradata)) return Result::failure(
         ::media::ErrorInfo::notInitialized("encoder readback requires an opened unpublished encoder"));
+    auto randomAccess = MediaEncoderRandomAccessAdapter::readAfterOpen(c);
+    if (!randomAccess) return Result::failure(randomAccess.error());
     MediaVideoEncoderReadback result;
+    result.randomAccess = std::move(randomAccess).value();
     result.fields = {
         {"codec_id", c.codec_id},
         {"codec_type", c.codec_type},

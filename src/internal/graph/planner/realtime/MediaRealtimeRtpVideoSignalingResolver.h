@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
 struct MediaResolvedRtpVideoSignaling final {
     std::string fmtp;
     MediaSize codedSize;
+    MediaRational sampleAspectRatio;
 };
 
 class MediaRealtimeRtpVideoSignalingResolver final {

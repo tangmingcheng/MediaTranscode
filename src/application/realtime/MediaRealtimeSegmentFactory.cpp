@@ -15,7 +15,7 @@ namespace media::ffmpeg::graph {
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
     std::shared_ptr<MediaDatagramServiceScopeArbiter> serviceScope,
     MediaBufferRef preparedEncoder, MediaGraphExecutionContext& session,
-    const ExportSource& exportSource)
+    const ExportSource& exportSource, const MediaRuntimeReclamationPlan& reclamationPlan)
 {
     using Result = ::media::Result<MediaRealtimeCreatedSegment>;
     CodecResolverNode* resolver = nullptr;
@@ -49,7 +49,7 @@ namespace media::ffmpeg::graph {
         if (!binding) return Result::failure(binding.error());
         upstream.push_back(std::move(binding).value());
     }
-    auto branch = MediaRuntimeBranch::prepare({segmentId, threading, std::move(graph), nodes,
+    auto branch = MediaRuntimeBranch::prepare({segmentId, threading, reclamationPlan, std::move(graph), nodes,
         std::move(upstream), std::move(runtimeNodes), std::move(resources)}, session);
     if (!branch) return Result::failure(branch.error());
     return Result::success({std::move(branch).value(), resolver, fanout});

@@ -12,6 +12,7 @@ extern "C" {
 }
 
 #include <utility>
+#include <chrono>
 
 namespace media::ffmpeg::graph {
 
@@ -19,6 +20,16 @@ namespace media::ffmpeg::graph {
     const MediaRealtimeOutputPreparationRequest& request)
 {
     using Result = ::media::Result<MediaPreparedRealtimeOutput>;
+    const auto preparationStarted = std::chrono::steady_clock::now();
+    const auto remainingBudget = [&]() -> ::media::Result<MediaRunningTime> {
+        const auto elapsed = std::chrono::steady_clock::now() - preparationStarted;
+        auto duration = MediaRunningTime::checkedFromTicks(elapsed.count(),
+            std::chrono::steady_clock::period::num, std::chrono::steady_clock::period::den);
+        if (!duration) return ::media::Result<MediaRunningTime>::failure(duration.error());
+        return request.remainingFirstOutputBudget.checkedSubtract(duration.value());
+    };
+    if (request.remainingFirstOutputBudget.nanoseconds() <= 0) return Result::failure(
+        ::media::ErrorInfo::cancelled("Output preparation has no remaining first-output transaction budget"));
     const auto& snapshot = request.sourceSnapshot;
     if (request.prefix.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
         "output preparation requires a nonempty branch identity"));
@@ -85,8 +96,18 @@ namespace media::ffmpeg::graph {
             request.output, identity, request.sessionPlan, source,
             request.sourceGeneration, witness.pipeline);
         if (!planned) return Result::failure(planned.error());
+        if (!witness.actual.readback.randomAccess) return Result::failure(
+            ::media::ErrorInfo::unsupported("Running encoder has no proven finite natural-IDR join interval"));
+        auto remaining = remainingBudget();
+        if (!remaining) return Result::failure(remaining.error());
+        auto wait = MediaRealtimeVideoJoinWaitPlanner::plan(*witness.actual.readback.randomAccess,
+            MediaVideoJoinEncoderState::AlreadyRunning,
+            std::get<MediaRealtimeVideoRuntimePlan>(planned.value().runtime),
+            remaining.value());
+        if (!wait) return Result::failure(wait.error());
         auto output = MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
-            request.graph, planned.value(), request.prefix, group.encoded);
+            request.graph, planned.value(), request.prefix, group.encoded,
+            wait.value(), request.reclamationPlan);
         if (!output) return Result::failure(output.error());
         if (auto status = MediaRealtimeVideoGraphShapeValidator::validateOutputBranch(
                 *output.value().graph, output.value().nodeIds, request.sessionPlan,
@@ -97,19 +118,32 @@ namespace media::ffmpeg::graph {
     }
     MediaHardwareCapabilityProbe probe([&](MediaPipelineChainPlan& candidate,
                                           const MediaPipelinePlannerOptions& options) {
+        if (!request.sessionPlan.videoPlan.sharedSource)
+            return MediaHardwareCapability{false, "shared video source has no typed allocation contract"};
         return MediaHardwareCapabilityProbe::validateOutputBranch(
-            candidate, options, request.liveFrames, request.decoderFacts);
+            candidate, options, request.liveFrames, request.decoderFacts,
+            *request.sessionPlan.videoPlan.sharedSource);
     });
     auto planned = MediaRealtimeRtpTranscodePlanner::planOutputBranch(
         request.output, identity, request.sessionPlan, source,
         request.sourceGeneration, probe);
     if (!planned) return Result::failure(planned.error());
+    const auto& access = planned.value().videoPlan.selected.encoder.randomAccess;
+    if (!access) return Result::failure(::media::ErrorInfo::unsupported(
+        "Prepared encoder has no proven finite natural-IDR join interval"));
+    auto remaining = remainingBudget();
+    if (!remaining) return Result::failure(remaining.error());
+    auto wait = MediaRealtimeVideoJoinWaitPlanner::plan(*access, MediaVideoJoinEncoderState::NewlyOpened,
+        std::get<MediaRealtimeVideoRuntimePlan>(planned.value().runtime),
+        remaining.value());
+    if (!wait) return Result::failure(wait.error());
     auto branch = MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
         request.graph, planned.value(), request.prefix,
-        request.formatSource, request.sharedDecode);
+        request.formatSource, request.sharedDecode, request.reclamationPlan);
     if (!branch) return Result::failure(branch.error());
     auto output = MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
-        branch.value().graph, planned.value(), request.prefix, branch.value().segment.encoded);
+        branch.value().graph, planned.value(), request.prefix, branch.value().segment.encoded,
+        wait.value(), request.reclamationPlan);
     if (!output) return Result::failure(output.error());
     if (auto status = MediaRealtimeVideoGraphShapeValidator::validateOutputBranch(
             *output.value().graph, output.value().nodeIds,
@@ -160,6 +194,8 @@ namespace media::ffmpeg::graph {
     }
     auto encoderReadback = MediaVideoEncoderReadback::capture(*encoder.value().context);
     if (!encoderReadback) return Result::failure(encoderReadback.error());
+    if (encoderReadback.value().randomAccess != access) return Result::failure(
+        ::media::ErrorInfo::invalidArgument("Retained encoder random-access readback differs from the admitted probe"));
     auto encodingContract = MediaRealtimeVideoEncodingGroupContractPlanner::plan(
         planned.value().videoPlan, request.sharedDecode.frame.node,
         request.sourceGeneration, request.sessionPlan.sourceTimeBase,

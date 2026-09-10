@@ -810,7 +810,8 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
     const MediaRealtimeRtpTranscodePlan& plan,
     const std::string& prefix,
     MediaEndpoint formatSource,
-    MediaSharedVideoDecodeEndpoints sharedDecode)
+    MediaSharedVideoDecodeEndpoints sharedDecode,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
 {
     using Result = ::media::Result<MediaRealtimeVideoEncodingGroupGraph>;
     const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
@@ -883,13 +884,15 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
     threading.maxWorkerThreads = nodes.size();
     return Result::success(MediaRealtimeVideoEncodingGroupGraph{std::move(graph),
         {std::move(nodes), threading, std::move(resources).value(),
-         std::move(growth).value(), std::move(encoded).value()}});
+         std::move(growth).value(), std::move(encoded).value(), reclamationPlan}});
 }
 
 ::media::Result<MediaRealtimeVideoProtocolOutputGraph>
 MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
     MediaGraph graph, const MediaRealtimeRtpTranscodePlan& plan,
-    const std::string& prefix, MediaEncodedBranchEndpoints encoded)
+    const std::string& prefix, MediaEncodedBranchEndpoints encoded,
+    const MediaRealtimeVideoJoinWaitPlan& joinWaitPlan,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
 {
     using Result = ::media::Result<MediaRealtimeVideoProtocolOutputGraph>;
     const auto* runtime = std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
@@ -933,7 +936,7 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
     threading.maxWorkerThreads = nodes.size();
     return Result::success({std::make_shared<const MediaGraph>(std::move(graph)),
         std::move(nodes), threading, storage.value().reservedStorageBytes,
-        {producer, plan.resourceLedger->media.videoBytes, count.value()}});
+        {producer, plan.resourceLedger->media.videoBytes, count.value()}, joinWaitPlan, reclamationPlan});
 }
 
 ::media::Result<MediaRealtimeInitialVideoOutputTopology>

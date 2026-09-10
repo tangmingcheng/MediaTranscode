@@ -3,6 +3,8 @@
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/model/MediaRuntimeBranchDrainPlan.h"
+#include "internal/graph/model/MediaRuntimeReclamationPlan.h"
+#include "internal/graph/runtime/threading/MediaRuntimeReclamationOwner.h"
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
 
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeMetrics.h"
@@ -23,6 +25,7 @@ public:
 struct MediaPreparedRuntimeBranch final {
     std::uint64_t id;
     MediaThreadingPolicy threadingPolicy;
+    MediaRuntimeReclamationPlan reclamationPlan;
     std::shared_ptr<const MediaGraph> graph;
     std::vector<MediaNodeId> nodeIds;
     std::vector<MediaRuntimeSegmentOutputBinding> upstreamInputs;
@@ -37,6 +40,7 @@ public:
     static ::media::Result<std::shared_ptr<MediaRuntimeBranch>> prepare(
         MediaPreparedRuntimeBranch prepared, MediaGraphExecutionContext& session);
     ~MediaRuntimeBranch();
+    static std::uint64_t fixedStorageBytes() noexcept;
     MediaRuntimeBranch(const MediaRuntimeBranch&) = delete;
     MediaRuntimeBranch& operator=(const MediaRuntimeBranch&) = delete;
 
@@ -54,7 +58,7 @@ public:
     std::optional<MediaGraphWorkerFailure> failure() const;
     MediaGraphExecutionContext& context() noexcept { return m_context; }
     // The caller retains this branch and serializes lookup with retirement.
-    MediaRuntimeNode* findNode(MediaNodeId id) noexcept { return m_scheduler.findNode(id); }
+    MediaRuntimeNode* findNode(MediaNodeId id) noexcept;
     std::vector<MediaEdgeId> inputEdges() const;
     MediaGraphRuntimeMetrics metrics() const;
     std::optional<MediaVideoOutputReadyEvidence> videoReadyEvidence() const;
@@ -63,15 +67,27 @@ private:
     friend class MediaGraphRuntime;
     MediaRuntimeBranch() = default;
     void requestFailureStop() noexcept;
+    ::media::Status prepareReclamation(const MediaRuntimeReclamationPlan& plan);
+    void reclaim() noexcept;
     MediaGraphRuntimeMetrics collectMetrics() const;
     std::uint64_t drainProgress() const;
     std::optional<MediaVideoOutputReadyEvidence> collectVideoReadyEvidence() const;
 
+    // Declared first, destroyed last: admission covers the branch/owner bodies
+    // as well as payloads, including references retained after physical retirement.
+    std::shared_ptr<MediaRuntimeBranchResourceReservation> m_resourceLease;
     std::uint64_t m_id = 0;
     MediaThreadingPolicy m_threadingPolicy;
+    std::optional<MediaRuntimeReclamationPlan> m_reclamationPlan;
+    std::unique_ptr<MediaRuntimeReclamationOwner> m_reclamationOwner;
+    std::optional<MediaGraphWorkerFailure> m_unexpectedReleaseFailure;
+    std::optional<MediaGraphWorkerFailure> m_releaseSilenceFailure;
+    bool m_reclaimAbort = false;
+    bool m_reclaimed = false;
+    std::chrono::steady_clock::time_point m_lastReleaseProgressAt;
+    std::uint64_t m_lastReleaseProgress = 0;
     MediaGraphRuntimeMetrics m_finalMetrics;
     std::optional<MediaVideoOutputReadyEvidence> m_finalVideoReadyEvidence;
-    std::shared_ptr<MediaRuntimeBranchResourceReservation> m_resourceLease;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;
     MediaGraphWorkerFailureRecorder m_failures;

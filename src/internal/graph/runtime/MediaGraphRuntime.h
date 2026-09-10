@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaRuntimeReclamationPlan.h"
+
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -69,7 +71,8 @@ public:
         std::uint64_t id, std::span<const MediaNodeId> nodes,
         std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
         std::span<const MediaNodeId> retirementProducerIds,
-        std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs);
+        std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs,
+        const MediaRuntimeReclamationPlan& reclamationPlan);
 
     void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
     const MediaThreadingPolicy& threadingPolicy() const noexcept;

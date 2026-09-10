@@ -1,5 +1,20 @@
 # MediaTranscode Quality Score
 
+## 2026-09-10 动态视频多输出增量审查
+
+两名未参与实现的独立审查者 A/B 对当前冻结生产源码均 PASS；停止请求与回收竞态修复文件SHA256为 `838F1E716CF57CA60B84F1BB8B0E23F5B9E3F43E7A7D9E1EBF9BE17E9970DC72`。完整交付门禁尚未通过，下表不替换历史全仓评分。
+
+| 维度 | 满分 | A | B | 依据与边界 |
+|---|---:|---:|---:|---|
+| 工业实现依据 | 25 | 23 | 23 | 对照GStreamer动态管线/排空、FFmpeg tee、NVENC/HEVC随机访问及固定版本RKMPP/RGA。 |
+| Planner契约 | 20 | 19 | 19 | prepared readback、原事务期限、完整编码契约复用与类型化资源产品；依赖更换需重建证据。 |
+| 生命周期与约束 | 25 | 23 | 22 | 停止请求屏障、异步候选/驱动清理、引用最终计账；不可取消驱动与高频增删长期风险保留。 |
+| 平台边界 | 10 | 7 | 7 | 共享DAG与VideoFilter，只有能力adapter不同；RK新版本尚无真实通过证据。 |
+| 真实验收 | 20 | 10 | 10 | 历史Windows13/16通过；当前Windows21仍有VLC晚帧，长GOP和RKMPP未闭环。 |
+| **合计** | **100** | **82** | **81** | **源码双PASS，完整交付未通过。** |
+
+待优化：controller文件职责继续拆分；次级Release失败可观测性；READONLY引用可能触发COW；多小时资源趋势；未来音视频共同激活与持续漂移验收。最终冻结commit/PR仍须复核。
+
 > Baseline scope: `codex/rkmpp-zero-copy`, scored 2026-08-17. Task5 evidence was appended on 2026-08-26; numeric scores remain frozen until the required two independent reviewers complete the current branch review.
 
 | Dimension | Max | Score | Evidence / debt |

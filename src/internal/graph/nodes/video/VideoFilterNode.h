@@ -10,6 +10,7 @@
 #include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
+#include "internal/graph/model/MediaVideoFilterExecutionPlan.h"
 
 #include <cstdint>
 #include <optional>
@@ -35,8 +36,9 @@ public:
     void resetFilterGraph() noexcept;
     void resetForLifecycle() noexcept;
 
-    MediaBufferRef encoderConfig;
-    AVCodecContext* encoderContext = nullptr;
+    AVRational outputTimeBase { 0, 1 };
+    AVRational inputFrameRate { 0, 1 };
+    ::media::ffmpeg::BufferRefPtr sourceFramesOwner;
     ::media::ffmpeg::FilterGraphPtr filterGraph;
     AVFilterContext* bufferSrcContext = nullptr;
     AVFilterContext* bufferSinkContext = nullptr;
@@ -123,6 +125,7 @@ private:
     bool m_preparationFeedArmed = false;
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
+    std::optional<MediaVideoFilterExecutionPlan> m_executionPlan;
     std::optional<MediaHardwareDescriptor> m_inputContract;
     std::optional<MediaHardwareDescriptor> m_outputContract;
     std::uint64_t m_drmPrimeInputFrames = 0;

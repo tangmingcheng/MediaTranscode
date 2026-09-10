@@ -495,7 +495,19 @@ builder 只消费 planner 产生的完整 plan；runtime node 不推断协议、
 - 简化外部调用方创建标准 graph 的过程
 ```
 
-## Realtime stream-set and prepared-input contracts
+## 动态视频多输出
+
+实时 `VideoOnly` 使用共享输入/解码段、编码组段和独立协议输出段。共享帧经 `VideoOutputFanout` 分发，编码结果经 `EncodedVideoFanout` 分发；完整编码契约与源代际一致时复用编码组。CLI 与 beta API 由同一控制器编排，不建立验收或平台专用媒体链路；音频多输出尚未实现。
+
+Planner 从真实 prepared encoder readback、源帧与平台能力规划自然 IDR 周期、原事务剩余期限、队列与资源硬边界。动态候选由既有准备线程持有，控制序列只负责准入和发布；实际首 IDR 的最后数据报提交后才通知 Running。各输出独立背压和失败，删除先解绑、再有序 EOS，零输出继续消费共享源。
+
+停止请求完成屏障先于回收所有权转移。预创建的单次回收线程执行 worker join、节点及驱动释放；实际完成前保留引用和费用，固定存储 lease 随最后 branch 引用销毁。不可取消驱动调用不具备无条件墙钟释放上界。
+
+Windows NVDEC 独立输出帧与 RKMPP 固定解码池由能力 adapter 区分。RKMPP 按已核验 FFmpeg/RGA 版本，在共享分发前组合既有 VideoFilter 的独立分配、同步完成操作，并计入滤镜源缓存；滤镜时序、SAR 和分配语义是类型化产品。RTP/RTCP 与全部协议输出共用 controller 内的 service-scope 仲裁和实际字节计账。
+
+实现与验收边界见 [实施记录](docs/dynamic-video-outputs-progress.md)、[源隔离证据](docs/dynamic-video-source-isolation.md)。
+
+## 既有流集合与输入准备契约
 
 Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `AudioVideo`. The planner produces one matching runtime variant and owns input selection, startup timing, queue and byte limits, protocol identity, scheduling and output shape. Builders only materialize that product; runtime validators reject missing or inconsistent facts instead of selecting defaults.
 

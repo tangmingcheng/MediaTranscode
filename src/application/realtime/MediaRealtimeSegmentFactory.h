@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include "internal/graph/model/MediaRuntimeReclamationPlan.h"
 
 #include <functional>
 
@@ -26,7 +27,7 @@ public:
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
         std::shared_ptr<MediaDatagramServiceScopeArbiter> serviceScope,
         MediaBufferRef preparedEncoder, MediaGraphExecutionContext& session,
-        const ExportSource& exportSource);
+        const ExportSource& exportSource, const MediaRuntimeReclamationPlan& reclamationPlan);
 };
 
 } // namespace media::ffmpeg::graph

@@ -8,6 +8,7 @@ struct MediaVideoTranscodeBranchNodes {
     MediaNodeId codecResolver = MediaNodeId::invalid();
     MediaNodeId packetStartGate = MediaNodeId::invalid();
     MediaNodeId videoDecode = MediaNodeId::invalid();
+    MediaNodeId sourceCopy = MediaNodeId::invalid();
     MediaNodeId outputFanout = MediaNodeId::invalid();
     MediaNodeId hardwareTransfer = MediaNodeId::invalid();
     MediaNodeId videoTimestamp = MediaNodeId::invalid();

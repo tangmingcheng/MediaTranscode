@@ -31,6 +31,8 @@ namespace media::ffmpeg::graph {
     branch->m_id = prepared.id;
     branch->m_threadingPolicy = prepared.threadingPolicy;
     branch->m_resourceLease = std::move(prepared.resourceLease);
+    auto reclamation = branch->prepareReclamation(prepared.reclamationPlan);
+    if (!reclamation) return Result::failure(reclamation.error());
     auto compiled = branch->m_context.compileSegment(
         std::move(prepared.graph), prepared.nodeIds, session, prepared.upstreamInputs);
     if (!compiled) return Result::failure(compiled.error());
@@ -45,21 +47,81 @@ namespace media::ffmpeg::graph {
     return Result::success(std::move(branch));
 }
 
+std::uint64_t MediaRuntimeBranch::fixedStorageBytes() noexcept
+{
+    return sizeof(MediaRuntimeBranch) + MediaRuntimeReclamationOwner::fixedStorageBytes();
+}
+
+::media::Status MediaRuntimeBranch::prepareReclamation(const MediaRuntimeReclamationPlan& plan)
+{
+    if (m_reclamationOwner || plan.mode != MediaRuntimeReclamationMode::DedicatedSingleShotOwner ||
+        plan.ownerThreads != 1 || plan.commandSlots != 1 ||
+        plan.fixedStorageBytes != fixedStorageBytes() ||
+        plan.maximumProgressSilence.nanoseconds() <= 0)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "runtime branch requires the exact planned single-shot reclamation owner"));
+    m_reclamationPlan = plan;
+    m_unexpectedReleaseFailure = MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
+        "output branch reclamation", ::media::ErrorInfo::internalError(
+            "physical branch reclamation raised an exception; resources remain owned"),
+        MediaGraphWorkerFailurePhase::Release};
+    m_releaseSilenceFailure = MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
+        "output branch reclamation", ::media::ErrorInfo::internalError(
+            "physical branch reclamation exceeded its planned progress silence; resources remain owned"),
+        MediaGraphWorkerFailurePhase::Release};
+    auto owner = MediaRuntimeReclamationOwner::create(this, [](void* branch) noexcept {
+        static_cast<MediaRuntimeBranch*>(branch)->reclaim();
+    });
+    if (!owner) return ::media::Status::failure(owner.error());
+    m_reclamationOwner = std::move(owner).value();
+    return ::media::Status::success();
+}
+
 MediaRuntimeBranch::~MediaRuntimeBranch()
 {
-    requestFailureStop();
-    for (auto& worker : m_workers) worker->join();
-    m_supervisor.disarm();
-    if (m_state != MediaRuntimeBranchState::Retired) m_scheduler.abort(m_context);
-    m_finalVideoReadyEvidence = collectVideoReadyEvidence();
-    m_finalMetrics = collectMetrics();
-    m_finalMetrics.threadCount = 0;
-    m_finalMetrics.activeWorkers = 0;
-    m_finalMetrics.queuedBuffers = 0;
-    m_workers.clear();
-    m_scheduler.clear(&m_context);
-    for (auto* channel : m_context.channels().channels()) channel->clear();
-    m_context.reset();
+    // Normal control flow retains the segment until poll observes completion.
+    // Final owner destruction still joins: driver resources must never detach.
+    if (m_state != MediaRuntimeBranchState::Retired &&
+        m_state != MediaRuntimeBranchState::Retiring) {
+        requestFailureStop();
+        m_reclaimAbort = true;
+        if (m_reclamationOwner) m_reclamationOwner->request();
+        else reclaim(); // Preparation failed before an owner could be created.
+    }
+    if (m_reclamationOwner) m_reclamationOwner->join();
+}
+
+void MediaRuntimeBranch::reclaim() noexcept
+{
+    try {
+        for (auto& worker : m_workers) worker->join();
+        m_supervisor.disarm();
+        if (m_reclaimAbort) m_scheduler.abort(m_context);
+        else {
+            auto stopped = m_scheduler.stop(m_context);
+            if (!stopped) {
+                m_failures.recordFirst(MediaGraphWorkerFailure{
+                    {}, MediaNodeKind::Unknown, "output branch teardown", stopped.error(),
+                    MediaGraphWorkerFailurePhase::Release});
+                m_scheduler.abort(m_context);
+            }
+        }
+        if (m_reclamationOwner) m_reclamationOwner->markProgress();
+        m_workers.clear();
+        m_scheduler.clear(&m_context);
+        if (m_reclamationOwner) m_reclamationOwner->markProgress();
+        m_inputs.clear();
+        for (auto* channel : m_context.channels().channels()) channel->clear();
+        m_context.reset();
+        m_reclaimed = true;
+    } catch (...) {
+        // Preallocated before worker creation: preserve first-failure semantics
+        // without allocating while reporting an exceptional release path.
+        if (m_unexpectedReleaseFailure) {
+            m_failures.recordFirst(std::move(*m_unexpectedReleaseFailure));
+            m_unexpectedReleaseFailure.reset();
+        }
+    }
 }
 
 ::media::Status MediaRuntimeBranch::start()
@@ -147,6 +209,11 @@ MediaChannelPushResult MediaRuntimeBranch::tryPublish(MediaEdgeId edge, MediaBuf
 
 void MediaRuntimeBranch::requestFailureStop() noexcept
 {
+    // Control callers hold m_publicationMutex through both passes, preventing
+    // poll from handing these objects to the reclamation owner mid-request.
+    // The supervisor runs on a worker: its exit publication follows this
+    // callback, so poll's all-workers-exited gate supplies the same lifetime
+    // barrier. Final destruction requests stop before starting/joining reclaim.
     for (auto& worker : m_workers) worker->requestStop();
     for (auto& worker : m_workers) worker->interrupt();
 }
@@ -159,13 +226,11 @@ void MediaRuntimeBranch::fail(::media::ErrorInfo error)
 
 void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
 {
-    {
-        std::lock_guard lock(m_publicationMutex);
-        if (m_state == MediaRuntimeBranchState::Retired ||
-            m_state == MediaRuntimeBranchState::Retiring) return;
-        m_failures.recordFirst(std::move(failure));
-        m_state = MediaRuntimeBranchState::Failed;
-    }
+    std::lock_guard lock(m_publicationMutex);
+    if (m_state == MediaRuntimeBranchState::Retired ||
+        m_state == MediaRuntimeBranchState::Retiring) return;
+    m_failures.recordFirst(std::move(failure));
+    m_state = MediaRuntimeBranchState::Failed;
     requestFailureStop();
 }
 
@@ -174,7 +239,30 @@ void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
     using Result = ::media::Result<bool>;
     std::unique_lock lock(m_publicationMutex);
     if (m_state == MediaRuntimeBranchState::Retired) return Result::success(true);
-    if (m_state == MediaRuntimeBranchState::Retiring) return Result::success(false);
+    if (m_state == MediaRuntimeBranchState::Retiring) {
+        if (m_reclamationOwner->completed()) {
+            // The release/acquire token follows every driver operation. Only
+            // the thread return remains; join cannot wait for driver teardown.
+            m_reclamationOwner->join();
+            if (!m_reclaimed) return Result::success(false);
+            m_finalMetrics.threadCount = 0;
+            m_finalMetrics.activeWorkers = 0;
+            m_finalMetrics.queuedBuffers = 0;
+            m_state = MediaRuntimeBranchState::Retired;
+            return Result::success(true);
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const auto progress = m_reclamationOwner->progress();
+        if (progress != m_lastReleaseProgress) {
+            m_lastReleaseProgress = progress;
+            m_lastReleaseProgressAt = now;
+        } else if (m_releaseSilenceFailure && now - m_lastReleaseProgressAt >=
+            std::chrono::nanoseconds(m_reclamationPlan->maximumProgressSilence.nanoseconds())) {
+            m_failures.recordFirst(std::move(*m_releaseSilenceFailure));
+            m_releaseSilenceFailure.reset();
+        }
+        return Result::success(false);
+    }
     if (m_failures.hasFailure()) m_state = MediaRuntimeBranchState::Failed;
     const bool workersExited = std::all_of(m_workers.begin(), m_workers.end(),
         [](const auto& worker) { return worker->exited(); });
@@ -196,36 +284,16 @@ void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
         return Result::success(false);
     if (!std::all_of(m_retirementPrerequisites.begin(), m_retirementPrerequisites.end(),
         [](const auto& token) { return token && token->completed(); })) return Result::success(false);
-    const bool failed = m_state == MediaRuntimeBranchState::Failed;
+    m_reclaimAbort = m_state == MediaRuntimeBranchState::Failed;
     m_finalVideoReadyEvidence = collectVideoReadyEvidence();
     m_finalMetrics = collectMetrics();
-    m_finalMetrics.threadCount = 0;
-    m_finalMetrics.activeWorkers = 0;
-    m_finalMetrics.queuedBuffers = 0;
+    m_finalMetrics.threadCount = m_reclamationPlan->ownerThreads;
+    m_finalMetrics.activeWorkers = m_reclamationPlan->ownerThreads;
     m_state = MediaRuntimeBranchState::Retiring;
-    lock.unlock();
-    // No producer can publish once Retiring is visible. Driver teardown must
-    // not hold the publication lock or stall the shared fanout worker.
-    for (auto& worker : m_workers) worker->join();
-    m_supervisor.disarm();
-    if (failed) m_scheduler.abort(m_context);
-    else {
-        auto stopped = m_scheduler.stop(m_context);
-        if (!stopped) {
-            m_failures.recordFirst(MediaGraphWorkerFailure{
-                {}, MediaNodeKind::Unknown, "output branch teardown", stopped.error(), MediaGraphWorkerFailurePhase::Release});
-            m_scheduler.abort(m_context);
-        }
-    }
-    m_workers.clear();
-    m_scheduler.clear(&m_context);
-    m_inputs.clear();
-    for (auto* channel : m_context.channels().channels()) channel->clear();
-    m_context.reset();
-    lock.lock();
-    m_resourceLease.reset();
-    m_state = MediaRuntimeBranchState::Retired;
-    return Result::success(true);
+    m_lastReleaseProgress = m_reclamationOwner->progress();
+    m_lastReleaseProgressAt = std::chrono::steady_clock::now();
+    m_reclamationOwner->request();
+    return Result::success(false);
 }
 
 std::optional<MediaVideoOutputReadyEvidence>
@@ -261,6 +329,7 @@ std::uint64_t MediaRuntimeBranch::drainProgress() const
 MediaGraphRuntimeMetrics MediaRuntimeBranch::collectMetrics() const
 {
     auto result = MediaRuntimeMetricsCollector::workers(m_workers);
+    if (m_reclamationPlan) result.threadCount += m_reclamationPlan->ownerThreads;
     for (const auto* channel : m_context.channels().channels()) {
         if (m_inputsAccountedBySession &&
             std::find(m_inputs.begin(), m_inputs.end(), channel) != m_inputs.end()) continue;
@@ -287,11 +356,20 @@ std::optional<MediaGraphWorkerFailure> MediaRuntimeBranch::failure() const
     return m_failures.primaryFailure();
 }
 
+MediaRuntimeNode* MediaRuntimeBranch::findNode(MediaNodeId id) noexcept
+{
+    std::lock_guard lock(m_publicationMutex);
+    if (m_state == MediaRuntimeBranchState::Retiring ||
+        m_state == MediaRuntimeBranchState::Retired) return nullptr;
+    return m_scheduler.findNode(id);
+}
+
 std::vector<MediaEdgeId> MediaRuntimeBranch::inputEdges() const
 {
     std::lock_guard lock(m_publicationMutex);
     std::vector<MediaEdgeId> edges;
-    if (m_state == MediaRuntimeBranchState::Retiring) return edges;
+    if (m_state == MediaRuntimeBranchState::Retiring ||
+        m_state == MediaRuntimeBranchState::Retired) return edges;
     for (const auto* channel : m_inputs) edges.push_back(channel->edgeId());
     return edges;
 }

@@ -4,8 +4,10 @@
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
 #include "internal/graph/runtime/network/MediaDatagramServiceScopeArbiter.h"
 #include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNodePlanCodec.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 #include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 #include "internal/graph/time/MediaClockDomainIdentity.h"
 #include <algorithm>
@@ -357,6 +359,12 @@ compileLedger(
         }
 
         if (ledger.terminalControlObjects != 0) {
+            if (auto reserved = reserveFixedStorage("segment-reclamation-owner",
+                    MediaRuntimeBranch::fixedStorageBytes(), 2,
+                    "one runtime segment and one single-shot reclamation owner sizeof"); !reserved)
+                return Result::failure(reserved.error());
+            ledger.outOfScopeAuthorities.push_back(
+                "native reclamation thread stack and STL thread/control-block allocations");
             auto controlStorage = addTo(
                 ledger.admittedGraphPayloadAndReservedStorageBytes,
                 sizeof(MediaControlBuffer), "branch shared terminal control object");
@@ -384,6 +392,7 @@ compileLedger(
                     node.name));
             }
             std::uint64_t retainedRefs = 1;
+            std::string filterInputRetentionAuthority;
             std::uint64_t retainedVideoSurfaces = 0;
             if (node.kind == MediaNodeKind::VideoFrameRate &&
                 !hasVideoFilter) {
@@ -424,6 +433,18 @@ compileLedger(
                     "video filter codec pending and prepared references");
                 if (!retained) return Result::failure(retained.error());
                 retainedRefs = retained.value();
+                auto execution = MediaVideoFilterExecutionPlanCodec::decode(node.options);
+                if (!execution) return Result::failure(execution.error());
+                if (execution.value().timing == MediaVideoFilterTimingAuthority::SourceFrame) {
+                    const auto& retention = execution.value().output;
+                    auto cached = Arithmetic::add(retainedRefs, retention.maximumRetainedInputFrames,
+                        "source filter adapter retained input frames");
+                    if (!cached) return Result::failure(cached.error());
+                    retainedRefs = cached.value();
+                    // These references retain the upstream source allocation;
+                    // they are not allocations from the encoder output pool.
+                    filterInputRetentionAuthority = retention.inputRetentionAuthority;
+                }
             } else if (node.kind == MediaNodeKind::AudioEncode &&
                        planningLedger.media.audioUnits) {
                 auto retained = Arithmetic::add(
@@ -460,7 +481,9 @@ compileLedger(
                 false,
                 node.kind == MediaNodeKind::RawRtpInput
                     ? "final-node-port-retention+planned-raw-rtp-ingress-arena"
-                    : "conservative-final-node-port-retention"});
+                    : "conservative-final-node-port-retention" +
+                        (filterInputRetentionAuthority.empty() ? std::string{}
+                            : "+source-filter-input-cache:" + filterInputRetentionAuthority)});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(

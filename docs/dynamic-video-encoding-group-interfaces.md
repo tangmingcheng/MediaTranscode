@@ -1,44 +1,33 @@
-# 动态视频编码组接口迁移
+# 动态视频编码组实现与验证
 
-状态：接口协调中，待基础动态链路诊断后实施。无新增外部参数，不表示功能已完成。
+状态：Windows 第 16 轮真实链路验收通过，对应提交 `4bf43635090bbe8b9d58c7bcf07b91ecd57d06a2`。RKMPP 动态多输出尚未验证，整体双审、质量评分和 PR 尚未完成。完整命令与结果见 [Windows 第 16 轮报告](dynamic-video-windows-16.md)。
 
-## 依据与缺口
+## 已实现
 
-复用 GStreamer [tee 独立分支队列](https://gstreamer.freedesktop.org/documentation/coreelements/tee.html)和[动态阻断、排空后移除](https://gstreamer.freedesktop.org/documentation/application-development/advanced/pipeline-manipulation.html)模式。NVENC [初始化创建编码 session](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html)，共享匹配必须在 probe/open 之前。
-
-当前 Preparer 先规划并 probe，再打开保留编码器，最后比较合同。在 session 已满时，本可共享的请求也会失败。builder 的 encodingNodeIds/outputNodeIds/encoded 尚未形成完整分段产品。
-
-## 接口协调
-
-精确字段由 resource 与 application 对齐后实施，不添加占位代码。
-
-| 所属层 | 产品与职责 |
+| 层次 | 当前职责 |
 | --- | --- |
-| planner | 在 probe 前规范化规格，以固定源和运行组已验证合同核对源 epoch、设备、尺寸、帧率、RC/GOP、滤镜、open 要求；另校验目标协议接受现有 packet layout/emission。匹配复用同一个运行编码器的真实 readback，不伪造候选 readback。 |
-| builder | 初始与新增统一输出共享源、编码组、协议段分区，各自提供 nodes、threading、资源及跨段 endpoints；协议保留增量归编码 producer，新组保留增量归源 frame producer。 |
-| preparer | 暂定返回 variant：MediaRealtimeVideoExistingGroupOutputPreparation 包含 groupId、协议 plan/graph；MediaRealtimeVideoNewGroupOutputPreparation 保留现有 plan/branch/encoder/encodingContract。Existing 不打开编码器。 |
-| application | Registry 持 group ID、segment ID、合同、编码分支、fanout、元数据及输出引用；Output 仅持协议段和 group ID。 |
-| runtime | 从实际生产段 context 导出跨段绑定。启动前复用 FFmpegCodecParametersMaterializer::fromContext 与 FFmpegCodecParametersBuffer/timeDescriptor 捕获元数据。既有 MPEGTS/RTP adapter 可消费，不读取活跃 AVCodecContext，不新增重复 snapshot 类。 |
+| planner | `normalizeEncodingRequest` 在 capability probe 前形成不可变请求合同，覆盖源与输出 codec、尺寸、帧率、完整 RC、quality、preset、tune、profile、level、GOP、B 帧、global header、low latency 和 filter/copy 要求。协议地址、端口和 session 不参与编码等价比较。 |
+| preparer | 先核对源 epoch、hwframes 身份和运行编码组的完整规范化合同；匹配后复用该组已验证的 pipeline/readback，仅规划协议输出，不执行 probe/open。未匹配时才准备新编码器，并持有真实 encoder 到发布。 |
+| builder | 初始图和新增图使用同一共享输入、编码组、协议输出三段模型。编码组通过 EncodedVideoOutputFanout 分发，协议使用明确的 CodecParameters 元数据。 |
+| application | Registry 管理组、执行段、不可变 witness 和输出引用；发布前复核源身份、图版本和组状态。删除输出先排空协议段，最后一个消费者退役后才排空并释放编码组。零输出保留共享输入和出口整形时钟。 |
+| runtime | 每个消费者使用独立有界队列；溢出隔离该分支。跨段绑定来自真实执行 context，资源保留至物理退休。所有输出和 RTCP 共用 controller 内同一接口 scope 整形器。 |
 
-## 生命周期
+## 加入与资源合同
 
-1. 初始图同样分成三段，resolver 完成真实 encoder readback 后登记首组。初始编码器不得永久归共享源。
-2. 准备任务持源事实、hwframes 引用及组快照版本；发布前重新校验 epoch、硬件身份、graph 版本及组可加入状态。
-3. 先取得协议和保留增长租约，启动协议段并回放元数据，再订阅 encoded fanout；提交后增加组引用。
-4. 候选异常仅拒绝候选；已启动段失败后留容器至实际回收，不停止健康组。超时任务继续持有资源并拒绝新事务，直到实际返回。
-5. 删除先撤销协议订阅并排空；协议实际退役后扣组引用。最后引用退出后再撤销组的 frame 订阅并排空编码组，实际退役后释放编码器及源保留租约。
-6. 零输出保留共享输入。output ID、group ID 各自单调；runtime segment 共用单调分配器。初始两段不同 ID，溢出失败且不复用。
+新消费者等待自然 IDR，不改变健康编码组 GOP。共用 NAL 扫描器验证完整 AU：H.264 NAL 5、HEVC NAL 19/20 可开放加入；CRA 或单独的 AV_PKT_FLAG_KEY 不足以开门。READY 需要该消费者首个完整 IDR 的最后媒体 datagram 实际提交。VideoOnly 不伪造 A/V canonical lineage。
 
-## RAP 与就绪
+初始 shared 账户在启动前暂存三段固定存储总量，再逐段提取独立固定存储 lease；最终媒体额度不包含这些字节。新增编码组分别预留 payload、自身固定存储和源 frame producer 的 retention 增量；新增协议只预留固定存储及既有编码 producer 的 retention 增量，不创建虚假 producer。共享 arbiter/clock 仅计入 shared，channel 按消费段计费。
 
-EncodedVideoOutputFanoutNode 当前强制 canonical lineage，但 VideoOnly 无 AV lineage registry 时不产生该元数据。应复用 packet 的 pts/dts/duration 与 MediaTimeDescriptor，核对 encoder readback timebase；canonical 仅已有时保留。组绑定 MediaVideoSourceGenerationPlan，不伪造 AV canonical lineage。
+## Windows 已验证范围
 
-AV_PKT_FLAG_KEY 不足以单独证明可独立加入。planner 须提供 codec、NAL layout、IDR/CRA 边界和 leading-picture 策略，节点复用 MediaRtpNalUnitParser 与 AnnexB 校验完整 AU。参数集复用 MediaTsVideoAccessUnitFramer 的 BeforeRandomAccess，不把任意 I 帧当作 IDR。
+连续 120 秒 H.264 RTP 1280×720、30 fps、约 8 Mbps 输入，输出 HEVC/H.264 MPEG-TS over RTP 1920×1080、25 fps、CBR 6 Mbps、GOP 50。第 16 轮证实同规格请求 action=reused 且未新增 encoder；同时覆盖异编码新组、删除共享组单个消费者、删除至零和重新添加。
 
-新输出等待自然 RAP，不改变健康组 GOP。READY 要求该输出完整首 RAP 最后媒体 datagram 实际提交证据，等待受会话事务预算和 planner startup 期限共同约束。
+四路 VLC 硬解画面均已查看；RTP 零丢包，TS 连续性无错。聚合出口服务曲线最大超额 1356 B，等于最大 datagram；最终 payload bytes/objects 为零。RTP 源结束后按既有无进展超时策略退出，不能描述为会话自然 EOS。
 
-## 分工与验证状态
+算法与生命周期对照 GStreamer [tee 独立队列](https://gstreamer.freedesktop.org/documentation/coreelements/tee.html)、[动态管线移除](https://gstreamer.freedesktop.org/documentation/application-development/advanced/pipeline-manipulation.html)，编码 session 生命周期参照 [NVENC 文档](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html)。本轮通过不代表 RKMPP 固定池适配、全部链路矩阵或最终独立审查通过。
 
-application agent 负责 registry、控制事务、初始接入、引用回收、ID 和状态；resource agent 负责打开前匹配及 planner/builder 产品；runtime agent 负责 AU/RAP、元数据和跨段生命周期。
+## 第 17 轮失败后的修复状态
 
-仅完成接口协调，未新增测试或完成编码组真实链路验证。独立编码分支通过不能替代编码共享通过。
+GOP 750 单变量真实诊断暴露动态复用错误沿用静态 10 秒启动期限：新消费者尚未等到自然 IDR 即被 scheduler 拒绝，初始输出继续运行。已实现内部随机访问周期产品，NVENC 在 probe 和真实 encoder open 后实读 GOP、帧率以及两个 intra-refresh 私有选项。动态 planner 按运行组完整 IDR 间隔或新组首帧启动，加已有组合 activation lead 检查剩余 first-output 事务预算；同一产品同时驱动 scheduler 和 controller，不能只修其中一层。周期是连续媒体条件下的事实，不构成 CPU/driver 墙钟执行保证。
+
+执行段新增单次 reclamation owner 产品，固定存储按实际运行段与 owner 对象布局计费，原生线程栈及库分配仍为观测范围。固定存储由 planner 统一计入各段，不并入媒体 producer 额度。此批修复尚待新构建、原规格真实流及独立复审；RKMPP 压缩驻留及自然 IDR adapter 已按目标依赖版本补齐，证据见 [适配记录](dynamic-video-rkmpp-adapter-evidence.md)，尚未通过新版本真实流验证。

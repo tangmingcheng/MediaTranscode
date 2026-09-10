@@ -1,6 +1,8 @@
 #include "internal/graph/builder/MediaVideoPlanOptionApplier.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
+#include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 
 #include <array>
 #include <string>
@@ -307,6 +309,17 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 "MediaVideoPlanOptionApplier requires decoder output frame contract"));
     }
     const MediaHardwareDescriptor& decoderOutput = *chain.decoder.outputFrame;
+    if (nodes.sourceCopy.isValid()) {
+        if (!plan.sharedSource || !plan.sharedSource->copy ||
+            plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::Unknown ||
+            plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::None)
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument("source copy lacks its planned filter implementation"));
+        if (auto status = setFrameContractOptions(graph, nodes.sourceCopy, "filter.pipeline.input", chain.decoder.outputFrame); !status) return status;
+        if (auto status = setFrameContractOptions(graph, nodes.sourceCopy, "filter.pipeline.output", chain.decoder.outputFrame); !status) return status;
+        if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.filter", plan.sharedSource->copy->output.filterDescription); !status) return status;
+        if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.implementation",
+                mediaVideoFilterImplementationName(plan.sharedSource->copyImplementation)); !status) return status;
+    }
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hardware", boolOption(decoderOutput.isHardwareBacked())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(decoderOutput.deviceKind)); !status) return status;
@@ -328,6 +341,9 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 ::media::ErrorInfo::invalidArgument(
                     "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
         }
+        auto execution = MediaVideoFilterExecutionPlanner::forEncoder(chain.filter.filterName);
+        if (!execution) return ::media::Result<void>::failure(execution.error());
+        if (auto status = applyFilterExecutionPlan(graph, nodes.videoFilter, execution.value()); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
@@ -349,6 +365,17 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
         !status) return status;
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+}
+
+::media::Result<void> MediaVideoPlanOptionApplier::applyFilterExecutionPlan(
+    MediaGraph& graph, MediaNodeId node, const MediaVideoFilterExecutionPlan& plan)
+{
+    auto encoded = MediaVideoFilterExecutionPlanCodec::encode(plan);
+    if (!encoded) return ::media::Result<void>::failure(encoded.error());
+    for (const auto& [key, value] : encoded.value().values()) {
+        if (auto status = setOption(graph, node, key, value); !status) return status;
+    }
+    return ::media::Result<void>::success();
 }
 
 } // namespace media::ffmpeg::graph

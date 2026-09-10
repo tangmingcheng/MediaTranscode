@@ -57,7 +57,7 @@ MediaRealtimeRtpVideoSignalingResolver::resolve(
     }
     return ::media::Result<MediaResolvedRtpVideoSignaling>::success(
         MediaResolvedRtpVideoSignaling{
-            std::move(fmtp).value(), inspected.value().codedSize});
+            std::move(fmtp).value(), inspected.value().codedSize, inspected.value().sampleAspectRatio});
 }
 
 } // namespace media::ffmpeg::graph

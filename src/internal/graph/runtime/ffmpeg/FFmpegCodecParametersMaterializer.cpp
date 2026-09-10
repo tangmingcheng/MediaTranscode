@@ -47,6 +47,8 @@ FFmpegCodecParametersMaterializer::fromContext(
     buffer->setStreamKind(context.codec_type == AVMEDIA_TYPE_VIDEO ? MediaStreamKind::Video : MediaStreamKind::Audio);
     MediaTimeDescriptor time;
     time.timeBase = MediaRational{context.time_base.num, context.time_base.den};
+    if (context.codec_type == AVMEDIA_TYPE_VIDEO)
+        time.frameRate = MediaRational{context.framerate.num, context.framerate.den};
     buffer->setTimeDescriptor(time);
     return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }

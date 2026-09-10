@@ -29,7 +29,8 @@ public:
         MediaPipelineChainPlan& chain,
         const MediaPipelinePlannerOptions& options,
         AVBufferRef* runningFrames,
-        const MediaDecoderRuntimeFacts& decoderFacts);
+        const MediaDecoderRuntimeFacts& decoderFacts,
+        const MediaVideoSharedSourcePlan& sourceAllocation);
 
 private:
     ChainValidator m_chainValidator;

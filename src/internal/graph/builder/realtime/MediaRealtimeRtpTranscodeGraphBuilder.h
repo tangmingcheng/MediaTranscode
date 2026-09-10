@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaRealtimeVideoJoinWaitPlanner.h"
+#include "internal/graph/model/MediaRuntimeReclamationPlan.h"
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -18,6 +20,7 @@ struct MediaRealtimeVideoEncodingSegmentGraph final {
     MediaFinalGraphResourceLedger resources;
     MediaGraphPayloadRetentionGrowth sourceRetentionGrowth;
     MediaEncodedBranchEndpoints encoded;
+    MediaRuntimeReclamationPlan reclamationPlan;
 };
 
 struct MediaRealtimeVideoProtocolOutputGraph final {
@@ -26,6 +29,8 @@ struct MediaRealtimeVideoProtocolOutputGraph final {
     MediaThreadingPolicy threading;
     std::uint64_t fixedStorageBytes;
     MediaGraphPayloadRetentionGrowth encodedRetentionGrowth;
+    MediaRealtimeVideoJoinWaitPlan joinWaitPlan;
+    MediaRuntimeReclamationPlan reclamationPlan;
 };
 
 struct MediaRealtimeInitialVideoOutputTopology final {
@@ -54,13 +59,16 @@ public:
         const MediaRealtimeRtpTranscodePlan& plan,
         const std::string& prefix,
         MediaEndpoint formatSource,
-        MediaSharedVideoDecodeEndpoints sharedDecode);
+        MediaSharedVideoDecodeEndpoints sharedDecode,
+        const MediaRuntimeReclamationPlan& reclamationPlan);
 
     static ::media::Result<MediaRealtimeVideoProtocolOutputGraph> appendProtocolOutput(
         MediaGraph graph,
         const MediaRealtimeRtpTranscodePlan& plan,
         const std::string& prefix,
-        MediaEncodedBranchEndpoints encoded);
+        MediaEncodedBranchEndpoints encoded,
+        const MediaRealtimeVideoJoinWaitPlan& joinWaitPlan,
+        const MediaRuntimeReclamationPlan& reclamationPlan);
 
 private:
     static ::media::Result<MediaGraph> buildPlanned(

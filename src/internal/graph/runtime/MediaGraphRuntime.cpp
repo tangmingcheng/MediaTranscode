@@ -22,7 +22,8 @@ MediaGraphRuntime::extractInitialBranch(
     std::uint64_t id, std::span<const MediaNodeId> nodes,
     std::shared_ptr<MediaRuntimeBranchResourceReservation> reservation,
     std::span<const MediaNodeId> retirementProducerIds,
-    std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs)
+    std::span<const MediaRuntimeSegmentOutputBinding> upstreamInputs,
+    const MediaRuntimeReclamationPlan& reclamationPlan)
 {
     using Result = ::media::Result<std::shared_ptr<MediaRuntimeBranch>>;
     if (m_state != MediaGraphRuntimeState::Compiled || !id || !reservation || nodes.empty()) {
@@ -31,6 +32,8 @@ MediaGraphRuntime::extractInitialBranch(
     }
     auto branch = std::shared_ptr<MediaRuntimeBranch>(new MediaRuntimeBranch());
     branch->m_id = id;
+    auto reclamation = branch->prepareReclamation(reclamationPlan);
+    if (!reclamation) return Result::failure(reclamation.error());
     for (const auto producer : retirementProducerIds) {
         auto token = m_context.nodeExitToken(producer);
         if (!token || std::find(nodes.begin(), nodes.end(), producer) != nodes.end())

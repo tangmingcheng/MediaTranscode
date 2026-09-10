@@ -25,6 +25,8 @@ struct MediaRealtimeOutputPreparationRequest final {
     std::uint64_t sourceGeneration;
     const MediaDecoderRuntimeFacts& decoderFacts;
     std::span<const MediaRealtimeExistingVideoEncodingGroup> groups;
+    const MediaRuntimeReclamationPlan& reclamationPlan;
+    MediaRunningTime remainingFirstOutputBudget;
 };
 
 struct MediaRealtimeExistingEncodingGroup final {

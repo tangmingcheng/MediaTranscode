@@ -1,4 +1,5 @@
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
+#include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
@@ -33,6 +34,9 @@ enum class MediaCapabilityProbeScope { CompletePipeline, OutputBranch };
     auto layout =
         MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(context);
     if (!layout) return ::media::Status::failure(layout.error());
+    auto randomAccess = MediaEncoderRandomAccessAdapter::readAfterOpen(context);
+    if (!randomAccess) return ::media::Status::failure(randomAccess.error());
+    chain.encoder.randomAccess = std::move(randomAccess).value();
     chain.encoder.encodedPacketLayout = std::move(layout).value();
     return ::media::Status::success();
 }
@@ -651,21 +655,29 @@ MediaHardwareCapability MediaHardwareCapabilityProbe::validateOutputBranch(
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options,
     AVBufferRef* runningFrames,
-    const MediaDecoderRuntimeFacts& decoderFacts)
+    const MediaDecoderRuntimeFacts& decoderFacts,
+    const MediaVideoSharedSourcePlan& sourceAllocation)
 {
     if (!chain.decoder.outputFrame) return unavailable("output branch lacks running decoder frame facts");
     if (decoderFacts.decoderName.empty() || decoderFacts.decoderName != chain.decoder.ffmpegName)
         return unavailable("opened decoder identity differs from the shared source contract");
+    const bool independentFilterOutput =
+        sourceAllocation.allocation == MediaVideoSourceAllocation::IndependentFilterOutput;
+    if (independentFilterOutput != sourceAllocation.copy.has_value() ||
+        (independentFilterOutput && (!sourceAllocation.copy->valid() ||
+            sourceAllocation.copy->timing != MediaVideoFilterTimingAuthority::SourceFrame)))
+        return unavailable("shared source allocation differs from its filter execution evidence");
     const auto& expected = *chain.decoder.outputFrame;
     if (expected.isHardwareBacked()) {
         // cuvid_output_frame always copies into independently allocated CUDA
         // storage. NVDEC's nvdec_retrieve_data makes the frame writable before
         // publishing it unless the opened decoder explicitly requests UNSAFE_OUTPUT.
         // Both paths release the mapped fixed decoder surface before downstream use.
-        const bool independentCudaOutput = expected.deviceKind == MediaHardwareDeviceKind::CUDA &&
+        const bool independentCudaOutput = sourceAllocation.allocation == MediaVideoSourceAllocation::DecoderOutput &&
+            expected.deviceKind == MediaHardwareDeviceKind::CUDA &&
             (decoderFacts.decoderName.ends_with("_cuvid") ||
              (decoderFacts.hardwareAccelerationFlags & AV_HWACCEL_FLAG_UNSAFE_OUTPUT) == 0);
-        if (!independentCudaOutput) {
+        if (!independentCudaOutput && !independentFilterOutput) {
             return unavailable(
                 "dynamic hardware output lacks authoritative independent decoder-output allocation or fixed-pool headroom evidence");
         }
