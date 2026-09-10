@@ -13,7 +13,8 @@
 - Windows第18轮出现VLC晚帧；第19轮将截图移到媒体结束后未再晚帧，但暴露FileMux缓存WouldBlock导致排空超时。已修复全部相关转发路径，独立源码审查PASS，正在原规格复验。
 - Windows20/21排空与发送正常但VLC晚帧门禁失败，均已记录并清理原始材料；不把RC冻结统计作为零丢帧证据。
 - 整批双审发现fail停止请求与后台回收竞态，已以同一publication锁完成停止请求屏障修复；两者复审源码PASS，完整交付仍未完成。
-- 架构与增量评分已更新；新冻结版原规格/长GOP复验、RKMPP实流与最终PR双审尚未完成。
+- 架构与增量评分已更新；冻结41bb17a1在Windows第22轮通过原规格完整动态验收：H.264 RTP 720p30约8Mbps → HEVC/H.264 MPEG-TS/RTP 1080p25 CBR6Mbps GOP50。长GOP与RKMPP实流仍待验证。
+- 草稿PR #33已创建，新独立智能体对41bb17a1源码审查PASS；完整交付待长GOP、RKMPP及最终证据复核，当前评分不自行上调。
 
 ## 行业依据与设计边界
 
@@ -41,6 +42,7 @@
 | [Windows19](dynamic-video-windows-19.md) | FAIL | 四路画面和发送正常，前两路FileMux未结束，触发排空超时；不能以最终workerErrors为零掩盖输出级失败。 |
 | [Windows20](dynamic-video-windows-20.md) | FAIL | 排空正常，VLC49/21/21ms晚帧。 |
 | [Windows21](dynamic-video-windows-21.md) | FAIL | 排空正常，VLC90/51ms晚帧；RC统计冻结不可用于验收。 |
+| [Windows22](dynamic-video-windows-22.md) | PASS | 原规格动态增删/复用/零输出恢复、D3D11VA画面、无晚帧丢弃、RTP/TS/时钟/共享整形及引用归零。 |
 | [RKMPP01](dynamic-video-rkmpp-01.md) | FAIL | 同规格准备阶段缺压缩输入持有adapter，输出0包。 |
 
 Windows NVDEC safe-output可证明独立CUDA帧。RKMPP固定解码池关系不同，复用既有VideoFilterNode在分发前执行独立分配复制；统一滤镜时序事实，不建立平台专用媒体链路。适用范围见[源隔离证据](dynamic-video-source-isolation.md)及[RKMPP adapter证据](dynamic-video-rkmpp-adapter-evidence.md)。
