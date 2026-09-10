@@ -14,4 +14,4 @@
 
 实际CLI/FFmpeg/VLC命令及完整结果见[Windows28](dynamic-video-windows-28.md)，同版本发送失败计数及排空补证见[Windows27](dynamic-video-windows-27.md)。两位未参与实现者windows_scope_review_a/b分别逐项明确PASS，允许进入RKMPP。原始材料已按用户要求清理，本次复核已审核报告，未重新分析原始抓包，未无变化重跑Windows。
 
-保留历史报告按当时门禁记录的FAIL；本记录是依据用户明确范围的独立复核结论。RKMPP尚未通过，完整交付仍待目标实流验收。评分不因边界澄清自行上调。
+保留历史报告按当时门禁记录的FAIL；本记录是依据用户明确范围的独立复核结论。随后RKMPP03同规格三项实流通过，独立提交76c175b0，见[实际命令与结果](dynamic-video-rkmpp-03.md)。评分由两位独立审查者基于补齐证据更新，详见QUALITY_SCORE.md。

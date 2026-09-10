@@ -138,7 +138,7 @@ MuxedTransportStream + RtpAvp
     -> Project MPEG-TS mux + MP2T RTP/RTCP sink + MP2T SDP
 ```
 
-Project MPEG-TS 的 H.264/AAC、PCR、PID、连续计数和调度事实由 UDP 与 RTP transport 共享。MP2T transport 仅将完整的 188 字节 TS 包批次封装为 RTP/AVP：固定 payload type 33、90 kHz 时钟、相邻 RTP/RTCP 端口，并从 canonical `emitOnMaster` 映射 RTP timestamp。它不解析或重封装 TS，也不引入第二个 pacing authority。
+Project MPEG-TS 的 H.264/HEVC 视频、AAC 音频、PCR、PID、连续计数和调度事实由 UDP 与 RTP transport 共享。MP2T transport 仅将完整的 188 字节 TS 包批次封装为 RTP/AVP：固定 payload type 33、90 kHz 时钟、相邻 RTP/RTCP 端口，并从 canonical `emitOnMaster` 映射 RTP timestamp。它不解析或重封装 TS，也不引入第二个 pacing authority。
 
 builder 只消费 planner 产生的完整 plan；runtime node 不推断协议、不补默认值、不根据包到达时间回退。
 
@@ -511,6 +511,6 @@ Windows NVDEC 独立输出帧与 RKMPP 固定解码池由能力 adapter 区分�
 
 Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `AudioVideo`. The planner produces one matching runtime variant and owns input selection, startup timing, queue and byte limits, protocol identity, scheduling and output shape. Builders only materialize that product; runtime validators reject missing or inconsistent facts instead of selecting defaults.
 
-`VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
+`VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 or HEVC video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
 
 Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.

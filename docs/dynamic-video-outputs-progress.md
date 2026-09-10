@@ -2,7 +2,7 @@
 
 ## 范围与状态
 
-最新验收边界已由用户明确为发送突发、动态增删、VLC正常解码三项；Windows28已有证据经两位独立审查者按此范围逐项PASS，可进入RKMPP。历史显示晚帧FAIL不抹除，详见[边界与复核](dynamic-video-acceptance-scope.md)。后文逐轮状态为当时记录。
+最新验收边界已由用户明确为发送突发、动态增删、VLC正常解码三项；Windows28已有证据经两位独立审查者按此范围逐项PASS，可进入RKMPP。RKMPP03同规格三项已完成，实流详情见[RKMPP03](dynamic-video-rkmpp-03.md)，已独立提交推送76c175b0；两位审查者三项均PASS，证据增量评分93/93，最终PR复核中。历史显示晚帧FAIL不抹除，详见[边界与复核](dynamic-video-acceptance-scope.md)。后文逐轮状态为当时记录。
 
 一路输入，动态增删独立视频输出；CLI 与 beta C API 复用生产 DAG。完整编码请求相等时复用编码组，协议输出保持独立队列与故障域；删除至零后继续消费输入。首版不实现音频多输出，首项验收 RTP → MPEG-TS/RTP，先 Windows 后 RKMPP。
 
