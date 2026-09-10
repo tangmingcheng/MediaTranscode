@@ -22,7 +22,7 @@ VLC结束后两次分离统计一致：video decoded1038/928/642/4302、displaye
 
 直接从Windows接收到的MPEG-TS/RTP参数集读取：61624路H264 profile_idc=100，为High，非Baseline；61620/61622/61626路HEVC general_profile_idc=1，为Main。本轮未传--profile，不应从codec名称、CBR或无B帧猜测profile。profile映射依据[FFmpeg定义](https://ffmpeg.org/doxygen/8.0/defs_8h_source.html)。仅确认本次RKMPP输出，不外推所有平台默认值。
 
-已有CLI支持--profile：planner形成encoder open contract，非空时在打开前应用；实际打开后capture profile/level/extradata并纳入组契约。未新增参数或改变编码策略。首个tshark尝试用了不存在的h264.level_idc字段而失败，弃用；最终以已确认字段全量导出退出0，只统计端口开头的数据行，排除本机插件尾部提示。
+更正：通用编码planner已有profile/open contract能力，但本轮realtime CLI未暴露--profile；此前将通用CLI解析能力误写为实时CLI能力。RKMPP03实际未传profile，其参数集结论不变。后续用户授权的Beta profile扩展另行实现、构建和验收。首个tshark尝试用了不存在的h264.level_idc字段而失败，弃用；最终以已确认字段全量导出退出0，只统计端口开头的数据行，排除本机插件尾部提示。
 
 ## 实际命令
 

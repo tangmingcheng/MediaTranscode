@@ -31,3 +31,15 @@
 待最新冻结重建及RKMPP实流。public output末尾增加profile字符串，初始和动态输出在返回前复制到既有video.profile；不新增默认值、fallback、独立编码链或level参数。调用方必须使用同包头文件重新编译。实际profile以输出SPS/PPS或HEVC PTL为准，不以readback捕获成功替代码流证明。
 
 0b71a44c首次全量构建失败：Beta mapper引用了实时请求中不存在的profile成员；此前两份源码PASS未发现该遗漏，已撤销其profile结论并要求复审。修复补齐实时请求自有字符串及planRealtimeVideoParameters到既有编码请求的传递，初始、动态和编码组匹配统一复用；不更改发送、队列或线程模型。失败构建不作为验收通过。
+
+最新候选包：`/home/tang/packages/media-transcode-beta-rkmpp-f41a6554-20260910/`。修正核心543f8565重新全量615项构建退出0，PID1893711；其后f41a6554仅修改示例及README，库源码/头文件与543f8565完全相同。示例取f41a6554重新C11严格编译、链接均退出0，目标打包脚本退出0，最终11文件SHA256SUMS全部成功；版本来源分别写入VERSION。两名原审查者明确撤回0b结论，逐类型重新核对修正核心及新版示例均源码PASS，实流另记。
+
+| 最新文件 | SHA256 |
+|---|---|
+| lib/libmedia_transcode_beta.a | 578c88714e466fc47320046a5c9b6204da012ac1cd5caf79c8c9e72c0b73d205 |
+| include/media_transcode_beta/realtime.h | a520700b8467196c9c773d26a464e3145606ba1a6cecd55b70239ff5edc9d03b |
+| examples/beta_minimal.c | a1821cf6920f49043952b9a2f65fa929bba527992a9adfc1dc653a3ca2bdac4e |
+| bin/beta_minimal | 5bef27adc36eec1c7564f4d9ed0543994865435780cfb18b3849e43ac6d42e15 |
+| bin/media_transcode_realtime_video_cli | 26d80ed6c90d0f1882a3f162f8f4a067aad68bdbf86d8a1f27634cc21a2a26aa |
+
+实际打包调用：`/home/tang/package_media_transcode_beta.sh /home/tang/dynamic-video-543f8565/out/build/rk-release /home/tang/packages/media-transcode-beta-rkmpp-f41a6554-20260910`。示例源码开头完整列出每路转码配置及动态add API，删除按返回ID；不依赖隐式复制初始输出。ldd再次确认FFmpeg来自ab1e61a前缀。此扩展目前只在Beta暴露，realtime CLI未增加profile选项。
