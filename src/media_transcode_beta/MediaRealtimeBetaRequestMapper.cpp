@@ -196,7 +196,7 @@ MediaRealtimeBetaRequestMapper::map(const mt_beta_realtime_config& config)
         !config.deployment.maximum_wire_residence_ms) {
         return Result::failure(::media::ErrorInfo::invalidArgument("deployment facts are invalid"));
     }
-    auto output = mapOutput(config.initial_output);
+    auto output = mapOutput(config.output);
     if (!output) return Result::failure(output.error());
     ffmpeg::graph::MediaRealtimeRtpTranscodeRequest request;
     request.mediaId = config.media_id;

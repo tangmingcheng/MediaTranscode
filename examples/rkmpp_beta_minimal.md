@@ -6,13 +6,17 @@
 
 ## 先看这三步
 
-源码开头的make_video_output集中列出每一路的完整配置：目的地址/端口、MPEG-TS/RTP、codec、profile、宽高、帧率、GOP、RC和码率。add_video_output紧接其后直接调用库的动态增加API；后面的stdin解析仅用于交互演示。
+main中直接使用config.output.destination_address、config.output.codec等字段设置初始输出。源码开头的add_video_output同样逐字段设置另一路的完整配置，然后直接调用动态增加API；后面的stdin解析仅用于交互演示。不使用配置工厂函数，也不隐藏每路转码配置。
 
 在已有session运行时增加另一路H264 Baseline输出，核心代码是：
 
 ```c
-mt_beta_video_output another = make_video_output(
-    MT_BETA_VIDEO_CODEC_H264, "baseline", 6204);
+mt_beta_video_output another = {0};
+another.protocol = MT_BETA_OUTPUT_MPEGTS_RTP;
+another.destination_address = "192.168.96.122";
+another.destination_port = 6204;
+another.codec = MT_BETA_VIDEO_CODEC_H264;
+another.profile = "baseline";
 /* another是独立配置；可在这里设置这一路自己的转码目标。 */
 another.width = 1920;
 another.height = 1080;
@@ -83,7 +87,7 @@ EOF不停止媒体会话；验收由120秒源自然结束驱动。裸RTP没有�
 
 ## Profile设置
 
-初始输出设置config.initial_output.profile，动态输出设置传给mt_beta_realtime_add_output的output.profile。字符串在start/add返回前复制；NULL或空串表示调用方不约束profile，mapper不填默认值。字段直接进入既有planner/open/readback及完整编码组契约，不建立额外链路。
+初始输出设置config.output.profile，动态输出设置传给mt_beta_realtime_add_output的output.profile。字符串在start/add返回前复制；NULL或空串表示调用方不约束profile，mapper不填默认值。字段直接进入既有planner/open/readback及完整编码组契约，不建立额外链路。按用户指定恢复config.output成员名，字段位置和结构布局不变，不保留initial_output别名。
 
 目标FFmpeg ab1e61a的h264_rkmpp支持baseline/main/high，hevc_rkmpp公开main；不同后端的可用值以编码器能力为准，不能推断通用main10支持。示例要求每次add显式传profile，编码器不支持的值在准备阶段报告失败；add返回0本身不代表请求达成，须观察输出状态并核对实际参数集。
 

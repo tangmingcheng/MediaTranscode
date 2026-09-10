@@ -148,37 +148,37 @@ int main(int argc, char** argv)
     }
 
     config.input.kind = MT_BETA_INPUT_RTP_VIDEO;
-    config.initial_output.protocol = MT_BETA_OUTPUT_MPEGTS_RTP;
+    config.output.protocol = MT_BETA_OUTPUT_MPEGTS_RTP;
     config.media_id = argv[1];
     config.input.source.rtp.bind_address = argv[2];
-    config.initial_output.destination_address = argv[7];
+    config.output.destination_address = argv[7];
     if (!parse_u16(argv[3], &config.input.source.rtp.port) ||
         !parse_codec(argv[4], &config.input.source.rtp.codec) ||
         !parse_u8(argv[5], &config.input.source.rtp.payload_type) ||
         !parse_u32(argv[6], &config.input.source.rtp.clock_rate) ||
-        !parse_u16(argv[8], &config.initial_output.destination_port) ||
-        !parse_codec(argv[9], &config.initial_output.codec) ||
-        !parse_u32(argv[10], &config.initial_output.width) ||
-        !parse_u32(argv[11], &config.initial_output.height) ||
-        !parse_u32(argv[12], &config.initial_output.frame_rate_num) ||
-        !parse_u32(argv[13], &config.initial_output.frame_rate_den) ||
-        !parse_u32(argv[14], &config.initial_output.gop_frames)) {
+        !parse_u16(argv[8], &config.output.destination_port) ||
+        !parse_codec(argv[9], &config.output.codec) ||
+        !parse_u32(argv[10], &config.output.width) ||
+        !parse_u32(argv[11], &config.output.height) ||
+        !parse_u32(argv[12], &config.output.frame_rate_num) ||
+        !parse_u32(argv[13], &config.output.frame_rate_den) ||
+        !parse_u32(argv[14], &config.output.gop_frames)) {
         print_usage(argv[0]);
         return 2;
     }
     if (is_cbr) {
-        config.initial_output.rate_control_mode = MT_BETA_RATE_CONTROL_CBR;
-        if (!parse_u64(argv[16], &config.initial_output.rate_control.cbr.bitrate_bps) ||
+        config.output.rate_control_mode = MT_BETA_RATE_CONTROL_CBR;
+        if (!parse_u64(argv[16], &config.output.rate_control.cbr.bitrate_bps) ||
             !parse_u64(argv[17], &config.deployment.provisioned_egress_capacity_bps) ||
             !parse_u32(argv[18], &config.deployment.maximum_wire_residence_ms)) {
             print_usage(argv[0]);
             return 2;
         }
     } else {
-        config.initial_output.rate_control_mode = MT_BETA_RATE_CONTROL_VBR;
-        if (!parse_u64(argv[16], &config.initial_output.rate_control.vbr.min_bitrate_bps) ||
-            !parse_u64(argv[17], &config.initial_output.rate_control.vbr.target_bitrate_bps) ||
-            !parse_u64(argv[18], &config.initial_output.rate_control.vbr.max_bitrate_bps) ||
+        config.output.rate_control_mode = MT_BETA_RATE_CONTROL_VBR;
+        if (!parse_u64(argv[16], &config.output.rate_control.vbr.min_bitrate_bps) ||
+            !parse_u64(argv[17], &config.output.rate_control.vbr.target_bitrate_bps) ||
+            !parse_u64(argv[18], &config.output.rate_control.vbr.max_bitrate_bps) ||
             !parse_u64(argv[19], &config.deployment.provisioned_egress_capacity_bps) ||
             !parse_u32(argv[20], &config.deployment.maximum_wire_residence_ms)) {
             print_usage(argv[0]);

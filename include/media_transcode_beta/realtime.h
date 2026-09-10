@@ -188,7 +188,7 @@ typedef struct mt_beta_realtime_deployment {
 typedef struct mt_beta_realtime_config {
     const char* media_id;
     mt_beta_realtime_input input;
-    mt_beta_video_output initial_output;
+    mt_beta_video_output output;
     mt_beta_realtime_deployment deployment;
 } mt_beta_realtime_config;
 
