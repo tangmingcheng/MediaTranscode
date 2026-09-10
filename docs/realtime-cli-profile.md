@@ -14,6 +14,14 @@ export PATH=/home/tang/ffmpeg-ab1e61a/bin:$PATH
 export LD_LIBRARY_PATH=/home/tang/ffmpeg-ab1e61a/lib:$LD_LIBRARY_PATH
 ```
 
+运行库检查（必须在运行CLI的同一终端执行）：
+
+```bash
+ldd /home/tang/packages/media-transcode-beta-rkmpp-038f069c-20260910/bin/media_transcode_realtime_video_cli | grep -E 'libav(codec|filter|util)'
+```
+
+三项必须解析到 `/home/tang/ffmpeg-ab1e61a/lib/`。`ffenv on` 会把 `/usr/local/lib` 提到前面，该目录当前为旧版本 `d90e3a1`，会触发 `shared source copy requires a verified independent allocation and synchronous completion implementation`。务必在最后一次 `ffenv on` **之后**执行上面的 `export LD_LIBRARY_PATH=...`；每个新终端都需要设置。FFmpeg可执行文件的 `-version` 首行不能证明CLI实际加载的共享库版本，应以CLI的 `ldd` 为准。
+
 先在Windows的四个终端分别执行以下命令，使用默认硬件解码。然后启动RKMPP CLI，在30秒打开超时内启动源流。动态命令应在120秒源流结束前执行。
 
 ```powershell
