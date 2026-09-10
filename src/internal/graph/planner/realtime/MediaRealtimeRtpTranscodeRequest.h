@@ -59,6 +59,7 @@ struct MediaRealtimeExecutionParameters {
 
 struct MediaRealtimeVideoTranscodeParameters {
     std::string codecName;
+    std::string profile;
     std::optional<int> width;
     std::optional<int> height;
     MediaFrameRateParameters frameRate;

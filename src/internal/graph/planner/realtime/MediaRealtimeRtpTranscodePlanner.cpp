@@ -180,6 +180,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(
 {
     MediaVideoTranscodeParameters planned;
     planned.codecName = requested.codecName;
+    planned.profile = requested.profile;
     planned.width = requested.width;
     planned.height = requested.height;
     planned.frameRate = requested.frameRate;

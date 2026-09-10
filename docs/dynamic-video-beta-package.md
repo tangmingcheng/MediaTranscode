@@ -29,3 +29,5 @@
 ## Profile扩展
 
 待最新冻结重建及RKMPP实流。public output末尾增加profile字符串，初始和动态输出在返回前复制到既有video.profile；不新增默认值、fallback、独立编码链或level参数。调用方必须使用同包头文件重新编译。实际profile以输出SPS/PPS或HEVC PTL为准，不以readback捕获成功替代码流证明。
+
+0b71a44c首次全量构建失败：Beta mapper引用了实时请求中不存在的profile成员；此前两份源码PASS未发现该遗漏，已撤销其profile结论并要求复审。修复补齐实时请求自有字符串及planRealtimeVideoParameters到既有编码请求的传递，初始、动态和编码组匹配统一复用；不更改发送、队列或线程模型。失败构建不作为验收通过。
