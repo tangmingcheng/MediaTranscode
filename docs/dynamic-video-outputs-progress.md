@@ -22,6 +22,8 @@
 
 - Windows26补充诊断：仅增加VLC RC统计唤醒，四路完整日志无晚帧、RTP到达序号连续、引用归零；可能存在观测调度扰动，不替代Windows正式门禁，详见[记录](dynamic-video-windows-26.md)。
 
+- Windows27撤除周期RC后，恢复路实际晚帧22ms/lost1，判FAIL；动态增删时刻与26不同，不据此宣称RC因果。用户已明确授权一次管理员WPR CPU/GPU及UAC，Windows28限定诊断采集正在进行。
+
 ## 行业依据与设计边界
 
 | 功能 | 权威依据 | 实施约束 |
