@@ -71,3 +71,7 @@ exit $LASTEXITCODE
 ```powershell
 & D:/VideoLAN/VLC/vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-videoonly-r2-vlc.log --extraintf=rc --rc-host=127.0.0.1:62740 --rc-quiet --snapshot-path=D:/Code/MyCode/MediaTranscode/out/acceptance --snapshot-prefix=composition-domain-videoonly-r2- --snapshot-format=png rtp://@127.0.0.1:61740
 ```
+
+## PR 独立审核
+
+新的独立智能体审查 PR #34 的 fd6109b4：当前基础源码 WIP PASS，合屏交付与合并门禁 FAIL；标题、正文与 Draft 状态的证据边界 PASS。要求先闭合输入控制进展与媒体准入，定位 VideoOnly 结束超时，再完成原规格 Windows→RKMPP 验证。本次仅文档追加审核记录，未改变已审源码。
