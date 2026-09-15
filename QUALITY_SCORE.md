@@ -14,7 +14,7 @@
 | 合屏观测与真实验收 | 10 | 4 | 合屏专属观测及运行证据 |
 | **合计** | **100** | **42** | **尚未就绪** |
 
-后续能力查询确认两平台滤镜存在，但 Windows CUDA 吞启动错误的源码门禁未关闭，不能据此提高分数。详见 [能力门禁](docs/realtime-video-composition-capability.md) 和 [实施记录](docs/realtime-video-composition-progress.md)。
+后续能力查询确认两平台滤镜存在；Windows CUDA 异常返回值传播属于静态风险，并无当前启动失败的复现证据，不能认定必须先修依赖。实施前评分保留，不据滤镜存在提高分数。详见 [能力门禁](docs/realtime-video-composition-capability.md) 和 [实施记录](docs/realtime-video-composition-progress.md)。
 
 ## 2026-09-10 Beta profile与示例交付增量
 

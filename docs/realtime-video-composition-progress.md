@@ -6,7 +6,7 @@
 
 Release 基线已通过 VS2026 全量 clean-first 构建（configure/build exit code 0）。尚未修改生产核心、尚未实现合屏、尚无合屏真实验收通过结论。
 
-平台调查已定位 Windows CUDA 合成滤镜的启动错误传播缺陷，详见 [能力与失败语义门禁](realtime-video-composition-capability.md)。这不是运行复现；不能用全量构建成功或滤镜存在判定合屏门禁通过。正在明确原计划之外的 Windows FFmpeg 根因修复范围。
+平台调查发现 Windows CUDA 合成滤镜的异常返回值传播静态风险，尚无当前环境启动失败证据。此前将其认定为实施阻塞并要求先修依赖的结论撤回。用户明确拒绝扩大依赖修复范围；保留现有 FFmpeg，按原计划验证与实施。详见 [能力与证据边界](realtime-video-composition-capability.md)。
 
 ## 静态评估
 
