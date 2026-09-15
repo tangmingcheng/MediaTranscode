@@ -199,7 +199,9 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
         MediaRealtimeAvSyncProtocolInputEndpoints{
             built.value().video,
             built.value().audio,
-            built.value().sourceClock});
+            built.value().sourceClock,
+            MediaAvDemuxClockRegistration{built.value().video.node,
+                                         built.value().audio.node}});
 }
 
 } // namespace

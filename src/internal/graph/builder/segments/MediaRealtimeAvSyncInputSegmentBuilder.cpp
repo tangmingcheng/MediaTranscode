@@ -425,7 +425,10 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
         MediaRealtimeAvSyncInputEndpoints{
             MediaEndpoint{nodes.value().releaseExtractor, "video"},
             MediaEndpoint{nodes.value().releaseExtractor, "audio"},
-            MediaEndpoint{nodes.value().activationSequencer, "activated"}});
+            MediaEndpoint{nodes.value().activationSequencer, "activated"},
+            MediaAvRuntimeInputRegistration{
+                nodes.value().epochBinder, nodes.value().activationSequencer,
+                nodes.value().releaseExtractor, protocol.value().demuxClock}});
 }
 
 } // namespace media::ffmpeg::graph

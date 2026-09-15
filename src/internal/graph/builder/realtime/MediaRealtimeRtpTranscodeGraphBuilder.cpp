@@ -403,11 +403,13 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::build(
     MediaRealtimeRtpTranscodePlan plan)
 {
-    return buildPlanned(plan);
+    std::optional<MediaAvRuntimeRegistrationPlan> registration;
+    return buildPlanned(plan, registration);
 }
 
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildPlanned(
-    MediaRealtimeRtpTranscodePlan& plan)
+    MediaRealtimeRtpTranscodePlan& plan,
+    std::optional<MediaAvRuntimeRegistrationPlan>& registration)
 {
     if (auto status = MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
             plan); !status) {
@@ -433,6 +435,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const MediaRealtimeEdgePolicySet& edgePolicies = videoRuntime
         ? videoRuntime->edgePolicies
         : avRuntime->edgePolicies;
+    registration.reset();
+    if (avRuntime) registration.emplace();
     const bool synchronized = avRuntime != nullptr;
     const bool audioBranchEnabled = synchronized;
     const MediaRealtimeRtpInputNodePlan* isolatedAudioInput =
@@ -575,6 +579,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(assembled.error());
         }
         synchronizedInput = std::move(assembled).value();
+        registration->input = synchronizedInput->registration;
         videoPacketSourceNode = synchronizedInput->releasedVideo.node;
         videoPacketSourcePort = synchronizedInput->releasedVideo.port;
         audioPacketSourceNode = synchronizedInput->releasedAudio.node;
@@ -625,6 +630,14 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaGraph>::failure(video.error());
     }
 
+    if (avRuntime) {
+        if (!video.value().startupPreparationOwner) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Synchronized video branch lacks its preparation owner product"));
+        }
+        registration->preparationOwner = *video.value().startupPreparationOwner;
+    }
     std::optional<MediaEncodedBranchEndpoints> audio;
     if (audioBranchEnabled) {
         const auto& avSyncRuntime = *avRuntime;
@@ -669,6 +682,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         if (!scheduled) {
             return ::media::Result<MediaGraph>::failure(scheduled.error());
         }
+        registration->outputScheduler = scheduled.value().scheduler;
         if (avRuntime->outputAdapter ==
             MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
             MediaScheduledRtpOutputSegmentOptions outputOptions;
@@ -699,6 +713,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
+            if (output.value().rtpSdpPublisher.isValid())
+                registration->rtpSdpPublisher = output.value().rtpSdpPublisher;
         } else {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::unsupported(
@@ -719,6 +735,12 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Realtime graph lost its typed runtime variant"));
+    }
+
+    if (registration) {
+        registration->members.reserve(graph.nodes().size());
+        for (const auto& node : graph.nodes())
+            registration->members.push_back(node.id);
     }
 
     if (!plan.resourceLedger) {
@@ -1040,7 +1062,8 @@ MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& g
             ::media::ErrorInfo::invalidArgument(
                 "realtime executable graph rejects unplanned prepared audio input"));
     }
-    auto graphResult = buildPlanned(preflight.plan);
+    std::optional<MediaAvRuntimeRegistrationPlan> registration;
+    auto graphResult = buildPlanned(preflight.plan, registration);
     if (!graphResult) {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
             graphResult.error());
@@ -1076,7 +1099,8 @@ MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& g
             runtimePlan->edgePolicies,
             std::move(runtimePlan->datagramTransport),
             audioExecutionProduct,
-            std::move(outputProduct)});
+            std::move(outputProduct),
+            std::move(*registration)});
     } else {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
             ::media::ErrorInfo::invalidArgument(

@@ -432,13 +432,30 @@ namespace {
                 MediaPreparedRawRtpAudioVideoProbe{
                     std::move(signaling), *sourceFrameRate,
                     std::move(prepared).value(),
-                    std::move(*preparedAudio)});
+                    std::move(*preparedAudio), byteBudget.value()});
         }
         return ::media::Result<MediaPreparedRawRtpProbe>::success(
             MediaPreparedRawRtpVideoOnlyProbe{
                 std::move(signaling), *sourceFrameRate,
-                std::move(prepared).value()});
+                std::move(prepared).value(), byteBudget.value()});
     }
+}
+
+::media::Status MediaRawRtpInputPreparer::sealPreflight(MediaPreparedRawRtpProbe& probe)
+{
+    return std::visit([](auto& prepared) -> ::media::Status {
+        if (!prepared.byteBudget) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "raw RTP prepared probe requires its shared byte budget"));
+        }
+        if (auto status = prepared.video.finishRawRtpPreflightCapture(); !status)
+            return status;
+        if constexpr (requires { prepared.audio; }) {
+            if (auto status = prepared.audio.finishRawRtpPreflightCapture(); !status)
+                return status;
+        }
+        return prepared.byteBudget->sealPreflight();
+    }, probe);
 }
 
 } // namespace media::ffmpeg::graph

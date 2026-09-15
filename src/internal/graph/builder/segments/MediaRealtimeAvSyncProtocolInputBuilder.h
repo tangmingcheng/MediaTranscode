@@ -8,6 +8,7 @@ struct MediaRealtimeAvSyncProtocolInputEndpoints final {
     MediaEndpoint video;
     MediaEndpoint audio;
     MediaEndpoint sourceClock;
+    std::optional<MediaAvDemuxClockRegistration> demuxClock;
 };
 
 class MediaRealtimeAvSyncProtocolInputBuilder final {

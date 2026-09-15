@@ -261,6 +261,14 @@ MediaRawRtpPreparedInputBuffer::ingressObservation()
             ::media::ErrorInfo::notInitialized(
                 "raw RTP prepared input has no ingress observation collector"));
     }
+    if (m_captureThread.joinable()) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP ingress observation requires completed preflight capture"));
+    }
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(status.error());
+    }
     return m_prepared->ingressObservation->seal();
 }
 
@@ -387,7 +395,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     return receiver->receiveNext(timeoutMilliseconds);
 }
 
-::media::Status MediaRawRtpPreparedInputBuffer::sealPreflight()
+::media::Status MediaRawRtpPreparedInputBuffer::finishPreflightCapture()
 {
     {
         std::scoped_lock lock(m_mutex);
@@ -404,7 +412,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     if (auto status = m_prepared->transport.reset(); !status) return status;
     std::scoped_lock lock(m_mutex);
     if (m_captureError) return ::media::Status::failure(*m_captureError);
-    return m_prepared->byteBudget->sealPreflight();
+    return m_prepared->byteBudget->validate();
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::stop() noexcept

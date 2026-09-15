@@ -72,7 +72,8 @@ public:
 
 private:
     static ::media::Result<MediaGraph> buildPlanned(
-        MediaRealtimeRtpTranscodePlan& plan);
+        MediaRealtimeRtpTranscodePlan& plan,
+        std::optional<MediaAvRuntimeRegistrationPlan>& registration);
 
     MediaRealtimeRtpTranscodeGraphBuilder() = default;
 };

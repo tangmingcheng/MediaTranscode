@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/runtime/validation/MediaAvCommonCoreShapeValidator.h"
+#include "internal/graph/runtime/validation/MediaAvRuntimeRegistrationValidator.h"
 #include "internal/graph/runtime/validation/MediaOutputAuthorityShapeValidator.h"
 #include "internal/graph/runtime/validation/MediaSourceClockShapeValidator.h"
 
@@ -59,6 +60,8 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
         !common) {
         return common;
     }
+    if (auto registration = MediaAvRuntimeRegistrationValidator::validate(
+            graph, binding); !registration) return registration;
     return MediaOutputAuthorityShapeValidator::validate(
         graph, binding);
 }

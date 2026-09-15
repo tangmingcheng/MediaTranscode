@@ -344,9 +344,11 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
         }
-        if (!nodes.videoFilter.isValid()) {
+        {
+            const auto readinessOwner = nodes.videoFilter.isValid()
+                ? nodes.videoFilter : nodes.videoFrameRate;
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                    graph, owner, nodes.videoFrameRate,
+                    graph, owner, readinessOwner,
                     "video.startup_preparation.owner", "1"); !status) {
                 return ::media::Result<MediaEncodedBranchEndpoints>::failure(
                     status.error());
@@ -383,7 +385,11 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     return ::media::Result<MediaEncodedBranchEndpoints>::success({
-        {nodes.videoEncode, "codec"}, {nodes.videoEncode, "packet"}});
+        {nodes.videoEncode, "codec"}, {nodes.videoEncode, "packet"},
+        options.canonicalLineageCapacity
+            ? std::optional<MediaNodeId>(nodes.videoFilter.isValid()
+                  ? nodes.videoFilter : nodes.videoFrameRate)
+            : std::nullopt});
 }
 
 } // namespace media::ffmpeg::graph

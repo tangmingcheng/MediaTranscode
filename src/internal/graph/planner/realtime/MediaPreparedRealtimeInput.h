@@ -63,7 +63,7 @@ public:
     rawRtpEffectiveSocketReceivePayloadBytes() const;
     ::media::Status configureRawRtpRuntimeIngress(
         const MediaRtpIngressPlan& plan);
-    ::media::Status sealRawRtpPreflight();
+    ::media::Status finishRawRtpPreflightCapture();
     ::media::Result<MediaBufferRef> releaseBuffer();
 
 private:

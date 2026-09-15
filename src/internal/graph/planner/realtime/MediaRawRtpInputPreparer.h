@@ -44,6 +44,7 @@ struct MediaPreparedRawRtpVideoOnlyProbe final {
     MediaDetectedRtpVideoSignaling signaling;
     MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
+    std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
 };
 
 struct MediaPreparedRawRtpAudioVideoProbe final {
@@ -51,6 +52,7 @@ struct MediaPreparedRawRtpAudioVideoProbe final {
     MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
     MediaPreparedRealtimeInput audio;
+    std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
 };
 
 using MediaPreparedRawRtpProbe = std::variant<
@@ -61,6 +63,7 @@ class MediaRawRtpInputPreparer final {
 public:
     static ::media::Result<MediaPreparedRawRtpProbe> prepare(
         const MediaRawRtpProbePlan& plan);
+    static ::media::Status sealPreflight(MediaPreparedRawRtpProbe& probe);
 
 private:
     MediaRawRtpInputPreparer() = delete;

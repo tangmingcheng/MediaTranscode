@@ -196,13 +196,13 @@ MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
     return m_rawRtpBuffer->configureRuntimeIngress(plan);
 }
 
-::media::Status MediaPreparedRealtimeInput::sealRawRtpPreflight()
+::media::Status MediaPreparedRealtimeInput::finishRawRtpPreflightCapture()
 {
     if (!m_rawRtpBuffer) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "raw RTP preflight seal requires a prepared raw RTP input"));
+            "raw RTP preflight capture completion requires a prepared raw RTP input"));
     }
-    return m_rawRtpBuffer->sealPreflight();
+    return m_rawRtpBuffer->finishPreflightCapture();
 }
 
 ::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer()

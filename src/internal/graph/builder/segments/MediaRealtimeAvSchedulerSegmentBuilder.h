@@ -19,6 +19,7 @@ struct MediaRealtimeAvSchedulerSegmentResult final {
     MediaEndpoint video;
     MediaEndpoint audio;
     MediaEndpoint serialized;
+    MediaNodeId scheduler;
 };
 
 class MediaRealtimeAvSchedulerSegmentBuilder final {

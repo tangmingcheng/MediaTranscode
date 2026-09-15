@@ -228,6 +228,7 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
             status.error());
     }
     MediaRealtimeAvSchedulerSegmentResult result;
+    result.scheduler = scheduler;
     if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         result.serialized = MediaEndpoint{router, "serialized"};
     } else {

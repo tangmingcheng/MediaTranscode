@@ -514,3 +514,9 @@ Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `
 `VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 or HEVC video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
 
 Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.
+
+## 实时 A/V 显式运行时注册
+
+现有单源 A/V builder 随节点创建输出 MediaAvRuntimeRegistrationPlan，明确输入启动角色、视频准备 owner、输出 scheduler 与域成员。MediaAvRuntimeRegistrationValidator 在编译前校验角色、归属和连接；MediaGraphRuntimeRegistrar 按 ID 组装，MediaAvRuntimeDomainState 持有 activation、恢复依赖与准备状态。策略仍归 planner，最终输出保持单权威；当前产品仍限定单域，不表示已支持合屏。
+
+RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。

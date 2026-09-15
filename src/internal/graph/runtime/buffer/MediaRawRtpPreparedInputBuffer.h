@@ -77,7 +77,7 @@ public:
     bool preparedReplayDrained() const noexcept;
     ::media::Result<MediaRtpIngressBatch> receiveRuntimeBatch(
         int timeoutMilliseconds);
-    ::media::Status sealPreflight();
+    ::media::Status finishPreflightCapture();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     void abort() noexcept;
