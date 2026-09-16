@@ -2,7 +2,7 @@
 
 本项目基于 C++20 和 FFmpeg，通过模块化能力支持文件转码、音视频处理、硬件适配和 DAG 媒体管线。核心位于 `src/internal/graph`，包含图模型、planner、构建、调度及运行时节点。
 
-按任务读取资料：模块边界查阅 `ARCHITECTURE.md`；具体任务按需写入 `plan.md`，实施时读取对应计划并在 `docs/` 更新完成进度；质量评估查阅 `QUALITY_SCORE.md`；Windows 全量构建使用 `.agents/skills/building-with-vs2026/SKILL.md`。无需为局部修改重复通读全部文档；下文的设计调查、审查和真实链路验收要求仍完整适用。
+按任务读取资料：模块边界查阅 `ARCHITECTURE.md`；具体任务按需写入 `plan.md`，实施时读取对应计划并在 `docs/` 更新完成进度；质量评估查阅 `QUALITY_SCORE.md`；准备打包或部署时查阅 `deployment.md`；Windows 全量构建使用 `.agents/skills/building-with-vs2026/SKILL.md`。无需为局部修改重复通读全部文档；下文的设计调查、审查和真实链路验收要求仍完整适用。
 
 ## 任务完成边界
 
