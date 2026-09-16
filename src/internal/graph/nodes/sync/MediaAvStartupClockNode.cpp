@@ -58,10 +58,13 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
     if (discontinuity) {
         if (state.readiness() !=
                 MediaSourceClockReadiness::ReacquireRequired ||
-            !m_generation || state.generation() != *m_generation) {
+            state.generation() == 0 ||
+            (m_generation ? state.generation() != *m_generation
+                          : m_invalidatedGeneration != state.generation())) {
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
                 "A/V startup clock rejects malformed reacquisition evidence"));
         }
+        m_invalidatedGeneration = state.generation();
         m_generation.reset();
         m_nextTick.reset();
         return ::media::Status::success();
@@ -74,7 +77,9 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         return ::media::Status::success();
     }
     if (state.readiness() != MediaSourceClockReadiness::Locked ||
-        state.generation() == 0) {
+        state.generation() == 0 ||
+        (m_invalidatedGeneration &&
+         state.generation() <= *m_invalidatedGeneration)) {
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "A/V startup clock requires locked source-clock state"));
     }
@@ -83,6 +88,7 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
             "A/V startup clock rejects generation changes"));
     }
     m_generation = state.generation();
+    m_invalidatedGeneration.reset();
     return ::media::Status::success();
 }
 
@@ -103,6 +109,7 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 return processFinished();
             case MediaControlBufferKind::Flush:
                 m_generation.reset();
+                m_invalidatedGeneration.reset();
                 m_nextTick.reset();
                 return processProgress();
             case MediaControlBufferKind::Abort:
@@ -127,7 +134,9 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 observed.error());
         }
     }
-    if (!m_generation) return processWaiting();
+    if (!m_generation) {
+        return state.value() ? processProgress() : processWaiting();
+    }
     auto now = m_group->clock()->now();
     if (!now) {
         return ::media::Result<MediaNodeProcessResult>::failure(now.error());
@@ -167,6 +176,7 @@ void MediaAvStartupClockNode::resetState() noexcept
     m_interval.reset();
     m_nextTick.reset();
     m_generation.reset();
+    m_invalidatedGeneration.reset();
 }
 
 } // namespace media::ffmpeg::graph

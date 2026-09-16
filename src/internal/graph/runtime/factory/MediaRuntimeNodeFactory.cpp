@@ -1009,6 +1009,12 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
         return registration;
     }
     if (auto registration =
+            fixedGenerationPurgeRegistration<MediaDatagramTransportPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::DatagramTransportPlan)) {
+        return registration;
+    }
+    if (auto registration =
             fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
                 runtime,
                 MediaAvGenerationParticipant::ProjectMpegTsOutput)) {

@@ -32,6 +32,7 @@ private:
     std::optional<MediaRunningTime> m_interval;
     std::optional<MediaRunningTime> m_nextTick;
     std::optional<std::uint64_t> m_generation;
+    std::optional<std::uint64_t> m_invalidatedGeneration;
 };
 
 } // namespace media::ffmpeg::graph

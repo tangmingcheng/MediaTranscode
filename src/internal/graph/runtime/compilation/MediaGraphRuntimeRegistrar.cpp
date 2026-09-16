@@ -224,10 +224,16 @@ namespace media::ffmpeg::graph {
         if (!participants) {
             return ::media::Status::failure(participants.error());
         }
+        std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups;
+        domainWakeups.reserve(domainPlan->members.size());
+        for (const auto member : domainPlan->members) {
+            domainWakeups.push_back(context.sharedNodeWakeup(member));
+        }
         auto coordinator = MediaAvReacquisitionCoordinator::create(
+            reacquisitionGroup->key(),
             std::move(reacquisitionDependencies->transitionService),
             std::move(reacquisitionDependencies->masterClock),
-            std::move(participants).value());
+            std::move(participants).value(), std::move(domainWakeups));
         if (!coordinator) {
             return ::media::Status::failure(coordinator.error());
         }

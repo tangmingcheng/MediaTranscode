@@ -2,7 +2,9 @@
 
 ## 当前状态
 
-最新：2026-09-16已修复RTP失效重复增代及old/next投影，r8两次匹配源BYE均保持next2/old1，无malformed discontinuity；源120秒发送完整，之后CLI无进展超时，完整验收仍FAIL。后续恢复等待期限、purge并发屏障及黑场/静音输出尚未实现，详见[源失活代次记录](realtime-video-composition-source-generation.md)。
+2026-09-16继续推进purge屏障、首次/重试发布授权、startup重复失效控制及传输计划注册。r9/r10错误已越过；r11全部5组ack且恢复源锁2，仍因MPEG-TS构造器未切换计划而退出1，完整恢复FAIL。双复审对10文件源码增量PASS，命令/指标/逐项清理见[purge屏障记录](realtime-video-composition-purge-barrier.md)。下一阶段须整体处理协议代次交接和sender owner-thread清理，并将输出时间轴与输入源域解耦；多源合屏仍未完成，不新增致命源缺失期限。
+
+上一阶段（r8）：2026-09-16已修复RTP失效重复增代及old/next投影，两次匹配源BYE均保持next2/old1，无malformed discontinuity；源120秒发送完整，之后CLI无进展超时，完整验收FAIL。当时purge并发屏障及持续输出尚未实现，历史证据见[源失活代次记录](realtime-video-composition-source-generation.md)。
 
 2026-09-15：用户批准两阶段计划及新增合屏输入列表、网格、指定音源的 CLI/C API。基线 `d590cc3b`，工作分支 `feat/realtime-video-composition`。现有未跟踪依赖、`NUL` 和 `out/` 属于实施前状态，不纳入本轮提交。
 

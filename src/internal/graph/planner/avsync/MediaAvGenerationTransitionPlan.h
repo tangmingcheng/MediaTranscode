@@ -14,7 +14,8 @@ enum class MediaAvGenerationParticipant : std::uint8_t {
     Scheduler = 2,
     RtpVideoOutput = 3,
     RtpAudioOutput = 4,
-    ProjectMpegTsOutput = 5
+    ProjectMpegTsOutput = 5,
+    DatagramTransportPlan = 6
 };
 
 struct MediaAvGenerationParticipantPlan final {

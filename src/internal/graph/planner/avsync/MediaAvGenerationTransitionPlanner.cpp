@@ -62,6 +62,9 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});
+    transition.participants.push_back({
+        MediaAvGenerationParticipant::DatagramTransportPlan,
+        {"datagram_transport_plan_generation_state"}});
     if (adapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
         transition.participants.push_back({
             MediaAvGenerationParticipant::RtpVideoOutput,

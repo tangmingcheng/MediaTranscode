@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+源域purge完成后由registrar绑定的既有节点wakeup通知域成员；gate在首次及背压重试的output commit处持有代次仲裁，旧包取消、新代屏障未完成则等待。startup clock保留精确失效代次，重复失效幂等；消费控制状态后继续排空队列。有限清理事务、有界恢复候选与可无限源缺失须区分，不能用源恢复超时替代独立输出时钟，见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。
+
 RTP A/V时钟域由validator区分初始获取、活动与重获取，失活首次保存旧代次并分配一次下一代次；快照明确失效旧代次，adapter向gate投影旧失效、向新获取保留下一代次。重复失效不重复建代，恢复候选继续受SR/CNAME时效约束，代次耗尽失败。此机制不将RTCP BYE转换成会话EOF；完整恢复期限与多源持续输出仍待实现，见[源失活记录](docs/realtime-video-composition-source-generation.md)。
 
 `src/internal/graph` 是项目中的 DAG 化媒体处理管线目录，负责描述、构建、校验、编译和运行媒体处理图。

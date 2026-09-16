@@ -1,5 +1,9 @@
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+
+#include <algorithm>
 #include <exception>
 #include <limits>
 #include <utility>
@@ -164,34 +168,43 @@ void MediaAvReacquisitionActivationReservation::abandon() noexcept
 }
 
 MediaAvReacquisitionCoordinator::MediaAvReacquisitionCoordinator(
+    MediaAvSyncGroupKey groupKey,
     std::shared_ptr<MediaAvEpochTransitionService> transition,
     std::shared_ptr<MediaMasterClock> clock,
-    std::vector<MediaAvGenerationParticipantGroup> participants)
-    : m_transitionService(std::move(transition))
+    std::vector<MediaAvGenerationParticipantGroup> participants,
+    std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups)
+    : m_groupKey(std::move(groupKey))
+    , m_transitionService(std::move(transition))
     , m_clock(std::move(clock))
     , m_participants(std::move(participants))
+    , m_domainWakeups(std::move(domainWakeups))
 {
 }
 
 ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
 MediaAvReacquisitionCoordinator::create(
+    MediaAvSyncGroupKey groupKey,
     std::shared_ptr<MediaAvEpochTransitionService> transition,
     std::shared_ptr<MediaMasterClock> clock,
-    std::vector<MediaAvGenerationParticipantGroup> participants)
+    std::vector<MediaAvGenerationParticipantGroup> participants,
+    std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups)
 {
-    if (!transition || !clock || participants.empty()) {
+    if (!groupKey.valid() || !transition || !clock || participants.empty() || domainWakeups.empty() ||
+        std::any_of(domainWakeups.begin(), domainWakeups.end(),
+                    [](const auto& wakeup) { return !wakeup; })) {
         return ::media::Result<
             std::shared_ptr<MediaAvReacquisitionCoordinator>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V reacquisition coordinator requires transition, clock, and participants"));
+                "A/V reacquisition coordinator requires transition, clock, participants, and domain wakeups"));
     }
     return ::media::Result<
         std::shared_ptr<MediaAvReacquisitionCoordinator>>::success(
         std::shared_ptr<MediaAvReacquisitionCoordinator>(
             new MediaAvReacquisitionCoordinator(
+                std::move(groupKey),
                 std::move(transition),
                 std::move(clock),
-                std::move(participants))));
+                std::move(participants), std::move(domainWakeups))));
 }
 
 std::unique_lock<std::mutex>
@@ -367,6 +380,13 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         purgeWork = purge.value();
     }
 
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "av_reacquisition group=" + m_groupKey.value() + " phase=purging old=" +
+            std::to_string(purgeWork.oldGeneration) + " next=" +
+            std::to_string(purgeWork.nextGeneration) + " transition=" +
+            std::to_string(purgeWork.transitionSequence));
     std::vector<::media::Result<MediaAvGenerationAcknowledgement>>
         purgeResults;
     purgeResults.reserve(m_participants.size());
@@ -374,7 +394,7 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         purgeResults.push_back(participant.purgeAll(purgeWork));
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
@@ -406,6 +426,19 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         m_phase = MediaAvReacquisitionPhase::Acquiring;
         m_beganAt.reset();
         m_inFlightTransitionSequence.reset();
+    }
+    lock.unlock();
+    if (complete) {
+        for (const auto& wakeup : m_domainWakeups) wakeup->notify();
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "av_reacquisition group=" + m_groupKey.value() +
+                " phase=acquiring purge_ack=complete ack_count=" +
+                std::to_string(purgeResults.size()) + " old=" +
+                std::to_string(purgeWork.oldGeneration) + " next=" +
+                std::to_string(purgeWork.nextGeneration) + " transition=" +
+                std::to_string(purgeWork.transitionSequence));
     }
     return ::media::Status::success();
 }

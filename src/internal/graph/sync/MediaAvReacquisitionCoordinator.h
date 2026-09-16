@@ -3,6 +3,7 @@
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/time/MediaMasterClock.h"
 
@@ -17,6 +18,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvReacquisitionCoordinator;
 class MediaAvSyncGroupRuntime;
+class MediaNodeWakeup;
 struct MediaAvReacquisitionCoordinatorTestAccess;
 
 class MediaAvStartupReleasePublicationReservation final {
@@ -165,9 +167,11 @@ class MediaAvReacquisitionCoordinator final
     : public std::enable_shared_from_this<MediaAvReacquisitionCoordinator> {
 public:
     static ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
-    create(std::shared_ptr<MediaAvEpochTransitionService> transition,
+    create(MediaAvSyncGroupKey groupKey,
+           std::shared_ptr<MediaAvEpochTransitionService> transition,
            std::shared_ptr<MediaMasterClock> clock,
-           std::vector<MediaAvGenerationParticipantGroup> participants);
+           std::vector<MediaAvGenerationParticipantGroup> participants,
+           std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups);
 
     ::media::Status observe(MediaAvReacquisitionRequest request);
     ::media::Status request(MediaAvReacquisitionRequest request);
@@ -197,9 +201,11 @@ private:
     friend struct MediaAvReacquisitionCoordinatorTestAccess;
 
     MediaAvReacquisitionCoordinator(
+        MediaAvSyncGroupKey groupKey,
         std::shared_ptr<MediaAvEpochTransitionService> transition,
         std::shared_ptr<MediaMasterClock> clock,
-        std::vector<MediaAvGenerationParticipantGroup> participants);
+        std::vector<MediaAvGenerationParticipantGroup> participants,
+        std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups);
 
     ::media::Status failTerminalLocked(::media::ErrorInfo error);
     ::media::Status validateAndQueueRequest(
@@ -229,9 +235,11 @@ private:
     mutable std::mutex m_mutex;
     mutable std::condition_variable m_activationWaitChanged;
     std::size_t m_activationWaiters = 0;
+    MediaAvSyncGroupKey m_groupKey;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::vector<MediaAvGenerationParticipantGroup> m_participants;
+    std::vector<std::shared_ptr<MediaNodeWakeup>> m_domainWakeups;
     MediaAvReacquisitionPhase m_phase =
         MediaAvReacquisitionPhase::Inactive;
     std::optional<MediaAvReacquisitionRequest> m_request;

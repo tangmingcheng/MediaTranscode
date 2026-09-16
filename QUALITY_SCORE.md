@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-16 purge屏障与恢复控制增量
+
+两名独立审查者复审10文件源码增量，Standards/局部Spec均PASS：修复背压重试跳过代次仲裁、purge完成缺少域唤醒、startup重复失效/控制消息滞留，以及传输计划遗漏purge注册。r9/r10定位的错误已越过；r11全部5组ack并恢复源锁2，最终仍因MPEG-TS构造器保留旧计划而退出1。完整恢复FAIL，详见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。就绪度仍42/100；剩余协议代次交接、sender线程归属清理、输出时间轴、黑场/静音及跨平台验收不能由局部PASS替代。
+
 ## 2026-09-16 源失活代次增量
 
 两位独立审查对validator三阶段、重复失效幂等、old/next投影及耗尽失败均给出Standards/局部Spec PASS。r8实际解析两次匹配源BYE，next=2/old=1稳定，无原malformed discontinuity；120秒有编码与VLC画面，随后仍无进展超时。完整交付FAIL，六维就绪度保持10/8/6/12/2/4，共42/100；不外推完整恢复或跨平台。剩余恢复获取期限、purge并发、尾部和物理内存风险见[专项记录](docs/realtime-video-composition-source-generation.md)。
