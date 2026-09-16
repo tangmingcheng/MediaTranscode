@@ -27,4 +27,10 @@ Release 基线已通过 VS2026 全量 clean-first 构建（configure/build exit 
 真实 A/V 基线暴露前置问题：RTP H.264/AAC → MPEG-TS/RTP HEVC/AAC，输入120秒连续源、1280×720/30 fps/约8 Mbps，输出HEVC CBR8 Mbps及AAC CBR192 kbps。CUDA能力探测成功后，builder报告 `prepared raw RTP input requires a planner-owned ingress product`，没有进入runtime。根因是preflight只为视频seal/规划/configure ingress，遗漏音频；资源账仅计视频arena。修复复用每输入同一规划流程，从各自真实socket和探测证据生成产品，两份arena经checked add纳入总预算，在DAG构建前验证一致性。无新增对外参数、外部依赖变更或平台专用链路。参考 [GStreamer rtpbin](https://gstreamer.freedesktop.org/documentation/rtpmanager/rtpbin.html) 的逐会话接收职责；不声称整套实现等价。
 
 验证尚未完成：原基线CLI退出1；源日志3600帧/120秒，PowerShell调用退出1，未独立取得FFmpeg原生exit code，不能标记源进程exit0。VLC无输出后经RC关闭。原始日志为 `out/acceptance/composition-domain-baseline-{cli,source,vlc}.log`。修改后须同规格复验，并回归VideoOnly；共享变更需随后验证RKMPP。完整命令及最终结果在本轮完成记录中汇总。
-阶段一完整失败记录、实际命令和审查边界见 [单源基础实施与验证](realtime-video-composition-stage-one.md)。最新 A/V r3 已进入 runtime，但音频 clock binder acquiring 6/6 失败；不得标记回归通过。两位独立审查者均对当前 WIP 源码范围 PASS，交付验收 FAIL。
+阶段一完整失败记录、实际命令和审查边界见 [单源基础实施与验证](realtime-video-composition-stage-one.md)。A/V r3 已进入 runtime，但音频 clock binder acquiring 6/6 失败；不得标记回归通过。两位独立审查者均对当前 WIP 源码范围 PASS，交付验收 FAIL。
+
+## 2026-09-16 启动背压推进
+
+binder 获取队列满时停止取媒体包，继续消费时钟并等待原截止时间，未增加容量。Release 全量重建成功；原规格 A/V r4 越过 binder 后，在启动协调器报容量不足，CLI 退出 1、无编码输出；源退出 0、3600 帧/120 秒。两位独立复审者对本项源码 PASS，完整交付 FAIL，就绪度维持 42/100。本轮命令和遥测归档后已清理临时产物，无本轮文件或进程残留。
+
+下一修复落点已明确：Raw RTP 缺少独立的输入 startup retention 产品，500 ms preroll 错配为按 100 ms 输出驻留推导的 4/6 个 AU；现有 prepared input ledger 仅增加一次解包批次 credit，未覆盖启动保留窗口。需贯通输入保留事实、共用 startup policy 与全局 payload 预算，不能改输出 residence 语义、降低 preroll 或仅按观测帧率增大常量。完整控制隔离仍未实现，多源合成与黑屏/静音恢复尚待实施。

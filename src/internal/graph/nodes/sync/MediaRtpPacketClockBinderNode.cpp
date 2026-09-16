@@ -71,6 +71,19 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         return processProgress(bindPacket(context, std::move(buffered)));
     }
 
+    // Keep the next packet in the bounded input channel until clock
+    // acquisition can drain our queue. Clock input remains serviced above.
+    if (!m_lockedSnapshot &&
+        m_acquiringPackets.size() >= m_acquiringCapacity) {
+        if (!m_acquisitionDeadline->deadline()) {
+            return processProgress(invalid(
+                "Full RTP acquisition queue requires an established deadline"));
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
+    }
+
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());

@@ -75,3 +75,37 @@ exit $LASTEXITCODE
 ## PR 独立审核
 
 新的独立智能体审查 PR #34 的 fd6109b4：当前基础源码 WIP PASS，合屏交付与合并门禁 FAIL；标题、正文与 Draft 状态的证据边界 PASS。要求先闭合输入控制进展与媒体准入，定位 VideoOnly 结束超时，再完成原规格 Windows→RKMPP 验证。本次仅文档追加审核记录，未改变已审源码。
+
+## r4：时钟获取队列背压验证（已运行，FAIL）
+
+r3 的直接失败是 binder 满队列后仍取包，并非已经复现 ingress credit 阻塞。先按 GStreamer queue 的有界阻塞语义修正消费端：未锁定且获取队列达到 planner 容量时停止取媒体包，保持 clock 优先消费并等待原 acquisition deadline；保留容量越界断言，不增加容量、不丢包、不改变超时。所有状态仍由该节点 worker 独占，沿用 RAII buffer/credit 与现有跨平台通知。
+
+worker 每次调用前记录通知序号，等待仅由序号变化、取消或截止时间唤醒；队列非空本身不会忙轮询。EOF/flush 仍按媒体 FIFO 顺序等待，不能宣称立即结束。此项不解决 RawRtpInput 媒体等待对 RTCP 的潜在阻塞，也不代表合屏已实现；下一次原规格真实运行用于定位剩余阻塞，不能用本地队列修改替代完整控制进展设计。
+
+### r4 实际结果：FAIL
+
+Release 全量重建成功（configure/build 均 0）。本轮只修改 binder 满队列前的取包行为，未修改启动协调器或其容量。CLI 退出 1，执行越过 binder 后在 node 13 报 startup buffer capacity exceeded，状态 PrimingStreams；已收到视频关键帧 sequence=1/generation=1。不能据此证明输入控制隔离完成。
+
+源 FFmpeg PID 10780，退出 0，3600 帧/120 秒；VLC PID 10204，无编码输出，结束后通过 RC quit 关闭。CLI 在首次进程采样前退出，未取得 PID，cpuSamples=0，无稳定 CPU/内存/A/V 漂移证据。最终 workingSet/peakWorkingSet=108498944 字节；encodedPackets=0，workerErrors/errors=2/2，payload reservations/releases=53/53、currentBytes/currentObjects=0、pressureFailures=0。prepared 视频 805 RTP/1 RTCP、音频 36 RTP/1 RTCP，观察跨度均 314 ms。
+
+源码进一步确认 makePolicy 要求 500 ms preroll，却使用输出 maximumResidence=100 ms 的 ledger.media 容量（视频 4、音频 6）；尚未修复。下一步核对输入事实规划及预算，不能仅扩大数字或降低启动门槛。
+
+本轮实际命令如下：
+
+```powershell
+& D:/Code/MyCode/MediaTranscode/out/build/x64-release/media_transcode_realtime_video_cli.exe --media-id composition-domain-r4 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60740 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --audio-rtp-url rtp://127.0.0.1:60742 --audio-rtp-codec aac --audio-rtp-payload-type 97 --audio-rtp-clock-rate 44100 --audio-rtp-channels 2 --audio-rtp-fmtp "profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210" --rtp-host 127.0.0.1 --rtp-port 61740 --sdp D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r4.sdp --video-codec hevc --rc cbr --width 1280 --height 720 --fps 30 --bitrate 8000 --gop 60 --audio-codec aac --audio-rc cbr --audio-bitrate 192 --sample-rate 44100 --channels 2 > D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r4-cli.log 2>&1
+exit $LASTEXITCODE
+```
+
+```powershell
+& D:/mabs/local64/bin-video/ffmpeg.exe -hide_banner -nostdin -re -i D:/Code/MyCode/MediaTranscode/out/acceptance/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 -rtpflags send_bye "rtp://127.0.0.1:60740?rtcpport=60741&pkt_size=1200" -map 0:a:0 -vn -c:a copy -f rtp -payload_type 97 -rtpflags send_bye "rtp://127.0.0.1:60742?rtcpport=60743&pkt_size=1200" > D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r4-source.log 2>&1
+exit $LASTEXITCODE
+```
+
+```powershell
+& D:/VideoLAN/VLC/vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r4-vlc.log --extraintf=rc --rc-host=127.0.0.1:62740 --rc-quiet --snapshot-path=D:/Code/MyCode/MediaTranscode/out/acceptance --snapshot-prefix=composition-domain-r4- --snapshot-format=png rtp://@127.0.0.1:61740
+```
+
+本轮临时产物清单：out/acceptance/composition-domain-r4-build.log、composition-domain-r4-cli.log、composition-domain-r4-source.log、composition-domain-r4-vlc.log。未生成 SDP、截图、录制或抓包；本轮未使用远程机。结果归档后已逐项清理，检查本轮文件和进程均无残留，保留复用源及历史产物。
+
+两位未参与实现者对冻结修改均给出 Standards PASS / 局部 WIP Spec PASS，完整合屏交付 FAIL，建议维持就绪度 42/100。除输入启动容量与预算外，仍需处理控制推进、Locked 后尚未排空即 invalidation 时的重获取边界，以及完整结束与跨平台验收。
