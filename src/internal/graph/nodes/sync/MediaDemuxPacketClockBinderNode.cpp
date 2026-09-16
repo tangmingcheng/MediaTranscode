@@ -331,6 +331,9 @@ MediaDemuxPacketClockBinderNode::timedPacket(
             generation,
             timestamp.duration()->nanoseconds()});
     if (!wrapped) return wrapped;
+    if (auto status = wrapped.value()->attachPayloadCredit(source->takePayloadCredit()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
     wrapped.value()->setFormatDescriptor(format);
     wrapped.value()->setTimeDescriptor(time);
     wrapped.value()->setHardwareDescriptor(hardware);

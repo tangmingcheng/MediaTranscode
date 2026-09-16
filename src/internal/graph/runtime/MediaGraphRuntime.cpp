@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
+#include "internal/graph/runtime/compilation/MediaGraphRuntimeRegistrar.h"
 #include "internal/graph/runtime/lifecycle/MediaGraphRuntimeLifecycleExecutor.h"
 
 
@@ -109,8 +110,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     return MediaGraphRuntimeCompiler::compile(
         std::move(executable), m_graph, m_inputBindings,
-        m_playbackEpochActivationCapability,
-        m_videoPreparationState,
+        m_avDomain,
         m_protocolOutputAuthority,
         m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
@@ -124,9 +124,9 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 
 ::media::Status MediaGraphRuntime::registerDefaultRuntimeNodes()
 {
-    auto registered = MediaGraphRuntimeCompiler::registerDefaults(
+    auto registered = MediaGraphRuntimeRegistrar::registerDefaults(
         m_context, m_scheduler, m_inputBindings,
-        m_playbackEpochActivationCapability, m_videoPreparationState,
+        m_avDomain,
         m_protocolOutputAuthority);
     if (!registered) {
         if (m_state ==

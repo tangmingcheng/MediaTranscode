@@ -1,5 +1,9 @@
 ## `src/internal/graph/`
 
+源域purge完成后由registrar绑定的既有节点wakeup通知域成员；gate在首次及背压重试的output commit处持有代次仲裁，旧包取消、新代屏障未完成则等待。startup clock保留精确失效代次，重复失效幂等；消费控制状态后继续排空队列。有限清理事务、有界恢复候选与可无限源缺失须区分，不能用源恢复超时替代独立输出时钟，见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。
+
+RTP A/V时钟域由validator区分初始获取、活动与重获取，失活首次保存旧代次并分配一次下一代次；快照明确失效旧代次，adapter向gate投影旧失效、向新获取保留下一代次。重复失效不重复建代，恢复候选继续受SR/CNAME时效约束，代次耗尽失败。此机制不将RTCP BYE转换成会话EOF；完整恢复期限与多源持续输出仍待实现，见[源失活记录](docs/realtime-video-composition-source-generation.md)。
+
 `src/internal/graph` 是项目中的 DAG 化媒体处理管线目录，负责描述、构建、校验、编译和运行媒体处理图。
 
 ```text
@@ -514,3 +518,15 @@ Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `
 `VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 or HEVC video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
 
 Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.
+
+## 实时 A/V 显式运行时注册
+
+协议代次交接由同一 coordinator 管理异步 purge 屏障。planner 显式注册 materializer、sender 和适用的 SDP publisher；各节点通过单槽请求在自己的 worker 清理状态，完成后通知域唤醒。清理未完成不确认 ack，复用原事务截止时间。sender 的 native submit 与提交计账受短发布授权保护，等待不持锁；授权取消仅退役未提交预约，保留物理服务域及已发送限速债务。输入按 RTP 重排序事件顺序发布时钟证据，控制事件不等待媒体 credit。当前仍为单源域基础，实流与剩余边界见[协议交接记录](docs/realtime-video-composition-protocol-handoff.md)。
+
+漂移控制候选只保存数据；每次提交按epoch→state→channel获取短授权，复核原origin后原子发布音频及校正，成功才推进servo。背压释放全部锁，恢复请求在锁外执行，owner退出清候选，避免全局代次锁随待发媒体跨worker等待。
+
+现有单源 A/V 的各 segment 显式返回源处理与输出处理节点归属，builder 将其装配到 MediaAvRuntimeRegistrationPlan；不再在末尾把全图扫描成一个隐式成员集合。MediaAvRuntimeRegistrationValidator 在编译前检查互斥、完整覆盖、角色与连接；registrar 按明确角色注入准备状态，并暂时仍对两侧成员执行原整体 transition。MediaAvRuntimeDomainState 仍持有单个 activation、恢复依赖与准备状态。processing 归属不是独立 generation：codec resolver 当前仍共同准备 decoder/encoder，输出连续时间与源贡献聚合边界尚未接入，不能视为已完成域隔离或合屏。
+
+Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
+
+RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。

@@ -7,6 +7,8 @@
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
+#include <utility>
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -227,7 +229,7 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 {
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
     const auto& sourcePacketPolicy = nodes.startupTrim.isValid()
-        ? policies.atomicAudioPacket
+        ? policies.startupAudioRelease
         : policies.audioPacket;
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", policies.metadata); !status) return status;
@@ -337,11 +339,19 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     if (auto status = connectEncodePorts(graph, options, nodes); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
+    MediaProcessingNodeOwnership processing;
+    for (const auto id : {nodes.packetNormalize, nodes.codecResolver,
+             nodes.decode, nodes.startupTrim, nodes.driftController, nodes.resample}) {
+        if (id.isValid()) processing.source.push_back(id);
+    }
+    processing.output.push_back(nodes.encode);
+    if (nodes.canonicalizer.isValid()) processing.output.push_back(nodes.canonicalizer);
     return ::media::Result<MediaEncodedBranchEndpoints>::success({
         {nodes.encode, "codec"},
         nodes.canonicalizer.isValid()
             ? MediaEndpoint{nodes.canonicalizer, "canonical"}
-            : MediaEndpoint{nodes.encode, "packet"}});
+            : MediaEndpoint{nodes.encode, "packet"},
+        std::nullopt, std::move(processing)});
 }
 
 } // namespace media::ffmpeg::graph

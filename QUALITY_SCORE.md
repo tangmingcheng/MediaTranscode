@@ -1,5 +1,42 @@
 # MediaTranscode Quality Score
 
+## 2026-09-16 显式处理归属与 r16–r18 复审
+
+两名未参与实现的审查者均Standards/局部Spec PASS，未发现新增P1/P2；合屏就绪度维持42/100（10/8/6/12/2/4）。segment显式归属、互斥覆盖校验与按角色准备注入已贯通，仍执行旧整体transition。Release全量重试成功；r16无源超时退出且最终保留4个逻辑对象，r17测试启动时序失败不计验收，r18完整双120秒源重入仍报AAC时间轴错误，CLI自然退出1且逻辑资源归零。完整合屏FAIL，连续输出、贡献模型、黑场/静音和跨平台验收仍缺失，不能据结构重构提高分数。[命令与证据](docs/realtime-video-composition-processing-ownership.md)。
+
+
+## 2026-09-16 协议代次交接增量
+
+两名独立审查者对owner线程清理、异步purge、协议/SDP注册及RTP事件顺序源码给出Standards/局部Spec PASS；r13七组ack并恢复源锁2、新MPEG-TS计划，随后AAC不支持flush导致编码lineage冲突，且漂移pending长期持epoch锁阻塞退出。短授权修复再次双审PASS，r14同规格Debug实流保留AAC失败并自然退出1、逻辑资源归零；完整恢复FAIL。旧r13挂起进程已按用户明确授权清理，r15 Release全量构建通过，同规格重入仍报AAC错误，但CLI自然退出1、逻辑资源归零，并实际取消53个未提交数据报；完整恢复仍FAIL。本轮产物与进程已清理。合屏就绪度维持42/100（10/8/6/12/2/4），未以基础修复提高评分；独立输出域、黑场/静音、多源与Windows→RKMPP验收仍未完成。[证据与命令](docs/realtime-video-composition-protocol-handoff.md)。
+
+## 2026-09-16 purge屏障与恢复控制增量
+
+两名独立审查者复审10文件源码增量，Standards/局部Spec均PASS：修复背压重试跳过代次仲裁、purge完成缺少域唤醒、startup重复失效/控制消息滞留，以及传输计划遗漏purge注册。r9/r10定位的错误已越过；r11全部5组ack并恢复源锁2，最终仍因MPEG-TS构造器保留旧计划而退出1。完整恢复FAIL，详见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。就绪度仍42/100；剩余协议代次交接、sender线程归属清理、输出时间轴、黑场/静音及跨平台验收不能由局部PASS替代。
+
+## 2026-09-16 源失活代次增量
+
+两位独立审查对validator三阶段、重复失效幂等、old/next投影及耗尽失败均给出Standards/局部Spec PASS。r8实际解析两次匹配源BYE，next=2/old=1稳定，无原malformed discontinuity；120秒有编码与VLC画面，随后仍无进展超时。完整交付FAIL，六维就绪度保持10/8/6/12/2/4，共42/100；不外推完整恢复或跨平台。剩余恢复获取期限、purge并发、尾部和物理内存风险见[专项记录](docs/realtime-video-composition-source-generation.md)。
+
+## 2026-09-15 阶段一基础修改复审
+
+两位未参与实现者对阶段一及2026-09-16输入保留增量均给出 Standards PASS / 当前 WIP 源码 Spec PASS。本轮贯通输入启动 retention、字节/对象信用、binder与重复帧凭证生命周期及独立启动批次发布容量；r5、r6真实链路FAIL，修复后的r7已进入持续编码与VLC播放，最终结果见[输入保留记录](docs/realtime-video-composition-input-retention.md)。独立复审建议维持下表六维尺度42/100：仍是单源基础，多源绑定、公共合成域、逐源黑屏/静音与恢复及双平台合屏验收尚未完成。逻辑credit不代表clone side data等全部物理分配边界；控制进展、完整结束和Windows→RKMPP回归仍待闭环，不因局部修复提高评分。
+
+## 2026-09-15 固定实时合屏就绪度（实施前）
+
+基线 `d590cc3b`；独立智能体仅进行源码专项评估，未运行合屏。下表衡量本次 2～4 路 RTP/RTCP 合屏的就绪度，不替换历史项目质量分，也不表示验收通过。
+
+| 维度 | 满分 | 得分 | 缺口 |
+|---|---:|---:|---|
+| DAG 复用与多源绑定 | 20 | 10 | 单源运行时基数与绑定 |
+| 多源时钟与合成来源 | 20 | 8 | 公共输出域、贡献记录 |
+| 逐源断流和恢复 | 20 | 6 | 黑屏、静音、局部恢复产品 |
+| 线程、背压和资源边界 | 20 | 12 | 多路总体准入与逐分配计量 |
+| 双平台合成能力证据 | 10 | 2 | 实际合成及吞吐未验证 |
+| 合屏观测与真实验收 | 10 | 4 | 合屏专属观测及运行证据 |
+| **合计** | **100** | **42** | **尚未就绪** |
+
+后续能力查询确认两平台滤镜存在；Windows CUDA 异常返回值传播属于静态风险，并无当前启动失败的复现证据，不能认定必须先修依赖。实施前评分保留，不据滤镜存在提高分数。详见 [能力门禁](docs/realtime-video-composition-capability.md) 和 [实施记录](docs/realtime-video-composition-progress.md)。
+
 ## 2026-09-10 Beta profile与示例交付增量
 
 代码冻结f41a6554（核心543f8565），真实120秒RKMPP Profile01及清晰版C示例由两名未参与实现者独立复核，Standards/Spec均PASS。首次0b71a44c构建失败暴露实时请求字段/转换遗漏，旧源码PASS已撤回；修正后全量构建及真实参数集验证成功。保留该过程，不能仅靠源码口头确认放行。

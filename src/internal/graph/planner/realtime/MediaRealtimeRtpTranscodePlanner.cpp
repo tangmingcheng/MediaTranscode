@@ -2,7 +2,9 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
-#include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpStartupPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
@@ -817,7 +819,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
                 "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
     return planWithInput(
-        options, nullptr, nullptr, nullptr, nullptr, nullptr, std::nullopt, nullptr,
+        options, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, std::nullopt, nullptr,
         nullptr);
 }
 
@@ -828,6 +830,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
     const MediaPreparedRealtimeInput* preparedResource,
     const MediaPreparedRealtimeInput* preparedAudioResource,
     const MediaRtpIngressPlan* preparedVideoIngress,
+    const MediaRtpIngressPlan* preparedAudioIngress,
     std::optional<MediaPipelinePlan> preplannedVideo,
     const MediaDetectedRtpVideoSignaling* detectedVideoSignaling,
     const MediaRational* detectedVideoFrameRate)
@@ -1071,6 +1074,16 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             preparedInputReservedStorageAuthority =
                 "prepared-raw-rtp-reusable-ingress-arena";
         }
+        if (preparedAudioIngress) {
+            auto totalStorage = MediaCheckedArithmetic::add(
+                preparedInputReservedStorageBytes,
+                preparedAudioIngress->batchByteCapacity(),
+                "prepared RTP video and audio ingress storage");
+            if (!totalStorage) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(totalStorage.error());
+            }
+            preparedInputReservedStorageBytes = totalStorage.value();
+        }
     }
     if (preparedInputPayload) {
         auto admitted = MediaRealtimeGraphResourceLedgerPlanner::
@@ -1083,6 +1096,27 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 admitted.error());
         }
+        resourceLedger = std::move(admitted);
+    }
+    if (rawInput && options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
+        if (!preparedResource || !preparedAudioResource) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "RTP A/V startup requires sealed prepared inputs"));
+        }
+        auto startup = MediaAvSyncStartupPolicyPlanner::planInputPreflight(options);
+        if (!startup) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(startup.error());
+        if (!startup.value().maximumWaitNs) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized("input startup acquisition window is missing"));
+        }
+        auto retention = MediaPreparedRtpStartupPlanner::plan(
+            *rawInput, *preparedResource, *preparedAudioResource,
+            *startup.value().maximumWaitNs);
+        if (!retention) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(retention.error());
+        auto admitted = MediaRealtimeGraphResourceLedgerPlanner::admitInputRetention(
+            std::move(resourceLedger).value(), std::move(retention).value());
+        if (!admitted) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(admitted.error());
         resourceLedger = std::move(admitted);
     }
     auto deployment = MediaRealtimeDeploymentPlanner::complete(
@@ -1145,31 +1179,10 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
                     ::media::ErrorInfo::notInitialized(
                         "planner-bound RTP ingress requires its prepared video transport"));
             }
-            if (auto status = preparedVideoIngress->validateProduct(); !status) {
-                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                    status.error());
+            if (auto status = MediaPreparedRtpIngressPlanner::bind(
+                    *preparedVideoIngress, *plan.input.rtpTransport); !status) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
             }
-            plan.input.rtpTransport->ingress = *preparedVideoIngress;
-            if (preparedVideoIngress->socketReceiveCapacityBytes() >
-                    static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-                preparedVideoIngress->maximumDatagramBytes() >
-                    static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-                preparedVideoIngress->reorderWindowPackets() >
-                    static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "planner-bound RTP ingress facts exceed node option range"));
-            }
-            plan.input.rtpTransport->receiveBufferBytes = static_cast<int>(
-                preparedVideoIngress->socketReceiveCapacityBytes());
-            plan.input.rtpTransport->maximumDatagramBytes = static_cast<int>(
-                preparedVideoIngress->maximumDatagramBytes());
-            plan.input.rtpTransport->reorderWindowPackets =
-                preparedVideoIngress->reorderWindowPackets();
-            const auto delayNanoseconds =
-                preparedVideoIngress->maximumReorderDelayNanoseconds();
-            plan.input.rtpTransport->maximumReorderDelayMs =
-                static_cast<int>((delayNanoseconds + 999'999) / 1'000'000);
         }
         if (plan.isolatedAudioInput) {
             if (*plan.input.requiresPreparedInput &&
@@ -1180,6 +1193,18 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             }
             plan.isolatedAudioInput->requiresPreparedInput =
                 *plan.input.requiresPreparedInput;
+            if (preparedAudioResource) {
+                if (!preparedAudioIngress || !plan.isolatedAudioInput->rtpTransport) {
+                    return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                        ::media::ErrorInfo::notInitialized(
+                            "prepared RTP audio requires its own planned ingress product"));
+                }
+                if (auto status = MediaPreparedRtpIngressPlanner::bind(
+                        *preparedAudioIngress, *plan.isolatedAudioInput->rtpTransport);
+                    !status) {
+                    return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
+                }
+            }
         } else if (preparedAudioResource) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -1467,7 +1492,7 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     const MediaTsSelectedProgramPlan& selectedTsProgram)
 {
     return planWithInput(
-        request, &input, &selectedTsProgram, nullptr, nullptr, nullptr,
+        request, &input, &selectedTsProgram, nullptr, nullptr, nullptr, nullptr,
         std::nullopt, nullptr, nullptr);
 }
 
@@ -1552,50 +1577,25 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 preplannedVideo.error());
         }
-        if (auto status = preparedVideo.sealRawRtpPreflight();
-            !status) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                status.error());
+        if (auto status = MediaRawRtpInputPreparer::sealPreflight(probed.value()); !status) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
         }
-        auto videoObservation = preparedVideo.rawRtpIngressObservation();
-        if (!videoObservation) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                videoObservation.error());
-        }
-        auto socketCapacity =
-            preparedVideo.rawRtpEffectiveSocketReceivePayloadBytes();
-        if (!socketCapacity) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                socketCapacity.error());
-        }
-        auto videoCapability =
-            MediaRtpIngressCapabilityMaterializer::materialize(
-                socketCapacity.value());
-        if (!videoCapability) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                videoCapability.error());
-        }
-        auto preparedByteCapacity =
-            preparedVideo.rawRtpPreparedByteCapacity();
-        if (!preparedByteCapacity) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                preparedByteCapacity.error());
-        }
-        auto maximumDatagramBytes = preparedVideo.rawRtpMaximumDatagramBytes();
-        if (!maximumDatagramBytes) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                maximumDatagramBytes.error());
-        }
-        auto videoIngress = MediaRtpIngressPlan::create(
-            videoCapability.value(), videoObservation.value(),
-            preparedByteCapacity.value(), maximumDatagramBytes.value());
+        auto videoIngress = MediaPreparedRtpIngressPlanner::plan(preparedVideo);
         if (!videoIngress) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                videoIngress.error());
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(videoIngress.error());
+        }
+        std::optional<MediaRtpIngressPlan> audioIngress;
+        if (preparedAudio) {
+            auto ingress = MediaPreparedRtpIngressPlanner::plan(*preparedAudio);
+            if (!ingress) {
+                return ::media::Result<MediaRealtimeTranscodePreflight>::failure(ingress.error());
+            }
+            audioIngress.emplace(std::move(ingress).value());
         }
         auto planned = planWithInput(
             request, nullptr, nullptr, &preparedVideo, preparedAudio,
-            &videoIngress.value(), std::move(preplannedVideo).value(),
+            &videoIngress.value(), audioIngress ? &*audioIngress : nullptr,
+            std::move(preplannedVideo).value(),
             detectedForPlanning,
             &detectedFrameRate);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
@@ -1609,6 +1609,12 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
                 videoIngress.value()); !status) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 status.error());
+        }
+        if (preparedAudio) {
+            if (auto status = preparedAudio->configureRawRtpRuntimeIngress(*audioIngress);
+                !status) {
+                return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
+            }
         }
         MediaRealtimeTranscodePreflight result(
             std::move(planned).value());
@@ -1643,7 +1649,7 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     auto planned = planWithInput(
         request, &scan.streams,
         scan.selectedTsProgram ? &*scan.selectedTsProgram : nullptr,
-        &scan.prepared, nullptr, nullptr, std::nullopt, nullptr, nullptr);
+        &scan.prepared, nullptr, nullptr, nullptr, std::nullopt, nullptr, nullptr);
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }

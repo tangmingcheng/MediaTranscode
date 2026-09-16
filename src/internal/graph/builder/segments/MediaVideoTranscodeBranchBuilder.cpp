@@ -101,7 +101,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     const auto& sourcePacketPolicy = options.lineageEdgePolicies
         ? options.lineageEdgePolicies->startupPacket
         : options.canonicalLineageCapacity
-            ? policies.atomicVideoPacket
+            ? policies.startupVideoRelease
             : policies.videoPacket;
     const auto& videoFramePolicy = options.lineageEdgePolicies
         ? options.lineageEdgePolicies->frame
@@ -344,9 +344,11 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
         }
-        if (!nodes.videoFilter.isValid()) {
+        {
+            const auto readinessOwner = nodes.videoFilter.isValid()
+                ? nodes.videoFilter : nodes.videoFrameRate;
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                    graph, owner, nodes.videoFrameRate,
+                    graph, owner, readinessOwner,
                     "video.startup_preparation.owner", "1"); !status) {
                 return ::media::Result<MediaEncodedBranchEndpoints>::failure(
                     status.error());
@@ -382,8 +384,27 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     if (auto status = connectTranscodePorts(graph, options, nodes); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
+    // The resolver still prepares both codec contexts as one source-bound node.
+    // This partition does not split its resource or generation lifetime.
+    MediaProcessingNodeOwnership processing;
+    for (const auto id : {nodes.packetStartGate,
+             nodes.videoDecode, nodes.sourceCopy, nodes.outputFanout}) {
+        if (id.isValid()) processing.source.push_back(id);
+    }
+    (options.sharedDecode ? processing.output : processing.source).push_back(nodes.codecResolver);
+    auto& processingStages = options.sharedDecode || options.plan.outputFanout
+        ? processing.output : processing.source;
+    for (const auto id : {nodes.hardwareTransfer, nodes.videoTimestamp,
+             nodes.videoFrameRate, nodes.videoFilter}) {
+        if (id.isValid()) processingStages.push_back(id);
+    }
+    processing.output.push_back(nodes.videoEncode);
     return ::media::Result<MediaEncodedBranchEndpoints>::success({
-        {nodes.videoEncode, "codec"}, {nodes.videoEncode, "packet"}});
+        {nodes.videoEncode, "codec"}, {nodes.videoEncode, "packet"},
+        options.canonicalLineageCapacity
+            ? std::optional<MediaNodeId>(nodes.videoFilter.isValid()
+                  ? nodes.videoFilter : nodes.videoFrameRate)
+            : std::nullopt, std::move(processing)});
 }
 
 } // namespace media::ffmpeg::graph

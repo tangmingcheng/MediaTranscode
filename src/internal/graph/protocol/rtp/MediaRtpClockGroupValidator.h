@@ -39,6 +39,7 @@ struct MediaRtpClockGroupSnapshot final {
     MediaRtpClockGroupState state;
     std::uint64_t groupGeneration;
     std::optional<MediaRtpLockedClockGroup> locked;
+    std::optional<std::uint64_t> invalidatedGeneration;
 };
 
 class MediaRtpClockGroupValidator final {
@@ -49,13 +50,15 @@ public:
     ::media::Status observe(MediaStreamKind streamKind,
                             const MediaRtcpClockEvidence& evidence,
                             MediaRtpSourceClockCalibration calibration);
-    MediaRtpClockGroupSnapshot snapshot(std::int64_t observedAtNs);
+    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs);
     void invalidate() noexcept;
 
 private:
     enum class Phase {
         InitialAcquisition,
-        ActiveGeneration
+        ActiveGeneration,
+        Reacquiring,
+        Exhausted
     };
 
     struct StreamState final {
@@ -64,8 +67,8 @@ private:
     };
 
     explicit MediaRtpClockGroupValidator(MediaRtpClockGroupValidatorConfig config) noexcept;
-    void discardExpiredInitialCandidates(std::int64_t observedAtNs) noexcept;
-    bool initialCandidateIsFresh(
+    void discardExpiredAcquisitionCandidates(std::int64_t observedAtNs) noexcept;
+    bool acquisitionCandidateIsFresh(
         const StreamState& stream,
         std::int64_t observedAtNs,
         std::int64_t cnameTimeoutNs) const noexcept;
@@ -76,6 +79,7 @@ private:
     std::optional<StreamState> m_audio;
     std::optional<MediaRunningTime> m_commonSourceEpoch;
     std::uint64_t m_groupGeneration = 0;
+    std::optional<std::uint64_t> m_invalidatedGeneration;
     bool m_reacquireRequired = false;
     Phase m_phase = Phase::InitialAcquisition;
 };

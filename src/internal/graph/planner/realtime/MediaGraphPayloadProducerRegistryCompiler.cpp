@@ -134,6 +134,14 @@ bool sameKey(
     std::uint64_t maximumLogicalBytes)
 {
     using Result = ::media::Result<MediaFrameCreditContract>;
+    if (node.kind == MediaNodeKind::AudioDecode ||
+        node.kind == MediaNodeKind::AudioStartupTrim ||
+        node.kind == MediaNodeKind::AudioResample) {
+        return Result::success(MediaFrameCreditContract{
+            MediaFrameCreditAllocationScope::EngineLogicalBytes,
+            maximumLogicalBytes, 1,
+            "prepared-audio-frame-footprint+avframe-software-samples"});
+    }
     std::string prefix;
     if (node.kind == MediaNodeKind::VideoDecode) {
         prefix = "decoder.pipeline.output";

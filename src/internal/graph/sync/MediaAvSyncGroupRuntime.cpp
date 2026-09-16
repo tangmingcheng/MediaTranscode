@@ -346,6 +346,15 @@ MediaAvSyncGroupRuntime::reacquisitionCoordinator() const noexcept
     return m_reacquisitionCoordinator.get();
 }
 
+::media::Result<std::optional<MediaRunningTime>>
+MediaAvSyncGroupRuntime::progressGenerationPurge()
+{
+    auto* coordinator = reacquisitionCoordinator();
+    if (!coordinator) return ::media::Result<std::optional<MediaRunningTime>>::failure(
+        ::media::ErrorInfo::notInitialized("A/V purge progress requires its coordinator"));
+    return coordinator->progressPurge();
+}
+
 ::media::Status MediaAvSyncGroupRuntime::pollEpochReacquisitionTimeout()
 {
     auto* coordinator = reacquisitionCoordinator();

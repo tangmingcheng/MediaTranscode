@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/runtime/factory/MediaAvRuntimeRegistrationPlan.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -33,6 +34,7 @@ struct MediaAvSyncRuntimeBinding final {
     MediaDatagramTransportPlanTemplate datagramTransport;
     MediaSynchronizedAudioExecutionProduct audioExecutionProduct;
     MediaAvSyncRuntimeOutputProduct outputProduct;
+    MediaAvRuntimeRegistrationPlan registration;
     std::shared_ptr<MediaAvStartupVideoPreparationState>
         videoPreparationState;
 };

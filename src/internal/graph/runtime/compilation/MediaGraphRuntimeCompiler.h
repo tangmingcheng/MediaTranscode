@@ -8,7 +8,7 @@
 #include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
-#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
+#include "internal/graph/runtime/compilation/MediaAvRuntimeDomainState.h"
 
 #include <media_transcode/Result.h>
 
@@ -36,10 +36,7 @@ private:
         MediaRealtimeExecutableGraph executable,
         MediaGraph& activeGraph,
         std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
-        std::optional<MediaPlaybackEpochActivationCapability>&
-            playbackEpochActivationCapability,
-        std::shared_ptr<MediaAvStartupVideoPreparationState>&
-            videoPreparationState,
+        std::optional<MediaAvRuntimeDomainState>& avDomain,
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
             protocolOutputAuthority,
         const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
@@ -51,17 +48,6 @@ private:
         MediaGraphRuntimeState& state);
 
     static ::media::Status registerNode(MediaGraphScheduler& scheduler, std::unique_ptr<MediaRuntimeNode> node);
-    static ::media::Status registerDefaults(
-        MediaGraphExecutionContext& context,
-        MediaGraphScheduler& scheduler,
-        std::vector<MediaPreparedRealtimeInputBinding>& inputBindings,
-        std::optional<MediaPlaybackEpochActivationCapability>&
-            playbackEpochActivationCapability,
-        const std::shared_ptr<MediaAvStartupVideoPreparationState>&
-            videoPreparationState,
-        const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
-            protocolOutputAuthority);
-
     MediaGraphRuntimeCompiler() = delete;
 };
 

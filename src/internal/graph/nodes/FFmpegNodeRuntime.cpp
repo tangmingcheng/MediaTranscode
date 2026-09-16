@@ -732,6 +732,10 @@ FFmpegNodeRuntime::publishAtomicOutput(
         PendingTransfer& transfer = *m_pendingTransfer;
         auto reserved = reserveOutputCommit(transfer.buffer);
         if (!reserved) {
+            if (reserved.error().code == ::media::ErrorCode::WouldBlock) {
+                waiting = true;
+                return ::media::Status::success();
+            }
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
                 auto cancelled = cancelReservedOutput(transfer.buffer);
                 if (!cancelled) return cancelled;

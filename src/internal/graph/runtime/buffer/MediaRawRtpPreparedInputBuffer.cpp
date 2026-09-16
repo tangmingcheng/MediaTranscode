@@ -2,6 +2,9 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressAdapterFactory.h"
 #include "internal/graph/time/MediaSteadyClock.h"
 
@@ -261,6 +264,14 @@ MediaRawRtpPreparedInputBuffer::ingressObservation()
             ::media::ErrorInfo::notInitialized(
                 "raw RTP prepared input has no ingress observation collector"));
     }
+    if (m_captureThread.joinable()) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP ingress observation requires completed preflight capture"));
+    }
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(status.error());
+    }
     return m_prepared->ingressObservation->seal();
 }
 
@@ -319,6 +330,50 @@ MediaRawRtpPreparedInputBuffer::effectiveSocketReceivePayloadBytes() const
     }
     return ::media::Result<std::size_t>::success(
         static_cast<std::size_t>(capacity));
+}
+
+::media::Result<std::uint64_t>
+MediaRawRtpPreparedInputBuffer::sealedReplayAccessUnitBound() const
+{
+    using Result = ::media::Result<std::uint64_t>;
+    std::scoped_lock lock(m_mutex);
+    if (!m_prepared || m_stopped || m_replayActive || m_captureThread.joinable()) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "RTP replay retention requires completed capture before replay"));
+    }
+    if (m_captureError) return Result::failure(*m_captureError);
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return Result::failure(status.error());
+    }
+    const auto codec = canonicalCodecName(m_prepared->identity.codecName);
+    const bool video = codec == "h264" || codec == "hevc";
+    if (!video && codec != "aac" && codec != "opus") {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "RTP replay retention has no codec completion contract"));
+    }
+    // One video AU can straddle the sealed replay/live boundary.
+    std::uint64_t units = video ? 1 : 0;
+    for (const auto& entry : m_prepared->datagrams) {
+        if (entry.datagram.channel != MediaRtpUdpChannel::Rtp) continue;
+        auto packet = MediaRtpPacketParser::parse(entry.datagram.bytes);
+        if (!packet) return Result::failure(packet.error());
+        if (packet.value().payloadType != m_prepared->identity.payloadType) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "sealed RTP replay payload identity differs from its plan"));
+        }
+        std::uint64_t completed = video ? (packet.value().marker ? 1 : 0) : 1;
+        if (codec == "aac") {
+            auto headers = MediaAacRtpAuHeaderPlanner::plan(packet.value().payload);
+            if (!headers) return Result::failure(headers.error());
+            // Counting every fragment header can overestimate, never undercount.
+            completed = headers.value().accessUnits.size();
+        }
+        auto total = MediaCheckedArithmetic::add(units, completed,
+            "sealed RTP replay access-unit retention");
+        if (!total) return Result::failure(total.error());
+        units = total.value();
+    }
+    return Result::success(units);
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::configureRuntimeIngress(
@@ -387,7 +442,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     return receiver->receiveNext(timeoutMilliseconds);
 }
 
-::media::Status MediaRawRtpPreparedInputBuffer::sealPreflight()
+::media::Status MediaRawRtpPreparedInputBuffer::finishPreflightCapture()
 {
     {
         std::scoped_lock lock(m_mutex);
@@ -404,7 +459,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     if (auto status = m_prepared->transport.reset(); !status) return status;
     std::scoped_lock lock(m_mutex);
     if (m_captureError) return ::media::Status::failure(*m_captureError);
-    return m_prepared->byteBudget->sealPreflight();
+    return m_prepared->byteBudget->validate();
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::stop() noexcept

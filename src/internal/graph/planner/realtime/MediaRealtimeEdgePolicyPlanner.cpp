@@ -107,4 +107,29 @@ MediaRealtimeEdgePolicyPlanner::planWithSynchronizedPacketMemoryBudget(
         std::move(policies));
 }
 
+::media::Result<MediaRealtimeEdgePolicySet>
+MediaRealtimeEdgePolicyPlanner::planWithAvStartupRelease(
+    const MediaGraphQueueParameters& queues,
+    std::uint64_t maximumBytes,
+    std::size_t maximumBuffers,
+    std::size_t maximumVideoReleaseUnits,
+    std::size_t maximumAudioReleaseUnits)
+{
+    if (maximumVideoReleaseUnits == 0 || maximumAudioReleaseUnits == 0) {
+        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V startup release requires explicit batch bounds"));
+    }
+    auto policies = planWithSynchronizedPacketMemoryBudget(
+        queues, maximumBytes, maximumBuffers);
+    if (!policies) return policies;
+    // Only release-extractor outputs reserve the entire input startup batch.
+    // Encoded and scheduled output edges retain their wire-residence bounds.
+    policies.value().startupVideoRelease =
+        planAtomicOutputPolicy(maximumVideoReleaseUnits);
+    policies.value().startupAudioRelease =
+        planAtomicOutputPolicy(maximumAudioReleaseUnits);
+    return policies;
+}
+
 } // namespace media::ffmpeg::graph

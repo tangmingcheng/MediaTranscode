@@ -1,7 +1,6 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/startup/MediaAvStartupCoverageIndex.h"
-#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 #include "internal/graph/sync/startup/MediaAvStartupStreamStore.h"
 #include "internal/graph/sync/startup/MediaAvStartupWindowSelector.h"
 
@@ -123,8 +122,8 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         config.preroll >= config.keyFrameWait ||
         config.keyFrameWait > config.maximumWait ||
         config.videoCapacity == 0 || config.audioCapacity == 0 ||
-        config.videoCapacity > MediaAvStartupMaximumUnitCapacity ||
-        config.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
+        config.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        config.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         config.videoByteCapacity == 0 || config.audioByteCapacity == 0 ||
         config.maximumVideoUnitBytes == 0 || config.maximumAudioUnitBytes == 0 ||
         config.maximumVideoUnitBytes > config.videoByteCapacity ||

@@ -68,6 +68,7 @@ public:
     ::media::Status captureStatus();
     ::media::Result<MediaRtpIngressObservation> ingressObservation();
     ::media::Result<std::size_t> preparedByteCapacity() const;
+    ::media::Result<std::uint64_t> sealedReplayAccessUnitBound() const;
     ::media::Result<std::size_t> maximumDatagramBytes() const;
     ::media::Result<std::size_t> effectiveSocketReceivePayloadBytes() const;
     ::media::Status configureRuntimeIngress(
@@ -77,7 +78,7 @@ public:
     bool preparedReplayDrained() const noexcept;
     ::media::Result<MediaRtpIngressBatch> receiveRuntimeBatch(
         int timeoutMilliseconds);
-    ::media::Status sealPreflight();
+    ::media::Status finishPreflightCapture();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     void abort() noexcept;

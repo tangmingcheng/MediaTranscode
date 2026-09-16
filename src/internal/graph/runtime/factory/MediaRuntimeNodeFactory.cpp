@@ -625,6 +625,7 @@ template <typename Node>
         }
         auto publisher = MediaRtpSdpPublisherNode::create(
             node.id, decoded.value(), std::move(path).value(),
+            protocolOutputAuthority,
             std::make_unique<MediaPlatformAtomicFileReplacePort>());
         return publisher
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
@@ -1009,10 +1010,30 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
         return registration;
     }
     if (auto registration =
+            fixedGenerationPurgeRegistration<MediaDatagramTransportPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::DatagramTransportPlan)) {
+        return registration;
+    }
+    if (auto registration =
             fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
                 runtime,
                 MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
         return registration;
+    }
+    if (auto registration = fixedGenerationPurgeRegistration<MediaScheduledDatagramSenderNode>(
+            runtime, MediaAvGenerationParticipant::DatagramSender)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaRtpSdpPublisherNode>(
+            runtime, MediaAvGenerationParticipant::ProtocolDescription)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaMpegTsRtpSdpPublisherNode>(
+            runtime, MediaAvGenerationParticipant::ProtocolDescription)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaMpegTsDatagramMaterializerNode>(
+            runtime, MediaAvGenerationParticipant::ProjectMpegTsOutput)) return registration;
+    if (auto* materializer = dynamic_cast<MediaRtpDatagramMaterializerNode*>(&runtime)) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            materializer->scheduledStream() == MediaScheduledStream::Video
+                ? MediaAvGenerationParticipant::RtpVideoOutput : MediaAvGenerationParticipant::RtpAudioOutput,
+            {std::string(materializer->generationPurgeIdentity()), materializer->generationPurgeTarget()}};
     }
     if (auto registration =
             fixedGenerationPurgeRegistration<

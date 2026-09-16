@@ -227,7 +227,11 @@ MediaReservedOutputTransaction::reserve(
                 " requires bounded FIFO blocking ordered outputs"));
         }
         const std::size_t capacity = channel->m_queue->capacity();
-        if (item.count > capacity || channel->m_reservedCapacity >
+        if (item.count > capacity) {
+            return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
+                ownerName + " batch exceeds planned output capacity"));
+        }
+        if (channel->m_reservedCapacity >
                 capacity - item.count || channel->m_queue->size() >
                 capacity - item.count - channel->m_reservedCapacity) {
             return ReserveResult::success(std::nullopt);

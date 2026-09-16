@@ -45,7 +45,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
     }
     if (plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket &&
         !MediaAtomicOutputPolicyContract::accepts(
-            plan.edgePolicies.atomicAudioPacket)) {
+            plan.edgePolicies.startupAudioRelease)) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler packet-copy audio requires its planner atomic release policy"));
@@ -205,7 +205,7 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
     const auto& policy = plan.edgePolicies.synchronizedPacket;
     const auto& audioPolicy =
         plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket
-            ? plan.edgePolicies.atomicAudioPacket
+            ? plan.edgePolicies.startupAudioRelease
             : policy;
     if (auto status = MediaGraphBuildSupport::connectChecked(
             graph, Owner, options.canonicalVideo.node,
@@ -228,6 +228,8 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
             status.error());
     }
     MediaRealtimeAvSchedulerSegmentResult result;
+    result.scheduler = scheduler;
+    result.outputMembers = {scheduler, router};
     if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         result.serialized = MediaEndpoint{router, "serialized"};
     } else {

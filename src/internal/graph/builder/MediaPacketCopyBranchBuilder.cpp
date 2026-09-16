@@ -169,12 +169,14 @@ MediaPacketCopyBranchBuilder::build(
     if (!*options.normalizePackets) {
         return ::media::Result<MediaEncodedBranchEndpoints>::success({
             {sourceConfig, "codec"},
-            {options.packetSourceNode, packetSourcePort}});
+            {options.packetSourceNode, packetSourcePort},
+            std::nullopt, {{sourceConfig}, {}}});
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", policies.metadata); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", packetPolicy); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     return ::media::Result<MediaEncodedBranchEndpoints>::success({
-        {sourceConfig, "codec"}, {packetNormalize, "packet"}});
+        {sourceConfig, "codec"}, {packetNormalize, "packet"},
+        std::nullopt, {{sourceConfig, packetNormalize}, {}}});
 }
 
 } // namespace media::ffmpeg::graph

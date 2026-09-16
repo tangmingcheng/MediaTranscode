@@ -104,6 +104,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         if (auto status = drainPendingRtpItems(context); !status) {
             return processProgress(status);
         }
+        if (!m_events.empty()) {
+            auto event = std::move(m_events.front());
+            m_events.pop_front();
+            return processProgress(emitOutput(context, event.first, event.second));
+        }
         if (!m_packets.empty()) {
             MediaBufferRef packet = std::move(m_packets.front());
             m_packets.pop_front();
@@ -524,9 +529,6 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
-    if (auto status = queueClockEvidence(context, observedAtNs); !status) {
-        return status;
-    }
     const auto observedAt = std::chrono::steady_clock::time_point(
         std::chrono::nanoseconds(observedAtNs));
     auto reordered = m_reorder->push(
@@ -563,6 +565,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     while (!m_pendingRtpItems.empty()) {
         auto& item = m_pendingRtpItems.front();
         if (const auto* packet = std::get_if<MediaRtpPacket>(&item)) {
+            if (auto status = queueClockEvidence(context, mediaSteadyClockNowNs()); !status) {
+                return status;
+            }
+            // Publish ordered evidence before payload allocation can wait for credits.
+            if (!m_events.empty()) return ::media::Status::success();
             if (auto status = processPendingRtpPacket(context, *packet); !status) {
                 return status;
             }
@@ -766,6 +773,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!packets) return ::media::Status::failure(packets.error());
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
     if (!status) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtcp_clock_invalidation generation=" +
+                std::to_string(m_clockTracker->generation()) +
+                " reason=" + status.error().message);
         if (m_clockSchedule) m_clockSchedule->reset();
         if (context.findOutputChannel(nodeId(), "event")) {
             m_events.emplace_back(

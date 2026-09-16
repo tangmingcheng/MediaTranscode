@@ -51,6 +51,7 @@ struct MediaDatagramPacingReservation final {
 struct MediaDatagramPacingTelemetry final {
     std::uint64_t reservedDatagrams = 0;
     std::uint64_t submittedDatagrams = 0;
+    std::uint64_t cancelledReservations = 0;
     std::int64_t maximumSubmitLatenessNanoseconds = 0;
     std::uint64_t worstLateGlobalSequence = 0;
     std::uint64_t rateAdaptations = 0;
@@ -68,6 +69,7 @@ public:
     ::media::Result<MediaDatagramPacingReservation> reserve(
         const MediaDatagramPacingJob& job,
         MediaRunningTime now);
+    ::media::Status cancelReservation(std::uint64_t generation);
     ::media::Status markSubmitted(
         std::uint64_t globalSequence,
         MediaRunningTime submitStartedAt,
