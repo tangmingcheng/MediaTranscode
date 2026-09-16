@@ -198,7 +198,7 @@ namespace media::ffmpeg::graph {
         return invalid("Datagram transport product");
     }
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
-        runtime.outputAdapter,
+        runtime.protocolOutput,
         *runtime.synchronization.sourceClockMode,
         runtime.audioPipeline.branchMode,
         runtime.videoFilterActive,

@@ -600,7 +600,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             datagramTransport.error());
     }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
-        adapter,
+        *protocolOutput,
         *synchronization.sourceClockMode,
         audio.branchMode,
         outer.videoPlan.filterActive,

@@ -222,11 +222,18 @@ MediaProtocolOutputGenerationState::reserveSessionMutation() const
         m_pendingTransitionSequence &&
         m_lastTransitionSequence &&
         *m_pendingTransitionSequence == *m_lastTransitionSequence;
+    // A globally activated epoch can be revoked before this participant has
+    // consumed its first plan. The sealed coordinator supplies that exact
+    // retirement transaction; there was no local publication to revoke.
+    const bool retireInitiallyUnpublishedGeneration =
+        !m_permittedGeneration && !m_pendingGeneration &&
+        !m_pendingTransitionSequence && !m_lastTransitionSequence;
     if (m_plannedIdentity.empty() || purge.oldGeneration == 0 ||
         purge.nextGeneration <= purge.oldGeneration ||
         purge.transitionSequence == 0 ||
         (!purgePermittedGeneration &&
-         !supersedeUnpublishedGeneration) ||
+         !supersedeUnpublishedGeneration &&
+         !retireInitiallyUnpublishedGeneration) ||
         (m_lastTransitionSequence &&
          purge.transitionSequence <= *m_lastTransitionSequence)) {
         return ::media::Status::failure(

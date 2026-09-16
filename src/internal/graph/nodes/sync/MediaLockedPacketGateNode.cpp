@@ -100,6 +100,17 @@ MediaLockedPacketGateNode::reserveOutputCommit(
 }
 
 ::media::Result<MediaNodeProcessResult>
+MediaLockedPacketGateNode::process(MediaGraphExecutionContext& context)
+{
+    if (auto status = configure(context); !status) return processProgress(status);
+    auto purge = m_syncGroup->progressGenerationPurge();
+    if (!purge) return processProgress(::media::Status::failure(purge.error()));
+    if (purge.value()) return ::media::Result<MediaNodeProcessResult>::success(
+        MediaNodeProcessResult::waitingUntilInputOrDeadline(*m_syncGroupKey, *purge.value()));
+    return FFmpegNodeRuntime::process(context);
+}
+
+::media::Result<MediaNodeProcessResult>
 MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (auto status = configure(context); !status) return processProgress(status);

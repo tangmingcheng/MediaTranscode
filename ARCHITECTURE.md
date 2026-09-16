@@ -521,6 +521,10 @@ Synchronized `AudioVideo` retains the canonical startup coordinator, generation 
 
 ## 实时 A/V 显式运行时注册
 
+协议代次交接由同一 coordinator 管理异步 purge 屏障。planner 显式注册 materializer、sender 和适用的 SDP publisher；各节点通过单槽请求在自己的 worker 清理状态，完成后通知域唤醒。清理未完成不确认 ack，复用原事务截止时间。sender 的 native submit 与提交计账受短发布授权保护，等待不持锁；授权取消仅退役未提交预约，保留物理服务域及已发送限速债务。输入按 RTP 重排序事件顺序发布时钟证据，控制事件不等待媒体 credit。当前仍为单源域基础，实流与剩余边界见[协议交接记录](docs/realtime-video-composition-protocol-handoff.md)。
+
+漂移控制候选只保存数据；每次提交按epoch→state→channel获取短授权，复核原origin后原子发布音频及校正，成功才推进servo。背压释放全部锁，恢复请求在锁外执行，owner退出清候选，避免全局代次锁随待发媒体跨worker等待。
+
 现有单源 A/V builder 随节点创建输出 MediaAvRuntimeRegistrationPlan，明确输入启动角色、视频准备 owner、输出 scheduler 与域成员。MediaAvRuntimeRegistrationValidator 在编译前校验角色、归属和连接；MediaGraphRuntimeRegistrar 按 ID 组装，MediaAvRuntimeDomainState 持有 activation、恢复依赖与准备状态。策略仍归 planner，最终输出保持单权威；当前产品仍限定单域，不表示已支持合屏。
 
 Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。

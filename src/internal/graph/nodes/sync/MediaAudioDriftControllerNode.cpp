@@ -129,6 +129,16 @@ MediaAudioDriftControllerNode::measureCanonicalPosition(
     return FFmpegNodeRuntime::stop(context);
 }
 
+::media::Status MediaAudioDriftControllerNode::finishExecution(
+    MediaGraphExecutionContext& context) noexcept
+{
+    {
+        auto stateLock = m_state->lock();
+        m_state->pending.reset();
+    }
+    return FFmpegNodeRuntime::finishExecution(context);
+}
+
 void MediaAudioDriftControllerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
@@ -163,7 +173,8 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
 
 ::media::Status MediaAudioDriftControllerNode::stage(
     const MediaBufferRef& audio,
-    MediaAvActivatedOutputPermitReservation activated)
+    const MediaAvActivatedOutputPermitReservation& activated,
+    std::optional<MediaAvReacquisitionRequest>& reacquisition)
 {
     const auto* bound = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(
         audio.get());
@@ -257,16 +268,14 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
                 MediaAudioServoDecisionKind::DropOldGeneration
             ? MediaAvReacquisitionReason::FutureGeneration
             : MediaAvReacquisitionReason::HardDiscontinuity;
-        m_group->requestReacquisition(
-            {decision.value().generation(), reason});
-        return ::media::Status::failure(::media::ErrorInfo::cancelled(
-            "Audio drift controller requested epoch reacquisition"));
+        reacquisition = MediaAvReacquisitionRequest{
+            decision.value().generation(), reason};
+        return ::media::Status::success();
     }
     m_state->pending = MediaAudioDriftControllerState::PendingTransaction{
         audio, std::move(correction), std::move(*candidateServo),
         std::move(*candidateProjection), bound->audioOrigin(),
-        m_state->nextSequence + 1,
-        std::move(activated.reservation)};
+        m_state->nextSequence + 1};
     return ::media::Status::success();
 }
 
@@ -303,6 +312,31 @@ void MediaAudioDriftControllerNode::logDriftSample(
 ::media::Result<bool> MediaAudioDriftControllerNode::commitIfReady(
     MediaGraphExecutionContext& context)
 {
+    // A candidate never owns an epoch permit across a backpressured process call.
+    // Publication always locks epoch -> lineage state -> output channels.
+    auto activated = m_group->reserveActivatedOutput();
+    if (!activated) {
+        const auto transition = m_group->epochTransitionSnapshot();
+        auto stateLock = m_state->lock();
+        if (!m_state->pending) return ::media::Result<bool>::success(true);
+        const auto* bound = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(
+            m_state->pending->audio.get());
+        if (bound && isClosingOrOldGeneration(*bound, transition))
+            return ::media::Result<bool>::success(false);
+        return ::media::Result<bool>::failure(activated.error());
+    }
+    auto stateLock = m_state->lock();
+    if (!m_state->pending) return ::media::Result<bool>::success(true);
+    const auto& origin = m_state->pending->origin;
+    const auto& active = activated.value();
+    if (active.audioOrigin != origin || active.epoch.generation != origin.generation ||
+        active.epoch.sourceStart != origin.sourceStart ||
+        active.epoch.masterRelease != origin.masterRelease) {
+        return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+            "Audio drift candidate requires its exact active playback origin"));
+    }
+    if (auto valid = m_state->validateObservation(origin.generation); !valid)
+        return ::media::Result<bool>::failure(valid.error());
     MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
     MediaChannel* correction = context.findOutputChannel(nodeId(), "correction");
     if (!audio || !correction) {
@@ -341,16 +375,18 @@ MediaAudioDriftControllerNode::onProcess(MediaGraphExecutionContext& context)
         return processProgress(configured);
     }
 
+    bool hasPending = false;
     {
         auto stateLock = m_state->lock();
-        if (m_state->pending) {
-            auto committed = commitIfReady(context);
-            if (!committed) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    committed.error());
-            }
-            return committed.value() ? processProgress() : processWaiting();
+        hasPending = m_state->pending.has_value();
+    }
+    if (hasPending) {
+        auto committed = commitIfReady(context);
+        if (!committed) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                committed.error());
         }
+        return committed.value() ? processProgress() : processWaiting();
     }
 
     auto input = tryReadRequiredInput(
@@ -387,25 +423,35 @@ MediaAudioDriftControllerNode::onProcess(MediaGraphExecutionContext& context)
             ::media::ErrorInfo::invalidArgument(
                 "Audio drift controller requires trimmed bound canonical audio"));
     }
-    auto activated = m_group->reserveActivatedOutput();
-    if (!activated) {
-        const auto transition = m_group->epochTransitionSnapshot();
-        if (isClosingOrOldGeneration(*bound, transition)) {
-            return processProgress();
+    std::optional<MediaAvReacquisitionRequest> reacquisition;
+    {
+        auto activated = m_group->reserveActivatedOutput();
+        if (!activated) {
+            const auto transition = m_group->epochTransitionSnapshot();
+            if (isClosingOrOldGeneration(*bound, transition)) {
+                return processProgress();
+            }
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                activated.error());
         }
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            activated.error());
+        auto stateLock = m_state->lock();
+        if (m_state->pending) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Audio drift controller cannot replace a pending transaction"));
+        }
+        if (auto staged = stage(*input.value(), activated.value(), reacquisition);
+            !staged) {
+            return ::media::Result<MediaNodeProcessResult>::failure(staged.error());
+        }
     }
-
-    auto stateLock = m_state->lock();
-    if (m_state->pending) {
+    if (reacquisition) {
+        auto requested = m_group->requestReacquisition(*reacquisition);
+        if (!requested)
+            return ::media::Result<MediaNodeProcessResult>::failure(requested.error());
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Audio drift controller cannot replace a pending transaction"));
-    }
-    if (auto staged = stage(
-            *input.value(), std::move(activated).value()); !staged) {
-        return ::media::Result<MediaNodeProcessResult>::failure(staged.error());
+            ::media::ErrorInfo::cancelled(
+                "Audio drift controller requested epoch reacquisition"));
     }
     auto committed = commitIfReady(context);
     if (!committed) {

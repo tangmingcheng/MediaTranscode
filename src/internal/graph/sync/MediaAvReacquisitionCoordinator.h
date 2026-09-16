@@ -176,6 +176,7 @@ public:
     ::media::Status observe(MediaAvReacquisitionRequest request);
     ::media::Status request(MediaAvReacquisitionRequest request);
     ::media::Status pollTimeout();
+    ::media::Result<std::optional<MediaRunningTime>> progressPurge();
     MediaAvReacquisitionSnapshot snapshot() const noexcept;
     MediaAvGenerationArbitrationReservation
     reserveGenerationArbitration();
@@ -232,6 +233,7 @@ private:
         MediaAvReacquisitionActivationReservation& reservation) noexcept;
 
     mutable std::mutex m_activationMutex;
+    std::mutex m_purgeMutex;
     mutable std::mutex m_mutex;
     mutable std::condition_variable m_activationWaitChanged;
     std::size_t m_activationWaiters = 0;

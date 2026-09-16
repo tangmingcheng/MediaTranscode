@@ -43,6 +43,7 @@ public:
     ::media::Result<MediaAvActivatedOutputPermitReservation>
     reserveActivatedOutput() const;
     ::media::Status pollEpochReacquisitionTimeout();
+    ::media::Result<std::optional<MediaRunningTime>> progressGenerationPurge();
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);
     ::media::Status requestReacquisition(MediaAvReacquisitionRequest request) noexcept;

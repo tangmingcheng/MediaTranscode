@@ -179,6 +179,8 @@ MediaAvReacquisitionCoordinator::MediaAvReacquisitionCoordinator(
     , m_participants(std::move(participants))
     , m_domainWakeups(std::move(domainWakeups))
 {
+    auto wakeups = std::make_shared<const std::vector<std::shared_ptr<MediaNodeWakeup>>>(m_domainWakeups);
+    for (auto& participant : m_participants) participant.bindPurgeProgressWakeups(wakeups);
 }
 
 ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
@@ -387,60 +389,77 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
             std::to_string(purgeWork.oldGeneration) + " next=" +
             std::to_string(purgeWork.nextGeneration) + " transition=" +
             std::to_string(purgeWork.transitionSequence));
-    std::vector<::media::Result<MediaAvGenerationAcknowledgement>>
-        purgeResults;
-    purgeResults.reserve(m_participants.size());
+    auto progressed = progressPurge();
+    return progressed ? ::media::Status::success()
+                      : ::media::Status::failure(progressed.error());
+}
+
+::media::Result<std::optional<MediaRunningTime>>
+MediaAvReacquisitionCoordinator::progressPurge()
+{
+    using Result = ::media::Result<std::optional<MediaRunningTime>>;
+    // Child callbacks can acquire publication authority; never hold either
+    // coordinator state or activation arbitration while calling them.
+    std::lock_guard progressLock(m_purgeMutex);
+    MediaAvGenerationPurge purgeWork{};
+    MediaRunningTime beganAt = MediaRunningTime::fromNanoseconds(0);
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_firstError) return Result::failure(*m_firstError);
+        if (m_phase != MediaAvReacquisitionPhase::Purging)
+            return Result::success(std::nullopt);
+        if (!m_transition || !m_beganAt) return Result::failure(
+            failTerminalLocked(::media::ErrorInfo::internalError(
+                "A/V purge progress lost its transaction")).error());
+        purgeWork = *m_transition;
+        beganAt = *m_beganAt;
+    }
+    std::vector<MediaAvGenerationAcknowledgement> acknowledgements;
+    std::optional<::media::ErrorInfo> failure;
     for (auto& participant : m_participants) {
-        purgeResults.push_back(participant.purgeAll(purgeWork));
-    }
-
-    std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_firstError) {
-        return ::media::Status::failure(*m_firstError);
-    }
-    if (m_phase != MediaAvReacquisitionPhase::Purging ||
-        !m_transition ||
-        !m_inFlightTransitionSequence ||
-        *m_inFlightTransitionSequence != purgeWork.transitionSequence ||
-        m_transition->transitionSequence != purgeWork.transitionSequence) {
-        return failTerminalLocked(::media::ErrorInfo::internalError(
-            "A/V reacquisition lost its in-flight purge transaction"));
-    }
-
-    for (const auto& purgeResult : purgeResults) {
-        if (!purgeResult) {
-            return failTerminalLocked(purgeResult.error());
+        auto result = participant.purgeAll(purgeWork);
+        if (!result) {
+            if (!failure) failure = result.error();
+        } else if (result.value()) {
+            acknowledgements.push_back(std::move(*result.value()));
         }
     }
-
+    std::unique_lock lock(m_mutex);
+    if (m_firstError) return Result::failure(*m_firstError);
+    if (failure) return Result::failure(failTerminalLocked(*failure).error());
+    if (m_phase != MediaAvReacquisitionPhase::Purging || !m_transition ||
+        m_transition->transitionSequence != purgeWork.transitionSequence)
+        return Result::failure(failTerminalLocked(::media::ErrorInfo::internalError(
+            "A/V purge progress lost its in-flight transaction")).error());
+    auto now = m_clock->now();
+    auto deadline = beganAt.checkedAdd(m_transitionService->transitionPlan().acknowledgementTimeout);
+    if (!now || !deadline) return Result::failure(
+        failTerminalLocked(!now ? now.error() : deadline.error()).error());
+    auto elapsed = now.value().checkedSubtract(beganAt);
+    if (!elapsed) return Result::failure(failTerminalLocked(elapsed.error()).error());
+    auto timeout = m_transitionService->pollTransitionTimeout(elapsed.value());
+    if (!timeout) return Result::failure(failTerminalLocked(timeout.error()).error());
     bool complete = false;
-    for (auto& purgeResult : purgeResults) {
-        auto acknowledged = m_transitionService->acknowledge(
-            std::move(purgeResult).value());
-        if (!acknowledged) {
-            return failTerminalLocked(acknowledged.error());
-        }
+    for (auto& acknowledgement : acknowledgements) {
+        auto acknowledged = m_transitionService->acknowledge(std::move(acknowledgement));
+        if (!acknowledged) return Result::failure(failTerminalLocked(acknowledged.error()).error());
         complete = acknowledged.value();
     }
-    if (complete) {
-        m_phase = MediaAvReacquisitionPhase::Acquiring;
-        m_beganAt.reset();
-        m_inFlightTransitionSequence.reset();
-    }
+    if (!complete) return Result::success(deadline.value());
+    m_phase = MediaAvReacquisitionPhase::Acquiring;
+    m_beganAt.reset();
+    m_inFlightTransitionSequence.reset();
     lock.unlock();
-    if (complete) {
-        for (const auto& wakeup : m_domainWakeups) wakeup->notify();
-        mediaGraphDiagnosticLog(
-            MediaGraphDiagnosticLevel::State,
-            MediaGraphDiagnosticPhase::RuntimeNode,
-            "av_reacquisition group=" + m_groupKey.value() +
-                " phase=acquiring purge_ack=complete ack_count=" +
-                std::to_string(purgeResults.size()) + " old=" +
-                std::to_string(purgeWork.oldGeneration) + " next=" +
-                std::to_string(purgeWork.nextGeneration) + " transition=" +
-                std::to_string(purgeWork.transitionSequence));
-    }
-    return ::media::Status::success();
+    for (const auto& wakeup : m_domainWakeups) wakeup->notify();
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "av_reacquisition group=" + m_groupKey.value() +
+        " phase=acquiring purge_ack=complete ack_count=" +
+        std::to_string(m_participants.size()) + " old=" +
+        std::to_string(purgeWork.oldGeneration) + " next=" +
+        std::to_string(purgeWork.nextGeneration) + " transition=" +
+        std::to_string(purgeWork.transitionSequence));
+    return Result::success(std::nullopt);
 }
 
 ::media::Status MediaAvReacquisitionCoordinator::pollTimeout()

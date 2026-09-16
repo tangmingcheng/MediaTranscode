@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-16 协议代次交接增量
+
+两名独立审查者对owner线程清理、异步purge、协议/SDP注册及RTP事件顺序源码给出Standards/局部Spec PASS；r13七组ack并恢复源锁2、新MPEG-TS计划，随后AAC不支持flush导致编码lineage冲突，且漂移pending长期持epoch锁阻塞退出。短授权修复再次双审PASS，r14同规格Debug实流保留AAC失败并自然退出1、逻辑资源归零；完整恢复FAIL。旧r13挂起进程清理待用户例外授权。合屏就绪度维持42/100（10/8/6/12/2/4），未以基础修复提高评分；独立输出域、黑场/静音、多源与Windows→RKMPP验收仍未完成。[证据与命令](docs/realtime-video-composition-protocol-handoff.md)。
+
 ## 2026-09-16 purge屏障与恢复控制增量
 
 两名独立审查者复审10文件源码增量，Standards/局部Spec均PASS：修复背压重试跳过代次仲裁、purge完成缺少域唤醒、startup重复失效/控制消息滞留，以及传输计划遗漏purge注册。r9/r10定位的错误已越过；r11全部5组ack并恢复源锁2，最终仍因MPEG-TS构造器保留旧计划而退出1。完整恢复FAIL，详见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。就绪度仍42/100；剩余协议代次交接、sender线程归属清理、输出时间轴、黑场/静音及跨平台验收不能由局部PASS替代。

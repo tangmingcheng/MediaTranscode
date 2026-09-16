@@ -41,7 +41,7 @@ std::vector<std::string> canonicalLineageChildren(
 } // namespace
 
 MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
-    MediaAvSyncOutputAdapterKind adapter,
+    const std::variant<MediaSeparateRtpOutputRuntimePlan, MediaProjectMpegTsRuntimeOutputPlan>& output,
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
@@ -65,19 +65,30 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
     transition.participants.push_back({
         MediaAvGenerationParticipant::DatagramTransportPlan,
         {"datagram_transport_plan_generation_state"}});
-    if (adapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
+    transition.participants.push_back({
+        MediaAvGenerationParticipant::DatagramSender,
+        {"datagram_sender_generation_state"}});
+    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(output)) {
         transition.participants.push_back({
             MediaAvGenerationParticipant::RtpVideoOutput,
-            {"rtp_video_output_generation_state"}});
+            {"rtp_video_output_generation_state", "rtp_video_materializer_generation_state"}});
         transition.participants.push_back({
             MediaAvGenerationParticipant::RtpAudioOutput,
-            {"rtp_audio_output_generation_state"}});
-    } else if (adapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+            {"rtp_audio_output_generation_state", "rtp_audio_materializer_generation_state"}});
+    } else {
         transition.participants.push_back({
             MediaAvGenerationParticipant::ProjectMpegTsOutput,
             {"project_mpegts_output_generation_state",
              "scheduled_ts_adapter_generation_state",
-             "project_mpegts_mux_generation_state"}});
+             "project_mpegts_mux_generation_state", "mpegts_materializer_generation_state"}});
+    }
+    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(output)) {
+        transition.participants.push_back({MediaAvGenerationParticipant::ProtocolDescription,
+            {"rtp_sdp_generation_state"}});
+    } else if (std::holds_alternative<MediaMpegTsRtpOutputPlan>(
+                   std::get<MediaProjectMpegTsRuntimeOutputPlan>(output).transport)) {
+        transition.participants.push_back({MediaAvGenerationParticipant::ProtocolDescription,
+            {"mpegts_sdp_generation_state"}});
     }
     return transition;
 }

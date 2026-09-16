@@ -29,6 +29,8 @@
 
 阶段一恢复屏障之后的切入点经独立设计审查确认：在解码后的规范化帧与共享输出编码之间建立源域→输出域映射。`MediaRealtimeAvSyncRuntimePlan`、runtime registration及transition planner明确归属；单源purge只清其输入/解码/源侧缓存，共享encode、scheduler、mux和RTP序号保留在输出域。lineage须区分真实源贡献与生成黑帧/静音，不伪造源AU。聚合节点复用master clock和执行器deadline，以整数帧号/样本号推导连续时间，按有限候选选帧，到期缺失则生成planner确认格式/硬件驻留的黑帧或静音；下游背压时禁止积累无界tick。不能只让startup clock继续发tick，因为现有整链generation仍会重置输出。该设计尚未实现，不代表阶段一已通过。
 
+r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush而mapper被重置的契约冲突。下一完整切片须同步修改source/output域产品、runtime归属注册、builder边界及音视频贡献模型；AAC codec、编码FIFO、packet mapper和唯一output origin从输出启动到全局终止连续保留。音频按prepared readback规划连续整数样本区间，缺口显式GeneratedSilence，恢复只接入尚未提交区间；现有interval accumulator复用区间算法，校验output generation，source generation移至贡献记录。仅删encoder purge注册、补静音却不处理视频、重写PTS或忽略旧包均不构成完成。源失锁不终止输出，只有显式停止或所有源可信结束才排空编码和协议。
+
 - [ ] 通过既有 DAG 节点组合输入、解码、缩放、聚合、硬件合成、编码与协议输出。
 - [ ] 聚合线程独占选帧状态，每次处理有界批次；慢源不阻塞输出，所有权和资源凭证使用 RAII。
 - [ ] 音频解码、重采样与编码，连续样本时间轴补静音并在恢复时对齐。
