@@ -85,9 +85,9 @@ exit $LASTEXITCODE
 & 'C:/Program Files/Windows Kits/10/Debuggers/x64/cdb.exe' -y D:/Code/MyCode/MediaTranscode/out/build/x64-release -pv -p 16540 -c '~* kb; qd'
 ```
 
-### 清理状态（进行中）
+### 清理状态
 
-两个源、VLC及诊断器已退出。CLI PID16540仍挂起，源码修复不能改变已运行进程；已请求用户定点停止例外，尚未获回复。已逐项删除r13 build/source/source-rejoin/vlc日志、SDP、截图及两份stacks日志；仅PID16540和占用的composition-domain-r13-cli.log保留待授权清理。保留固定120秒源，未声称全部清理。
+两个源、VLC及诊断器已退出。用户明确授权结束旧死锁CLI PID16540后，已核对可执行文件路径及media-id=composition-domain-r13，再定点强制结束；父执行会话返回-1，属于授权清理，不是自然退出成功。父进程释放文件后删除composition-domain-r13-cli.log。此前已逐项删除其余r13产物，当前r13无进程或临时文件残留，固定120秒源保留。
 
 ### 退出锁修复
 
@@ -118,3 +118,31 @@ exit $LASTEXITCODE
 ```
 
 首源自然结束后再次执行同一FFmpeg命令，仅日志改为`composition-domain-r14-source-rejoin.log`。两源退出码均由执行会话取得0。结果归档后逐项删除r14 build/cli/source/source-rejoin/vlc日志、SDP及截图composition-domain-r14-2026-09-16-14h08m19s937.png；CLI/两源/VLC四个PID均确认不存在，固定120秒源保留。本轮无抓包或临时测试脚本。
+
+## r15：RTP H.264/AAC → MPEG-TS/RTP HEVC CBR，1280×720、30 fps、8 Mbps
+
+用户已澄清：停止源流观察CLI属于测试阶段；测试已结束时直接核对精确PID清理残留进程，无需再次确认，清理退出不能算自然退出或通过。已写入AGENTS.md；r13旧进程及日志已清理。
+
+生产源码仍为52c014c0，Release全量重建624目标成功。完整恢复 **FAIL**，但短授权失败退出路径在Release实流得到验证：CLI PID31496自然退出1，worker/queue/payload均归零，72362次申请/释放相等，errors/workerErrors=1/1、stalledIntervals=1。未强制结束本轮CLI。首源PID30260退出0、3600帧/120秒；重入源PID34220亦自然退出0、3600帧/120秒。VLC PID34980由RC quit关闭，首段截图有效1280×720。
+
+14:47:14.540七组purge全部ack，19.839生成generation2的MPEG-TS计划，19.844再次明确报AAC packet timeline discontinuous。第二代仅3datagrams/600payload bytes，不是持续媒体恢复。旧代materialized/scheduled=86316、submitted/committed=86263，差53与backlog_cancelled_datagrams=53一致，取消wire bytes=70740；pacing_reserved=86264、cancelled=1、submitted=86263。该日志覆盖一次非空未提交尾部取消，不能外推全部并发/压力矩阵。新代账本独立归零，累计86266datagrams/104740172payload bytes；deadline/pressure/partial/ambiguous均0、delivery_evidence=not_proven。
+
+CPU399采样、22核，进程整机均值1.475016%、峰4.966140%，单核等效32.450346%/109.255079%；工作集112369664→193716224字节，未证明长期稳定。payload高水13900834字节/398对象，pressure=0。第一代漂移118条、raw/filtered绝对最大156ns，第二代仅2条、最大11531ns；不代表播放端同步或恢复通过。AAC生命周期、独立输出域、黑场/静音、多源及Windows→RKMPP验收仍待完成。
+
+### 实际命令
+
+```powershell
+& D:/Code/MyCode/MediaTranscode/out/build/x64-release/media_transcode_realtime_video_cli.exe --media-id composition-domain-r15 --egress-capacity-bps 50000000 --maximum-wire-residence-ms 100 --input-type rtp --output-layout mpegts --output-transport rtp --open-timeout-ms 30000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --video-rtp-url rtp://127.0.0.1:60780 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --audio-rtp-url rtp://127.0.0.1:60782 --audio-rtp-codec aac --audio-rtp-payload-type 97 --audio-rtp-clock-rate 44100 --audio-rtp-channels 2 --audio-rtp-fmtp "profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210" --rtp-host 127.0.0.1 --rtp-port 61780 --sdp D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r15.sdp --video-codec hevc --rc cbr --width 1280 --height 720 --fps 30 --bitrate 8000 --gop 60 --audio-codec aac --audio-rc cbr --audio-bitrate 192 --sample-rate 44100 --channels 2 > D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r15-cli.log 2>&1
+exit $LASTEXITCODE
+```
+
+```powershell
+& D:/mabs/local64/bin-video/ffmpeg.exe -hide_banner -nostdin -re -i D:/Code/MyCode/MediaTranscode/out/acceptance/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 -rtpflags send_bye "rtp://127.0.0.1:60780?rtcpport=60781&pkt_size=1200" -map 0:a:0 -vn -c:a copy -f rtp -payload_type 97 -rtpflags send_bye "rtp://127.0.0.1:60782?rtcpport=60783&pkt_size=1200" > D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r15-source.log 2>&1
+exit $LASTEXITCODE
+```
+
+```powershell
+& D:/VideoLAN/VLC/vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --file-logging --logfile=D:/Code/MyCode/MediaTranscode/out/acceptance/composition-domain-r15-vlc.log --extraintf=rc --rc-host=127.0.0.1:62780 --rc-quiet --snapshot-path=D:/Code/MyCode/MediaTranscode/out/acceptance --snapshot-prefix=composition-domain-r15- --snapshot-format=png rtp://@127.0.0.1:61780
+```
+
+首源自然结束后再次执行同一FFmpeg命令，仅日志改为`composition-domain-r15-source-rejoin.log`。两次源执行会话均取得exit0，各3600帧/120秒。外部进程监控18轮、其中9轮取得CLI存活采样。两名独立审查者核对原始日志，局部证据PASS、完整恢复FAIL、评分42/100。结果归档后逐项删除r15 build/cli/source/source-rejoin/vlc日志、SDP及截图composition-domain-r15-2026-09-16-14h46m15s049.png；本轮CLI/两源/VLC和旧r13 PID16540均确认不存在。固定120秒源保留，无本轮临时脚本或抓包。

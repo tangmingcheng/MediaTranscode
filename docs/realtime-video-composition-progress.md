@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-2026-09-16协议代次交接已实现owner线程清理、异步七组ack、sender授权取消未提交预约及SDP生命周期。r12暴露输入证据早于SSRC失效，顺序修复后r13成功锁generation2并生成新MPEG-TS计划，随后AAC时间轴不连续且退出锁等待；完整恢复FAIL。源码双审通过范围与真实指标详见[协议交接记录](realtime-video-composition-protocol-handoff.md)。漂移控制器已改为短授权，r14同规格Debug复验保留AAC失败且CLI自然退出1、逻辑资源归零；完整恢复仍FAIL。AAC恢复须继续原计划的独立输出域、连续样本和显式静音贡献，未改外部FFmpeg，未提高就绪度。r13旧挂起CLI的定点清理例外待用户回复。
+2026-09-16协议代次交接已实现owner线程清理、异步七组ack、sender授权取消未提交预约及SDP生命周期。r12暴露输入证据早于SSRC失效，顺序修复后r13成功锁generation2并生成新MPEG-TS计划，随后AAC时间轴不连续且退出锁等待；完整恢复FAIL。源码双审通过范围与真实指标详见[协议交接记录](realtime-video-composition-protocol-handoff.md)。漂移控制器已改为短授权，r14同规格Debug复验保留AAC失败且CLI自然退出1、逻辑资源归零；完整恢复仍FAIL。AAC恢复须继续原计划的独立输出域、连续样本和显式静音贡献，未改外部FFmpeg，未提高就绪度。r13旧挂起CLI已按用户明确授权定点结束，日志已删除，r15 Release全量构建通过，同规格重入仍报AAC错误，但CLI自然退出1、逻辑资源归零，并实际取消53个未提交数据报；完整恢复仍FAIL。本轮产物与进程已清理。
 
 2026-09-16继续推进purge屏障、首次/重试发布授权、startup重复失效控制及传输计划注册。r9/r10错误已越过；r11全部5组ack且恢复源锁2，仍因MPEG-TS构造器未切换计划而退出1，完整恢复FAIL。双复审对10文件源码增量PASS，命令/指标/逐项清理见[purge屏障记录](realtime-video-composition-purge-barrier.md)。下一阶段须整体处理协议代次交接和sender owner-thread清理，并将输出时间轴与输入源域解耦；多源合屏仍未完成，不新增致命源缺失期限。
 
