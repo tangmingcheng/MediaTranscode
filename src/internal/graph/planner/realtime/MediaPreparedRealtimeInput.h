@@ -58,6 +58,7 @@ public:
     ::media::Status rawRtpCaptureStatus();
     ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
     ::media::Result<std::size_t> rawRtpPreparedByteCapacity() const;
+    ::media::Result<std::uint64_t> rawRtpReplayAccessUnitBound() const;
     ::media::Result<std::size_t> rawRtpMaximumDatagramBytes() const;
     ::media::Result<std::size_t>
     rawRtpEffectiveSocketReceivePayloadBytes() const;

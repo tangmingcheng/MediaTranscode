@@ -3,6 +3,8 @@
 #include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpStartupPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
@@ -1094,6 +1096,27 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 admitted.error());
         }
+        resourceLedger = std::move(admitted);
+    }
+    if (rawInput && options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
+        if (!preparedResource || !preparedAudioResource) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "RTP A/V startup requires sealed prepared inputs"));
+        }
+        auto startup = MediaAvSyncStartupPolicyPlanner::planInputPreflight(options);
+        if (!startup) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(startup.error());
+        if (!startup.value().maximumWaitNs) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized("input startup acquisition window is missing"));
+        }
+        auto retention = MediaPreparedRtpStartupPlanner::plan(
+            *rawInput, *preparedResource, *preparedAudioResource,
+            *startup.value().maximumWaitNs);
+        if (!retention) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(retention.error());
+        auto admitted = MediaRealtimeGraphResourceLedgerPlanner::admitInputRetention(
+            std::move(resourceLedger).value(), std::move(retention).value());
+        if (!admitted) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(admitted.error());
         resourceLedger = std::move(admitted);
     }
     auto deployment = MediaRealtimeDeploymentPlanner::complete(

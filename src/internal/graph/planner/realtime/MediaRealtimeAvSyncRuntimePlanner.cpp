@@ -27,6 +27,8 @@ namespace {
 {
     if (!synchronization.startup.videoByteCapacity ||
         !synchronization.startup.audioByteCapacity ||
+        !synchronization.startup.videoCapacity ||
+        !synchronization.startup.audioCapacity ||
         *synchronization.startup.videoByteCapacity == 0 ||
         *synchronization.startup.audioByteCapacity == 0 ||
         outer.queues.packet == 0 ||
@@ -41,8 +43,10 @@ namespace {
         *synchronization.startup.videoByteCapacity +
         *synchronization.startup.audioByteCapacity;
     return MediaRealtimeEdgePolicyPlanner::
-        planWithSynchronizedPacketMemoryBudget(
-            outer.queues, maximumBytes, outer.queues.packet);
+        planWithAvStartupRelease(
+            outer.queues, maximumBytes, outer.queues.packet,
+            *synchronization.startup.videoCapacity,
+            *synchronization.startup.audioCapacity);
 }
 
 ::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(

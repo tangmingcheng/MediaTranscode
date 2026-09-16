@@ -519,4 +519,6 @@ Synchronized `AudioVideo` retains the canonical startup coordinator, generation 
 
 现有单源 A/V builder 随节点创建输出 MediaAvRuntimeRegistrationPlan，明确输入启动角色、视频准备 owner、输出 scheduler 与域成员。MediaAvRuntimeRegistrationValidator 在编译前校验角色、归属和连接；MediaGraphRuntimeRegistrar 按 ID 组装，MediaAvRuntimeDomainState 持有 activation、恢复依赖与准备状态。策略仍归 planner，最终输出保持单权威；当前产品仍限定单域，不表示已支持合屏。
 
+Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
+
 RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。

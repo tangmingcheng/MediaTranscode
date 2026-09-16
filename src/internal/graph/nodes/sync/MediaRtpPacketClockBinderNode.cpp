@@ -261,6 +261,9 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     auto wrapped = FFmpegBufferFactory::wrapPacket(
         std::move(packet), m_streamKind, std::move(timing).value());
     if (!wrapped) return wrapped;
+    if (auto status = wrapped.value()->attachPayloadCredit(source->takePayloadCredit()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
     if (m_streamKind == MediaStreamKind::Video && inputKey &&
         !m_keyTraceEmitted) {
         m_keyTraceEmitted = true;

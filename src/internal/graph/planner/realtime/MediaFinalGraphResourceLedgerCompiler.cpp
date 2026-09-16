@@ -420,6 +420,26 @@ compileLedger(
                 if (!retained) return Result::failure(retained.error());
                 retainedRefs = retained.value();
             }
+            if (node.kind == MediaNodeKind::AvStartupCoordinator) {
+                auto video = optionUnsigned(node, "av_startup.video_capacity");
+                auto audio = optionUnsigned(node, "av_startup.audio_capacity");
+                if (!video || !audio) return Result::failure(
+                    !video ? video.error() : audio.error());
+                auto batch = Arithmetic::add(video.value(), audio.value(),
+                    "startup batch payload object retention");
+                auto retained = batch ? Arithmetic::add(retainedRefs, batch.value(),
+                    "startup store and release-batch object credits") : batch;
+                if (!retained) return Result::failure(retained.error());
+                // Leases follow the batch through GraphEvent wrappers and the
+                // release extractor; reference copies do not allocate new AUs.
+                retainedRefs = retained.value();
+            } else if (node.kind == MediaNodeKind::RtpPacketClockBinder) {
+                auto acquiring = optionUnsigned(node, "rtp_clock_binder.acquiring_capacity");
+                auto retained = acquiring ? Arithmetic::add(retainedRefs, acquiring.value(),
+                    "RTP clock acquisition object credits") : acquiring;
+                if (!retained) return Result::failure(retained.error());
+                retainedRefs = retained.value();
+            }
             if (node.kind == MediaNodeKind::VideoEncode) {
                 auto retained = Arithmetic::add(
                     retainedRefs,

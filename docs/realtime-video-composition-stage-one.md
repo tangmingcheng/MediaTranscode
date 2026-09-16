@@ -108,4 +108,4 @@ exit $LASTEXITCODE
 
 本轮临时产物清单：out/acceptance/composition-domain-r4-build.log、composition-domain-r4-cli.log、composition-domain-r4-source.log、composition-domain-r4-vlc.log。未生成 SDP、截图、录制或抓包；本轮未使用远程机。结果归档后已逐项清理，检查本轮文件和进程均无残留，保留复用源及历史产物。
 
-两位未参与实现者对冻结修改均给出 Standards PASS / 局部 WIP Spec PASS，完整合屏交付 FAIL，建议维持就绪度 42/100。除输入启动容量与预算外，仍需处理控制推进、Locked 后尚未排空即 invalidation 时的重获取边界，以及完整结束与跨平台验收。
+两位未参与实现者对冻结修改均给出 Standards PASS / 局部 WIP Spec PASS，完整合屏交付 FAIL，建议维持就绪度 42/100。后续输入保留、字节/对象预算、凭证生命周期与启动整批发布修复及r5～r7命令/结果见[专项记录](realtime-video-composition-input-retention.md)。仍需处理控制推进、Locked后尚未排空即invalidation时的重获取边界，以及完整结束与跨平台验收。

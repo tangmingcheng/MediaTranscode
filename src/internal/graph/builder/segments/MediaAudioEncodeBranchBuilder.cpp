@@ -227,7 +227,7 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 {
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
     const auto& sourcePacketPolicy = nodes.startupTrim.isValid()
-        ? policies.atomicAudioPacket
+        ? policies.startupAudioRelease
         : policies.audioPacket;
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", policies.metadata); !status) return status;

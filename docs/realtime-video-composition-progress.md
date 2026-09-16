@@ -33,4 +33,10 @@ Release 基线已通过 VS2026 全量 clean-first 构建（configure/build exit 
 
 binder 获取队列满时停止取媒体包，继续消费时钟并等待原截止时间，未增加容量。Release 全量重建成功；原规格 A/V r4 越过 binder 后，在启动协调器报容量不足，CLI 退出 1、无编码输出；源退出 0、3600 帧/120 秒。两位独立复审者对本项源码 PASS，完整交付 FAIL，就绪度维持 42/100。本轮命令和遥测归档后已清理临时产物，无本轮文件或进程残留。
 
-下一修复落点已明确：Raw RTP 缺少独立的输入 startup retention 产品，500 ms preroll 错配为按 100 ms 输出驻留推导的 4/6 个 AU；现有 prepared input ledger 仅增加一次解包批次 credit，未覆盖启动保留窗口。需贯通输入保留事实、共用 startup policy 与全局 payload 预算，不能改输出 residence 语义、降低 preroll 或仅按观测帧率增大常量。完整控制隔离仍未实现，多源合成与黑屏/静音恢复尚待实施。
+该轮定位为Raw RTP缺少独立输入startup retention产品：500ms preroll错配100ms输出驻留4/6 AU，prepared ledger只增加单次解包批次。后续修复及r5～r7证据见[输入保留与发布契约](realtime-video-composition-input-retention.md)。
+
+## 2026-09-16 输入保留与启动发布推进
+
+已由planner从源cadence、10秒既有acquisition window和封存回放AU上界生成有限接纳产品，贯通字节/对象预算；补齐binder移动与scheduled clone共享凭证。r5越过协调器后暴露凭证缺失，r6进入CUDA解码/缩放后暴露31音频AU发布到10项队列的永久等待，均FAIL。
+
+启动发布现使用独立边产品，覆盖转码与音频CopyPacket入口，输出驻留容量保持原规划。两位独立源码复审PASS，全量构建通过；r7持续编码并由VLC显示至120秒源结束，随后因时钟失活投影新代次与gate要求旧代次不符而退出1，完整验收FAIL。FFmpeg退出0、3600帧；内部漂移118条记录为0，热阶段工作集仍缓慢增长。命令/遥测/画面结论已归档，临时文件及进程已清理。没有修改外部FFmpeg，没有新增对外参数。下一落点是源失活与代次转换，不能把BYE当可信EOF绕过；完整控制隔离、多源合成、逐源黑屏/静音与恢复仍待实施，阶段一未标记完成。

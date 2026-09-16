@@ -598,7 +598,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     }
     if (avRuntime) {
         videoOptions.edgePolicies.videoPacket =
-            edgePolicies.atomicVideoPacket;
+            edgePolicies.startupVideoRelease;
     }
     videoOptions.inputStartRequiresKeyFrame = synchronizedInput
         ? false : plan.videoInputStartRequiresKeyFrame;
@@ -647,7 +647,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audioOptions.queues = queues;
         audioOptions.edgePolicies = edgePolicies;
         audioOptions.edgePolicies.audioPacket =
-            edgePolicies.atomicAudioPacket;
+            edgePolicies.startupAudioRelease;
         audioOptions.formatSourceNode = isolateRawRtpAudio
             ? audioInputChain.input
             : videoInputChain.value().input;

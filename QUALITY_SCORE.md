@@ -2,7 +2,7 @@
 
 ## 2026-09-15 阶段一基础修改复审
 
-两位未参与实现者对 37 个源码文件均给出 Standards PASS / 当前 WIP 源码 Spec PASS。2026-09-16 的 binder 有界背压增量经两位独立复审均 PASS，Release 全量构建通过；原规格 A/V r4 越过 binder 后在启动协调器容量检查失败，无编码输出，交付验收 FAIL。两位复审者建议维持下表六维尺度的 42/100：单域注册改善尚未形成多源能力，不因局部修复提高就绪度。输入 startup retention 与全局 payload 预算尚未贯通；逻辑帧 credit 不代表全部物理内存边界。控制进展、逐源恢复和 Windows→RKMPP 回归仍待闭环。证据见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。
+两位未参与实现者对阶段一及2026-09-16输入保留增量均给出 Standards PASS / 当前 WIP 源码 Spec PASS。本轮贯通输入启动 retention、字节/对象信用、binder与重复帧凭证生命周期及独立启动批次发布容量；r5、r6真实链路FAIL，修复后的r7已进入持续编码与VLC播放，最终结果见[输入保留记录](docs/realtime-video-composition-input-retention.md)。独立复审建议维持下表六维尺度42/100：仍是单源基础，多源绑定、公共合成域、逐源黑屏/静音与恢复及双平台合屏验收尚未完成。逻辑credit不代表clone side data等全部物理分配边界；控制进展、完整结束和Windows→RKMPP回归仍待闭环，不因局部修复提高评分。
 
 ## 2026-09-15 固定实时合屏就绪度（实施前）
 

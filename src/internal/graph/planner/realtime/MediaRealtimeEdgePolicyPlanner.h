@@ -17,6 +17,13 @@ public:
         const MediaGraphQueueParameters& queues,
         std::uint64_t maximumBytes,
         std::size_t maximumBuffers);
+    static ::media::Result<MediaRealtimeEdgePolicySet>
+    planWithAvStartupRelease(
+        const MediaGraphQueueParameters& queues,
+        std::uint64_t maximumBytes,
+        std::size_t maximumBuffers,
+        std::size_t maximumVideoReleaseUnits,
+        std::size_t maximumAudioReleaseUnits);
 
 private:
     MediaRealtimeEdgePolicyPlanner() = delete;

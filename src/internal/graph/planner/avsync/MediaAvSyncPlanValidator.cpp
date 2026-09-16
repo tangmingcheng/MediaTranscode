@@ -1,7 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/sync/MediaAudioDriftServoLimits.h"
 #include "internal/graph/sync/MediaAudioDriftServoPolicyValidator.h"
-#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 
 #include <optional>
 #include <limits>
@@ -76,8 +75,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
                            startup.videoByteCapacity) ||
         !validByteCapacity(startup.audioCapacity, startup.maximumAudioUnitBytes,
                            startup.audioByteCapacity) ||
-        *startup.videoCapacity > MediaAvStartupMaximumUnitCapacity ||
-        *startup.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
+        *startup.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        *startup.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         !presentText(startup.videoIdentity) || !presentText(startup.audioIdentity) ||
         *startup.videoIdentity == *startup.audioIdentity ||
         !startup.allowDegradedClock || *startup.allowDegradedClock) {

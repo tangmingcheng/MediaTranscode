@@ -25,9 +25,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     if (!capacity.audioUnits ||
         !capacity.audioUnitBytes || !capacity.audioBytes ||
         capacity.videoUnits == 0 || capacity.videoUnitBytes == 0 ||
-        capacity.videoBytes == 0 ||
-        capacity.videoUnits > MediaAvStartupMaximumUnitCapacity ||
-        *capacity.audioUnits > MediaAvStartupMaximumUnitCapacity) {
+        capacity.videoBytes == 0) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup deployment budget is incomplete"));
@@ -83,9 +81,27 @@ MediaAvSyncStartupPolicyPlanner::plan(
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             capacity.error());
     }
-    return makePolicy(
-        capacity.value(),
+    if (!ledger.inputRetention) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V startup requires a prepared input retention product"));
+    }
+    const auto& retention = *ledger.inputRetention;
+    if (auto status = retention.validate(); !status) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(status.error());
+    }
+    auto policy = makePolicy(MediaRealtimeMediaCapacityPlan{
+        retention.video.maximumUnits, retention.video.maximumUnitBytes,
+        retention.video.maximumBytes,
+        retention.audio.maximumUnits, retention.audio.maximumUnitBytes,
+        retention.audio.maximumBytes, capacity.value().maximumGap},
         deployment.encode().transportTiming.senderTransportLead);
+    if (policy && policy.value().maximumWaitNs != retention.acquisitionWindow) {
+        return ::media::Result<MediaAvSyncStartupPolicy>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "input retention acquisition window differs from startup policy"));
+    }
+    return policy;
 }
 
 ::media::Result<MediaAvSyncStartupPolicy>
@@ -136,9 +152,9 @@ MediaAvSyncStartupPolicyPlanner::planInputPreflight(
     const auto maximumGap = MediaRunningTime::fromNanoseconds(
         static_cast<std::int64_t>(*request.input.readTimeoutMs) * Millisecond);
     return makePolicy(MediaRealtimeMediaCapacityPlan{
-        MediaAvStartupMaximumUnitCapacity, perStreamBudget,
+        MediaAvStartupPreflightUnitCapacity, perStreamBudget,
         perStreamBudget,
-        MediaAvStartupMaximumUnitCapacity, perStreamBudget,
+        MediaAvStartupPreflightUnitCapacity, perStreamBudget,
         perStreamBudget,
         maximumGap}, std::nullopt);
 }

@@ -101,7 +101,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     const auto& sourcePacketPolicy = options.lineageEdgePolicies
         ? options.lineageEdgePolicies->startupPacket
         : options.canonicalLineageCapacity
-            ? policies.atomicVideoPacket
+            ? policies.startupVideoRelease
             : policies.videoPacket;
     const auto& videoFramePolicy = options.lineageEdgePolicies
         ? options.lineageEdgePolicies->frame
