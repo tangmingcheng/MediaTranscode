@@ -1,5 +1,10 @@
 # MediaTranscode Quality Score
 
+## 2026-09-16 显式处理归属与 r16–r18 复审
+
+两名未参与实现的审查者均Standards/局部Spec PASS，未发现新增P1/P2；合屏就绪度维持42/100（10/8/6/12/2/4）。segment显式归属、互斥覆盖校验与按角色准备注入已贯通，仍执行旧整体transition。Release全量重试成功；r16无源超时退出且最终保留4个逻辑对象，r17测试启动时序失败不计验收，r18完整双120秒源重入仍报AAC时间轴错误，CLI自然退出1且逻辑资源归零。完整合屏FAIL，连续输出、贡献模型、黑场/静音和跨平台验收仍缺失，不能据结构重构提高分数。[命令与证据](docs/realtime-video-composition-processing-ownership.md)。
+
+
 ## 2026-09-16 协议代次交接增量
 
 两名独立审查者对owner线程清理、异步purge、协议/SDP注册及RTP事件顺序源码给出Standards/局部Spec PASS；r13七组ack并恢复源锁2、新MPEG-TS计划，随后AAC不支持flush导致编码lineage冲突，且漂移pending长期持epoch锁阻塞退出。短授权修复再次双审PASS，r14同规格Debug实流保留AAC失败并自然退出1、逻辑资源归零；完整恢复FAIL。旧r13挂起进程已按用户明确授权清理，r15 Release全量构建通过，同规格重入仍报AAC错误，但CLI自然退出1、逻辑资源归零，并实际取消53个未提交数据报；完整恢复仍FAIL。本轮产物与进程已清理。合屏就绪度维持42/100（10/8/6/12/2/4），未以基础修复提高评分；独立输出域、黑场/静音、多源与Windows→RKMPP验收仍未完成。[证据与命令](docs/realtime-video-composition-protocol-handoff.md)。

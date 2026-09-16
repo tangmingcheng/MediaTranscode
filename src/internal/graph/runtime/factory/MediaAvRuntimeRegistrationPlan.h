@@ -1,9 +1,9 @@
 #pragma once
 
 #include "internal/graph/core/MediaNodeId.h"
+#include "internal/graph/model/MediaProcessingNodeOwnership.h"
 
 #include <optional>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -24,7 +24,7 @@ struct MediaAvRuntimeRegistrationPlan final {
     MediaNodeId preparationOwner;
     MediaNodeId outputScheduler;
     std::optional<MediaNodeId> rtpSdpPublisher;
-    std::vector<MediaNodeId> members;
+    MediaProcessingNodeOwnership processing;
 };
 
 } // namespace media::ffmpeg::graph

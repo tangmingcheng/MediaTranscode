@@ -62,6 +62,7 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
 struct RealtimePacketInputChain {
     MediaNodeId input;
     PacketSelectSegment packetSelect;
+    std::vector<MediaNodeId> sourceMembers;
 };
 
 ::media::Result<MediaNodeId> findPreparedInputTarget(
@@ -187,6 +188,7 @@ struct RealtimePacketInputChain {
         RealtimePacketInputChain chain;
         chain.input = input;
         chain.packetSelect.split = input;
+        chain.sourceMembers = {input};
         return ::media::Result<RealtimePacketInputChain>::success(chain);
     }
 
@@ -238,6 +240,7 @@ struct RealtimePacketInputChain {
         chain.input = input;
         chain.packetSelect.demux = demux;
         chain.packetSelect.split = demux;
+        chain.sourceMembers = {input, demux};
         return ::media::Result<RealtimePacketInputChain>::success(chain);
     }
 
@@ -257,6 +260,7 @@ struct RealtimePacketInputChain {
     RealtimePacketInputChain chain;
     chain.input = input;
     chain.packetSelect = packetSelect.value();
+    chain.sourceMembers = {input, chain.packetSelect.demux, chain.packetSelect.split};
     return ::media::Result<RealtimePacketInputChain>::success(chain);
 }
 
@@ -477,6 +481,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaGraph>::failure(videoInputChain.error());
     }
 
+    if (registration) registration->processing.source = videoInputChain.value().sourceMembers;
+
     RealtimePacketInputChain audioInputChain;
     MediaNodeId protocolClockNode = MediaNodeId::invalid();
     if (isolateRawRtpAudio) {
@@ -494,6 +500,9 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(audioInput.error());
         }
         audioInputChain = audioInput.value();
+        if (registration) registration->processing.source.insert(
+            registration->processing.source.end(), audioInputChain.sourceMembers.begin(),
+            audioInputChain.sourceMembers.end());
 
         if (!avRuntime || !plan.input.rtpTransport ||
             !isolatedAudioInput->rtpTransport) {
@@ -508,6 +517,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                            edgePolicies);
         if (!clockGroup) return ::media::Result<MediaGraph>::failure(clockGroup.error());
         protocolClockNode = clockGroup.value();
+        registration->processing.source.push_back(clockGroup.value());
     }
 
     MediaNodeId videoPacketSourceNode = videoInputChain.value().packetSelect.split;
@@ -580,6 +590,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         }
         synchronizedInput = std::move(assembled).value();
         registration->input = synchronizedInput->registration;
+        registration->processing.source.insert(registration->processing.source.end(),
+            synchronizedInput->sourceMembers.begin(), synchronizedInput->sourceMembers.end());
         videoPacketSourceNode = synchronizedInput->releasedVideo.node;
         videoPacketSourcePort = synchronizedInput->releasedVideo.port;
         audioPacketSourceNode = synchronizedInput->releasedAudio.node;
@@ -637,6 +649,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                     "Synchronized video branch lacks its preparation owner product"));
         }
         registration->preparationOwner = *video.value().startupPreparationOwner;
+        registration->processing.append(video.value().processing);
     }
     std::optional<MediaEncodedBranchEndpoints> audio;
     if (audioBranchEnabled) {
@@ -665,6 +678,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(builtAudio.error());
         }
         audio = std::move(builtAudio).value();
+        registration->processing.append(audio->processing);
     }
 
     if (avRuntime) {
@@ -683,6 +697,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(scheduled.error());
         }
         registration->outputScheduler = scheduled.value().scheduler;
+        registration->processing.output.insert(registration->processing.output.end(),
+            scheduled.value().outputMembers.begin(), scheduled.value().outputMembers.end());
         if (avRuntime->outputAdapter ==
             MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
             MediaScheduledRtpOutputSegmentOptions outputOptions;
@@ -697,6 +713,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
+            registration->processing.output.insert(registration->processing.output.end(),
+                output.value().outputMembers.begin(), output.value().outputMembers.end());
         } else if (avRuntime->outputAdapter ==
                    MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
             MediaScheduledMpegTsOutputSegmentOptions outputOptions;
@@ -713,6 +731,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
+            registration->processing.output.insert(registration->processing.output.end(),
+                output.value().outputMembers.begin(), output.value().outputMembers.end());
             if (output.value().rtpSdpPublisher.isValid())
                 registration->rtpSdpPublisher = output.value().rtpSdpPublisher;
         } else {
@@ -735,12 +755,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Realtime graph lost its typed runtime variant"));
-    }
-
-    if (registration) {
-        registration->members.reserve(graph.nodes().size());
-        for (const auto& node : graph.nodes())
-            registration->members.push_back(node.id);
     }
 
     if (!plan.resourceLedger) {

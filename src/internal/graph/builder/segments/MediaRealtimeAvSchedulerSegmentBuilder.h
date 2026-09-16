@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include <vector>
+
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeAvSchedulerSegmentOptions final {
@@ -20,6 +22,7 @@ struct MediaRealtimeAvSchedulerSegmentResult final {
     MediaEndpoint audio;
     MediaEndpoint serialized;
     MediaNodeId scheduler;
+    std::vector<MediaNodeId> outputMembers;
 };
 
 class MediaRealtimeAvSchedulerSegmentBuilder final {

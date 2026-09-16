@@ -132,11 +132,12 @@ namespace media::ffmpeg::graph {
         for (const auto& scope : serviceScopes.value()) {
             if (scope.sender == node.id) { serviceScope = scope.arbiter; break; }
         }
-        const bool domainMember = domainPlan &&
-            std::find(domainPlan->members.begin(), domainPlan->members.end(), node.id) !=
-                domainPlan->members.end();
+        // Preparation roles cross processing ownership; inject their exact owners.
+        const bool preparationConsumer = domainPlan &&
+            (node.id == domainPlan->input.releaseExtractor ||
+             node.id == domainPlan->preparationOwner);
         auto runtimeNode = MediaRuntimeNodeFactory::create(
-            node, binding, domainMember ? videoPreparationState : nullptr,
+            node, binding, preparationConsumer ? videoPreparationState : nullptr,
             protocolOutputAuthority, serviceScope);
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeNode,
@@ -209,8 +210,7 @@ namespace media::ffmpeg::graph {
             return ::media::Status::failure(assembler.error());
         }
         for (auto& runtimeNode : preparedNodes) {
-            if (std::find(domainPlan->members.begin(), domainPlan->members.end(),
-                          runtimeNode->nodeId()) == domainPlan->members.end()) continue;
+            if (!domainPlan->processing.contains(runtimeNode->nodeId())) continue;
             auto registration =
                 MediaRuntimeNodeFactory::generationPurgeRegistration(
                     *runtimeNode);
@@ -225,10 +225,12 @@ namespace media::ffmpeg::graph {
             return ::media::Status::failure(participants.error());
         }
         std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups;
-        domainWakeups.reserve(domainPlan->members.size());
-        for (const auto member : domainPlan->members) {
+        domainWakeups.reserve(domainPlan->processing.source.size() +
+            domainPlan->processing.output.size());
+        // The existing single-source transition still covers both processing sides.
+        domainPlan->processing.forEach([&](MediaNodeId member) {
             domainWakeups.push_back(context.sharedNodeWakeup(member));
-        }
+        });
         auto coordinator = MediaAvReacquisitionCoordinator::create(
             reacquisitionGroup->key(),
             std::move(reacquisitionDependencies->transitionService),

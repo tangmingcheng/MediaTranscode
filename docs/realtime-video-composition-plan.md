@@ -38,6 +38,16 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 - [ ] 增加逐源帧龄、缺口区间、代次、合成输出与 A/V 漂移观测。
 - [ ] Windows→RKMPP 逐项真实验收，覆盖布局、转码、RC、断流、恢复、背压与停止。
 
+## 当前实施顺序：源处理与持续输出分离
+
+1. segment 显式返回源处理/输出处理成员；registration 校验互斥、完整覆盖和角色归属，runtime 消费同一产品。此步保留原整体 transition，不宣称恢复已修复。
+2. 连续输出 generation/origin 与真实源贡献分开；音频复用整数区间运算，视频记录各源贡献；静音/黑帧不伪造源 AU。贡献条数、样本、字节分别形成有界契约。
+3. 在规范化帧与共享编码之间接入聚合节点；单 owner、既有 master clock/deadline、有限候选与单 pending 事务，到期缺口生成黑帧/静音，背压不积累无界 tick。
+4. 聚合边界完整后切换逐源恢复权限与唯一输出权限；AAC context、FIFO、packet mapper、scheduler、mux 与发送序号保持连续，源恢复仅清本源未提交候选。
+5. 同规格真实源断流/重入验证后接入 2–4 路组合，完成 Windows→RKMPP 矩阵与双独立审查。
+
+音频量子取 prepared encoder frameSizeSamples，不能写死编码器帧长。黑帧的格式、色彩范围和硬件上传必须经实际 capability/readback 规划；已有 packet-layout probe 的清零帧不能等同于黑帧能力证明。上述边界对应 [GstAggregator 的输入队列与 GAP/flush 生命周期](https://gstreamer.freedesktop.org/documentation/base/gstaggregator.html)，不是新增平台专用媒体链路。
+
 ## 交付门禁
 
 同一分支 `feat/realtime-video-composition` 完成 commit/push；每个完整通过的真实链路立即独立提交，标题与报告列出协议、编码转换、分辨率、帧率、码率及 RC。冻结后两个未参与实现的独立智能体同时明确 PASS，再提交 PR 并由新智能体审核。更新架构、质量评分和中文完成记录，UTF-8/CRLF，不纳入临时测试或既有未跟踪产物。

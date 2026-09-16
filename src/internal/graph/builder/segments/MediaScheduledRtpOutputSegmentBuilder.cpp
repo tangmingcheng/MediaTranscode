@@ -238,7 +238,9 @@ MediaScheduledRtpOutputSegmentBuilder::build(
         if (!connected) return SegmentResult::failure(connected.error());
     }
     return SegmentResult::success(
-        MediaScheduledRtpOutputSegmentResult{video, audio, sdp});
+        MediaScheduledRtpOutputSegmentResult{video, audio, sdp,
+            {video, audio, sdp, execution.value().transportPlanSource,
+             execution.value().sender}});
 }
 
 ::media::Result<MediaVideoOnlyScheduledRtpOutputSegmentResult>

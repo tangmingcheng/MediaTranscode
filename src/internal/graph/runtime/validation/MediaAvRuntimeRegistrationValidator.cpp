@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace media::ffmpeg::graph {
@@ -33,11 +34,24 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
 {
     const auto& plan = binding.registration;
     std::unordered_set<std::uint64_t> members;
-    for (auto id : plan.members) {
-        if (!id.isValid() || !graph.findNode(id) ||
-            !members.insert(id.value).second)
-            return invalid("A/V registration has invalid or duplicate domain members");
+    for (const auto* partition : {&plan.processing.source, &plan.processing.output}) {
+        if (partition->empty())
+            return invalid("A/V registration requires source and output processing ownership");
+        for (const auto id : *partition) {
+            if (!id.isValid() || !graph.findNode(id) ||
+                !members.insert(id.value).second)
+                return invalid("A/V processing ownership has invalid, duplicate or overlapping members");
+        }
     }
+    const auto sourceOwned = [&](MediaNodeId id) {
+        const auto& source = plan.processing.source;
+        return std::find(source.begin(), source.end(), id) != source.end();
+    };
+    if (!sourceOwned(plan.input.epochBinder) ||
+        !sourceOwned(plan.input.activationSequencer) ||
+        !sourceOwned(plan.input.releaseExtractor) ||
+        !sourceOwned(plan.preparationOwner) || sourceOwned(plan.outputScheduler))
+        return invalid("A/V registration roles conflict with processing ownership");
     if (members.size() != graph.nodes().size())
         return invalid("Single A/V domain registration must cover its complete graph");
     const auto matches = [&](MediaNodeId id, MediaNodeKind kind) {
@@ -62,6 +76,64 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         if (node.options.value("video.startup_preparation.owner") == "1") ++ownerCount;
         if (node.kind == MediaNodeKind::DemuxPacketClockBinder) ++demuxCount;
         if (node.kind == MediaNodeKind::MpegTsRtpSdpPublisher) ++publisherCount;
+        // These node roles have fixed ownership in the admitted single-source A/V graph.
+        // Flexible video-only fanout branches are outside this binding contract.
+        bool requiresSource = false;
+        switch (node.kind) {
+        case MediaNodeKind::VideoEncode:
+        case MediaNodeKind::AudioEncode:
+        case MediaNodeKind::EncodedAudioCanonicalizer:
+        case MediaNodeKind::AvOutputScheduler:
+        case MediaNodeKind::ScheduledOutputRouter:
+        case MediaNodeKind::RtpDatagramMaterializer:
+        case MediaNodeKind::RtpSdpPublisher:
+        case MediaNodeKind::DatagramTransportPlanSource:
+        case MediaNodeKind::ScheduledDatagramSender:
+        case MediaNodeKind::ProjectMpegTsPlanSource:
+        case MediaNodeKind::ScheduledTsAccessUnitAdapter:
+        case MediaNodeKind::MpegTsDatagramMaterializer:
+        case MediaNodeKind::MpegTsRtpSdpPublisher:
+        case MediaNodeKind::FileMux:
+            break;
+        case MediaNodeKind::RawRtpInput:
+        case MediaNodeKind::RealtimeInput:
+        case MediaNodeKind::MpegTsDemux:
+        case MediaNodeKind::Demux:
+        case MediaNodeKind::StreamSplit:
+        case MediaNodeKind::RtpClockGroup:
+        case MediaNodeKind::RtpClockSnapshotFanout:
+        case MediaNodeKind::RtpPacketClockBinder:
+        case MediaNodeKind::RtpSourceClockStateAdapter:
+        case MediaNodeKind::DemuxPacketClockBinder:
+        case MediaNodeKind::SourceClockStateFanout:
+        case MediaNodeKind::LockedPacketGate:
+        case MediaNodeKind::CanonicalInput:
+        case MediaNodeKind::AvStartupCoordinator:
+        case MediaNodeKind::AvStartupClock:
+        case MediaNodeKind::PlaybackEpochBinder:
+        case MediaNodeKind::ActivatedStartupReleaseSequencer:
+        case MediaNodeKind::AvBoundReleaseExtractor:
+        case MediaNodeKind::CodecResolver:
+        case MediaNodeKind::PacketStartGate:
+        case MediaNodeKind::VideoDecode:
+        case MediaNodeKind::HardwareTransfer:
+        case MediaNodeKind::VideoTimestamp:
+        case MediaNodeKind::VideoFrameRate:
+        case MediaNodeKind::VideoFilter:
+        case MediaNodeKind::PacketNormalize:
+        case MediaNodeKind::PacketSourceConfig:
+        case MediaNodeKind::AudioCodecResolver:
+        case MediaNodeKind::AudioDecode:
+        case MediaNodeKind::AudioStartupTrim:
+        case MediaNodeKind::AudioDriftController:
+        case MediaNodeKind::AudioResample:
+            requiresSource = true;
+            break;
+        default:
+            return invalid("A/V registration has no processing ownership contract for this node kind");
+        }
+        if (sourceOwned(node.id) != requiresSource)
+            return invalid("A/V node role conflicts with its processing ownership");
         if (node.kind == MediaNodeKind::VideoEncode) {
             auto filtered = requiredBoolNodeOption(&node.options,
                 "MediaAvRuntimeRegistrationValidator", "pipeline.filter_active");
@@ -85,7 +157,8 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         return invalid("A/V registration does not cover the demux clock binders");
     if (plan.input.demuxClock) {
         const auto& demux = *plan.input.demuxClock;
-        if (demux.videoBinder == demux.audioBinder ||
+        if (!sourceOwned(demux.videoBinder) || !sourceOwned(demux.audioBinder) ||
+            demux.videoBinder == demux.audioBinder ||
             !matches(demux.videoBinder, MediaNodeKind::DemuxPacketClockBinder) ||
             !matches(demux.audioBinder, MediaNodeKind::DemuxPacketClockBinder))
             return invalid("A/V demux registration requires distinct typed binders");
@@ -102,7 +175,8 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
     }
     if (publisherCount != (plan.rtpSdpPublisher ? 1u : 0u) ||
         (plan.rtpSdpPublisher &&
-         !matches(*plan.rtpSdpPublisher, MediaNodeKind::MpegTsRtpSdpPublisher)))
+         (sourceOwned(*plan.rtpSdpPublisher) ||
+          !matches(*plan.rtpSdpPublisher, MediaNodeKind::MpegTsRtpSdpPublisher))))
         return invalid("A/V registration does not cover its exact SDP publisher");
     return ::media::Status::success();
 }

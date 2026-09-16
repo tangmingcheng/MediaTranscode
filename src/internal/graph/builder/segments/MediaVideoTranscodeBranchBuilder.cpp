@@ -384,12 +384,27 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     if (auto status = connectTranscodePorts(graph, options, nodes); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
+    // The resolver still prepares both codec contexts as one source-bound node.
+    // This partition does not split its resource or generation lifetime.
+    MediaProcessingNodeOwnership processing;
+    for (const auto id : {nodes.packetStartGate,
+             nodes.videoDecode, nodes.sourceCopy, nodes.outputFanout}) {
+        if (id.isValid()) processing.source.push_back(id);
+    }
+    (options.sharedDecode ? processing.output : processing.source).push_back(nodes.codecResolver);
+    auto& processingStages = options.sharedDecode || options.plan.outputFanout
+        ? processing.output : processing.source;
+    for (const auto id : {nodes.hardwareTransfer, nodes.videoTimestamp,
+             nodes.videoFrameRate, nodes.videoFilter}) {
+        if (id.isValid()) processingStages.push_back(id);
+    }
+    processing.output.push_back(nodes.videoEncode);
     return ::media::Result<MediaEncodedBranchEndpoints>::success({
         {nodes.videoEncode, "codec"}, {nodes.videoEncode, "packet"},
         options.canonicalLineageCapacity
             ? std::optional<MediaNodeId>(nodes.videoFilter.isValid()
                   ? nodes.videoFilter : nodes.videoFrameRate)
-            : std::nullopt});
+            : std::nullopt, std::move(processing)});
 }
 
 } // namespace media::ffmpeg::graph

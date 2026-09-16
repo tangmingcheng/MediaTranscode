@@ -162,7 +162,8 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::success(
         MediaRealtimeAvSyncProtocolInputEndpoints{
             MediaEndpoint{video, "packet"}, MediaEndpoint{audio, "packet"},
-            MediaEndpoint{adapter, "state"}});
+            MediaEndpoint{adapter, "state"}, std::nullopt,
+            {snapshot, video, audio, adapter}});
 }
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildMpegTs(
@@ -201,7 +202,8 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             built.value().audio,
             built.value().sourceClock,
             MediaAvDemuxClockRegistration{built.value().video.node,
-                                         built.value().audio.node}});
+                                         built.value().audio.node},
+            {built.value().video.node, built.value().audio.node}});
 }
 
 } // namespace
