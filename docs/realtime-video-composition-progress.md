@@ -2,6 +2,8 @@
 
 ## 当前状态
 
+最新：2026-09-16已修复RTP失效重复增代及old/next投影，r8两次匹配源BYE均保持next2/old1，无malformed discontinuity；源120秒发送完整，之后CLI无进展超时，完整验收仍FAIL。后续恢复等待期限、purge并发屏障及黑场/静音输出尚未实现，详见[源失活代次记录](realtime-video-composition-source-generation.md)。
+
 2026-09-15：用户批准两阶段计划及新增合屏输入列表、网格、指定音源的 CLI/C API。基线 `d590cc3b`，工作分支 `feat/realtime-video-composition`。现有未跟踪依赖、`NUL` 和 `out/` 属于实施前状态，不纳入本轮提交。
 
 Release 基线已通过 VS2026 全量 clean-first 构建（configure/build exit code 0）。已实施单域显式注册、逐输入 ingress 与音频 frame credit 基础修改；尚未实现合屏，尚无合屏真实验收通过结论。

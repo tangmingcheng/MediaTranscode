@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-16 源失活代次增量
+
+两位独立审查对validator三阶段、重复失效幂等、old/next投影及耗尽失败均给出Standards/局部Spec PASS。r8实际解析两次匹配源BYE，next=2/old=1稳定，无原malformed discontinuity；120秒有编码与VLC画面，随后仍无进展超时。完整交付FAIL，六维就绪度保持10/8/6/12/2/4，共42/100；不外推完整恢复或跨平台。剩余恢复获取期限、purge并发、尾部和物理内存风险见[专项记录](docs/realtime-video-composition-source-generation.md)。
+
 ## 2026-09-15 阶段一基础修改复审
 
 两位未参与实现者对阶段一及2026-09-16输入保留增量均给出 Standards PASS / 当前 WIP 源码 Spec PASS。本轮贯通输入启动 retention、字节/对象信用、binder与重复帧凭证生命周期及独立启动批次发布容量；r5、r6真实链路FAIL，修复后的r7已进入持续编码与VLC播放，最终结果见[输入保留记录](docs/realtime-video-composition-input-retention.md)。独立复审建议维持下表六维尺度42/100：仍是单源基础，多源绑定、公共合成域、逐源黑屏/静音与恢复及双平台合屏验收尚未完成。逻辑credit不代表clone side data等全部物理分配边界；控制进展、完整结束和Windows→RKMPP回归仍待闭环，不因局部修复提高评分。

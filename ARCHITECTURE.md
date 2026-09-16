@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+RTP A/V时钟域由validator区分初始获取、活动与重获取，失活首次保存旧代次并分配一次下一代次；快照明确失效旧代次，adapter向gate投影旧失效、向新获取保留下一代次。重复失效不重复建代，恢复候选继续受SR/CNAME时效约束，代次耗尽失败。此机制不将RTCP BYE转换成会话EOF；完整恢复期限与多源持续输出仍待实现，见[源失活记录](docs/realtime-video-composition-source-generation.md)。
+
 `src/internal/graph` 是项目中的 DAG 化媒体处理管线目录，负责描述、构建、校验、编译和运行媒体处理图。
 
 ```text

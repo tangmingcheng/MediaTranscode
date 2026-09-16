@@ -83,6 +83,9 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
     const MediaRtcpClockEvidence& evidence,
     MediaRtpSourceClockCalibration calibration)
 {
+    if (m_phase == Phase::Exhausted) {
+        return invalid("RTP clock group generation is exhausted");
+    }
     if ((streamKind != MediaStreamKind::Video && streamKind != MediaStreamKind::Audio) ||
         (m_config.requireMatchingCname && evidence.cname.empty()) ||
         evidence.senderReportObservedAtNs < 0 ||
@@ -145,19 +148,25 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
     return ::media::Status::success();
 }
 
-MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
+::media::Result<MediaRtpClockGroupSnapshot> MediaRtpClockGroupValidator::snapshot(
     std::int64_t observedAtNs)
 {
+    using Result = ::media::Result<MediaRtpClockGroupSnapshot>;
+    if (m_phase == Phase::Exhausted) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP clock group generation is exhausted"));
+    }
     MediaRtpClockGroupSnapshot result{
         m_reacquireRequired ? MediaRtpClockGroupState::ReacquireRequired
                             : MediaRtpClockGroupState::Acquiring,
         m_groupGeneration,
-        std::nullopt};
-    if (m_phase == Phase::InitialAcquisition && !m_reacquireRequired) {
-        discardExpiredInitialCandidates(observedAtNs);
-        result.groupGeneration = 0;
+        std::nullopt,
+        m_invalidatedGeneration};
+    if (m_phase != Phase::ActiveGeneration && !m_reacquireRequired) {
+        discardExpiredAcquisitionCandidates(observedAtNs);
     }
-    if (m_reacquireRequired || !m_video || !m_audio) return result;
+    if (m_reacquireRequired || !m_video || !m_audio)
+        return Result::success(std::move(result));
 
     const auto age = [observedAtNs](const StreamState& stream) -> std::optional<std::int64_t> {
         if (observedAtNs < stream.evidence.senderReportObservedAtNs) return std::nullopt;
@@ -178,20 +187,30 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         *videoCnameAge > m_config.videoCnameTimeoutNs ||
         *audioCnameAge > m_config.audioCnameTimeoutNs) {
         clear(true);
-        result.state = MediaRtpClockGroupState::ReacquireRequired;
+        if (m_phase == Phase::Exhausted) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP clock group generation is exhausted"));
+        }
+        result.state = m_reacquireRequired
+            ? MediaRtpClockGroupState::ReacquireRequired
+            : MediaRtpClockGroupState::Acquiring;
         result.groupGeneration = m_groupGeneration;
-        return result;
+        result.invalidatedGeneration = m_invalidatedGeneration;
+        return Result::success(std::move(result));
     }
 
     result.state = *videoAge > m_config.senderReportTimeoutNs ||
                            *audioAge > m_config.senderReportTimeoutNs
         ? MediaRtpClockGroupState::Degraded
         : MediaRtpClockGroupState::Locked;
-    if (result.state != MediaRtpClockGroupState::Locked) return result;
+    if (result.state != MediaRtpClockGroupState::Locked)
+        return Result::success(std::move(result));
     if (m_phase == Phase::InitialAcquisition) {
         ++m_groupGeneration;
-        m_phase = Phase::ActiveGeneration;
     }
+    m_phase = Phase::ActiveGeneration;
+    m_invalidatedGeneration.reset();
+    result.invalidatedGeneration.reset();
     result.groupGeneration = m_groupGeneration;
     MediaRtpSourceClockCalibration video = m_video->calibration;
     MediaRtpSourceClockCalibration audio = m_audio->calibration;
@@ -208,23 +227,23 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         m_video->evidence.cname,
         std::move(video),
         std::move(audio)};
-    return result;
+    return Result::success(std::move(result));
 }
 
-void MediaRtpClockGroupValidator::discardExpiredInitialCandidates(
+void MediaRtpClockGroupValidator::discardExpiredAcquisitionCandidates(
     std::int64_t observedAtNs) noexcept
 {
-    if (m_video && !initialCandidateIsFresh(
+    if (m_video && !acquisitionCandidateIsFresh(
                        *m_video, observedAtNs, m_config.videoCnameTimeoutNs)) {
         m_video.reset();
     }
-    if (m_audio && !initialCandidateIsFresh(
+    if (m_audio && !acquisitionCandidateIsFresh(
                        *m_audio, observedAtNs, m_config.audioCnameTimeoutNs)) {
         m_audio.reset();
     }
 }
 
-bool MediaRtpClockGroupValidator::initialCandidateIsFresh(
+bool MediaRtpClockGroupValidator::acquisitionCandidateIsFresh(
     const StreamState& stream,
     std::int64_t observedAtNs,
     std::int64_t cnameTimeoutNs) const noexcept
@@ -241,18 +260,24 @@ bool MediaRtpClockGroupValidator::initialCandidateIsFresh(
 
 void MediaRtpClockGroupValidator::invalidate() noexcept
 {
-    clear(m_phase == Phase::ActiveGeneration);
+    clear(m_phase != Phase::InitialAcquisition);
 }
 
 void MediaRtpClockGroupValidator::clear(bool requireReacquisition) noexcept
 {
     if (m_phase == Phase::ActiveGeneration) {
+        if (m_groupGeneration == (std::numeric_limits<std::uint64_t>::max)()) {
+            m_phase = Phase::Exhausted;
+            return;
+        }
+        m_invalidatedGeneration = m_groupGeneration;
         ++m_groupGeneration;
+        m_phase = Phase::Reacquiring;
     }
     m_video.reset();
     m_audio.reset();
     m_commonSourceEpoch.reset();
-    m_reacquireRequired = requireReacquisition;
+    m_reacquireRequired = requireReacquisition && m_invalidatedGeneration.has_value();
 }
 
 } // namespace media::ffmpeg::graph

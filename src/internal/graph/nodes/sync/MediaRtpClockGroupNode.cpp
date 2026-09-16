@@ -368,13 +368,17 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("RTP clock group output has no downstream consumer yet"));
     }
-    MediaRtpClockGroupSnapshot snapshot = m_validator->snapshot(observedAtNs);
+    auto observed = m_validator->snapshot(observedAtNs);
+    if (!observed) return ::media::Status::failure(observed.error());
+    MediaRtpClockGroupSnapshot snapshot = std::move(observed).value();
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
         "rtp_clock_group_snapshot state=" +
             std::to_string(static_cast<int>(snapshot.state)) +
             " generation=" + std::to_string(snapshot.groupGeneration) +
+            " invalidated_generation=" + (snapshot.invalidatedGeneration
+                ? std::to_string(*snapshot.invalidatedGeneration) : "none") +
             " locked=" + (snapshot.locked ? std::string("1")
                                            : std::string("0")));
     return emitOutput(

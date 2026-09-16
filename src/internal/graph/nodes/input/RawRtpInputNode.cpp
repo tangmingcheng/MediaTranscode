@@ -766,6 +766,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!packets) return ::media::Status::failure(packets.error());
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
     if (!status) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtcp_clock_invalidation generation=" +
+                std::to_string(m_clockTracker->generation()) +
+                " reason=" + status.error().message);
         if (m_clockSchedule) m_clockSchedule->reset();
         if (context.findOutputChannel(nodeId(), "event")) {
             m_events.emplace_back(
