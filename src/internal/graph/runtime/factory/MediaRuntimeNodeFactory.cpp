@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include <type_traits>
 
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
@@ -220,11 +221,33 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             prepared.error());
     }
-    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-        std::make_unique<Node>(
-            node.id, mode.value(),
-            std::make_shared<typename Node::LineageState>(
-                mode.value(), prepared.value().capacity)));
+    if constexpr (std::is_same_v<Node, AudioEncodeNode>) {
+        std::optional<MediaAudioEncoderFifoRetentionPlan> retention;
+        if (mode.value() == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+            auto input = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.input_samples");
+            auto samples = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.samples");
+            auto bytes = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.bytes");
+            auto fragments = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.fragments");
+            auto frame = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.frame_samples");
+            if (!input || !samples || !bytes || !fragments || !frame) {
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    !input ? input.error() : !samples ? samples.error() :
+                    !bytes ? bytes.error() : !fragments ? fragments.error() :
+                    frame.error());
+            }
+            retention = MediaAudioEncoderFifoRetentionPlan{input.value(), samples.value(),
+                bytes.value(), static_cast<std::size_t>(fragments.value()), frame.value()};
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<Node>(node.id, mode.value(),
+                std::make_shared<typename Node::LineageState>(mode.value(),
+                    prepared.value().capacity, std::move(retention))));
+    } else {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<Node>(node.id, mode.value(),
+                std::make_shared<typename Node::LineageState>(
+                    mode.value(), prepared.value().capacity)));
+    }
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createAudioStartupTrimStage(
@@ -527,8 +550,16 @@ template <typename Node>
                 node.id, std::move(group).value()));
     }
     case MediaNodeKind::EncodedAudioCanonicalizer:
+    {
+        auto group = requiredSyncGroup(
+            node, "MediaEncodedAudioCanonicalizerNode", "audio_canonicalizer.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(group.error());
+        }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaEncodedAudioCanonicalizerNode>(node.id));
+            std::make_unique<MediaEncodedAudioCanonicalizerNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::ScheduledOutputRouter:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaScheduledOutputRouterNode>(node.id));

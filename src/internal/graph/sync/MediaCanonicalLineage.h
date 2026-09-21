@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaCanonicalAccessUnitIdentity.h"
 #include "internal/graph/time/MediaMappedTimestamp.h"
 #include "media_transcode/Result.h"
 
@@ -15,11 +15,23 @@ struct MediaCanonicalLineage final {
     std::optional<MediaRunningTime> decode;
     MediaRunningTime duration;
     MediaDecodeOrderMode decodeOrder;
-    std::string sourceIdentity;
-    MediaSourceAccessUnitSequence sourceSequence;
+    MediaCanonicalAccessUnitIdentity identity;
     MediaTimeMappingConfidence mappingConfidence;
     std::uint64_t generation;
+
+    MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept;
 };
+
+struct MediaCanonicalSourceStamp final {
+    MediaSourceAccessUnitIdentity identity;
+    std::uint64_t generation;
+    MediaTimeMappingConfidence mappingConfidence;
+    MediaRunningTime presentation;
+    MediaRunningTime duration;
+};
+
+bool sameMediaCanonicalTimeline(const MediaCanonicalLineage& left,
+                                const MediaCanonicalLineage& right) noexcept;
 
 ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>
 createMediaCanonicalLineage(const MediaMappedTimestamp& mapped,
@@ -34,6 +46,16 @@ createMediaCanonicalLineage(
     MediaDecodeOrderMode decodeOrder,
     std::string sourceIdentity,
     MediaSourceAccessUnitSequence sourceSequence,
+    MediaTimeMappingConfidence mappingConfidence,
+    std::uint64_t generation);
+
+::media::Result<std::shared_ptr<const MediaCanonicalLineage>>
+createMediaCanonicalOutputLineage(
+    MediaRunningTime presentation,
+    std::optional<MediaRunningTime> decode,
+    MediaRunningTime duration,
+    MediaDecodeOrderMode decodeOrder,
+    MediaOutputAccessUnitIdentity identity,
     MediaTimeMappingConfidence mappingConfidence,
     std::uint64_t generation);
 

@@ -59,7 +59,7 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
     }
     if (*options.lineageMode ==
         MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-        if (!options.lineageCapacity || *options.lineageCapacity == 0 ||
+        if (!options.encoderFifoRetention || !options.lineageCapacity || *options.lineageCapacity == 0 ||
             !options.correctionMode ||
             *options.correctionMode !=
                 MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
@@ -70,7 +70,7 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
         return ::media::Result<void>::success();
     }
     if (*options.lineageMode != MediaAudioLineageExecutionMode::LegacyPlainPacket ||
-        options.lineageCapacity ||
+        options.encoderFifoRetention || options.lineageCapacity ||
         !options.correctionMode ||
         *options.correctionMode != MediaAudioCorrectionExecutionMode::Disabled) {
         return ::media::Result<void>::failure(
@@ -321,6 +321,19 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
             graph, options, nodes.resample, MediaAudioResampleLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = applyLineageStageOptions(
             graph, options, nodes.encode, MediaAudioEncodeLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    if (options.encoderFifoRetention) {
+        const auto& limit = *options.encoderFifoRetention;
+        for (const auto& item : {
+                 std::pair{"audio.fifo.input_samples", std::to_string(limit.maximumInputSamples)},
+                 std::pair{"audio.fifo.samples", std::to_string(limit.maximumSamples)},
+                 std::pair{"audio.fifo.bytes", std::to_string(limit.maximumBytes)},
+                 std::pair{"audio.fifo.fragments", std::to_string(limit.maximumFragments)},
+                 std::pair{"audio.fifo.frame_samples", std::to_string(limit.frameSamples)}}) {
+            auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, nodes.encode, item.first, item.second);
+            if (!status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        }
+    }
     if (nodes.startupTrim.isValid()) {
         if (auto status = applyLineageStageOptions(
                 graph, options, nodes.startupTrim,
@@ -330,6 +343,12 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, nodes.driftController,
                 "audio_drift_controller.sync_group",
+                options.syncGroup->value()); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    }
+    if (nodes.canonicalizer.isValid()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, nodes.canonicalizer,
+                "audio_canonicalizer.sync_group",
                 options.syncGroup->value()); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(

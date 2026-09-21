@@ -33,7 +33,7 @@ namespace {
     }
     if (!lineage) return Result::success(std::move(output));
     return MediaCanonicalAccessUnitBuffer::create(
-        std::move(output), std::move(lineage), std::nullopt);
+        std::move(output), std::move(lineage), std::nullopt, {});
 }
 } // namespace
 

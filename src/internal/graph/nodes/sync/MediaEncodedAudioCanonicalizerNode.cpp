@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaEncodedAudioCanonicalizerNode.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaEncodedAudioLineageBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
@@ -10,10 +11,11 @@
 namespace media::ffmpeg::graph {
 
 MediaEncodedAudioCanonicalizerNode::MediaEncodedAudioCanonicalizerNode(
-    MediaNodeId nodeId)
+    MediaNodeId nodeId, MediaAvSyncGroupKey outputGroup)
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaEncodedAudioCanonicalizerNode")
     , m_state(std::make_shared<MediaEncodedAudioCanonicalizerState>())
+    , m_outputGroup(std::move(outputGroup))
 {
 }
 
@@ -37,7 +39,8 @@ MediaNodeKind MediaEncodedAudioCanonicalizerNode::staticKind() noexcept
 ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
 MediaEncodedAudioCanonicalizerNode::canonicalize(
     const MediaBufferRef& encoded,
-    MediaSourceAccessUnitSequence sequence)
+    MediaOutputAccessUnitSequence sequence,
+    const MediaAvSyncGroupKey& outputGroup)
 {
     const auto* input = dynamic_cast<const MediaEncodedAudioLineageBuffer*>(
         encoded.get());
@@ -69,20 +72,39 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             presentation.error());
     }
-    auto lineage = createMediaCanonicalLineage(
+    auto lineage = createMediaCanonicalOutputLineage(
         presentation.value(), std::nullopt, duration.value(),
         MediaDecodeOrderMode::PresentationOrderNoReorder,
-        std::string(generationPurgeIdentity()), sequence,
+        MediaOutputAccessUnitIdentity{outputGroup.value(), MediaScheduledStream::Audio, sequence},
         MediaTimeMappingConfidence::Locked,
         origin.generation);
     if (!lineage) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             lineage.error());
     }
+    std::vector<MediaCanonicalAudioContribution> contributions;
+    contributions.reserve(fragments.size());
+    for (const auto& fragment : fragments) {
+        if (!fragment.lineage || !validateMediaCanonicalLineage(*fragment.lineage)) {
+            return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Encoded audio contribution requires valid source lineage"));
+        }
+        const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&fragment.lineage->identity);
+        if (!source) {
+            return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Encoded audio contribution rejects recursive output lineage"));
+        }
+        contributions.push_back(MediaCanonicalAudioContribution{
+            MediaCanonicalSourceStamp{*source, fragment.lineage->generation,
+                fragment.lineage->mappingConfidence, fragment.lineage->presentation,
+                fragment.lineage->duration}, fragment.interval});
+    }
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
         input->media(), std::move(lineage).value(),
         MediaCanonicalAudioSampleInterval{
-            begin, end, origin.outputSampleRate});
+            begin, end, origin.outputSampleRate}, std::move(contributions));
     if (!canonical) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             canonical.error());
@@ -181,7 +203,7 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
                     "Encoded audio canonicalizer rejects interval discontinuity"));
         }
         auto output = canonicalize(
-            *input.value(), MediaSourceAccessUnitSequence(m_state->nextSequence));
+            *input.value(), MediaOutputAccessUnitSequence(m_state->nextSequence), m_outputGroup);
         if (!output) {
             return ::media::Result<MediaNodeProcessResult>::failure(output.error());
         }

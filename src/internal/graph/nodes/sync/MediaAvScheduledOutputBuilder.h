@@ -22,7 +22,7 @@ public:
     static ::media::Result<MediaPreparedScheduledOutput> repeatedVideo(
         const MediaVideoRepeatRequestBuffer& repeat,
         const MediaBufferRef& lastDisplayedVideo,
-        MediaSourceAccessUnitSequence lastDisplayedSequence,
+        MediaCanonicalAccessUnitSequence lastDisplayedSequence,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime dispatchOnMaster,
         MediaRunningTime emitOnMaster,

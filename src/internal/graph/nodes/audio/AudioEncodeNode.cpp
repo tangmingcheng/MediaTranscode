@@ -23,11 +23,12 @@ namespace media::ffmpeg::graph {
 
 AudioEncodeLineageState::AudioEncodeLineageState(
     MediaAudioLineageExecutionMode mode,
-    std::size_t capacity) noexcept
+    std::size_t capacity,
+    std::optional<MediaAudioEncoderFifoRetentionPlan> retention) noexcept
     : MediaAudioLineageState(
           mode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
           capacity)
-    , frameQueue(mode, capacity)
+    , frameQueue(mode, capacity, std::move(retention))
 {
 }
 
@@ -227,7 +228,8 @@ void AudioEncodeNode::resetRuntimeState() noexcept
                 MediaGraphDiagnosticPhase::RuntimeNode,
                 "audio_encode_trace stage=codec_bound");
         }
-        if (codecContext()->frame_size > 0) {
+        if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio ||
+            codecContext()->frame_size > 0) {
             auto queueStatus = m_frameQueue.configure(*codecContext());
             if (!queueStatus) {
                 return ::media::Result<MediaNodeProcessResult>::failure(queueStatus.error());

@@ -107,7 +107,7 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
             const auto* first = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
                 release.video().front().media.get());
             out << " first_video_sequence="
-                << (first ? std::to_string(first->sourceSequence().value()) : "untyped");
+                << (first ? std::to_string(first->canonicalSequence().value()) : "untyped");
         } else {
             out << " first_video_sequence=none";
         }

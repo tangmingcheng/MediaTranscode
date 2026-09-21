@@ -16,6 +16,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include "internal/graph/planner/audio/MediaAudioEncoderFifoRetentionPlan.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -55,6 +56,7 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeAvSyncPlanningFacts planningFacts;
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
 };
 
 } // namespace media::ffmpeg::graph

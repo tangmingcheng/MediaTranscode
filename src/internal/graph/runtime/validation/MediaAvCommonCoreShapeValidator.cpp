@@ -48,7 +48,10 @@ constexpr std::array GroupContracts{
         "av_startup.sync_group"},
     GroupOptionContract{
         MediaNodeKind::AudioDriftController,
-        "audio_drift_controller.sync_group"}};
+        "audio_drift_controller.sync_group"},
+    GroupOptionContract{
+        MediaNodeKind::EncodedAudioCanonicalizer,
+        "audio_canonicalizer.sync_group"}};
 
 const GroupOptionContract* findContract(
     MediaNodeKind kind,

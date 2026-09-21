@@ -1,4 +1,7 @@
 # MediaTranscode Quality Score
+## 2026-09-21 输出身份与 FIFO 边界复审
+
+两名未参与实现的智能体对源/输出身份、canonical 音频贡献保存、完整 timeline 校验及同步 FIFO 上界给出 Standards/局部 Spec PASS，直接 include 和同步组 contract 修复后复审结论保持。Release全量成功；r20重入AAC时间轴失败，CLI自然退出1、逻辑资源归零。完整合屏 FAIL，就绪度仍为 42/100（10/8/6/12/2/4）；尚缺独立输出生命周期、连续聚合、黑帧/静音、多源与双平台运行证据。FIFO PCM payload 界不覆盖 metadata/codec 物理内存，贡献尚未穿过调度到协议层。构建与实流结果见[本轮记录](docs/realtime-video-composition-output-identity.md)，源码 PASS 不替代运行验收。
 
 ## 2026-09-16 显式处理归属与 r16–r18 复审
 

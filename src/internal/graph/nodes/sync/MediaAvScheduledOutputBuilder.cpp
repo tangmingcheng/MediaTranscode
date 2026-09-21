@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaAvScheduledOutputBuilder.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/MediaScheduledPayloadClone.h"
 
 namespace media::ffmpeg::graph {
@@ -33,7 +34,7 @@ MediaAvScheduledOutputBuilder::canonicalVideo(
         unit->canonicalPresentation(), canonicalDispatch.value(),
         presentationOnMaster, dispatchOnMaster, emitOnMaster,
         unit->canonicalDuration(),
-        unit->generation(), unit->sourceSequence(), std::nullopt, std::nullopt,
+        unit->generation(), unit->canonicalSequence(), std::nullopt, std::nullopt,
         decision};
     auto output = MediaScheduledAccessUnit::create(std::move(parameters));
     if (!output) {
@@ -49,7 +50,7 @@ MediaAvScheduledOutputBuilder::canonicalVideo(
 MediaAvScheduledOutputBuilder::repeatedVideo(
     const MediaVideoRepeatRequestBuffer& repeat,
     const MediaBufferRef& lastDisplayedVideo,
-    MediaSourceAccessUnitSequence lastDisplayedSequence,
+    MediaCanonicalAccessUnitSequence lastDisplayedSequence,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime dispatchOnMaster,
     MediaRunningTime emitOnMaster,
@@ -93,7 +94,7 @@ MediaAvScheduledOutputBuilder::repeatedVideo(
         unit.canonicalPresentation(), canonicalDispatch.value(),
         presentationOnMaster, dispatchOnMaster, emitOnMaster,
         unit.canonicalDuration(),
-        unit.generation(), unit.sourceSequence(), std::nullopt, std::nullopt,
+        unit.generation(), unit.canonicalSequence(), std::nullopt, std::nullopt,
         std::nullopt});
 }
 

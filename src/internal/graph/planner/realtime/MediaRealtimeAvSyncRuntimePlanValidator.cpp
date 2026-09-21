@@ -133,7 +133,18 @@ namespace media::ffmpeg::graph {
                 expectedCorrection.value().frequencyFilterTimeConstant) {
             return invalid("audio correction derivation");
         }
-    } else if (runtime.audioCorrection ||
+        if (!runtime.encoderFifoRetention || !runtime.audioPipeline.resolvedOutput ||
+            !runtime.audioPipeline.selectedResampler) {
+            return invalid("audio encoder FIFO retention facts");
+        }
+        auto expectedRetention = MediaAudioEncoderFifoRetentionPlan::create(
+            *runtime.audioPipeline.resolvedOutput,
+            runtime.audioPipeline.selectedResampler->maximumOutputBlockSamples,
+            runtime.synchronization.audioServo);
+        if (!expectedRetention || *runtime.encoderFifoRetention != expectedRetention.value()) {
+            return invalid("audio encoder FIFO retention derivation");
+        }
+    } else if (runtime.encoderFifoRetention || runtime.audioCorrection ||
                runtime.synchronization.audioServo.commandLeadNs ||
                runtime.synchronization.audioServo.compensationWindowNs ||
                runtime.synchronization.audioServo.frequencyFilterTimeConstantNs) {

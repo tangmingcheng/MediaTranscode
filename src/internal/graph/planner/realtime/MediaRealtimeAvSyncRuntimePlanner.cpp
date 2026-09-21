@@ -355,6 +355,18 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 status.error());
         }
     }
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
+    if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
+        if (!audio.resolvedOutput || !audio.selectedResampler) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                ::media::ErrorInfo::invalidArgument("audio FIFO requires selected resampler and encoder"));
+        }
+        auto retention = MediaAudioEncoderFifoRetentionPlan::create(
+            *audio.resolvedOutput, audio.selectedResampler->maximumOutputBlockSamples,
+            synchronization.audioServo);
+        if (!retention) return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(retention.error());
+        encoderFifoRetention = std::move(retention).value();
+    }
     auto assembly = planAssembly(outer, audio, synchronization, facts.value());
     if (!assembly) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -627,7 +639,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt});
+                : std::nullopt, std::move(encoderFifoRetention)});
 }
 
 } // namespace media::ffmpeg::graph

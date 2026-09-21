@@ -530,3 +530,7 @@ Synchronized `AudioVideo` retains the canonical startup coordinator, generation 
 Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
 
 RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。
+
+### 合屏输出身份基础（2026-09-21）
+
+Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号改为域中性。音频编码 canonicalizer 使用既有同步组产品标识输出，并在 canonical AU 中保留非递归真实源贡献与精确样本区间。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。独立 output epoch、源局部 purge、持续聚合和贡献全链路资源账尚未接通；源码局部审查通过不能代替合屏验收。见 [实施与验证](docs/realtime-video-composition-output-identity.md)。

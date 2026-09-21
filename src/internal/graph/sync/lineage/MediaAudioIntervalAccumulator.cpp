@@ -28,17 +28,17 @@ namespace media::ffmpeg::graph {
         return fail("Audio interval accumulator requires a valid lineage interval");
     }
     if (!m_initialized) {
-        m_generation = fragment.lineage->generation;
+        m_timeline = fragment.lineage;
         m_sampleRate = fragment.interval.sampleRate;
         m_initialized = true;
     } else {
-        if (fragment.lineage->generation != m_generation ||
+        if (!sameMediaCanonicalTimeline(*m_timeline, *fragment.lineage) ||
             fragment.interval.sampleRate != m_sampleRate ||
             m_expectedNextBegin != fragment.interval.begin) {
             std::ostringstream message;
             message
-                << "Audio interval accumulator requires contiguous same-generation intervals"
-                << " expected_generation=" << m_generation
+                << "Audio interval accumulator requires contiguous same-timeline intervals"
+                << " expected_generation=" << m_timeline->generation
                 << " actual_generation=" << fragment.lineage->generation
                 << " expected_sample_rate=" << m_sampleRate
                 << " actual_sample_rate=" << fragment.interval.sampleRate
@@ -115,7 +115,7 @@ MediaAudioIntervalAccumulator::take(int samples)
 void MediaAudioIntervalAccumulator::reset() noexcept
 {
     m_fragments.clear();
-    m_generation = 0;
+    m_timeline.reset();
     m_sampleRate = 0;
     m_expectedNextBegin = 0;
     m_queuedSamples = 0;

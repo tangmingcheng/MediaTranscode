@@ -50,3 +50,7 @@ binder 获取队列满时停止取媒体包，继续消费时钟并等待原截�
 ## 2026-09-16：显式处理归属与 r16–r18 复验
 
 segment→registration→validator→registrar 的源/输出处理归属已落地，移除末尾全图归属推断；准备状态按明确角色注入，旧整体transition保留。两名独立审查者源码及局部证据PASS，完整合屏FAIL，42/100不变。Release首次120秒构建超时、同入口全量重试成功。r16源结束后无进展退出且残留4个逻辑对象；r17源启动晚于探测窗口、不计媒体验收；r18两次完整120秒源已越过七组purge并锁新代，仍报AAC时间轴错误，CLI自然退出1，逻辑资源归零。测试产物和进程已清理。独立输出时间轴、贡献模型、聚合与黑场/静音仍待实现，不能把此结构步骤当作域隔离完成。实际命令、指标与风险见[处理归属记录](realtime-video-composition-processing-ownership.md)。
+
+## 2026-09-21：输出身份与同步音频 FIFO
+
+源/输出 AU 类型身份、canonical 音频真实贡献保存和完整 timeline 校验已接入现有生产消费者；同步 FIFO 由 planner 推导并执行样本/PCM 字节/片段门禁。两名独立审查者对局部源码 PASS；直接 include 依赖修正后 Release 全量构建成功；r19 真实 CLI 暴露的 GroupContracts 漏项修复后再次全量成功，r20 首源完整120秒并显示画面，重入锁新代后仍报 AAC timeline 错误，CLI 自然退出1、逻辑资源归零。独立输出域、聚合、黑帧/静音及多源链路仍未完成，完整合屏 FAIL，42/100 不变。详见[输出身份记录](realtime-video-composition-output-identity.md)。

@@ -33,7 +33,7 @@ public:
 private:
     ::media::Status fail(std::string message);
     std::deque<MediaAudioIntervalFragment> m_fragments;
-    std::uint64_t m_generation = 0;
+    std::shared_ptr<const MediaCanonicalLineage> m_timeline;
     int m_sampleRate = 0;
     std::int64_t m_expectedNextBegin = 0;
     std::int64_t m_queuedSamples = 0;

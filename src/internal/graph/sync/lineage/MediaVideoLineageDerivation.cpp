@@ -45,7 +45,7 @@ deriveMediaVideoLineage(
                     presentation.value(), presentation.value(),
                     MediaRunningTime::fromNanoseconds(durationNs),
                     MediaDecodeOrderMode::PresentationOrderNoReorder,
-                    source.sourceIdentity, source.sourceSequence,
+                    source.identity,
                     source.mappingConfidence, source.generation}));
 }
 

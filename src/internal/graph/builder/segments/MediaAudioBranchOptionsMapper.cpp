@@ -34,6 +34,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     encodeOptions.correctionMode = options.correctionMode;
     encodeOptions.lineageMode = options.lineageMode;
     encodeOptions.lineageCapacity = options.lineageCapacity;
+    encodeOptions.encoderFifoRetention = options.encoderFifoRetention;
     encodeOptions.correctionGeneration = options.correctionGeneration;
     encodeOptions.correctionLookaheadWindows = options.correctionLookaheadWindows;
     encodeOptions.syncGroup = options.syncGroup;
@@ -45,7 +46,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     MediaAudioBranchSegmentOptions& options)
 {
     if (options.correctionMode || options.lineageMode ||
-        options.lineageCapacity || options.correctionGeneration ||
+        options.lineageCapacity || options.encoderFifoRetention || options.correctionGeneration ||
         options.correctionLookaheadWindows || options.syncGroup) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "synchronized audio branch mapping requires empty execution options"));
@@ -72,6 +73,11 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "synchronized frame-transcode bounds are incomplete"));
     }
+    if (!runtime.encoderFifoRetention) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "synchronized frame-transcode requires planned encoder FIFO retention"));
+    }
+    options.encoderFifoRetention = runtime.encoderFifoRetention;
     options.correctionMode =
         MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
     options.lineageMode =

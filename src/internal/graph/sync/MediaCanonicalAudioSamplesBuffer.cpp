@@ -49,12 +49,12 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
             sampleRate = fragment.interval.sampleRate;
             expectedBegin = fragment.interval.begin;
         }
-        if (fragment.lineage->generation != generation ||
+        if (!sameMediaCanonicalTimeline(*fragments.front().lineage, *fragment.lineage) ||
             fragment.interval.sampleRate != sampleRate ||
             fragment.interval.begin != expectedBegin) {
             return ::media::Result<MediaBufferRef>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "Canonical audio fragments must be contiguous and same-generation"));
+                    "Canonical audio fragments must be contiguous and share a timeline"));
         }
         expectedBegin = fragment.interval.end;
     }
