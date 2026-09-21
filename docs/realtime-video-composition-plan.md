@@ -53,3 +53,9 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 同一分支 `feat/realtime-video-composition` 完成 commit/push；每个完整通过的真实链路立即独立提交，标题与报告列出协议、编码转换、分辨率、帧率、码率及 RC。冻结后两个未参与实现的独立智能体同时明确 PASS，再提交 PR 并由新智能体审核。更新架构、质量评分和中文完成记录，UTF-8/CRLF，不纳入临时测试或既有未跟踪产物。
 
 进度与证据见 [实施记录](realtime-video-composition-progress.md)。
+
+## 2026-09-21：编码提交事务与画布事实
+
+编码器接受帧后无法撤销，贡献元数据须在 send 前完成验证和分配，成功后仅执行不分配的提交；EAGAIN 保留待发送帧并先接收，再重新准备候选。沿用现有 owner/lineage lock，不改变包时间轴与恢复语义。随后使用 Release 和原规格真实链路检查回归，双独立审查后交付。
+
+已核实版本的 AAC 驻留推导及 CUDA 黑帧路径分别记录在[编码驻留调查](realtime-video-composition-encoder-retention.md)和[能力调查](realtime-video-composition-capability.md)。未知编码器支持范围不得因版本白名单而隐式收缩；黑帧尚需权威 SPS/VUI 范围、生产帧池预算与 aggregate 消费闭环。以上不替代阶段一/二原验收门禁。

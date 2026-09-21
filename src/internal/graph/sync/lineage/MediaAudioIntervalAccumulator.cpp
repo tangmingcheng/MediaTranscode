@@ -8,6 +8,18 @@
 
 namespace media::ffmpeg::graph {
 
+void MediaAudioIntervalAccumulator::swap(MediaAudioIntervalAccumulator& other) noexcept
+{
+    using std::swap;
+    m_fragments.swap(other.m_fragments);
+    m_timeline.swap(other.m_timeline);
+    swap(m_sampleRate, other.m_sampleRate);
+    swap(m_expectedNextBegin, other.m_expectedNextBegin);
+    swap(m_queuedSamples, other.m_queuedSamples);
+    swap(m_initialized, other.m_initialized);
+    swap(m_terminalFailure, other.m_terminalFailure);
+}
+
 ::media::Status MediaAudioIntervalAccumulator::fail(std::string message)
 {
     m_terminalFailure = true;

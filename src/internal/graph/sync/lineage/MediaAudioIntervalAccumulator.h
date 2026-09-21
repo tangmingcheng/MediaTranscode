@@ -25,6 +25,7 @@ public:
     ::media::Status finish() const;
     ::media::Status settleDroppedSamples(std::int64_t authorizedSamples);
     void reset() noexcept;
+    void swap(MediaAudioIntervalAccumulator& other) noexcept;
     std::int64_t queuedSamples() const noexcept;
     std::size_t fragmentCount() const noexcept;
     ::media::Status observeLineageCapacity(

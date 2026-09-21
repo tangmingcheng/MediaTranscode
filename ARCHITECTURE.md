@@ -533,4 +533,6 @@ RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一
 
 ### 合屏输出身份基础（2026-09-21）
 
+音频编码提交在同一 lineage lock 内先准备贡献候选，再发送帧，成功后通过 noexcept swap 提交；EAGAIN 销毁候选、接收后重新准备。事务不跨调度调用，不改变 packet map/priming 或恢复清理。提交 mapper 的权威驻留与元数据物理预算仍未完成，不能把该原子提交边界视为持续输出生命周期已接通。
+
 Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号改为域中性。音频编码 canonicalizer 使用既有同步组产品标识输出，并在 canonical AU 中保留非递归真实源贡献与精确样本区间。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。独立 output epoch、源局部 purge、持续聚合和贡献全链路资源账尚未接通；源码局部审查通过不能代替合屏验收。见 [实施与验证](docs/realtime-video-composition-output-identity.md)。

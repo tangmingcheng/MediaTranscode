@@ -1,4 +1,8 @@
 # MediaTranscode Quality Score
+## 2026-09-21 编码提交事务复审
+
+两名独立审查者 composition_transaction_review_a/b 均 Standards/局部事务 Spec PASS，未发现新增阻塞；合屏就绪度维持42/100（10/8/6/12/2/4）。Release全量构建成功；r21首段120秒有VLC画面，重入AAC timeline失败，CLI自然exit1、逻辑资源归零。完整合屏FAIL。提交事务前置不能替代独立输出生命周期、mapper驻留硬界、黑帧/静音及多源验收。[命令与结果](docs/realtime-video-composition-transaction.md)。
+
 ## 2026-09-21 输出身份与 FIFO 边界复审
 
 两名未参与实现的智能体对源/输出身份、canonical 音频贡献保存、完整 timeline 校验及同步 FIFO 上界给出 Standards/局部 Spec PASS，直接 include 和同步组 contract 修复后复审结论保持。Release全量成功；r20重入AAC时间轴失败，CLI自然退出1、逻辑资源归零。完整合屏 FAIL，就绪度仍为 42/100（10/8/6/12/2/4）；尚缺独立输出生命周期、连续聚合、黑帧/静音、多源与双平台运行证据。FIFO PCM payload 界不覆盖 metadata/codec 物理内存，贡献尚未穿过调度到协议层。构建与实流结果见[本轮记录](docs/realtime-video-composition-output-identity.md)，源码 PASS 不替代运行验收。

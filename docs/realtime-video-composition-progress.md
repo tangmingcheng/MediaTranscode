@@ -1,5 +1,9 @@
 # 固定实时视频合屏实施记录
 
+## 2026-09-21：编码提交事务
+
+已把编码贡献验证/分配移至 send 前，成功后 noexcept 提交，EAGAIN 丢弃候选并保留待发送输入。两名独立审查者 Standards/局部事务 Spec PASS；Release 全量构建成功。r21 原规格首源120秒/3600帧、VLC画面正常，重入仍报 AAC timeline 错误，CLI自然退出1、逻辑资源归零；完整恢复 FAIL，42/100不变。命令、指标、清理及遗留风险见[本轮记录](realtime-video-composition-transaction.md)。AAC驻留与黑帧的权威事实调查已记录，未引入收缩编码器支持范围的版本白名单，未改外部依赖。
+
 ## 当前状态
 
 2026-09-16协议代次交接已实现owner线程清理、异步七组ack、sender授权取消未提交预约及SDP生命周期。r12暴露输入证据早于SSRC失效，顺序修复后r13成功锁generation2并生成新MPEG-TS计划，随后AAC时间轴不连续且退出锁等待；完整恢复FAIL。源码双审通过范围与真实指标详见[协议交接记录](realtime-video-composition-protocol-handoff.md)。漂移控制器已改为短授权，r14同规格Debug复验保留AAC失败且CLI自然退出1、逻辑资源归零；完整恢复仍FAIL。AAC恢复须继续原计划的独立输出域、连续样本和显式静音贡献，未改外部FFmpeg，未提高就绪度。r13旧挂起CLI已按用户明确授权定点结束，日志已删除，r15 Release全量构建通过，同规格重入仍报AAC错误，但CLI自然退出1、逻辑资源归零，并实际取消53个未提交数据报；完整恢复仍FAIL。本轮产物与进程已清理。
