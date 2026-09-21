@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-21：准备阶段所有权基础
+
+已抽取共用decoder open与稳定回调owner；新增readonly RTP probe lease，不消费正式回放，快照payload/描述符计入共享预算，持有时禁止seal。独立审查发现临时占额可使capture静默停止，已改为该场景明确失败。最终双审阶段源码PASS，Release全量638项成功、13源码hash不变。r25 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720/30fps、AAC CBR192kbps，固定120秒/3600帧源exit0，VLC画面正常；CLI仍无进展自然exit1、4逻辑对象残留，完整验收FAIL。5文件及本轮进程清理完成。真实probe消费者、完整preflight及公共合屏入口仍未接通，详见[准备所有权记录](realtime-video-composition-prepared-source.md)。
+
 ## 2026-09-21：逐源视频规划公共切片
 
 decoder/filter 源产品、公共后端候选、帧域匹配、评分及源执行契约已抽取，旧单源复用相同逻辑；显式首帧滤镜协商与旧 synthetic probe 的证据边界分开。两名独立源码审查均 Standards/阶段 Spec PASS；Release全量636项成功，10源码文件冻结hash一致。

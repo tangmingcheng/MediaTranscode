@@ -103,6 +103,22 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
     return ::media::Status::success();
 }
 
+::media::Result<MediaRawRtpProbeLease>
+MediaRawRtpPreparedInputBuffer::acquireProbeLease() const
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_captureError) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(*m_captureError);
+    }
+    if (!m_prepared || m_stopped || m_replayActive) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP probe requires a live prepared input before replay"));
+    }
+    return MediaRawRtpProbeLease::capture(
+        m_prepared->datagrams, m_prepared->byteBudget);
+}
+
 ::media::Result<MediaPreparedRawRtpReplayInfo>
 MediaRawRtpPreparedInputBuffer::beginReplay()
 {
@@ -138,14 +154,14 @@ MediaRawRtpPreparedInputBuffer::beginReplay()
     if (lastNs >= firstNs) {
         info.arrivalSpanMilliseconds = (lastNs - firstNs) / 1'000'000;
     }
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
+            status.error());
+    }
     auto activated = m_prepared->replayClock->activate();
     if (!activated) {
         return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
             activated.error());
-    }
-    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
-        return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
-            status.error());
     }
     m_replayEpoch = activated.value();
     if (firstNs > 0) {
@@ -543,6 +559,12 @@ void MediaRawRtpPreparedInputBuffer::capture(
                 budget.retainedBytes > budget.capacity ||
                 maximumDatagramBytes >
                     budget.capacity - budget.retainedBytes) {
+                if (budget.probeActive) {
+                    m_captureError = ::media::ErrorInfo::allocationFailed(
+                        "raw RTP capture exhausted shared storage while a probe snapshot was retained");
+                    (void)m_prepared->byteBudget->fail(*m_captureError);
+                    m_ready.notify_all();
+                }
                 return;
             }
             timeoutMs = m_prepared->captureReadTimeoutMs;

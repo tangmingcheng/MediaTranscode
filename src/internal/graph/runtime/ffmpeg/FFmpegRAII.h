@@ -74,6 +74,10 @@ struct PacketDeleter {
 };
 
 struct CodecContextDeleter {
+    // Travels with CodecContextPtr, including buffer takeContext(). The callback
+    // state remains alive during avcodec_free_context, then with the deleter.
+    std::shared_ptr<const void> callbackOwner;
+
     void operator()(AVCodecContext* ctx) const noexcept
     {
         if (ctx) {

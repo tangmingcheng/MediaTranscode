@@ -1,5 +1,11 @@
 # MediaTranscode Quality Score
 
+## 2026-09-21 decoder owner 与只读 RTP 探测租约独立评分 B
+
+基线 `3a40b842` 后13个src文件的独立B最终复审：Standards/限定阶段源码 Spec PASS；完整合屏与交付/合并 FAIL。共用 decoder open 的 callback owner 随context稳定转移；只读快照同时计费原数据和副本，seal与租约互斥且不消耗生产replay。新lease尚未接入真实源prepare，不能用旧Shared单源回归外推其运行正确性。
+
+六维维持 **10/8/6/12/2/4，共42/100**。仍缺实际AU/首帧与decoder交接、唯一canvas/output准备及总账、多源/双平台验收。probe占额时capture容量截止已显式传播粘性错误并阻止seal；释放lease不清除失败或重启reader，后续probe仍不能无限等待新数据。资源范围保持engine-managed硬边界与外部device/driver observed-only区分。本轮Release/真实120秒结果由对应实施记录独立给出，源码审查不预先判定运行通过。
+
 ## 2026-09-21 逐源视频规划独立评分 B
 
 基线 `ffbf31a7` 后10文件冻结增量双审 Standards/阶段源码 Spec PASS；Release全量636项成功且构建前后源码哈希一致。独立B核对 [r24记录](docs/realtime-video-composition-source-planning.md)：指定120秒源自然exit0/3600帧，VLC首段有画面；七组purge ack后CLI仍无进展自然exit1，4个逻辑对象残留。运行的是Shared单源，并未验证新source-only入口或Preserve合屏。

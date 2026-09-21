@@ -15,6 +15,7 @@ struct MediaRawRtpPreparedByteBudgetSnapshot final {
     std::size_t observedBytes;
     std::size_t retainedBytes;
     bool runtimeActive;
+    bool probeActive;
 };
 
 class MediaRawRtpPreparedByteBudget final {
@@ -34,6 +35,9 @@ public:
     MediaRawRtpPreparedByteBudgetSnapshot snapshot() const noexcept;
 
 private:
+    friend class MediaRawRtpProbeLease;
+    ::media::Status reserveProbe(std::size_t bytes);
+    void releaseProbe(std::size_t bytes) noexcept;
     explicit MediaRawRtpPreparedByteBudget(std::size_t capacity) noexcept;
     ::media::Status observeLocked(std::size_t bytes);
     ::media::Status retainLocked(
@@ -45,6 +49,7 @@ private:
     std::size_t m_observedBytes = 0;
     std::size_t m_retainedBytes = 0;
     bool m_runtimeActive = false;
+    bool m_probeActive = false;
     std::optional<::media::ErrorInfo> m_error;
 };
 

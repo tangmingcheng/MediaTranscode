@@ -541,4 +541,6 @@ AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样�
 
 源生命周期由planner显式选择：Shared保留原失败合同，Source只有在唯一Output实际激活后才允许缺流等待。RTCP BYE/证据到期是有序源失效，真实协议/I/O错误仍失败；恢复尝试到期释放候选并等待新SR及新AU。未发布代退休复用真实owner-thread purge/ack，启动清理完成后才确认；代次分类、排队续接与等价目标重判共用activation仲裁，不能假激活或吞非法证据。此内部实现已通过源码双审，公共composition入口尚未接入，运行结论仍未通过，见[源生命周期记录](docs/realtime-video-composition-source-lifecycle.md)。
 
-逐源视频规划以 MediaVideoSourcePlan 表示 decoder/filter 与源执行合同，完整链在相同产品上追加 encoder。候选、帧域匹配、评分和执行合同复用同一实现；MediaHardwareCapabilityProbe 的显式首帧协商只返回 filter graph 配置/readback，不证明真实decode/transfer或同设备身份。真实prepared输入、decoder回调owner、首帧lineage和资源总账仍须在组合preflight中闭合。见[逐源规划记录](docs/realtime-video-composition-source-planning.md)。
+逐源视频规划以 MediaVideoSourcePlan 表示 decoder/filter 与源执行合同，完整链在相同产品上追加 encoder。候选、帧域匹配、评分和执行合同复用同一实现；MediaHardwareCapabilityProbe 的显式首帧协商只返回 filter graph 配置/readback，不证明真实decode/transfer或同设备身份。见[逐源规划记录](docs/realtime-video-composition-source-planning.md)。
+
+CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_format 回调状态随 CodecContextPtr 的 deleter 转移，不借用节点成员。MediaRawRtpProbeLease 对 prepared 队列建立只读快照，payload和描述符先计入原共享预算，原始回放及到达时间保留；lease存活时禁止seal，probe占额引起capture容量截止明确失败。该原语尚未接真实预解码消费者，首帧lineage、实际设备与逐owner资源仍须在组合preflight中闭合。见[准备所有权记录](docs/realtime-video-composition-prepared-source.md)。

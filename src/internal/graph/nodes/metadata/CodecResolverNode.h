@@ -38,7 +38,6 @@ private:
     bool m_emitted = false;
     ::media::ffmpeg::BufferRefPtr m_decoderHardwareDevice;
     ::media::ffmpeg::BufferRefPtr m_preparedHardwareDevice;
-    AVPixelFormat m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
     mutable std::mutex m_snapshotMutex;
     MediaBufferRef m_inputSnapshot;
     MediaBufferRef m_timestampSource;

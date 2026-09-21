@@ -55,6 +55,7 @@ public:
     const MediaPreparedGenericInputEvidence* genericEvidence() const noexcept;
     const MediaAvSyncStartupPolicy* genericStartup() const noexcept;
     ::media::Status startRawRtpPreflightCapture();
+    ::media::Result<MediaRawRtpProbeLease> acquireRawRtpProbeLease() const;
     ::media::Status rawRtpCaptureStatus();
     ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
     ::media::Result<std::size_t> rawRtpPreparedByteCapacity() const;

@@ -17,6 +17,8 @@
 
 ## 阶段一：多源基础
 
+最新实施：公共decoder创建与callback owner、同预算readonly RTP快照已形成内部基础，仍待真实预解码/生产回放衔接及按owner资源证明，详见[准备所有权记录](realtime-video-composition-prepared-source.md)。以下完成门禁未因内部切片而勾选。
+
 - [ ] 核实实际 Windows/RKMPP 合成依赖、帧池与完成语义，记录能力门禁。
 - [ ] 取得现有真实 CLI 的功能缺失/单源约束证据，完成全量基线构建。
 - [ ] 按 planner 源域组织 runtime binding、时钟、启动与恢复；保持最终输出单权威。

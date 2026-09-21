@@ -133,6 +133,17 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return m_rawRtpBuffer->startPreflightCapture();
 }
 
+::media::Result<MediaRawRtpProbeLease>
+MediaPreparedRealtimeInput::acquireRawRtpProbeLease() const
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP probe requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->acquireProbeLease();
+}
+
 ::media::Status MediaPreparedRealtimeInput::rawRtpCaptureStatus()
 {
     if (!m_rawRtpBuffer) {
