@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/planner/video/MediaVideoSourcePlan.h"
+#include "internal/graph/model/MediaVideoColorRangeFact.h"
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
 #include "internal/graph/model/MediaVideoSharedSourcePlan.h"
 
@@ -27,74 +29,12 @@ namespace media::ffmpeg::graph {
 
 class MediaHardwareCapabilityProbe;
 
-enum class MediaPipelineStageRole {
-    Decoder,
-    Filter,
-    Encoder
-};
-
-struct MediaPipelineStagePlan {
-    MediaPipelineStageRole role = MediaPipelineStageRole::Decoder;
-    std::string componentName;
-    std::string codecName;
-    std::string ffmpegName;
-    std::string filterName;
-    std::string hwaccelName;
-    std::optional<MediaHardwareDescriptor> inputFrame;
-    std::optional<MediaHardwareDescriptor> outputFrame;
-    bool available = false;
-    int priority = 0;
-    std::string availabilityReason;
-    std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
-    std::optional<MediaEncoderRateControlPlan> encoderRateControl;
-    std::optional<MediaEncoderOpenContract> encoderOpenContract;
-    std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
-    std::optional<MediaDecoderInputRetention> preparedInputRetention;
-    std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
-
-    const MediaHardwareDescriptor* frameContract() const noexcept
-    {
-        return inputFrame ? &*inputFrame : outputFrame ? &*outputFrame : nullptr;
-    }
-    MediaHardwareDeviceKind deviceKind() const noexcept
-    {
-        const auto* contract = frameContract();
-        return contract ? contract->deviceKind : MediaHardwareDeviceKind::Unknown;
-    }
-    bool hardware() const noexcept
-    {
-        const auto* contract = frameContract();
-        return contract && contract->isHardwareBacked();
-    }
-    bool zeroCopy() const noexcept
-    {
-        const auto* contract = frameContract();
-        return contract && contract->zeroCopyPreferred;
-    }
-};
-
-struct MediaPipelineChainPlan {
-    std::string label;
-    MediaPipelineStagePlan decoder;
-    MediaPipelineStagePlan filter;
+struct MediaPipelineChainPlan : MediaVideoSourcePlan {
     MediaPipelineStagePlan encoder;
-    int score = 0;
-    bool available = false;
-    bool allHardware = false;
-    bool sameHardwareDevice = false;
-    bool zeroCopy = false;
-    bool filterActive = false;
-    MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
-    MediaVideoLineagePropagation decoderLineagePropagation =
-        MediaVideoLineagePropagation::Unknown;
     MediaVideoLineagePropagation encoderLineagePropagation =
         MediaVideoLineagePropagation::Unknown;
-    MediaVideoFilterImplementation filterImplementation =
-        MediaVideoFilterImplementation::Unknown;
     MediaVideoEncoderAbortPolicy encoderAbortPolicy =
         MediaVideoEncoderAbortPolicy::Unknown;
-    std::optional<MediaRunningTime> decoderReceiveInterval;
-    std::string reason;
 };
 
 struct MediaPipelinePlannerOptions {
@@ -115,6 +55,7 @@ struct MediaPipelinePlannerOptions {
     int probeWidth = 0;
     int probeHeight = 0;
     MediaRational sourceFrameRate;
+    std::optional<AVColorRange> sourceColorRange;
     MediaRational targetFrameRate;
     MediaEncoderRateControlRequest encoderRateControl;
     MediaVideoTranscodeParameters encoderOpenRequest;
@@ -136,6 +77,7 @@ struct MediaInputVideoStreamInfo {
     int width = 0;
     int height = 0;
     int64_t bitrateBitsPerSecond = 0;
+    std::optional<AVColorRange> sourceColorRange;
     MediaRational frameRate;
     MediaRational sampleAspectRatio;
 };
@@ -193,6 +135,12 @@ public:
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options);
+
+    static ::media::Status materializeSourceExecutionContract(
+        MediaVideoSourcePlan& source, const MediaRational& sourceFrameRate);
+    static ::media::Result<std::vector<MediaVideoSourcePlan>> planVideoSourceCandidates(
+        const MediaInputVideoStreamInfo& input, const MediaVideoSourcePlanningOptions& options,
+        const MediaHardwareDescriptor& target);
 
     static ::media::Status preflightSelectedCandidate(
         MediaPipelineChainPlan& selected,

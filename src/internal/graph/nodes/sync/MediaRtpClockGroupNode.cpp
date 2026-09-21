@@ -98,6 +98,9 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     auto residual = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_sender_clock_residual_ns");
     auto videoCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.video_cname_timeout_ns");
     auto audioCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_cname_timeout_ns");
+    auto invalidateOnDegraded = requiredBoolNodeOption(
+        options, "MediaRtpClockGroupNode", "rtp_clock_group.invalidate_on_degraded");
+    if (!invalidateOnDegraded) return ::media::Status::failure(invalidateOnDegraded.error());
     auto requireMatchingCname = requiredBoolNodeOption(
         options, "MediaRtpClockGroupNode",
         "rtp_clock_group.require_matching_cname");
@@ -141,7 +144,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         {timeout.value(), extrapolation.value(), clockOffsetSkew.value(),
          videoCnameTimeout.value(), audioCnameTimeout.value(),
          requireMatchingCname.value(),
-         commonEpochPolicy.value()});
+         commonEpochPolicy.value(), invalidateOnDegraded.value()});
     if (!validator) return ::media::Status::failure(validator.error());
     m_validator = std::make_unique<MediaRtpClockGroupValidator>(std::move(validator).value());
     m_configured = true;
@@ -224,7 +227,16 @@ MediaRtpClockGroupNode::processStream(
         auto& minimumGeneration = streamKind == MediaStreamKind::Video
             ? m_minimumVideoGeneration
             : m_minimumAudioGeneration;
-        const std::uint64_t invalidatedGeneration = event->clockInvalidation()->generation;
+        const auto& invalidation = *event->clockInvalidation();
+        if (invalidation.observedAtNs < 0)
+            return ::media::Result<StreamProcessOutcome>::failure(
+                ::media::ErrorInfo::invalidArgument("RTP invalidation requires monotonic observation time"));
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtp_source_unavailable ingress_generation=" + std::to_string(invalidation.generation) +
+                " reason=" + std::to_string(static_cast<int>(invalidation.reason)) +
+                " observed_at_ns=" + std::to_string(invalidation.observedAtNs));
+        const std::uint64_t invalidatedGeneration = invalidation.generation;
         minimumGeneration = minimumGeneration
             ? std::max(*minimumGeneration, invalidatedGeneration)
             : invalidatedGeneration;
@@ -368,13 +380,17 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("RTP clock group output has no downstream consumer yet"));
     }
-    MediaRtpClockGroupSnapshot snapshot = m_validator->snapshot(observedAtNs);
+    auto observed = m_validator->snapshot(observedAtNs);
+    if (!observed) return ::media::Status::failure(observed.error());
+    MediaRtpClockGroupSnapshot snapshot = std::move(observed).value();
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
         "rtp_clock_group_snapshot state=" +
             std::to_string(static_cast<int>(snapshot.state)) +
             " generation=" + std::to_string(snapshot.groupGeneration) +
+            " invalidated_generation=" + (snapshot.invalidatedGeneration
+                ? std::to_string(*snapshot.invalidatedGeneration) : "none") +
             " locked=" + (snapshot.locked ? std::string("1")
                                            : std::string("0")));
     return emitOutput(

@@ -51,17 +51,88 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
 }
 
 ::media::Status MediaAvStartupClockNode::observe(
-    const MediaSourceClockStateBuffer& state)
+    const MediaSourceClockStateBuffer& state, const MediaBufferRef& buffer)
 {
     const bool discontinuity =
         hasFlag(state.flags(), MediaBufferFlag::Discontinuity);
+    if (discontinuity != (state.readiness() == MediaSourceClockReadiness::ReacquireRequired))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Startup clock discontinuity marker differs from its readiness"));
+    bool futureClockTarget = false;
+    {
+        auto arbitration = m_group->reserveGenerationArbitration();
+        if (!arbitration) return ::media::Status::failure(arbitration.error());
+        const auto& reacquisition = arbitration.value().reacquisition();
+        if (reacquisition.phase == MediaAvReacquisitionPhase::Purging ||
+            reacquisition.phase == MediaAvReacquisitionPhase::Acquiring ||
+            reacquisition.phase == MediaAvReacquisitionPhase::ReadyForActivation ||
+            arbitration.value().epoch().playbackEpoch) {
+            auto classified = classifyMediaAvGenerationEvidence(
+                reacquisition, arbitration.value().epoch(), state.generation());
+            if (!classified) return ::media::Status::failure(classified.error());
+            if (m_generation) {
+                auto local = classifyMediaAvGenerationEvidence(
+                    reacquisition, arbitration.value().epoch(), *m_generation);
+                if (!local) return ::media::Status::failure(local.error());
+                if (local.value() == MediaAvGenerationEvidenceDisposition::Future)
+                    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                        "Startup clock local generation exceeds source authority"));
+                if (local.value() == MediaAvGenerationEvidenceDisposition::Retired) {
+                    m_invalidatedGeneration = *m_generation;
+                    m_generation.reset();
+                    m_nextTick.reset();
+                }
+            }
+            if (classified.value() == MediaAvGenerationEvidenceDisposition::Retired)
+                return ::media::Status::success();
+            futureClockTarget = classified.value() == MediaAvGenerationEvidenceDisposition::Future;
+        }
+    }
+    const auto* deferred = m_pendingClockState
+        ? dynamic_cast<const MediaSourceClockStateBuffer*>(m_pendingClockState.get()) : nullptr;
+    if (deferred && state.generation() < deferred->generation())
+        return ::media::Status::success();
+    if (futureClockTarget) {
+        if (!m_group->preservesActivatedOutput() || !state.evidenceRevision() ||
+            (state.readiness() != MediaSourceClockReadiness::Locked &&
+             state.readiness() != MediaSourceClockReadiness::Acquiring))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Future startup clock target requires authoritative persistent RTP evidence"));
+        auto requested = m_group->requestReacquisition({
+            state.generation(), MediaAvReacquisitionReason::FutureGeneration});
+        if (!requested) return requested;
+        if (m_generation) m_invalidatedGeneration = *m_generation;
+        m_generation.reset();
+        m_nextTick.reset();
+        m_pendingClockState = buffer;
+        return ::media::Status::success();
+    }
+    m_pendingClockState.reset();
+    if (m_group->plan().sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
+        !m_group->preservesActivatedOutput() &&
+        (discontinuity || state.readiness() == MediaSourceClockReadiness::Degraded))
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "Initial composition source admission lost clock evidence"));
+    if (m_group->preservesActivatedOutput() && discontinuity) {
+        if (state.generation() == 0 ||
+            (discontinuity && state.readiness() != MediaSourceClockReadiness::ReacquireRequired))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Startup source unavailability requires an identified clock generation"));
+        m_invalidatedGeneration = state.generation();
+        m_generation.reset();
+        m_nextTick.reset();
+        return ::media::Status::success();
+    }
     if (discontinuity) {
         if (state.readiness() !=
                 MediaSourceClockReadiness::ReacquireRequired ||
-            !m_generation || state.generation() != *m_generation) {
+            state.generation() == 0 ||
+            (m_generation ? state.generation() != *m_generation
+                          : m_invalidatedGeneration != state.generation())) {
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
                 "A/V startup clock rejects malformed reacquisition evidence"));
         }
+        m_invalidatedGeneration = state.generation();
         m_generation.reset();
         m_nextTick.reset();
         return ::media::Status::success();
@@ -74,7 +145,9 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         return ::media::Status::success();
     }
     if (state.readiness() != MediaSourceClockReadiness::Locked ||
-        state.generation() == 0) {
+        state.generation() == 0 ||
+        (m_invalidatedGeneration &&
+         state.generation() <= *m_invalidatedGeneration)) {
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "A/V startup clock requires locked source-clock state"));
     }
@@ -82,7 +155,15 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "A/V startup clock rejects generation changes"));
     }
+    if (m_group->plan().sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput) {
+        if (!state.evidenceRevision())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Persistent source clock requires an authoritative evidence revision"));
+        auto accepted = m_group->observeClockEvidence(state.generation(), *state.evidenceRevision());
+        if (!accepted) return accepted;
+    }
     m_generation = state.generation();
+    m_invalidatedGeneration.reset();
     return ::media::Status::success();
 }
 
@@ -103,7 +184,9 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 return processFinished();
             case MediaControlBufferKind::Flush:
                 m_generation.reset();
+                m_invalidatedGeneration.reset();
                 m_nextTick.reset();
+                m_pendingClockState.reset();
                 return processProgress();
             case MediaControlBufferKind::Abort:
                 return ::media::Result<MediaNodeProcessResult>::failure(
@@ -122,12 +205,24 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "A/V startup clock requires generic source-clock state"));
         }
-        if (auto observed = observe(*clockState); !observed) {
+        if (auto observed = observe(*clockState, *state.value()); !observed) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 observed.error());
         }
     }
-    if (!m_generation) return processWaiting();
+    if (m_pendingClockState) {
+        if (state.value()) return processProgress();
+        auto pending = std::move(m_pendingClockState);
+        const auto* clockState = dynamic_cast<const MediaSourceClockStateBuffer*>(pending.get());
+        if (!clockState) return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::internalError("Pending startup clock state lost its typed evidence"));
+        if (auto observed = observe(*clockState, pending); !observed)
+            return ::media::Result<MediaNodeProcessResult>::failure(observed.error());
+        if (m_pendingClockState) return processWaiting();
+    }
+    if (!m_generation) {
+        return state.value() ? processProgress() : processWaiting();
+    }
     auto now = m_group->clock()->now();
     if (!now) {
         return ::media::Result<MediaNodeProcessResult>::failure(now.error());
@@ -167,6 +262,8 @@ void MediaAvStartupClockNode::resetState() noexcept
     m_interval.reset();
     m_nextTick.reset();
     m_generation.reset();
+    m_invalidatedGeneration.reset();
+    m_pendingClockState.reset();
 }
 
 } // namespace media::ffmpeg::graph

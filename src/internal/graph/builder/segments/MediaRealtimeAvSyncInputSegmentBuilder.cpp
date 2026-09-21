@@ -421,11 +421,22 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }
+    auto sourceMembers = std::move(protocol.value().sourceMembers);
+    const auto& shared = nodes.value();
+    sourceMembers.insert(sourceMembers.end(), {
+        shared.sourceClock, shared.videoGenerationGate, shared.audioGenerationGate,
+        shared.videoCanonical, shared.audioCanonical, shared.coordinator,
+        shared.startupClock, shared.epochBinder, shared.activationSequencer,
+        shared.releaseExtractor});
     return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::success(
         MediaRealtimeAvSyncInputEndpoints{
             MediaEndpoint{nodes.value().releaseExtractor, "video"},
             MediaEndpoint{nodes.value().releaseExtractor, "audio"},
-            MediaEndpoint{nodes.value().activationSequencer, "activated"}});
+            MediaEndpoint{nodes.value().activationSequencer, "activated"},
+            MediaAvRuntimeInputRegistration{
+                nodes.value().epochBinder, nodes.value().activationSequencer,
+                nodes.value().releaseExtractor, protocol.value().demuxClock},
+            std::move(sourceMembers)});
 }
 
 } // namespace media::ffmpeg::graph

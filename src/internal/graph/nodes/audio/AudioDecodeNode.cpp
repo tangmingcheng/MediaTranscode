@@ -283,9 +283,12 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "AudioDecodeNode source interval sample rate conflicts with codec"));
         }
-        const MediaAudioIntervalFragment incomingFragment{
-            synchronized.lineage,
-            sourceInterval};
+        auto sourceFragment = MediaAudioIntervalFragment::fromSource(
+            synchronized.lineage, sourceInterval);
+        if (!sourceFragment) {
+            return ::media::Result<MediaNodeProcessResult>::failure(sourceFragment.error());
+        }
+        const auto incomingFragment = std::move(sourceFragment).value();
         MediaAudioLineageCapacity leases(m_lineageState->capacity());
         if (auto status =
                 m_lineageState->intervals.observeLineageCapacity(leases);

@@ -53,6 +53,8 @@ MediaMpegTsRtpSdpPublisherNode::create(
             ::media::ErrorInfo::allocationFailed(
                 "MediaMpegTsRtpSdpPublisherNode"));
     }
+    try { node->m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>(); }
+    catch (const std::bad_alloc&) { return NodeResult::failure(::media::ErrorInfo::allocationFailed("MP2T SDP purge")); }
     return NodeResult::success(std::move(node));
 }
 
@@ -81,7 +83,10 @@ MediaNodeKind MediaMpegTsRtpSdpPublisherNode::staticKind() noexcept
 {
     resetState();
     auto valid = validatePorts(context);
-    return valid ? FFmpegNodeRuntime::start(context) : valid;
+    if (!valid) return valid;
+    m_completedPurge.reset();
+    auto started = m_generationPurge->start(context.sharedNodeWakeup(nodeId()));
+    return started ? FFmpegNodeRuntime::start(context) : started;
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -93,6 +98,60 @@ MediaMpegTsRtpSdpPublisherNode::failTerminal(
         *m_terminalFailure);
 }
 
+::media::Status MediaMpegTsRtpSdpPublisherNode::applyGenerationPurge(
+    MediaGraphExecutionContext& context, const MediaAvGenerationPurge& purge)
+{
+    const auto authorized = [&](std::uint64_t generation) {
+        return generation == purge.oldGeneration ||
+            (m_completedPurge && generation == m_completedPurge->oldGeneration);
+    };
+    const auto discard = [&](const MediaBufferRef& buffer) -> ::media::Status {
+        if (const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+            if (control->controlKind() == MediaControlBufferKind::Abort)
+                return ::media::Status::failure(::media::ErrorInfo::cancelled("SDP publisher aborted during purge"));
+            if (!control->generation() || !authorized(*control->generation()) ||
+                (control->controlKind() != MediaControlBufferKind::Eof &&
+                 control->controlKind() != MediaControlBufferKind::Flush))
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("SDP control is outside exact purge authorization"));
+            return ::media::Status::success();
+        }
+        const auto* plan = dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(buffer.get());
+        if (!plan || !authorized(plan->activation().generation) ||
+            plan->sessionKey() != m_plannedSession || plan->streamSet() != m_streamSet)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("MP2T SDP plan is outside exact purge authorization"));
+        return ::media::Status::success();
+    };
+    if (m_pendingPlan) {
+        auto status = discard(m_pendingPlan);
+        if (!status) return status;
+        m_pendingPlan.reset();
+    }
+    for (auto* channel : context.inputChannels(nodeId())) {
+        if (!channel || channel->aborted())
+            return ::media::Status::failure(::media::ErrorInfo::cancelled("SDP publisher input aborted during purge"));
+        MediaBufferRef buffer;
+        while (channel->tryPop(buffer)) {
+            auto status = discard(buffer);
+            if (!status) return status;
+        }
+    }
+    m_completedPurge = purge;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaNodeProcessResult> MediaMpegTsRtpSdpPublisherNode::process(
+    MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_generationPurge->pending()) {
+        auto status = applyGenerationPurge(context, *purge);
+        auto completed = m_generationPurge->complete(*purge, status);
+        if (!completed) return failTerminal(completed.error());
+        if (!status) return failTerminal(status.error());
+        return processProgress();
+    }
+    return FFmpegNodeRuntime::process(context);
+}
+
 ::media::Result<MediaNodeProcessResult>
 MediaMpegTsRtpSdpPublisherNode::onProcess(
     MediaGraphExecutionContext& context)
@@ -101,7 +160,9 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             *m_terminalFailure);
     }
-    auto input = tryPopInputOptional(context, "plan");
+    auto input = m_pendingPlan
+        ? ::media::Result<std::optional<MediaBufferRef>>::success(m_pendingPlan)
+        : tryPopInputOptional(context, "plan");
     if (!input) return failTerminal(input.error());
     if (!input.value()) {
         MediaChannel* channel = context.findInputChannel(nodeId(), "plan");
@@ -117,14 +178,25 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         }
         return processWaiting();
     }
+    m_pendingPlan = *input.value();
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get())) {
+        m_pendingPlan.reset();
+        if ((control->controlKind() == MediaControlBufferKind::Eof ||
+             control->controlKind() == MediaControlBufferKind::Flush) &&
+            control->generation() && m_completedPurge &&
+            *control->generation() == m_completedPurge->oldGeneration)
+            return processProgress();
+        auto activation = m_authority->currentActivation();
+        if (control->controlKind() != MediaControlBufferKind::Abort &&
+            (!activation || (control->generation()
+                ? *control->generation() != activation.value().generation
+                : m_streamSet != MediaTranscodeStreamSet::VideoOnly)))
+            return failTerminal(::media::ErrorInfo::invalidArgument("SDP terminal requires exact active generation"));
         switch (control->controlKind()) {
         case MediaControlBufferKind::Eof:
-            return m_lastPublishedGeneration
-                ? processFinished()
-                : failTerminal(::media::ErrorInfo::notInitialized(
-                      "MP2T SDP publisher reached EOF before publication"));
+            // EOS belongs to one generation; only channel closure ends the node.
+            return processProgress();
         case MediaControlBufferKind::Flush:
             return processProgress();
         case MediaControlBufferKind::Abort:
@@ -152,9 +224,19 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher requires an RTP transport plan"));
     }
+    if (m_completedPurge && runtime->activation().generation == m_completedPurge->oldGeneration) {
+        m_pendingPlan.reset();
+        return processProgress();
+    }
     auto currentActivation = m_authority->currentActivation();
-    if (!currentActivation ||
-        currentActivation.value() != runtime->activation()) {
+    if (!currentActivation) {
+        auto commit = m_authority->reserveCommit(runtime->activation().generation);
+        if (!commit && commit.error().code == ::media::ErrorCode::Cancelled) return processWaiting();
+        return failTerminal(currentActivation.error());
+    }
+    if (runtime->activation().generation < currentActivation.value().generation)
+        return processWaiting();
+    if (currentActivation.value() != runtime->activation()) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher activation differs from its authority"));
     }
@@ -174,7 +256,7 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         runtime->activation().generation);
     if (!outputCommit) {
         return outputCommit.error().code == ::media::ErrorCode::Cancelled
-            ? processProgress()
+            ? processWaiting()
             : failTerminal(outputCommit.error());
     }
     MediaAtomicUtf8FilePublisher publisher(*m_replacePort);
@@ -182,11 +264,13 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         description.value().path(), serialized.value());
     if (!published) return failTerminal(published.error());
     m_lastPublishedGeneration = runtime->activation().generation;
+    m_pendingPlan.reset();
     return processProgress();
 }
 
 void MediaMpegTsRtpSdpPublisherNode::resetState() noexcept
 {
+    m_pendingPlan.reset();
     m_terminalFailure.reset();
     m_lastPublishedGeneration.reset();
 }
@@ -201,6 +285,7 @@ void MediaMpegTsRtpSdpPublisherNode::resetState() noexcept
 ::media::Status MediaMpegTsRtpSdpPublisherNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_generationPurge->stop();
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -213,6 +298,7 @@ void MediaMpegTsRtpSdpPublisherNode::abort(
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "MP2T SDP publisher was aborted");
     }
+    m_generationPurge->stop();
     FFmpegNodeRuntime::abort(context);
 }
 

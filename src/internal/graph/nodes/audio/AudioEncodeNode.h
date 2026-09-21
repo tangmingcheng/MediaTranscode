@@ -16,7 +16,8 @@ namespace media::ffmpeg::graph {
 class AudioEncodeLineageState final : public MediaAudioLineageState {
 public:
     AudioEncodeLineageState(MediaAudioLineageExecutionMode mode,
-                            std::size_t capacity) noexcept;
+                            std::size_t capacity,
+                            std::optional<MediaAudioEncoderFifoRetentionPlan> retention) noexcept;
 
     bool receivePending = false;
     AudioEncoderFrameQueue frameQueue;

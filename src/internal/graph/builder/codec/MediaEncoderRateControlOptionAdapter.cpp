@@ -52,6 +52,28 @@ template <typename Value>
 
 } // namespace
 
+MediaNodeOptions MediaEncoderRateControlOptionAdapter::encode(
+    const MediaEncoderRateControlPlan& plan)
+{
+    MediaNodeOptions options;
+    options.set(MediaTranscodeOptionKey::PlannedVideoRateControl,
+        mediaRateControlModeName(plan.mode));
+    const auto optional = [&](const char* key, const std::optional<int>& value) {
+        if (value) options.set(key, std::to_string(*value));
+    };
+    optional(MediaTranscodeOptionKey::PlannedVideoTargetBitrateKbps, plan.targetBitrateKbps);
+    optional(MediaTranscodeOptionKey::PlannedVideoMinBitrateKbps, plan.minimumBitrateKbps);
+    optional(MediaTranscodeOptionKey::PlannedVideoMaxBitrateKbps, plan.maximumBitrateKbps);
+    optional(MediaTranscodeOptionKey::PlannedVideoBufferSizeKbits, plan.bufferSizeKbits);
+    if (plan.privateOption) {
+        options.set(MediaTranscodeOptionKey::PlannedVideoPrivateRateControlName, plan.privateOption->name);
+        options.set(MediaTranscodeOptionKey::PlannedVideoPrivateRateControlValue, plan.privateOption->value);
+        options.set(MediaTranscodeOptionKey::PlannedVideoPrivateRateControlExpected,
+            std::to_string(plan.privateOption->expectedNumericValue));
+    }
+    return options;
+}
+
 ::media::Result<MediaEncoderRateControlPlan>
 MediaEncoderRateControlOptionAdapter::applyBeforeOpen(
     AVCodecContext& context,

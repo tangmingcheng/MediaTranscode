@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/sync/MediaAvGenerationTransition.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -25,6 +26,8 @@ struct MediaWireGlobalSequenceSnapshot final {
     std::uint64_t nextGlobalSequence;
     bool reservationActive;
     bool poisoned;
+    std::uint64_t cancelledDatagrams;
+    std::uint64_t cancelledWireBytes;
     std::uint64_t currentDatagrams;
     std::uint64_t currentWireBytes;
     std::uint64_t highWaterDatagrams;
@@ -121,6 +124,7 @@ public:
         std::shared_ptr<MediaNodeWakeup> wakeup);
     ::media::Result<MediaWirePacingQueueSnapshot> pacingQueueSnapshot(
         const MediaMasterClock& clock) const;
+    ::media::Status authorizeGenerationPurge(const MediaAvGenerationPurge& purge);
     MediaWireGlobalSequenceSnapshot snapshot() const noexcept;
     const std::string& sessionKey() const noexcept { return m_sessionKey; }
     const std::string& serviceScopeId() const noexcept
@@ -196,6 +200,9 @@ private:
     std::deque<ReservationRecord> m_reservations;
     bool m_reservationBlocked = false;
     bool m_poisoned = false;
+    std::optional<MediaAvGenerationPurge> m_authorizedPurge;
+    std::uint64_t m_cancelledDatagrams = 0;
+    std::uint64_t m_cancelledWireBytes = 0;
 };
 
 } // namespace media::ffmpeg::graph

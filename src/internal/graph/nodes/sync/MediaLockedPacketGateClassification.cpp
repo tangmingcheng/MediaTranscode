@@ -34,44 +34,18 @@ classifyLockedPacketGateGeneration(
             "Locked packet gate requires exact nonzero generation authority");
     }
     if (transitionActive(reacquisition.phase)) {
-        if (!reacquisition.transition) {
-            return invalidClassification(
-                "Locked packet gate requires a complete active transition");
-        }
-        const auto& transition = *reacquisition.transition;
-        const auto expectedReadiness =
-            reacquisition.phase == MediaAvReacquisitionPhase::Purging
-            ? MediaAvGenerationReadiness::Reacquire
-            : MediaAvGenerationReadiness::Acquiring;
-        if (epoch.poisoned ||
-            epoch.readiness != expectedReadiness ||
-            !epoch.playbackEpoch ||
-            epoch.playbackEpoch->generation != transition.oldGeneration ||
-            !epoch.audioOrigin ||
-            epoch.audioOrigin->generation != transition.oldGeneration ||
-            epoch.outputPermitted) {
-            return invalidClassification(
-                "Locked packet gate requires a consistent live transition epoch");
-        }
-        if (generation ==
-            transition.oldGeneration) {
-            return ::media::Result<
-                MediaLockedPacketGateDisposition>::success(
+        auto classified = classifyMediaAvGenerationEvidence(reacquisition, epoch, generation);
+        if (!classified)
+            return ::media::Result<MediaLockedPacketGateDisposition>::failure(classified.error());
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Future)
+            return invalidClassification("Packet generation exceeds the planned transition target");
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Retired)
+            return ::media::Result<MediaLockedPacketGateDisposition>::success(
                 MediaLockedPacketGateDisposition::DropOldGeneration);
-        }
-        if (generation ==
-            transition.nextGeneration) {
-            return ::media::Result<
-                MediaLockedPacketGateDisposition>::success(
-                reacquisition.phase ==
-                        MediaAvReacquisitionPhase::Purging
-                    ? MediaLockedPacketGateDisposition::
-                          WithholdForReacquisition
-                    : MediaLockedPacketGateDisposition::
-                          PassToReacquisition);
-        }
-        return invalidClassification(
-            "Locked packet gate rejects an unplanned transition generation");
+        return ::media::Result<MediaLockedPacketGateDisposition>::success(
+            reacquisition.phase == MediaAvReacquisitionPhase::Purging
+                ? MediaLockedPacketGateDisposition::WithholdForReacquisition
+                : MediaLockedPacketGateDisposition::PassToReacquisition);
     }
     if (reacquisition.phase != MediaAvReacquisitionPhase::Inactive ||
         reacquisition.transition) {

@@ -9,7 +9,7 @@ namespace {
 
 ::media::Status validateRtpInputLiveness(
     const MediaAvSyncGraphShape& shape,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
     if (!binding.plan.rtpInput ||
         !binding.plan.rtpInput->input.maximumExtrapolationNs) {
@@ -43,14 +43,14 @@ namespace {
 
 ::media::Status MediaSourceClockShapeValidator::validate(
     const MediaGraph& graph,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
     if (!binding.plan.sourceClockMode) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "Source-clock shape requires its planner mode"));
     }
-    const MediaAvSyncGraphShape shape(graph);
+    const MediaAvSyncGraphShape shape(graph, binding.members);
     switch (*binding.plan.sourceClockMode) {
     case MediaAvSyncSourceClockMode::RtpSenderReports: {
         auto cardinality = shape.requireExact({

@@ -34,6 +34,22 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
                 std::move(coordinator).value())));
 }
 
+std::shared_ptr<MediaAvEpochTransitionService>
+MediaAvEpochTransitionService::createInitialOnly()
+{
+    return std::shared_ptr<MediaAvEpochTransitionService>(
+        new MediaAvEpochTransitionService());
+}
+
+bool MediaAvEpochTransitionService::outputPermittedLocked(
+    std::uint64_t generation) const noexcept
+{
+    return !m_aborted && !m_firstError && m_epoch &&
+        m_readiness == MediaAvGenerationReadiness::Locked &&
+        m_epoch->generation == generation &&
+        (!m_coordinator || m_coordinator->outputPermitted(generation));
+}
+
 ::media::Status MediaAvEpochTransitionService::validateEpochPair(
     const MediaPlaybackEpoch& epoch,
     const MediaAudioPlaybackOrigin& audioOrigin)
@@ -64,8 +80,10 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Initial epoch activation requires an acquiring empty service"));
     }
-    auto permitted = m_coordinator.permitInitial(epoch.generation);
-    if (!permitted) return permitted;
+    if (m_coordinator) {
+        auto permitted = m_coordinator->permitInitial(epoch.generation);
+        if (!permitted) return permitted;
+    }
     m_epoch = epoch;
     m_audioOrigin = audioOrigin;
     m_completedTransitionSequence.reset();
@@ -75,7 +93,7 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
 
 ::media::Result<MediaAvGenerationPurge>
 MediaAvEpochTransitionService::beginReacquisition(
-    std::uint64_t oldGeneration,
+    MediaAvTransitionOrigin origin,
     std::uint64_t nextGeneration)
 {
     std::lock_guard lock(m_mutex);
@@ -83,12 +101,19 @@ MediaAvEpochTransitionService::beginReacquisition(
         return ::media::Result<MediaAvGenerationPurge>::failure(
             *m_firstError);
     }
-    if (m_readiness != MediaAvGenerationReadiness::Locked) {
+    if (!m_coordinator) {
+        return ::media::Result<MediaAvGenerationPurge>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Initial-only output domain rejects reacquisition"));
+    }
+    const bool unpublished = std::holds_alternative<MediaAvUnpublishedAcquisition>(origin);
+    if (m_readiness != (unpublished ? MediaAvGenerationReadiness::Acquiring
+                                   : MediaAvGenerationReadiness::Locked)) {
         return ::media::Result<MediaAvGenerationPurge>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Reacquisition requires a locked generation"));
     }
-    auto purge = m_coordinator.begin(oldGeneration, nextGeneration);
+    auto purge = m_coordinator->begin(std::move(origin), nextGeneration);
     if (!purge) return purge;
     m_readiness = MediaAvGenerationReadiness::Reacquire;
     return purge;
@@ -101,12 +126,12 @@ MediaAvEpochTransitionService::beginReacquisition(
     if (m_firstError) {
         return ::media::Result<bool>::failure(*m_firstError);
     }
-    if (m_readiness != MediaAvGenerationReadiness::Reacquire) {
+    if (!m_coordinator || m_readiness != MediaAvGenerationReadiness::Reacquire) {
         return ::media::Result<bool>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Generation acknowledgement requires reacquisition"));
     }
-    auto acknowledged = m_coordinator.acknowledge(
+    auto acknowledged = m_coordinator->acknowledge(
         std::move(acknowledgement));
     if (!acknowledged) {
         auto failed = failLocked(acknowledged.error());
@@ -125,11 +150,11 @@ MediaAvEpochTransitionService::beginReacquisition(
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
-    if (m_readiness != MediaAvGenerationReadiness::Reacquire) {
+    if (!m_coordinator || m_readiness != MediaAvGenerationReadiness::Reacquire) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Generation timeout polling requires reacquisition"));
     }
-    auto status = m_coordinator.checkTimeout(elapsedSinceBegin);
+    auto status = m_coordinator->checkTimeout(elapsedSinceBegin);
     if (!status) {
         return failLocked(status.error());
     }
@@ -147,12 +172,16 @@ MediaAvEpochTransitionService::beginReacquisition(
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
+    if (!m_coordinator) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Initial-only output domain rejects next epoch activation"));
+    }
     if (m_readiness != MediaAvGenerationReadiness::Acquiring || !m_epoch ||
         !m_audioOrigin || epoch.generation <= m_epoch->generation) {
         return failLocked(::media::ErrorInfo::invalidArgument(
             "Next epoch activation requires a completed newer generation"));
     }
-    auto published = m_coordinator.publishCompletedGeneration(
+    auto published = m_coordinator->publishCompletedGeneration(
         completedTransitionSequence, epoch.generation);
     if (!published) return failLocked(published.error());
     m_epoch = epoch;
@@ -175,7 +204,8 @@ MediaAvEpochTransitionService::beginReacquisition(
     if (!m_firstError) {
         m_firstError = std::move(error);
     }
-    m_coordinator.abort();
+    m_aborted = true;
+    if (m_coordinator) m_coordinator->abort();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
     return ::media::Status::failure(*m_firstError);
 }
@@ -183,7 +213,8 @@ MediaAvEpochTransitionService::beginReacquisition(
 void MediaAvEpochTransitionService::abort() noexcept
 {
     std::lock_guard lock(m_mutex);
-    m_coordinator.abort();
+    m_aborted = true;
+    if (m_coordinator) m_coordinator->abort();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
 }
 
@@ -196,8 +227,8 @@ MediaAvEpochTransitionService::snapshot() const noexcept
         m_readiness,
         m_epoch,
         m_audioOrigin,
-        m_coordinator.outputPermitted(generation),
-        m_coordinator.poisoned(),
+        outputPermittedLocked(generation),
+        m_aborted || (m_coordinator && m_coordinator->poisoned()),
         m_completedTransitionSequence};
 }
 
@@ -208,7 +239,7 @@ MediaAvEpochTransitionService::reserveOutputCommit(
     std::unique_lock lock(m_mutex);
     if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
         !m_epoch || m_epoch->generation != generation ||
-        !m_coordinator.outputPermitted(generation)) {
+        !outputPermittedLocked(generation)) {
         return ::media::Result<
             MediaAvOutputPermitCommitReservation>::failure(
                 ::media::ErrorInfo::cancelled(
@@ -224,7 +255,7 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
     std::unique_lock lock(m_mutex);
     if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
         !m_epoch || !m_audioOrigin ||
-        !m_coordinator.outputPermitted(m_epoch->generation)) {
+        !outputPermittedLocked(m_epoch->generation)) {
         return ::media::Result<
             MediaAvActivatedOutputPermitReservation>::failure(
                 ::media::ErrorInfo::cancelled(
@@ -237,10 +268,10 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
                 MediaAvOutputPermitCommitReservation(std::move(lock))});
 }
 
-const MediaAvGenerationTransitionPlan&
+const MediaAvGenerationTransitionPlan*
 MediaAvEpochTransitionService::transitionPlan() const noexcept
 {
-    return m_coordinator.m_plan;
+    return m_coordinator ? &m_coordinator->m_plan : nullptr;
 }
 
 } // namespace media::ffmpeg::graph

@@ -58,41 +58,41 @@ bool filterExists(const std::string& name)
     return MediaHardwareCapabilityProbe::filterExists(root);
 }
 
-bool targetResizeRequested(const MediaPipelinePlannerOptions& options) noexcept
+bool targetResizeRequested(const MediaVideoSourcePlanningOptions& options) noexcept
 {
-    return options.targetWidth > 0 && options.targetHeight > 0;
+    return options.targetSize.has_value();
 }
 
-std::string targetSizeText(const MediaPipelinePlannerOptions& options)
+std::string targetSizeText(const MediaVideoSourcePlanningOptions& options)
 {
-    return std::to_string(options.targetWidth) + ":" + std::to_string(options.targetHeight);
+    return std::to_string(options.targetSize->width) + ":" + std::to_string(options.targetSize->height);
 }
 
-std::string cudaFilterName(const MediaPipelinePlannerOptions& options)
+std::string cudaFilterName(const MediaVideoSourcePlanningOptions& options)
 {
     return targetResizeRequested(options) ? "scale_cuda=" + targetSizeText(options) : "passthrough_cuda";
 }
 
-std::string qsvFilterName(const MediaPipelinePlannerOptions& options)
+std::string qsvFilterName(const MediaVideoSourcePlanningOptions& options)
 {
     return targetResizeRequested(options)
-               ? "scale_qsv=w=" + std::to_string(options.targetWidth) + ":h=" + std::to_string(options.targetHeight)
+               ? "scale_qsv=w=" + std::to_string(options.targetSize->width) + ":h=" + std::to_string(options.targetSize->height)
                : "passthrough_qsv";
 }
 
-std::string d3d11FilterName(const MediaPipelinePlannerOptions& options)
+std::string d3d11FilterName(const MediaVideoSourcePlanningOptions& options)
 {
     return targetResizeRequested(options) ? "scale_d3d11=" + targetSizeText(options) : "passthrough_d3d11va";
 }
 
-std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
+std::string vaapiFilterName(const MediaVideoSourcePlanningOptions& options)
 {
     return targetResizeRequested(options)
-               ? "scale_vaapi=w=" + std::to_string(options.targetWidth) + ":h=" + std::to_string(options.targetHeight)
+               ? "scale_vaapi=w=" + std::to_string(options.targetSize->width) + ":h=" + std::to_string(options.targetSize->height)
                : "passthrough_vaapi";
 }
 
-std::string videotoolboxFilterName(const MediaPipelinePlannerOptions& options)
+std::string videotoolboxFilterName(const MediaVideoSourcePlanningOptions& options)
 {
     return targetResizeRequested(options) ? "scale_videotoolbox=" + targetSizeText(options) : "passthrough_videotoolbox";
 }
@@ -226,41 +226,75 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
     return stage;
 }
 
-MediaPipelineChainPlan makeRawChain(std::string label,
-                                    MediaPipelineStagePlan decoder,
-                                    MediaPipelineStagePlan filter,
-                                    MediaPipelineStagePlan encoder,
-                                    const MediaPipelinePlannerOptions& options)
+struct BackendProfile {
+    const char* label;
+    const char* decoderComponent;
+    const char* decoderSuffix;
+    const char* hwaccel;
+    MediaHardwareDeviceKind device;
+    int decoderPriority;
+    int filterPriority;
+    const char* encoderComponent;
+    const char* encoderSuffix;
+    int encoderPriority;
+    std::string (*filterName)(const MediaVideoSourcePlanningOptions&);
+};
+
+const BackendProfile profiles[] = {
+    {"cuda-nvenc", "cuda decoder", "", "cuda", MediaHardwareDeviceKind::CUDA,
+        95, 90, "nvenc encoder", "_nvenc", 95, cudaFilterName},
+    {"qsv", "qsv decoder", "_qsv", "qsv", MediaHardwareDeviceKind::QSV,
+        90, 88, "qsv encoder", "_qsv", 90, qsvFilterName},
+    {"d3d11va-mediafoundation", "d3d11va decoder", "", "d3d11va", MediaHardwareDeviceKind::D3D11VA,
+        84, 82, "mediafoundation encoder", "_mf", 84, d3d11FilterName},
+    {"rkmpp", "rkmpp decoder", "_rkmpp", "rkmpp", MediaHardwareDeviceKind::RKMPP,
+        92, 90, "rkmpp encoder", "_rkmpp", 92, nullptr},
+    {"vaapi", "vaapi decoder", "", "vaapi", MediaHardwareDeviceKind::VAAPI,
+        82, 82, "vaapi encoder", "_vaapi", 82, vaapiFilterName},
+    {"videotoolbox", "videotoolbox decoder", "", "videotoolbox", MediaHardwareDeviceKind::VideoToolbox,
+        80, 78, "videotoolbox encoder", "_videotoolbox", 80, videotoolboxFilterName}
+};
+
+MediaVideoSourcePlan makeSourceCandidate(
+    const BackendProfile& profile, const std::string& inputCodec,
+    const MediaVideoSourcePlanningOptions& options)
 {
-    MediaPipelineChainPlan chain;
-    chain.label = std::move(label);
-    chain.decoder = std::move(decoder);
-    chain.filter = std::move(filter);
-    chain.encoder = std::move(encoder);
-    chain.filterActive = !chain.filter.filterName.empty();
-    chain.transferDirection = MediaHardwareTransferDirection::None;
-
-    const MediaSize sourceSize{options.probeWidth, options.probeHeight};
-    const MediaSize outputSize = targetResizeRequested(options)
-        ? MediaSize{options.targetWidth, options.targetHeight}
-        : sourceSize;
-    if (chain.decoder.outputFrame) chain.decoder.outputFrame->size = sourceSize;
-    if (chain.filter.inputFrame) chain.filter.inputFrame->size = sourceSize;
-    if (chain.filter.outputFrame) chain.filter.outputFrame->size = outputSize;
-    if (chain.encoder.inputFrame) chain.encoder.inputFrame->size = outputSize;
-
-    return chain;
+    MediaVideoSourcePlan source;
+    source.label = profile.label;
+    source.decoder = makeCodecStage(MediaPipelineStageRole::Decoder,
+        profile.decoderComponent, inputCodec, codecSpecificName(inputCodec, profile.decoderSuffix),
+        profile.hwaccel, profile.device, true, true, profile.decoderPriority);
+    auto filterName = profile.filterName
+        ? ::media::Result<std::string>::success(profile.filterName(options))
+        : MediaVideoCapabilityScanner::planRkmppFilter(options);
+    source.filter = makeFilterStage(std::string(profile.device == MediaHardwareDeviceKind::RKMPP
+        ? "rga/rkmpp" : profile.hwaccel) +
+        (targetResizeRequested(options) ? " scale filter" : " passthrough filter"),
+        filterName ? filterName.value() : std::string(), profile.hwaccel,
+        profile.device, true, true, profile.filterPriority);
+    if (!filterName) {
+        source.filter.available = false;
+        source.filter.availabilityReason = filterName.error().message;
+    }
+    source.filterActive = profile.device == MediaHardwareDeviceKind::RKMPP
+        ? targetResizeRequested(options) : !source.filter.filterName.empty();
+    source.transferDirection = MediaHardwareTransferDirection::None;
+    const auto outputSize = options.targetSize.value_or(options.sourceSize);
+    source.decoder.outputFrame->size = options.sourceSize;
+    if (source.filter.inputFrame) source.filter.inputFrame->size = options.sourceSize;
+    if (source.filter.outputFrame) source.filter.outputFrame->size = outputSize;
+    return source;
 }
 
 } // namespace
 
 ::media::Result<std::string> MediaVideoCapabilityScanner::planRkmppFilter(
-    const MediaPipelinePlannerOptions& options)
+    const MediaVideoSourcePlanningOptions& options)
 {
     using Result = ::media::Result<std::string>;
     if (!targetResizeRequested(options)) return Result::success({});
-    std::string description = "scale_rkrga=w=" + std::to_string(options.targetWidth) +
-        ":h=" + std::to_string(options.targetHeight) + ":format=nv12";
+    std::string description = "scale_rkrga=w=" + std::to_string(options.targetSize->width) +
+        ":h=" + std::to_string(options.targetSize->height) + ":format=nv12";
     if (options.lowLatency) {
         const AVFilter* filter = avfilter_get_by_name("scale_rkrga");
         const AVClass* filterClass = filter ? filter->priv_class : nullptr;
@@ -278,95 +312,53 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     return Result::success(std::move(description));
 }
 
+::media::Result<std::vector<MediaVideoSourcePlan>>
+MediaVideoCapabilityScanner::enumerateSourceCandidates(
+    const std::string& inputCodecName, const MediaVideoSourcePlanningOptions& options,
+    const MediaHardwareDescriptor& target)
+{
+    using Result = ::media::Result<std::vector<MediaVideoSourcePlan>>;
+    if (inputCodecName.empty() || options.sourceSize.width <= 0 || options.sourceSize.height <= 0 ||
+        !options.targetSize || options.targetSize->width <= 0 || options.targetSize->height <= 0 ||
+        target.size.width != options.targetSize->width || target.size.height != options.targetSize->height ||
+        target.deviceKind == MediaHardwareDeviceKind::Unknown || target.pixelFormat.empty())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Source candidates require explicit input dimensions and a resolved target frame domain"));
+    std::vector<MediaVideoSourcePlan> sources;
+    for (const auto& profile : profiles) {
+        if (profile.device != target.deviceKind) continue;
+        auto source = makeSourceCandidate(profile, canonicalCodecName(inputCodecName), options);
+        const auto& output = source.filterActive ? source.filter.outputFrame : source.decoder.outputFrame;
+        if (!output || *output != target)
+            continue;
+        sources.push_back(std::move(source));
+    }
+    if (sources.empty()) return Result::failure(::media::ErrorInfo::unsupported(
+        "No source candidate matches the selected target frame domain"));
+    return Result::success(std::move(sources));
+}
+
 std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTranscodeCandidates(
     const std::string& inputCodecName, const std::string& outputCodecName,
     const MediaPipelinePlannerOptions& options)
 {
-    const std::string inputCodec = canonicalCodecName(inputCodecName);
-    const std::string outputCodec = canonicalCodecName(outputCodecName);
+    const MediaVideoSourcePlanningOptions sourceOptions{
+        {options.probeWidth, options.probeHeight},
+        options.targetWidth > 0 && options.targetHeight > 0
+            ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
+        options.sourceFrameRate, options.lowLatency};
     std::vector<MediaPipelineChainPlan> chains;
-
-    auto add = [&](std::string label, MediaPipelineStagePlan decoder, MediaPipelineStagePlan filter,
-                   MediaPipelineStagePlan encoder)
-    {
-        chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter),
-                                      std::move(encoder), options));
-    };
-
-    add("cuda-nvenc",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "cuda decoder", inputCodec,
-                           inputCodec, "cuda",
-                           MediaHardwareDeviceKind::CUDA, true, true, 95),
-            makeFilterStage(
-                targetResizeRequested(options) ? "cuda scale filter" : "cuda passthrough filter",
-                cudaFilterName(options), "cuda", MediaHardwareDeviceKind::CUDA, true, true, 90),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "nvenc encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_nvenc"), "cuda",
-                           MediaHardwareDeviceKind::CUDA, true, true, 95));
-
-    add("qsv",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "qsv decoder", inputCodec,
-                           codecSpecificName(inputCodec, "_qsv"), "qsv",
-                           MediaHardwareDeviceKind::QSV, true, true, 90),
-            makeFilterStage(
-                targetResizeRequested(options) ? "qsv scale filter" : "qsv passthrough filter",
-                qsvFilterName(options), "qsv", MediaHardwareDeviceKind::QSV, true, true, 88),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "qsv encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_qsv"), "qsv",
-                           MediaHardwareDeviceKind::QSV, true, true, 90));
-
-    add("d3d11va-mediafoundation",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "d3d11va decoder", inputCodec,
-                           inputCodec, "d3d11va", MediaHardwareDeviceKind::D3D11VA, true, true, 84),
-            makeFilterStage(targetResizeRequested(options) ? "d3d11va scale filter"
-                                                           : "d3d11va passthrough filter",
-                            d3d11FilterName(options), "d3d11va", MediaHardwareDeviceKind::D3D11VA,
-                            true, true, 82),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "mediafoundation encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_mf"), "d3d11va",
-                           MediaHardwareDeviceKind::D3D11VA, true, true, 84));
-
-    auto rkmppDescription = planRkmppFilter(options);
-    auto rkmppFilter = makeFilterStage(
-        targetResizeRequested(options) ? "rga/rkmpp scale filter" : "rga/rkmpp passthrough filter",
-        rkmppDescription ? rkmppDescription.value() : std::string(),
-        "rkmpp", MediaHardwareDeviceKind::RKMPP, true, true, 90);
-    if (!rkmppDescription) {
-        rkmppFilter.available = false;
-        rkmppFilter.availabilityReason = rkmppDescription.error().message;
+    for (const auto& profile : profiles) {
+        MediaPipelineChainPlan chain;
+        static_cast<MediaVideoSourcePlan&>(chain) =
+            makeSourceCandidate(profile, canonicalCodecName(inputCodecName), sourceOptions);
+        const auto outputCodec = canonicalCodecName(outputCodecName);
+        chain.encoder = makeCodecStage(MediaPipelineStageRole::Encoder,
+            profile.encoderComponent, outputCodec, codecSpecificName(outputCodec, profile.encoderSuffix),
+            profile.hwaccel, profile.device, true, true, profile.encoderPriority);
+        chain.encoder.inputFrame->size = sourceOptions.targetSize.value_or(sourceOptions.sourceSize);
+        chains.push_back(std::move(chain));
     }
-    add("rkmpp",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "rkmpp decoder", inputCodec,
-                           codecSpecificName(inputCodec, "_rkmpp"), "rkmpp",
-                           MediaHardwareDeviceKind::RKMPP, true, true, 92),
-            std::move(rkmppFilter),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "rkmpp encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_rkmpp"), "rkmpp",
-                           MediaHardwareDeviceKind::RKMPP, true, true, 92));
-    chains.back().filterActive = targetResizeRequested(options);
-
-    add("vaapi",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "vaapi decoder", inputCodec, inputCodec,
-                           "vaapi", MediaHardwareDeviceKind::VAAPI, true, true, 82),
-            makeFilterStage(
-                targetResizeRequested(options) ? "vaapi scale filter" : "vaapi passthrough filter",
-                vaapiFilterName(options), "vaapi", MediaHardwareDeviceKind::VAAPI, true, true, 82),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "vaapi encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_vaapi"), "vaapi",
-                           MediaHardwareDeviceKind::VAAPI, true, true, 82));
-
-    add("videotoolbox",
-            makeCodecStage(MediaPipelineStageRole::Decoder, "videotoolbox decoder", inputCodec,
-                           inputCodec, "videotoolbox", MediaHardwareDeviceKind::VideoToolbox, true,
-                           true, 80),
-            makeFilterStage(targetResizeRequested(options) ? "videotoolbox scale filter"
-                                                           : "videotoolbox passthrough filter",
-                            videotoolboxFilterName(options), "videotoolbox",
-                            MediaHardwareDeviceKind::VideoToolbox, true, true, 78),
-            makeCodecStage(MediaPipelineStageRole::Encoder, "videotoolbox encoder", outputCodec,
-                           codecSpecificName(outputCodec, "_videotoolbox"), "videotoolbox",
-                           MediaHardwareDeviceKind::VideoToolbox, true, true, 80));
-
     return chains;
 }
 

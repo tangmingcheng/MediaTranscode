@@ -751,13 +751,13 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!prepared) {
         return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
     }
-    const auto sourceSequence = repeat
+    const auto canonicalSequence = repeat
         ? *m_generationData->lastDisplayedVideoSequence
-        : m_generationData->videoHead->canonical()->sourceSequence();
+        : m_generationData->videoHead->canonical()->canonicalSequence();
     MediaAvSchedulerPendingCommit commit{
         MediaAvSchedulerCommitKind::Video,
         std::move(prepared.value().displayedVideoClone),
-        sourceSequence,
+        canonicalSequence,
         target.value(),
         false};
     return emitWithCommit(

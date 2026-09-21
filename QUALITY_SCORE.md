@@ -1,5 +1,92 @@
 # MediaTranscode Quality Score
 
+## 2026-09-21 decoder owner 与只读 RTP 探测租约独立评分 B
+
+基线 `3a40b842` 后13个src文件的独立B最终复审：Standards/限定阶段源码 Spec PASS；完整合屏与交付/合并 FAIL。共用 decoder open 的 callback owner 随context稳定转移；只读快照同时计费原数据和副本，seal与租约互斥且不消耗生产replay。新lease尚未接入真实源prepare，不能用旧Shared单源回归外推其运行正确性。
+
+六维维持 **10/8/6/12/2/4，共42/100**。仍缺实际AU/首帧与decoder交接、唯一canvas/output准备及总账、多源/双平台验收。probe占额时capture容量截止已显式传播粘性错误并阻止seal；释放lease不清除失败或重启reader，后续probe仍不能无限等待新数据。资源范围保持engine-managed硬边界与外部device/driver observed-only区分。本轮Release/真实120秒结果由对应实施记录独立给出，源码审查不预先判定运行通过。
+
+## 2026-09-21 逐源视频规划独立评分 B
+
+基线 `ffbf31a7` 后10文件冻结增量双审 Standards/阶段源码 Spec PASS；Release全量636项成功且构建前后源码哈希一致。独立B核对 [r24记录](docs/realtime-video-composition-source-planning.md)：指定120秒源自然exit0/3600帧，VLC首段有画面；七组purge ack后CLI仍无进展自然exit1，4个逻辑对象残留。运行的是Shared单源，并未验证新source-only入口或Preserve合屏。
+
+| 六维 | 得分/满分 | 本阶段提升判定 |
+|---|---:|---|
+| DAG复用与多源绑定 | 10/20 | 公共源候选/执行契约已抽取，真实准备交接及入口未完成，不提升。 |
+| 多源时钟与合成来源 | 8/20 | 仅单源generation1漂移证据，不提升。 |
+| 逐源断流和恢复 | 6/20 | 无generation2恢复媒体，旧失败仍复现，不提升。 |
+| 线程、背压和资源边界 | 12/20 | 无新增队列，仍缺按域总账且逻辑对象未归零，不提升。 |
+| 双平台合成能力证据 | 2/10 | Windows单源协商/执行可用，缺RKMPP及多源合屏证据，不提升。 |
+| 合屏观测与真实验收 | 4/10 | 117条漂移raw最大4793ns只覆盖首代；完整验收FAIL，不提升。 |
+| **合计** | **42/100** | **完整合屏仍未就绪。** |
+
+保留风险：graph config/readback不证明真实首帧执行、同设备身份或transfer；还需准备对象所有权交接、物理画布及资源准入。433个CPU样本整机平均1.049801%不能外推多路吞吐或长期稳定。文档明确记录失败与五文件/三PID清理，没有把源码PASS、播放截图或逻辑残留夸大为运行通过或物理泄漏。
+
+## 2026-09-21 源生命周期与共用准备步骤独立评分 B
+
+基线 `81e30778` 后冻结增量经独立双审，Standards/本阶段源码 Spec PASS；最终 Release 全量构建成功，61 个源码文件构建前后哈希一致。独立审查 B 核对 [r23 命令、结果与清理记录](docs/realtime-video-composition-source-lifecycle.md)：120 秒单源、3600 帧及 VLC 首段画面不代表合屏验收；源结束后七组 ack，CLI 仍因无进展自然退出1，保留4个逻辑对象。本阶段没有足以提高合屏就绪度的运行证据。
+
+| 维度 | 满分 | 得分 | 本阶段证据与提升判定 |
+|---|---:|---:|---|
+| DAG 复用与多源绑定 | 20 | 10 | 准备步骤复用已抽取；多源 preflight/入口未闭合，不提升。 |
+| 多源时钟与合成来源 | 20 | 8 | 权威代次与迟到证据分类源码通过；r23仅generation1，不提升。 |
+| 逐源断流和恢复 | 20 | 6 | Preserve、真实purge及重试屏障源码通过；新模式未运行，旧路径仍失败，不提升。 |
+| 线程、背压和资源边界 | 20 | 12 | 已修复续接/发布竞争；全局资源账未完成且逻辑对象未归零，不提升。 |
+| 双平台合成能力证据 | 10 | 2 | 仅Windows单源回归，无本阶段RKMPP合屏实证，不提升。 |
+| 合屏观测与真实验收 | 10 | 4 | 117条漂移最大4793 ns仅覆盖单源首代；无持续黑帧/静音及恢复证明，不提升。 |
+| **合计** | **100** | **42** | **完整合屏仍 FAIL，尚未就绪。** |
+
+风险与待优化：完成独立输出预检查、物理画布验证、按域资源准入及公共入口；覆盖多源反复失锁、真实恢复、长期内存和Windows→RKMPP完整链路。4个逻辑对象残留不能直接推断进程退出后的物理泄漏；源码审查不替代运行成熟度。
+
+## 2026-09-21 合屏域与聚合接线独立审查 B
+
+独立审查B对`2ff6bab0`之后当前合屏WIP给出**源码安全保留PASS、完整合屏FAIL**：交叉复核确认的RGA隐式plane布局P2已修复，完整布局及RGB24/BGR24字节序冻结复审通过。域注册、连续贡献、黑帧/静音及CUDA/RGA源码已对照FFmpeg/GStreamer；preflight、全局资源准入、CLI/C API和多源Windows→RKMPP验收仍未闭环。r22属于单源回归，不能替代合屏证明。沿用六维10/8/6/12/2/4，合计**42/100**，不提高分数；B结论不代替A或最终PR审查。
+
+## 2026-09-21 编码提交事务复审
+
+两名独立审查者 composition_transaction_review_a/b 均 Standards/局部事务 Spec PASS，未发现新增阻塞；合屏就绪度维持42/100（10/8/6/12/2/4）。Release全量构建成功；r21首段120秒有VLC画面，重入AAC timeline失败，CLI自然exit1、逻辑资源归零。完整合屏FAIL。提交事务前置不能替代独立输出生命周期、mapper驻留硬界、黑帧/静音及多源验收。[命令与结果](docs/realtime-video-composition-transaction.md)。
+
+## 2026-09-21 输出身份与 FIFO 边界复审
+
+两名未参与实现的智能体对源/输出身份、canonical 音频贡献保存、完整 timeline 校验及同步 FIFO 上界给出 Standards/局部 Spec PASS，直接 include 和同步组 contract 修复后复审结论保持。Release全量成功；r20重入AAC时间轴失败，CLI自然退出1、逻辑资源归零。完整合屏 FAIL，就绪度仍为 42/100（10/8/6/12/2/4）；尚缺独立输出生命周期、连续聚合、黑帧/静音、多源与双平台运行证据。FIFO PCM payload 界不覆盖 metadata/codec 物理内存，贡献尚未穿过调度到协议层。构建与实流结果见[本轮记录](docs/realtime-video-composition-output-identity.md)，源码 PASS 不替代运行验收。
+
+## 2026-09-16 显式处理归属与 r16–r18 复审
+
+两名未参与实现的审查者均Standards/局部Spec PASS，未发现新增P1/P2；合屏就绪度维持42/100（10/8/6/12/2/4）。segment显式归属、互斥覆盖校验与按角色准备注入已贯通，仍执行旧整体transition。Release全量重试成功；r16无源超时退出且最终保留4个逻辑对象，r17测试启动时序失败不计验收，r18完整双120秒源重入仍报AAC时间轴错误，CLI自然退出1且逻辑资源归零。完整合屏FAIL，连续输出、贡献模型、黑场/静音和跨平台验收仍缺失，不能据结构重构提高分数。[命令与证据](docs/realtime-video-composition-processing-ownership.md)。
+
+
+## 2026-09-16 协议代次交接增量
+
+两名独立审查者对owner线程清理、异步purge、协议/SDP注册及RTP事件顺序源码给出Standards/局部Spec PASS；r13七组ack并恢复源锁2、新MPEG-TS计划，随后AAC不支持flush导致编码lineage冲突，且漂移pending长期持epoch锁阻塞退出。短授权修复再次双审PASS，r14同规格Debug实流保留AAC失败并自然退出1、逻辑资源归零；完整恢复FAIL。旧r13挂起进程已按用户明确授权清理，r15 Release全量构建通过，同规格重入仍报AAC错误，但CLI自然退出1、逻辑资源归零，并实际取消53个未提交数据报；完整恢复仍FAIL。本轮产物与进程已清理。合屏就绪度维持42/100（10/8/6/12/2/4），未以基础修复提高评分；独立输出域、黑场/静音、多源与Windows→RKMPP验收仍未完成。[证据与命令](docs/realtime-video-composition-protocol-handoff.md)。
+
+## 2026-09-16 purge屏障与恢复控制增量
+
+两名独立审查者复审10文件源码增量，Standards/局部Spec均PASS：修复背压重试跳过代次仲裁、purge完成缺少域唤醒、startup重复失效/控制消息滞留，以及传输计划遗漏purge注册。r9/r10定位的错误已越过；r11全部5组ack并恢复源锁2，最终仍因MPEG-TS构造器保留旧计划而退出1。完整恢复FAIL，详见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。就绪度仍42/100；剩余协议代次交接、sender线程归属清理、输出时间轴、黑场/静音及跨平台验收不能由局部PASS替代。
+
+## 2026-09-16 源失活代次增量
+
+两位独立审查对validator三阶段、重复失效幂等、old/next投影及耗尽失败均给出Standards/局部Spec PASS。r8实际解析两次匹配源BYE，next=2/old=1稳定，无原malformed discontinuity；120秒有编码与VLC画面，随后仍无进展超时。完整交付FAIL，六维就绪度保持10/8/6/12/2/4，共42/100；不外推完整恢复或跨平台。剩余恢复获取期限、purge并发、尾部和物理内存风险见[专项记录](docs/realtime-video-composition-source-generation.md)。
+
+## 2026-09-15 阶段一基础修改复审
+
+两位未参与实现者对阶段一及2026-09-16输入保留增量均给出 Standards PASS / 当前 WIP 源码 Spec PASS。本轮贯通输入启动 retention、字节/对象信用、binder与重复帧凭证生命周期及独立启动批次发布容量；r5、r6真实链路FAIL，修复后的r7已进入持续编码与VLC播放，最终结果见[输入保留记录](docs/realtime-video-composition-input-retention.md)。独立复审建议维持下表六维尺度42/100：仍是单源基础，多源绑定、公共合成域、逐源黑屏/静音与恢复及双平台合屏验收尚未完成。逻辑credit不代表clone side data等全部物理分配边界；控制进展、完整结束和Windows→RKMPP回归仍待闭环，不因局部修复提高评分。
+
+## 2026-09-15 固定实时合屏就绪度（实施前）
+
+基线 `d590cc3b`；独立智能体仅进行源码专项评估，未运行合屏。下表衡量本次 2～4 路 RTP/RTCP 合屏的就绪度，不替换历史项目质量分，也不表示验收通过。
+
+| 维度 | 满分 | 得分 | 缺口 |
+|---|---:|---:|---|
+| DAG 复用与多源绑定 | 20 | 10 | 单源运行时基数与绑定 |
+| 多源时钟与合成来源 | 20 | 8 | 公共输出域、贡献记录 |
+| 逐源断流和恢复 | 20 | 6 | 黑屏、静音、局部恢复产品 |
+| 线程、背压和资源边界 | 20 | 12 | 多路总体准入与逐分配计量 |
+| 双平台合成能力证据 | 10 | 2 | 实际合成及吞吐未验证 |
+| 合屏观测与真实验收 | 10 | 4 | 合屏专属观测及运行证据 |
+| **合计** | **100** | **42** | **尚未就绪** |
+
+后续能力查询确认两平台滤镜存在；Windows CUDA 异常返回值传播属于静态风险，并无当前启动失败的复现证据，不能认定必须先修依赖。实施前评分保留，不据滤镜存在提高分数。详见 [能力门禁](docs/realtime-video-composition-capability.md) 和 [实施记录](docs/realtime-video-composition-progress.md)。
+
 ## 2026-09-10 Beta profile与示例交付增量
 
 代码冻结f41a6554（核心543f8565），真实120秒RKMPP Profile01及清晰版C示例由两名未参与实现者独立复核，Standards/Spec均PASS。首次0b71a44c构建失败暴露实时请求字段/转换遗漏，旧源码PASS已撤回；修正后全量构建及真实参数集验证成功。保留该过程，不能仅靠源码口头确认放行。

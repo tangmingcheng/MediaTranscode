@@ -1,7 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/sync/MediaAudioDriftServoLimits.h"
 #include "internal/graph/sync/MediaAudioDriftServoPolicyValidator.h"
-#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 
 #include <optional>
 #include <limits>
@@ -46,7 +45,14 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
 {
+    if (!plan.sourceLifecycle ||
+        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
+         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
+        return invalid("sourceLifecycle");
     if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
+        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
     if (!plan.controlGenerationPolicy) {
         return invalid("controlGenerationPolicy");
     }
@@ -76,8 +82,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
                            startup.videoByteCapacity) ||
         !validByteCapacity(startup.audioCapacity, startup.maximumAudioUnitBytes,
                            startup.audioByteCapacity) ||
-        *startup.videoCapacity > MediaAvStartupMaximumUnitCapacity ||
-        *startup.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
+        *startup.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        *startup.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         !presentText(startup.videoIdentity) || !presentText(startup.audioIdentity) ||
         *startup.videoIdentity == *startup.audioIdentity ||
         !startup.allowDegradedClock || *startup.allowDegradedClock) {

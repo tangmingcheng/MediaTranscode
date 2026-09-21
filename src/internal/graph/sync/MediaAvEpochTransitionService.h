@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvReacquisitionCoordinator;
 class MediaPlaybackEpochActivationCapability;
+class MediaOutputEpochActivationCapability;
 struct MediaAvEpochTransitionServiceTestAccess;
 
 class MediaAvOutputPermitCommitReservation final {
@@ -53,9 +54,10 @@ class MediaAvEpochTransitionService final {
 public:
     static ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>> create(
         MediaAvGenerationTransitionPlan plan);
+    static std::shared_ptr<MediaAvEpochTransitionService> createInitialOnly();
 
     ::media::Result<MediaAvGenerationPurge> beginReacquisition(
-        std::uint64_t oldGeneration,
+        MediaAvTransitionOrigin origin,
         std::uint64_t nextGeneration);
     ::media::Result<bool> acknowledge(
         MediaAvGenerationAcknowledgement acknowledgement);
@@ -66,11 +68,12 @@ public:
     reserveOutputCommit(std::uint64_t generation) const;
     ::media::Result<MediaAvActivatedOutputPermitReservation>
     reserveActivatedOutput() const;
-    const MediaAvGenerationTransitionPlan& transitionPlan() const noexcept;
+    const MediaAvGenerationTransitionPlan* transitionPlan() const noexcept;
 
 private:
     friend class MediaAvReacquisitionCoordinator;
     friend class MediaPlaybackEpochActivationCapability;
+    friend class MediaOutputEpochActivationCapability;
     friend struct MediaAvEpochTransitionServiceTestAccess;
     ::media::Status activateInitial(
         MediaPlaybackEpoch epoch,
@@ -81,6 +84,8 @@ private:
         MediaAudioPlaybackOrigin audioOrigin);
     explicit MediaAvEpochTransitionService(
         MediaAvGenerationTransitionCoordinator coordinator);
+    MediaAvEpochTransitionService() = default;
+    bool outputPermittedLocked(std::uint64_t generation) const noexcept;
     static ::media::Status validateEpochPair(
         const MediaPlaybackEpoch& epoch,
         const MediaAudioPlaybackOrigin& audioOrigin);
@@ -88,7 +93,8 @@ private:
     ::media::Status failLocked(::media::ErrorInfo error);
 
     mutable std::mutex m_mutex;
-    MediaAvGenerationTransitionCoordinator m_coordinator;
+    std::optional<MediaAvGenerationTransitionCoordinator> m_coordinator;
+    bool m_aborted = false;
     MediaAvGenerationReadiness m_readiness =
         MediaAvGenerationReadiness::Acquiring;
     std::optional<MediaPlaybackEpoch> m_epoch;

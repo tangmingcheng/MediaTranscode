@@ -69,6 +69,7 @@ MediaAvStartupGenerationState::MediaAvStartupGenerationState(
 void MediaAvStartupGenerationState::erase(const MediaAvStartupUnitId& id) noexcept
 {
     m_payloads.erase(id);
+    m_seen.erase(id);
 }
 
 void MediaAvStartupGenerationState::erase(

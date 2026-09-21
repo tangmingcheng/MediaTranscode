@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
 

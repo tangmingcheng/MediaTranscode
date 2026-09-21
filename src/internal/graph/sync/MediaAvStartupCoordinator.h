@@ -5,6 +5,7 @@
 #include "internal/graph/sync/MediaAvSyncError.h"
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/sync/MediaAvGenerationTransition.h"
 #include "internal/graph/sync/startup/MediaAvStartupSelectionWork.h"
 
 #include <cstddef>
@@ -110,6 +111,13 @@ struct MediaAvStartupDecision final {
     std::vector<MediaAvStartupUnitId> purged;
 };
 
+struct MediaAvStartupAttemptExpired final {
+    std::uint64_t generation;
+    MediaAvSyncError error;
+    std::vector<MediaAvStartupUnitId> purged;
+};
+using MediaAvStartupPollOutcome = std::optional<MediaAvStartupAttemptExpired>;
+
 class MediaAvStartupCoordinator final {
 public:
     static MediaAvSyncResult<MediaAvStartupCoordinator> create(MediaAvStartupConfig config);
@@ -122,7 +130,9 @@ public:
 
     MediaAvSyncResult<MediaAvStartupDecision> submit(MediaAvStartupAccessUnit unit,
                                                       MediaRunningTime observedAt);
-    MediaAvSyncStatus poll(MediaRunningTime observedAt);
+    MediaAvSyncResult<MediaAvStartupPollOutcome> poll(MediaRunningTime observedAt);
+    MediaAvSyncStatus resumeAfterEvidence(MediaRunningTime observedAt);
+    MediaAvSyncStatus retireGeneration(const MediaAvGenerationPurge& purge);
     MediaAvSyncStatus endOfStream(MediaAvStartupStream stream);
     MediaAvSyncStatus fail(std::string reason);
     void stop() noexcept;

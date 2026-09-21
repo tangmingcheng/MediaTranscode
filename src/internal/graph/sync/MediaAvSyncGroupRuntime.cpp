@@ -346,6 +346,15 @@ MediaAvSyncGroupRuntime::reacquisitionCoordinator() const noexcept
     return m_reacquisitionCoordinator.get();
 }
 
+::media::Result<std::optional<MediaRunningTime>>
+MediaAvSyncGroupRuntime::progressGenerationPurge()
+{
+    auto* coordinator = reacquisitionCoordinator();
+    if (!coordinator) return ::media::Result<std::optional<MediaRunningTime>>::failure(
+        ::media::ErrorInfo::notInitialized("A/V purge progress requires its coordinator"));
+    return coordinator->progressPurge();
+}
+
 ::media::Status MediaAvSyncGroupRuntime::pollEpochReacquisitionTimeout()
 {
     auto* coordinator = reacquisitionCoordinator();
@@ -362,6 +371,28 @@ MediaAvSyncGroupRuntime::reacquisitionCoordinator() const noexcept
     auto fromStart = canonicalTime.checkedSubtract(epoch.value().sourceStart);
     if (!fromStart) return fromStart;
     return epoch.value().masterRelease.checkedAdd(fromStart.value());
+}
+
+bool MediaAvSyncGroupRuntime::preservesActivatedOutput() const noexcept
+{
+    const auto* coordinator = reacquisitionCoordinator();
+    return coordinator && coordinator->preservesActivatedOutput();
+}
+
+::media::Status MediaAvSyncGroupRuntime::observeClockEvidence(
+    std::uint64_t generation, std::uint64_t revision)
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator ? coordinator->observeClockEvidence(generation, revision)
+        : ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "Source clock evidence requires its coordinator"));
+}
+
+std::optional<MediaAvSourceClockEvidence>
+MediaAvSyncGroupRuntime::clockEvidence() const noexcept
+{
+    const auto* coordinator = reacquisitionCoordinator();
+    return coordinator ? coordinator->clockEvidence() : std::nullopt;
 }
 
 } // namespace media::ffmpeg::graph

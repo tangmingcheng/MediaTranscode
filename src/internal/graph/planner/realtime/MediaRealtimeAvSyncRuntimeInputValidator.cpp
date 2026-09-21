@@ -38,6 +38,9 @@ namespace {
     const auto& input = *runtime.synchronization.rtpInput;
     const auto& policy = input.input;
     constexpr std::int64_t Millisecond = 1'000'000;
+    const bool preserve = runtime.synchronization.sourceLifecycle &&
+        runtime.synchronization.sourceLifecycle->mode ==
+            MediaAvSourceLifecycleMode::PreserveActivatedOutput;
     const bool transportPolicyMatches =
         policy.requireSenderReports &&
         policy.rtcpCompositionMode &&
@@ -84,11 +87,13 @@ namespace {
         runtime.isolatedAudioInput->rtpTransport->clockLossPolicy ==
             *policy.secondaryClockLossPolicy &&
         *policy.clockLossPolicy ==
-            (*runtime.synchronization.startup.allowDegradedClock
+            (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait :
+             *runtime.synchronization.startup.allowDegradedClock
                  ? MediaRtpClockLossPolicy::FailOnExpired
                  : MediaRtpClockLossPolicy::FailOnDegraded) &&
         *policy.secondaryClockLossPolicy ==
-            MediaRtpClockLossPolicy::FailOnExpired &&
+            (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait
+                      : MediaRtpClockLossPolicy::FailOnExpired) &&
         outer.input.rtpTransport->rtcpCompositionMode ==
             policy.rtcpCompositionMode &&
         runtime.isolatedAudioInput->rtpTransport->rtcpCompositionMode ==

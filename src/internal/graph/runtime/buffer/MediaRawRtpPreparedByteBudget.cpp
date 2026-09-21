@@ -64,6 +64,27 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     return failLocked(std::move(error));
 }
 
+::media::Status MediaRawRtpPreparedByteBudget::reserveProbe(std::size_t bytes)
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return ::media::Status::failure(*m_error);
+    if (m_runtimeActive || m_probeActive || bytes == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe requires an unsealed budget without another probe lease"));
+    }
+    if (auto status = retainLocked(bytes, "probe"); !status) return status;
+    m_probeActive = true;
+    return ::media::Status::success();
+}
+
+void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
+{
+    std::scoped_lock lock(m_mutex);
+    // Only the move-only lease can release this reservation, exactly once.
+    m_retainedBytes -= bytes;
+    m_probeActive = false;
+}
+
 ::media::Status MediaRawRtpPreparedByteBudget::sealPreflight()
 {
     std::scoped_lock lock(m_mutex);
@@ -71,6 +92,10 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     if (m_runtimeActive) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP prepared byte budget was already sealed"));
+    }
+    if (m_probeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP preflight cannot seal while a probe snapshot is retained"));
     }
     m_runtimeActive = true;
     return ::media::Status::success();
@@ -97,7 +122,8 @@ MediaRawRtpPreparedByteBudgetSnapshot
 MediaRawRtpPreparedByteBudget::snapshot() const noexcept
 {
     std::scoped_lock lock(m_mutex);
-    return {m_capacity, m_observedBytes, m_retainedBytes, m_runtimeActive};
+    return {m_capacity, m_observedBytes, m_retainedBytes, m_runtimeActive,
+        m_probeActive};
 }
 
 ::media::Status MediaRawRtpPreparedByteBudget::observeLocked(

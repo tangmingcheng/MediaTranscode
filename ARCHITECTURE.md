@@ -1,5 +1,9 @@
 ## `src/internal/graph/`
 
+源域purge完成后由registrar绑定的既有节点wakeup通知域成员；gate在首次及背压重试的output commit处持有代次仲裁，旧包取消、新代屏障未完成则等待。startup clock保留精确失效代次，重复失效幂等；消费控制状态后继续排空队列。有限清理事务、有界恢复候选与可无限源缺失须区分，不能用源恢复超时替代独立输出时钟，见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。
+
+RTP A/V时钟域由validator区分初始获取、活动与重获取，失活首次保存旧代次并分配一次下一代次；快照明确失效旧代次，adapter向gate投影旧失效、向新获取保留下一代次。重复失效不重复建代，恢复候选继续受SR/CNAME时效约束，代次耗尽失败。此机制不将RTCP BYE转换成会话EOF；完整恢复期限与多源持续输出仍待实现，见[源失活记录](docs/realtime-video-composition-source-generation.md)。
+
 `src/internal/graph` 是项目中的 DAG 化媒体处理管线目录，负责描述、构建、校验、编译和运行媒体处理图。
 
 ```text
@@ -514,3 +518,29 @@ Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `
 `VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 or HEVC video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
 
 Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.
+
+## 实时 A/V 显式运行时注册
+
+协议代次交接由同一 coordinator 管理异步 purge 屏障。planner 显式注册 materializer、sender 和适用的 SDP publisher；各节点通过单槽请求在自己的 worker 清理状态，完成后通知域唤醒。清理未完成不确认 ack，复用原事务截止时间。sender 的 native submit 与提交计账受短发布授权保护，等待不持锁；授权取消仅退役未提交预约，保留物理服务域及已发送限速债务。输入按 RTP 重排序事件顺序发布时钟证据，控制事件不等待媒体 credit。当前仍为单源域基础，实流与剩余边界见[协议交接记录](docs/realtime-video-composition-protocol-handoff.md)。
+
+漂移控制候选只保存数据；每次提交按epoch→state→channel获取短授权，复核原origin后原子发布音频及校正，成功才推进servo。背压释放全部锁，恢复请求在锁外执行，owner退出清候选，避免全局代次锁随待发媒体跨worker等待。
+
+各 segment 显式返回源处理与输出处理归属，binding 持有完整域列表与唯一 outputGroupKey，编译前检查成员互斥、完整覆盖和允许的跨域连接。SharedSourceOutput 角色保留既有单源整体 transition；Source 角色仅清本源处理和聚合候选，Output 角色只授予首次激活能力。各域复用同一 master clock，协议时间权威仅属于输出域。codec resolver 与 branch builder 已拆出源处理和输出编码入口，合屏图构建器复用这些入口及既有协议段；composition planner、资源准入和外部控制入口仍未接通，因此不能视为合屏已可用。
+
+Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
+
+RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。
+
+### 合屏输出身份基础（2026-09-21）
+
+音频编码提交在同一 lineage lock 内先准备贡献候选，再发送帧，成功后通过 noexcept swap 提交；EAGAIN 销毁候选、接收后重新准备。事务不跨调度调用，不改变 packet map/priming 或恢复清理。提交 mapper 的权威驻留与元数据物理预算仍未完成，不能把该原子提交边界视为持续输出生命周期已接通。
+
+Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号保持域中性。音频贡献区分真实源映射和生成静音，视频贡献逐格记录源身份或生成黑帧；重采样与裁剪保留原始源区间及映射锚点。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。
+
+AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样本轴，按共享时钟 deadline 选择仍有效的源区间，缺口生成黑帧/静音。输出仅保留一项 pending，提交同时取得所涉及源与输出的短代次许可；源 purge 先于背压重试服务。画布通过 CUDA/RGA adapter 完成同步矩形操作，黑模板由明确色彩范围填充并读回验证，帧 lease 释放通知 owner。实际生产帧池的预DAG验证、全局资源和元数据物理上界、迟到工作策略及完整运行门禁仍缺失；不能把局部实现或单源画面当成完整合屏验收。见[持续聚合接线记录](docs/realtime-video-composition-aggregate.md)。
+
+源生命周期由planner显式选择：Shared保留原失败合同，Source只有在唯一Output实际激活后才允许缺流等待。RTCP BYE/证据到期是有序源失效，真实协议/I/O错误仍失败；恢复尝试到期释放候选并等待新SR及新AU。未发布代退休复用真实owner-thread purge/ack，启动清理完成后才确认；代次分类、排队续接与等价目标重判共用activation仲裁，不能假激活或吞非法证据。此内部实现已通过源码双审，公共composition入口尚未接入，运行结论仍未通过，见[源生命周期记录](docs/realtime-video-composition-source-lifecycle.md)。
+
+逐源视频规划以 MediaVideoSourcePlan 表示 decoder/filter 与源执行合同，完整链在相同产品上追加 encoder。候选、帧域匹配、评分和执行合同复用同一实现；MediaHardwareCapabilityProbe 的显式首帧协商只返回 filter graph 配置/readback，不证明真实decode/transfer或同设备身份。见[逐源规划记录](docs/realtime-video-composition-source-planning.md)。
+
+CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_format 回调状态随 CodecContextPtr 的 deleter 转移，不借用节点成员。MediaRawRtpProbeLease 对 prepared 队列建立只读快照，payload和描述符先计入原共享预算，原始回放及到达时间保留；lease存活时禁止seal，probe占额引起capture容量截止明确失败。该原语尚未接真实预解码消费者，首帧lineage、实际设备与逐owner资源仍须在组合preflight中闭合。见[准备所有权记录](docs/realtime-video-composition-prepared-source.md)。

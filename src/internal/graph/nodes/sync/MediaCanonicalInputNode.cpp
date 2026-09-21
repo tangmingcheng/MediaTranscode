@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
@@ -116,7 +117,7 @@ MediaCanonicalInputNode::canonicalize(
     }
     auto created = MediaCanonicalAccessUnitBuffer::create(
         std::move(encodedAccessUnit), std::move(lineage).value(),
-        std::move(audioInterval));
+        std::move(audioInterval), {});
     if (!created) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             created.error());

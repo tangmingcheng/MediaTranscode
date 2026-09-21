@@ -26,7 +26,8 @@ std::int64_t calculateDeadline(std::int64_t observedAtNs, std::int64_t intervalN
         cnameTimeoutNs <= 0 ||
         (lossPolicy != MediaRtpClockLossPolicy::FailOnDegraded &&
          lossPolicy != MediaRtpClockLossPolicy::FailOnExpired &&
-         lossPolicy != MediaRtpClockLossPolicy::WaitForEvidence)) {
+         lossPolicy != MediaRtpClockLossPolicy::WaitForEvidence &&
+         lossPolicy != MediaRtpClockLossPolicy::InvalidateAndWait)) {
         return ::media::Result<MediaRtpClockObservationSchedule>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock observation deadlines must be positive and ordered"));
     }
@@ -117,7 +118,8 @@ MediaRtpClockObservationSchedule::transition(
     }
     if (!m_degradedPublished) {
         m_degradedPublished = true;
-        if (m_lossPolicy != MediaRtpClockLossPolicy::FailOnDegraded) {
+        if (m_lossPolicy != MediaRtpClockLossPolicy::FailOnDegraded &&
+            m_lossPolicy != MediaRtpClockLossPolicy::InvalidateAndWait) {
             return ::media::Result<std::optional<MediaRtpClockAgeTransition>>::success(
                 std::nullopt);
         }

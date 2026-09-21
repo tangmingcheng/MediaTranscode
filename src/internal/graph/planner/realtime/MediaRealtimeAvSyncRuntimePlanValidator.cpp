@@ -133,7 +133,18 @@ namespace media::ffmpeg::graph {
                 expectedCorrection.value().frequencyFilterTimeConstant) {
             return invalid("audio correction derivation");
         }
-    } else if (runtime.audioCorrection ||
+        if (!runtime.encoderFifoRetention || !runtime.audioPipeline.resolvedOutput ||
+            !runtime.audioPipeline.selectedResampler) {
+            return invalid("audio encoder FIFO retention facts");
+        }
+        auto expectedRetention = MediaAudioEncoderFifoRetentionPlan::create(
+            *runtime.audioPipeline.resolvedOutput,
+            runtime.audioPipeline.selectedResampler->maximumOutputBlockSamples,
+            runtime.synchronization.audioServo);
+        if (!expectedRetention || *runtime.encoderFifoRetention != expectedRetention.value()) {
+            return invalid("audio encoder FIFO retention derivation");
+        }
+    } else if (runtime.encoderFifoRetention || runtime.audioCorrection ||
                runtime.synchronization.audioServo.commandLeadNs ||
                runtime.synchronization.audioServo.compensationWindowNs ||
                runtime.synchronization.audioServo.frequencyFilterTimeConstantNs) {
@@ -149,9 +160,11 @@ namespace media::ffmpeg::graph {
         return invalid("edge-policy byte facts");
     }
     auto expectedEdges = MediaRealtimeEdgePolicyPlanner::
-        planWithSynchronizedPacketMemoryBudget(
+        planWithAvStartupRelease(
             runtime.queues, *videoBytes + *audioBytes,
-            runtime.queues.packet);
+            runtime.queues.packet,
+            *runtime.synchronization.startup.videoCapacity,
+            *runtime.synchronization.startup.audioCapacity);
     if (!expectedEdges || runtime.edgePolicies != expectedEdges.value()) {
         return invalid("edge-policy product");
     }
@@ -196,7 +209,7 @@ namespace media::ffmpeg::graph {
         return invalid("Datagram transport product");
     }
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
-        runtime.outputAdapter,
+        runtime.protocolOutput,
         *runtime.synchronization.sourceClockMode,
         runtime.audioPipeline.branchMode,
         runtime.videoFilterActive,

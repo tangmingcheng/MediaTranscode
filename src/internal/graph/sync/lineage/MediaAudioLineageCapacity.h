@@ -10,8 +10,9 @@ namespace media::ffmpeg::graph {
 
 struct MediaAudioLineageKey final {
     std::uint64_t generation = 0;
-    std::string_view sourceIdentity;
-    MediaSourceAccessUnitSequence sourceSequence {0};
+    std::string_view timelineIdentity;
+    std::uint64_t sequence = 0;
+    bool output = false;
 
     friend bool operator==(const MediaAudioLineageKey&,
                            const MediaAudioLineageKey&) noexcept = default;

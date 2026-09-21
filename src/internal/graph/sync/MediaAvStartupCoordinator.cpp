@@ -1,7 +1,6 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/startup/MediaAvStartupCoverageIndex.h"
-#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 #include "internal/graph/sync/startup/MediaAvStartupStreamStore.h"
 #include "internal/graph/sync/startup/MediaAvStartupWindowSelector.h"
 
@@ -123,8 +122,8 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         config.preroll >= config.keyFrameWait ||
         config.keyFrameWait > config.maximumWait ||
         config.videoCapacity == 0 || config.audioCapacity == 0 ||
-        config.videoCapacity > MediaAvStartupMaximumUnitCapacity ||
-        config.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
+        config.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        config.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         config.videoByteCapacity == 0 || config.audioByteCapacity == 0 ||
         config.maximumVideoUnitBytes == 0 || config.maximumAudioUnitBytes == 0 ||
         config.maximumVideoUnitBytes > config.videoByteCapacity ||
@@ -268,6 +267,9 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
                 : MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", &unit, "startup coordinator is not accepting media"));
     }
+    if (m_state.state() == MediaAvSyncState::WaitingForEvidence)
+        return MediaAvSyncResult<MediaAvStartupDecision>::success(
+            {MediaAvStartupDisposition::DroppedNotReady, std::nullopt, {unitId(unit)}});
     const MediaRunningTime effectiveNow = advanceWatermark(observedAt);
     std::vector<MediaAvStartupUnitId> purged;
     if (!m_state.generation()) {
@@ -284,6 +286,8 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
         purged = std::move(advanced).value();
     }
 
+    if (!m_acquisitionStartedAt && m_state.state() == MediaAvSyncState::AcquiringClock)
+        m_acquisitionStartedAt = effectiveNow;
     const bool usableClock = unit.readiness == MediaSourceClockReadiness::Locked;
     if (!usableClock) {
         const bool acquisitionAlreadyActive =
@@ -486,34 +490,68 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
          std::move(purged)});
 }
 
-MediaAvSyncStatus MediaAvStartupCoordinator::poll(MediaRunningTime observedAt)
+MediaAvSyncResult<MediaAvStartupPollOutcome>
+MediaAvStartupCoordinator::poll(MediaRunningTime observedAt)
 {
+    using Result = MediaAvSyncResult<MediaAvStartupPollOutcome>;
     if (!m_acquisitionStartedAt || m_state.state() == MediaAvSyncState::Running ||
-        m_state.state() == MediaAvSyncState::Idle) return MediaAvSyncStatus::success();
+        m_state.state() == MediaAvSyncState::Idle ||
+        m_state.state() == MediaAvSyncState::WaitingForEvidence)
+        return Result::success(std::nullopt);
     const MediaRunningTime effectiveNow = advanceWatermark(observedAt);
     auto elapsed = effectiveNow.checkedSubtract(*m_acquisitionStartedAt);
-    if (!elapsed) return MediaAvSyncStatus::failure(startupError(
+    if (!elapsed) return Result::failure(startupError(
         MediaAvSyncErrorCode::TimeOverflow, "poll", nullptr, elapsed.error().message));
-    if (elapsed.value() >= m_config.maximumWait) {
-        return markFailed(MediaAvSyncErrorCode::StartupTimeout, "startup timeout");
-    }
+    std::optional<MediaAvSyncErrorCode> expiry;
+    if (elapsed.value() >= m_config.maximumWait) expiry = MediaAvSyncErrorCode::StartupTimeout;
     const auto videoSnapshot = m_keyFrameWaitStartedAt
-        ? m_video->presentationSnapshot()
-        : std::vector<MediaAvStartupIndexedUnit>{};
-    if (m_keyFrameWaitStartedAt &&
+        ? m_video->presentationSnapshot() : std::vector<MediaAvStartupIndexedUnit>{};
+    if (!expiry && m_keyFrameWaitStartedAt &&
         std::none_of(videoSnapshot.begin(), videoSnapshot.end(), [&](const auto& item) {
             return !m_config.requireVideoKeyFrame || item.unit->keyFrame;
         })) {
-        auto keyFrameElapsed = effectiveNow.checkedSubtract(*m_keyFrameWaitStartedAt);
-        if (!keyFrameElapsed) return MediaAvSyncStatus::failure(startupError(
-            MediaAvSyncErrorCode::TimeOverflow, "poll_key_frame", nullptr,
-            keyFrameElapsed.error().message));
-        if (keyFrameElapsed.value() >= m_config.keyFrameWait) {
-            return markFailed(MediaAvSyncErrorCode::KeyFrameTimeout,
-                              "video key frame wait timeout");
-        }
+        auto elapsedKey = effectiveNow.checkedSubtract(*m_keyFrameWaitStartedAt);
+        if (!elapsedKey) return Result::failure(startupError(
+            MediaAvSyncErrorCode::TimeOverflow, "poll_key_frame", nullptr, elapsedKey.error().message));
+        if (elapsedKey.value() >= m_config.keyFrameWait) expiry = MediaAvSyncErrorCode::KeyFrameTimeout;
     }
+    if (!expiry) return Result::success(std::nullopt);
+    auto error = startupError(*expiry, "poll", nullptr,
+        *expiry == MediaAvSyncErrorCode::StartupTimeout
+            ? "startup timeout" : "video key frame wait timeout");
+    auto waiting = m_state.transition(MediaAvSyncEvent::AttemptExpired, *m_state.generation());
+    if (!waiting) return Result::failure(waiting.error());
+    auto purged = purge();
+    m_acquisitionStartedAt.reset();
+    return Result::success(MediaAvStartupAttemptExpired{
+        *m_state.generation(), std::move(error), std::move(purged)});
+}
+
+MediaAvSyncStatus MediaAvStartupCoordinator::retireGeneration(const MediaAvGenerationPurge& transition)
+{
+    if (!m_state.generation() || *m_state.generation() > transition.oldGeneration ||
+        *m_state.generation() < transition.publishedGeneration)
+        return MediaAvSyncStatus::failure(startupError(
+            MediaAvSyncErrorCode::StartupInvalidTransition, "retire_generation", nullptr,
+            "Startup retirement requires the exact published-to-pending generation interval"));
+    auto retired = m_state.transition(MediaAvSyncEvent::RequireReacquisition, transition.nextGeneration);
+    if (!retired) return retired;
+    (void)purge();
+    m_acquisitionStartedAt.reset();
+    m_lastVideoSequence.reset();
+    m_lastAudioSequence.reset();
     return MediaAvSyncStatus::success();
+}
+
+MediaAvSyncStatus MediaAvStartupCoordinator::resumeAfterEvidence(MediaRunningTime observedAt)
+{
+    if (m_state.state() != MediaAvSyncState::WaitingForEvidence || !m_state.generation())
+        return MediaAvSyncStatus::failure(startupError(
+            MediaAvSyncErrorCode::StartupInvalidTransition, "resume_evidence", nullptr,
+            "A new acquisition attempt requires the waiting state"));
+    auto resumed = m_state.transition(MediaAvSyncEvent::RequireReacquisition, *m_state.generation());
+    if (resumed) m_acquisitionStartedAt = advanceWatermark(observedAt);
+    return resumed;
 }
 
 MediaAvSyncStatus MediaAvStartupCoordinator::endOfStream(MediaAvStartupStream stream)

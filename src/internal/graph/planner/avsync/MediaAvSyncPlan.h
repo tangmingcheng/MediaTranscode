@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
+#include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
 
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/model/MediaControlGenerationPolicy.h"
@@ -191,6 +192,7 @@ struct MediaAvSyncMetricsPolicy {
 };
 
 struct MediaAvSyncPlan {
+    std::optional<MediaAvSourceLifecyclePlan> sourceLifecycle;
     std::optional<MediaAvSyncSourceClockMode> sourceClockMode;
     std::optional<MediaControlGenerationPolicy>
         controlGenerationPolicy;

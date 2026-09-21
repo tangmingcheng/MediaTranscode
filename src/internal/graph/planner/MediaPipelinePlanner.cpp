@@ -9,6 +9,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <algorithm>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -72,12 +73,7 @@ completeRateControlFromPreparedReadback(
 bool sameFrameDomain(const MediaHardwareDescriptor& left,
                      const MediaHardwareDescriptor& right) noexcept
 {
-    return left.deviceKind == right.deviceKind &&
-           left.frameKind == right.frameKind &&
-           left.deviceName == right.deviceName &&
-           left.pixelFormat == right.pixelFormat &&
-           left.surfacePixelFormat == right.surfacePixelFormat &&
-           left.zeroCopyPreferred == right.zeroCopyPreferred &&
+    return MediaPipelineScorer::sameFrameDomain(left, right) &&
            left.requiresHardwareDeviceContext == right.requiresHardwareDeviceContext &&
            left.requiresHardwareFramesContext == right.requiresHardwareFramesContext;
 }
@@ -136,7 +132,11 @@ bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcep
         return ::media::Status::success();
     }
 
-    const auto expectedFilter = MediaVideoCapabilityScanner::planRkmppFilter(options);
+    const auto expectedFilter = MediaVideoCapabilityScanner::planRkmppFilter({
+        {options.probeWidth, options.probeHeight},
+        options.targetWidth > 0 && options.targetHeight > 0
+            ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
+        options.sourceFrameRate, options.lowLatency});
     if (!expectedFilter) return ::media::Status::failure(expectedFilter.error());
     if (chain.filter.filterName != expectedFilter.value() ||
         !chain.filter.inputFrame || !chain.filter.outputFrame ||
@@ -228,36 +228,16 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    chain.decoderLineagePropagation =
-        chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoLineagePropagation::SubmissionOrder
-        : MediaVideoLineagePropagation::CodecCopyOpaque;
+    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(chain, options.sourceFrameRate);
+    if (!source) return source;
     chain.encoderLineagePropagation =
         chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoLineagePropagation::SubmissionOrder
         : MediaVideoLineagePropagation::CodecCopyOpaque;
-    chain.filterImplementation = !chain.filterActive
-        ? MediaVideoFilterImplementation::None
-        : chain.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoFilterImplementation::Rga
-        : MediaVideoFilterImplementation::Generic;
     chain.encoderAbortPolicy =
         chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoEncoderAbortPolicy::DrainThenAbort
         : MediaVideoEncoderAbortPolicy::Immediate;
-    chain.decoderReceiveInterval.reset();
-    if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
-        // This backend can complete a frame after receive returned EAGAIN.
-        // Bound the next receive by the probed source cadence, not new input.
-        auto interval = MediaRunningTime::checkedFromTicks(
-            1, options.sourceFrameRate.den, options.sourceFrameRate.num);
-        if (!interval) return ::media::Status::failure(interval.error());
-        if (interval.value().nanoseconds() <= 0) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "RKMPP decoder receive requires a positive probed frame interval"));
-        }
-        chain.decoderReceiveInterval = interval.value();
-    }
     return ::media::Status::success();
 }
 
@@ -284,6 +264,8 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     if (inputInfo.frameRate.isKnown()) {
         options.sourceFrameRate = inputInfo.frameRate;
     }
+
+    options.sourceColorRange = inputInfo.sourceColorRange;
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets =
@@ -400,6 +382,54 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 }
 
 } // namespace
+
+::media::Status MediaPipelinePlanner::materializeSourceExecutionContract(
+    MediaVideoSourcePlan& source, const MediaRational& sourceFrameRate)
+{
+    source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoLineagePropagation::SubmissionOrder : MediaVideoLineagePropagation::CodecCopyOpaque;
+    source.filterImplementation = !source.filterActive ? MediaVideoFilterImplementation::None
+        : source.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoFilterImplementation::Rga : MediaVideoFilterImplementation::Generic;
+    source.decoderReceiveInterval.reset();
+    if (source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
+        // This backend can complete a frame after receive returned EAGAIN.
+        // Bound the next receive by the probed source cadence, not new input.
+        auto interval = MediaRunningTime::checkedFromTicks(
+            1, sourceFrameRate.den, sourceFrameRate.num);
+        if (!interval) return ::media::Status::failure(interval.error());
+        if (interval.value().nanoseconds() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RKMPP decoder receive requires a positive probed frame interval"));
+        }
+        source.decoderReceiveInterval = interval.value();
+    }
+    return ::media::Status::success();
+}
+
+::media::Result<std::vector<MediaVideoSourcePlan>> MediaPipelinePlanner::planVideoSourceCandidates(
+    const MediaInputVideoStreamInfo& input, const MediaVideoSourcePlanningOptions& options,
+    const MediaHardwareDescriptor& target)
+{
+    using Result = ::media::Result<std::vector<MediaVideoSourcePlan>>;
+    if (input.streamIndex < 0 || input.width != options.sourceSize.width ||
+        input.height != options.sourceSize.height || input.frameRate.num <= 0 || input.frameRate.den <= 0 ||
+        input.sampleAspectRatio.num <= 0 || input.sampleAspectRatio.den <= 0 || options.sourceFrameRate.num != input.frameRate.num ||
+        options.sourceFrameRate.den != input.frameRate.den)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Source planning requires matching dimensions, cadence and authoritative SAR"));
+    auto candidates = MediaVideoCapabilityScanner::enumerateSourceCandidates(input.codecName, options, target);
+    if (!candidates) return Result::failure(candidates.error());
+    for (auto& source : candidates.value()) {
+        source = MediaPipelineScorer::scoreSource(std::move(source), target);
+        auto execution = materializeSourceExecutionContract(source, input.frameRate);
+        if (!execution) return Result::failure(execution.error());
+    }
+    std::sort(candidates.value().begin(), candidates.value().end(), [](const auto& left, const auto& right) {
+        return left.score != right.score ? left.score > right.score : left.label < right.label;
+    });
+    return candidates;
+}
 
 ::media::Status MediaPipelinePlanner::preflightSelectedCandidate(
     MediaPipelineChainPlan& selected,

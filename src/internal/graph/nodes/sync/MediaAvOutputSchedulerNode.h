@@ -35,7 +35,7 @@ private:
         std::optional<MediaAvSchedulerHead> audioHead;
         MediaBufferRef terminal;
         MediaBufferRef lastDisplayedVideoClone;
-        std::optional<MediaSourceAccessUnitSequence> lastDisplayedVideoSequence;
+        std::optional<MediaCanonicalAccessUnitSequence> lastDisplayedVideoSequence;
         std::optional<MediaRunningTime> lastDisplayedVideoMasterTime;
         std::optional<std::uint64_t> heldControllerSequence;
         std::optional<MediaAvSchedulerPendingCommit> pendingCommit;

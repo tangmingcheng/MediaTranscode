@@ -71,6 +71,30 @@ MediaAudioCorrectionQuantizer::create(MediaRunningTime compensationWindow,
         MediaAudioCorrectionQuantizer(windowNs, leadSamples, outputSampleRate));
 }
 
+::media::Result<int> MediaAudioCorrectionQuantizer::maximumCompensationDistance(
+    int maximumStretchPpm) const
+{
+    // Positive window rounding carries a residual below half a sample.
+    // Signed delta rounding can retain positive half a sample after a negative tie.
+    const auto ns = MediaAudioDriftServoLimits::NanosecondsPerSecond;
+    const auto ppm = MediaAudioDriftServoLimits::PartsPerMillion;
+    const auto product = m_windowNs * m_outputSampleRate;
+    const auto nominal = product / ns + (product % ns != 0);
+    if (maximumStretchPpm < 0 || nominal > std::numeric_limits<int>::max() ||
+        (maximumStretchPpm != 0 && nominal >
+            (std::numeric_limits<std::int64_t>::max() - ppm) / maximumStretchPpm)) {
+        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument(
+            "audio compensation distance bound is not representable"));
+    }
+    const auto deltaProduct = nominal * maximumStretchPpm;
+    const auto distance = nominal + roundSignedRatio(deltaProduct + ppm / 2, ppm);
+    if (distance <= 0 || distance > std::numeric_limits<int>::max()) {
+        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument(
+            "audio compensation distance bound exceeds FFmpeg capacity"));
+    }
+    return ::media::Result<int>::success(static_cast<int>(distance));
+}
+
 ::media::Result<std::optional<MediaAudioCompensationCommand>>
 MediaAudioCorrectionQuantizer::schedule(
     std::uint64_t generation,

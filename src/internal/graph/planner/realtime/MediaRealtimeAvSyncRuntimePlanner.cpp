@@ -27,6 +27,8 @@ namespace {
 {
     if (!synchronization.startup.videoByteCapacity ||
         !synchronization.startup.audioByteCapacity ||
+        !synchronization.startup.videoCapacity ||
+        !synchronization.startup.audioCapacity ||
         *synchronization.startup.videoByteCapacity == 0 ||
         *synchronization.startup.audioByteCapacity == 0 ||
         outer.queues.packet == 0 ||
@@ -41,8 +43,10 @@ namespace {
         *synchronization.startup.videoByteCapacity +
         *synchronization.startup.audioByteCapacity;
     return MediaRealtimeEdgePolicyPlanner::
-        planWithSynchronizedPacketMemoryBudget(
-            outer.queues, maximumBytes, outer.queues.packet);
+        planWithAvStartupRelease(
+            outer.queues, maximumBytes, outer.queues.packet,
+            *synchronization.startup.videoCapacity,
+            *synchronization.startup.audioCapacity);
 }
 
 ::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(
@@ -351,6 +355,18 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 status.error());
         }
     }
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
+    if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
+        if (!audio.resolvedOutput || !audio.selectedResampler) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                ::media::ErrorInfo::invalidArgument("audio FIFO requires selected resampler and encoder"));
+        }
+        auto retention = MediaAudioEncoderFifoRetentionPlan::create(
+            *audio.resolvedOutput, audio.selectedResampler->maximumOutputBlockSamples,
+            synchronization.audioServo);
+        if (!retention) return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(retention.error());
+        encoderFifoRetention = std::move(retention).value();
+    }
     auto assembly = planAssembly(outer, audio, synchronization, facts.value());
     if (!assembly) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -596,7 +612,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             datagramTransport.error());
     }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
-        adapter,
+        *protocolOutput,
         *synchronization.sourceClockMode,
         audio.branchMode,
         outer.videoPlan.filterActive,
@@ -623,7 +639,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt});
+                : std::nullopt, std::move(encoderFifoRetention)});
 }
 
 } // namespace media::ffmpeg::graph

@@ -12,7 +12,7 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaAvStartupGenerationState final : public MediaAvGenerationPurgeTarget {
+class MediaAvStartupGenerationState final {
 public:
     explicit MediaAvStartupGenerationState(MediaAvSyncGroupKey groupKey);
 
@@ -27,7 +27,7 @@ public:
     ::media::Result<MediaBufferRef> take(const MediaAvStartupUnitId& id);
     void erase(const MediaAvStartupUnitId& id) noexcept;
     void erase(const std::vector<MediaAvStartupUnitId>& ids) noexcept;
-    ::media::Status purge(const MediaAvGenerationPurge& purge) override;
+    ::media::Status purge(const MediaAvGenerationPurge& purge);
     void reset() noexcept;
 
     const MediaAvSyncGroupKey& groupKey() const noexcept { return m_groupKey; }

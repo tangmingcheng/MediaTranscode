@@ -61,30 +61,56 @@ MediaAvGenerationParticipantGroup::create(
     return ::media::Status::success();
 }
 
-::media::Result<MediaAvGenerationAcknowledgement>
+void MediaAvGenerationParticipantGroup::bindPurgeProgressWakeups(
+    std::shared_ptr<const std::vector<std::shared_ptr<MediaNodeWakeup>>> wakeups)
+{
+    for (const auto& [identity, child] : m_children)
+        child->bindPurgeProgressWakeups(wakeups);
+}
+
+::media::Result<std::optional<MediaAvGenerationAcknowledgement>>
 MediaAvGenerationParticipantGroup::purgeAll(
     const MediaAvGenerationPurge& purge)
 {
+    using Result = ::media::Result<std::optional<MediaAvGenerationAcknowledgement>>;
+    const bool continuing = m_pendingPurge &&
+        m_pendingPurge->oldGeneration == purge.oldGeneration &&
+        m_pendingPurge->nextGeneration == purge.nextGeneration &&
+        m_pendingPurge->transitionSequence == purge.transitionSequence &&
+        m_pendingPurge->publishedGeneration == purge.publishedGeneration;
     if (!m_sealed || purge.oldGeneration == 0 ||
         purge.nextGeneration <= purge.oldGeneration ||
         purge.transitionSequence == 0 ||
-        (m_lastTransitionSequence &&
-         purge.transitionSequence <= *m_lastTransitionSequence)) {
-        return ::media::Result<MediaAvGenerationAcknowledgement>::failure(
+        (!continuing && ((m_pendingPurge && !m_acknowledged) ||
+         (m_lastTransitionSequence &&
+          purge.transitionSequence <= *m_lastTransitionSequence)))) {
+        return Result::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Generation purge requires a sealed group and a fresh valid transition"));
     }
-    m_lastTransitionSequence = purge.transitionSequence;
+    if (!continuing) {
+        m_lastTransitionSequence = purge.transitionSequence;
+        m_pendingPurge = purge;
+        m_completedChildren.assign(m_plan.requiredChildren.size(), false);
+        m_acknowledged = false;
+    }
+    if (m_acknowledged) return Result::success(std::nullopt);
     std::optional<::media::ErrorInfo> firstFailure;
-    for (const auto& identity : m_plan.requiredChildren) {
+    bool pending = false;
+    for (std::size_t index = 0; index < m_plan.requiredChildren.size(); ++index) {
+        if (m_completedChildren[index]) continue;
+        const auto& identity = m_plan.requiredChildren[index];
         auto status = m_children.at(identity)->purge(purge);
-        if (!status && !firstFailure) firstFailure = status.error();
+        if (status) m_completedChildren[index] = true;
+        else if (status.error().code == ::media::ErrorCode::WouldBlock) pending = true;
+        else if (!firstFailure) firstFailure = status.error();
     }
     if (firstFailure) {
-        return ::media::Result<MediaAvGenerationAcknowledgement>::failure(
-            std::move(*firstFailure));
+        return Result::failure(std::move(*firstFailure));
     }
-    return ::media::Result<MediaAvGenerationAcknowledgement>::success(
+    if (pending) return Result::success(std::nullopt);
+    m_acknowledged = true;
+    return Result::success(
         MediaAvGenerationAcknowledgement{
             m_plan.participant,
             purge.transitionSequence,

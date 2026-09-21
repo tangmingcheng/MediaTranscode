@@ -23,11 +23,12 @@ namespace media::ffmpeg::graph {
 
 AudioEncodeLineageState::AudioEncodeLineageState(
     MediaAudioLineageExecutionMode mode,
-    std::size_t capacity) noexcept
+    std::size_t capacity,
+    std::optional<MediaAudioEncoderFifoRetentionPlan> retention) noexcept
     : MediaAudioLineageState(
           mode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
           capacity)
-    , frameQueue(mode, capacity)
+    , frameQueue(mode, capacity, std::move(retention))
 {
 }
 
@@ -227,7 +228,8 @@ void AudioEncodeNode::resetRuntimeState() noexcept
                 MediaGraphDiagnosticPhase::RuntimeNode,
                 "audio_encode_trace stage=codec_bound");
         }
-        if (codecContext()->frame_size > 0) {
+        if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio ||
+            codecContext()->frame_size > 0) {
             auto queueStatus = m_frameQueue.configure(*codecContext());
             if (!queueStatus) {
                 return ::media::Result<MediaNodeProcessResult>::failure(queueStatus.error());
@@ -380,8 +382,19 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         m_pendingFragments = std::move(queued.fragments);
     }
 
+    std::optional<AudioEncoderPacketLineageMapper::PreparedSubmission> submission;
+    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        auto prepared = m_submittedLineage.prepareSubmission(
+            m_pendingFrame->pts, m_pendingFrame->nb_samples, m_pendingFragments);
+        if (!prepared) {
+            return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
+        }
+        submission.emplace(std::move(prepared).value());
+    }
+
     const int sendRet = m_codecApi->sendFrame(codecContext(), m_pendingFrame.get());
     if (sendRet == AVERROR(EAGAIN)) {
+        submission.reset();
         auto receiveStatus = receivePackets(context);
         if (!receiveStatus) {
             return processProgress(::media::Status::failure(receiveStatus.error()));
@@ -392,15 +405,9 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(audio queued)"));
     }
-    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-        auto submitted = m_submittedLineage.submit(
-            m_pendingFrame->pts, m_pendingFrame->nb_samples,
-            std::move(m_pendingFragments));
-        if (!submitted) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                submitted.error());
-        }
-    }
+    if (submission) std::move(*submission).commit();
+    submission.reset();
+    m_pendingFragments.clear();
     m_pendingFrame.reset();
 
     auto receiveStatus = receivePackets(context);

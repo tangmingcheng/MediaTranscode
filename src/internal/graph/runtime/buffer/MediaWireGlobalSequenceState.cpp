@@ -277,7 +277,7 @@ void MediaWireGlobalSequenceReservation::abandon() noexcept
     if (!m_state) return;
     {
         std::lock_guard lock(m_state->m_mutex);
-        if (m_committed != m_wireBytes.size()) {
+        if (!m_state->m_authorizedPurge && m_committed != m_wireBytes.size()) {
             m_state->m_poisoned = true;
             for (std::size_t index = m_committed;
                  index < m_wireBytes.size(); ++index) {
@@ -402,6 +402,10 @@ MediaWireGlobalSequenceState::reserve(
             "wire global sequence reservation credits"));
     }
     std::lock_guard lock(m_mutex);
+    if (m_authorizedPurge) {
+        return Result::failure(::media::ErrorInfo::cancelled(
+            "wire global sequence generation was explicitly purged"));
+    }
     if (m_poisoned) {
         return Result::failure(::media::ErrorInfo::internalError(
             "wire global sequence state is poisoned by an uncommitted reservation"));
@@ -566,7 +570,7 @@ void MediaWireGlobalSequenceState::notifyReservationWaiters() noexcept
     MediaRunningTime now,
     std::optional<std::uint64_t>& lastStageSequence) noexcept
 {
-    if (m_poisoned || count == 0 || begin < reservation.m_committed ||
+    if (m_authorizedPurge || m_poisoned || count == 0 || begin < reservation.m_committed ||
         begin > reservation.m_wireBytes.size() ||
         count > reservation.m_wireBytes.size() - begin) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -599,7 +603,7 @@ void MediaWireGlobalSequenceState::notifyReservationWaiters() noexcept
     std::size_t begin,
     std::size_t count) const noexcept
 {
-    if (m_poisoned || count == 0 || m_reservations.empty() ||
+    if (m_authorizedPurge || m_poisoned || count == 0 || m_reservations.empty() ||
         m_reservations.front().identity != reservation.m_reservationIdentity ||
         m_reservations.front().firstSequence != reservation.m_firstSequence ||
         m_reservations.front().count != reservation.m_wireBytes.size() ||
@@ -626,6 +630,34 @@ void MediaWireGlobalSequenceState::observeResidence(
     }
 }
 
+::media::Status MediaWireGlobalSequenceState::authorizeGenerationPurge(
+    const MediaAvGenerationPurge& purge)
+{
+    {
+        std::lock_guard lock(m_mutex);
+        if (purge.oldGeneration != m_generation ||
+            purge.nextGeneration <= purge.oldGeneration || purge.transitionSequence == 0 ||
+            m_poisoned || (m_authorizedPurge &&
+                (m_authorizedPurge->oldGeneration != purge.oldGeneration ||
+                 m_authorizedPurge->nextGeneration != purge.nextGeneration ||
+                 m_authorizedPurge->transitionSequence != purge.transitionSequence))) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "wire global sequence purge differs from its generation transaction"));
+        }
+        if (m_authorizedPurge) return ::media::Status::success();
+        m_authorizedPurge = purge;
+        m_cancelledDatagrams = m_outstandingDatagrams;
+        m_cancelledWireBytes = m_outstandingWireBytes;
+        m_outstandingDatagrams = 0;
+        m_outstandingWireBytes = 0;
+        m_queueResidenceSumNanoseconds = 0;
+        m_reservations.clear();
+        m_reservationBlocked = false;
+    }
+    notifyReservationWaiters();
+    return ::media::Status::success();
+}
+
 MediaWireGlobalSequenceSnapshot
 MediaWireGlobalSequenceState::snapshot() const noexcept
 {
@@ -635,6 +667,8 @@ MediaWireGlobalSequenceState::snapshot() const noexcept
         m_nextGlobalSequence,
         !m_reservations.empty(),
         m_poisoned,
+        m_cancelledDatagrams,
+        m_cancelledWireBytes,
         static_cast<std::uint64_t>(m_outstandingDatagrams),
         m_outstandingWireBytes,
         m_highWaterDatagrams,

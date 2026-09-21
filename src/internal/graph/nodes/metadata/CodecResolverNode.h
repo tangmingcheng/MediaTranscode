@@ -20,6 +20,7 @@ public:
     explicit CodecResolverNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status bindPreparedEncoder(MediaBufferRef encoder);
+    ::media::Status bindPreparedHardwareDevice(AVBufferRef* device);
     MediaBufferRef inputSnapshot() const;
     ::media::Result<MediaVideoEncoderReadback> encoderReadback() const;
     MediaBufferRef timestampSource() const;
@@ -36,7 +37,7 @@ private:
 private:
     bool m_emitted = false;
     ::media::ffmpeg::BufferRefPtr m_decoderHardwareDevice;
-    AVPixelFormat m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
+    ::media::ffmpeg::BufferRefPtr m_preparedHardwareDevice;
     mutable std::mutex m_snapshotMutex;
     MediaBufferRef m_inputSnapshot;
     MediaBufferRef m_timestampSource;

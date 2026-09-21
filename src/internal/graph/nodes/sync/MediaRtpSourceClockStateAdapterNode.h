@@ -25,6 +25,7 @@ private:
         MediaSourceClockReadiness readiness;
         std::uint64_t generation;
         bool discontinuity;
+        std::uint64_t evidenceRevision;
 
         bool operator==(const Projection&) const noexcept = default;
     };

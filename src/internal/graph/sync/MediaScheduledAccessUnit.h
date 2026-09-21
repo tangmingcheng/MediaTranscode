@@ -22,8 +22,8 @@ struct MediaScheduledAccessUnitParameters final {
         MediaRunningTime emitOnMaster,
         MediaRunningTime canonicalDuration,
         std::uint64_t generation,
-        MediaSourceAccessUnitSequence sourceSequence,
-        std::optional<MediaSourceAccessUnitSequence> repeatedFrom,
+        MediaCanonicalAccessUnitSequence canonicalSequence,
+        std::optional<MediaCanonicalAccessUnitSequence> repeatedFrom,
         std::optional<MediaVideoRepeatRequestId> repeatRequestId,
         std::optional<MediaVideoSyncDecisionKind> videoDecision);
 
@@ -36,8 +36,8 @@ struct MediaScheduledAccessUnitParameters final {
     MediaRunningTime emitOnMaster;
     MediaRunningTime canonicalDuration;
     std::uint64_t generation;
-    MediaSourceAccessUnitSequence sourceSequence;
-    std::optional<MediaSourceAccessUnitSequence> repeatedFrom;
+    MediaCanonicalAccessUnitSequence canonicalSequence;
+    std::optional<MediaCanonicalAccessUnitSequence> repeatedFrom;
     std::optional<MediaVideoRepeatRequestId> repeatRequestId;
     std::optional<MediaVideoSyncDecisionKind> videoDecision;
 };
@@ -57,10 +57,10 @@ public:
     MediaRunningTime emitOnMaster() const noexcept { return m_emitOnMaster; }
     MediaRunningTime canonicalDuration() const noexcept { return m_canonicalDuration; }
     std::uint64_t generation() const noexcept { return m_generation; }
-    MediaSourceAccessUnitSequence sourceSequence() const noexcept { return m_sourceSequence; }
-    const std::optional<MediaSourceAccessUnitSequence>& repeatedFromSourceSequence() const noexcept
+    MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept { return m_canonicalSequence; }
+    const std::optional<MediaCanonicalAccessUnitSequence>& repeatedFromCanonicalSequence() const noexcept
     {
-        return m_repeatedFromSourceSequence;
+        return m_repeatedFromCanonicalSequence;
     }
     const std::optional<MediaVideoRepeatRequestId>& repeatRequestId() const noexcept
     {
@@ -82,8 +82,8 @@ private:
     MediaRunningTime m_emitOnMaster;
     MediaRunningTime m_canonicalDuration;
     std::uint64_t m_generation;
-    MediaSourceAccessUnitSequence m_sourceSequence;
-    std::optional<MediaSourceAccessUnitSequence> m_repeatedFromSourceSequence;
+    MediaCanonicalAccessUnitSequence m_canonicalSequence;
+    std::optional<MediaCanonicalAccessUnitSequence> m_repeatedFromCanonicalSequence;
     std::optional<MediaVideoRepeatRequestId> m_repeatRequestId;
     std::optional<MediaVideoSyncDecisionKind> m_videoDecision;
 };

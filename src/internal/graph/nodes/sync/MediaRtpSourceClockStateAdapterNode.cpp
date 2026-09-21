@@ -61,6 +61,7 @@ MediaRtpSourceClockStateAdapterNode::onProcess(
     }
     const auto& snapshot = clock->snapshot();
     MediaSourceClockReadiness readiness;
+    std::uint64_t projectedGeneration = snapshot.groupGeneration;
     bool discontinuity = false;
     switch (snapshot.state) {
     case MediaRtpClockGroupState::Acquiring:
@@ -78,17 +79,25 @@ MediaRtpSourceClockStateAdapterNode::onProcess(
         readiness = MediaSourceClockReadiness::Degraded;
         break;
     case MediaRtpClockGroupState::ReacquireRequired:
+        if (!snapshot.invalidatedGeneration ||
+            *snapshot.invalidatedGeneration == 0 ||
+            snapshot.groupGeneration <= *snapshot.invalidatedGeneration) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP clock invalidation requires its previous active generation"));
+        }
         readiness = MediaSourceClockReadiness::ReacquireRequired;
+        projectedGeneration = *snapshot.invalidatedGeneration;
         discontinuity = true;
         break;
     }
     const Projection projection{
-        readiness, snapshot.groupGeneration, discontinuity};
+        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision};
     if (m_lastEmittedProjection == projection) return processProgress();
 
     m_pendingProjection = projection;
     m_pendingState = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        readiness, snapshot.groupGeneration, discontinuity);
+        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision);
     return emitPendingState(context);
 }
 

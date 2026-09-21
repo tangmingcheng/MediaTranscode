@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include <vector>
+
 namespace media::ffmpeg::graph {
 
 struct MediaScheduledRtpOutputSegmentOptions final {
@@ -22,6 +24,7 @@ struct MediaScheduledRtpOutputSegmentResult final {
     MediaNodeId videoSender;
     MediaNodeId audioSender;
     MediaNodeId sdpPublisher;
+    std::vector<MediaNodeId> outputMembers;
 };
 
 struct MediaVideoOnlyScheduledRtpOutputSegmentOptions final {

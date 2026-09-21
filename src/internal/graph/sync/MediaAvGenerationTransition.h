@@ -4,13 +4,27 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <variant>
 
 namespace media::ffmpeg::graph {
+
+struct MediaAvPublishedGeneration final {
+    std::uint64_t generation;
+};
+
+struct MediaAvUnpublishedAcquisition final {
+    std::uint64_t generation;
+    std::uint64_t completedTransitionSequence;
+};
+
+using MediaAvTransitionOrigin = std::variant<
+    MediaAvPublishedGeneration, MediaAvUnpublishedAcquisition>;
 
 struct MediaAvGenerationPurge final {
     std::uint64_t oldGeneration;
     std::uint64_t nextGeneration;
     std::uint64_t transitionSequence;
+    std::uint64_t publishedGeneration;
 };
 
 struct MediaAvGenerationAcknowledgement final {

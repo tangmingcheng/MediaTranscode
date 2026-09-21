@@ -4,6 +4,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
+#include "internal/graph/runtime/buffer/MediaRawRtpProbeLease.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedReplayClock.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressObservationCollector.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
@@ -63,11 +64,13 @@ public:
 
     MediaBufferType type() const noexcept override;
     ::media::Status startPreflightCapture();
+    ::media::Result<MediaRawRtpProbeLease> acquireProbeLease() const;
     ::media::Result<MediaPreparedRawRtpReplayInfo> beginReplay();
     ::media::Result<MediaPreparedRawRtpDatagram> receive(int timeoutMs);
     ::media::Status captureStatus();
     ::media::Result<MediaRtpIngressObservation> ingressObservation();
     ::media::Result<std::size_t> preparedByteCapacity() const;
+    ::media::Result<std::uint64_t> sealedReplayAccessUnitBound() const;
     ::media::Result<std::size_t> maximumDatagramBytes() const;
     ::media::Result<std::size_t> effectiveSocketReceivePayloadBytes() const;
     ::media::Status configureRuntimeIngress(
@@ -77,7 +80,7 @@ public:
     bool preparedReplayDrained() const noexcept;
     ::media::Result<MediaRtpIngressBatch> receiveRuntimeBatch(
         int timeoutMilliseconds);
-    ::media::Status sealPreflight();
+    ::media::Status finishPreflightCapture();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     void abort() noexcept;

@@ -9,6 +9,7 @@
 #include "internal/graph/builder/MediaEncodedBranchEndpoints.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/audio/MediaAudioEncoderFifoRetentionPlan.h"
 
 #include <cstddef>
 #include <optional>
@@ -32,6 +33,7 @@ struct MediaAudioBranchSegmentOptions {
     std::optional<MediaAudioCorrectionExecutionMode> correctionMode;
     std::optional<MediaAudioLineageExecutionMode> lineageMode;
     std::optional<std::size_t> lineageCapacity;
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
     std::optional<std::uint64_t> correctionGeneration;
     std::optional<std::size_t> correctionLookaheadWindows;
     std::optional<MediaAvSyncGroupKey> syncGroup;

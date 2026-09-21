@@ -48,7 +48,10 @@ constexpr std::array GroupContracts{
         "av_startup.sync_group"},
     GroupOptionContract{
         MediaNodeKind::AudioDriftController,
-        "audio_drift_controller.sync_group"}};
+        "audio_drift_controller.sync_group"},
+    GroupOptionContract{
+        MediaNodeKind::EncodedAudioCanonicalizer,
+        "audio_canonicalizer.sync_group"}};
 
 const GroupOptionContract* findContract(
     MediaNodeKind kind,
@@ -64,11 +67,12 @@ const GroupOptionContract* findContract(
 
 ::media::Status validateGroupReferences(
     const MediaGraph& graph,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
     constexpr std::string_view Suffix = ".sync_group";
     for (const auto& contract : GroupContracts) {
         for (const MediaNode& node : graph.nodes()) {
+            if (!binding.contains(node.id)) continue;
             if (node.kind != contract.kind) continue;
             auto group = requiredNodeOption(
                 &node.options,
@@ -85,6 +89,7 @@ const GroupOptionContract* findContract(
         }
     }
     for (const MediaNode& node : graph.nodes()) {
+        if (!binding.contains(node.id)) continue;
         for (const auto& [key, value] : node.options.values()) {
             if (!key.ends_with(Suffix)) continue;
             if (!findContract(node.kind, key) || value.empty()) {
@@ -99,7 +104,7 @@ const GroupOptionContract* findContract(
 
 ::media::Status validateStartupSourceMode(
     const MediaAvSyncGraphShape& shape,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
     if (!binding.plan.sourceClockMode) {
         return ::media::Status::failure(
@@ -136,7 +141,7 @@ const GroupOptionContract* findContract(
 
 ::media::Status validateReleasedAudioBranch(
     const MediaAvSyncGraphShape& shape,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
     const auto nodes = shape.nodes(MediaNodeKind::AvBoundReleaseExtractor);
     if (nodes.size() != 1) {
@@ -172,56 +177,63 @@ const GroupOptionContract* findContract(
 
 ::media::Status MediaAvCommonCoreShapeValidator::validate(
     const MediaGraph& graph,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
-    const MediaAvSyncGraphShape shape(graph);
-    const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
-    if (encoders.size() != 1) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "A/V common core requires exactly one video encoder"));
-    }
-    auto filterActive = requiredBoolNodeOption(
-        &encoders.front()->options,
-        "VideoEncodeNode",
-        "pipeline.filter_active");
-    if (!filterActive) {
-        return ::media::Status::failure(filterActive.error());
+    const MediaAvSyncGraphShape shape(graph, binding.members);
+    const bool sourceDomain = std::holds_alternative<MediaAvSourceDomainBinding>(binding.role);
+    const bool outputDomain = std::holds_alternative<MediaAvOutputDomainBinding>(binding.role);
+    const std::size_t sourceCount = outputDomain ? 0u : 1u;
+    const std::size_t outputCount = sourceDomain ? 0u : 1u;
+    bool filterActive = false;
+    if (sourceDomain) {
+        const auto* owner = graph.findNode(std::get<MediaAvSourceDomainBinding>(binding.role).registration.preparationOwner);
+        if (!owner) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Source domain requires its planned preparation owner"));
+        filterActive = owner->kind == MediaNodeKind::VideoFilter;
+    } else {
+        const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
+        if (encoders.size() != 1) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Output domain requires exactly one video encoder"));
+        auto required = requiredBoolNodeOption(&encoders.front()->options,
+            "VideoEncodeNode", "pipeline.filter_active");
+        if (!required) return ::media::Status::failure(required.error());
+        filterActive = required.value();
     }
     const bool audioTranscode = binding.audioExecutionProduct ==
         MediaSynchronizedAudioExecutionProduct::FrameTranscode;
     auto cardinality = shape.requireExact({
-        {MediaNodeKind::SourceClockStateFanout, 1,
+        {MediaNodeKind::SourceClockStateFanout, sourceCount,
          "source-clock state fanout"},
-        {MediaNodeKind::LockedPacketGate, 2, "locked packet gate"},
-        {MediaNodeKind::CanonicalInput, 2, "canonical input"},
-        {MediaNodeKind::AvStartupCoordinator, 1, "startup coordinator"},
-        {MediaNodeKind::AvStartupClock, 1, "startup clock"},
-        {MediaNodeKind::PlaybackEpochBinder, 1, "playback epoch binder"},
-        {MediaNodeKind::ActivatedStartupReleaseSequencer, 1,
+        {MediaNodeKind::LockedPacketGate, 2u * sourceCount, "locked packet gate"},
+        {MediaNodeKind::CanonicalInput, 2u * sourceCount, "canonical input"},
+        {MediaNodeKind::AvStartupCoordinator, sourceCount, "startup coordinator"},
+        {MediaNodeKind::AvStartupClock, sourceCount, "startup clock"},
+        {MediaNodeKind::PlaybackEpochBinder, sourceCount, "playback epoch binder"},
+        {MediaNodeKind::ActivatedStartupReleaseSequencer, sourceCount,
          "activated startup release sequencer"},
-        {MediaNodeKind::AvBoundReleaseExtractor, 1,
+        {MediaNodeKind::AvBoundReleaseExtractor, sourceCount,
          "bound release extractor"},
-        {MediaNodeKind::AudioDriftController, audioTranscode ? 1u : 0u,
+        {MediaNodeKind::AudioDriftController, audioTranscode ? sourceCount : 0u,
          "audio drift controller"},
-        {MediaNodeKind::AvOutputScheduler, 1, "A/V output scheduler"},
-        {MediaNodeKind::ScheduledOutputRouter, 1,
+        {MediaNodeKind::AvOutputScheduler, outputCount, "A/V output scheduler"},
+        {MediaNodeKind::ScheduledOutputRouter, outputCount,
          "scheduled output router"},
         {MediaNodeKind::CodecResolver, 1, "video codec resolver"},
-        {MediaNodeKind::VideoDecode, 1, "video decoder"},
-        {MediaNodeKind::HardwareTransfer, 1, "hardware transfer"},
-        {MediaNodeKind::VideoFrameRate, 1, "video frame-rate controller"},
-        {MediaNodeKind::VideoFilter, filterActive.value() ? 1u : 0u,
+        {MediaNodeKind::VideoDecode, sourceCount, "video decoder"},
+        {MediaNodeKind::HardwareTransfer, sourceCount, "hardware transfer"},
+        {MediaNodeKind::VideoFrameRate, sourceCount, "video frame-rate controller"},
+        {MediaNodeKind::VideoFilter, filterActive ? sourceCount : 0u,
          "planner-selected video filter"},
-        {MediaNodeKind::VideoEncode, 1, "video encoder"},
+        {MediaNodeKind::VideoEncode, outputCount, "video encoder"},
         {MediaNodeKind::PacketSourceConfig, audioTranscode ? 0u : 1u,
          "audio packet-copy source config"},
         {MediaNodeKind::AudioCodecResolver, audioTranscode ? 1u : 0u,
          "audio codec resolver"},
-        {MediaNodeKind::AudioDecode, audioTranscode ? 1u : 0u, "audio decoder"},
-        {MediaNodeKind::AudioStartupTrim, audioTranscode ? 1u : 0u, "audio startup trim"},
-        {MediaNodeKind::AudioResample, audioTranscode ? 1u : 0u, "audio resampler"},
-        {MediaNodeKind::AudioEncode, audioTranscode ? 1u : 0u, "audio encoder"},
-        {MediaNodeKind::EncodedAudioCanonicalizer, audioTranscode ? 1u : 0u,
+        {MediaNodeKind::AudioDecode, audioTranscode ? sourceCount : 0u, "audio decoder"},
+        {MediaNodeKind::AudioStartupTrim, audioTranscode ? sourceCount : 0u, "audio startup trim"},
+        {MediaNodeKind::AudioResample, audioTranscode ? sourceCount : 0u, "audio resampler"},
+        {MediaNodeKind::AudioEncode, audioTranscode ? outputCount : 0u, "audio encoder"},
+        {MediaNodeKind::EncodedAudioCanonicalizer, audioTranscode ? outputCount : 0u,
          "encoded audio canonicalizer"}},
         "A/V common core shape");
     if (!cardinality) return cardinality;
@@ -229,6 +241,7 @@ const GroupOptionContract* findContract(
         !group) {
         return group;
     }
+    if (outputDomain) return ::media::Status::success();
     if (auto sourceMode = validateStartupSourceMode(shape, binding);
         !sourceMode) {
         return sourceMode;

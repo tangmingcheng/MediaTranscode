@@ -104,6 +104,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         if (auto status = drainPendingRtpItems(context); !status) {
             return processProgress(status);
         }
+        if (!m_events.empty()) {
+            auto event = std::move(m_events.front());
+            m_events.pop_front();
+            return processProgress(emitOutput(context, event.first, event.second));
+        }
         if (!m_packets.empty()) {
             MediaBufferRef packet = std::move(m_packets.front());
             m_packets.pop_front();
@@ -339,6 +344,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         lossPolicy = MediaRtpClockLossPolicy::FailOnExpired;
     } else if (clockLossPolicy.value() == "wait_for_evidence") {
         lossPolicy = MediaRtpClockLossPolicy::WaitForEvidence;
+    } else if (clockLossPolicy.value() == "invalidate_and_wait") {
+        lossPolicy = MediaRtpClockLossPolicy::InvalidateAndWait;
     } else {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RawRtpInputNode clock loss policy is invalid"));
@@ -524,9 +531,6 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
-    if (auto status = queueClockEvidence(context, observedAtNs); !status) {
-        return status;
-    }
     const auto observedAt = std::chrono::steady_clock::time_point(
         std::chrono::nanoseconds(observedAtNs));
     auto reordered = m_reorder->push(
@@ -563,6 +567,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     while (!m_pendingRtpItems.empty()) {
         auto& item = m_pendingRtpItems.front();
         if (const auto* packet = std::get_if<MediaRtpPacket>(&item)) {
+            if (auto status = queueClockEvidence(context, mediaSteadyClockNowNs()); !status) {
+                return status;
+            }
+            // Publish ordered evidence before payload allocation can wait for credits.
+            if (!m_events.empty()) return ::media::Status::success();
             if (auto status = processPendingRtpPacket(context, *packet); !status) {
                 return status;
             }
@@ -764,15 +773,20 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto packets = MediaRtcpCompoundParser::parse(datagram, MediaRtcpCompoundPolicy{
         *m_rtcpCompositionMode, m_requireCname});
     if (!packets) return ::media::Status::failure(packets.error());
-    auto status = m_clockTracker->observe(packets.value(), observedAtNs);
-    if (!status) {
+    auto observation = m_clockTracker->observe(packets.value(), observedAtNs);
+    if (!observation) return ::media::Status::failure(observation.error());
+    if (const auto* invalidation =
+            std::get_if<MediaRtpClockInvalidation>(&observation.value())) {
         if (m_clockSchedule) m_clockSchedule->reset();
+        m_waitingForClockEvidence = true;
+        m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
+        m_depacketizer->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+        m_pendingPayloadReservations.clear();
+        m_reservedAccessUnitTimestamp.reset();
         if (context.findOutputChannel(nodeId(), "event")) {
-            m_events.emplace_back(
-                "event",
+            m_events.emplace_back("event",
                 makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    MediaRtpClockInvalidation{m_clockTracker->generation()},
-                    nextIngressSequence()));
+                    *invalidation, nextIngressSequence()));
         }
         return ::media::Status::success();
     }
@@ -833,7 +847,17 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     const char* age = *transition.value() == MediaRtpClockAgeTransition::Degraded
         ? "degraded"
         : "expired";
-    if (m_clockLossPolicy == MediaRtpClockLossPolicy::WaitForEvidence) {
+    if (m_clockLossPolicy == MediaRtpClockLossPolicy::WaitForEvidence ||
+        m_clockLossPolicy == MediaRtpClockLossPolicy::InvalidateAndWait) {
+        if (m_clockLossPolicy == MediaRtpClockLossPolicy::InvalidateAndWait) {
+            m_clockTracker->observeContinuityLoss();
+            m_clockSchedule->reset();
+            m_events.emplace_back("event",
+                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                    MediaRtpClockInvalidation{m_clockTracker->generation(),
+                        MediaRtpSourceUnavailableReason::ClockEvidenceExpired, observedAtNs},
+                    nextIngressSequence()));
+        }
         m_waitingForClockEvidence = true;
         m_waitingForKeyFrame = *m_config.waitForKeyFrameAfterLoss;
         m_depacketizer->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);

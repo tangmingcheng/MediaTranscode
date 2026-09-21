@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 
 #include <memory>
 #include <deque>
@@ -27,6 +28,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -59,7 +61,7 @@ private:
     ::media::Result<MediaNodeProcessResult> processOne(
         MediaGraphExecutionContext& context,
         PendingInput input);
-    ::media::Result<MediaNodeProcessResult> processClock();
+    ::media::Result<MediaNodeProcessResult> processClock(MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processControl(
         MediaGraphExecutionContext& context,
         PendingInput input,
@@ -71,6 +73,7 @@ private:
     void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
     void clearTransientState() noexcept;
 
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
     std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
     int m_outputAudioSampleRate = 0;
@@ -88,6 +91,7 @@ private:
     std::optional<MediaRunningTime> m_lastVideoObservedAt;
     std::optional<MediaRunningTime> m_lastAudioObservedAt;
     std::optional<MediaRunningTime> m_lastClock;
+    std::optional<std::uint64_t> m_retiredClockEvidenceRevision;
     bool m_terminalControlCommitted = false;
     bool m_keyTraceEmitted = false;
     std::optional<std::uint64_t> m_lastReleasedGeneration;

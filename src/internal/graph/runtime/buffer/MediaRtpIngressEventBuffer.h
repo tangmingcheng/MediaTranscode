@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtcpClockEvidence.h"
+#include "internal/graph/protocol/rtp/MediaRtpSourceUnavailable.h"
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
@@ -17,10 +18,6 @@ enum class MediaRtpIngressEventKind {
 
 struct MediaRtpClockObservation final {
     std::int64_t observedAtNs;
-};
-
-struct MediaRtpClockInvalidation final {
-    std::uint64_t generation;
 };
 
 class MediaRtpIngressEventBuffer final : public MediaBuffer {

@@ -1,10 +1,66 @@
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+
+#include <algorithm>
 #include <exception>
 #include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+::media::Result<MediaAvGenerationEvidenceDisposition>
+classifyMediaAvGenerationEvidence(
+    const MediaAvReacquisitionSnapshot& reacquisition,
+    const MediaAvEpochTransitionSnapshot& epoch,
+    std::uint64_t generation)
+{
+    using Result = ::media::Result<MediaAvGenerationEvidenceDisposition>;
+    if (generation == 0)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Generation evidence must have a nonzero authority"));
+    if (reacquisition.phase == MediaAvReacquisitionPhase::Inactive) {
+        if (reacquisition.transition || epoch.poisoned || !epoch.outputPermitted ||
+            epoch.readiness != MediaAvGenerationReadiness::Locked ||
+            !epoch.playbackEpoch || !epoch.audioOrigin ||
+            epoch.audioOrigin->generation != epoch.playbackEpoch->generation)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Generation evidence requires a consistent published epoch"));
+        if (generation < epoch.playbackEpoch->generation)
+            return Result::success(MediaAvGenerationEvidenceDisposition::Retired);
+        if (generation == epoch.playbackEpoch->generation)
+            return Result::success(MediaAvGenerationEvidenceDisposition::Target);
+        return Result::success(MediaAvGenerationEvidenceDisposition::Future);
+    }
+    const bool purging = reacquisition.phase == MediaAvReacquisitionPhase::Purging;
+    if ((!purging && reacquisition.phase != MediaAvReacquisitionPhase::Acquiring &&
+         reacquisition.phase != MediaAvReacquisitionPhase::ReadyForActivation) ||
+        !reacquisition.transition || generation == 0)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Generation evidence requires a complete live transition"));
+    const auto& transition = *reacquisition.transition;
+    if (transition.publishedGeneration == 0 ||
+        transition.oldGeneration < transition.publishedGeneration ||
+        transition.nextGeneration <= transition.oldGeneration ||
+        epoch.poisoned || epoch.outputPermitted ||
+        epoch.readiness != (purging ? MediaAvGenerationReadiness::Reacquire
+                                    : MediaAvGenerationReadiness::Acquiring) ||
+        !epoch.playbackEpoch || !epoch.audioOrigin ||
+        epoch.playbackEpoch->generation != transition.publishedGeneration ||
+        epoch.audioOrigin->generation != transition.publishedGeneration)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Generation evidence requires a consistent closed transition epoch"));
+    if (generation >= transition.publishedGeneration && generation <= transition.oldGeneration)
+        return Result::success(MediaAvGenerationEvidenceDisposition::Retired);
+    if (generation == transition.nextGeneration)
+        return Result::success(MediaAvGenerationEvidenceDisposition::Target);
+    if (generation > transition.nextGeneration)
+        return Result::success(MediaAvGenerationEvidenceDisposition::Future);
+    return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Generation evidence is outside the exact retired interval and planned target"));
+}
 
 MediaAvGenerationPublicationReservation::
     MediaAvGenerationPublicationReservation(
@@ -164,34 +220,92 @@ void MediaAvReacquisitionActivationReservation::abandon() noexcept
 }
 
 MediaAvReacquisitionCoordinator::MediaAvReacquisitionCoordinator(
+    MediaAvSyncGroupKey groupKey,
     std::shared_ptr<MediaAvEpochTransitionService> transition,
     std::shared_ptr<MediaMasterClock> clock,
-    std::vector<MediaAvGenerationParticipantGroup> participants)
-    : m_transitionService(std::move(transition))
+    std::vector<MediaAvGenerationParticipantGroup> participants,
+    std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+    MediaAvSourceLifecyclePlan lifecycle,
+    std::weak_ptr<const MediaAvSyncGroupRuntime> output)
+    : m_groupKey(std::move(groupKey))
+    , m_lifecycle(lifecycle)
+    , m_output(std::move(output))
+    , m_transitionService(std::move(transition))
     , m_clock(std::move(clock))
     , m_participants(std::move(participants))
+    , m_domainWakeups(std::move(domainWakeups))
 {
+    auto wakeups = std::make_shared<const std::vector<std::shared_ptr<MediaNodeWakeup>>>(m_domainWakeups);
+    for (auto& participant : m_participants) participant.bindPurgeProgressWakeups(wakeups);
 }
 
 ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
 MediaAvReacquisitionCoordinator::create(
+    MediaAvSyncGroupKey groupKey,
     std::shared_ptr<MediaAvEpochTransitionService> transition,
     std::shared_ptr<MediaMasterClock> clock,
-    std::vector<MediaAvGenerationParticipantGroup> participants)
+    std::vector<MediaAvGenerationParticipantGroup> participants,
+    std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+    MediaAvSourceLifecyclePlan lifecycle,
+    std::weak_ptr<const MediaAvSyncGroupRuntime> output)
 {
-    if (!transition || !clock || participants.empty()) {
+    if ((lifecycle.mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput && output.expired()) ||
+        (lifecycle.mode == MediaAvSourceLifecycleMode::FailSessionOnSourceLoss && !output.expired()) ||
+        !groupKey.valid() || !transition || !transition->transitionPlan() || !clock || participants.empty() || domainWakeups.empty() ||
+        std::any_of(domainWakeups.begin(), domainWakeups.end(),
+                    [](const auto& wakeup) { return !wakeup; })) {
         return ::media::Result<
             std::shared_ptr<MediaAvReacquisitionCoordinator>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V reacquisition coordinator requires transition, clock, and participants"));
+                "A/V reacquisition coordinator requires transition, clock, participants, and domain wakeups"));
     }
     return ::media::Result<
         std::shared_ptr<MediaAvReacquisitionCoordinator>>::success(
         std::shared_ptr<MediaAvReacquisitionCoordinator>(
             new MediaAvReacquisitionCoordinator(
+                std::move(groupKey),
                 std::move(transition),
                 std::move(clock),
-                std::move(participants))));
+                std::move(participants), std::move(domainWakeups), lifecycle, std::move(output))));
+}
+
+::media::Status MediaAvReacquisitionCoordinator::observeClockEvidence(
+    std::uint64_t generation, std::uint64_t revision)
+{
+    std::lock_guard lock(m_mutex);
+    if (generation == 0 || revision == 0 ||
+        (m_clockEvidence && (generation < m_clockEvidence->generation ||
+                            revision < m_clockEvidence->revision)))
+        return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+            "Source clock evidence must carry a monotonic generation and revision"));
+    if (m_clockEvidence && revision == m_clockEvidence->revision) {
+        if (generation != m_clockEvidence->generation)
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "Source clock generation changed without new evidence"));
+        return ::media::Status::success();
+    }
+    auto now = m_clock->now();
+    if (!now) return failTerminalLocked(now.error());
+    m_clockEvidence = MediaAvSourceClockEvidence{generation, revision, now.value()};
+    return ::media::Status::success();
+}
+
+std::optional<MediaAvSourceClockEvidence>
+MediaAvReacquisitionCoordinator::clockEvidence() const noexcept
+{
+    std::lock_guard lock(m_mutex);
+    return m_clockEvidence;
+}
+
+bool MediaAvReacquisitionCoordinator::preservesActivatedOutput() const noexcept
+{
+    if (m_lifecycle.mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput)
+        return false;
+    const auto output = m_output.lock();
+    if (!output) return false;
+    const auto active = output->epochTransitionSnapshot();
+    return !active.poisoned && active.outputPermitted && active.playbackEpoch &&
+        active.readiness == MediaAvGenerationReadiness::Locked;
 }
 
 std::unique_lock<std::mutex>
@@ -278,14 +392,34 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     return ::media::Status::success();
 }
 
+::media::Result<bool> MediaAvReacquisitionCoordinator::requestSatisfiedLocked(
+    const MediaAvReacquisitionRequest& request) const
+{
+    if (!preservesActivatedOutput() ||
+        (request.reason != MediaAvReacquisitionReason::FutureGeneration &&
+         request.reason != MediaAvReacquisitionReason::HardDiscontinuity))
+        return ::media::Result<bool>::success(false);
+    auto classified = classifyMediaAvGenerationEvidence(
+        {m_phase, m_transition, m_request ? std::optional(m_request->reason) : std::nullopt},
+        m_transitionService->snapshot(), request.observedGeneration);
+    if (!classified) return ::media::Result<bool>::failure(classified.error());
+    return ::media::Result<bool>::success(
+        classified.value() == MediaAvGenerationEvidenceDisposition::Retired ||
+        (classified.value() == MediaAvGenerationEvidenceDisposition::Target &&
+         request.reason == MediaAvReacquisitionReason::FutureGeneration));
+}
+
 ::media::Status MediaAvReacquisitionCoordinator::observe(
     MediaAvReacquisitionRequest request)
 {
     auto activationLock = acquireActivationArbitration();
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
+    auto satisfied = requestSatisfiedLocked(request);
+    if (!satisfied) return failTerminalLocked(satisfied.error());
+    if (satisfied.value()) return ::media::Status::success();
     if (m_phase == MediaAvReacquisitionPhase::Inactive) {
         auto queued = validateAndQueueRequest(request);
         return queued ? queued : failTerminalLocked(queued.error());
@@ -297,117 +431,218 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     if (matchesActiveRequest(request) || plannedNextGeneration) {
         return ::media::Status::success();
     }
+    if (preservesActivatedOutput() && m_transition &&
+        request.reason == MediaAvReacquisitionReason::FutureGeneration &&
+        request.observedGeneration > m_transition->nextGeneration) {
+        lock.unlock();
+        activationLock.unlock();
+        return this->request(request);
+    }
     return failTerminalLocked(
         ::media::ErrorInfo::invalidArgument(
             "A/V reacquisition rejects incompatible generation evidence after transition begin"));
 }
 
-::media::Status MediaAvReacquisitionCoordinator::request(
+::media::Status MediaAvReacquisitionCoordinator::beginRequestLocked(
     MediaAvReacquisitionRequest request)
 {
-    MediaAvGenerationPurge purgeWork{};
-    {
-        std::unique_lock<std::mutex> stateLock(m_mutex);
-        if (m_firstError) {
-            return ::media::Status::failure(*m_firstError);
-        }
-        if (m_phase != MediaAvReacquisitionPhase::Inactive) {
-            if (matchesActiveRequest(request)) {
-                return ::media::Status::success();
-            }
-            stateLock.unlock();
-            return rejectIncompatibleEvidence(
-                ::media::ErrorInfo::invalidArgument(
-                    "A/V reacquisition rejects an incompatible request after transition begin"));
-        }
-    }
-
-    {
-        auto publicationLock = acquireActivationArbitration();
-        std::lock_guard<std::mutex> stateLock(m_mutex);
-        if (m_firstError) {
-            return ::media::Status::failure(*m_firstError);
-        }
-        if (m_phase != MediaAvReacquisitionPhase::Inactive) {
-            if (matchesActiveRequest(request)) {
-                return ::media::Status::success();
-            }
-            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
-                "A/V reacquisition rejects an incompatible request after transition begin"));
-        }
+    if (m_firstError) return ::media::Status::failure(*m_firstError);
+    auto satisfied = requestSatisfiedLocked(request);
+    if (!satisfied) return failTerminalLocked(satisfied.error());
+    if (satisfied.value()) return ::media::Status::success();
+    if (m_phase != MediaAvReacquisitionPhase::Inactive && matchesActiveRequest(request))
+        return ::media::Status::success();
+    const auto active = m_transitionService->snapshot();
+    MediaAvTransitionOrigin origin = MediaAvPublishedGeneration{0};
+    std::uint64_t oldGeneration = 0;
+    if (m_phase == MediaAvReacquisitionPhase::Inactive) {
         auto queued = validateAndQueueRequest(request);
         if (!queued) return failTerminalLocked(queued.error());
         request = *m_request;
-        const auto active = m_transitionService->snapshot();
-        if (active.poisoned ||
-            active.readiness != MediaAvGenerationReadiness::Locked ||
+        if (active.poisoned || active.readiness != MediaAvGenerationReadiness::Locked ||
             !active.playbackEpoch) {
             return failTerminalLocked(::media::ErrorInfo::notInitialized(
                 "A/V reacquisition lost its active locked playback epoch"));
         }
-        const std::uint64_t oldGeneration =
-            active.playbackEpoch->generation;
-        const bool future =
-            request.reason == MediaAvReacquisitionReason::FutureGeneration;
-        const std::uint64_t nextGeneration =
-            future ? request.observedGeneration : oldGeneration + 1;
-
-        auto beganAt = m_clock->now();
-        if (!beganAt) return failTerminalLocked(beganAt.error());
-        auto purge = m_transitionService->beginReacquisition(
-            oldGeneration, nextGeneration);
-        if (!purge) return failTerminalLocked(purge.error());
-
-        m_request = request;
-        m_transition = purge.value();
-        m_inFlightTransitionSequence =
-            purge.value().transitionSequence;
-        m_beganAt = beganAt.value();
-        m_phase = MediaAvReacquisitionPhase::Purging;
-        purgeWork = purge.value();
-    }
-
-    std::vector<::media::Result<MediaAvGenerationAcknowledgement>>
-        purgeResults;
-    purgeResults.reserve(m_participants.size());
-    for (auto& participant : m_participants) {
-        purgeResults.push_back(participant.purgeAll(purgeWork));
-    }
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_firstError) {
-        return ::media::Status::failure(*m_firstError);
-    }
-    if (m_phase != MediaAvReacquisitionPhase::Purging ||
-        !m_transition ||
-        !m_inFlightTransitionSequence ||
-        *m_inFlightTransitionSequence != purgeWork.transitionSequence ||
-        m_transition->transitionSequence != purgeWork.transitionSequence) {
-        return failTerminalLocked(::media::ErrorInfo::internalError(
-            "A/V reacquisition lost its in-flight purge transaction"));
-    }
-
-    for (const auto& purgeResult : purgeResults) {
-        if (!purgeResult) {
-            return failTerminalLocked(purgeResult.error());
+        oldGeneration = active.playbackEpoch->generation;
+        origin = MediaAvPublishedGeneration{oldGeneration};
+    } else {
+        const bool future = request.reason == MediaAvReacquisitionReason::FutureGeneration;
+        if (!preservesActivatedOutput() || !m_transition || active.poisoned ||
+            active.outputPermitted || !active.playbackEpoch ||
+            (future ? request.observedGeneration <= m_transition->nextGeneration
+                    : request.observedGeneration != m_transition->nextGeneration)) {
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "A/V reacquisition rejects incompatible unpublished generation evidence"));
         }
-    }
-
-    bool complete = false;
-    for (auto& purgeResult : purgeResults) {
-        auto acknowledged = m_transitionService->acknowledge(
-            std::move(purgeResult).value());
-        if (!acknowledged) {
-            return failTerminalLocked(acknowledged.error());
+        if (m_phase == MediaAvReacquisitionPhase::Purging) {
+            if (!m_queuedRequest || request.observedGeneration > m_queuedRequest->observedGeneration)
+                m_queuedRequest = request;
+            return ::media::Status::success();
         }
-        complete = acknowledged.value();
+        if ((m_phase != MediaAvReacquisitionPhase::Acquiring &&
+             m_phase != MediaAvReacquisitionPhase::ReadyForActivation) ||
+            m_inFlightTransitionSequence ||
+            active.readiness != MediaAvGenerationReadiness::Acquiring) {
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "A/V unpublished retirement requires completed purge and closed publication"));
+        }
+        oldGeneration = m_transition->nextGeneration;
+        origin = MediaAvUnpublishedAcquisition{
+            oldGeneration, m_transition->transitionSequence};
     }
-    if (complete) {
-        m_phase = MediaAvReacquisitionPhase::Acquiring;
-        m_beganAt.reset();
-        m_inFlightTransitionSequence.reset();
+    const bool future = request.reason == MediaAvReacquisitionReason::FutureGeneration;
+    if (!future && oldGeneration == std::numeric_limits<std::uint64_t>::max())
+        return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+            "A/V source generation exhausted"));
+    const std::uint64_t nextGeneration = future ? request.observedGeneration : oldGeneration + 1;
+    auto beganAt = m_clock->now();
+    if (!beganAt) return failTerminalLocked(beganAt.error());
+    auto purge = m_transitionService->beginReacquisition(std::move(origin), nextGeneration);
+    if (!purge) return failTerminalLocked(purge.error());
+    m_request = request;
+    m_transition = purge.value();
+    m_inFlightTransitionSequence = purge.value().transitionSequence;
+    m_beganAt = beganAt.value();
+    m_phase = MediaAvReacquisitionPhase::Purging;
+    return ::media::Status::success();
+}
+
+::media::Status MediaAvReacquisitionCoordinator::request(
+    MediaAvReacquisitionRequest request)
+{
+    std::optional<MediaAvGenerationPurge> began;
+    {
+        auto publicationLock = acquireActivationArbitration();
+        std::lock_guard stateLock(m_mutex);
+        const auto previousSequence = m_transition
+            ? std::optional<std::uint64_t>(m_transition->transitionSequence) : std::nullopt;
+        auto status = beginRequestLocked(request);
+        if (!status) return status;
+        if (m_phase == MediaAvReacquisitionPhase::Purging && m_transition &&
+            previousSequence != m_transition->transitionSequence)
+            began = m_transition;
+    }
+    if (began) {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "av_reacquisition group=" + m_groupKey.value() + " phase=purging old=" +
+                std::to_string(began->oldGeneration) + " next=" +
+                std::to_string(began->nextGeneration) + " transition=" +
+                std::to_string(began->transitionSequence));
+        for (const auto& wakeup : m_domainWakeups) wakeup->notify();
     }
     return ::media::Status::success();
+}
+
+::media::Result<std::optional<MediaRunningTime>>
+MediaAvReacquisitionCoordinator::progressPurge()
+{
+    using Result = ::media::Result<std::optional<MediaRunningTime>>;
+    // Child callbacks can acquire publication authority; never hold either
+    // coordinator state or activation arbitration while calling them.
+    std::unique_lock progressLock(m_purgeMutex);
+    MediaAvGenerationPurge purgeWork{};
+    MediaRunningTime beganAt = MediaRunningTime::fromNanoseconds(0);
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_firstError) return Result::failure(*m_firstError);
+        if (m_phase != MediaAvReacquisitionPhase::Purging)
+            return Result::success(std::nullopt);
+        if (!m_transition || !m_beganAt) return Result::failure(
+            failTerminalLocked(::media::ErrorInfo::internalError(
+                "A/V purge progress lost its transaction")).error());
+        purgeWork = *m_transition;
+        beganAt = *m_beganAt;
+    }
+    std::vector<MediaAvGenerationAcknowledgement> acknowledgements;
+    std::optional<::media::ErrorInfo> failure;
+    for (auto& participant : m_participants) {
+        auto result = participant.purgeAll(purgeWork);
+        if (!result) {
+            if (!failure) failure = result.error();
+        } else if (result.value()) {
+            acknowledgements.push_back(std::move(*result.value()));
+        }
+    }
+    auto activationLock = acquireActivationArbitration();
+    std::unique_lock lock(m_mutex);
+    if (m_firstError) return Result::failure(*m_firstError);
+    if (failure) return Result::failure(failTerminalLocked(*failure).error());
+    if (m_phase != MediaAvReacquisitionPhase::Purging || !m_transition ||
+        m_transition->transitionSequence != purgeWork.transitionSequence)
+        return Result::failure(failTerminalLocked(::media::ErrorInfo::internalError(
+            "A/V purge progress lost its in-flight transaction")).error());
+    auto now = m_clock->now();
+    auto deadline = beganAt.checkedAdd(m_transitionService->transitionPlan()->acknowledgementTimeout);
+    if (!now || !deadline) return Result::failure(
+        failTerminalLocked(!now ? now.error() : deadline.error()).error());
+    auto elapsed = now.value().checkedSubtract(beganAt);
+    if (!elapsed) return Result::failure(failTerminalLocked(elapsed.error()).error());
+    auto timeout = m_transitionService->pollTransitionTimeout(elapsed.value());
+    if (!timeout) return Result::failure(failTerminalLocked(timeout.error()).error());
+    bool complete = false;
+    for (auto& acknowledgement : acknowledgements) {
+        auto acknowledged = m_transitionService->acknowledge(std::move(acknowledgement));
+        if (!acknowledged) return Result::failure(failTerminalLocked(acknowledged.error()).error());
+        complete = acknowledged.value();
+    }
+    if (!complete) return Result::success(deadline.value());
+    m_phase = MediaAvReacquisitionPhase::Acquiring;
+    m_beganAt.reset();
+    m_inFlightTransitionSequence.reset();
+    const auto queued = std::exchange(m_queuedRequest, std::nullopt);
+    std::optional<MediaRunningTime> nextDeadline;
+    std::optional<MediaAvGenerationPurge> continuedPurge;
+    if (queued) {
+        // Ack completion and replacement share activation arbitration. No
+        // observer can publish the retired pending generation between them.
+        auto requested = beginRequestLocked(*queued);
+        if (!requested) return Result::failure(requested.error());
+        if (m_firstError) return Result::failure(*m_firstError);
+        if (m_phase == MediaAvReacquisitionPhase::Purging) {
+            if (!m_beganAt || !m_transition || !m_inFlightTransitionSequence ||
+                *m_inFlightTransitionSequence != m_transition->transitionSequence)
+                return Result::failure(failTerminalLocked(::media::ErrorInfo::internalError(
+                    "Queued source transition lost its stable deadline transaction")).error());
+            auto deadlineForNext = m_beganAt->checkedAdd(
+                m_transitionService->transitionPlan()->acknowledgementTimeout);
+            if (!deadlineForNext)
+                return Result::failure(failTerminalLocked(deadlineForNext.error()).error());
+            nextDeadline = deadlineForNext.value();
+            continuedPurge = m_transition;
+        } else if (m_phase != MediaAvReacquisitionPhase::Acquiring ||
+                   m_beganAt || m_inFlightTransitionSequence) {
+            return Result::failure(failTerminalLocked(::media::ErrorInfo::internalError(
+                "Queued source transition produced an inconsistent completion phase")).error());
+        }
+    }
+    const auto completedPhase = m_phase;
+    lock.unlock();
+    activationLock.unlock();
+    progressLock.unlock();
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "av_reacquisition group=" + m_groupKey.value() +
+        " event=purge_completed purge_ack=complete continuation=" +
+        std::string(completedPhase == MediaAvReacquisitionPhase::Purging ? "purging" : "acquiring") +
+        " ack_count=" +
+        std::to_string(m_participants.size()) + " old=" +
+        std::to_string(purgeWork.oldGeneration) + " next=" +
+        std::to_string(purgeWork.nextGeneration) + " transition=" +
+        std::to_string(purgeWork.transitionSequence));
+    if (continuedPurge) {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "av_reacquisition group=" + m_groupKey.value() +
+                " event=queued_begin phase=purging old=" +
+                std::to_string(continuedPurge->oldGeneration) + " next=" +
+                std::to_string(continuedPurge->nextGeneration) + " transition=" +
+                std::to_string(continuedPurge->transitionSequence) + " published_generation=" +
+                std::to_string(continuedPurge->publishedGeneration));
+    }
+    for (const auto& wakeup : m_domainWakeups) wakeup->notify();
+    return Result::success(nextDeadline);
 }
 
 ::media::Status MediaAvReacquisitionCoordinator::pollTimeout()
@@ -555,18 +790,6 @@ MediaAvReacquisitionCoordinator::markReadyForActivation(
     }
     m_phase = MediaAvReacquisitionPhase::ReadyForActivation;
     return ::media::Status::success();
-}
-
-::media::Status
-MediaAvReacquisitionCoordinator::rejectIncompatibleEvidence(
-    ::media::ErrorInfo error)
-{
-    auto activationLock = acquireActivationArbitration();
-    std::lock_guard<std::mutex> stateLock(m_mutex);
-    if (m_firstError) {
-        return ::media::Status::failure(*m_firstError);
-    }
-    return failTerminalLocked(std::move(error));
 }
 
 ::media::Result<MediaAvReacquisitionActivationReservation>
