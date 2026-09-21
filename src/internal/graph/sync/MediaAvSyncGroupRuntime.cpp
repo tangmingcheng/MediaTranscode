@@ -373,4 +373,26 @@ MediaAvSyncGroupRuntime::progressGenerationPurge()
     return epoch.value().masterRelease.checkedAdd(fromStart.value());
 }
 
+bool MediaAvSyncGroupRuntime::preservesActivatedOutput() const noexcept
+{
+    const auto* coordinator = reacquisitionCoordinator();
+    return coordinator && coordinator->preservesActivatedOutput();
+}
+
+::media::Status MediaAvSyncGroupRuntime::observeClockEvidence(
+    std::uint64_t generation, std::uint64_t revision)
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator ? coordinator->observeClockEvidence(generation, revision)
+        : ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "Source clock evidence requires its coordinator"));
+}
+
+std::optional<MediaAvSourceClockEvidence>
+MediaAvSyncGroupRuntime::clockEvidence() const noexcept
+{
+    const auto* coordinator = reacquisitionCoordinator();
+    return coordinator ? coordinator->clockEvidence() : std::nullopt;
+}
+
 } // namespace media::ffmpeg::graph

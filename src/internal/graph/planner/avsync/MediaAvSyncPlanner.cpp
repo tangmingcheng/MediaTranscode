@@ -75,7 +75,8 @@ void planSharedNonStartupPolicy(MediaAvSyncPlan& plan)
 }
 
 ::media::Result<MediaAvSyncRtpInputPlan> planRtpInput(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    MediaAvSourceLifecycleMode lifecycleMode)
 {
     if (!request.input.videoRtp.payloadType || !request.input.videoRtp.clockRate ||
         !request.input.audioRtp.payloadType || !request.input.audioRtp.clockRate) {
@@ -111,8 +112,19 @@ void planSharedNonStartupPolicy(MediaAvSyncPlan& plan)
         static_cast<std::int64_t>(
             MediaRtpClockLivenessPolicy::MaximumExtrapolationMs) *
         Millisecond);
-    input.input.clockLossPolicy = MediaRtpClockLossPolicy::FailOnDegraded;
-    input.input.secondaryClockLossPolicy = MediaRtpClockLossPolicy::FailOnExpired;
+    switch (lifecycleMode) {
+    case MediaAvSourceLifecycleMode::FailSessionOnSourceLoss:
+        input.input.clockLossPolicy = MediaRtpClockLossPolicy::FailOnDegraded;
+        input.input.secondaryClockLossPolicy = MediaRtpClockLossPolicy::FailOnExpired;
+        break;
+    case MediaAvSourceLifecycleMode::PreserveActivatedOutput:
+        input.input.clockLossPolicy = MediaRtpClockLossPolicy::InvalidateAndWait;
+        input.input.secondaryClockLossPolicy = MediaRtpClockLossPolicy::InvalidateAndWait;
+        break;
+    default:
+        return ::media::Result<MediaAvSyncRtpInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument("Unknown source lifecycle mode"));
+    }
     input.input.maximumInterStreamClockOffsetSkewNs =
         runningTime(50 * Millisecond);
     input.input.maximumSenderClockRateErrorPpm = 1'000;
@@ -255,14 +267,15 @@ void planTsInput(MediaAvSyncPlan& plan,
 } // namespace
 
 ::media::Result<MediaAvSyncRtpInputPlan> MediaAvSyncPlanner::planRtpInputClock(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    MediaAvSourceLifecycleMode lifecycleMode)
 {
     if (request.mediaId.empty()) {
         return ::media::Result<MediaAvSyncRtpInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V RTP input clock requires an explicit media identity"));
     }
-    return planRtpInput(request);
+    return planRtpInput(request, lifecycleMode);
 }
 
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
@@ -273,7 +286,8 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
     const MediaRealtimeDeploymentEnvelope& deployment,
     MediaBranchMode audioBranchMode,
-    int resolvedOutputAudioSampleRate)
+    int resolvedOutputAudioSampleRate,
+    MediaAvSourceLifecycleMode lifecycleMode)
 {
     if (request.mediaId.empty()) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -296,6 +310,7 @@ void planTsInput(MediaAvSyncPlan& plan,
                 "A/V synchronization requires a planned audio execution branch"));
     }
     MediaAvSyncPlan plan;
+    plan.sourceLifecycle = MediaAvSourceLifecyclePlan{lifecycleMode};
     if (preparedDemuxFacts) {
         auto finalized = MediaAvSyncStartupPolicyPlanner::finalizePrepared(
             preparedDemuxFacts->startup, resourceLedger, deployment);
@@ -318,7 +333,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
 
     if (MediaRealtimeRequestClassifier::rawRtpInput(request)) {
-        auto rtpInput = planRtpInput(request);
+        auto rtpInput = planRtpInput(request, lifecycleMode);
         if (!rtpInput) {
             return ::media::Result<MediaAvSyncPlan>::failure(rtpInput.error());
         }

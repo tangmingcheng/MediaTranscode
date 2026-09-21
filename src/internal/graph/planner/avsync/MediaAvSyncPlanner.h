@@ -15,7 +15,8 @@ struct MediaRealtimeGraphResourceLedgerPlan;
 class MediaAvSyncPlanner final {
 public:
     static ::media::Result<MediaAvSyncRtpInputPlan> planRtpInputClock(
-        const MediaRealtimeRtpTranscodeRequest& request);
+        const MediaRealtimeRtpTranscodeRequest& request,
+        MediaAvSourceLifecycleMode lifecycleMode);
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
@@ -24,7 +25,8 @@ public:
         const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
         const MediaRealtimeDeploymentEnvelope& deployment,
         MediaBranchMode audioBranchMode,
-        int resolvedOutputAudioSampleRate);
+        int resolvedOutputAudioSampleRate,
+        MediaAvSourceLifecycleMode lifecycleMode);
 
 private:
     MediaAvSyncPlanner() = delete;

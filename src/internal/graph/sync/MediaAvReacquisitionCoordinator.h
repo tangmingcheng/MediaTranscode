@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
 #include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -96,11 +97,29 @@ enum class MediaAvReacquisitionPhase : std::uint8_t {
     Publishing = 6
 };
 
+struct MediaAvSourceClockEvidence final {
+    std::uint64_t generation;
+    std::uint64_t revision;
+    MediaRunningTime acceptedAt;
+};
+
 struct MediaAvReacquisitionSnapshot final {
     MediaAvReacquisitionPhase phase;
     std::optional<MediaAvGenerationPurge> transition;
     std::optional<MediaAvReacquisitionReason> reason;
 };
+
+enum class MediaAvGenerationEvidenceDisposition : std::uint8_t {
+    Retired,
+    Target,
+    Future
+};
+
+::media::Result<MediaAvGenerationEvidenceDisposition>
+classifyMediaAvGenerationEvidence(
+    const MediaAvReacquisitionSnapshot& reacquisition,
+    const MediaAvEpochTransitionSnapshot& epoch,
+    std::uint64_t generation);
 
 class MediaAvGenerationPublicationReservation final {
 public:
@@ -171,8 +190,13 @@ public:
            std::shared_ptr<MediaAvEpochTransitionService> transition,
            std::shared_ptr<MediaMasterClock> clock,
            std::vector<MediaAvGenerationParticipantGroup> participants,
-           std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups);
+           std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+           MediaAvSourceLifecyclePlan lifecycle,
+           std::weak_ptr<const MediaAvSyncGroupRuntime> output);
 
+    bool preservesActivatedOutput() const noexcept;
+    ::media::Status observeClockEvidence(std::uint64_t generation, std::uint64_t revision);
+    std::optional<MediaAvSourceClockEvidence> clockEvidence() const noexcept;
     ::media::Status observe(MediaAvReacquisitionRequest request);
     ::media::Status request(MediaAvReacquisitionRequest request);
     ::media::Status pollTimeout();
@@ -206,13 +230,17 @@ private:
         std::shared_ptr<MediaAvEpochTransitionService> transition,
         std::shared_ptr<MediaMasterClock> clock,
         std::vector<MediaAvGenerationParticipantGroup> participants,
-        std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups);
+        std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+           MediaAvSourceLifecyclePlan lifecycle,
+           std::weak_ptr<const MediaAvSyncGroupRuntime> output);
 
     ::media::Status failTerminalLocked(::media::ErrorInfo error);
+    // Requires activation arbitration followed by m_mutex.
+    ::media::Result<bool> requestSatisfiedLocked(
+        const MediaAvReacquisitionRequest& request) const;
+    ::media::Status beginRequestLocked(MediaAvReacquisitionRequest request);
     ::media::Status validateAndQueueRequest(
         MediaAvReacquisitionRequest request);
-    ::media::Status rejectIncompatibleEvidence(
-        ::media::ErrorInfo error);
     std::unique_lock<std::mutex> acquireActivationArbitration();
     bool matchesActiveRequest(
         const MediaAvReacquisitionRequest& request) const noexcept;
@@ -238,6 +266,10 @@ private:
     mutable std::condition_variable m_activationWaitChanged;
     std::size_t m_activationWaiters = 0;
     MediaAvSyncGroupKey m_groupKey;
+    MediaAvSourceLifecyclePlan m_lifecycle;
+    std::weak_ptr<const MediaAvSyncGroupRuntime> m_output;
+    std::optional<MediaAvReacquisitionRequest> m_queuedRequest;
+    std::optional<MediaAvSourceClockEvidence> m_clockEvidence;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::vector<MediaAvGenerationParticipantGroup> m_participants;

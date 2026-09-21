@@ -380,7 +380,7 @@ MediaDemuxPacketClockBinderNode::publishClockState(
         snapshot.readiness ==
         MediaSourceClockReadiness::ReacquireRequired;
     MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        snapshot.readiness, snapshot.generation, discontinuity);
+        snapshot.readiness, snapshot.generation, discontinuity, std::nullopt);
     m_state->publishedClockRevision = snapshot.revision;
     return processProgress(emitOutput(context, "state", state));
 }

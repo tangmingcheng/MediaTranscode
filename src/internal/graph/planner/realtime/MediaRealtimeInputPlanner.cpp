@@ -792,12 +792,13 @@ void MediaRealtimeInputPlanner::applyNodePlans(
 
 ::media::Result<MediaPreparedRawRtpProbe>
 MediaRealtimeInputPlanner::prepareRawRtpVideo(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeInputConfig& input,
+    MediaTranscodeStreamSet streamSet)
 {
-    const auto& metadata = request.input.videoRtp;
+    const auto& metadata = input.videoRtp;
     if (!metadata.payloadType || !metadata.clockRate ||
-        !request.input.openTimeoutMs || !request.input.readTimeoutMs ||
-        !request.input.analyzeDurationUs || !request.input.probeSizeBytes) {
+        !input.openTimeoutMs || !input.readTimeoutMs ||
+        !input.analyzeDurationUs || !input.probeSizeBytes) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "raw RTP video preparation requires explicit RTP identity and probe limits"));
@@ -813,8 +814,8 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4;
     auto videoBootstrap = MediaRawRtpBootstrapPlan::create(
         videoAddressFamily,
-        static_cast<std::size_t>(*request.input.probeSizeBytes),
-        *request.input.analyzeDurationUs);
+        static_cast<std::size_t>(*input.probeSizeBytes),
+        *input.analyzeDurationUs);
     if (!videoBootstrap) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             videoBootstrap.error());
@@ -828,15 +829,15 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
             static_cast<std::uint16_t>(parsedEndpoint.value().port + 1),
             videoBootstrap.value().socketReceiveBufferBytes(),
             videoBootstrap.value().maximumDatagramBytes(),
-            *request.input.readTimeoutMs,
+            *input.readTimeoutMs,
             nullptr},
         MediaPreparedRawRtpIdentity{
             MediaStreamKind::Video,
             canonicalCodecName(metadata.codecName),
             static_cast<std::uint8_t>(*metadata.payloadType),
             *metadata.clockRate}};
-    if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        const auto& audio = request.input.audioRtp;
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
+        const auto& audio = input.audioRtp;
         if (!audio.payloadType || !audio.clockRate) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -854,8 +855,8 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
                       : MediaIpAddressFamily::Ipv4;
         auto audioBootstrap = MediaRawRtpBootstrapPlan::create(
             audioAddressFamily,
-            static_cast<std::size_t>(*request.input.probeSizeBytes),
-            *request.input.analyzeDurationUs);
+            static_cast<std::size_t>(*input.probeSizeBytes),
+            *input.analyzeDurationUs);
         if (!audioBootstrap) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 audioBootstrap.error());
@@ -868,7 +869,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
                 static_cast<std::uint16_t>(audioEndpoint.value().port + 1),
                 audioBootstrap.value().socketReceiveBufferBytes(),
                 audioBootstrap.value().maximumDatagramBytes(),
-                *request.input.readTimeoutMs,
+                *input.readTimeoutMs,
                 nullptr},
             MediaPreparedRawRtpIdentity{
                 MediaStreamKind::Audio,
@@ -881,10 +882,10 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         plan.streams = MediaRawRtpProbePlan::VideoOnly{
             std::move(videoProbeStream)};
     }
-    plan.openTimeoutMs = *request.input.openTimeoutMs;
-    plan.analyzeDurationUs = *request.input.analyzeDurationUs;
+    plan.openTimeoutMs = *input.openTimeoutMs;
+    plan.analyzeDurationUs = *input.analyzeDurationUs;
     plan.maximumBufferedBytes =
-        static_cast<std::size_t>(*request.input.probeSizeBytes);
+        static_cast<std::size_t>(*input.probeSizeBytes);
     plan.reorderWindowPackets =
         videoBootstrap.value().reorderWindowPackets();
     plan.maximumReorderDelayMs =

@@ -67,5 +67,5 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 1. 从现有preflight抽出逐源事实准备，验证真实SAR；将固定grid cell与等比内容矩形区分，常黑画布只拷贝内容矩形。
 2. 抽取源处理/时钟和唯一输出规划，共用实际prepared编码器、设备与帧池；黑场、tile copy及分配证据前移到DAG构建前。
 3. 现有资源compiler按明确owner选择事实，统一核算源输入/decoder/filter、聚合候选/贡献/canvas及唯一输出/协议；不能直接相加多个单源总账。
-4. 由内部生命周期产品区分旧单源失败语义与持续合屏缺流。RTP失锁是有序失效事件；恢复尝试到期回到等待新证据，首次准入及purge ack超时仍失败。现transition不支持“未发布恢复代再次失锁”，须通过真实源purge屏障处理该代，不能假激活或吞错。
+4. 内部生命周期产品已区分旧单源失败语义与持续合屏缺流，未发布代再次失锁、owner-thread purge、到期等待新证据及代次仲裁已通过源码双审。仍须由composition planner选择Preserve并通过真实源链路验证，首次准入及purge ack超时保持失败。r23仍走Shared单源路径，不能作为此模式运行通过证据，见[源生命周期记录](realtime-video-composition-source-lifecycle.md)。
 5. 接通已批准的inputs/grid/audioSource公共配置与共用controller，补纯视频非音源、逐源缺口观测及Windows→RKMPP完整验收。迟到输出须有planner有界策略，单pending不等于历史追赶工作有界。

@@ -130,6 +130,9 @@ const char* boolOption(bool value) noexcept
         case MediaRtpClockLossPolicy::FailOnExpired:
             lossPolicy = "fail_on_expired";
             break;
+        case MediaRtpClockLossPolicy::InvalidateAndWait:
+            lossPolicy = "invalidate_and_wait";
+            break;
         case MediaRtpClockLossPolicy::WaitForEvidence:
             lossPolicy = "wait_for_evidence";
             break;

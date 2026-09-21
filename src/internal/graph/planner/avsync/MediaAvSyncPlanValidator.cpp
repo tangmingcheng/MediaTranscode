@@ -45,7 +45,14 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
 {
+    if (!plan.sourceLifecycle ||
+        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
+         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
+        return invalid("sourceLifecycle");
     if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
+        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
     if (!plan.controlGenerationPolicy) {
         return invalid("controlGenerationPolicy");
     }

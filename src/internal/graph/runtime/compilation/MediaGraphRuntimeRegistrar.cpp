@@ -280,7 +280,9 @@ namespace media::ffmpeg::graph {
         if (outputDomain) wakeups.push_back(context.sharedNodeWakeup(outputDomain->registration.activationOwner));
         auto coordinator = MediaAvReacquisitionCoordinator::create(
             source.groupKey, source.reacquisition->transitionService,
-            source.reacquisition->masterClock, std::move(participants).value(), std::move(wakeups));
+            source.reacquisition->masterClock, std::move(participants).value(), std::move(wakeups),
+            *group->plan().sourceLifecycle,
+            outputGroupKey ? context.findAvSyncGroup(*outputGroupKey) : nullptr);
         if (!coordinator) return ::media::Status::failure(coordinator.error());
         auto installed = group->installReacquisitionCoordinator(std::move(coordinator).value());
         if (!installed) return installed;

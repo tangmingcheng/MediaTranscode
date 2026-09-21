@@ -26,6 +26,7 @@ struct MediaRtpClockGroupValidatorConfig final {
     std::int64_t audioCnameTimeoutNs;
     bool requireMatchingCname;
     MediaRtpCommonEpochPolicy commonEpochPolicy;
+    bool invalidateOnDegraded;
 };
 
 struct MediaRtpLockedClockGroup final {
@@ -40,6 +41,7 @@ struct MediaRtpClockGroupSnapshot final {
     std::uint64_t groupGeneration;
     std::optional<MediaRtpLockedClockGroup> locked;
     std::optional<std::uint64_t> invalidatedGeneration;
+    std::uint64_t evidenceRevision;
 };
 
 class MediaRtpClockGroupValidator final {
@@ -79,6 +81,7 @@ private:
     std::optional<StreamState> m_audio;
     std::optional<MediaRunningTime> m_commonSourceEpoch;
     std::uint64_t m_groupGeneration = 0;
+    std::uint64_t m_evidenceRevision = 0;
     std::optional<std::uint64_t> m_invalidatedGeneration;
     bool m_reacquireRequired = false;
     Phase m_phase = Phase::InitialAcquisition;

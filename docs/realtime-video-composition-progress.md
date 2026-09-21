@@ -1,5 +1,11 @@
 # 固定实时视频合屏实施记录
 
+## 2026-09-21：源缺流生命周期与准备步骤复用
+
+typed源生命周期、BYE/真实错误分流、未发布代退休、owner-thread startup清理、到期后新证据重试及公共代次分类已接入内部路径。复审发现的排队续接、Degraded代次、迟到控制和分类到请求竞争均修复；两名独立审查者对最终源码Standards/本阶段Spec明确PASS。共用编码器准备保留同一opened context，RTP探测接口只消费输入事实。
+
+最终Release全量重建成功且源码冻结hash一致。r23原规格120秒源自然exit0、3600帧，VLC首段画面正常；源结束后七组purge完成，CLI仍无进展超时自然exit1、残留4个逻辑对象。117条generation1漂移最大4.8微秒，不证明恢复。完整验收FAIL、42/100不变；已归档命令/指标并逐项清理。当前公共入口仍是Shared单源，composition preflight、资源总账、真实帧池提前验证、入口及双平台合屏门禁仍未完成。详见[源生命周期记录](realtime-video-composition-source-lifecycle.md)。
+
 ## 2026-09-21：源/输出域、贡献与持续聚合接线
 
 已实现域列表和唯一输出权限、音视频贡献、持续聚合节点、画布adapter以及复用既有segments的组合图构建器。画布释放补上owner唤醒；独立审查发现的RGA逐平面布局折叠已修复，双方冻结复审均给出WIP源码安全保留PASS、完整合屏FAIL。composition preflight、资源总账、完整源缺流恢复、公共入口与纯视频源仍缺失，不能启动或宣称完成多源合屏。

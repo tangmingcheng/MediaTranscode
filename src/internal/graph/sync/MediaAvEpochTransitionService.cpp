@@ -93,7 +93,7 @@ bool MediaAvEpochTransitionService::outputPermittedLocked(
 
 ::media::Result<MediaAvGenerationPurge>
 MediaAvEpochTransitionService::beginReacquisition(
-    std::uint64_t oldGeneration,
+    MediaAvTransitionOrigin origin,
     std::uint64_t nextGeneration)
 {
     std::lock_guard lock(m_mutex);
@@ -106,12 +106,14 @@ MediaAvEpochTransitionService::beginReacquisition(
             ::media::ErrorInfo::invalidArgument(
                 "Initial-only output domain rejects reacquisition"));
     }
-    if (m_readiness != MediaAvGenerationReadiness::Locked) {
+    const bool unpublished = std::holds_alternative<MediaAvUnpublishedAcquisition>(origin);
+    if (m_readiness != (unpublished ? MediaAvGenerationReadiness::Acquiring
+                                   : MediaAvGenerationReadiness::Locked)) {
         return ::media::Result<MediaAvGenerationPurge>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Reacquisition requires a locked generation"));
     }
-    auto purge = m_coordinator->begin(oldGeneration, nextGeneration);
+    auto purge = m_coordinator->begin(std::move(origin), nextGeneration);
     if (!purge) return purge;
     m_readiness = MediaAvGenerationReadiness::Reacquire;
     return purge;

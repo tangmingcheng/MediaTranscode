@@ -24,7 +24,7 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status observe(const MediaSourceClockStateBuffer& state);
+    ::media::Status observe(const MediaSourceClockStateBuffer& state, const MediaBufferRef& buffer);
     void resetState() noexcept;
 
     std::optional<MediaAvSyncGroupKey> m_groupKey;
@@ -33,6 +33,7 @@ private:
     std::optional<MediaRunningTime> m_nextTick;
     std::optional<std::uint64_t> m_generation;
     std::optional<std::uint64_t> m_invalidatedGeneration;
+    MediaBufferRef m_pendingClockState;
 };
 
 } // namespace media::ffmpeg::graph

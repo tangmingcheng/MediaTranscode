@@ -72,7 +72,8 @@ namespace {
          transport.clockLossPolicy !=
              MediaRtpClockLossPolicy::FailOnExpired &&
          transport.clockLossPolicy !=
-             MediaRtpClockLossPolicy::WaitForEvidence) ||
+             MediaRtpClockLossPolicy::WaitForEvidence &&
+         transport.clockLossPolicy != MediaRtpClockLossPolicy::InvalidateAndWait) ||
         !transport.rtcpCompositionMode) {
         return invalid("clock loss or RTCP composition policy");
     }

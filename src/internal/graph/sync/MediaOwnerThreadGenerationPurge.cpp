@@ -5,7 +5,7 @@ namespace {
 bool samePurge(const MediaAvGenerationPurge& a, const MediaAvGenerationPurge& b)
 {
     return a.oldGeneration == b.oldGeneration && a.nextGeneration == b.nextGeneration &&
-        a.transitionSequence == b.transitionSequence;
+        a.transitionSequence == b.transitionSequence && a.publishedGeneration == b.publishedGeneration;
 }
 }
 

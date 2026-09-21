@@ -10,6 +10,7 @@ namespace media::ffmpeg::graph {
 
 class MediaEncoderRateControlOptionAdapter final {
 public:
+    static MediaNodeOptions encode(const MediaEncoderRateControlPlan& plan);
     static ::media::Result<MediaEncoderRateControlPlan> applyBeforeOpen(
         AVCodecContext& context,
         const MediaNodeOptions& options);

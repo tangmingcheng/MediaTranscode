@@ -38,6 +38,9 @@ public:
     }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
+    bool preservesActivatedOutput() const noexcept;
+    ::media::Status observeClockEvidence(std::uint64_t generation, std::uint64_t revision);
+    std::optional<MediaAvSourceClockEvidence> clockEvidence() const noexcept;
     ::media::Result<MediaAvOutputPermitCommitReservation>
     reserveOutputCommit(std::uint64_t generation) const;
     ::media::Result<MediaAvActivatedOutputPermitReservation>

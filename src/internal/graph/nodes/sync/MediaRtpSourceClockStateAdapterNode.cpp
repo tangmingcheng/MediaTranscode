@@ -92,12 +92,12 @@ MediaRtpSourceClockStateAdapterNode::onProcess(
         break;
     }
     const Projection projection{
-        readiness, projectedGeneration, discontinuity};
+        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision};
     if (m_lastEmittedProjection == projection) return processProgress();
 
     m_pendingProjection = projection;
     m_pendingState = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        readiness, projectedGeneration, discontinuity);
+        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision);
     return emitPendingState(context);
 }
 

@@ -907,7 +907,8 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
     std::optional<MediaAvSyncPlan> plannedRawRtpAvSync;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options) &&
         options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        auto rtpInput = MediaAvSyncPlanner::planRtpInputClock(options);
+        auto rtpInput = MediaAvSyncPlanner::planRtpInputClock(
+            options, MediaAvSourceLifecycleMode::FailSessionOnSourceLoss);
         if (!rtpInput) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 rtpInput.error());
@@ -1375,7 +1376,8 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             *plan.resourceLedger,
             *plan.deployment,
             plannedAudio.branchMode,
-            plannedAudio.resolvedOutput->sampleRate());
+            plannedAudio.resolvedOutput->sampleRate(),
+            MediaAvSourceLifecycleMode::FailSessionOnSourceLoss);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
@@ -1542,10 +1544,10 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 remainingForProbe.error());
         }
-        MediaRealtimeRtpTranscodeRequest probeRequest = request;
-        probeRequest.input.openTimeoutMs = remainingForProbe.value();
+        MediaRealtimeInputConfig probeInput = request.input;
+        probeInput.openTimeoutMs = remainingForProbe.value();
         auto probed = MediaRealtimeInputPlanner::prepareRawRtpVideo(
-            probeRequest);
+            probeInput, *request.parameters.execution.streamSet);
         if (!probed) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 probed.error());

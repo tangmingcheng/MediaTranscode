@@ -97,7 +97,7 @@ planner 形成格式、尺寸、有效范围、上传完成机制与内存边界
 
 继续接线时确认：`CodecResolverNode::prepareDecoder` 原先为各源独立调用 `av_hwdevice_ctx_create`；CUDA canvas 明确要求同一 context，因此仅证明各滤镜单独支持缩放不足以证明多源设备互通。采用 [FFmpeg 共享硬件设备上下文](https://ffmpeg.org/ffmpeg.html#Advanced-options) 的方法，由实际输出 encoder 的设备引用绑定各源 decoder，启动前核对所选硬件类型；现有单源链路仍消费原来的设备准备路径。没有启用跨设备隐式复制，也没有修改外部 FFmpeg。
 
-仍须闭合：实际生产帧池与每个缩放 tile 的预先验证、整体资源准入和贡献字节上限、非选定源无音频时的源时钟产品，以及单源失锁不会终止共享输出的恢复策略。现有 A/V 源的非选定音频必须显式消费，不能让未连接的音频阻塞源启动。这些缺项未解决前不判定合屏可交付。
+仍须闭合：实际生产帧池与每个缩放 tile 的预先验证、整体资源准入和贡献字节上限、非选定源无音频时的源时钟产品。持续缺流生命周期及未发布代退休已通过源码双审，但尚未由composition preflight接入并真实运行；r23仍复现Shared单源无进展退出。现有 A/V 源的非选定音频必须显式消费，不能让未连接的音频阻塞源启动。这些缺项未解决前不判定合屏可交付。
 
 独立审查发现并修复RGA布局校验缺口：仅检查DRM各plane不越界，不能证明其独立pitch/offset与RGA单一wstride/hstride等价。现在复用FFmpeg图像布局计算逐项核对格式、全部plane步长/偏移及填充容量，不等价时在import前失败。[Rockchip公共接口](https://github.com/airockchip/librga/blob/main/include/im2d_buffer.h)与[Linux DRM字节布局](https://github.com/torvalds/linux/blob/master/include/uapi/drm/drm_fourcc.h)是适配依据；RGB24对应little-endian DRM BGR888，不能按名称同名映射。部署FFmpeg fork的RGB24/BGR24描述与此不同，adapter拒绝该描述，没有修改外部依赖。
 

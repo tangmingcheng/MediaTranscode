@@ -76,7 +76,8 @@ MediaAvGenerationParticipantGroup::purgeAll(
     const bool continuing = m_pendingPurge &&
         m_pendingPurge->oldGeneration == purge.oldGeneration &&
         m_pendingPurge->nextGeneration == purge.nextGeneration &&
-        m_pendingPurge->transitionSequence == purge.transitionSequence;
+        m_pendingPurge->transitionSequence == purge.transitionSequence &&
+        m_pendingPurge->publishedGeneration == purge.publishedGeneration;
     if (!m_sealed || purge.oldGeneration == 0 ||
         purge.nextGeneration <= purge.oldGeneration ||
         purge.transitionSequence == 0 ||

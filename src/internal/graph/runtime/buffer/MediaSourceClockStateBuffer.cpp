@@ -5,9 +5,11 @@ namespace media::ffmpeg::graph {
 MediaSourceClockStateBuffer::MediaSourceClockStateBuffer(
     MediaSourceClockReadiness readiness,
     std::uint64_t generation,
-    bool discontinuity)
+    bool discontinuity,
+    std::optional<std::uint64_t> evidenceRevision)
     : m_readiness(readiness)
     , m_generation(generation)
+    , m_evidenceRevision(evidenceRevision)
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::GraphEvent);

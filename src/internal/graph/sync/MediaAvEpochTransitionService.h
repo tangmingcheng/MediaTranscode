@@ -57,7 +57,7 @@ public:
     static std::shared_ptr<MediaAvEpochTransitionService> createInitialOnly();
 
     ::media::Result<MediaAvGenerationPurge> beginReacquisition(
-        std::uint64_t oldGeneration,
+        MediaAvTransitionOrigin origin,
         std::uint64_t nextGeneration);
     ::media::Result<bool> acknowledge(
         MediaAvGenerationAcknowledgement acknowledgement);

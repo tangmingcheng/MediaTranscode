@@ -25,6 +25,7 @@ MediaAvStartupCoordinatorNode::MediaAvStartupCoordinatorNode(
     MediaNodeId nodeId,
     MediaAvStartupCoordinatorNodePreparation preparation)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvStartupCoordinatorNode")
+    , m_ownerPurge(std::make_shared<MediaOwnerThreadGenerationPurge>())
     , m_coordinator(std::move(preparation.m_coordinator))
     , m_generationState(std::move(preparation.m_generationState))
     , m_outputAudioSampleRate(preparation.m_outputAudioSampleRate)
@@ -44,7 +45,26 @@ std::string_view MediaAvStartupCoordinatorNode::generationPurgeIdentity() noexce
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 {
-    return m_generationState;
+    return m_ownerPurge;
+}
+
+::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::process(
+    MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_ownerPurge->pending()) {
+        cancelPendingOutputTransfer();
+        auto retired = m_coordinator->retireGeneration(*purge);
+        auto status = retired ? m_generationState->purge(*purge)
+            : ::media::Status::failure(retired.error().toErrorInfo());
+        if (status) {
+            clearTransientState();
+            m_lastReleasedGeneration = purge->publishedGeneration;
+        }
+        auto completed = m_ownerPurge->complete(*purge, status);
+        if (!completed) return processProgress(completed);
+        return processProgress(status);
+    }
+    return FFmpegNodeRuntime::process(context);
 }
 
 ::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::onProcess(
@@ -105,7 +125,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     if (!selected) return ::media::Result<MediaNodeProcessResult>::failure(selected.error());
     if (!selected.value()) return processWaiting();
     return *selected.value() == PendingInput::Clock
-        ? processClock()
+        ? processClock(context)
         : processOne(context, *selected.value());
 }
 
@@ -283,7 +303,7 @@ MediaAvStartupCoordinatorNode::selectPending() const
     return ::media::Result<std::optional<PendingInput>>::success(selected);
 }
 
-::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::processClock()
+::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::processClock(MediaGraphExecutionContext& context)
 {
     const auto* tick = dynamic_cast<const MediaAvStartupClockBuffer*>(m_pendingClock.get());
     if (!tick) return ::media::Result<MediaNodeProcessResult>::failure(
@@ -299,17 +319,27 @@ MediaAvStartupCoordinatorNode::selectPending() const
     m_clockBarrierSnapshotSealed = false;
     m_videoClockBarrierRemaining = 0;
     m_audioClockBarrierRemaining = 0;
-    auto status = m_coordinator->poll(*m_lastClock);
-    if (!status) {
-        mediaGraphDiagnosticLog(
-            MediaGraphDiagnosticLevel::State,
-            MediaGraphDiagnosticPhase::RuntimeNode,
-            std::string("av_startup_trace stage=clock_poll status=failed error=") +
-                status.error().toErrorInfo().message);
-    }
-    return status ? processProgress()
-                   : ::media::Result<MediaNodeProcessResult>::failure(
-                         status.error().toErrorInfo());
+    auto outcome = m_coordinator->poll(*m_lastClock);
+    if (!outcome) return ::media::Result<MediaNodeProcessResult>::failure(
+        outcome.error().toErrorInfo());
+    if (!outcome.value()) return processProgress();
+    const auto& expired = *outcome.value();
+    erasePurged(expired.purged);
+    const auto group = context.findAvSyncGroup(m_generationState->groupKey());
+    if (!group || !group->preservesActivatedOutput())
+        return ::media::Result<MediaNodeProcessResult>::failure(expired.error.toErrorInfo());
+    const auto evidence = group->clockEvidence();
+    if (!evidence || evidence->generation != expired.generation)
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument("Expired source attempt lost its clock evidence"));
+    m_retiredClockEvidenceRevision = evidence->revision;
+    m_pendingVideo.clear();
+    m_pendingAudio.clear();
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "av_source_attempt state=waiting_for_evidence generation=" +
+            std::to_string(expired.generation) + " revision=" + std::to_string(evidence->revision));
+    return processProgress();
 }
 
 ::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::processOne(
@@ -354,6 +384,19 @@ MediaAvStartupCoordinatorNode::selectPending() const
             std::string("av_startup_trace stage=coordinator_key sequence=") +
                 std::to_string(unit.sequence) + " generation=" +
                 std::to_string(unit.generation));
+    }
+    if (m_coordinator->state() == MediaAvSyncState::WaitingForEvidence) {
+        const auto group = context.findAvSyncGroup(m_generationState->groupKey());
+        const auto evidence = group ? group->clockEvidence() : std::nullopt;
+        if (!m_retiredClockEvidenceRevision || !evidence ||
+            evidence->revision <= *m_retiredClockEvidenceRevision ||
+            evidence->generation != unit.generation || envelope->observedAt() < evidence->acceptedAt) {
+            pending.pop_front();
+            return processProgress();
+        }
+        auto resumed = m_coordinator->resumeAfterEvidence(envelope->observedAt());
+        if (!resumed) return ::media::Result<MediaNodeProcessResult>::failure(resumed.error().toErrorInfo());
+        m_retiredClockEvidenceRevision.reset();
     }
     auto decision = m_coordinator->submit(unit, envelope->observedAt());
     if (!decision) {
@@ -411,8 +454,7 @@ MediaAvStartupCoordinatorNode::prepareOutput(
                 reacquisition.phase !=
                     MediaAvReacquisitionPhase::Acquiring ||
                 !reacquisition.transition ||
-                reacquisition.transition->oldGeneration !=
-                    *m_lastReleasedGeneration ||
+                reacquisition.transition->publishedGeneration != *m_lastReleasedGeneration ||
                 reacquisition.transition->nextGeneration !=
                     epoch->generation) {
                 return ::media::Result<
@@ -561,11 +603,13 @@ MediaAvStartupCoordinatorNode::processControl(
     if (!reset) return ::media::Status::failure(reset.error().toErrorInfo());
     m_generationState->reset();
     clearTransientState();
-    return FFmpegNodeRuntime::start(context);
+    auto started = m_ownerPurge->start(context.sharedNodeWakeup(nodeId()));
+    return started ? FFmpegNodeRuntime::start(context) : started;
 }
 
 ::media::Status MediaAvStartupCoordinatorNode::stop(MediaGraphExecutionContext& context)
 {
+    m_ownerPurge->stop();
     if (m_coordinator) m_coordinator->stop();
     if (m_generationState) m_generationState->reset();
     clearTransientState();
@@ -574,6 +618,7 @@ MediaAvStartupCoordinatorNode::processControl(
 
 void MediaAvStartupCoordinatorNode::abort(MediaGraphExecutionContext& context) noexcept
 {
+    m_ownerPurge->stop();
     if (m_coordinator) m_coordinator->abort();
     if (m_generationState) m_generationState->reset();
     clearTransientState();
@@ -596,6 +641,7 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_lastVideoObservedAt.reset();
     m_lastAudioObservedAt.reset();
     m_lastClock.reset();
+    m_retiredClockEvidenceRevision.reset();
     m_terminalControlCommitted = false;
     m_keyTraceEmitted = false;
     m_lastReleasedGeneration.reset();

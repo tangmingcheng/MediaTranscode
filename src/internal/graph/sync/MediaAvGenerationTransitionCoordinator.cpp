@@ -60,20 +60,30 @@ MediaAvGenerationTransitionCoordinator::create(
 
 ::media::Result<MediaAvGenerationPurge>
 MediaAvGenerationTransitionCoordinator::begin(
-    std::uint64_t oldGeneration,
+    MediaAvTransitionOrigin origin,
     std::uint64_t nextGeneration)
 {
-    if (m_poisoned || !m_permitted || !m_currentGeneration || m_active ||
-        m_completed || oldGeneration != *m_currentGeneration ||
+    const auto oldGeneration = std::visit([](const auto& value) {
+        return value.generation;
+    }, origin);
+    const auto* unpublished = std::get_if<MediaAvUnpublishedAcquisition>(&origin);
+    const bool validOrigin = unpublished
+        ? !m_permitted && m_completed &&
+            m_completed->nextGeneration == oldGeneration &&
+            m_completed->sequence == unpublished->completedTransitionSequence
+        : m_permitted && m_currentGeneration && !m_completed &&
+            oldGeneration == *m_currentGeneration;
+    if (m_poisoned || m_active || !m_currentGeneration || !validOrigin ||
         nextGeneration <= oldGeneration ||
         m_nextSequence == std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Result<MediaAvGenerationPurge>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Generation transition requires the permitted current generation and a newer target"));
+                "Generation transition requires the exact published or completed unpublished origin"));
     }
+    m_completed.reset();
     m_permitted = false;
     const MediaAvGenerationPurge purge{
-        oldGeneration, nextGeneration, m_nextSequence++};
+        oldGeneration, nextGeneration, m_nextSequence++, *m_currentGeneration};
     m_active.emplace(ActiveTransition{
         purge, std::vector<bool>(m_plan.participants.size(), false)});
     return ::media::Result<MediaAvGenerationPurge>::success(purge);

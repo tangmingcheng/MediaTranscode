@@ -94,6 +94,15 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
         return invalid("RTP clock group evidence identity is invalid");
     }
 
+    const auto& previous = streamKind == MediaStreamKind::Video ? m_video : m_audio;
+    const bool fresh = !previous || previous->evidence.generation != evidence.generation ||
+        previous->evidence.ntp != evidence.ntp ||
+        previous->evidence.cname != evidence.cname;
+    if (fresh) {
+        if (m_evidenceRevision == std::numeric_limits<std::uint64_t>::max())
+            return invalid("RTP clock evidence revision exhausted");
+        ++m_evidenceRevision;
+    }
     StreamState observed{evidence, std::move(calibration)};
     if (m_phase == Phase::ActiveGeneration && m_video && m_audio &&
         !m_reacquireRequired) {
@@ -161,7 +170,7 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
                             : MediaRtpClockGroupState::Acquiring,
         m_groupGeneration,
         std::nullopt,
-        m_invalidatedGeneration};
+        m_invalidatedGeneration, m_evidenceRevision};
     if (m_phase != Phase::ActiveGeneration && !m_reacquireRequired) {
         discardExpiredAcquisitionCandidates(observedAtNs);
     }
@@ -185,7 +194,10 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
     if (!videoAge || !audioAge || *videoAge > m_config.maximumExtrapolationNs ||
         *audioAge > m_config.maximumExtrapolationNs || !videoCnameAge || !audioCnameAge ||
         *videoCnameAge > m_config.videoCnameTimeoutNs ||
-        *audioCnameAge > m_config.audioCnameTimeoutNs) {
+        *audioCnameAge > m_config.audioCnameTimeoutNs ||
+        (m_config.invalidateOnDegraded &&
+         (*videoAge > m_config.senderReportTimeoutNs ||
+          *audioAge > m_config.senderReportTimeoutNs))) {
         clear(true);
         if (m_phase == Phase::Exhausted) {
             return Result::failure(::media::ErrorInfo::invalidArgument(

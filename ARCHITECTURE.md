@@ -537,4 +537,6 @@ RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一
 
 Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号保持域中性。音频贡献区分真实源映射和生成静音，视频贡献逐格记录源身份或生成黑帧；重采样与裁剪保留原始源区间及映射锚点。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。
 
-AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样本轴，按共享时钟 deadline 选择仍有效的源区间，缺口生成黑帧/静音。输出仅保留一项 pending，提交同时取得所涉及源与输出的短代次许可；源 purge 先于背压重试服务。画布通过 CUDA/RGA adapter 完成同步矩形操作，黑模板由明确色彩范围填充并读回验证，帧 lease 释放通知 owner。实际生产帧池的预DAG验证、全局资源和元数据物理上界、迟到工作策略、完整源失锁恢复仍缺失；不能把局部实现或单源画面当成完整合屏验收。见[持续聚合接线记录](docs/realtime-video-composition-aggregate.md)。
+AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样本轴，按共享时钟 deadline 选择仍有效的源区间，缺口生成黑帧/静音。输出仅保留一项 pending，提交同时取得所涉及源与输出的短代次许可；源 purge 先于背压重试服务。画布通过 CUDA/RGA adapter 完成同步矩形操作，黑模板由明确色彩范围填充并读回验证，帧 lease 释放通知 owner。实际生产帧池的预DAG验证、全局资源和元数据物理上界、迟到工作策略及完整运行门禁仍缺失；不能把局部实现或单源画面当成完整合屏验收。见[持续聚合接线记录](docs/realtime-video-composition-aggregate.md)。
+
+源生命周期由planner显式选择：Shared保留原失败合同，Source只有在唯一Output实际激活后才允许缺流等待。RTCP BYE/证据到期是有序源失效，真实协议/I/O错误仍失败；恢复尝试到期释放候选并等待新SR及新AU。未发布代退休复用真实owner-thread purge/ack，启动清理完成后才确认；代次分类、排队续接与等价目标重判共用activation仲裁，不能假激活或吞非法证据。此内部实现已通过源码双审，公共composition入口尚未接入，运行结论仍未通过，见[源生命周期记录](docs/realtime-video-composition-source-lifecycle.md)。
