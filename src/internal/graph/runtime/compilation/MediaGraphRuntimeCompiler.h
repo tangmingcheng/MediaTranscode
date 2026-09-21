@@ -36,7 +36,7 @@ private:
         MediaRealtimeExecutableGraph executable,
         MediaGraph& activeGraph,
         std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
-        std::optional<MediaAvRuntimeDomainState>& avDomain,
+        std::vector<MediaAvRuntimeDomainState>& avDomains,
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
             protocolOutputAuthority,
         const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,

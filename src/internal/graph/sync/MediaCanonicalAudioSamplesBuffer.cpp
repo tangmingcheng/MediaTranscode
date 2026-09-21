@@ -19,9 +19,10 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
     MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage,
     MediaCanonicalAudioSampleInterval interval)
 {
-    return create(
-        std::move(media),
-        std::vector<MediaAudioIntervalFragment>{{std::move(lineage), interval}});
+    auto fragment = MediaAudioIntervalFragment::fromSource(std::move(lineage), interval);
+    if (!fragment) return ::media::Result<MediaBufferRef>::failure(fragment.error());
+    return create(std::move(media), std::vector<MediaAudioIntervalFragment>{
+        std::move(fragment).value()});
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalAudioSamplesBuffer::create(
@@ -37,7 +38,7 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
     int sampleRate = 0;
     std::int64_t expectedBegin = -1;
     for (const auto& fragment : fragments) {
-        if (!fragment.lineage || !fragment.interval.sampleCount()) {
+        if (!fragment.valid()) {
             return ::media::Result<MediaBufferRef>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical audio samples require valid fragments"));

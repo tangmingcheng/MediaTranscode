@@ -17,13 +17,17 @@ MediaAudioLineageCapacity::MediaAudioLineageCapacity(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Audio lineage capacity requires valid canonical lineage"));
     }
-    const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&lineage->identity);
-    if (!source) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Audio source lineage capacity requires source access unit identity"));
+    MediaAudioLineageKey key;
+    key.generation = lineage->generation;
+    if (const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&lineage->identity)) {
+        key.timelineIdentity = source->sourceIdentity;
+        key.sequence = source->sourceSequence.value();
+    } else {
+        const auto& output = std::get<MediaOutputAccessUnitIdentity>(lineage->identity);
+        key.timelineIdentity = output.outputIdentity;
+        key.sequence = output.outputSequence.value();
+        key.output = true;
     }
-    MediaAudioLineageKey key{
-        lineage->generation, source->sourceIdentity, source->sourceSequence};
     if (std::find(m_keys.begin(), m_keys.end(), key) != m_keys.end()) {
         return ::media::Status::success();
     }

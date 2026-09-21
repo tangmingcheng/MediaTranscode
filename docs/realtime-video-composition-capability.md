@@ -90,3 +90,15 @@ planner 形成格式、尺寸、有效范围、上传完成机制与内存边界
 预算必须覆盖实际 staging 字节、回读核验峰值、硬件 surface 分配字节、常驻模板与有限 pending headers，并通过现有 reservation 约束 CUDA 活跃 surface。`MediaFramePayloadFootprint::logicalBytes` 只是逻辑像素字节，不足以证明物理分配硬界。
 
 本节尚缺 SPS/VUI 范围产品、实际生产帧池预算、CUDA/RKMPP adapter 与 aggregate 消费闭环；未新增 helper 或实现代码，不能将单独 helper、存在滤镜或上传成功当作功能完成。原 Windows→RKMPP 真实链路、断流/恢复及双独立审查门禁保持不变。
+
+## 2026-09-21：持续聚合接线中的设备契约
+
+当前工作树已加入源域/输出域 binding、初次输出激活权限、视频逐格贡献、真实音频/生成静音贡献、共享画布 producer 和 CUDA/RGA adapter，尚未完成组合 planner、CLI/C API 与真实合屏验收。此前“未新增 helper 或实现代码”的表述仅描述上一提交时点。
+
+继续接线时确认：`CodecResolverNode::prepareDecoder` 原先为各源独立调用 `av_hwdevice_ctx_create`；CUDA canvas 明确要求同一 context，因此仅证明各滤镜单独支持缩放不足以证明多源设备互通。采用 [FFmpeg 共享硬件设备上下文](https://ffmpeg.org/ffmpeg.html#Advanced-options) 的方法，由实际输出 encoder 的设备引用绑定各源 decoder，启动前核对所选硬件类型；现有单源链路仍消费原来的设备准备路径。没有启用跨设备隐式复制，也没有修改外部 FFmpeg。
+
+仍须闭合：实际生产帧池与每个缩放 tile 的预先验证、整体资源准入和贡献字节上限、非选定源无音频时的源时钟产品，以及单源失锁不会终止共享输出的恢复策略。现有 A/V 源的非选定音频必须显式消费，不能让未连接的音频阻塞源启动。这些缺项未解决前不判定合屏可交付。
+
+独立审查发现并修复RGA布局校验缺口：仅检查DRM各plane不越界，不能证明其独立pitch/offset与RGA单一wstride/hstride等价。现在复用FFmpeg图像布局计算逐项核对格式、全部plane步长/偏移及填充容量，不等价时在import前失败。[Rockchip公共接口](https://github.com/airockchip/librga/blob/main/include/im2d_buffer.h)与[Linux DRM字节布局](https://github.com/torvalds/linux/blob/master/include/uapi/drm/drm_fourcc.h)是适配依据；RGB24对应little-endian DRM BGR888，不能按名称同名映射。部署FFmpeg fork的RGB24/BGR24描述与此不同，adapter拒绝该描述，没有修改外部依赖。
+
+紧凑NV15/NV20与16bit容器P010/P210的RGA packing等价性尚未证明，当前明确unsupported，不据此宣称硬件不支持。只有Windows Release编译及原规格单源r22回归证据；RGA文件不参与Windows编译，尚无本次RKMPP构建或运行通过证据。CUDA逐plane传实际地址和pitch，不存在上述地址折叠。首段画面、失败和清理见[聚合记录](realtime-video-composition-aggregate.md)。

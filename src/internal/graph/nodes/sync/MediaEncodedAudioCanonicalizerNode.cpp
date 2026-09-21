@@ -77,7 +77,7 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
         MediaDecodeOrderMode::PresentationOrderNoReorder,
         MediaOutputAccessUnitIdentity{outputGroup.value(), MediaScheduledStream::Audio, sequence},
         MediaTimeMappingConfidence::Locked,
-        origin.generation);
+        origin.generation, {});
     if (!lineage) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             lineage.error());
@@ -90,16 +90,11 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
                 ::media::ErrorInfo::invalidArgument(
                     "Encoded audio contribution requires valid source lineage"));
         }
-        const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&fragment.lineage->identity);
-        if (!source) {
+        if (!validMediaCanonicalAudioContribution(fragment.contribution)) {
             return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Encoded audio contribution rejects recursive output lineage"));
+                ::media::ErrorInfo::invalidArgument("Encoded audio requires explicit valid contributions"));
         }
-        contributions.push_back(MediaCanonicalAudioContribution{
-            MediaCanonicalSourceStamp{*source, fragment.lineage->generation,
-                fragment.lineage->mappingConfidence, fragment.lineage->presentation,
-                fragment.lineage->duration}, fragment.interval});
+        contributions.push_back(fragment.contribution);
     }
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
         input->media(), std::move(lineage).value(),

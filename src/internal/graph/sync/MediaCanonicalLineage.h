@@ -1,12 +1,14 @@
 #pragma once
 
 #include "internal/graph/sync/MediaCanonicalAccessUnitIdentity.h"
+#include "internal/graph/sync/MediaCanonicalVideoContribution.h"
 #include "internal/graph/time/MediaMappedTimestamp.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -18,16 +20,9 @@ struct MediaCanonicalLineage final {
     MediaCanonicalAccessUnitIdentity identity;
     MediaTimeMappingConfidence mappingConfidence;
     std::uint64_t generation;
+    std::vector<MediaCanonicalVideoContribution> videoContributions;
 
     MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept;
-};
-
-struct MediaCanonicalSourceStamp final {
-    MediaSourceAccessUnitIdentity identity;
-    std::uint64_t generation;
-    MediaTimeMappingConfidence mappingConfidence;
-    MediaRunningTime presentation;
-    MediaRunningTime duration;
 };
 
 bool sameMediaCanonicalTimeline(const MediaCanonicalLineage& left,
@@ -57,7 +52,8 @@ createMediaCanonicalOutputLineage(
     MediaDecodeOrderMode decodeOrder,
     MediaOutputAccessUnitIdentity identity,
     MediaTimeMappingConfidence mappingConfidence,
-    std::uint64_t generation);
+    std::uint64_t generation,
+    std::vector<MediaCanonicalVideoContribution> videoContributions);
 
 ::media::Status validateMediaCanonicalLineage(
     const MediaCanonicalLineage& lineage) noexcept;

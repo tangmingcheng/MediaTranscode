@@ -159,6 +159,21 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
+    const auto mode = nodeOption(context, "codec_resolver.mode");
+    if (!mode.empty() && mode != "source_decode" && mode != "output_branch") {
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Unknown codec resolver assembly mode")));
+    }
+
+    if (mode == "output_branch") {
+        auto encoder = buildEncoderContext(context);
+        if (!encoder) return processProgress(::media::Status::failure(encoder.error()));
+        auto status = emitCodecContext(context, "encoder", std::move(encoder).value());
+        if (!status) return processProgress(status);
+        m_emitted = true;
+        return processFinished();
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
@@ -184,7 +199,14 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(decoder.error());
     }
 
-    auto encoder = buildEncoderContext(context, *stream.value());
+    if (mode == "source_decode") {
+        auto status = emitCodecContext(context, "decoder", std::move(decoder).value());
+        if (!status) return processProgress(status);
+        m_emitted = true;
+        return processFinished();
+    }
+
+    auto encoder = buildEncoderContext(context);
     if (!encoder) {
         return ::media::Result<MediaNodeProcessResult>::failure(encoder.error());
     }
@@ -253,10 +275,8 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
 }
 
 ::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildEncoderContext(
-    MediaGraphExecutionContext& context,
-    const FFmpegInputStreamSnapshot& stream) const
+    MediaGraphExecutionContext& context) const
 {
-    static_cast<void>(stream);
     const MediaNodeOptions* options = nodeOptions(context);
     const AVCodec* encoder = findEncoder(options);
     if (!encoder) {

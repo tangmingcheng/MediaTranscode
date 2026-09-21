@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/MediaCanonicalAudioSampleInterval.h"
+#include "internal/graph/sync/MediaCanonicalAudioContribution.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
 #include "media_transcode/Result.h"
 
@@ -16,6 +16,13 @@ class MediaAudioLineageCapacity;
 struct MediaAudioIntervalFragment final {
     std::shared_ptr<const MediaCanonicalLineage> lineage;
     MediaCanonicalAudioSampleInterval interval;
+    MediaCanonicalAudioContribution contribution;
+
+    static ::media::Result<MediaAudioIntervalFragment> fromSource(
+        std::shared_ptr<const MediaCanonicalLineage> lineage,
+        MediaCanonicalAudioSampleInterval interval);
+    bool valid() const noexcept;
+
 };
 
 class MediaAudioIntervalAccumulator final {

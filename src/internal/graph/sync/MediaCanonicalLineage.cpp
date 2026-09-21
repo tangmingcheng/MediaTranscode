@@ -54,6 +54,28 @@ bool sameMediaCanonicalTimeline(const MediaCanonicalLineage& left,
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Reordered canonical lineage requires decode time"));
     }
+    const auto* output = std::get_if<MediaOutputAccessUnitIdentity>(&lineage.identity);
+    const bool composedVideo = output && output->stream == MediaScheduledStream::Video;
+    if (composedVideo == lineage.videoContributions.empty()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Output video lineage requires explicit tile contributions only"));
+    }
+    for (std::size_t slot = 0; slot < lineage.videoContributions.size(); ++slot) {
+        const auto& contribution = lineage.videoContributions[slot];
+        const auto& rectangle = contribution.rectangle;
+        if (contribution.slot != slot || rectangle.x < 0 || rectangle.y < 0 ||
+            rectangle.width <= 0 || rectangle.height <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Video contribution has invalid slot or geometry"));
+        }
+        if (const auto* source = std::get_if<MediaCanonicalSourceStamp>(&contribution.origin);
+            source && (source->identity.sourceIdentity.empty() ||
+                source->identity.sourceSequence.value() == 0 || source->generation == 0 ||
+                source->duration.nanoseconds() < 0)) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Video contribution requires a valid nonrecursive source stamp"));
+        }
+    }
     return ::media::Status::success();
 }
 
@@ -104,11 +126,13 @@ createMediaCanonicalOutputLineage(
     MediaDecodeOrderMode decodeOrder,
     MediaOutputAccessUnitIdentity identity,
     MediaTimeMappingConfidence mappingConfidence,
-    std::uint64_t generation)
+    std::uint64_t generation,
+    std::vector<MediaCanonicalVideoContribution> videoContributions)
 {
     auto lineage = std::make_shared<const MediaCanonicalLineage>(
         MediaCanonicalLineage{presentation, decode, duration, decodeOrder,
-                              std::move(identity), mappingConfidence, generation});
+                              std::move(identity), mappingConfidence, generation,
+                              std::move(videoContributions)});
     if (auto valid = validateMediaCanonicalLineage(*lineage); !valid) {
         return ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>::failure(
             valid.error());

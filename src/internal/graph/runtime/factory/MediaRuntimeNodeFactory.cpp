@@ -53,6 +53,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaAvContinuousAggregateNode.h"
 #include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
@@ -956,6 +957,33 @@ MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
             std::move(syncGroup)));
 }
 
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createContinuousAggregateNode(
+    const MediaNode& node, MediaAvAggregateRuntimeDependencies dependencies)
+{
+    if (node.kind != MediaNodeKind::AvContinuousAggregate || !dependencies.aggregatePlan) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument("Continuous aggregate requires its planned node and dependencies"));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaAvContinuousAggregateNode>(node.id, std::move(dependencies)));
+}
+
+::media::Result<MediaRuntimeGenerationPurgeRegistration>
+MediaRuntimeNodeFactory::generationPurgeRegistrationForSource(
+    MediaRuntimeNode& runtime, const MediaAvSyncGroupKey& groupKey)
+{
+    auto* aggregate = dynamic_cast<MediaAvContinuousAggregateNode*>(&runtime);
+    auto target = aggregate ? aggregate->sourcePurgeTarget(groupKey) : nullptr;
+    if (!target) {
+        return ::media::Result<MediaRuntimeGenerationPurgeRegistration>::failure(
+            ::media::ErrorInfo::invalidArgument("Aggregate purge requires a planned source domain"));
+    }
+    return ::media::Result<MediaRuntimeGenerationPurgeRegistration>::success({
+        MediaAvGenerationParticipant::CanonicalLineage,
+        {"aggregate_source", std::move(target)}});
+}
+
 std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
@@ -1118,6 +1146,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
+    case MediaNodeKind::AvContinuousAggregate:
     case MediaNodeKind::VideoOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::CanonicalInput:

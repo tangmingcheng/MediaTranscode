@@ -99,6 +99,18 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return MediaNodeKind::CodecResolver;
 }
 
+::media::Status CodecResolverNode::bindPreparedHardwareDevice(AVBufferRef* device)
+{
+    if (m_emitted || m_preparedDecoder || m_preparedHardwareDevice || !device || !device->data)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Source decoder requires one prepared hardware device before runtime start"));
+    auto retained = ::media::ffmpeg::BufferRefPtr(av_buffer_ref(device));
+    if (!retained) return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        "Could not retain the prepared source hardware device"));
+    m_preparedHardwareDevice = std::move(retained);
+    return ::media::Status::success();
+}
+
 ::media::Status CodecResolverNode::bindPreparedEncoder(MediaBufferRef encoder)
 {
     auto* codec = dynamic_cast<FFmpegCodecContextBuffer*>(encoder.get());
@@ -160,7 +172,13 @@ MediaBufferRef CodecResolverNode::timestampSource() const
         return processFinished();
     }
 
-    if (nodeOption(context, "codec_resolver.mode") == "output_branch") {
+    const auto mode = nodeOption(context, "codec_resolver.mode");
+    if (!mode.empty() && mode != "source_decode" && mode != "output_branch") {
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Unknown codec resolver assembly mode")));
+    }
+
+    if (mode == "output_branch") {
         if (!m_preparedEncoder) {
             return processProgress(::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -204,6 +222,18 @@ MediaBufferRef CodecResolverNode::timestampSource() const
     auto decoderStatus = prepareDecoder(context, *stream);
     if (!decoderStatus) {
         return processProgress(decoderStatus);
+    }
+
+    if (mode == "source_decode") {
+        if (auto timestamp = timestampSource()) {
+            auto status = emitOutput(context, "timestamp_source", std::move(timestamp));
+            if (!status) return processProgress(status);
+        }
+        auto status = emitOutput(context, "decoder", m_preparedDecoder);
+        if (!status) return processProgress(status);
+        m_preparedDecoder.reset();
+        m_emitted = true;
+        return processFinished();
     }
 
     auto encoderStatus = prepareEncoder(context, *stream);
@@ -326,12 +356,26 @@ MediaBufferRef CodecResolverNode::timestampSource() const
                     ::media::ErrorInfo::invalidArgument("CodecResolverNode planned hardware decoder requires valid pipeline.hwaccel"));
             }
 
-            AVBufferRef* rawDevice = nullptr;
-            const int deviceRet = av_hwdevice_ctx_create(&rawDevice, plannedDeviceType, nullptr, nullptr, 0);
-            if (deviceRet < 0) {
-                return FFmpegGraphError::statusFromCode(deviceRet, "av_hwdevice_ctx_create(" + hwaccelName + ")");
+            if (m_preparedHardwareDevice) {
+                const auto* device = reinterpret_cast<const AVHWDeviceContext*>(m_preparedHardwareDevice->data);
+                if (device->type != plannedDeviceType)
+                    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                        "Prepared decoder device differs from the selected hardware contract"));
+                m_decoderHardwareDevice.reset(av_buffer_ref(m_preparedHardwareDevice.get()));
+                if (!m_decoderHardwareDevice)
+                    return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+                        "Could not retain the shared decoder hardware device"));
+            } else {
+                if (optionValue(options, "codec_resolver.mode") == "source_decode")
+                    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                        "Composition source decoder requires its prepared shared device"));
+                AVBufferRef* rawDevice = nullptr;
+                const int deviceRet = av_hwdevice_ctx_create(&rawDevice, plannedDeviceType, nullptr, nullptr, 0);
+                if (deviceRet < 0) {
+                    return FFmpegGraphError::statusFromCode(deviceRet, "av_hwdevice_ctx_create(" + hwaccelName + ")");
+                }
+                m_decoderHardwareDevice = ::media::ffmpeg::BufferRefPtr(rawDevice);
             }
-            m_decoderHardwareDevice = ::media::ffmpeg::BufferRefPtr(rawDevice);
             decoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
             if (!decoderContext->hw_device_ctx) {
                 return ::media::Status::failure(

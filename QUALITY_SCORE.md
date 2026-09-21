@@ -1,4 +1,8 @@
 # MediaTranscode Quality Score
+## 2026-09-21 合屏域与聚合接线独立审查 B
+
+独立审查B对`2ff6bab0`之后当前合屏WIP给出**源码安全保留PASS、完整合屏FAIL**：交叉复核确认的RGA隐式plane布局P2已修复，完整布局及RGB24/BGR24字节序冻结复审通过。域注册、连续贡献、黑帧/静音及CUDA/RGA源码已对照FFmpeg/GStreamer；preflight、全局资源准入、CLI/C API和多源Windows→RKMPP验收仍未闭环。r22属于单源回归，不能替代合屏证明。沿用六维10/8/6/12/2/4，合计**42/100**，不提高分数；B结论不代替A或最终PR审查。
+
 ## 2026-09-21 编码提交事务复审
 
 两名独立审查者 composition_transaction_review_a/b 均 Standards/局部事务 Spec PASS，未发现新增阻塞；合屏就绪度维持42/100（10/8/6/12/2/4）。Release全量构建成功；r21首段120秒有VLC画面，重入AAC timeline失败，CLI自然exit1、逻辑资源归零。完整合屏FAIL。提交事务前置不能替代独立输出生命周期、mapper驻留硬界、黑帧/静音及多源验收。[命令与结果](docs/realtime-video-composition-transaction.md)。

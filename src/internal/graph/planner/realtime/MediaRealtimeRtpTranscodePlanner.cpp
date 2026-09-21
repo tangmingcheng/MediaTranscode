@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 #include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
@@ -328,6 +330,21 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     input.width = signaling.value().codedSize.width;
     input.height = signaling.value().codedSize.height;
     input.frameRate = detectedFrameRate;
+    auto sourceRequest = request.input.videoRtp;
+    sourceRequest.fmtp = signaling.value().fmtp;
+    auto descriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Video, sourceRequest);
+    if (!descriptor) return ::media::Result<MediaPipelinePlan>::failure(descriptor.error());
+    auto config = MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
+        MediaStreamKind::Video, sourceRequest, descriptor.value());
+    if (!config) return ::media::Result<MediaPipelinePlan>::failure(config.error());
+    auto snapshot = MediaRawRtpStreamDescriptorFactory::create(config.value());
+    if (!snapshot) return ::media::Result<MediaPipelinePlan>::failure(snapshot.error());
+    const auto* stream = snapshot.value()->inputStreamSnapshot(0);
+    if (!stream) return ::media::Result<MediaPipelinePlan>::failure(
+        ::media::ErrorInfo::notInitialized("raw RTP video descriptor has no stream snapshot"));
+    auto parameters = stream->cloneCodecParameters();
+    if (!parameters) return ::media::Result<MediaPipelinePlan>::failure(parameters.error());
+    input.sourceColorRange = parameters.value()->color_range;
     return MediaPipelinePlanner::planVideoTranscodeKnownInput(
         std::move(input), request.input.videoRtp.url,
         std::move(pipelineOptions).value());

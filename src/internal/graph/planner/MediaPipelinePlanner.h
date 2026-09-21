@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaVideoColorRangeFact.h"
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
 #include "internal/graph/model/MediaVideoSharedSourcePlan.h"
 
@@ -46,6 +47,7 @@ struct MediaPipelineStagePlan {
     int priority = 0;
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
+    std::optional<MediaVideoColorRangeFact> effectiveColorRange;
     std::optional<MediaEncoderRateControlPlan> encoderRateControl;
     std::optional<MediaEncoderOpenContract> encoderOpenContract;
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
@@ -115,6 +117,7 @@ struct MediaPipelinePlannerOptions {
     int probeWidth = 0;
     int probeHeight = 0;
     MediaRational sourceFrameRate;
+    std::optional<AVColorRange> sourceColorRange;
     MediaRational targetFrameRate;
     MediaEncoderRateControlRequest encoderRateControl;
     MediaVideoTranscodeParameters encoderOpenRequest;
@@ -136,6 +139,7 @@ struct MediaInputVideoStreamInfo {
     int width = 0;
     int height = 0;
     int64_t bitrateBitsPerSecond = 0;
+    std::optional<AVColorRange> sourceColorRange;
     MediaRational frameRate;
     MediaRational sampleAspectRatio;
 };

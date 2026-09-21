@@ -59,3 +59,13 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 编码器接受帧后无法撤销，贡献元数据须在 send 前完成验证和分配，成功后仅执行不分配的提交；EAGAIN 保留待发送帧并先接收，再重新准备候选。沿用现有 owner/lineage lock，不改变包时间轴与恢复语义。随后使用 Release 和原规格真实链路检查回归，双独立审查后交付。
 
 已核实版本的 AAC 驻留推导及 CUDA 黑帧路径分别记录在[编码驻留调查](realtime-video-composition-encoder-retention.md)和[能力调查](realtime-video-composition-capability.md)。未知编码器支持范围不得因版本白名单而隐式收缩；黑帧尚需权威 SPS/VUI 范围、生产帧池预算与 aggregate 消费闭环。以上不替代阶段一/二原验收门禁。
+
+## 2026-09-21：下一实施边界
+
+持续聚合、域绑定与复用段的组合图已落代码，尚无组合入口；r22单源原规格结束后仍无进展超时，记录见[聚合接线](realtime-video-composition-aggregate.md)。下一步按以下依赖补全，不复制多个整链单源输出计划充当合屏：
+
+1. 从现有preflight抽出逐源事实准备，验证真实SAR；将固定grid cell与等比内容矩形区分，常黑画布只拷贝内容矩形。
+2. 抽取源处理/时钟和唯一输出规划，共用实际prepared编码器、设备与帧池；黑场、tile copy及分配证据前移到DAG构建前。
+3. 现有资源compiler按明确owner选择事实，统一核算源输入/decoder/filter、聚合候选/贡献/canvas及唯一输出/协议；不能直接相加多个单源总账。
+4. 由内部生命周期产品区分旧单源失败语义与持续合屏缺流。RTP失锁是有序失效事件；恢复尝试到期回到等待新证据，首次准入及purge ack超时仍失败。现transition不支持“未发布恢复代再次失锁”，须通过真实源purge屏障处理该代，不能假激活或吞错。
+5. 接通已批准的inputs/grid/audioSource公共配置与共用controller，补纯视频非音源、逐源缺口观测及Windows→RKMPP完整验收。迟到输出须有planner有界策略，单pending不等于历史追赶工作有界。

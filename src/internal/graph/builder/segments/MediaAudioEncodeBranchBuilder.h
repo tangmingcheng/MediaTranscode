@@ -45,6 +45,12 @@ public:
         MediaGraph& graph,
         const MediaAudioEncodeBranchOptions& options);
 
+    static ::media::Result<MediaSourceBranchEndpoints> buildSource(
+        MediaGraph& graph, const MediaAudioEncodeBranchOptions& options,
+        MediaEndpoint outputEncoderCodec);
+    static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
+        MediaGraph& graph, const MediaAudioEncodeBranchOptions& options);
+
 private:
     MediaAudioEncodeBranchBuilder() = default;
 };

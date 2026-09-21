@@ -95,7 +95,7 @@ bool exactAudioVideoCodecEdges(
 ::media::Status validateScheduledRtpSender(
     const MediaGraph& graph,
     const MediaNode& sender,
-    const MediaAvSyncRuntimeBinding& binding,
+    const MediaAvDomainValidationView& binding,
     const MediaScheduledRtpOutputPlan& product,
     const MediaSeparateRtpSdpRuntimePlan& sdp,
     const MediaNode& publisher,
@@ -177,7 +177,7 @@ bool exactAudioVideoCodecEdges(
 ::media::Status validateScheduledRtpOutput(
     const MediaGraph& graph,
     const MediaAvSyncGraphShape& shape,
-    const MediaAvSyncRuntimeBinding& binding,
+    const MediaAvDomainValidationView& binding,
     const MediaSeparateRtpOutputRuntimePlan& product)
 {
     const MediaNode& publisher =
@@ -304,7 +304,7 @@ bool exactAudioVideoCodecEdges(
 ::media::Status validateAudioVideoProjectNodes(
     const MediaGraph& graph,
     const MediaAvSyncGraphShape& shape,
-    const MediaAvSyncRuntimeBinding& binding,
+    const MediaAvDomainValidationView& binding,
     bool requireByteSink)
 {
     const MediaNode& source =
@@ -412,7 +412,7 @@ bool exactAudioVideoCodecEdges(
 }
 
 ::media::Status validatePlannerProduct(
-    const MediaAvSyncRuntimeBinding& binding,
+    const MediaAvDomainValidationView& binding,
     const MediaProjectMpegTsRuntimeOutputPlan& product)
 {
     const auto* program = product.protocol.muxPlan().audioVideoProgram();
@@ -439,9 +439,9 @@ bool exactAudioVideoCodecEdges(
 
 ::media::Status MediaOutputAuthorityShapeValidator::validate(
     const MediaGraph& graph,
-    const MediaAvSyncRuntimeBinding& binding)
+    const MediaAvDomainValidationView& binding)
 {
-    const MediaAvSyncGraphShape shape(graph);
+    const MediaAvSyncGraphShape shape(graph, binding.members);
     if (std::holds_alternative<MediaAvSyncComponentCoreRuntimeProduct>(
             binding.outputProduct)) {
         return shape.requireExact({

@@ -17,7 +17,7 @@ namespace media::ffmpeg::graph {
     }
     std::int64_t expected = fragments.front().interval.begin;
     for (const auto& fragment : fragments) {
-        if (!fragment.lineage || !validateMediaCanonicalLineage(*fragment.lineage) ||
+        if (!fragment.valid() ||
             !sameMediaCanonicalTimeline(*fragments.front().lineage, *fragment.lineage) ||
             fragment.lineage->generation != origin.generation ||
             fragment.interval.sampleRate != origin.outputSampleRate ||

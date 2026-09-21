@@ -191,7 +191,7 @@ MediaAvReacquisitionCoordinator::create(
     std::vector<MediaAvGenerationParticipantGroup> participants,
     std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups)
 {
-    if (!groupKey.valid() || !transition || !clock || participants.empty() || domainWakeups.empty() ||
+    if (!groupKey.valid() || !transition || !transition->transitionPlan() || !clock || participants.empty() || domainWakeups.empty() ||
         std::any_of(domainWakeups.begin(), domainWakeups.end(),
                     [](const auto& wakeup) { return !wakeup; })) {
         return ::media::Result<
@@ -432,7 +432,7 @@ MediaAvReacquisitionCoordinator::progressPurge()
         return Result::failure(failTerminalLocked(::media::ErrorInfo::internalError(
             "A/V purge progress lost its in-flight transaction")).error());
     auto now = m_clock->now();
-    auto deadline = beganAt.checkedAdd(m_transitionService->transitionPlan().acknowledgementTimeout);
+    auto deadline = beganAt.checkedAdd(m_transitionService->transitionPlan()->acknowledgementTimeout);
     if (!now || !deadline) return Result::failure(
         failTerminalLocked(!now ? now.error() : deadline.error()).error());
     auto elapsed = now.value().checkedSubtract(beganAt);

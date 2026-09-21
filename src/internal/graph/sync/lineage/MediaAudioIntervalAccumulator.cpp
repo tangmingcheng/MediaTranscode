@@ -8,6 +8,43 @@
 
 namespace media::ffmpeg::graph {
 
+::media::Result<MediaAudioIntervalFragment> MediaAudioIntervalFragment::fromSource(
+    std::shared_ptr<const MediaCanonicalLineage> lineage,
+    MediaCanonicalAudioSampleInterval interval)
+{
+    if (!lineage || !validateMediaCanonicalLineage(*lineage) || !interval.sampleCount()) {
+        return ::media::Result<MediaAudioIntervalFragment>::failure(
+            ::media::ErrorInfo::invalidArgument("Source audio requires valid lineage and interval"));
+    }
+    const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&lineage->identity);
+    if (!source) {
+        return ::media::Result<MediaAudioIntervalFragment>::failure(
+            ::media::ErrorInfo::invalidArgument("Output audio requires explicit contributions"));
+    }
+    MediaCanonicalAudioContribution contribution{
+        MediaCanonicalAudioRealSource{
+            {*source, lineage->generation, lineage->mappingConfidence,
+             lineage->presentation, lineage->duration}, interval, interval}, interval};
+    return ::media::Result<MediaAudioIntervalFragment>::success(
+        {std::move(lineage), interval, std::move(contribution)});
+}
+
+bool MediaAudioIntervalFragment::valid() const noexcept
+{
+    if (!lineage || !validateMediaCanonicalLineage(*lineage) ||
+        !interval.sampleCount() || !validMediaCanonicalAudioContribution(contribution) ||
+        contribution.interval.begin != interval.begin ||
+        contribution.interval.end != interval.end ||
+        contribution.interval.sampleRate != interval.sampleRate) return false;
+    if (const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&lineage->identity)) {
+        const auto* real = std::get_if<MediaCanonicalAudioRealSource>(&contribution.origin);
+        return real && real->source.identity == *source &&
+            real->source.generation == lineage->generation;
+    }
+    return std::get<MediaOutputAccessUnitIdentity>(lineage->identity).stream ==
+        MediaScheduledStream::Audio;
+}
+
 void MediaAudioIntervalAccumulator::swap(MediaAudioIntervalAccumulator& other) noexcept
 {
     using std::swap;
@@ -35,8 +72,7 @@ void MediaAudioIntervalAccumulator::swap(MediaAudioIntervalAccumulator& other) n
             "Audio interval accumulator is terminal"));
     }
     const auto fragmentSamples = fragment.interval.sampleCount();
-    if (!fragment.lineage || !fragmentSamples ||
-        !validateMediaCanonicalLineage(*fragment.lineage)) {
+    if (!fragment.valid()) {
         return fail("Audio interval accumulator requires a valid lineage interval");
     }
     if (!m_initialized) {
@@ -87,11 +123,12 @@ MediaAudioIntervalAccumulator::take(int samples)
         auto& front = m_fragments.front();
         const std::int64_t available = front.interval.end - front.interval.begin;
         const std::int64_t consumed = std::min(available, remaining);
-        result.push_back(MediaAudioIntervalFragment{
-            front.lineage,
-            {front.interval.begin, front.interval.begin + consumed,
-             front.interval.sampleRate}});
+        auto taken = front;
+        taken.interval.end = taken.interval.begin + consumed;
+        taken.contribution.interval = taken.interval;
+        result.push_back(std::move(taken));
         front.interval.begin += consumed;
+        front.contribution.interval = front.interval;
         remaining -= consumed;
         m_queuedSamples -= consumed;
         if (front.interval.begin == front.interval.end) m_fragments.pop_front();

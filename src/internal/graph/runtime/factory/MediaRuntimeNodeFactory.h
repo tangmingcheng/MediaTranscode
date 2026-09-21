@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaNode.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeBinding.h"
+#include "internal/graph/runtime/factory/MediaAvAggregateRuntimeDependencies.h"
 #include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
@@ -44,6 +45,10 @@ public:
             protocolOutputAuthority,
         const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createContinuousAggregateNode(
+        const MediaNode& node,
+        MediaAvAggregateRuntimeDependencies dependencies);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createActivatedStartupReleaseSequencer(
         const MediaNode& node,
         MediaPlaybackEpochActivationCapability capability,
@@ -65,6 +70,9 @@ public:
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
     static std::optional<MediaRuntimeGenerationPurgeRegistration>
     generationPurgeRegistration(MediaRuntimeNode& node);
+    static ::media::Result<MediaRuntimeGenerationPurgeRegistration>
+    generationPurgeRegistrationForSource(
+        MediaRuntimeNode& node, const MediaAvSyncGroupKey& groupKey);
     static bool supported(MediaNodeKind kind) noexcept;
 };
 

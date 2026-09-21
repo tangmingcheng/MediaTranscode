@@ -285,6 +285,8 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         options.sourceFrameRate = inputInfo.frameRate;
     }
 
+    options.sourceColorRange = inputInfo.sourceColorRange;
+
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets =
         options.allowPacketCopy &&

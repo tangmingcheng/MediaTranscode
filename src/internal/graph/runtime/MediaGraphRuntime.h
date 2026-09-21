@@ -119,7 +119,7 @@ private:
     MediaRuntimeAcceptanceCollector m_acceptanceCollector;
     mutable std::atomic_size_t m_queueHighWatermark{ 0 };
     std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
-    std::optional<MediaAvRuntimeDomainState> m_avDomain;
+    std::vector<MediaAvRuntimeDomainState> m_avDomains;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority>
         m_protocolOutputAuthority;
     std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;

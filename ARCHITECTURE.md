@@ -525,7 +525,7 @@ Synchronized `AudioVideo` retains the canonical startup coordinator, generation 
 
 漂移控制候选只保存数据；每次提交按epoch→state→channel获取短授权，复核原origin后原子发布音频及校正，成功才推进servo。背压释放全部锁，恢复请求在锁外执行，owner退出清候选，避免全局代次锁随待发媒体跨worker等待。
 
-现有单源 A/V 的各 segment 显式返回源处理与输出处理节点归属，builder 将其装配到 MediaAvRuntimeRegistrationPlan；不再在末尾把全图扫描成一个隐式成员集合。MediaAvRuntimeRegistrationValidator 在编译前检查互斥、完整覆盖、角色与连接；registrar 按明确角色注入准备状态，并暂时仍对两侧成员执行原整体 transition。MediaAvRuntimeDomainState 仍持有单个 activation、恢复依赖与准备状态。processing 归属不是独立 generation：codec resolver 当前仍共同准备 decoder/encoder，输出连续时间与源贡献聚合边界尚未接入，不能视为已完成域隔离或合屏。
+各 segment 显式返回源处理与输出处理归属，binding 持有完整域列表与唯一 outputGroupKey，编译前检查成员互斥、完整覆盖和允许的跨域连接。SharedSourceOutput 角色保留既有单源整体 transition；Source 角色仅清本源处理和聚合候选，Output 角色只授予首次激活能力。各域复用同一 master clock，协议时间权威仅属于输出域。codec resolver 与 branch builder 已拆出源处理和输出编码入口，合屏图构建器复用这些入口及既有协议段；composition planner、资源准入和外部控制入口仍未接通，因此不能视为合屏已可用。
 
 Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
 
@@ -535,4 +535,6 @@ RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一
 
 音频编码提交在同一 lineage lock 内先准备贡献候选，再发送帧，成功后通过 noexcept swap 提交；EAGAIN 销毁候选、接收后重新准备。事务不跨调度调用，不改变 packet map/priming 或恢复清理。提交 mapper 的权威驻留与元数据物理预算仍未完成，不能把该原子提交边界视为持续输出生命周期已接通。
 
-Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号改为域中性。音频编码 canonicalizer 使用既有同步组产品标识输出，并在 canonical AU 中保留非递归真实源贡献与精确样本区间。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。独立 output epoch、源局部 purge、持续聚合和贡献全链路资源账尚未接通；源码局部审查通过不能代替合屏验收。见 [实施与验证](docs/realtime-video-composition-output-identity.md)。
+Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号保持域中性。音频贡献区分真实源映射和生成静音，视频贡献逐格记录源身份或生成黑帧；重采样与裁剪保留原始源区间及映射锚点。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。
+
+AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样本轴，按共享时钟 deadline 选择仍有效的源区间，缺口生成黑帧/静音。输出仅保留一项 pending，提交同时取得所涉及源与输出的短代次许可；源 purge 先于背压重试服务。画布通过 CUDA/RGA adapter 完成同步矩形操作，黑模板由明确色彩范围填充并读回验证，帧 lease 释放通知 owner。实际生产帧池的预DAG验证、全局资源和元数据物理上界、迟到工作策略、完整源失锁恢复仍缺失；不能把局部实现或单源画面当成完整合屏验收。见[持续聚合接线记录](docs/realtime-video-composition-aggregate.md)。

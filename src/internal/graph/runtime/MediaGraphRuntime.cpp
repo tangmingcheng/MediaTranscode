@@ -110,7 +110,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     return MediaGraphRuntimeCompiler::compile(
         std::move(executable), m_graph, m_inputBindings,
-        m_avDomain,
+        m_avDomains,
         m_protocolOutputAuthority,
         m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
@@ -126,7 +126,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     auto registered = MediaGraphRuntimeRegistrar::registerDefaults(
         m_context, m_scheduler, m_inputBindings,
-        m_avDomain,
+        m_avDomains,
         m_protocolOutputAuthority);
     if (!registered) {
         if (m_state ==

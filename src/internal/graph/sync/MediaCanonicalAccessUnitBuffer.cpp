@@ -70,11 +70,7 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
     if (outputAudio) {
         auto expectedBegin = audioInterval->begin;
         for (const auto& contribution : audioContributions) {
-            const auto& source = contribution.source;
-            if (source.identity.sourceIdentity.empty() ||
-                source.identity.sourceSequence.value() == 0 || source.generation == 0 ||
-                source.duration.nanoseconds() < 0 ||
-                !contribution.interval.sampleCount() ||
+            if (!validMediaCanonicalAudioContribution(contribution) ||
                 contribution.interval.sampleRate != audioInterval->sampleRate ||
                 contribution.interval.begin != expectedBegin ||
                 contribution.interval.end > audioInterval->end) {

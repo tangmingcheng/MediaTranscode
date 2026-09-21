@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
@@ -406,6 +407,9 @@ openMpegTsRuntimeSession(
     result.streams.video.sampleAspectRatio = video->format.video.sampleAspectRatio;
     result.streams.video.height = video->format.video.size.height;
     result.streams.video.bitrateBitsPerSecond = video->format.codec.bitrate;
+    auto videoParameters = video->cloneCodecParameters();
+    if (!videoParameters) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(videoParameters.error());
+    result.streams.video.sourceColorRange = videoParameters.value()->color_range;
     auto resolvedVideoFrameRate = resolveMpegTsVideoFrameRate(
         video->format.video.frameRate, video->index,
         selectedProgram.value());
@@ -619,6 +623,14 @@ void fillNodePlan(
             videoDepacketizer.error());
     }
     result.videoDepacketizer = std::move(videoDepacketizer).value();
+    auto sourceDescriptor = MediaRawRtpStreamDescriptorFactory::create(result.videoDepacketizer);
+    if (!sourceDescriptor) return ::media::Result<MediaRealtimeRawInputPlan>::failure(sourceDescriptor.error());
+    const auto* sourceStream = sourceDescriptor.value()->inputStreamSnapshot(0);
+    if (!sourceStream) return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+        ::media::ErrorInfo::notInitialized("raw RTP video descriptor has no stream snapshot"));
+    auto sourceParameters = sourceStream->cloneCodecParameters();
+    if (!sourceParameters) return ::media::Result<MediaRealtimeRawInputPlan>::failure(sourceParameters.error());
+    result.video.sourceColorRange = sourceParameters.value()->color_range;
     auto videoAccessUnitEnvelope =
         MediaPreparedRtpAccessUnitEnvelopePlanner::plan(
             result.videoDepacketizer,

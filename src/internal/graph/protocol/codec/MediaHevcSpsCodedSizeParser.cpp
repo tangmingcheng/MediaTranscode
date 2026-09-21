@@ -1,83 +1,13 @@
-#include "internal/graph/protocol/rtp/MediaHevcSpsCodedSizeParser.h"
+#include "internal/graph/protocol/codec/MediaHevcSpsCodedSizeParser.h"
+
+#include "internal/graph/protocol/codec/MediaSpsVuiParser.h"
 
 #include <limits>
-#include <utility>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-class BitReader final {
-public:
-    explicit BitReader(std::vector<std::uint8_t> bytes)
-        : m_bytes(std::move(bytes))
-    {
-    }
-
-    bool bit(std::uint32_t& value) noexcept
-    {
-        if (m_offset >= m_bytes.size() * 8) return false;
-        value = (m_bytes[m_offset / 8] >> (7 - (m_offset % 8))) & 1U;
-        ++m_offset;
-        return true;
-    }
-
-    bool skip(std::size_t count) noexcept
-    {
-        if (count > m_bytes.size() * 8 - m_offset) return false;
-        m_offset += count;
-        return true;
-    }
-
-    bool bits(unsigned count, std::uint32_t& value) noexcept
-    {
-        if (count > 32) return false;
-        value = 0;
-        for (unsigned index = 0; index < count; ++index) {
-            std::uint32_t next = 0;
-            if (!bit(next)) return false;
-            value = (value << 1) | next;
-        }
-        return true;
-    }
-
-    bool ue(std::uint32_t& value) noexcept
-    {
-        unsigned leadingZeros = 0;
-        std::uint32_t next = 0;
-        while (bit(next) && next == 0) {
-            if (++leadingZeros > 31) return false;
-        }
-        if (next == 0) return false;
-        std::uint32_t suffix = 0;
-        if (leadingZeros && !bits(leadingZeros, suffix)) return false;
-        const std::uint64_t decoded = ((std::uint64_t{1} << leadingZeros) - 1) + suffix;
-        if (decoded > std::numeric_limits<std::uint32_t>::max()) return false;
-        value = static_cast<std::uint32_t>(decoded);
-        return true;
-    }
-
-private:
-    std::vector<std::uint8_t> m_bytes;
-    std::size_t m_offset = 0;
-};
-
-std::vector<std::uint8_t> rbsp(std::span<const std::uint8_t> sps)
-{
-    std::vector<std::uint8_t> output;
-    output.reserve(sps.size() - 2);
-    unsigned zeroCount = 0;
-    for (std::size_t index = 2; index < sps.size(); ++index) {
-        const std::uint8_t byte = sps[index];
-        if (zeroCount >= 2 && byte == 3) {
-            zeroCount = 0;
-            continue;
-        }
-        output.push_back(byte);
-        zeroCount = byte == 0 ? zeroCount + 1 : 0;
-    }
-    return output;
-}
+using BitReader = MediaRbspBitReader;
 
 ::media::Result<MediaSize> invalidSps()
 {
@@ -108,17 +38,19 @@ bool skipProfileTierLevel(BitReader& reader,
 } // namespace
 
 ::media::Result<MediaSize> MediaHevcSpsCodedSizeParser::parse(
-    std::span<const std::uint8_t> sps)
+    std::span<const std::uint8_t> sps,
+    std::optional<MediaVideoColorRangeFact>* colorRange)
 {
+    if (colorRange) colorRange->reset();
     if (sps.size() < 5 || ((sps[0] >> 1) & 0x3f) != 33) return invalidSps();
-    BitReader reader(rbsp(sps));
+    BitReader reader(sps.subspan(2));
     std::uint32_t ignored = 0;
     std::uint32_t maximumSubLayersMinusOne = 0;
     if (!reader.bits(4, ignored) ||
-        !reader.bits(3, maximumSubLayersMinusOne) ||
-        !reader.bit(ignored) ||
+        !reader.bits(3, maximumSubLayersMinusOne) || maximumSubLayersMinusOne > 6 ||
+        !reader.bit(ignored) || (maximumSubLayersMinusOne == 0 && ignored == 0) ||
         !skipProfileTierLevel(reader, maximumSubLayersMinusOne) ||
-        !reader.ue(ignored)) return invalidSps();
+        !reader.ue(ignored, 15)) return invalidSps();
 
     std::uint32_t chromaFormat = 0;
     std::uint32_t separateColourPlane = 0;
@@ -139,13 +71,15 @@ bool skipProfileTierLevel(BitReader& reader,
     const std::uint32_t chromaArrayType = separateColourPlane ? 0 : chromaFormat;
     const std::uint64_t subWidth = chromaArrayType == 1 || chromaArrayType == 2 ? 2 : 1;
     const std::uint64_t subHeight = chromaArrayType == 1 ? 2 : 1;
-    const std::uint64_t croppedWidth = subWidth * (left + right);
-    const std::uint64_t croppedHeight = subHeight * (top + bottom);
+    const std::uint64_t croppedWidth = subWidth * (std::uint64_t{left} + right);
+    const std::uint64_t croppedHeight = subHeight * (std::uint64_t{top} + bottom);
     if (croppedWidth >= width || croppedHeight >= height ||
         width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
         height > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         return invalidSps();
     }
+    if (colorRange && (sps[0] & 0x81U) == 0 && (sps[1] & 0xf8U) == 0 && (sps[1] & 7U) == 1)
+        *colorRange = MediaSpsVuiParser::hevc(reader, maximumSubLayersMinusOne);
     return ::media::Result<MediaSize>::success(MediaSize{
         static_cast<int>(width - croppedWidth),
         static_cast<int>(height - croppedHeight)});

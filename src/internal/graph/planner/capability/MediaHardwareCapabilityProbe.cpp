@@ -32,7 +32,7 @@ enum class MediaCapabilityProbeScope { CompletePipeline, OutputBranch };
     MediaPipelineChainPlan& chain, AVCodecContext& context)
 {
     auto layout =
-        MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(context);
+        MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(context, chain.encoder.effectiveColorRange);
     if (!layout) return ::media::Status::failure(layout.error());
     auto randomAccess = MediaEncoderRandomAccessAdapter::readAfterOpen(context);
     if (!randomAccess) return ::media::Status::failure(randomAccess.error());
@@ -69,6 +69,7 @@ enum class MediaCapabilityProbeScope { CompletePipeline, OutputBranch };
     probeContext->pix_fmt = surfaceFormat;
     probeContext->sw_pix_fmt = surfaceFormat;
     probeContext->sample_aspect_ratio = openedHardwareContext.sample_aspect_ratio;
+    probeContext->color_range = openedHardwareContext.color_range;
 
     auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
         *probeContext, openContract);
@@ -317,6 +318,7 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
+    if (options.sourceColorRange) encoderContext->color_range = *options.sourceColorRange;
     if (!chain.encoder.encoderOpenContract) {
         return unavailable("RKMPP encoder open contract is missing");
     }
@@ -375,6 +377,7 @@ MediaHardwareCapability validateSoftwareEncoder(
         ? options.targetFrameRate : options.sourceFrameRate;
     context->pix_fmt = pixelFormat(chain.encoder.inputFrame->pixelFormat);
     context->sample_aspect_ratio = AVRational{1, 1};
+    if (options.sourceColorRange) context->color_range = *options.sourceColorRange;
     if (context->pix_fmt == AV_PIX_FMT_NONE || !cadence.isKnown()) {
         return unavailable("software encoder preflight geometry is incomplete");
     }
@@ -538,6 +541,7 @@ MediaHardwareCapability validateCompleteChain(
     const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
         ? options.targetFrameRate : options.sourceFrameRate;
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
+    if (options.sourceColorRange) encoderContext->color_range = *options.sourceColorRange;
     if (!chain.encoder.encoderRateControl ||
         !chain.encoder.encoderOpenContract) {
         return unavailable("hardware encoder open contract is missing");

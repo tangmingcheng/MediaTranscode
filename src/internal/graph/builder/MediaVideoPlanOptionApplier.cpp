@@ -246,21 +246,23 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
 
     const MediaPipelineChainPlan& chain = plan.selected;
-    if (auto status = setOption(graph, nodes.videoFrameRate,
-            "video.framerate.bound_duplication_gap",
-            boolOption(plan.maximumFrameDuplicationGap.has_value())); !status) return status;
-    if (plan.maximumFrameDuplicationGap) {
-        const auto gap = *plan.maximumFrameDuplicationGap;
-        if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
-            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
-                "Video frame-rate duplication gap contract is invalid"));
+    if (nodes.videoFrameRate.isValid()) {
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.bound_duplication_gap",
+                boolOption(plan.maximumFrameDuplicationGap.has_value())); !status) return status;
+        if (plan.maximumFrameDuplicationGap) {
+            const auto gap = *plan.maximumFrameDuplicationGap;
+            if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
+                return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                    "Video frame-rate duplication gap contract is invalid"));
+            }
+            if (auto status = setOption(graph, nodes.videoFrameRate,
+                    "video.framerate.maximum_duplication_gap_num",
+                    std::to_string(gap.num)); !status) return status;
+            if (auto status = setOption(graph, nodes.videoFrameRate,
+                    "video.framerate.maximum_duplication_gap_den",
+                    std::to_string(gap.den)); !status) return status;
         }
-        if (auto status = setOption(graph, nodes.videoFrameRate,
-                "video.framerate.maximum_duplication_gap_num",
-                std::to_string(gap.num)); !status) return status;
-        if (auto status = setOption(graph, nodes.videoFrameRate,
-                "video.framerate.maximum_duplication_gap_den",
-                std::to_string(gap.den)); !status) return status;
     }
     std::vector<MediaNodeId> plannedNodes {
         nodes.codecResolver,
@@ -301,7 +303,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             graph, nodes.codecResolver, chain.encoder); !status) return status;
     if (auto status = setEncoderOpenContractOptions(
             graph, nodes.codecResolver, chain.encoder); !status) return status;
-    if (auto status = setEncoderRateControlOptions(
+    if (nodes.videoEncode.isValid()) if (auto status = setEncoderRateControlOptions(
             graph, nodes.videoEncode, chain.encoder); !status) return status;
     if (!chain.decoder.outputFrame) {
         return ::media::Result<void>::failure(
@@ -333,7 +335,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             ::media::ErrorInfo::invalidArgument(
                 "MediaVideoPlanOptionApplier requires planner-selected transfer direction"));
     }
-    if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(chain.transferDirection)); !status) return status;
+    if (nodes.hardwareTransfer.isValid()) if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(chain.transferDirection)); !status) return status;
     if (nodes.videoFilter.isValid()) {
         if (chain.filterImplementation == MediaVideoFilterImplementation::Unknown ||
             chain.filterImplementation == MediaVideoFilterImplementation::None) {
@@ -355,6 +357,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (nodes.videoTimestamp.isValid()) {
         if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
     }
+    if (!nodes.videoEncode.isValid()) return ::media::Result<void>::success();
     if (chain.encoderAbortPolicy == MediaVideoEncoderAbortPolicy::Unknown) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(

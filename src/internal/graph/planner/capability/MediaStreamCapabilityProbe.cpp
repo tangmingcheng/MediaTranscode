@@ -54,6 +54,7 @@ MediaRational frameRate(const AVStream& stream) noexcept
     info.width = parameters->width;
     info.height = parameters->height;
     info.bitrateBitsPerSecond = parameters->bit_rate;
+    info.sourceColorRange = parameters->color_range;
     info.frameRate = frameRate(*stream);
     return ::media::Result<MediaInputVideoStreamInfo>::success(std::move(info));
 }

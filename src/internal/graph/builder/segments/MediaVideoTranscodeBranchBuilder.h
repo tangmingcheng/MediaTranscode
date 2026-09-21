@@ -44,6 +44,12 @@ public:
         MediaGraph& graph,
         const MediaVideoTranscodeBranchOptions& options);
 
+    static ::media::Result<MediaSourceBranchEndpoints> buildSource(
+        MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options,
+        MediaEndpoint outputEncoderCodec);
+    static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
+        MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options);
+
 private:
     MediaVideoTranscodeBranchBuilder() = default;
 };

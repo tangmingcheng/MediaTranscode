@@ -1,5 +1,11 @@
 # 固定实时视频合屏实施记录
 
+## 2026-09-21：源/输出域、贡献与持续聚合接线
+
+已实现域列表和唯一输出权限、音视频贡献、持续聚合节点、画布adapter以及复用既有segments的组合图构建器。画布释放补上owner唤醒；独立审查发现的RGA逐平面布局折叠已修复，双方冻结复审均给出WIP源码安全保留PASS、完整合屏FAIL。composition preflight、资源总账、完整源缺流恢复、公共入口与纯视频源仍缺失，不能启动或宣称完成多源合屏。
+
+Release全量构建修正两类编译错误后成功。r22原规格RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720/30fps、AAC CBR192kbps：源完整120秒、3600帧exit0，VLC首段有画面；源停止后CLI无进展超时自然exit1，最终仍保留4个逻辑对象，完整验收FAIL。118条漂移记录全0不代表恢复。命令、CPU/内存、失败和逐项清理见[聚合接线记录](realtime-video-composition-aggregate.md)。不创建成功验收提交，评分保持42/100。
+
 ## 2026-09-21：编码提交事务
 
 已把编码贡献验证/分配移至 send 前，成功后 noexcept 提交，EAGAIN 丢弃候选并保留待发送输入。两名独立审查者 Standards/局部事务 Spec PASS；Release 全量构建成功。r21 原规格首源120秒/3600帧、VLC画面正常，重入仍报 AAC timeline 错误，CLI自然退出1、逻辑资源归零；完整恢复 FAIL，42/100不变。命令、指标、清理及遗留风险见[本轮记录](realtime-video-composition-transaction.md)。AAC驻留与黑帧的权威事实调查已记录，未引入收缩编码器支持范围的版本白名单，未改外部依赖。

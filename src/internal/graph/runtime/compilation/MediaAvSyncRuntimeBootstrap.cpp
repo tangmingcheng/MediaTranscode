@@ -13,27 +13,29 @@ MediaAvSyncRuntimeBootstrap::createClocks(
     const MediaAvSyncRuntimeBinding& binding,
     MediaAvSyncClockSource& source)
 {
-    if (!binding.groupKey.valid()) {
+    if (binding.domains.empty() || !binding.outputGroupKey.valid()) {
         return ::media::Result<MediaAvSyncClockBundle>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V sync runtime binding requires a valid group key"));
+                "A/V sync runtime requires domains and an explicit output group"));
     }
-    if (auto status = MediaAvSyncPlanValidator::validateRuntime(binding.plan);
-        !status) {
-        return ::media::Result<MediaAvSyncClockBundle>::failure(
-            status.error());
+    bool requireSharedNtpEpoch = false;
+    for (const auto& domain : binding.domains) {
+        if (!domain.groupKey.valid()) {
+            return ::media::Result<MediaAvSyncClockBundle>::failure(
+                ::media::ErrorInfo::invalidArgument("A/V runtime domain requires a valid group"));
+        }
+        if (auto status = MediaAvSyncPlanValidator::validateRuntime(domain.plan); !status) {
+            return ::media::Result<MediaAvSyncClockBundle>::failure(status.error());
+        }
+        auto requirement = MediaAvSyncSharedNtpEpochRequirement::resolve(domain.plan);
+        if (!requirement) return ::media::Result<MediaAvSyncClockBundle>::failure(requirement.error());
+        requireSharedNtpEpoch = requireSharedNtpEpoch || requirement.value();
     }
-    auto requirement =
-        MediaAvSyncSharedNtpEpochRequirement::resolve(binding.plan);
-    if (!requirement) {
-        return ::media::Result<MediaAvSyncClockBundle>::failure(
-            requirement.error());
-    }
-    auto clocks = source.capture(requirement.value());
+    auto clocks = source.capture(requireSharedNtpEpoch);
     if (!clocks) return clocks;
     if (!clocks.value().masterClock ||
         static_cast<bool>(clocks.value().sharedNtpEpoch) !=
-            requirement.value()) {
+            requireSharedNtpEpoch) {
         return ::media::Result<MediaAvSyncClockBundle>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync clock source violated the planned clock bundle"));
@@ -41,27 +43,35 @@ MediaAvSyncRuntimeBootstrap::createClocks(
     return clocks;
 }
 
-::media::Result<MediaPlaybackEpochActivationCapability>
+::media::Result<MediaAvSyncRuntimeBootstrap::Activation>
 MediaAvSyncRuntimeBootstrap::registerGroupAndIssueActivationCapability(
-    const MediaAvSyncRuntimeBinding& binding,
+    const MediaAvRuntimeDomainBinding& binding,
     MediaAvSyncClockBundle clocks,
     MediaGraphExecutionContext& context)
 {
-    auto transition = MediaAvEpochTransitionService::create(binding.transition);
-    if (!transition) {
-        return ::media::Result<MediaPlaybackEpochActivationCapability>::failure(
-            transition.error());
+    using Result = ::media::Result<Activation>;
+    std::shared_ptr<MediaAvEpochTransitionService> service;
+    const auto* shared = std::get_if<MediaAvSharedSourceOutputDomainBinding>(&binding.role);
+    const auto* source = std::get_if<MediaAvSourceDomainBinding>(&binding.role);
+    if (shared || source) {
+        auto transition = MediaAvEpochTransitionService::create(
+            shared ? shared->transition : source->transition);
+        if (!transition) return Result::failure(transition.error());
+        service = std::move(transition).value();
+    } else {
+        service = MediaAvEpochTransitionService::createInitialOnly();
     }
-    auto service = std::move(transition).value();
+    auto requirement = MediaAvSyncSharedNtpEpochRequirement::resolve(binding.plan);
+    if (!requirement) return Result::failure(requirement.error());
+    if (!requirement.value()) clocks.sharedNtpEpoch.reset();
     auto registered = context.registerAvSyncGroup(
         binding.groupKey, binding.plan, std::move(clocks.masterClock),
         std::move(clocks.sharedNtpEpoch), service);
-    if (!registered) {
-        return ::media::Result<MediaPlaybackEpochActivationCapability>::failure(
-            registered.error());
+    if (!registered) return Result::failure(registered.error());
+    if (shared || source) {
+        return Result::success(Activation(MediaPlaybackEpochActivationCapability(service)));
     }
-    return ::media::Result<MediaPlaybackEpochActivationCapability>::success(
-        MediaPlaybackEpochActivationCapability(service));
+    return Result::success(Activation(MediaOutputEpochActivationCapability(service)));
 }
 
 ::media::Result<MediaAvReacquisitionAssemblyDependencies>
@@ -70,7 +80,7 @@ MediaAvSyncRuntimeBootstrap::reacquisitionAssemblyDependencies(
     const std::shared_ptr<MediaAvSyncGroupRuntime>& group)
 {
     auto transition = capability.m_transition.lock();
-    if (!transition || !group || !group->clock()) {
+    if (!transition || !transition->transitionPlan() || !group || !group->clock()) {
         return ::media::Result<
             MediaAvReacquisitionAssemblyDependencies>::failure(
             ::media::ErrorInfo::notInitialized(

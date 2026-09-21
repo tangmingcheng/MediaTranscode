@@ -148,7 +148,9 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    if (runtime.m_avDomain) runtime.m_avDomain->activation.reset();
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
+    }
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     if (primaryFailure) {
@@ -170,7 +172,9 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     auto clearStatus = MediaGraphLifecycle::clearChannels(runtime.m_context);
     auto closeStatus = MediaGraphLifecycle::closeChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    if (runtime.m_avDomain) runtime.m_avDomain->activation.reset();
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
+    }
     runtime.m_protocolOutputAuthority.reset();
     if (!schedulerStatus) {
         if (runtime.m_threadedExecutor.state() == MediaGraphThreadedExecutorState::Aborted) {
@@ -195,7 +199,9 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    if (runtime.m_avDomain) runtime.m_avDomain->activation.reset();
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
+    }
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.done state=Aborted");
@@ -212,7 +218,7 @@ void MediaGraphRuntimeLifecycleExecutor::reset(MediaGraphRuntime& runtime)
     runtime.m_context.setDiagnosticsEnabled(diagnostics);
     runtime.m_graph.clear();
     runtime.m_inputBindings.clear();
-    runtime.m_avDomain.reset();
+    runtime.m_avDomains.clear();
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_acceptanceCollector.reset();
     runtime.m_queueHighWatermark = 0;

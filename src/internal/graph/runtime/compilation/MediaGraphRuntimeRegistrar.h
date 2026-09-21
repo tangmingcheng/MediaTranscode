@@ -15,7 +15,7 @@ public:
         MediaGraphExecutionContext& context,
         MediaGraphScheduler& scheduler,
         std::vector<MediaPreparedRealtimeInputBinding>& inputBindings,
-        std::optional<MediaAvRuntimeDomainState>& avDomain,
+        std::vector<MediaAvRuntimeDomainState>& avDomains,
         const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>& protocolOutputAuthority);
 };
 

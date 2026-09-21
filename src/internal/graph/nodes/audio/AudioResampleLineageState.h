@@ -46,6 +46,7 @@ public:
     MediaAudioIntervalAccumulator outputIntervals;
     std::optional<MediaAudioSampleProjection> sampleProjection;
     std::shared_ptr<const MediaCanonicalLineage> lastOutputLineage;
+    std::optional<MediaCanonicalAudioContribution> lastOutputContribution;
     MediaInputTerminalTracker terminals { { "frame" } };
     bool eofEmitted = false;
 
