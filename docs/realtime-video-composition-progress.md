@@ -1,4 +1,9 @@
 # 固定实时视频合屏实施记录
+## 2026-09-21：逐源视频规划公共切片
+
+decoder/filter 源产品、公共后端候选、帧域匹配、评分及源执行契约已抽取，旧单源复用相同逻辑；显式首帧滤镜协商与旧 synthetic probe 的证据边界分开。两名独立源码审查均 Standards/阶段 Spec PASS；Release全量636项成功，10源码文件冻结hash一致。
+
+r24 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720/30fps、AAC CBR192kbps，指定120秒源3600帧exit0，VLC首段画面正常；源结束后七组ack，CLI仍无进展超时自然exit1、4个逻辑对象残留，完整验收FAIL。命令/指标已归档，5个临时文件及本轮进程已清理。真实prepare交接、按owner资源准入及合屏入口仍未完成，评分不因本切片提高。详见[逐源规划记录](realtime-video-composition-source-planning.md)。
 
 ## 2026-09-21：源缺流生命周期与准备步骤复用
 

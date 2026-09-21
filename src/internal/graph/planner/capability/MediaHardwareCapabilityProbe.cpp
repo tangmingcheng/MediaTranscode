@@ -1,4 +1,5 @@
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
@@ -27,6 +28,29 @@ namespace media::ffmpeg::graph {
 namespace {
 
 enum class MediaCapabilityProbeScope { CompletePipeline, OutputBranch };
+
+::media::Result<MediaVideoSourceFilterNegotiation> negotiateSourceFilterDescription(
+    const MediaVideoSourcePlan& source, const AVFrame& firstFrame,
+    const MediaRational& inputTimeBase, const MediaRational& inputFrameRate,
+    const MediaRational& sampleAspectRatio, const MediaHardwareDescriptor& target);
+
+::media::Result<MediaVideoSourceFilterNegotiation> negotiateLegacyChainFilter(
+    const MediaPipelineChainPlan& chain, const AVFrame& frame, const MediaRational& cadence)
+{
+    using Result = ::media::Result<MediaVideoSourceFilterNegotiation>;
+    if (!chain.filter.outputFrame || !chain.encoder.inputFrame)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Chain filter output contract is missing"));
+    // Existing complete-chain probes supply synthetic descriptions, not decoded frames.
+    auto result = negotiateSourceFilterDescription(chain, frame,
+        {cadence.den, cadence.num}, cadence, {1, 1}, *chain.filter.outputFrame);
+    if (!result) return result;
+    const auto& target = *chain.encoder.inputFrame;
+    if (result.value().pixelFormat != target.pixelFormat ||
+        result.value().outputSize != target.size)
+        return Result::failure(::media::ErrorInfo::hardwareUnavailable(
+            "Source filter negotiation differs from encoder input"));
+    return result;
+}
 
 ::media::Status publishPacketLayout(
     MediaPipelineChainPlan& chain, AVCodecContext& context)
@@ -177,6 +201,26 @@ bool decoderSupportsDevice(const AVCodec& decoder,
 #endif
 }
 
+::media::Result<std::optional<MediaDecoderInputRetention>> probeDecoderOpenRetention(
+    const AVCodec& decoder, const MediaPipelineStagePlan& stage,
+    MediaSize size, AVBufferRef* device)
+{
+    using Result = ::media::Result<std::optional<MediaDecoderInputRetention>>;
+    auto context = ::media::ffmpeg::makeCodecContext(&decoder);
+    if (!context) return Result::failure(::media::ErrorInfo::internalError(
+        "Decoder retention probe allocation failed"));
+    context->width = size.width;
+    context->height = size.height;
+    if (device) {
+        context->hw_device_ctx = av_buffer_ref(device);
+        if (!context->hw_device_ctx) return Result::failure(::media::ErrorInfo::internalError(
+            "Decoder retention probe device reference allocation failed"));
+    }
+    const int opened = avcodec_open2(context.get(), &decoder, nullptr);
+    if (opened < 0) return Result::failure(FFmpegGraphError::fromCode(opened, "Decoder retention probe open"));
+    return Result::success(MediaDecoderInputRetentionAdapter::readAfterOpen(*context, stage.hwaccelName));
+}
+
 MediaHardwareCapability validateInternallyManagedRkmppChain(
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options,
@@ -260,53 +304,16 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
                 "av_buffer_ref(RKMPP RGA probe frames context) returned null");
         }
 
-        MediaNodeOptions filterOptions;
-        filterOptions.set("filter.pipeline.filter", chain.filter.filterName);
-        VideoFilterGraphBuildRequest request;
-        request.options = &filterOptions;
-        request.firstFrame = probeFrame.get();
         const auto inputFrameRate = capabilityInputFrameRate(options);
-        request.inputTimeBase =
-            AVRational{inputFrameRate.den, inputFrameRate.num};
-        request.inputFrameRate =
-            AVRational{inputFrameRate.num, inputFrameRate.den};
-        request.sampleAspectRatio = AVRational{1, 1};
-        auto filterGraph = VideoFilterGraphBuilder::build(request);
-        if (!filterGraph) {
-            return unavailable(
-                "planned RKMPP RGA graph negotiation failed: " +
-                filterGraph.error().message);
-        }
-        const int sinkFormat = av_buffersink_get_format(
-            filterGraph.value().bufferSink);
-        const int sinkWidth = av_buffersink_get_w(
-            filterGraph.value().bufferSink);
-        const int sinkHeight = av_buffersink_get_h(
-            filterGraph.value().bufferSink);
-        if (sinkFormat != encoderFormat ||
-            sinkWidth != chain.filter.outputFrame->size.width ||
-            sinkHeight != chain.filter.outputFrame->size.height) {
-            return unavailable(
-                "planned RKMPP RGA graph negotiated a different output frame contract");
-        }
+        auto negotiation = negotiateLegacyChainFilter(chain, *probeFrame, inputFrameRate);
+        if (!negotiation) return unavailable(negotiation.error().message);
     }
 
     if (scope == MediaCapabilityProbeScope::CompletePipeline) {
-        auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
-        if (!decoderContext) {
-            return unavailable("avcodec_alloc_context3(RKMPP decoder) returned null");
-        }
-        decoderContext->width = options.probeWidth;
-        decoderContext->height = options.probeHeight;
-        const int decoderOpened = avcodec_open2(decoderContext.get(), decoder, nullptr);
-        if (decoderOpened < 0) {
-            return ffmpegUnavailable(
-                "avcodec_open2(decoder " + chain.decoder.ffmpegName + ")",
-                decoderOpened);
-        }
-        chain.decoder.preparedInputRetention =
-            MediaDecoderInputRetentionAdapter::readAfterOpen(
-                *decoderContext, chain.decoder.hwaccelName);
+        auto retention = probeDecoderOpenRetention(*decoder, chain.decoder,
+            {options.probeWidth, options.probeHeight}, nullptr);
+        if (!retention) return unavailable(retention.error().message);
+        chain.decoder.preparedInputRetention = std::move(retention).value();
     }
 
     auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
@@ -411,14 +418,10 @@ MediaHardwareCapability validateCompleteChain(
         if (scope == MediaCapabilityProbeScope::CompletePipeline) {
             const auto* decoder = avcodec_find_decoder_by_name(chain.decoder.ffmpegName.c_str());
             if (!decoder) return unavailable("planned decoder is unavailable");
-            auto context = ::media::ffmpeg::makeCodecContext(decoder);
-            if (!context) return unavailable("decoder retention probe allocation failed");
-            context->width = options.probeWidth;
-            context->height = options.probeHeight;
-            const int opened = avcodec_open2(context.get(), decoder, nullptr);
-            if (opened < 0) return ffmpegUnavailable("decoder retention probe open", opened);
-            chain.decoder.preparedInputRetention =
-                MediaDecoderInputRetentionAdapter::readAfterOpen(*context, chain.decoder.hwaccelName);
+            auto retention = probeDecoderOpenRetention(*decoder, chain.decoder,
+                {options.probeWidth, options.probeHeight}, nullptr);
+            if (!retention) return unavailable(retention.error().message);
+            chain.decoder.preparedInputRetention = std::move(retention).value();
         }
         return validateSoftwareEncoder(chain, options);
     }
@@ -487,27 +490,10 @@ MediaHardwareCapability validateCompleteChain(
     }
 
     if (scope == MediaCapabilityProbeScope::CompletePipeline) {
-        auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
-        if (!decoderContext) {
-            return unavailable("avcodec_alloc_context3(decoder) returned null");
-        }
-        decoderContext->width = options.probeWidth;
-        decoderContext->height = options.probeHeight;
-        if (device) {
-            decoderContext->hw_device_ctx = av_buffer_ref(device.get());
-            if (!decoderContext->hw_device_ctx) {
-                return unavailable("av_buffer_ref(decoder hardware device) returned null");
-            }
-        }
-        const int decoderOpened = avcodec_open2(decoderContext.get(), decoder, nullptr);
-        if (decoderOpened < 0) {
-            return ffmpegUnavailable(
-                "avcodec_open2(decoder " + chain.decoder.ffmpegName + ")",
-                decoderOpened);
-        }
-        chain.decoder.preparedInputRetention =
-            MediaDecoderInputRetentionAdapter::readAfterOpen(
-                *decoderContext, chain.decoder.hwaccelName);
+        auto retention = probeDecoderOpenRetention(*decoder, chain.decoder,
+            {options.probeWidth, options.probeHeight}, device.get());
+        if (!retention) return unavailable(retention.error().message);
+        chain.decoder.preparedInputRetention = std::move(retention).value();
     }
 
     ::media::ffmpeg::BufferRefPtr sourceFrames;
@@ -580,33 +566,9 @@ MediaHardwareCapability validateCompleteChain(
             }
         }
 
-        MediaNodeOptions filterOptions;
-        filterOptions.set("filter.pipeline.filter", chain.filter.filterName);
-        VideoFilterGraphBuildRequest request;
-        request.options = &filterOptions;
-        request.firstFrame = firstFrame.get();
         const auto inputFrameRate = capabilityInputFrameRate(options);
-        request.inputTimeBase =
-            AVRational{inputFrameRate.den, inputFrameRate.num};
-        request.inputFrameRate =
-            AVRational{inputFrameRate.num, inputFrameRate.den};
-        request.sampleAspectRatio = AVRational{1, 1};
-        auto filterGraph = VideoFilterGraphBuilder::build(request);
-        if (!filterGraph) {
-            return unavailable(
-                "filter graph negotiation failed: " + filterGraph.error().message);
-        }
-        const int negotiatedFormat =
-            av_buffersink_get_format(filterGraph.value().bufferSink);
-        const int negotiatedWidth =
-            av_buffersink_get_w(filterGraph.value().bufferSink);
-        const int negotiatedHeight =
-            av_buffersink_get_h(filterGraph.value().bufferSink);
-        if (negotiatedFormat != encoderContext->pix_fmt ||
-            negotiatedWidth != outputWidth || negotiatedHeight != outputHeight) {
-            return unavailable(
-                "filter output does not negotiate the planned encoder format and dimensions");
-        }
+        auto negotiation = negotiateLegacyChainFilter(chain, *firstFrame, inputFrameRate);
+        if (!negotiation) return unavailable(negotiation.error().message);
     }
 
     const int encoderOpened = avcodec_open2(encoderContext.get(), encoder, nullptr);
@@ -629,7 +591,69 @@ MediaHardwareCapability validateCompleteChain(
     return {true, "decoder/filter/encoder chain opened and negotiated"};
 }
 
+::media::Result<MediaVideoSourceFilterNegotiation>
+negotiateSourceFilterDescription(
+    const MediaVideoSourcePlan& source, const AVFrame& firstFrame,
+    const MediaRational& inputTimeBase, const MediaRational& inputFrameRate,
+    const MediaRational& sampleAspectRatio, const MediaHardwareDescriptor& target)
+{
+    using Result = ::media::Result<MediaVideoSourceFilterNegotiation>;
+    if (!source.filterActive || source.filter.filterName.empty() ||
+        !source.filter.inputFrame || !source.filter.outputFrame ||
+        inputTimeBase.num <= 0 || inputTimeBase.den <= 0 ||
+        inputFrameRate.num <= 0 || inputFrameRate.den <= 0 ||
+        sampleAspectRatio.num <= 0 || sampleAspectRatio.den <= 0 ||
+        firstFrame.width != source.filter.inputFrame->size.width ||
+        firstFrame.height != source.filter.inputFrame->size.height ||
+        firstFrame.format != pixelFormat(source.filter.inputFrame->pixelFormat) ||
+        (source.filter.inputFrame->requiresHardwareFramesContext && !firstFrame.hw_frames_ctx) ||
+        target.size.width <= 0 || target.size.height <= 0 || pixelFormat(target.pixelFormat) == AV_PIX_FMT_NONE ||
+        *source.filter.outputFrame != target)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Source filter negotiation requires explicit frame, timing, SAR and target contracts"));
+    MediaNodeOptions filterOptions;
+    filterOptions.set("filter.pipeline.filter", source.filter.filterName);
+    VideoFilterGraphBuildRequest request;
+    request.options = &filterOptions;
+    request.firstFrame = &firstFrame;
+    request.inputTimeBase = {inputTimeBase.num, inputTimeBase.den};
+    request.inputFrameRate = {inputFrameRate.num, inputFrameRate.den};
+    request.sampleAspectRatio = {sampleAspectRatio.num, sampleAspectRatio.den};
+    auto graph = VideoFilterGraphBuilder::build(request);
+    if (!graph) return Result::failure(graph.error());
+    const auto format = static_cast<AVPixelFormat>(av_buffersink_get_format(graph.value().bufferSink));
+    const MediaSize size{av_buffersink_get_w(graph.value().bufferSink),
+                         av_buffersink_get_h(graph.value().bufferSink)};
+    if (format != pixelFormat(target.pixelFormat) || size.width != target.size.width ||
+        size.height != target.size.height)
+        return Result::failure(::media::ErrorInfo::hardwareUnavailable(
+            "Source filter graph negotiated a different target format or size"));
+    const auto sar = av_buffersink_get_sample_aspect_ratio(graph.value().bufferSink);
+    return Result::success({size, target.pixelFormat, {sar.num, sar.den}});
+}
+
 } // namespace
+
+::media::Result<MediaVideoSourceFilterNegotiation>
+MediaHardwareCapabilityProbe::negotiateSourceFilter(
+    const MediaVideoSourcePlan& source, const AVFrame& firstFrame,
+    const MediaRational& inputTimeBase, const MediaRational& inputFrameRate,
+    const MediaRational& sampleAspectRatio, const MediaHardwareDescriptor& target)
+{
+    using Result = ::media::Result<MediaVideoSourceFilterNegotiation>;
+    if (!source.filter.inputFrame)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Source filter input contract is missing"));
+    auto frame = MediaVideoFrameContractValidator::validate(
+        firstFrame, *source.filter.inputFrame, "source filter negotiation");
+    if (!frame) return Result::failure(frame.error());
+    if (sampleAspectRatio.num <= 0 || sampleAspectRatio.den <= 0 ||
+        firstFrame.sample_aspect_ratio.num <= 0 || firstFrame.sample_aspect_ratio.den <= 0 ||
+        av_cmp_q(firstFrame.sample_aspect_ratio, {sampleAspectRatio.num, sampleAspectRatio.den}) != 0)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Source filter negotiation SAR differs from the supplied actual frame"));
+    return negotiateSourceFilterDescription(source, firstFrame, inputTimeBase,
+        inputFrameRate, sampleAspectRatio, target);
+}
 
 bool MediaHardwareCapabilityProbe::decoderExists(const std::string& name) noexcept
 {

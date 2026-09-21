@@ -69,3 +69,5 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 3. 现有资源compiler按明确owner选择事实，统一核算源输入/decoder/filter、聚合候选/贡献/canvas及唯一输出/协议；不能直接相加多个单源总账。
 4. 内部生命周期产品已区分旧单源失败语义与持续合屏缺流，未发布代再次失锁、owner-thread purge、到期等待新证据及代次仲裁已通过源码双审。仍须由composition planner选择Preserve并通过真实源链路验证，首次准入及purge ack超时保持失败。r23仍走Shared单源路径，不能作为此模式运行通过证据，见[源生命周期记录](realtime-video-composition-source-lifecycle.md)。
 5. 接通已批准的inputs/grid/audioSource公共配置与共用controller，补纯视频非音源、逐源缺口观测及Windows→RKMPP完整验收。迟到输出须有planner有界策略，单pending不等于历史追赶工作有界。
+
+逐源纯规划公共切片已完成源码双审和Release全量构建：decoder/filter候选、评分和源执行契约由新source与旧single共用；显式首帧协商仅提供graph配置/readback。r24原规格单源仍在源结束后无进展退出，完整门禁未通过。下一步继续真实输入lease、decoder callback/首帧lineage交接和逐owner资源准入，不把候选或synthetic probe当作准备成功。见[逐源规划记录](realtime-video-composition-source-planning.md)。
