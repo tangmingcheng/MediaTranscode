@@ -2,7 +2,9 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/core/MediaNodeOptions.h"
-#include "internal/graph/model/MediaFormatDescriptor.h"
+#include "internal/graph/model/MediaGraphTypes.h"
+
+#include <optional>
 #include "media_transcode/Result.h"
 
 extern "C" {
@@ -10,14 +12,19 @@ extern "C" {
 }
 
 struct AVBufferRef;
-struct AVCodecParameters;
 
 namespace media::ffmpeg::graph {
 
+struct MediaVideoEncoderFrameInput {
+    MediaRational sampleAspectRatio;
+    AVColorRange colorRange;
+    AVColorPrimaries colorPrimaries;
+    AVColorTransferCharacteristic colorTransfer;
+    AVColorSpace colorSpace;
+};
+
 struct CodecResolverEncoderContextBuildRequest {
-    const AVCodecParameters* codecParameters = nullptr;
-    MediaFormatDescriptor sourceFormat;
-    MediaTimeDescriptor sourceTime;
+    std::optional<MediaVideoEncoderFrameInput> frameInput;
     const MediaNodeOptions* options = nullptr;
     AVBufferRef* hardwareDevice = nullptr;
 };

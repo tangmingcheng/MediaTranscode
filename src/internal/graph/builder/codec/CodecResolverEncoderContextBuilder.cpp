@@ -19,7 +19,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 }
 
@@ -85,43 +84,12 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     av_opt_set(context->priv_data, key.c_str(), value.c_str(), 0);
 }
 
-::media::Result<AVRational> resolveFrameRate(const MediaTimeDescriptor& sourceTime,
-                                             const MediaNodeOptions* options)
-{
-    auto fpsNumResult = intOption(options, MediaTranscodeOptionKey::VideoFpsNum);
-    if (!fpsNumResult) {
-        return ::media::Result<AVRational>::failure(fpsNumResult.error());
-    }
-    auto fpsDenResult = intOption(options, MediaTranscodeOptionKey::VideoFpsDen);
-    if (!fpsDenResult) {
-        return ::media::Result<AVRational>::failure(fpsDenResult.error());
-    }
-
-    const std::optional<int> fpsNum = fpsNumResult.value();
-    const std::optional<int> fpsDen = fpsDenResult.value();
-    if (fpsNum || fpsDen) {
-        if (!fpsNum || !fpsDen || *fpsNum <= 0 || *fpsDen <= 0) {
-            return ::media::Result<AVRational>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires valid video fps numerator/denominator"));
-        }
-        return ::media::Result<AVRational>::success(AVRational{ *fpsNum, *fpsDen });
-    }
-
-    if (sourceTime.frameRate.num > 0 && sourceTime.frameRate.den > 0) {
-        return ::media::Result<AVRational>::success(AVRational{ sourceTime.frameRate.num, sourceTime.frameRate.den });
-    }
-
-    return ::media::Result<AVRational>::failure(
-        ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cannot resolve input frame rate; specify fps explicitly"));
-}
-
 ::media::Status validateRequest(const CodecResolverEncoderContextBuildRequest& request)
 {
-    if (!request.codecParameters) {
+    if (!request.frameInput) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires source stream"));
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires explicit raw-frame input facts"));
     }
-
     return ::media::Status::success();
 }
 
@@ -165,7 +133,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     const MediaNodeOptions* options = request.options;
-    const AVCodecParameters* params = request.codecParameters;
+    const auto& frameInput = *request.frameInput;
 
     const std::string plannedEncoder = optionValue(options, MediaTranscodeOptionKey::PlannedEncoder);
     if (plannedEncoder.empty() || plannedEncoder == "auto") {
@@ -186,26 +154,20 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
     const CodecResolverEncoderFormatPlan formatPlan = formatPlanResult.value();
 
-    auto frameRateResult = resolveFrameRate(request.sourceTime, options);
-    if (!frameRateResult) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(frameRateResult.error());
-    }
-    const AVRational frameRate = std::move(frameRateResult).value();
-
-    auto widthOption = intOption(options, MediaTranscodeOptionKey::VideoWidth);
-    if (!widthOption) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(widthOption.error());
-    }
-    auto heightOption = intOption(options, MediaTranscodeOptionKey::VideoHeight);
-    if (!heightOption) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(heightOption.error());
-    }
-    const int targetWidth = widthOption.value().value_or(params->width);
-    const int targetHeight = heightOption.value().value_or(params->height);
-    if (targetWidth <= 0 || targetHeight <= 0) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires valid target dimensions"));
-    }
+    const auto requiredPositive = [&](const char* key) {
+        return requiredPositiveIntNodeOption(options, "CodecResolverEncoderContextBuilder", key);
+    };
+    auto fpsNum = requiredPositive(MediaTranscodeOptionKey::VideoFpsNum);
+    if (!fpsNum) return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(fpsNum.error());
+    auto fpsDen = requiredPositive(MediaTranscodeOptionKey::VideoFpsDen);
+    if (!fpsDen) return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(fpsDen.error());
+    const AVRational frameRate{fpsNum.value(), fpsDen.value()};
+    auto width = requiredPositive(MediaTranscodeOptionKey::VideoWidth);
+    if (!width) return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(width.error());
+    auto height = requiredPositive(MediaTranscodeOptionKey::VideoHeight);
+    if (!height) return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(height.error());
+    const int targetWidth = width.value();
+    const int targetHeight = height.value();
 
     CodecResolverEncoderContextBuildResult result;
     result.hardwareFramesFormat = formatPlan.hardwareFramesFormat;
@@ -231,12 +193,12 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->sw_pix_fmt = formatPlan.surfaceSoftwareFormat;
     encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
     encoderContext->framerate = frameRate;
-    encoderContext->sample_aspect_ratio = AVRational{ request.sourceFormat.video.sampleAspectRatio.num,
-                                                      request.sourceFormat.video.sampleAspectRatio.den };
-    encoderContext->color_range = params->color_range;
-    encoderContext->color_primaries = params->color_primaries;
-    encoderContext->color_trc = params->color_trc;
-    encoderContext->colorspace = params->color_space;
+    encoderContext->sample_aspect_ratio = AVRational{ frameInput.sampleAspectRatio.num,
+                                                      frameInput.sampleAspectRatio.den };
+    encoderContext->color_range = frameInput.colorRange;
+    encoderContext->color_primaries = frameInput.colorPrimaries;
+    encoderContext->color_trc = frameInput.colorTransfer;
+    encoderContext->colorspace = frameInput.colorSpace;
     auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
         options, "video.lineage.encoder_copy_opaque");
     if (!copyOpaque) {

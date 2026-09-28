@@ -1,13 +1,11 @@
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
-#include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
+#include "internal/graph/planner/capability/MediaOpenedVideoEncoderProbe.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
 #include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
-#include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -50,65 +48,6 @@ enum class MediaCapabilityProbeScope { CompletePipeline, OutputBranch };
         return Result::failure(::media::ErrorInfo::hardwareUnavailable(
             "Source filter negotiation differs from encoder input"));
     return result;
-}
-
-::media::Status publishPacketLayout(
-    MediaPipelineChainPlan& chain, AVCodecContext& context)
-{
-    auto layout =
-        MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(context, chain.encoder.effectiveColorRange);
-    if (!layout) return ::media::Status::failure(layout.error());
-    auto randomAccess = MediaEncoderRandomAccessAdapter::readAfterOpen(context);
-    if (!randomAccess) return ::media::Status::failure(randomAccess.error());
-    chain.encoder.randomAccess = std::move(randomAccess).value();
-    chain.encoder.encodedPacketLayout = std::move(layout).value();
-    return ::media::Status::success();
-}
-
-::media::Status publishPacketLayoutThroughAdvertisedSoftwareSurface(
-    MediaPipelineChainPlan& chain,
-    const AVCodec& encoder,
-    const AVCodecContext& openedHardwareContext,
-    AVPixelFormat surfaceFormat,
-    const MediaEncoderOpenContract& openContract)
-{
-    const AVPixFmtDescriptor* surfaceDescriptor =
-        av_pix_fmt_desc_get(surfaceFormat);
-    if (!surfaceDescriptor ||
-        (surfaceDescriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) != 0 ||
-        !ffmpegCodecSupportsPixelFormat(&encoder, surfaceFormat)) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "opened hardware encoder exposes no advertised software-input packet-layout probe contract"));
-    }
-    if (!chain.encoder.encoderRateControl) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "hardware encoder packet-layout probe has no rate-control contract"));
-    }
-
-    auto probeContext = ::media::ffmpeg::makeCodecContext(&encoder);
-    if (!probeContext) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
-            "hardware encoder software-input packet-layout probe context"));
-    }
-    probeContext->pix_fmt = surfaceFormat;
-    probeContext->sw_pix_fmt = surfaceFormat;
-    probeContext->sample_aspect_ratio = openedHardwareContext.sample_aspect_ratio;
-    probeContext->color_range = openedHardwareContext.color_range;
-
-    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
-        *probeContext, openContract);
-    if (!applied) return ::media::Status::failure(applied.error());
-
-    const int opened = avcodec_open2(probeContext.get(), &encoder, nullptr);
-    if (opened < 0) {
-        return FFmpegGraphError::statusFromCode(
-            opened, "avcodec_open2(hardware encoder software-input packet-layout probe)");
-    }
-    if (auto equivalent =
-            MediaEncoderOpenContractAdapter::validateEquivalentReadback(
-                openedHardwareContext, *probeContext, openContract);
-        !equivalent) return equivalent;
-    return publishPacketLayout(chain, *probeContext);
 }
 
 MediaHardwareCapability unavailable(std::string reason)
@@ -340,23 +279,9 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
             "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
             encoderOpened);
     }
-    auto packetLayout = publishPacketLayout(chain, *encoderContext);
-    if (!packetLayout) {
-        packetLayout = publishPacketLayoutThroughAdvertisedSoftwareSurface(
-            chain, *encoder, *encoderContext, encoderSurfaceFormat,
-            *chain.encoder.encoderOpenContract);
-    }
-    if (!packetLayout) return unavailable(packetLayout.error().message);
-
-    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
-        *encoderContext, *chain.encoder.encoderRateControl,
-        encoderFrameRate, *chain.encoder.encodedPacketLayout,
-        "opened-encoder-context:" + chain.encoder.ffmpegName,
-        "rkmpp");
-    if (!emission) {
-        return unavailable(emission.error().message);
-    }
-    chain.encoder.preparedEmission = std::move(emission).value();
+    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
+        chain.encoder, *encoderContext, encoderFrameRate, "rkmpp", encoderSurfaceFormat);
+    if (!evidence) return unavailable(evidence.error().message);
     return {true, chain.filterActive
                       ? "internally managed RKMPP codecs and planned RGA graph negotiated"
                       : "internally managed RKMPP codecs opened without a filter"};
@@ -397,14 +322,9 @@ MediaHardwareCapability validateSoftwareEncoder(
             "avcodec_open2(software encoder " + chain.encoder.ffmpegName + ")",
             opened);
     }
-    auto packetLayout = publishPacketLayout(chain, *context);
-    if (!packetLayout) return unavailable(packetLayout.error().message);
-    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
-        *context, *chain.encoder.encoderRateControl, cadence,
-        *chain.encoder.encodedPacketLayout,
-        "opened-encoder-context:" + chain.encoder.ffmpegName, "ffmpeg-software");
-    if (!emission) return unavailable(emission.error().message);
-    chain.encoder.preparedEmission = std::move(emission).value();
+    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
+        chain.encoder, *context, cadence, "ffmpeg-software", std::nullopt);
+    if (!evidence) return unavailable(evidence.error().message);
     return {true, "software encoder opened with effective emission readback"};
 }
 
@@ -577,16 +497,9 @@ MediaHardwareCapability validateCompleteChain(
             "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
             encoderOpened);
     }
-    auto packetLayout = publishPacketLayout(chain, *encoderContext);
-    if (!packetLayout) return unavailable(packetLayout.error().message);
-
-    auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
-        *encoderContext, *chain.encoder.encoderRateControl,
-        encoderFrameRate, *chain.encoder.encodedPacketLayout,
-        "opened-encoder-context:" + chain.encoder.ffmpegName,
-        chain.decoder.hwaccelName);
-    if (!emission) return unavailable(emission.error().message);
-    chain.encoder.preparedEmission = std::move(emission).value();
+    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
+        chain.encoder, *encoderContext, encoderFrameRate, chain.encoder.hwaccelName, std::nullopt);
+    if (!evidence) return unavailable(evidence.error().message);
 
     return {true, "decoder/filter/encoder chain opened and negotiated"};
 }

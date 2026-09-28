@@ -274,9 +274,10 @@ MediaBufferRef CodecResolverNode::timestampSource() const
     if (!codecParameters) return ::media::Status::failure(codecParameters.error());
 
     CodecResolverEncoderContextBuildRequest request;
-    request.codecParameters = codecParameters.value().get();
-    request.sourceFormat = stream.format;
-    request.sourceTime = stream.time;
+    const auto& parameters = *codecParameters.value();
+    request.frameInput = MediaVideoEncoderFrameInput{
+        stream.format.video.sampleAspectRatio, parameters.color_range,
+        parameters.color_primaries, parameters.color_trc, parameters.color_space};
     request.options = options;
     request.hardwareDevice = m_decoderHardwareDevice.get();
 

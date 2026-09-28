@@ -550,3 +550,5 @@ RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder
 准备首帧释放后，经公共codec adapter flush同一个decoder并形成一次性MediaPreparedVideoDecoder；source domain绑定、registrar与CodecResolver领取该对象，storage lease随实际context所有权转移。公共MediaVideoDecoderPlanOptionCodec供旧单源与source-only规划共用。完整preflight尚未调用该交接，详见[解码器交接记录](docs/realtime-video-composition-decoder-handoff.md)。
 
 组合图源输入现在使用MediaRealtimeCompositionSourcePlan，公共输入组装与decoder/filter segment消费MediaRealtimeAvSourceRuntimePlan，不要求逐源encoder/FIFO/协议输出。MediaPreparedVideoCanvas在真实输出帧池执行黑模板与tile copy后持有资源，运行aggregate一次性领取并绑定owner wakeup；缺失准备产品直接失败。唯一视频输出改用MediaVideoOutputPlan，输出segment仅创建resolver和encoder，并与旧完整branch复用编码映射；发送规划直接消费上游prepared emission，不再索取完整源计划。完整准备协调器及跨源准入仍待接通，见[源合同与准备画布](docs/realtime-video-composition-source-contract.md)和[唯一输出合同](docs/realtime-video-composition-output-contract.md)。
+
+编码器创建器消费显式原始帧SAR/色彩事实，尺寸和cadence由planner选项提供，不依赖源AVCodecParameters或从源再次回退。MediaOpenedVideoEncoderProbe统一已打开编码器的packet-layout/random-access/emission证据；能力探测context可能进入drain，不能交给生产。生产preparer仍独立打开未消费context并核对准入读回，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)。

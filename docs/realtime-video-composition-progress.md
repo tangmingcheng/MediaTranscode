@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：编码器帧输入与能力读回
+
+共用encoder创建器改收显式帧属性，尺寸/cadence由planner合同提供；metadata与动态输出两个生产调用者同步迁移。已打开encoder的packet-layout/random-access/emission探测从完整源链抽出，三种既有能力路径复用，探测context不能交给生产编码。7源码双独立阶段PASS；首次Release构建120秒超时，第二次全量成功且hash不变。r30固定120秒实时源exit0、VLC有画面，CLI仍无进展exit1/4对象；local-r30仍能力规划失败exit1。6项临时文件及媒体进程全部清理，完整目标仍未完成，详见[本轮记录](realtime-video-composition-encoder-input.md)。
+
 ## 2026-09-21：RTP 首帧消费者与准备存储
 
 已实现有限快照的参数集核验、完整随机访问 AU 解码、拥有 decoder/首帧/额度的证据产品，以及原截止时间内的新数据等待。已修复独立审查发现的硬件surface合同缺口，两名独立复审阶段源码PASS。修复后首次Release全量构建120秒超时，第二次成功，18源码hash一致。r26原规格120秒源exit0，CLI仍无进展自然exit1、4逻辑对象残留，VLC有迟到警告，完整验收FAIL；5项临时文件及进程清理完成。消费者尚无公共生产调用方，完整合屏、跨源总账和真实多源验收未完成，详见[首帧记录](realtime-video-composition-first-frame.md)。

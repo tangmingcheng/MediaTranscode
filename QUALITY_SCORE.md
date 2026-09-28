@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 编码器帧输入双独立审查
+
+基线`e6f411d9`后7个源码，两名未参与实现者均给出阶段Standards/Spec **PASS**；原始帧事实、planner尺寸/cadence、SAR/色彩保持和一次性能力探测生命周期符合现有FFmpeg接口语义。没有新增算法、平台链或公共参数。
+
+六维维持 **10/8/6/12/2/4，共42/100**。完整合屏及交付 **FAIL（未完成）**：唯一输出候选/设备准备、完整事务协调器、纯视频源及Windows→RKMPP多源矩阵仍缺。源码审查不证明本轮构建、动态输出或媒体链路通过，验证结果见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)。
+
 ## 2026-09-28 唯一输出合同独立审查 B
 
 基线`6ffe4c3e`后冻结11个src文件：Standards/限定阶段源码 Spec **PASS**。首次构建发现optional<bool>初始化C2440，修复为图前存在性检查后解引用，false合法；新冻结源码复审通过，构建结果另行记录。合屏输出消费encoder-only产品，旧完整branch共用encoder映射、端口及lineage；datagram planner消费上游已解析emission，保持原wire规划及失败传播。未运行构建或媒体，不能预判主执行验证结果。
