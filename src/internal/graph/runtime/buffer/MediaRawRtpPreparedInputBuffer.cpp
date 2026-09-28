@@ -99,7 +99,14 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
     m_captureThread = std::jthread(
         [owner = this](std::stop_token stopToken) {
             owner->capture(stopToken);
+            {
+                std::scoped_lock lock(owner->m_mutex);
+                owner->m_captureFinished = true;
+            }
+            owner->m_ready.notify_all();
         });
+    m_captureStarted = true;
+    m_captureFinished = false;
     return ::media::Status::success();
 }
 
@@ -117,6 +124,55 @@ MediaRawRtpPreparedInputBuffer::acquireProbeLease() const
     }
     return MediaRawRtpProbeLease::capture(
         m_prepared->datagrams, m_prepared->byteBudget);
+}
+
+::media::Status MediaRawRtpPreparedInputBuffer::waitForProbeData(
+    std::size_t previousDatagramCount,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token stopToken)
+{
+    // Register before taking the lock so return unlocks before joining an
+    // in-flight stop callback. The shared mutex prevents a lost cancellation wake.
+    std::stop_callback cancellation(stopToken, [this] {
+        std::scoped_lock lock(m_mutex);
+        m_ready.notify_all();
+    });
+    std::unique_lock lock(m_mutex);
+    if (!m_prepared || m_stopped || m_replayActive ||
+        !m_captureStarted ||
+        previousDatagramCount > m_prepared->datagrams.size()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe wait requires its live preflight capture frontier"));
+    }
+    const auto budget = m_prepared->byteBudget->snapshot();
+    if (budget.runtimeActive || budget.probeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe must release its snapshot before waiting for more input"));
+    }
+    m_ready.wait_until(lock, deadline, [&] {
+        return stopToken.stop_requested() || m_stopped || m_replayActive ||
+            m_captureError || m_captureFinished ||
+            m_prepared->datagrams.size() > previousDatagramCount;
+    });
+    if (m_captureError) return ::media::Status::failure(*m_captureError);
+    if (auto status = m_prepared->byteBudget->validate(); !status) return status;
+    if (m_prepared->byteBudget->snapshot().runtimeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe input wait outlived preflight preparation"));
+    }
+    if (stopToken.stop_requested() || m_stopped || m_replayActive) {
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "raw RTP probe input wait was cancelled"));
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "raw RTP probe reached its original preparation deadline"));
+    }
+    if (m_prepared->datagrams.size() > previousDatagramCount) {
+        return ::media::Status::success();
+    }
+    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "raw RTP preflight capture ended before additional probe evidence"));
 }
 
 ::media::Result<MediaPreparedRawRtpReplayInfo>

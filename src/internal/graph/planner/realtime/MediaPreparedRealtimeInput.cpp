@@ -144,6 +144,19 @@ MediaPreparedRealtimeInput::acquireRawRtpProbeLease() const
     return m_rawRtpBuffer->acquireProbeLease();
 }
 
+::media::Status MediaPreparedRealtimeInput::waitForRawRtpProbeData(
+    std::size_t previousDatagramCount,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token stopToken)
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe wait requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->waitForProbeData(
+        previousDatagramCount, deadline, stopToken);
+}
+
 ::media::Status MediaPreparedRealtimeInput::rawRtpCaptureStatus()
 {
     if (!m_rawRtpBuffer) {

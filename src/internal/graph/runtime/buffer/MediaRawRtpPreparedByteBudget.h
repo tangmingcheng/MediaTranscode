@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/resource/MediaByteReservationCounter.h"
 
 #include <cstddef>
 #include <memory>
@@ -44,10 +45,9 @@ private:
         std::size_t bytes, std::string_view stream);
     ::media::Status failLocked(::media::ErrorInfo error);
 
-    const std::size_t m_capacity;
+    MediaByteReservationCounter m_storage;
     mutable std::mutex m_mutex;
     std::size_t m_observedBytes = 0;
-    std::size_t m_retainedBytes = 0;
     bool m_runtimeActive = false;
     bool m_probeActive = false;
     std::optional<::media::ErrorInfo> m_error;

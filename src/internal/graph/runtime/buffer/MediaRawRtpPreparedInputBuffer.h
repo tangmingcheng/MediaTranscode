@@ -12,6 +12,7 @@
 #include "media_transcode/Result.h"
 
 #include <deque>
+#include <chrono>
 #include <cstdint>
 #include <condition_variable>
 #include <memory>
@@ -65,6 +66,9 @@ public:
     MediaBufferType type() const noexcept override;
     ::media::Status startPreflightCapture();
     ::media::Result<MediaRawRtpProbeLease> acquireProbeLease() const;
+    ::media::Status waitForProbeData(std::size_t previousDatagramCount,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stopToken);
     ::media::Result<MediaPreparedRawRtpReplayInfo> beginReplay();
     ::media::Result<MediaPreparedRawRtpDatagram> receive(int timeoutMs);
     ::media::Status captureStatus();
@@ -103,6 +107,8 @@ private:
     bool m_preparedQueueConsumed = false;
     bool m_budgetReserved = false;
     bool m_stopped = false;
+    bool m_captureStarted = false;
+    bool m_captureFinished = false;
 };
 
 } // namespace media::ffmpeg::graph

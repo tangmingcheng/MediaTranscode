@@ -543,4 +543,6 @@ AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样�
 
 逐源视频规划以 MediaVideoSourcePlan 表示 decoder/filter 与源执行合同，完整链在相同产品上追加 encoder。候选、帧域匹配、评分和执行合同复用同一实现；MediaHardwareCapabilityProbe 的显式首帧协商只返回 filter graph 配置/readback，不证明真实decode/transfer或同设备身份。见[逐源规划记录](docs/realtime-video-composition-source-planning.md)。
 
-CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_format 回调状态随 CodecContextPtr 的 deleter 转移，不借用节点成员。MediaRawRtpProbeLease 对 prepared 队列建立只读快照，payload和描述符先计入原共享预算，原始回放及到达时间保留；lease存活时禁止seal，probe占额引起capture容量截止明确失败。该原语尚未接真实预解码消费者，首帧lineage、实际设备与逐owner资源仍须在组合preflight中闭合。见[准备所有权记录](docs/realtime-video-composition-prepared-source.md)。
+CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_format 回调状态随 CodecContextPtr 的 deleter 转移，不借用节点成员。MediaRawRtpProbeLease 对 prepared 队列建立只读快照，payload和描述符先计入原共享预算，原始回放及到达时间保留；lease存活时禁止seal，probe占额引起capture容量截止明确失败。其内部首帧消费者见下文；生产回放交接与逐owner资源仍须在组合preflight中闭合。见[准备所有权记录](docs/realtime-video-composition-prepared-source.md)。
+
+RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder API，保留原始回放；结果拥有 decoder、首帧与准备 storage lease。准备存储按协议上界及实际 decoder retention 推导，和 raw 快照预算分别计费；跨源总准入仍须在组合 preflight 完成。等待新证据沿用原 open/analysis 截止时间。该消费者尚未接入公共生产入口，见[首帧探测记录](docs/realtime-video-composition-first-frame.md)。

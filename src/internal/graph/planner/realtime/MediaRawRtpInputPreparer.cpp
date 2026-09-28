@@ -386,7 +386,7 @@ namespace {
             }
         }
         const auto sourceFrameRate = frameRateObserver.value().frameRate();
-        if (!signalingComplete || !sourceFrameRate) continue;
+        if (!signalingComplete || !sourceFrameRate || !firstMatchingPacketAt) continue;
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             Clock::now() - startedAt).count();
@@ -427,17 +427,20 @@ namespace {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 status.error());
         }
+        const auto preparationDeadline = (std::min)(
+            startedAt + std::chrono::milliseconds(plan.openTimeoutMs),
+            *firstMatchingPacketAt + std::chrono::microseconds(plan.analyzeDurationUs));
         if (preparedAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::success(
                 MediaPreparedRawRtpAudioVideoProbe{
                     std::move(signaling), *sourceFrameRate,
                     std::move(prepared).value(),
-                    std::move(*preparedAudio), byteBudget.value()});
+                    std::move(*preparedAudio), byteBudget.value(), preparationDeadline});
         }
         return ::media::Result<MediaPreparedRawRtpProbe>::success(
             MediaPreparedRawRtpVideoOnlyProbe{
                 std::move(signaling), *sourceFrameRate,
-                std::move(prepared).value(), byteBudget.value()});
+                std::move(prepared).value(), byteBudget.value(), preparationDeadline});
     }
 }
 

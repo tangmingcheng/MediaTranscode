@@ -56,6 +56,9 @@ public:
     const MediaAvSyncStartupPolicy* genericStartup() const noexcept;
     ::media::Status startRawRtpPreflightCapture();
     ::media::Result<MediaRawRtpProbeLease> acquireRawRtpProbeLease() const;
+    ::media::Status waitForRawRtpProbeData(std::size_t previousDatagramCount,
+        std::chrono::steady_clock::time_point deadline,
+        std::stop_token stopToken);
     ::media::Status rawRtpCaptureStatus();
     ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
     ::media::Result<std::size_t> rawRtpPreparedByteCapacity() const;

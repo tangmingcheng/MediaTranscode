@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-21：RTP 首帧消费者与准备存储
+
+已实现有限快照的参数集核验、完整随机访问 AU 解码、拥有 decoder/首帧/额度的证据产品，以及原截止时间内的新数据等待。已修复独立审查发现的硬件surface合同缺口，两名独立复审阶段源码PASS。修复后首次Release全量构建120秒超时，第二次成功，18源码hash一致。r26原规格120秒源exit0，CLI仍无进展自然exit1、4逻辑对象残留，VLC有迟到警告，完整验收FAIL；5项临时文件及进程清理完成。消费者尚无公共生产调用方，完整合屏、跨源总账和真实多源验收未完成，详见[首帧记录](realtime-video-composition-first-frame.md)。
+
 ## 2026-09-21：准备阶段所有权基础
 
 已抽取共用decoder open与稳定回调owner；新增readonly RTP probe lease，不消费正式回放，快照payload/描述符计入共享预算，持有时禁止seal。独立审查发现临时占额可使capture静默停止，已改为该场景明确失败。最终双审阶段源码PASS，Release全量638项成功、13源码hash不变。r25 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720/30fps、AAC CBR192kbps，固定120秒/3600帧源exit0，VLC画面正常；CLI仍无进展自然exit1、4逻辑对象残留，完整验收FAIL。5文件及本轮进程清理完成。真实probe消费者、完整preflight及公共合屏入口仍未接通，详见[准备所有权记录](realtime-video-composition-prepared-source.md)。

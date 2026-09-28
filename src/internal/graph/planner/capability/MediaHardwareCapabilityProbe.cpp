@@ -709,14 +709,9 @@ MediaHardwareCapability MediaHardwareCapabilityProbe::validateOutputBranch(
             return unavailable(
                 "dynamic hardware output lacks authoritative independent decoder-output allocation or fixed-pool headroom evidence");
         }
-        if (!runningFrames || !runningFrames->data) return unavailable(
-            "hardware output branch requires the running decoder frames context");
-        const auto* frames = reinterpret_cast<const AVHWFramesContext*>(runningFrames->data);
-        if (!frames->device_ref || frames->format != pixelFormat(expected.pixelFormat) ||
-            frames->sw_format != pixelFormat(expected.surfacePixelFormat) ||
-            frames->width < expected.size.width || frames->height < expected.size.height) {
-            return unavailable("running decoder frames contradict the fixed branch input contract");
-        }
+        auto frames = MediaVideoFrameContractValidator::validateHardwareFrames(
+            runningFrames, expected, "output branch running decoder");
+        if (!frames) return unavailable(frames.error().describe());
     } else if (runningFrames) {
         return unavailable("software decoder branch rejects hardware frames evidence");
     }

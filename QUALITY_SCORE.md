@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
+## 2026-09-28 RTP 首帧与硬件帧合同独立复审 B
 
+基线 `f148bdca` 后18个src文件：Standards/限定阶段源码 Spec **PASS**，完整合屏与交付/合并 **FAIL**。只读快照消费复用 RTP/decoder 状态机，准备预算按并存关系形成独立逻辑额度；原截止时间、取消与采集结束显式传播。公共硬件帧校验由首帧和 output capability 复用，核对实际 format/sw_format、设备引用及分配尺寸；首帧另核对打开 decoder 的设备身份。
+
+六维维持 **10/8/6/12/2/4，共42/100**。首帧消费者尚未接入完整准备事务，缺跨源 owner 总账及 Windows→RKMPP 多源运行证据，不能升分。逻辑存储预算不等于 allocator RSS 或全部 FFmpeg/driver 分配；Shared 无进展超时、4个逻辑对象残留与 AAC 重入问题仍未证明修复。本次只作源码复审，没有运行构建或媒体验收。
 ## 2026-09-21 decoder owner 与只读 RTP 探测租约独立评分 B
 
 基线 `3a40b842` 后13个src文件的独立B最终复审：Standards/限定阶段源码 Spec PASS；完整合屏与交付/合并 FAIL。共用 decoder open 的 callback owner 随context稳定转移；只读快照同时计费原数据和副本，seal与租约互斥且不消耗生产replay。新lease尚未接入真实源prepare，不能用旧Shared单源回归外推其运行正确性。
