@@ -1,17 +1,12 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvProtocolOutputPlanner.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
-#include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
-#include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
-#include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
-#include "internal/graph/utils/MediaCheckedArithmetic.h"
-#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
-#include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <optional>
 #include <limits>
@@ -200,86 +195,6 @@ namespace {
             *synchronization.audioServo.minimumUpdateIntervalNs});
 }
 
-::media::Result<MediaScheduledRtpOutputPlan> scheduledRtpOutput(
-    MediaScheduledStream stream,
-    MediaRealtimeScheduledRtpOutputPlanningDraft& plannedOutput,
-    const MediaAvSyncRtpOutputStreamPlan& synchronization,
-    MediaRunningTime senderLead,
-    const MediaRealtimeDeploymentEnvelope& deployment,
-    std::uint64_t sessionBandwidthBytesPerSecond,
-    std::string bandwidthAuthority)
-{
-    if (!synchronization.payloadType || !synchronization.ssrc ||
-        !synchronization.baseTimestamp || !synchronization.clockRate ||
-        !synchronization.cname || synchronization.cname->empty() ||
-        plannedOutput.packetSize <= 0 || !plannedOutput.scheduledTransport ||
-        !plannedOutput.scheduledPacketization) {
-        return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "scheduled RTP output requires complete protocol planning facts"));
-    }
-    const auto& endpoint = plannedOutput.scheduledTransport->remoteRtpEndpoint();
-    auto address = MediaNumericIpAddress::create(
-        endpoint.addressFamily(), endpoint.numericAddress());
-    auto compoundWire = MediaRtcpWireGeometry::compoundWireBytes(
-        synchronization.cname->size(), endpoint.addressFamily());
-    auto reporting = address && compoundWire
-        ? MediaRtcpReportingPolicyPlanner::plan(
-              deployment, address.value(), sessionBandwidthBytesPerSecond,
-              std::move(bandwidthAuthority), compoundWire.value())
-        : ::media::Result<MediaRtcpReportingPolicy>::failure(
-              !address ? address.error() : compoundWire.error());
-    if (!reporting) {
-        return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
-            reporting.error());
-    }
-    return ::media::Result<MediaScheduledRtpOutputPlan>::success(
-        MediaScheduledRtpOutputPlan{
-            stream,
-            std::move(*plannedOutput.scheduledTransport),
-            *plannedOutput.scheduledPacketization,
-            *synchronization.ssrc,
-            *synchronization.baseTimestamp,
-            *synchronization.clockRate,
-            *synchronization.cname,
-            senderLead,
-            std::move(reporting).value()});
-}
-
-::media::Result<MediaSeparateRtpSdpRuntimePlan> scheduledSdp(
-    const MediaRealtimeOutputPlanningDraft& output,
-    const MediaScheduledRtpOutputPlan& video,
-    const MediaScheduledRtpOutputPlan& audio)
-{
-    const auto& videoRtp = video.transport.remoteRtpEndpoint();
-    const auto& audioRtp = audio.transport.remoteRtpEndpoint();
-    if (output.sdp.path.empty() || output.sdp.mediaId.empty() ||
-        videoRtp.addressFamily() != audioRtp.addressFamily() ||
-        videoRtp.numericAddress() != audioRtp.numericAddress() ||
-        video.cname.empty() || video.cname != audio.cname) {
-        return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP SDP requires one complete planner-owned identity"));
-    }
-    auto identityValidation = MediaSdpSessionIdentity::create(
-        output.sdp.mediaId, 0, 0, output.sdp.mediaId,
-        videoRtp.addressFamily(), videoRtp.numericAddress(), video.cname);
-    if (!identityValidation) {
-        return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::failure(
-            identityValidation.error());
-    }
-    return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::success(
-        MediaSeparateRtpSdpRuntimePlan{
-            output.sdp.path,
-            output.sdp.mediaId,
-            output.sdp.mediaId,
-            videoRtp.addressFamily(),
-            videoRtp.numericAddress(),
-            video.cname,
-            MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
-            MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration});
-}
-
 } // namespace
 
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
@@ -378,231 +293,28 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             edgePolicies.error());
     }
 
-    MediaAvSyncOutputAdapterKind adapter;
-    std::optional<MediaRunningTime> activationOutputLead;
-    std::optional<std::variant<MediaSeparateRtpOutputRuntimePlan,
-                               MediaProjectMpegTsRuntimeOutputPlan>> protocolOutput;
-    if (synchronization.rtpOutput) {
-        if (synchronization.projectMpegTsOutput ||
-            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
-            outer.outputTransport != MediaOutputTransportKind::RtpAvp ||
-            !synchronization.startup.outputLeadNs ||
-            !outer.deployment || !preparedEmission.audio ||
-            output.sdp.path.empty() || !audio.resolvedOutput) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "separate RTP synchronization output facts are incomplete"));
-        }
-        auto video = scheduledRtpOutput(
-            MediaScheduledStream::Video,
-            output.videoOutput,
-            synchronization.rtpOutput->videoOutput,
-            *synchronization.startup.outputLeadNs,
-            *outer.deployment,
-            preparedEmission.video.sustainedPayloadBytesPerSecond,
-            preparedEmission.video.authority);
-        auto audio = scheduledRtpOutput(
-            MediaScheduledStream::Audio,
-            output.audioOutput,
-            synchronization.rtpOutput->audioOutput,
-            *synchronization.startup.outputLeadNs,
-            *outer.deployment,
-            preparedEmission.audio->sustainedPayloadBytesPerSecond,
-            preparedEmission.audio->authority);
-        if (!video || !audio) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                video ? audio.error() : video.error());
-        }
-        auto sdp = scheduledSdp(
-            output, video.value(), audio.value());
-        if (!sdp) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                sdp.error());
-        }
-        adapter = MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
-        activationOutputLead = *synchronization.startup.outputLeadNs;
-        protocolOutput.emplace(std::in_place_type<MediaSeparateRtpOutputRuntimePlan>,
-            MediaSeparateRtpOutputRuntimePlan{
-                std::move(video).value(),
-                std::move(audio).value(),
-                std::move(sdp).value()});
-    } else if (synchronization.projectMpegTsOutput) {
-        if (synchronization.rtpOutput ||
-            outer.outputLayout !=
-                RealtimeOutputStreamLayout::MuxedTransportStream ||
-            !synchronization.projectMpegTsOutput->outputMux ||
-            !facts.value().outputSampleRate || output.muxedOutput.url.empty()) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "project MPEG-TS synchronization output facts are incomplete"));
-        }
-        auto accepted = MediaProjectMpegTsOutputPlan::fromAudioVideoEncodedFacts(
-            *synchronization.projectMpegTsOutput->outputMux);
-        if (!accepted) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                accepted.error());
-        }
-        if (!outputFrameRate.isKnown() || outputFrameRate.num <= 0 ||
-            outputFrameRate.den <= 0 ||
-            !facts.value().outputSampleRate ||
-            !facts.value().protocolBatchSamples ||
-            *facts.value().protocolBatchSamples <= 0) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS emission requires planner-owned output cadences"));
-        }
-        auto videoCadence = MediaRunningTime::checkedFromTicks(
-            1, outputFrameRate.den, outputFrameRate.num);
-        auto audioCadence = MediaRunningTime::checkedFromTicks(
-            *facts.value().protocolBatchSamples,
-            1, *facts.value().outputSampleRate);
-        if (!videoCadence || !audioCadence) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                videoCadence ? audioCadence.error() : videoCadence.error());
-        }
-        auto projectActivationLead =
-            accepted.value().muxPlan().transportDecodeLead().checkedAdd(
-                accepted.value().muxPlan().startupEmissionPreroll());
-        if (!projectActivationLead) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                projectActivationLead.error());
-        }
-        activationOutputLead = projectActivationLead.value();
-        std::optional<std::variant<
-            MediaMpegTsUdpOutputPlan,
-            MediaMpegTsRtpOutputPlan>> transport;
-        if (outer.outputTransport ==
-            MediaOutputTransportKind::UdpDatagrams) {
-            if (output.muxedOutput.rtpTransport ||
-                !output.muxedOutput.sdpPath.empty() ||
-                accepted.value().muxPlan().parameters().transportKind !=
-                    MediaOutputTransportKind::UdpDatagrams) {
-                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MPEG-TS UDP output rejects RTP transport facts"));
-            }
-            transport.emplace(
-                std::in_place_type<MediaMpegTsUdpOutputPlan>,
-                MediaMpegTsUdpOutputPlan{
-                    output.muxedOutput.url,
-                    MediaOutputResourceKind::ByteSink,
-                    MediaMuxSessionKind::ProjectMpegTs});
-        } else if (outer.outputTransport ==
-                   MediaOutputTransportKind::RtpAvp) {
-            if (!output.muxedOutput.rtpTransport ||
-                !output.muxedOutput.maximumDatagramBytes ||
-                output.muxedOutput.sdpPath.empty() ||
-                output.muxedOutput.mediaId.empty() ||
-                accepted.value().muxPlan().parameters().transportKind !=
-                    MediaOutputTransportKind::RtpAvp) {
-                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MPEG-TS RTP output requires complete planned transport facts"));
-            }
-            auto sessionBandwidth = preparedEmission.audio
-                ? MediaCheckedArithmetic::add(
-                      preparedEmission.video.sustainedPayloadBytesPerSecond,
-                      preparedEmission.audio->sustainedPayloadBytesPerSecond,
-                      "MPEG-TS RTP session media bandwidth")
-                : ::media::Result<std::uint64_t>::success(
-                      preparedEmission.video.sustainedPayloadBytesPerSecond);
-            const auto& endpoint =
-                output.muxedOutput.rtpTransport->remoteRtpEndpoint();
-            auto address = MediaNumericIpAddress::create(
-                endpoint.addressFamily(), endpoint.numericAddress());
-            const auto cname = MediaRtpOutputIdentityPlanner::cname(
-                output.muxedOutput.mediaId);
-            auto compoundWire = MediaRtcpWireGeometry::compoundWireBytes(
-                cname.size(), endpoint.addressFamily());
-            auto reporting = sessionBandwidth && address && compoundWire
-                ? MediaRtcpReportingPolicyPlanner::plan(
-                      *outer.deployment, address.value(),
-                      sessionBandwidth.value(),
-                      preparedEmission.video.authority + "+" +
-                          preparedEmission.audio->authority,
-                      compoundWire.value())
-                : ::media::Result<MediaRtcpReportingPolicy>::failure(
-                      !sessionBandwidth ? sessionBandwidth.error() :
-                      !address ? address.error() : compoundWire.error());
-            if (!reporting) {
-                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                    reporting.error());
-            }
-            auto rtp = MediaMpegTsRtpOutputPlan::create(
-                std::move(*output.muxedOutput.rtpTransport),
-                *output.muxedOutput.maximumDatagramBytes,
-                output.muxedOutput.sdpPath,
-                output.muxedOutput.mediaId,
-                std::move(reporting).value());
-            if (!rtp ||
-                rtp.value().tsPacketsPerPayload() !=
-                    accepted.value().muxPlan().parameters()
-                        .maximumPacketsPerDatagram) {
-                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                    rtp ? ::media::ErrorInfo::invalidArgument(
-                              "MPEG-TS RTP transport batching differs from the mux plan")
-                        : rtp.error());
-            }
-            transport.emplace(
-                std::in_place_type<MediaMpegTsRtpOutputPlan>,
-                std::move(rtp).value());
-        } else {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "MPEG-TS output transport is unsupported"));
-        }
-        adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
-        outer.videoParameters.globalHeader = true;
-        const std::uint64_t maximumQueuedBytes =
-            edgePolicies.value().synchronizedPacket.bufferPolicy
-                .memoryBudget.maxBytes;
-        auto emission = MediaTsDatagramEmissionPlan::create(
-            accepted.value().muxPlan(), videoCadence.value(),
-            audioCadence.value(), maximumQueuedBytes,
-            outer.deployment->encode().latency.targetResidence);
-        if (!emission) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                emission.error());
-        }
-        protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
-            MediaProjectMpegTsRuntimeOutputPlan{
-                std::move(accepted).value(),
-                MediaMuxSessionKind::ProjectMpegTs,
-                std::move(emission).value(),
-                outer.outputTransport == MediaOutputTransportKind::RtpAvp
-                    ? edgePolicies.value().synchronizedPacket.bufferPolicy
-                          .memoryBudget.maxBytes
-                    : 0,
-                std::move(*transport)});
-    } else {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            ::media::ErrorInfo::unsupported(
-                "A/V runtime output authority is unsupported"));
-    }
-
-    if (!activationOutputLead) {
+    if (!outer.deployment || (synchronization.rtpOutput && !audio.resolvedOutput)) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
-                "A/V runtime output requires planner-owned activation lead"));
-    }
-    if (!outer.deployment) {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V runtime output requires planner-owned deployment transport facts"));
+                "A/V protocol output requires deployment and resolved output audio facts"));
     }
     const MediaAvSyncGroupKey groupKey("realtime.av");
-    auto datagramTransport = std::visit(
-        [&](const auto& selectedOutput) {
-            return MediaRealtimeDatagramTransportPlanner::plan(
-                groupKey.value(), *outer.deployment, selectedOutput, preparedEmission);
-        },
-        *protocolOutput);
-    if (!datagramTransport) {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            datagramTransport.error());
+    auto protocol = MediaRealtimeAvProtocolOutputPlanner::plan(
+        {groupKey, outer.outputLayout, outer.outputTransport,
+         synchronization.rtpOutput, synchronization.projectMpegTsOutput,
+         synchronization.startup.outputLeadNs, outputFrameRate,
+         facts.value().outputSampleRate, facts.value().protocolBatchSamples,
+         edgePolicies.value().synchronizedPacket.bufferPolicy.memoryBudget.maxBytes,
+         *outer.deployment, preparedEmission}, output);
+    if (!protocol) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(protocol.error());
+    }
+    auto outputPlan = std::move(protocol).value();
+    if (outputPlan.adapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+        outer.videoParameters.globalHeader = true;
     }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
-        *protocolOutput,
+        outputPlan.protocolOutput,
         *synchronization.sourceClockMode,
         audio.branchMode,
         outer.videoPlan.filterActive,
@@ -619,15 +331,15 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.queues,
             std::move(edgePolicies).value(),
             outer.threadingPolicy,
-            *activationOutputLead,
+            outputPlan.activationOutputLead,
             outer.videoPlan.filterActive,
             std::move(transition),
             facts.value().inputAudioSampleRate,
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt}, *outer.avSyncComponentBounds, facts.value(), adapter, std::move(*protocolOutput),
-            std::move(datagramTransport).value(), std::move(encoderFifoRetention)});
+                : std::nullopt}, *outer.avSyncComponentBounds, facts.value(), outputPlan.adapter, std::move(outputPlan.protocolOutput),
+            std::move(outputPlan.datagramTransport), std::move(encoderFifoRetention)});
 }
 
 } // namespace media::ffmpeg::graph

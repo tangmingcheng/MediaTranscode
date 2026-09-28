@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 协议输出规划双审
+
+基线e9aa5fed后3源码，两名未参与实现者均阶段Standards/Spec **PASS**。输出协议规划已不依赖源decoder/clock，单源复用同一入口，保留源assembly/correction/transition/FIFO。未新增协议算法或公共参数。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏功能/交付 **FAIL（未完成）**。唯一资源准备、源/输出runtime、多源入口及双平台门禁仍缺；构建和真实结果见[协议输出规划](docs/realtime-video-composition-protocol-output-planning.md)。
+
 ## 2026-09-28 输出编码planner双审
 
 基线`6ef4a6c9`后5源码，两名未参与实现者均给阶段Standards/Spec **PASS**。输出open、执行策略与VBV补全共用同一planner；完整链复用源/输出两个内部数据合同，保留单源不可变请求，移除独立输出未消费的源请求字段。

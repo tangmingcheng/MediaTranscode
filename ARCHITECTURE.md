@@ -554,3 +554,5 @@ RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder
 编码器创建器消费显式原始帧SAR/色彩事实，尺寸和cadence由planner选项提供，不依赖源AVCodecParameters或从源再次回退。候选枚举复用同一backend profile；MediaVideoEncoderCapabilityProbe用调用方设备/帧池打开encoder并读回能力，内部独占并销毁可能进入drain的context，不再暴露已打开context的消耗性探测入口。生产preparer仍独立打开未消费context并核对准入读回，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)和[独立编码能力准备](docs/realtime-video-composition-encoder-capability.md)。
 
 MediaVideoOutputPlanner独立规划encoder open合同、输出执行策略及prepared VBV补全。MediaPipelineChainPlan复用源与输出数据合同；单源规范化仍处理真实源事实和不可变请求记录，独立输出不携带源身份，见[输出编码规划](docs/realtime-video-composition-output-planner.md)。
+
+MediaRealtimeAvProtocolOutputPlanner 只消费输出协议、节拍、队列字节界限、prepared emission与部署事实，生成协议及datagram产品；单源AvSyncRuntimePlanner复用它并继续拥有源assembly、校正、transition和FIFO规划。该接口不依赖decoder或输入clock；完整合屏准备和源/输出runtime拆分仍未完成。

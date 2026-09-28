@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：独立协议输出规划
+
+A/V协议输出已从单源runtime抽出，旧生产调用复用，输出产品不接收源decoder/clock；源assembly/correction/transition/FIFO保留。3源码双独立阶段PASS，首次Release全量成功、hash一致；r33原规格120秒源exit0/VLC有画面，CLI仍无进展exit1/4对象。5项产物与进程清理完成，完整合屏仍未完成，见[本轮记录](realtime-video-composition-protocol-output-planning.md)。
+
 ## 2026-09-28：输出编码规划
 
 输出open意图、既有RKMPP执行策略和prepared VBV补全已由独立输出planner统一提供，旧单源真实调用复用；完整链继承同一输出数据合同。双独立阶段源码PASS；首次全量超时退出1，第二次Release全量成功且冻结hash一致。r32原规格120秒源exit0，CLI无进展exit1/4对象；local-r32能力规划失败exit1。6项临时产物及进程全部清理。完整合屏仍未完成，构建与真实验证见[本轮记录](realtime-video-composition-output-planner.md)。
