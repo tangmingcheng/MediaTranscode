@@ -14,6 +14,10 @@ public:
                                                    const MediaVideoTranscodeBranchNodes& nodes,
                                                    const MediaPipelinePlan& plan);
 
+    static ::media::Result<void> applyEncoderPlan(
+        MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+        const MediaPipelineStagePlan& encoder, MediaVideoEncoderAbortPolicy abortPolicy);
+
     static ::media::Result<void> applySourcePlan(
         MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
         const MediaVideoSourcePlan& plan, int sourceStreamIndex,

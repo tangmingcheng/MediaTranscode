@@ -6,6 +6,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/video/MediaVideoOutputPlan.h"
 
 #include <string>
 #include <optional>
@@ -48,6 +49,14 @@ struct MediaVideoSourceBranchOptions : MediaVideoBranchConnectionOptions {
     std::optional<MediaRational> maximumFrameDuplicationGap;
 };
 
+struct MediaVideoOutputEncoderOptions final {
+    std::string prefix;
+    MediaVideoOutputPlan plan;
+    MediaRealtimeEdgePolicySet edgePolicies;
+    std::size_t canonicalLineageCapacity;
+    bool generationStartRequiresKeyFrame;
+};
+
 class MediaVideoTranscodeBranchBuilder final {
 public:
     static ::media::Result<MediaEncodedBranchEndpoints> build(
@@ -58,7 +67,7 @@ public:
         MediaGraph& graph, const MediaVideoSourceBranchOptions& options,
         MediaEndpoint outputEncoderCodec);
     static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
-        MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options);
+        MediaGraph& graph, const MediaVideoOutputEncoderOptions& options);
 
 private:
     MediaVideoTranscodeBranchBuilder() = default;

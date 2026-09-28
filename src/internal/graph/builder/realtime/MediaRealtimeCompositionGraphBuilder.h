@@ -3,7 +3,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
-#include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/video/MediaVideoOutputPlan.h"
 #include "internal/graph/runtime/factory/MediaAvSyncRuntimeBinding.h"
 
 #include <memory>
@@ -18,8 +18,7 @@ class MediaPreparedVideoCanvas;
 struct MediaRealtimeCompositionGraphOptions final {
     std::vector<MediaRealtimeCompositionSourcePlan> sources;
     std::vector<std::shared_ptr<MediaPreparedVideoDecoder>> preparedVideoDecoders;
-    MediaPipelinePlan outputVideo;
-    MediaVideoTranscodeParameters outputVideoParameters;
+    MediaVideoOutputPlan outputVideo;
     MediaRealtimeAvSyncRuntimePlan outputRuntime;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregate;
     MediaBufferRef preparedVideoEncoder;

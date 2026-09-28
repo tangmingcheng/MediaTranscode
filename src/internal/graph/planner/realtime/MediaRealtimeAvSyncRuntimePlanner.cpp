@@ -593,18 +593,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     const MediaAvSyncGroupKey groupKey("realtime.av");
     auto datagramTransport = std::visit(
         [&](const auto& selectedOutput) {
-            using Output = std::decay_t<decltype(selectedOutput)>;
-            if constexpr (std::is_same_v<
-                              Output,
-                              MediaProjectMpegTsRuntimeOutputPlan>) {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    groupKey.value(), *outer.deployment, selectedOutput,
-                    outer.videoPlan, outputFrameRate, &audio);
-            } else {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    groupKey.value(), *outer.deployment, selectedOutput,
-                    outer.videoPlan, outputFrameRate, audio);
-            }
+            return MediaRealtimeDatagramTransportPlanner::plan(
+                groupKey.value(), *outer.deployment, selectedOutput, preparedEmission);
         },
         *protocolOutput);
     if (!datagramTransport) {

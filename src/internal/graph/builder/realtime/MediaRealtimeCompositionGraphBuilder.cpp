@@ -51,12 +51,13 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
     if (auto status = options.preparedCanvas->validateBinding(aggregate.canvas,
             preparedEncoder->context()->hw_frames_ctx); !status) return status;
     const auto& output = options.outputRuntime;
-    const auto& encoder = options.outputVideo.selected.encoder.encoderOpenContract;
+    if (!output.synchronization.startup.requireVideoKeyFrame.has_value())
+        return invalid("Composition output requires its planned generation-start key-frame policy");
+    const auto& encoder = options.outputVideo.encoder.encoderOpenContract;
     if (aggregate.sources.size() != options.sources.size() ||
         aggregate.canvas.tiles.size() != options.sources.size() ||
         aggregate.audioSource >= options.sources.size() ||
         output.groupKey != aggregate.outputGroupKey || !output.groupKey.valid() ||
-        !options.outputVideo.enabled || options.outputVideo.branchMode != MediaBranchMode::TranscodeFrame ||
         !encoder || encoder->width != aggregate.canvas.width || encoder->height != aggregate.canvas.height ||
         encoder->frameRate != aggregate.videoFrameRate || !output.audioPipeline.enabled ||
         !output.audioPipeline.resolvedOutput ||
@@ -113,19 +114,12 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
     return ::media::Status::success();
 }
 
-MediaVideoTranscodeBranchOptions videoOptions(
-    const std::string& prefix, const MediaPipelinePlan& plan,
-    const MediaVideoTranscodeParameters& parameters, const MediaRealtimeAvSyncRuntimePlan& runtime)
+MediaVideoOutputEncoderOptions videoOptions(
+    const std::string& prefix, const MediaVideoOutputPlan& plan,
+    const MediaRealtimeAvSyncRuntimePlan& runtime)
 {
-    MediaVideoTranscodeBranchOptions options;
-    options.prefix = prefix;
-    options.plan = plan;
-    options.parameters = parameters;
-    options.queues = runtime.queues;
-    options.edgePolicies = runtime.edgePolicies;
-    options.canonicalLineageCapacity = runtime.queues.frame;
-    options.generationStartRequiresKeyFrame = runtime.synchronization.startup.requireVideoKeyFrame;
-    return options;
+    return {prefix, plan, runtime.edgePolicies, runtime.queues.frame,
+        *runtime.synchronization.startup.requireVideoKeyFrame};
 }
 
 ::media::Result<MediaAudioEncodeBranchOptions> audioOptions(
@@ -199,7 +193,7 @@ MediaVideoTranscodeBranchOptions videoOptions(
     const auto& aggregate = *options.aggregate;
     auto& outputRuntime = options.outputRuntime;
     auto outputVideo = MediaVideoTranscodeBranchBuilder::buildOutputEncoder(graph,
-        videoOptions(prefix + ".output.video", options.outputVideo, options.outputVideoParameters, outputRuntime));
+        videoOptions(prefix + ".output.video", options.outputVideo, outputRuntime));
     if (!outputVideo) return Result::failure(outputVideo.error());
     auto outputAudioOptions = audioOptions(prefix + ".output.audio", outputRuntime, outputRuntime.encoderFifoRetention);
     if (!outputAudioOptions) return Result::failure(outputAudioOptions.error());
@@ -297,7 +291,7 @@ MediaVideoTranscodeBranchOptions videoOptions(
     } else if (outputRuntime.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         auto protocol = MediaScheduledMpegTsOutputSegmentBuilder::build(graph,
             {prefix + ".output.mpegts", activated, outputVideo.value().encoded.codec, outputAudio.value().encoded.codec,
-             scheduled.value().serialized, options.outputVideo.enabled, outputRuntime.audioPipeline.enabled}, outputRuntime);
+             scheduled.value().serialized, true, outputRuntime.audioPipeline.enabled}, outputRuntime);
         if (!protocol) return Result::failure(protocol.error());
         outputMembers.insert(outputMembers.end(), protocol.value().outputMembers.begin(), protocol.value().outputMembers.end());
         if (protocol.value().rtpSdpPublisher.isValid()) publisher = protocol.value().rtpSdpPublisher;

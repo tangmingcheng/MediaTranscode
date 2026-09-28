@@ -249,13 +249,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
 
     if (auto status = applyOptions(graph, nodes.codecResolver, decoderOptions.value()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
-    auto encoderOptions = MediaVideoEncoderPlanOptionCodec::encode(chain.encoder);
-    if (!encoderOptions) return ::media::Result<void>::failure(encoderOptions.error());
-    if (auto status = applyOptions(graph, nodes.codecResolver, encoderOptions.value()); !status) return status;
-    if (nodes.videoEncode.isValid()) {
-        auto rateControl = MediaEncoderRateControlOptionAdapter::encode(*chain.encoder.encoderRateControl);
-        if (auto status = applyOptions(graph, nodes.videoEncode, rateControl); !status) return status;
-    }
+    if (auto status = applyEncoderPlan(graph, nodes, chain.encoder, chain.encoderAbortPolicy);
+        !status) return status;
     if (nodes.sourceCopy.isValid()) {
         if (!plan.sharedSource || !plan.sharedSource->copy ||
             plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::Unknown ||
@@ -271,17 +266,27 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (nodes.videoTimestamp.isValid()) {
         if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
     }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> MediaVideoPlanOptionApplier::applyEncoderPlan(
+    MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+    const MediaPipelineStagePlan& encoder, MediaVideoEncoderAbortPolicy abortPolicy)
+{
+    auto encoded = MediaVideoEncoderPlanOptionCodec::encode(encoder);
+    if (!encoded) return ::media::Result<void>::failure(encoded.error());
+    if (auto status = applyOptions(graph, nodes.codecResolver, encoded.value()); !status) return status;
+    if (auto status = setStageOptions(graph, nodes.codecResolver, "encoder.pipeline", encoder); !status) return status;
     if (!nodes.videoEncode.isValid()) return ::media::Result<void>::success();
-    if (chain.encoderAbortPolicy == MediaVideoEncoderAbortPolicy::Unknown) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MediaVideoPlanOptionApplier requires planner encoder abort policy"));
-    }
-    if (auto status = setOption(
-            graph, nodes.videoEncode, "video_encode.abort_policy",
-            mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
-        !status) return status;
-    return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+    if (abortPolicy == MediaVideoEncoderAbortPolicy::Unknown)
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "MediaVideoPlanOptionApplier requires planner encoder abort policy"));
+    if (auto status = setStageOptions(graph, nodes.videoEncode, "encoder.pipeline", encoder); !status) return status;
+    auto rateControl = MediaEncoderRateControlOptionAdapter::encode(*encoder.encoderRateControl);
+    if (auto status = applyOptions(graph, nodes.videoEncode, rateControl); !status) return status;
+    if (auto status = setOption(graph, nodes.videoEncode, "video_encode.abort_policy",
+            mediaVideoEncoderAbortPolicyName(abortPolicy)); !status) return status;
+    return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, encoder.ffmpegName);
 }
 
 ::media::Result<void> MediaVideoPlanOptionApplier::applySourcePlan(
