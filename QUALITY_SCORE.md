@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 输出编码planner双审
+
+基线`6ef4a6c9`后5源码，两名未参与实现者均给阶段Standards/Spec **PASS**。输出open、执行策略与VBV补全共用同一planner；完整链复用源/输出两个内部数据合同，保留单源不可变请求，移除独立输出未消费的源请求字段。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏/交付 **FAIL（未完成）**。缺实际唯一输出资源准备与多源事务、跨源总准入、纯视频及双平台真实门禁，验证边界见[输出编码规划](docs/realtime-video-composition-output-planner.md)。
+
 ## 2026-09-28 独立编码能力双审
 
 基线`10978e42`后7条源码路径（含删除与新建），两名未参与实现者均给阶段Standards/Spec **PASS**。encoder候选复用原profile，旧整链消费同枚举；消耗性能力探测内部打开并销毁context，三个调用者复用同实现，设备/池引用符合FFmpeg生命周期。

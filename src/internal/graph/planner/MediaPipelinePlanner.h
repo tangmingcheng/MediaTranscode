@@ -1,5 +1,6 @@
 #pragma once
 #include "internal/graph/planner/video/MediaVideoSourcePlan.h"
+#include "internal/graph/planner/video/MediaVideoOutputPlan.h"
 #include "internal/graph/model/MediaVideoColorRangeFact.h"
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
 #include "internal/graph/model/MediaVideoSharedSourcePlan.h"
@@ -29,12 +30,7 @@ namespace media::ffmpeg::graph {
 
 class MediaHardwareCapabilityProbe;
 
-struct MediaPipelineChainPlan : MediaVideoSourcePlan {
-    MediaPipelineStagePlan encoder;
-    MediaVideoLineagePropagation encoderLineagePropagation =
-        MediaVideoLineagePropagation::Unknown;
-    MediaVideoEncoderAbortPolicy encoderAbortPolicy =
-        MediaVideoEncoderAbortPolicy::Unknown;
+struct MediaPipelineChainPlan : MediaVideoSourcePlan, MediaVideoOutputPlan {
 };
 
 struct MediaPipelinePlannerOptions {

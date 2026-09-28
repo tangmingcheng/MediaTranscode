@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：输出编码规划
+
+输出open意图、既有RKMPP执行策略和prepared VBV补全已由独立输出planner统一提供，旧单源真实调用复用；完整链继承同一输出数据合同。双独立阶段源码PASS；首次全量超时退出1，第二次Release全量成功且冻结hash一致。r32原规格120秒源exit0，CLI无进展exit1/4对象；local-r32能力规划失败exit1。6项临时产物及进程全部清理。完整合屏仍未完成，构建与真实验证见[本轮记录](realtime-video-composition-output-planner.md)。
+
 ## 2026-09-28：独立编码能力准备
 
 encoder候选枚举已由旧整链共用；三处encoder open/readback统一到内部独占context的能力探测入口，移除外部已打开context消耗接口。双独立阶段源码PASS，首次Release全量成功，构建后hash与冻结版一致。r31指定源3600帧/120秒exit0，CLI仍无进展exit1/4对象；local-r31能力规划失败exit1。6项临时产物及媒体进程清理完成，完整合屏仍未完成，见[本轮记录](realtime-video-composition-encoder-capability.md)。

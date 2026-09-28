@@ -552,3 +552,5 @@ RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder
 组合图源输入现在使用MediaRealtimeCompositionSourcePlan，公共输入组装与decoder/filter segment消费MediaRealtimeAvSourceRuntimePlan，不要求逐源encoder/FIFO/协议输出。MediaPreparedVideoCanvas在真实输出帧池执行黑模板与tile copy后持有资源，运行aggregate一次性领取并绑定owner wakeup；缺失准备产品直接失败。唯一视频输出改用MediaVideoOutputPlan，输出segment仅创建resolver和encoder，并与旧完整branch复用编码映射；发送规划直接消费上游prepared emission，不再索取完整源计划。完整准备协调器及跨源准入仍待接通，见[源合同与准备画布](docs/realtime-video-composition-source-contract.md)和[唯一输出合同](docs/realtime-video-composition-output-contract.md)。
 
 编码器创建器消费显式原始帧SAR/色彩事实，尺寸和cadence由planner选项提供，不依赖源AVCodecParameters或从源再次回退。候选枚举复用同一backend profile；MediaVideoEncoderCapabilityProbe用调用方设备/帧池打开encoder并读回能力，内部独占并销毁可能进入drain的context，不再暴露已打开context的消耗性探测入口。生产preparer仍独立打开未消费context并核对准入读回，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)和[独立编码能力准备](docs/realtime-video-composition-encoder-capability.md)。
+
+MediaVideoOutputPlanner独立规划encoder open合同、输出执行策略及prepared VBV补全。MediaPipelineChainPlan复用源与输出数据合同；单源规范化仍处理真实源事实和不可变请求记录，独立输出不携带源身份，见[输出编码规划](docs/realtime-video-composition-output-planner.md)。
