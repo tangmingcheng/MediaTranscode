@@ -150,3 +150,8 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 2026-09-28：源校正容量
 
 源组件界被旧共享链共用，源校正显式排除输出编码/协议项，组合图构图前重算校正政策。双审发现旧mailbox用metadata而真实命令边为frame，已同步修正并双复审PASS。两次Release全量成功；r42固定120秒源exit0、VLC有画面，CLI自然exit1/无进展/4逻辑对象，完整验收FAIL。5文件及媒体/编译进程清理，指定源保留，仅realtime。见[源校正记录](realtime-video-composition-source-correction.md)。校正可达性余量不等于全源资源总账；完整source runtime/资源事务/纯视频源/多源入口与Windows→RKMPP门禁仍未完成，42/100不变。
+
+
+## 源同步域与A/V源runtime装配
+
+同一sync planner支持明确源贡献域，不需构造输出协议；源runtime组合既有clock/correction/edges/source transition。原共享路径复用政策和校验。首审三项前置校验缺口修复后双独立Standards/阶段Spec PASS，完整FAIL42。公共多源协调器尚未调用，不能计为合屏已运行；详见[本轮记录](realtime-video-composition-source-runtime.md)。

@@ -4,14 +4,18 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeAvSyncRuntimePlan;
-struct MediaRealtimeRtpTranscodePlan;
+struct MediaRealtimeAvSourceClockRequest;
+struct MediaAvSyncPlan;
+struct MediaRealtimeAvSourceTimingFacts;
+struct MediaRealtimeAvSyncAssemblyPlan;
 
 class MediaRealtimeAvSyncRuntimeInputValidator final {
 public:
     static ::media::Status validate(
-        const MediaRealtimeRtpTranscodePlan& outer,
-        const MediaRealtimeAvSyncRuntimePlan& runtime);
+        const MediaRealtimeAvSourceClockRequest& request,
+        const MediaAvSyncPlan& synchronization,
+        const MediaRealtimeAvSourceTimingFacts& facts,
+        const MediaRealtimeAvSyncAssemblyPlan& assembly);
 
 private:
     MediaRealtimeAvSyncRuntimeInputValidator() = delete;

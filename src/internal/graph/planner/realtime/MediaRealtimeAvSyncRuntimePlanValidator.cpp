@@ -6,6 +6,7 @@
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeInputValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeOutputValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
@@ -168,13 +169,7 @@ namespace media::ffmpeg::graph {
     if (!expectedEdges || runtime.edgePolicies != expectedEdges.value()) {
         return invalid("edge-policy product");
     }
-    if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
-        runtime.threadingPolicy.priority != MediaThreadPriority::High ||
-        runtime.threadingPolicy.maxWorkerThreads != 0 ||
-        runtime.threadingPolicy.pinWorkers ||
-        !runtime.threadingPolicy.collectWorkerMetrics) {
-        return invalid("threading product");
-    }
+    if (auto status = validateThreading(runtime.threadingPolicy); !status) return status;
     if (runtime.transition.acknowledgementTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
         runtime.transition.terminalDrainWindow <=
@@ -259,7 +254,10 @@ namespace media::ffmpeg::graph {
     }
     if (auto inputStatus =
             MediaRealtimeAvSyncRuntimeInputValidator::validate(
-                outer, runtime);
+                {outer.inputType, outer.inputLayout, outer.input, outer.videoPlan.sourceStreamIndex,
+                 outer.videoPlan.inputCodecName, runtime.audioPipeline,
+                 runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr},
+                runtime.synchronization, runtime.planningFacts, runtime.assembly);
         !inputStatus) {
         return inputStatus;
     }
@@ -268,6 +266,20 @@ namespace media::ffmpeg::graph {
                 outer, runtime);
         !outputStatus) {
         return outputStatus;
+    }
+    return ::media::Status::success();
+}
+
+::media::Status MediaRealtimeAvSyncRuntimePlanValidator::validateThreading(
+    const MediaThreadingPolicy& policy)
+{
+    if (policy.mode != MediaThreadingMode::PerNodeWorker ||
+        policy.priority != MediaThreadPriority::High ||
+        policy.maxWorkerThreads != 0 ||
+        policy.pinWorkers ||
+        !policy.collectWorkerMetrics) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Invalid synchronized runtime product: threading product"));
     }
     return ::media::Status::success();
 }

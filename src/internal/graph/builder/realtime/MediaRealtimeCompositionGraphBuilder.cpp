@@ -91,6 +91,7 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
                 runtime->synchronization, MediaAvSyncDomainRole::SourceContribution); !status) return status;
         const auto& input = aggregate.sources[i];
         if (!runtime->groupKey.valid() || runtime->groupKey != input.groupKey ||
+            runtime->activationOutputLead != output.activationOutputLead ||
             !groups.insert(input.groupKey.value()).second ||
             !source.video.available || source.videoStreamIndex < 0 ||
             !source.video.decoder.preparedInputRetention ||

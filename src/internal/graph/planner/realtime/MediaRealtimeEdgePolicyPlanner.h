@@ -8,8 +8,13 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaAvSyncStartupPolicy;
+
 class MediaRealtimeEdgePolicyPlanner final {
 public:
+    static ::media::Result<MediaRealtimeEdgePolicySet> planSynchronizedSource(
+        const MediaGraphQueueParameters& queues,
+        const MediaAvSyncStartupPolicy& startup);
     static MediaRealtimeEdgePolicySet plan(
         const MediaGraphQueueParameters& queues);
     static ::media::Result<MediaRealtimeEdgePolicySet>

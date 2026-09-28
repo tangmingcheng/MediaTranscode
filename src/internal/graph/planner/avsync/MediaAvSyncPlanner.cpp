@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/avsync/MediaAvSynchronizationPolicyPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 
@@ -143,13 +144,12 @@ void planTsInput(MediaAvSyncPlan& plan,
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
-    MediaAvSyncPlan outputSynchronization,
+    MediaAvSynchronizationDomain domain,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
     const MediaRealtimeDeploymentEnvelope& deployment,
     MediaBranchMode audioBranchMode,
-    int resolvedOutputAudioSampleRate,
-    MediaAvSourceLifecycleMode lifecycleMode)
+    int resolvedOutputAudioSampleRate)
 {
     if (request.mediaId.empty()) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -171,12 +171,28 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::invalidArgument(
                 "A/V synchronization requires a planned audio execution branch"));
     }
-    if (auto status = MediaAvSyncPlanValidator::validateDomain(
-            outputSynchronization, MediaAvSyncDomainRole::ContinuousOutput); !status) {
-        return ::media::Result<MediaAvSyncPlan>::failure(status.error());
+    const bool sourceContribution =
+        std::holds_alternative<MediaAvSourceContributionDomain>(domain);
+    if (sourceContribution && audioBranchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::unsupported("Source contribution requires frame audio processing"));
     }
-    auto plan = std::move(outputSynchronization);
-    plan.domainRole = MediaAvSyncDomainRole::SharedSourceOutput;
+    const auto lifecycleMode = sourceContribution
+        ? MediaAvSourceLifecycleMode::PreserveActivatedOutput
+        : MediaAvSourceLifecycleMode::FailSessionOnSourceLoss;
+    MediaAvSyncPlan plan;
+    if (sourceContribution) {
+        plan.domainRole = MediaAvSyncDomainRole::SourceContribution;
+        MediaAvSynchronizationPolicyPlanner::apply(plan);
+    } else {
+        auto& outputSynchronization = std::get<MediaAvSyncPlan>(domain);
+        if (auto status = MediaAvSyncPlanValidator::validateDomain(
+                outputSynchronization, MediaAvSyncDomainRole::ContinuousOutput); !status) {
+            return ::media::Result<MediaAvSyncPlan>::failure(status.error());
+        }
+        plan = std::move(outputSynchronization);
+        plan.domainRole = MediaAvSyncDomainRole::SharedSourceOutput;
+    }
     plan.sourceLifecycle = MediaAvSourceLifecyclePlan{lifecycleMode};
     if (preparedDemuxFacts) {
         auto finalized = MediaAvSyncStartupPolicyPlanner::finalizePrepared(

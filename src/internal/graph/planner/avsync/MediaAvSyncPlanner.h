@@ -6,9 +6,15 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "media_transcode/Result.h"
 
+#include <variant>
+
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeGraphResourceLedgerPlan;
+
+struct MediaAvSourceContributionDomain final {};
+using MediaAvSynchronizationDomain =
+    std::variant<MediaAvSourceContributionDomain, MediaAvSyncPlan>;
 
 class MediaAvSyncPlanner final {
 public:
@@ -18,13 +24,12 @@ public:
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
-        MediaAvSyncPlan outputSynchronization,
+        MediaAvSynchronizationDomain domain,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
         const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
         const MediaRealtimeDeploymentEnvelope& deployment,
         MediaBranchMode audioBranchMode,
-        int resolvedOutputAudioSampleRate,
-        MediaAvSourceLifecycleMode lifecycleMode);
+        int resolvedOutputAudioSampleRate);
 
 private:
     MediaAvSyncPlanner() = delete;

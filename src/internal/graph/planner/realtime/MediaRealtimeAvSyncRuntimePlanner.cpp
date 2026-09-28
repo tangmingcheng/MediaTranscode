@@ -9,44 +9,10 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
 #include <optional>
-#include <limits>
 #include <utility>
 #include <variant>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-::media::Result<MediaRealtimeEdgePolicySet> planBoundedEdgePolicies(
-    const MediaRealtimeRtpTranscodePlanningDraft& outer,
-    const MediaAvSyncPlan& synchronization)
-{
-    if (!synchronization.startup.videoByteCapacity ||
-        !synchronization.startup.audioByteCapacity ||
-        !synchronization.startup.videoCapacity ||
-        !synchronization.startup.audioCapacity ||
-        *synchronization.startup.videoByteCapacity == 0 ||
-        *synchronization.startup.audioByteCapacity == 0 ||
-        outer.queues.packet == 0 ||
-        *synchronization.startup.videoByteCapacity >
-            (std::numeric_limits<std::uint64_t>::max)() -
-                *synchronization.startup.audioByteCapacity) {
-        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V edge byte capacity is incomplete or not representable"));
-    }
-    const auto maximumBytes =
-        *synchronization.startup.videoByteCapacity +
-        *synchronization.startup.audioByteCapacity;
-    return MediaRealtimeEdgePolicyPlanner::
-        planWithAvStartupRelease(
-            outer.queues, maximumBytes, outer.queues.packet,
-            *synchronization.startup.videoCapacity,
-            *synchronization.startup.audioCapacity);
-}
-
-
-} // namespace
-
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
@@ -125,7 +91,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::invalidArgument("audio output requires resolved format and selected processing"));
     }
-    auto edgePolicies = planBoundedEdgePolicies(outer, synchronization);
+    auto edgePolicies = MediaRealtimeEdgePolicyPlanner::planSynchronizedSource(outer.queues, synchronization.startup);
     if (!edgePolicies) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             edgePolicies.error());

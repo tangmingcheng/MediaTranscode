@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 源runtime装配双审
+
+基线c930cf66后16源码，源同步域与A/V源runtime装配共用既有政策、源clock/correction/边界和transition。首审漏校验的transport一致性、音频索引、线程合同已修正，A/B最终Standards/阶段Spec PASS；B撤回首次不充分PASS。多源公共调用、纯视频源、总准入及双平台真实门禁未完成，六维10/8/6/12/2/4，总42/100，完整FAIL。见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。
+
 ## 2026-09-28 源校正容量双审
 
 基线4e7bd5e7后8源码，两位独立最终Standards/阶段Spec PASS。旧共享链复用源容量，组合图重算源校正产品；首审命令mailbox事实映射缺陷已同步修正为实际frame事务边。校正可达性余量不是全源资源总账；完整source runtime、资源事务、多源入口和双平台门禁仍未完成，六维10/8/6/12/2/4，总42/100，完整FAIL。详见[源校正记录](docs/realtime-video-composition-source-correction.md)。

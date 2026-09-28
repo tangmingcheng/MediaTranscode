@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+同步planner以显式域生成源贡献或共享链政策，公共时钟/视频/metrics政策集中复用。MediaRealtimeAvSourceRuntimePlanner装配源clock、correction、有界startup边及source-only transition，返回既有组合图所需A/V源合同；公共多源prepare协调器尚未接入，见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。
+
 源音频校正组件界由共用planner推导，旧共享链在其上追加输出编码/调度界；源贡献路径不包含这些输出阶段。命令mailbox按实际audioDriftTransaction的frame容量记账，组合图重算源校正并核对政策，见[源校正容量](docs/realtime-video-composition-source-correction.md)。
 
 MediaRealtimeAvSourceClockPlanner以源输入合同生成源时间事实与canonical装配；旧共享resolver和runtime领取同次结果，源入口不依赖输出packetization或encoder延迟。专项源时钟验证由新旧路径共用，runtime validator重算整个assembly比较，见[源时钟规划](docs/realtime-video-composition-source-clock.md)。

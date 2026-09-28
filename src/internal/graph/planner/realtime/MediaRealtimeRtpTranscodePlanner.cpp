@@ -1382,8 +1382,7 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             *plan.resourceLedger,
             *plan.deployment,
             plannedAudio.branchMode,
-            plannedAudio.resolvedOutput->sampleRate(),
-            MediaAvSourceLifecycleMode::FailSessionOnSourceLoss);
+            plannedAudio.resolvedOutput->sampleRate());
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
