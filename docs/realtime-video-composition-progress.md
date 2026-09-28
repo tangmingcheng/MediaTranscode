@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：源恢复参与者合同
+
+同一planner按源贡献与共享源/输出职责产生精确参与者，旧单源顺序保留；合屏builder构图前拒绝完整集合错配。4源码双独立阶段PASS，首次Release全量成功、hash一致。r34原规格120秒源exit0、VLC有画面，CLI仍无进展exit1/4对象；5项产物和进程清理完成。纯源bootstrap校验仍要求输出协议，下一步须按domain拆分；完整目标未完成，见[本轮记录](realtime-video-composition-source-transition.md)。
+
 ## 2026-09-28：独立协议输出规划
 
 A/V协议输出已从单源runtime抽出，旧生产调用复用，输出产品不接收源decoder/clock；源assembly/correction/transition/FIFO保留。3源码双独立阶段PASS，首次Release全量成功、hash一致；r33原规格120秒源exit0/VLC有画面，CLI仍无进展exit1/4对象。5项产物与进程清理完成，完整合屏仍未完成，见[本轮记录](realtime-video-composition-protocol-output-planning.md)。

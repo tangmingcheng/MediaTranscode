@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：输出编码规划已解耦；正将协议输出从单源runtime planner分离，复用原RTP/RTCP和MPEG-TS算法。实际唯一输出资源、源/输出runtime与多源事务仍未完成，见[协议输出规划](docs/realtime-video-composition-protocol-output-planning.md)。
+当前推进：输出编码与协议规划已解耦；源贡献generation合同已按真实处理职责独立，并由合屏builder作构图前精确校验。实际唯一输出资源、源/输出runtime与多源事务仍未完成，见[源恢复参与者](docs/realtime-video-composition-source-transition.md)。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 源恢复参与者双审
+
+基线958b1a68后4源码，两名未参与实现者均阶段Standards/Spec **PASS**。核对真实source builder与runtime注册，精确源集合排除输出encoder/sender，旧共享集合顺序保持；合屏builder在构图前核验完整合同。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏/验收/交付 **FAIL（未完成）**。源runtime及多源生产入口、唯一资源/跨源总账和双平台门禁仍缺，见[源恢复参与者](docs/realtime-video-composition-source-transition.md)。
+
 ## 2026-09-28 协议输出规划双审
 
 基线e9aa5fed后3源码，两名未参与实现者均阶段Standards/Spec **PASS**。输出协议规划已不依赖源decoder/clock，单源复用同一入口，保留源assembly/correction/transition/FIFO。未新增协议算法或公共参数。

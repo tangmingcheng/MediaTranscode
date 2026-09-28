@@ -9,6 +9,13 @@ namespace media::ffmpeg::graph {
 
 class MediaAvGenerationTransitionPlanner final {
 public:
+    static ::media::Result<MediaAvGenerationTransitionPlan> planSourceContribution(
+        MediaAvSyncSourceClockMode sourceClockMode,
+        MediaBranchMode audioBranchMode,
+        bool videoFilterActive,
+        MediaRunningTime acknowledgementTimeout,
+        MediaRunningTime terminalDrainWindow);
+
     static MediaAvGenerationTransitionPlan plan(
         const std::variant<MediaSeparateRtpOutputRuntimePlan, MediaProjectMpegTsRuntimeOutputPlan>& output,
         MediaAvSyncSourceClockMode sourceClockMode,

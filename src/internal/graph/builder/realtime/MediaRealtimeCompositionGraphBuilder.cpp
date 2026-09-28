@@ -8,6 +8,7 @@
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
@@ -99,17 +100,15 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
             (input.discardedAudioPort && (input.discardedAudioPort->empty() ||
              !ports.insert(*input.discardedAudioPort).second)))
             return invalid("Composition requires distinct frame and epoch ports including all nonselected audio");
-        bool aggregateParticipant = false;
-        for (const auto& participant : runtime->transition.participants) {
-            if (participant.participant == MediaAvGenerationParticipant::CanonicalLineage) {
-                aggregateParticipant = std::find(participant.requiredChildren.begin(),
-                    participant.requiredChildren.end(), "aggregate_source") != participant.requiredChildren.end();
-            } else if (participant.participant != MediaAvGenerationParticipant::AudioCorrection) {
-                return invalid("Composition source transition must not reset output participants");
-            }
-        }
-        if (!aggregateParticipant)
-            return invalid("Composition source transition lacks its aggregate purge child");
+        if (!runtime->synchronization.sourceClockMode)
+            return invalid("Composition source transition requires its source clock authority");
+        auto expectedTransition = MediaAvGenerationTransitionPlanner::planSourceContribution(
+            *runtime->synchronization.sourceClockMode, runtime->audioPipeline.branchMode,
+            source.video.filterActive, runtime->transition.acknowledgementTimeout,
+            runtime->transition.terminalDrainWindow);
+        if (!expectedTransition) return ::media::Status::failure(expectedTransition.error());
+        if (runtime->transition.participants != expectedTransition.value().participants)
+            return invalid("Composition source transition differs from its exact source processing contract");
     }
     return ::media::Status::success();
 }

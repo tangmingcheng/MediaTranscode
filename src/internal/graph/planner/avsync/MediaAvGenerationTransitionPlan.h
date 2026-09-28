@@ -23,6 +23,8 @@ enum class MediaAvGenerationParticipant : std::uint8_t {
 struct MediaAvGenerationParticipantPlan final {
     MediaAvGenerationParticipant participant;
     std::vector<std::string> requiredChildren;
+    friend bool operator==(const MediaAvGenerationParticipantPlan&,
+                           const MediaAvGenerationParticipantPlan&) = default;
 };
 
 struct MediaAvGenerationTransitionPlan final {
