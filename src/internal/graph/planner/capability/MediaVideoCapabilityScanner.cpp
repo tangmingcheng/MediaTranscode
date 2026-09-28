@@ -338,6 +338,21 @@ MediaVideoCapabilityScanner::enumerateSourceCandidates(
     return Result::success(std::move(sources));
 }
 
+std::vector<MediaPipelineStagePlan> MediaVideoCapabilityScanner::enumerateEncoderCandidates(
+    const std::string& outputCodecName, MediaSize frameSize)
+{
+    const auto outputCodec = canonicalCodecName(outputCodecName);
+    std::vector<MediaPipelineStagePlan> encoders;
+    for (const auto& profile : profiles) {
+        auto encoder = makeCodecStage(MediaPipelineStageRole::Encoder,
+            profile.encoderComponent, outputCodec, codecSpecificName(outputCodec, profile.encoderSuffix),
+            profile.hwaccel, profile.device, true, true, profile.encoderPriority);
+        encoder.inputFrame->size = frameSize;
+        encoders.push_back(std::move(encoder));
+    }
+    return encoders;
+}
+
 std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTranscodeCandidates(
     const std::string& inputCodecName, const std::string& outputCodecName,
     const MediaPipelinePlannerOptions& options)
@@ -347,16 +362,16 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
         options.targetWidth > 0 && options.targetHeight > 0
             ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
         options.sourceFrameRate, options.lowLatency};
+    auto encoders = enumerateEncoderCandidates(outputCodecName,
+        sourceOptions.targetSize.value_or(sourceOptions.sourceSize));
     std::vector<MediaPipelineChainPlan> chains;
-    for (const auto& profile : profiles) {
+    // Enumeration retains every profile, including unavailable codecs, in table order.
+    // Pair each encoder with the same source profile without inventing a decoder.
+    for (std::size_t index = 0; index < encoders.size(); ++index) {
         MediaPipelineChainPlan chain;
         static_cast<MediaVideoSourcePlan&>(chain) =
-            makeSourceCandidate(profile, canonicalCodecName(inputCodecName), sourceOptions);
-        const auto outputCodec = canonicalCodecName(outputCodecName);
-        chain.encoder = makeCodecStage(MediaPipelineStageRole::Encoder,
-            profile.encoderComponent, outputCodec, codecSpecificName(outputCodec, profile.encoderSuffix),
-            profile.hwaccel, profile.device, true, true, profile.encoderPriority);
-        chain.encoder.inputFrame->size = sourceOptions.targetSize.value_or(sourceOptions.sourceSize);
+            makeSourceCandidate(profiles[index], canonicalCodecName(inputCodecName), sourceOptions);
+        chain.encoder = std::move(encoders[index]);
         chains.push_back(std::move(chain));
     }
     return chains;

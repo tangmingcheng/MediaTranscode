@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：共用编码器原始帧输入与能力读回已解耦并双审；下一步仍是唯一输出准备与完整多源事务接线，不能把局部合同视为合屏完成，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)。
+当前推进：共用编码器原始帧输入、独立候选与消耗性能力探测已解耦并双审；下一步仍是实际保留唯一输出资源与完整多源事务接线，不能把局部合同视为合屏完成，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)及[独立编码能力准备](docs/realtime-video-composition-encoder-capability.md)。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

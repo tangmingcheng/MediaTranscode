@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：独立编码能力准备
+
+encoder候选枚举已由旧整链共用；三处encoder open/readback统一到内部独占context的能力探测入口，移除外部已打开context消耗接口。双独立阶段源码PASS，首次Release全量成功，构建后hash与冻结版一致。r31指定源3600帧/120秒exit0，CLI仍无进展exit1/4对象；local-r31能力规划失败exit1。6项临时产物及媒体进程清理完成，完整合屏仍未完成，见[本轮记录](realtime-video-composition-encoder-capability.md)。
+
 ## 2026-09-28：编码器帧输入与能力读回
 
 共用encoder创建器改收显式帧属性，尺寸/cadence由planner合同提供；metadata与动态输出两个生产调用者同步迁移。已打开encoder的packet-layout/random-access/emission探测从完整源链抽出，三种既有能力路径复用，探测context不能交给生产编码。7源码双独立阶段PASS；首次Release构建120秒超时，第二次全量成功且hash不变。r30固定120秒实时源exit0、VLC有画面，CLI仍无进展exit1/4对象；local-r30仍能力规划失败exit1。6项临时文件及媒体进程全部清理，完整目标仍未完成，详见[本轮记录](realtime-video-composition-encoder-input.md)。

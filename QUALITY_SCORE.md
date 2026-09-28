@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 独立编码能力双审
+
+基线`10978e42`后7条源码路径（含删除与新建），两名未参与实现者均给阶段Standards/Spec **PASS**。encoder候选复用原profile，旧整链消费同枚举；消耗性能力探测内部打开并销毁context，三个调用者复用同实现，设备/池引用符合FFmpeg生命周期。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏及交付 **FAIL（未完成）**。候选/能力探测不等于实际保留唯一输出资源；完整协调器、源/输出runtime、总准入、纯视频与双平台多源门禁未通过，见[独立编码能力准备](docs/realtime-video-composition-encoder-capability.md)。
+
 ## 2026-09-28 编码器帧输入双独立审查
 
 基线`e6f411d9`后7个源码，两名未参与实现者均给出阶段Standards/Spec **PASS**；原始帧事实、planner尺寸/cadence、SAR/色彩保持和一次性能力探测生命周期符合现有FFmpeg接口语义。没有新增算法、平台链或公共参数。

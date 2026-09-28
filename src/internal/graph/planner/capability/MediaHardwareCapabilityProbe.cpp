@@ -1,11 +1,10 @@
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
-#include "internal/graph/planner/capability/MediaOpenedVideoEncoderProbe.h"
+#include "internal/graph/planner/capability/MediaVideoEncoderCapabilityProbe.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -255,32 +254,8 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         chain.decoder.preparedInputRetention = std::move(retention).value();
     }
 
-    auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
-    if (!encoderContext) {
-        return unavailable("avcodec_alloc_context3(RKMPP encoder) returned null");
-    }
-    encoderContext->pix_fmt = encoderFormat;
-    encoderContext->sw_pix_fmt = encoderSurfaceFormat;
-    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
-        ? options.targetFrameRate : options.sourceFrameRate;
-    encoderContext->sample_aspect_ratio = AVRational{1, 1};
-    if (options.sourceColorRange) encoderContext->color_range = *options.sourceColorRange;
-    if (!chain.encoder.encoderOpenContract) {
-        return unavailable("RKMPP encoder open contract is missing");
-    }
-    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
-        *encoderContext, *chain.encoder.encoderOpenContract);
-    if (!applied) {
-        return unavailable(applied.error().message);
-    }
-    const int encoderOpened = avcodec_open2(encoderContext.get(), encoder, nullptr);
-    if (encoderOpened < 0) {
-        return ffmpegUnavailable(
-            "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
-            encoderOpened);
-    }
-    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
-        chain.encoder, *encoderContext, encoderFrameRate, "rkmpp", encoderSurfaceFormat);
+    auto evidence = MediaVideoEncoderCapabilityProbe::inspect(chain.encoder,
+        {{1, 1}, options.sourceColorRange, nullptr, nullptr, "rkmpp", encoderSurfaceFormat});
     if (!evidence) return unavailable(evidence.error().message);
     return {true, chain.filterActive
                       ? "internally managed RKMPP codecs and planned RGA graph negotiated"
@@ -291,39 +266,8 @@ MediaHardwareCapability validateSoftwareEncoder(
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    if (!chain.encoder.inputFrame || !chain.encoder.encoderRateControl ||
-        !chain.encoder.encoderOpenContract) {
-        return unavailable("software encoder preflight contract is missing");
-    }
-    const AVCodec* encoder =
-        avcodec_find_encoder_by_name(chain.encoder.ffmpegName.c_str());
-    if (!encoder) {
-        return unavailable("planned encoder is unavailable: " +
-                           chain.encoder.ffmpegName);
-    }
-    auto context = ::media::ffmpeg::makeCodecContext(encoder);
-    if (!context) {
-        return unavailable("avcodec_alloc_context3(software encoder) returned null");
-    }
-    const auto cadence = options.targetFrameRate.isKnown()
-        ? options.targetFrameRate : options.sourceFrameRate;
-    context->pix_fmt = pixelFormat(chain.encoder.inputFrame->pixelFormat);
-    context->sample_aspect_ratio = AVRational{1, 1};
-    if (options.sourceColorRange) context->color_range = *options.sourceColorRange;
-    if (context->pix_fmt == AV_PIX_FMT_NONE || !cadence.isKnown()) {
-        return unavailable("software encoder preflight geometry is incomplete");
-    }
-    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
-        *context, *chain.encoder.encoderOpenContract);
-    if (!applied) return unavailable(applied.error().message);
-    const int opened = avcodec_open2(context.get(), encoder, nullptr);
-    if (opened < 0) {
-        return ffmpegUnavailable(
-            "avcodec_open2(software encoder " + chain.encoder.ffmpegName + ")",
-            opened);
-    }
-    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
-        chain.encoder, *context, cadence, "ffmpeg-software", std::nullopt);
+    auto evidence = MediaVideoEncoderCapabilityProbe::inspect(chain.encoder,
+        {{1, 1}, options.sourceColorRange, nullptr, nullptr, "ffmpeg-software", std::nullopt});
     if (!evidence) return unavailable(evidence.error().message);
     return {true, "software encoder opened with effective emission readback"};
 }
@@ -433,42 +377,15 @@ MediaHardwareCapability validateCompleteChain(
         }
     }
 
-    const AVCodec* encoder =
-        avcodec_find_encoder_by_name(chain.encoder.ffmpegName.c_str());
-    if (!encoder) {
-        return unavailable("planned encoder is unavailable: " + chain.encoder.ffmpegName);
-    }
-    auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
-    if (!encoderContext) {
-        return unavailable("avcodec_alloc_context3(encoder) returned null");
-    }
-    encoderContext->pix_fmt = encoderFormat;
-    encoderContext->sw_pix_fmt = surfaceFormat;
-    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
-        ? options.targetFrameRate : options.sourceFrameRate;
-    encoderContext->sample_aspect_ratio = AVRational{1, 1};
-    if (options.sourceColorRange) encoderContext->color_range = *options.sourceColorRange;
-    if (!chain.encoder.encoderRateControl ||
-        !chain.encoder.encoderOpenContract) {
-        return unavailable("hardware encoder open contract is missing");
-    }
-    auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
-        *encoderContext, *chain.encoder.encoderOpenContract);
-    if (!applied) return unavailable(applied.error().message);
-
+    ::media::ffmpeg::BufferRefPtr encoderFrames;
     if (device) {
-        encoderContext->hw_device_ctx = av_buffer_ref(device.get());
-        if (!encoderContext->hw_device_ctx) {
-            return unavailable("av_buffer_ref(encoder hardware device) returned null");
-        }
         std::string framesFailure;
-        auto encoderFrames = createFramesContext(
+        encoderFrames = createFramesContext(
             device.get(), hardwareFormat, surfaceFormat,
             outputWidth, outputHeight, 4, framesFailure);
         if (!encoderFrames) {
             return unavailable("filter/encoder frame negotiation " + framesFailure);
         }
-        encoderContext->hw_frames_ctx = encoderFrames.release();
     }
 
     if (chain.filterActive) {
@@ -491,14 +408,9 @@ MediaHardwareCapability validateCompleteChain(
         if (!negotiation) return unavailable(negotiation.error().message);
     }
 
-    const int encoderOpened = avcodec_open2(encoderContext.get(), encoder, nullptr);
-    if (encoderOpened < 0) {
-        return ffmpegUnavailable(
-            "avcodec_open2(encoder " + chain.encoder.ffmpegName + ")",
-            encoderOpened);
-    }
-    auto evidence = MediaOpenedVideoEncoderProbe::inspect(
-        chain.encoder, *encoderContext, encoderFrameRate, chain.encoder.hwaccelName, std::nullopt);
+    auto evidence = MediaVideoEncoderCapabilityProbe::inspect(chain.encoder,
+        {{1, 1}, options.sourceColorRange, device.get(), encoderFrames.get(),
+         chain.encoder.hwaccelName, std::nullopt});
     if (!evidence) return unavailable(evidence.error().message);
 
     return {true, "decoder/filter/encoder chain opened and negotiated"};
