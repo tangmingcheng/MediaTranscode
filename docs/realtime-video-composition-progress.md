@@ -155,3 +155,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 源同步域与A/V源runtime装配
 
 同一sync planner支持明确源贡献域，不需构造输出协议；源runtime组合既有clock/correction/edges/source transition。原共享路径复用政策和校验。首审三项前置校验缺口修复后双独立Standards/阶段Spec PASS，完整FAIL42。公共多源协调器尚未调用，不能计为合屏已运行；详见[本轮记录](realtime-video-composition-source-runtime.md)。
+
+## 真实接线依赖核查
+
+基线a7836de5：实际encoder/canvas是当前builder前置条件，但其pool容量来自后置最终graph compiler，已确认准备依赖环。资源ledger按单链阶段max记账且aggregate producer/retention缺合同，不能直接复用为N源准入。本轮源码诊断更正实施顺序为一次最终逻辑拓扑、总合同、真实资源准备、强制绑定；没有新增媒体测试或通过项，完整FAIL42。见[核查与具体边界](realtime-video-composition-wiring-gate.md)。

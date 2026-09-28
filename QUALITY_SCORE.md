@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 真实接线依赖核查
+
+基线a7836de5源码核查发现实际encoder/canvas与最终图资源编译存在准备依赖环，单链峰值账本及aggregate保留合同不足以支撑多源总准入。下一步先分离最终逻辑拓扑、总合同与强制物理绑定；本轮仅文档诊断，无新运行证据。六维10/8/6/12/2/4，总42/100，完整FAIL。见[接线核查](docs/realtime-video-composition-wiring-gate.md)。
+
 ## 2026-09-28 源runtime装配双审
 
 基线c930cf66后16源码，源同步域与A/V源runtime装配共用既有政策、源clock/correction/边界和transition。首审漏校验的transport一致性、音频索引、线程合同已修正，A/B最终Standards/阶段Spec PASS；B撤回首次不充分PASS。多源公共调用、纯视频源、总准入及双平台真实门禁未完成，六维10/8/6/12/2/4，总42/100，完整FAIL。见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。
