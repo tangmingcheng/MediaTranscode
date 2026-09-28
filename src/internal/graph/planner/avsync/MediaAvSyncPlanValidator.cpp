@@ -466,18 +466,6 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateInputClock(const MediaAvSyncPlan& plan)
-{
-    switch (*plan.sourceClockMode) {
-    case MediaAvSyncSourceClockMode::RtpSenderReports:
-        return validateRtpInput(plan);
-    case MediaAvSyncSourceClockMode::MpegTsPcr:
-        return validateTsInput(plan);
-    case MediaAvSyncSourceClockMode::DemuxTimestamps:
-        return validateDemuxInput(plan);
-    }
-    return invalid("sourceClockMode");
-}
 
 ::media::Status validateOutput(const MediaAvSyncPlan& plan)
 {
@@ -522,12 +510,29 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         (plan.rtpOutput || plan.projectMpegTsOutput))
         return invalid("source domain contains output authority");
     if (auto status = validateShared(plan, finalized); !status) return status;
-    if (auto status = validateInputClock(plan); !status) return status;
+    if (auto status = MediaAvSyncPlanValidator::validateSourceClock(plan); !status) return status;
     return *plan.domainRole == MediaAvSyncDomainRole::SourceContribution
         ? ::media::Status::success() : validateOutput(plan);
 }
 
 } // namespace
+
+::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlan& plan)
+{
+    if (!plan.sourceClockMode || !plan.controlGenerationPolicy ||
+        !positive(plan.recovery.reacquisitionTimeoutNs) ||
+        !positive(plan.recovery.hardDiscontinuityThresholdNs))
+        return invalid("source clock prerequisites");
+    switch (*plan.sourceClockMode) {
+    case MediaAvSyncSourceClockMode::RtpSenderReports:
+        return validateRtpInput(plan);
+    case MediaAvSyncSourceClockMode::MpegTsPcr:
+        return validateTsInput(plan);
+    case MediaAvSyncSourceClockMode::DemuxTimestamps:
+        return validateDemuxInput(plan);
+    }
+    return invalid("sourceClockMode");
+}
 
 ::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlan& plan)
 {

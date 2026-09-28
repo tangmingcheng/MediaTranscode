@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：独立输出runtime装配已接入旧生产caller，输出timing使用真实协议产品完整交叉校验；双独立复审PASS。源在途界、唯一输出资源事务、源准备和多源协调器仍未完成，见[输出装配记录](docs/realtime-video-composition-output-assembly.md)。仅运行realtime，原规格门禁不变。
+当前推进：独立源时钟与canonical装配已由同次规划提供，旧生产路径立即消费，专项源时钟校验共用。源专用校正容量、完整source runtime、唯一资源事务和多源协调器仍未完成，见[源时钟记录](docs/realtime-video-composition-source-clock.md)。仅realtime验证，原门禁不变。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

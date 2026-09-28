@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
-#include "internal/graph/protocol/mpegts/MediaTsPacketDurationEvidence.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceTimingFacts.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
@@ -23,14 +23,9 @@ struct MediaRealtimeAvOutputTimingFacts {
                            const MediaRealtimeAvOutputTimingFacts&) = default;
 };
 
-struct MediaRealtimeAvSyncPlanningFacts final : MediaRealtimeAvOutputTimingFacts {
-    std::optional<std::string> inputVideoIdentity;
-    std::optional<std::string> inputAudioIdentity;
-    std::optional<int> inputVideoClockRate;
-    std::optional<int> inputAudioSampleRate;
-    std::optional<std::uint32_t> inputAudioSamplesPerAccessUnit;
-    std::optional<MediaTsPacketDurationEvidence> inputVideoPacketDuration;
-    std::optional<MediaTsPacketDurationEvidence> inputAudioPacketDuration;
+
+struct MediaRealtimeAvSyncPlanningFacts final : MediaRealtimeAvOutputTimingFacts,
+                                               MediaRealtimeAvSourceTimingFacts {
     std::optional<std::int64_t> decoderDelaySamples;
     std::optional<std::int64_t> encoderLookaheadSamples;
     std::optional<std::int64_t> decodeQueueSamples;

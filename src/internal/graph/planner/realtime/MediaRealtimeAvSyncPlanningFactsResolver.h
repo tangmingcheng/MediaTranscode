@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "media_transcode/Result.h"
 
 namespace media::ffmpeg::graph {
@@ -12,13 +13,18 @@ struct MediaAudioPipelinePlan;
 class MediaResolvedAudioOutputPlan;
 struct MediaRealtimeRtpInputNodePlan;
 
+struct MediaRealtimeAvSyncResolvedFacts final {
+    MediaRealtimeAvSyncPlanningFacts timing;
+    MediaRealtimeAvSyncAssemblyPlan assembly;
+};
+
 class MediaRealtimeAvSyncPlanningFactsResolver final {
 public:
     static ::media::Result<MediaRealtimeAvOutputTimingFacts> resolveOutput(
         const MediaResolvedAudioOutputPlan& audio,
         const MediaRealtimeOutputPlanningDraft& output,
         const MediaAvSyncPlan& synchronization);
-    static ::media::Result<MediaRealtimeAvSyncPlanningFacts> resolve(
+    static ::media::Result<MediaRealtimeAvSyncResolvedFacts> resolve(
         const MediaRealtimeRtpTranscodePlanCore& plan,
         const MediaAudioPipelinePlan& audio,
         const MediaRealtimeAvSyncComponentBounds& componentBounds,

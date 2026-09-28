@@ -68,7 +68,8 @@ namespace media::ffmpeg::graph {
         runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr,
         selectedOutput,
         runtime.synchronization);
-    if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
+    if (!selectedFacts || (selectedFacts.value().timing != runtime.planningFacts ||
+                           selectedFacts.value().assembly != runtime.assembly)) {
         return invalid("selected planning facts");
     }
     const auto& assembly = runtime.assembly;

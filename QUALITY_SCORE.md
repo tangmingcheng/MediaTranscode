@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 源时钟规划双审
+
+基线400ffc4a后10源码双独立复审Standards/阶段Spec PASS；源timing与canonical assembly一次规划并由旧生产链直接消费。首审独立入口demux非法代次/阈值缺口已通过共用原源clock validator关闭。容量校正、多源准备、唯一资源事务及双平台门禁仍缺，六维10/8/6/12/2/4，总42/100，完整FAIL。详见[源时钟记录](docs/realtime-video-composition-source-clock.md)。
+
 ## 2026-09-28 独立输出装配双审
 
 基线d86523ac后11源码双独立复审Standards/阶段Spec PASS。首审发现timing与真实协议产品缺少交叉校验，已复用resolveOutput完整比较并复审关闭。旧生产caller消费独立输出装配；源在途界、唯一资源事务、多源入口及双平台门禁仍未完成。六维10/8/6/12/2/4，总42/100，完整FAIL。见[装配记录](docs/realtime-video-composition-output-assembly.md)。

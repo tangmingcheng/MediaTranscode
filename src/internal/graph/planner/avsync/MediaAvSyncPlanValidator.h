@@ -7,6 +7,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSyncPlanValidator final {
 public:
+    static ::media::Status validateSourceClock(const MediaAvSyncPlan& plan);
     static ::media::Status validate(const MediaAvSyncPlan& plan);
     static ::media::Status validatePolicy(const MediaAvSyncPlan& plan);
     static ::media::Status validateRuntime(const MediaAvSyncPlan& plan);

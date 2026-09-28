@@ -140,3 +140,8 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 2026-09-28：独立输出runtime装配
 
 输出timing解析与FIFO/协议装配已由独立planner提供，旧生产caller实际消费；源共享政策取独立值副本。双审发现协议事实一致性缺口，复用真实resolver完整比较后双重复审PASS。两次Release全量成功；r40源完整120秒exit0、VLC有画面，CLI自然exit1/无进展/4逻辑对象，完整验收FAIL。5项临时产物及进程清理，固定源保留，仅realtime。详见[输出装配记录](realtime-video-composition-output-assembly.md)。源在途界、资源事务、纯视频源、多源协调器及Windows→RKMPP仍待完成，42/100不变。
+
+
+## 2026-09-28：独立源时钟与装配
+
+源timing与canonical assembly一次规划，旧生产resolver/runtime直接消费，新旧入口共用源时钟专项校验。首审非法demux代次/阈值缺口修复后双独立复审PASS。两次Release全量成功；r41原规格源完整120秒exit0、VLC有画面，CLI自然exit1/无进展/4逻辑对象，完整FAIL。5文件及媒体/构建进程清理，固定源保留，仅realtime。详见[源时钟记录](realtime-video-composition-source-clock.md)。源校正容量、完整source runtime、唯一资源事务、纯视频和多源入口仍未完成，42/100不变。

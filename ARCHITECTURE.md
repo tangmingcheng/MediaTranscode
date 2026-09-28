@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+MediaRealtimeAvSourceClockPlanner以源输入合同生成源时间事实与canonical装配；旧共享resolver和runtime领取同次结果，源入口不依赖输出packetization或encoder延迟。专项源时钟验证由新旧路径共用，runtime validator重算整个assembly比较，见[源时钟规划](docs/realtime-video-composition-source-clock.md)。
+
 MediaRealtimeAvOutputRuntimePlanner独立装配音频FIFO、协议与datagram产品，消费一次生成的纯输出同步政策；旧生产caller共享同一装配。输出timing复用真实协议解析，并在移交资源前精确核对。源共享planner消费政策值副本，保留源启动/校正/transition，见[输出runtime装配](docs/realtime-video-composition-output-assembly.md)。
 
 MediaAvOutputSynchronizationPlanner只消费输出身份/layout/transport/cadence、deployment和编码事实，生成经ContinuousOutput校验的同步政策；旧单源planner立即复用并加入真实源政策，保留各源控制代次模式。协议与政策算法原值迁移，既有经验阈值仍待事实依据收口，见[输出同步规划](docs/realtime-video-composition-output-sync.md)。
