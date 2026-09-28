@@ -1,5 +1,4 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
-#include "internal/graph/planner/avsync/MediaAvOutputSynchronizationPlanner.h"
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
@@ -144,7 +143,7 @@ void planTsInput(MediaAvSyncPlan& plan,
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
-    const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
+    MediaAvSyncPlan outputSynchronization,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
     const MediaRealtimeDeploymentEnvelope& deployment,
@@ -172,12 +171,11 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::invalidArgument(
                 "A/V synchronization requires a planned audio execution branch"));
     }
-    auto output = MediaAvOutputSynchronizationPlanner::plan(
-        {request.mediaId, request.output.streamLayout, request.output.transport,
-         request.parameters.video.frameRate, resolvedOutputAudioSampleRate,
-         deployment, resolvedTsFacts});
-    if (!output) return ::media::Result<MediaAvSyncPlan>::failure(output.error());
-    auto plan = std::move(output).value();
+    if (auto status = MediaAvSyncPlanValidator::validateDomain(
+            outputSynchronization, MediaAvSyncDomainRole::ContinuousOutput); !status) {
+        return ::media::Result<MediaAvSyncPlan>::failure(status.error());
+    }
+    auto plan = std::move(outputSynchronization);
     plan.domainRole = MediaAvSyncDomainRole::SharedSourceOutput;
     plan.sourceLifecycle = MediaAvSourceLifecyclePlan{lifecycleMode};
     if (preparedDemuxFacts) {

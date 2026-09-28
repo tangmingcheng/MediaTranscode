@@ -3,8 +3,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
-#include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
-#include "internal/graph/planner/realtime/MediaProjectMpegTsResolvedPipelineFacts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "media_transcode/Result.h"
 
@@ -20,7 +18,7 @@ public:
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
-        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
+        MediaAvSyncPlan outputSynchronization,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
         const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
         const MediaRealtimeDeploymentEnvelope& deployment,

@@ -1,5 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvProtocolOutputPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlanner.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
@@ -201,8 +201,8 @@ namespace {
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
-    const MediaRealtimeRtpTranscodeRequest& request,
     MediaAvSyncPlan synchronization,
+    MediaAvSyncPlan outputSynchronization,
     MediaRational outputFrameRate,
     const MediaPreparedRealtimeEmissionSet& preparedEmission)
 {
@@ -270,16 +270,10 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 status.error());
         }
     }
-    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
-    if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
-        if (!audio.resolvedOutput || !audio.selectedResampler) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::invalidArgument("audio FIFO requires selected resampler and encoder"));
-        }
-        auto retention = MediaAudioEncoderFifoRetentionPlan::create(
-            *audio.resolvedOutput, correction->maximumOutputBlockSamples);
-        if (!retention) return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(retention.error());
-        encoderFifoRetention = std::move(retention).value();
+    if (!audio.resolvedOutput ||
+        (audio.branchMode == MediaBranchMode::TranscodeFrame && !audio.selectedResampler)) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("audio output requires resolved format and selected processing"));
     }
     auto assembly = planAssembly(outer, audio, synchronization, facts.value());
     if (!assembly) {
@@ -298,18 +292,16 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 "A/V protocol output requires deployment and resolved output audio facts"));
     }
     const MediaAvSyncGroupKey groupKey("realtime.av");
-    auto protocol = MediaRealtimeAvProtocolOutputPlanner::plan(
-        {groupKey, outer.outputLayout, outer.outputTransport,
-         synchronization.rtpOutput, synchronization.projectMpegTsOutput,
-         synchronization.startup.outputLeadNs, outputFrameRate,
-         facts.value().outputSampleRate, facts.value().protocolBatchSamples,
-         edgePolicies.value().synchronizedPacket.bufferPolicy.memoryBudget.maxBytes,
-         *outer.deployment, preparedEmission}, output);
-    if (!protocol) {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(protocol.error());
+    auto plannedOutput = MediaRealtimeAvOutputRuntimePlanner::plan(
+        {groupKey, *audio.resolvedOutput, outer.queues, edgePolicies.value(), facts.value(),
+         correction ? std::optional<std::int64_t>(correction->maximumOutputBlockSamples) : std::nullopt,
+         outer.outputLayout, outer.outputTransport, outputFrameRate, *outer.deployment, preparedEmission},
+        std::move(outputSynchronization), output);
+    if (!plannedOutput) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(plannedOutput.error());
     }
-    auto outputPlan = std::move(protocol).value();
-    if (outputPlan.adapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+    auto outputPlan = std::move(plannedOutput).value();
+    if (outputPlan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         outer.videoParameters.globalHeader = true;
     }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
@@ -337,8 +329,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt}, *outer.avSyncComponentBounds, facts.value(), outputPlan.adapter, std::move(outputPlan.protocolOutput),
-            std::move(outputPlan.datagramTransport), std::move(encoderFifoRetention)});
+                : std::nullopt}, *outer.avSyncComponentBounds, facts.value(), outputPlan.outputAdapter, std::move(outputPlan.protocolOutput),
+            std::move(outputPlan.datagramTransport), std::move(outputPlan.encoderFifoRetention)});
 }
 
 } // namespace media::ffmpeg::graph

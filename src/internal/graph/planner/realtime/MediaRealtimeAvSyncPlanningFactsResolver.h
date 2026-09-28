@@ -9,10 +9,15 @@ struct MediaRealtimeRtpTranscodePlanCore;
 struct MediaRealtimeOutputPlanningDraft;
 struct MediaAvSyncPlan;
 struct MediaAudioPipelinePlan;
+class MediaResolvedAudioOutputPlan;
 struct MediaRealtimeRtpInputNodePlan;
 
 class MediaRealtimeAvSyncPlanningFactsResolver final {
 public:
+    static ::media::Result<MediaRealtimeAvOutputTimingFacts> resolveOutput(
+        const MediaResolvedAudioOutputPlan& audio,
+        const MediaRealtimeOutputPlanningDraft& output,
+        const MediaAvSyncPlan& synchronization);
     static ::media::Result<MediaRealtimeAvSyncPlanningFacts> resolve(
         const MediaRealtimeRtpTranscodePlanCore& plan,
         const MediaAudioPipelinePlan& audio,

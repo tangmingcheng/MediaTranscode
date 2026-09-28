@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 独立输出装配双审
+
+基线d86523ac后11源码双独立复审Standards/阶段Spec PASS。首审发现timing与真实协议产品缺少交叉校验，已复用resolveOutput完整比较并复审关闭。旧生产caller消费独立输出装配；源在途界、唯一资源事务、多源入口及双平台门禁仍未完成。六维10/8/6/12/2/4，总42/100，完整FAIL。见[装配记录](docs/realtime-video-composition-output-assembly.md)。
+
 ## 2026-09-28 输出同步政策双审
 
 基线087baf55后3源码双独立Standards/阶段Spec PASS，旧RTP/TS/demux与copy/transcode值映射保持；输出政策有真实生产调用者。历史经验阈值工业依据仍缺，完整runtime装配/资源/多源入口及双平台门禁仍未完成。六维10/8/6/12/2/4，总42/100，完整FAIL。见[输出同步规划](docs/realtime-video-composition-output-sync.md)。

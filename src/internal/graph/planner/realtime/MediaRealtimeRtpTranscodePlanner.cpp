@@ -11,6 +11,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvOutputSynchronizationPlanner.h"
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
@@ -1369,9 +1370,14 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             ? std::get_if<MediaTsAudioVideoSelectedProgramPlan>(
                   selectedTsProgram)
             : nullptr;
+        auto outputSynchronization = MediaAvOutputSynchronizationPlanner::plan(
+            {options.mediaId, options.output.streamLayout, options.output.transport,
+             options.parameters.video.frameRate, plannedAudio.resolvedOutput->sampleRate(),
+             *plan.deployment, resolvedTsFacts ? &*resolvedTsFacts : nullptr});
+        if (!outputSynchronization) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+            outputSynchronization.error());
         auto avSync = MediaAvSyncPlanner::plan(
-            options, selectedAudioVideoProgram,
-            resolvedTsFacts ? &*resolvedTsFacts : nullptr,
+            options, selectedAudioVideoProgram, outputSynchronization.value(),
             demuxFacts ? &*demuxFacts : nullptr,
             *plan.resourceLedger,
             *plan.deployment,
@@ -1397,7 +1403,8 @@ static ::media::Result<MediaRealtimeRtpTranscodePlan> planOutputBranchImpl(
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, output, options, std::move(avSync).value(), outputFrameRate,
+            plan, output, std::move(avSync).value(),
+            std::move(outputSynchronization).value(), outputFrameRate,
             emission.value());
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(

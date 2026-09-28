@@ -12,7 +12,18 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeAvSyncPlanningFacts final {
+struct MediaRealtimeAvOutputTimingFacts {
+    std::optional<MediaScheduledRtpPacketizationPlan>
+        outputVideoRtpPacketization;
+    std::optional<MediaScheduledRtpPacketizationPlan>
+        outputAudioRtpPacketization;
+    std::optional<int> outputSampleRate;
+    std::optional<std::int64_t> protocolBatchSamples;
+    friend bool operator==(const MediaRealtimeAvOutputTimingFacts&,
+                           const MediaRealtimeAvOutputTimingFacts&) = default;
+};
+
+struct MediaRealtimeAvSyncPlanningFacts final : MediaRealtimeAvOutputTimingFacts {
     std::optional<std::string> inputVideoIdentity;
     std::optional<std::string> inputAudioIdentity;
     std::optional<int> inputVideoClockRate;
@@ -20,18 +31,12 @@ struct MediaRealtimeAvSyncPlanningFacts final {
     std::optional<std::uint32_t> inputAudioSamplesPerAccessUnit;
     std::optional<MediaTsPacketDurationEvidence> inputVideoPacketDuration;
     std::optional<MediaTsPacketDurationEvidence> inputAudioPacketDuration;
-    std::optional<MediaScheduledRtpPacketizationPlan>
-        outputVideoRtpPacketization;
-    std::optional<MediaScheduledRtpPacketizationPlan>
-        outputAudioRtpPacketization;
-    std::optional<int> outputSampleRate;
     std::optional<std::int64_t> decoderDelaySamples;
     std::optional<std::int64_t> encoderLookaheadSamples;
     std::optional<std::int64_t> decodeQueueSamples;
     std::optional<std::int64_t> resampleQueueSamples;
     std::optional<std::int64_t> encodeQueueSamples;
     std::optional<std::int64_t> schedulerQueueSamples;
-    std::optional<std::int64_t> protocolBatchSamples;
     std::optional<std::int64_t> mailboxDeliveryMarginSamples;
     std::optional<std::int64_t> maximumResamplerOutputBlockSamples;
     std::optional<std::size_t> mailboxCapacity;

@@ -20,6 +20,7 @@ struct MediaRealtimeAvOutputRuntimePlan final {
     MediaAvSyncPlan synchronization;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    MediaRunningTime activationOutputLead;
     MediaAvSyncOutputAdapterKind outputAdapter;
     std::variant<MediaSeparateRtpOutputRuntimePlan,
                  MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
