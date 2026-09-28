@@ -32,7 +32,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
 }
 
 ::media::Result<void> validatePlan(
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     const auto& queue = plan.edgePolicies.synchronizedPacket.queuePolicy;
     if (!plan.groupKey.valid() || !queue.bounded || queue.capacity == 0 ||
@@ -43,7 +43,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler segment requires its planned sync group and ordered packet policy"));
     }
-    if (plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket &&
+    if (plan.audioBranchMode == MediaBranchMode::CopyPacket &&
         !MediaAtomicOutputPolicyContract::accepts(
             plan.edgePolicies.startupAudioRelease)) {
         return ::media::Result<void>::failure(
@@ -91,7 +91,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
 }
 
 ::media::Result<MediaRunningTime> transportLead(
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
         const auto* output = std::get_if<MediaSeparateRtpOutputRuntimePlan>(
@@ -128,7 +128,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
 MediaRealtimeAvSchedulerSegmentBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSchedulerSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     if (options.prefix.empty()) {
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
@@ -204,7 +204,7 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
     }
     const auto& policy = plan.edgePolicies.synchronizedPacket;
     const auto& audioPolicy =
-        plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket
+        plan.audioBranchMode == MediaBranchMode::CopyPacket
             ? plan.edgePolicies.startupAudioRelease
             : policy;
     if (auto status = MediaGraphBuildSupport::connectChecked(

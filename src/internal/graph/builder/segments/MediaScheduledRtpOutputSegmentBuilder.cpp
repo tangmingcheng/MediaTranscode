@@ -96,7 +96,7 @@ constexpr std::string_view Owner = "MediaScheduledRtpOutputSegmentBuilder";
 MediaScheduledRtpOutputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaScheduledRtpOutputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     using SegmentResult =
         ::media::Result<MediaScheduledRtpOutputSegmentResult>;

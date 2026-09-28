@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
 #include "internal/graph/planner/video/MediaVideoOutputPlan.h"
@@ -19,7 +20,7 @@ struct MediaRealtimeCompositionGraphOptions final {
     std::vector<MediaRealtimeCompositionSourcePlan> sources;
     std::vector<std::shared_ptr<MediaPreparedVideoDecoder>> preparedVideoDecoders;
     MediaVideoOutputPlan outputVideo;
-    MediaRealtimeAvSyncRuntimePlan outputRuntime;
+    MediaRealtimeAvOutputRuntimePlan outputRuntime;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregate;
     MediaBufferRef preparedVideoEncoder;
     std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;

@@ -63,9 +63,8 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
         aggregate.audioSource >= options.sources.size() ||
         output.groupKey != aggregate.outputGroupKey || !output.groupKey.valid() ||
         !encoder || encoder->width != aggregate.canvas.width || encoder->height != aggregate.canvas.height ||
-        encoder->frameRate != aggregate.videoFrameRate || !output.audioPipeline.enabled ||
-        !output.audioPipeline.resolvedOutput ||
-        !sameAudioFrames(*output.audioPipeline.resolvedOutput, aggregate.audio))
+        encoder->frameRate != aggregate.videoFrameRate ||
+        !sameAudioFrames(output.audioOutput, aggregate.audio))
         return invalid("Composition output contracts disagree with the aggregate canvas or audio grid");
     if (!MediaAtomicOutputPolicyContract::accepts(output.edgePolicies.atomicMetadata))
         return invalid("Composition activation requires the planned atomic metadata policy");
@@ -125,7 +124,7 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
 
 MediaVideoOutputEncoderOptions videoOptions(
     const std::string& prefix, const MediaVideoOutputPlan& plan,
-    const MediaRealtimeAvSyncRuntimePlan& runtime)
+    const MediaRealtimeAvOutputRuntimePlan& runtime)
 {
     return {prefix, plan, runtime.edgePolicies, runtime.queues.frame,
         *runtime.synchronization.startup.requireVideoKeyFrame};
@@ -203,7 +202,7 @@ MediaVideoOutputEncoderOptions videoOptions(
         videoOptions(prefix + ".output.video", options.outputVideo, outputRuntime));
     if (!outputVideo) return Result::failure(outputVideo.error());
     auto outputAudio = MediaAudioEncodeBranchBuilder::buildOutputEncoder(graph,
-        {prefix + ".output.audio", *outputRuntime.audioPipeline.resolvedOutput,
+        {prefix + ".output.audio", outputRuntime.audioOutput,
          outputRuntime.edgePolicies, MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
          outputRuntime.queues.frame, outputRuntime.encoderFifoRetention, outputRuntime.groupKey});
     if (!outputAudio) return Result::failure(outputAudio.error());
@@ -283,9 +282,12 @@ MediaVideoOutputEncoderOptions videoOptions(
              std::tuple{MediaEndpoint{aggregateNode, "audio"}, outputAudio.value().frameInput, policies.audioFrame}}) {
         if (auto status = connect(graph, from, to, policy); !status) return Result::failure(status.error());
     }
+    const MediaRealtimeAvOutputSegmentPlan outputSegment{
+        outputRuntime.groupKey, outputRuntime.edgePolicies, outputRuntime.audioOutput.branchMode(),
+        outputRuntime.outputAdapter, outputRuntime.protocolOutput, outputRuntime.datagramTransport};
     auto scheduled = MediaRealtimeAvSchedulerSegmentBuilder::build(graph,
         {prefix + ".output.scheduler", outputVideo.value().encoded.packet, outputAudio.value().encoded.packet},
-        outputRuntime);
+        outputSegment);
     if (!scheduled) return Result::failure(scheduled.error());
     outputMembers.insert(outputMembers.end(), scheduled.value().outputMembers.begin(), scheduled.value().outputMembers.end());
     std::optional<MediaNodeId> publisher;
@@ -293,13 +295,13 @@ MediaVideoOutputEncoderOptions videoOptions(
     if (outputRuntime.outputAdapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
         auto protocol = MediaScheduledRtpOutputSegmentBuilder::build(graph,
             {prefix + ".output.rtp", activated, outputVideo.value().encoded.codec, outputAudio.value().encoded.codec,
-             scheduled.value().video, scheduled.value().audio}, outputRuntime);
+             scheduled.value().video, scheduled.value().audio}, outputSegment);
         if (!protocol) return Result::failure(protocol.error());
         outputMembers.insert(outputMembers.end(), protocol.value().outputMembers.begin(), protocol.value().outputMembers.end());
     } else if (outputRuntime.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         auto protocol = MediaScheduledMpegTsOutputSegmentBuilder::build(graph,
             {prefix + ".output.mpegts", activated, outputVideo.value().encoded.codec, outputAudio.value().encoded.codec,
-             scheduled.value().serialized, true, outputRuntime.audioPipeline.enabled}, outputRuntime);
+             scheduled.value().serialized, true, outputRuntime.audioOutput.branchMode() == MediaBranchMode::TranscodeFrame}, outputSegment);
         if (!protocol) return Result::failure(protocol.error());
         outputMembers.insert(outputMembers.end(), protocol.value().outputMembers.begin(), protocol.value().outputMembers.end());
         if (protocol.value().rtpSdpPublisher.isValid()) publisher = protocol.value().rtpSdpPublisher;

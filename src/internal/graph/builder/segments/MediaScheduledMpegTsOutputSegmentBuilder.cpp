@@ -322,7 +322,7 @@ struct CommonPlan final {
 MediaScheduledMpegTsOutputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaScheduledMpegTsOutputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     if (!options.expectVideo || !options.expectAudio ||
         !plan.groupKey.valid() ||

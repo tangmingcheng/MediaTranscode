@@ -2,7 +2,7 @@
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvOutputSegmentPlan.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -30,7 +30,7 @@ public:
     static ::media::Result<MediaRealtimeAvSchedulerSegmentResult> build(
         MediaGraph& graph,
         const MediaRealtimeAvSchedulerSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvOutputSegmentPlan& plan);
 
 private:
     MediaRealtimeAvSchedulerSegmentBuilder() = delete;

@@ -2,7 +2,7 @@
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvOutputSegmentPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
 
 #include <string>
@@ -42,7 +42,7 @@ public:
     static ::media::Result<MediaScheduledMpegTsOutputSegmentResult> build(
         MediaGraph& graph,
         const MediaScheduledMpegTsOutputSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvOutputSegmentPlan& plan);
     static ::media::Result<MediaScheduledMpegTsOutputSegmentResult>
     buildVideoOnly(
         MediaGraph& graph,

@@ -241,8 +241,11 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
         schedulerOptions.prefix = "realtime.av_sync.output";
         schedulerOptions.canonicalVideo = video.value().packet;
         schedulerOptions.canonicalAudio = audio->packet;
+        const MediaRealtimeAvOutputSegmentPlan outputSegment{
+            avRuntime->groupKey, avRuntime->edgePolicies, avRuntime->audioPipeline.branchMode,
+            avRuntime->outputAdapter, avRuntime->protocolOutput, avRuntime->datagramTransport};
         auto scheduled = MediaRealtimeAvSchedulerSegmentBuilder::build(
-            graph, schedulerOptions, *avRuntime);
+            graph, schedulerOptions, outputSegment);
         if (!scheduled) {
             return ::media::Result<MediaGraph>::failure(scheduled.error());
         }
@@ -259,7 +262,7 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
             outputOptions.scheduledVideo = scheduled.value().video;
             outputOptions.scheduledAudio = scheduled.value().audio;
             auto output = MediaScheduledRtpOutputSegmentBuilder::build(
-                graph, outputOptions, *avRuntime);
+                graph, outputOptions, outputSegment);
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
@@ -277,7 +280,7 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
                 videoOptions.plan.enabled && videoOptions.plan.branchMode != MediaBranchMode::Drop;
             outputOptions.expectAudio = true;
             auto output = MediaScheduledMpegTsOutputSegmentBuilder::build(
-                graph, outputOptions, *avRuntime);
+                graph, outputOptions, outputSegment);
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }

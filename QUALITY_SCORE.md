@@ -1,4 +1,8 @@
 # MediaTranscode Quality Score
+
+## 2026-09-28 输出runtime双审
+
+基线3a539650后11源码双独立Standards/阶段Spec均PASS。独立输出产品解除源runtime继承，借用视图共用三个发送/调度segment；旧链等价、引用寿命及校验保留已核对。完整输出planner、资源事务与多源入口尚未接通，六维10/8/6/12/2/4，总分42/100，完整FAIL。详见[输出runtime](docs/realtime-video-composition-output-runtime.md)。
 ## 2026-09-28 独立音频编码段双审
 
 基线5ae7ea9a后5源码，两位独立审查者均阶段Standards/Spec **PASS**。纯输出不再经过源mapper或要求源索引，旧节点/端口/配置复用；已核对借用寿命、lineage/FIFO/group与无源resolver路径。

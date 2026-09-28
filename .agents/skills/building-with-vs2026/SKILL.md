@@ -5,7 +5,7 @@ description: Use when configuring or fully rebuilding MediaTranscode x64 Debug o
 
 # Building with VS2026
 
-Use [scripts/rebuild_debug.ps1](scripts/rebuild_debug.ps1) as the only build entry point. It establishes amd64, configures the fixed Ninja tree, and performs a clean-first all-target rebuild within one 120-second deadline. `Debug` is the default; request `Release` explicitly when Release artifacts are required.
+Use [scripts/rebuild_debug.ps1](scripts/rebuild_debug.ps1) as the only build entry point. It establishes amd64, configures the fixed Ninja tree, and performs a clean-first all-target rebuild within one 300-second deadline. `Debug` is the default; request `Release` explicitly when Release artifacts are required.
 
 ## Build command
 
@@ -20,7 +20,7 @@ Use `-Configuration Debug` for Debug. The script sets `out/build/x64-<configurat
 - Initialize `VsDevCmd.bat -arch=amd64 -host_arch=amd64` through the script.
 - “全部重新生成” means `--clean-first --target all`; incremental, partial, and exploratory compilation are prohibited.
 - Never add `/showIncludes`. Fail on cached injection without changing compiler options. Ninja internal MSVC dependency collection is not user-visible include trace.
-- At 120 seconds, terminate the active CMake/Ninja/CL process tree and report timeout.
+- At 300 seconds, terminate the active CMake/Ninja/CL process tree and report timeout.
 - This build workflow does not run tests. Real media acceptance remains governed by the repository's `AGENTS.md`.
 
 ## Success contract

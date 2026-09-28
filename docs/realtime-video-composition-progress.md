@@ -127,3 +127,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 2026-09-28：纯音频输出编码段
 
 输出编码段改用独立内部合同，复用原节点和配置映射，解除源索引与servo依赖。双独立源码阶段审查PASS；Release首次超时，重试全量构建成功。r37实时源完整120秒exit0、VLC有画面，CLI无进展exit1、残留4逻辑对象；local-r37能力规划失败exit1，未进入DAG。共6项临时文件已清理，媒体进程无残留，指定源保留。实际命令、指标和证据限制见[音频输出记录](realtime-video-composition-audio-output.md)。完整runtime拆分、准备事务、资源总账、多源入口和Windows→RKMPP验收仍未完成，完整FAIL、42/100不变。
+
+## 2026-09-28：独立输出runtime与共用发送段
+
+合屏输出不再继承源runtime，旧单源与合屏共用借用型输出segment合同。11源码双独立阶段PASS。Release前三次120秒超时；用户批准300秒后第四次全量成功。r38原规格源完整120秒exit0、VLC有画面，CLI仍无进展exit1/4逻辑对象；5项临时文件及媒体进程已清理。遵照最新要求未运行local。详见[输出runtime](realtime-video-composition-output-runtime.md)。输出planner产品形成、唯一资源事务、多源入口及双平台完整门禁仍未完成，42/100不变。

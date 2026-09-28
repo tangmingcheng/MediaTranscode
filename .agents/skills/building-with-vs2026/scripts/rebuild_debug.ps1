@@ -14,7 +14,7 @@ $InstallPrefix = "D:/Code/MyCode/MediaTranscode/out/install/x64-$ConfigurationDi
 $VsDevCmd = 'D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat'
 $CMake = 'D:\VisualStudio2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
 $Ninja = 'D:\VisualStudio2026\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
-$TimeoutSeconds = 120
+$TimeoutSeconds = 300
 $RequiredProducts = @('media_transcode_local_video_cli.exe', 'media_transcode_realtime_video_cli.exe')
 
 function Assert-RequiredPath([string]$LiteralPath, [string]$Label) {
