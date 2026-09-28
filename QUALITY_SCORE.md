@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 独立音频编码段双审
+
+基线5ae7ea9a后5源码，两位独立审查者均阶段Standards/Spec **PASS**。纯输出不再经过源mapper或要求源索引，旧节点/端口/配置复用；已核对借用寿命、lineage/FIFO/group与无源resolver路径。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏/验收/交付 **FAIL（未完成）**。输出runtime产品、资源事务、多源入口和双平台门禁仍缺，见[音频编码段](docs/realtime-video-composition-audio-output.md)。
+
 ## 2026-09-28 输出音频FIFO双审
 
 基线c5878f36后6源码，两名独立审查者均阶段Standards/Spec **PASS**。源校正上界归入校正planner，FIFO消费纯输入块事实；旧公式和写入前硬界保持，aggregate合同构图前精确核验。

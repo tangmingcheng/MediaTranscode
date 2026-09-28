@@ -123,3 +123,7 @@ segment→registration→validator→registrar 的源/输出处理归属已落�
 ## 2026-09-28：唯一输出编码与发送合同
 
 MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；旧branch共用encoder options、端口和lineage。发送规划直接消费已有prepared emission。11源码初构建发现optional<bool>初始化错误，修复后双独立复审PASS、Release全量exit0。r29实时原规格源完整120秒exit0/VLC有画面，CLI仍源结束后无进展exit1/4逻辑对象；local-r29能力规划失败未进入segment。两轮6项临时产物和媒体PID均清理，指定源保留，命令指标见[唯一输出合同](realtime-video-composition-output-contract.md)。完整协调器、唯一encoder候选、source/output runtime拆分、总准入、纯视频及双平台多源验收仍缺，42/100不变。
+
+## 2026-09-28：纯音频输出编码段
+
+输出编码段改用独立内部合同，复用原节点和配置映射，解除源索引与servo依赖。双独立源码阶段审查PASS；Release首次超时，重试全量构建成功。r37实时源完整120秒exit0、VLC有画面，CLI无进展exit1、残留4逻辑对象；local-r37能力规划失败exit1，未进入DAG。共6项临时文件已清理，媒体进程无残留，指定源保留。实际命令、指标和证据限制见[音频输出记录](realtime-video-composition-audio-output.md)。完整runtime拆分、准备事务、资源总账、多源入口和Windows→RKMPP验收仍未完成，完整FAIL、42/100不变。

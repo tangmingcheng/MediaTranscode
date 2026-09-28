@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：源/输出域校验已分离；输出音频FIFO容量规划也已解除对源servo的依赖，源校正上界由原校正planner形成，aggregate使用真实固定块事实。双独立阶段审查PASS；实际唯一输出资源、源/输出计划形成与多源事务仍未完成，见[FIFO规划](docs/realtime-video-composition-audio-fifo.md)。
+当前推进：源/输出域校验和FIFO容量已分离，合屏音频编码段也已改为独立输出合同，解除输出经源mapper、源索引和servo校验的构图阻断。双独立阶段审查PASS；实际唯一输出资源、源/输出runtime计划形成与多源事务仍未完成，见[音频编码段](docs/realtime-video-composition-audio-output.md)。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

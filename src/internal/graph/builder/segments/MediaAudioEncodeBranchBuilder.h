@@ -39,6 +39,16 @@ struct MediaAudioEncodeBranchOptions {
     std::optional<MediaAvSyncGroupKey> syncGroup;
 };
 
+struct MediaAudioOutputEncoderOptions final {
+    std::string prefix;
+    MediaResolvedAudioOutputPlan plan;
+    MediaRealtimeEdgePolicySet edgePolicies;
+    MediaAudioLineageExecutionMode lineageMode;
+    std::optional<std::size_t> lineageCapacity;
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
+    std::optional<MediaAvSyncGroupKey> syncGroup;
+};
+
 class MediaAudioEncodeBranchBuilder final {
 public:
     static ::media::Result<MediaEncodedBranchEndpoints> build(
@@ -49,7 +59,7 @@ public:
         MediaGraph& graph, const MediaAudioEncodeBranchOptions& options,
         MediaEndpoint outputEncoderCodec);
     static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
-        MediaGraph& graph, const MediaAudioEncodeBranchOptions& options);
+        MediaGraph& graph, const MediaAudioOutputEncoderOptions& options);
 
 private:
     MediaAudioEncodeBranchBuilder() = default;

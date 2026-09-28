@@ -132,8 +132,7 @@ MediaVideoOutputEncoderOptions videoOptions(
 }
 
 ::media::Result<MediaAudioEncodeBranchOptions> audioOptions(
-    const std::string& prefix, const MediaRealtimeAvSourceRuntimePlan& runtime,
-    const std::optional<MediaAudioEncoderFifoRetentionPlan>& encoderFifo)
+    const std::string& prefix, const MediaRealtimeAvSourceRuntimePlan& runtime)
 {
     MediaAudioBranchSegmentOptions branch;
     branch.prefix = prefix;
@@ -144,7 +143,6 @@ MediaVideoOutputEncoderOptions videoOptions(
     branch.normalizeInputPackets = false;
     auto status = mapSynchronizedAudioSourceOptions(runtime, branch);
     if (!status) return ::media::Result<MediaAudioEncodeBranchOptions>::failure(status.error());
-    branch.encoderFifoRetention = encoderFifo;
     return ::media::Result<MediaAudioEncodeBranchOptions>::success(makeAudioEncodeBranchOptions(branch));
 }
 
@@ -204,9 +202,10 @@ MediaVideoOutputEncoderOptions videoOptions(
     auto outputVideo = MediaVideoTranscodeBranchBuilder::buildOutputEncoder(graph,
         videoOptions(prefix + ".output.video", options.outputVideo, outputRuntime));
     if (!outputVideo) return Result::failure(outputVideo.error());
-    auto outputAudioOptions = audioOptions(prefix + ".output.audio", outputRuntime, outputRuntime.encoderFifoRetention);
-    if (!outputAudioOptions) return Result::failure(outputAudioOptions.error());
-    auto outputAudio = MediaAudioEncodeBranchBuilder::buildOutputEncoder(graph, outputAudioOptions.value());
+    auto outputAudio = MediaAudioEncodeBranchBuilder::buildOutputEncoder(graph,
+        {prefix + ".output.audio", *outputRuntime.audioPipeline.resolvedOutput,
+         outputRuntime.edgePolicies, MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
+         outputRuntime.queues.frame, outputRuntime.encoderFifoRetention, outputRuntime.groupKey});
     if (!outputAudio) return Result::failure(outputAudio.error());
     const auto aggregateNode = graph.addNode(MediaNodeKind::AvContinuousAggregate,
         prefix + ".aggregate", "Continuous A/V aggregate");
@@ -245,7 +244,7 @@ MediaVideoOutputEncoderOptions videoOptions(
         video.packetSourcePort = inputs.value().videoPacket.port;
         auto sourceVideo = MediaVideoTranscodeBranchBuilder::buildSource(graph, video, outputVideo.value().codec);
         if (!sourceVideo) return Result::failure(sourceVideo.error());
-        auto audio = audioOptions(sourcePrefix + ".audio", runtime, std::nullopt);
+        auto audio = audioOptions(sourcePrefix + ".audio", runtime);
         if (!audio) return Result::failure(audio.error());
         audio.value().formatSourceNode = inputs.value().audioFormat.node;
         audio.value().formatSourcePort = inputs.value().audioFormat.port;

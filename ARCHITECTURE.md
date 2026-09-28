@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+音频输出编码段使用MediaAudioOutputEncoderOptions，仅消费解析后的编码格式、边策略和lineage/FIFO/group，不携带源索引或servo。源/共享分支与输出通过同步借用的内部视图复用同一节点及端口实现；AudioPlanOptionApplier共用编码配置映射，源字段只在真实源段写入，见[音频编码段](docs/realtime-video-composition-audio-output.md)。
+
 音频FIFO容量产品只消费prepared编码格式和上游最大输入样本数。源校正块上界由AudioCorrectionReachabilityPlanner复用原量化器推导；aggregate按codecFrameSamples形成固定块，合屏builder核对相同FIFO合同。运行时入队前检查保留，容量是样本载荷界，不是进程RSS上限，见[FIFO规划](docs/realtime-video-composition-audio-fifo.md)。
 
 A/V同步计划显式区分SharedSourceOutput、SourceContribution与ContinuousOutput；binding与产品角色在构图和bootstrap核对。源域只保留接收时钟/恢复权限，输出域只持初始epoch激活权限；本地sender NTP需求由输出协议决定，不代替源RTCP映射。旧单源planner使用共享角色；新多源产品形成与资源事务仍未接通，见[域校验记录](docs/realtime-video-composition-domain-validation.md)。
