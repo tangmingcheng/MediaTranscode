@@ -548,3 +548,5 @@ CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_for
 RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder API，保留原始回放；结果拥有 decoder、首帧与准备 storage lease。准备存储按协议上界及实际 decoder retention 推导，和 raw 快照预算分别计费；跨源总准入仍须在组合 preflight 完成。等待新证据沿用原 open/analysis 截止时间。该消费者尚未接入公共生产入口，见[首帧探测记录](docs/realtime-video-composition-first-frame.md)。
 
 准备首帧释放后，经公共codec adapter flush同一个decoder并形成一次性MediaPreparedVideoDecoder；source domain绑定、registrar与CodecResolver领取该对象，storage lease随实际context所有权转移。公共MediaVideoDecoderPlanOptionCodec供旧单源与source-only规划共用。完整preflight尚未调用该交接，详见[解码器交接记录](docs/realtime-video-composition-decoder-handoff.md)。
+
+组合图源输入现在使用MediaRealtimeCompositionSourcePlan，公共输入组装与decoder/filter segment消费MediaRealtimeAvSourceRuntimePlan，不要求逐源encoder/FIFO/协议输出。MediaPreparedVideoCanvas在真实输出帧池执行黑模板与tile copy后持有资源，运行aggregate一次性领取并绑定owner wakeup；缺失准备产品直接失败。完整准备协调器及跨源准入仍待接通，见[源合同与准备画布](docs/realtime-video-composition-source-contract.md)。

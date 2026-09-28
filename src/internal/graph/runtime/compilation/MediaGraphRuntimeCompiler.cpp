@@ -202,13 +202,14 @@ public:
             }
             if (output) {
                 const auto& outputBinding = std::get<MediaAvOutputDomainBinding>(domain.role);
-                if (!outputBinding.aggregatePlan) return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("Continuous output requires its typed aggregate plan"));
+                if (!outputBinding.aggregatePlan || !outputBinding.preparedCanvas) return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument("Continuous output requires its typed aggregate plan and prepared canvas"));
                 preparedDomains.push_back(MediaAvRuntimeDomainState{
                     domain.groupKey, MediaAvOutputDomainRuntimeState{
                         std::get<MediaAvOutputDomainBinding>(domain.role).registration,
                         std::move(std::get<MediaOutputEpochActivationCapability>(registered.value())),
-                        outputBinding.aggregatePlan, outputBinding.preparedVideoEncoder}});
+                        outputBinding.aggregatePlan, outputBinding.preparedVideoEncoder,
+                        outputBinding.preparedCanvas}});
                 continue;
             }
             auto& activation = std::get<MediaPlaybackEpochActivationCapability>(registered.value());

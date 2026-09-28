@@ -230,7 +230,7 @@ namespace media::ffmpeg::graph {
     if (outputDomain) {
         const auto* owner = context.graph()->findNode(outputDomain->registration.activationOwner);
         auto output = context.findAvSyncGroup(*outputGroupKey);
-        if (!owner || !output || !outputDomain->activation || sources.empty() ||
+        if (!owner || !output || !outputDomain->activation || !outputDomain->preparedCanvas || sources.empty() ||
             scheduler.findNode(owner->id)) {
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
                 "Continuous output requires its aggregate owner, sources and unused initial activation"));
@@ -253,7 +253,7 @@ namespace media::ffmpeg::graph {
         auto runtimeNode = MediaRuntimeNodeFactory::createContinuousAggregateNode(
             *owner, MediaAvAggregateRuntimeDependencies{
                 std::move(inputs), std::move(output), std::move(*outputDomain->activation),
-                outputDomain->aggregatePlan});
+                outputDomain->aggregatePlan, outputDomain->preparedCanvas});
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         preparedNodes.push_back(std::move(runtimeNode).value());
     }

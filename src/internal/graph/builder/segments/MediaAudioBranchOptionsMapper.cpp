@@ -41,8 +41,8 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     return encodeOptions;
 }
 
-::media::Status mapSynchronizedAudioBranchOptions(
-    const MediaRealtimeAvSyncRuntimePlan& runtime,
+::media::Status mapSynchronizedAudioSourceOptions(
+    const MediaRealtimeAvSourceRuntimePlan& runtime,
     MediaAudioBranchSegmentOptions& options)
 {
     if (options.correctionMode || options.lineageMode ||
@@ -52,10 +52,8 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
             "synchronized audio branch mapping requires empty execution options"));
     }
 
-    if (std::holds_alternative<MediaSynchronizedAudioPacketCopyBounds>(
-            runtime.componentBounds)) {
-        if (runtime.audioPipeline.branchMode != MediaBranchMode::CopyPacket ||
-            runtime.audioCorrection) {
+    if (runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket) {
+        if (runtime.audioCorrection) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "synchronized packet-copy bounds conflict with runtime audio facts"));
         }
@@ -65,19 +63,12 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
         return ::media::Status::success();
     }
 
-    if (!std::holds_alternative<MediaSynchronizedAudioFrameTranscodeBounds>(
-            runtime.componentBounds) ||
-        runtime.audioPipeline.branchMode != MediaBranchMode::TranscodeFrame ||
+    if (runtime.audioPipeline.branchMode != MediaBranchMode::TranscodeFrame ||
         !runtime.audioCorrection || runtime.queues.frame == 0 ||
         !runtime.synchronization.audioServo.correctionLookaheadWindows) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "synchronized frame-transcode bounds are incomplete"));
     }
-    if (!runtime.encoderFifoRetention) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "synchronized frame-transcode requires planned encoder FIFO retention"));
-    }
-    options.encoderFifoRetention = runtime.encoderFifoRetention;
     options.correctionMode =
         MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
     options.lineageMode =
@@ -87,6 +78,25 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     options.correctionLookaheadWindows =
         runtime.synchronization.audioServo.correctionLookaheadWindows;
     options.syncGroup = runtime.groupKey;
+    return ::media::Status::success();
+}
+
+::media::Status mapSynchronizedAudioBranchOptions(
+    const MediaRealtimeAvSyncRuntimePlan& runtime,
+    MediaAudioBranchSegmentOptions& options)
+{
+    const bool copy = runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket;
+    if ((copy && !std::holds_alternative<MediaSynchronizedAudioPacketCopyBounds>(runtime.componentBounds)) ||
+        (!copy && !std::holds_alternative<MediaSynchronizedAudioFrameTranscodeBounds>(runtime.componentBounds)))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "synchronized audio component bounds conflict with the planned branch"));
+    auto status = mapSynchronizedAudioSourceOptions(runtime, options);
+    if (!status) return status;
+    if (runtime.audioPipeline.branchMode == MediaBranchMode::TranscodeFrame) {
+        if (!runtime.encoderFifoRetention) return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("synchronized frame-transcode requires planned encoder FIFO retention"));
+        options.encoderFifoRetention = runtime.encoderFifoRetention;
+    }
     return ::media::Status::success();
 }
 

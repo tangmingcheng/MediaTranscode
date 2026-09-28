@@ -620,26 +620,24 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         *facts.value().terminalDrainWindow);
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
         MediaRealtimeAvSyncRuntimePlan{
+          MediaRealtimeAvSourceRuntimePlan{
             std::move(audio),
             std::move(outer.isolatedAudioInput),
-            *outer.avSyncComponentBounds,
             groupKey,
             std::move(synchronization),
             std::move(assembly).value(),
-            adapter,
-            std::move(*protocolOutput),
-            std::move(datagramTransport).value(),
             outer.queues,
             std::move(edgePolicies).value(),
             outer.threadingPolicy,
             *activationOutputLead,
             outer.videoPlan.filterActive,
             std::move(transition),
-            facts.value(),
+            facts.value().inputAudioSampleRate,
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt, std::move(encoderFifoRetention)});
+                : std::nullopt}, *outer.avSyncComponentBounds, facts.value(), adapter, std::move(*protocolOutput),
+            std::move(datagramTransport).value(), std::move(encoderFifoRetention)});
 }
 
 } // namespace media::ffmpeg::graph

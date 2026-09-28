@@ -12,7 +12,7 @@ public:
         MediaGraph& graph,
         MediaNodeId node,
         MediaStreamKind stream,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureDemuxPacketClockBinder(
         MediaGraph& graph,
@@ -25,38 +25,38 @@ public:
         MediaGraph& graph,
         MediaNodeId node,
         MediaStreamKind stream,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureCanonicalInput(
         MediaGraph& graph,
         MediaNodeId node,
         MediaScheduledStream stream,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureStartupCoordinator(
         MediaGraph& graph,
         MediaNodeId node,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureStartupClock(
         MediaGraph& graph,
         MediaNodeId node,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configurePlaybackEpochBinder(
         MediaGraph& graph,
         MediaNodeId node,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureActivationSequencer(
         MediaGraph& graph,
         MediaNodeId node,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
     static ::media::Result<void> configureBoundReleaseExtractor(
         MediaGraph& graph,
         MediaNodeId node,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
 private:
     MediaRealtimeAvSyncNodeConfigurator() = delete;

@@ -37,25 +37,29 @@ struct MediaAudioCorrectionReachabilityPlan final {
                            const MediaAudioCorrectionReachabilityPlan&) = default;
 };
 
-struct MediaRealtimeAvSyncRuntimePlan final {
+struct MediaRealtimeAvSourceRuntimePlan {
     MediaAudioPipelinePlan audioPipeline;
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
-    MediaRealtimeAvSyncComponentBounds componentBounds;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan synchronization;
     MediaRealtimeAvSyncAssemblyPlan assembly;
-    MediaAvSyncOutputAdapterKind outputAdapter;
-    std::variant<MediaSeparateRtpOutputRuntimePlan,
-                 MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
-    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
     MediaRunningTime activationOutputLead;
     bool videoFilterActive;
     MediaAvGenerationTransitionPlan transition;
-    MediaRealtimeAvSyncPlanningFacts planningFacts;
+    std::optional<int> inputAudioSampleRate;
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
+};
+
+struct MediaRealtimeAvSyncRuntimePlan final : MediaRealtimeAvSourceRuntimePlan {
+    MediaRealtimeAvSyncComponentBounds componentBounds;
+    MediaRealtimeAvSyncPlanningFacts planningFacts;
+    MediaAvSyncOutputAdapterKind outputAdapter;
+    std::variant<MediaSeparateRtpOutputRuntimePlan,
+                 MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
+    MediaDatagramTransportPlanTemplate datagramTransport;
     std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
 };
 

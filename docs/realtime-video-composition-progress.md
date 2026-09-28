@@ -87,3 +87,7 @@ segment→registration→validator→registrar 的源/输出处理归属已落�
 ## 2026-09-28：准备decoder一次性交接
 
 共用decoder选项映射、同context flush/claim、准备预算随实际codec所有权转移及组合域绑定已完成源码双审PASS。用户完成Release构建后使用现有产物r27复验，源完整120秒exit0、VLC有画面，CLI源结束后仍无进展exit1、4逻辑对象残留，完整门禁FAIL。命令、指标及5项产物清理已归档到[解码器交接记录](realtime-video-composition-decoder-handoff.md)。下一步接通源专用计划与完整preflight调用者，补全跨源资源准入、公共入口及多源矩阵；42/100不变。
+
+## 2026-09-28：源合同与准备画布
+
+源图合同移除逐源encoder/FIFO/协议依赖，公共source配置复用；真实prepared canvas在图前copy验证后一次性转交aggregate。33源码双独立审查PASS、Release全量构建exit0且哈希不变。r28原规格实时回归源exit0、VLC有画面，但CLI源结束后无进展exit1、4对象残留；local-r28在CUDA保留帧上界/QSV帧池能力规划阶段失败，未进入segment，均不算通过。两轮6项临时文件及媒体PID已清理，完整命令和指标见[源合同与准备画布](realtime-video-composition-source-contract.md)。完整准备调用者、跨源总账、纯视频、公共入口及Windows→RKMPP多源矩阵继续未完成，42/100不变。

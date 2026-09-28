@@ -30,6 +30,7 @@ struct MediaAvOutputDomainRuntimeState final {
     std::optional<MediaOutputEpochActivationCapability> activation;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregatePlan;
     MediaBufferRef preparedVideoEncoder;
+    std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;
 };
 
 struct MediaAvRuntimeDomainState final {

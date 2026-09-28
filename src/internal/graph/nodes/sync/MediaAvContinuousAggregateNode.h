@@ -76,7 +76,7 @@ private:
     bool m_audioEnded = false;
     MediaBufferRef m_videoCodec;
     MediaBufferRef m_audioCodec;
-    MediaVideoCanvasProducer m_canvas;
+    std::unique_ptr<MediaVideoCanvasProducer> m_canvas;
     bool m_canvasPrepared = false;
     std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputEndpoints.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
@@ -20,6 +21,9 @@ public:
     static ::media::Result<MediaRealtimeInputGraph> append(
         MediaGraph& graph, const std::string& prefix,
         const MediaRealtimeRtpTranscodePlan& plan);
+    static ::media::Result<MediaRealtimeInputGraph> append(
+        MediaGraph& graph, const std::string& prefix,
+        const MediaRealtimeCompositionSourcePlan& plan);
 };
 
 } // namespace media::ffmpeg::graph

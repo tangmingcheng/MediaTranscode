@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/MediaPreparedVideoCanvas.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
@@ -49,7 +50,7 @@ MediaAvContinuousAggregateNode::sourcePurgeTarget(const MediaAvSyncGroupKey& gro
 
 ::media::Status MediaAvContinuousAggregateNode::start(MediaGraphExecutionContext& context)
 {
-    if (!m_dependencies.aggregatePlan || !m_dependencies.output ||
+    if (!m_dependencies.aggregatePlan || !m_dependencies.output || !m_dependencies.preparedCanvas ||
         m_dependencies.output->key() != plan().outputGroupKey ||
         m_sources.empty() || m_sources.size() != m_dependencies.sources.size() ||
         plan().audioSource >= m_sources.size() ||
@@ -106,7 +107,7 @@ void MediaAvContinuousAggregateNode::clear() noexcept
     m_pending.reset();
     m_videoCodec.reset();
     m_audioCodec.reset();
-    m_canvas = MediaVideoCanvasProducer{};
+    m_canvas.reset();
     m_canvasPrepared = false;
     m_audioCandidateSamples = 0;
     m_committedAudioFrames = 0;
@@ -210,8 +211,11 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
             codec->pix_fmt != range.encoderInput->pixelFormat ||
             codec->sw_pix_fmt != range.encoderInput->surfacePixelFormat)
             return invalid("Canvas facts differ from the production encoder readback");
-        if (auto status = m_canvas.prepare(plan().canvas, codec->hw_frames_ctx,
-                context.sharedNodeWakeup(nodeId())); !status) return status;
+        if (!m_dependencies.preparedCanvas) return invalid("Aggregate requires its prepared canvas resources");
+        auto canvas = m_dependencies.preparedCanvas->claim(plan().canvas, codec->hw_frames_ctx,
+            context.sharedNodeWakeup(nodeId()));
+        if (!canvas) return ::media::Status::failure(canvas.error());
+        m_canvas = std::move(canvas.value());
         m_canvasPrepared = true;
     }
     if (m_audioCodec) {

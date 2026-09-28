@@ -45,17 +45,17 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
 }
 
 ::media::Result<void> addTranscodePorts(MediaGraph& graph,
-                                        const MediaVideoTranscodeBranchOptions& options,
-                                        const MediaVideoTranscodeBranchNodes& nodes)
+                                        const MediaVideoBranchConnectionOptions& options,
+                                        const MediaVideoTranscodeBranchNodes& nodes, bool outputFanout)
 {
     if (nodes.hardwareTransfer.isValid()) if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
     if (nodes.videoDecode.isValid()) {
         if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.codecResolver, "decoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     }
     if (nodes.videoTimestamp.isValid() && !options.sharedDecode) {
-        if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.codecResolver, "timestamp_source", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, !options.plan.outputFanout.has_value(), true); !status) return status;
+        if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.codecResolver, "timestamp_source", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, !outputFanout, true); !status) return status;
     }
-    if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.codecResolver, "encoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, !options.plan.outputFanout.has_value(), !nodes.hardwareTransfer.isValid()); !status) return status;
+    if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.codecResolver, "encoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, !outputFanout, !nodes.hardwareTransfer.isValid()); !status) return status;
     if (nodes.videoDecode.isValid()) {
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.videoDecode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     }
@@ -100,7 +100,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
 }
 
 ::media::Result<void> connectTranscodePorts(MediaGraph& graph,
-                                            const MediaVideoTranscodeBranchOptions& options,
+                                            const MediaVideoBranchConnectionOptions& options,
                                             const MediaVideoTranscodeBranchNodes& nodes,
                                             MediaEndpoint outputCodec)
 {
@@ -174,15 +174,137 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> validateVideoLineage(
+    const MediaVideoBranchConnectionOptions& options, MediaVideoLineagePropagation decoderLineage,
+    std::optional<MediaVideoLineagePropagation> encoderLineage)
+{
+    if (options.canonicalLineageCapacity) {
+        if (!options.generationStartRequiresKeyFrame) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video branch requires planner generation-start key-frame policy"));
+        }
+        const auto& synchronizedFrames =
+            options.edgePolicies.synchronizedVideoFrame.queuePolicy;
+        if (!synchronizedFrames.bounded ||
+            synchronizedFrames.capacity == 0 ||
+            synchronizedFrames.overflowPolicy !=
+                MediaQueueOverflowPolicy::BlockProducer ||
+            synchronizedFrames.orderingPolicy !=
+                MediaQueueOrderingPolicy::Fifo ||
+            !synchronizedFrames.preserveOrdering) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video branch requires its planned ordered frame policy"));
+        }
+        if (!MediaAtomicOutputPolicyContract::accepts(
+                options.edgePolicies.preparedVideoFrame)) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video preparation requires a complete planned atomic output policy"));
+        }
+        if (decoderLineage == MediaVideoLineagePropagation::Unknown ||
+            (encoderLineage && *encoderLineage == MediaVideoLineagePropagation::Unknown)) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video branch requires planner lineage propagation contracts"));
+        }
+        if (decoderLineage == MediaVideoLineagePropagation::CodecCopyOpaque ||
+            (encoderLineage && *encoderLineage == MediaVideoLineagePropagation::CodecCopyOpaque)) {
+            if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
+                return ::media::Result<void>::failure(
+                    status.error());
+            }
+        }
+    }
+    if (options.lineageEdgePolicies) {
+        const auto& lineage = *options.lineageEdgePolicies;
+        const auto validBlockingPolicy = [](const MediaEdgePolicy& policy) {
+            const auto& queue = policy.queuePolicy;
+            return queue.bounded && queue.capacity > 0 &&
+                queue.overflowPolicy ==
+                    MediaQueueOverflowPolicy::BlockProducer &&
+                queue.orderingPolicy == MediaQueueOrderingPolicy::Fifo &&
+                queue.preserveOrdering;
+        };
+        if (!MediaAtomicOutputPolicyContract::accepts(
+                lineage.startupPacket) ||
+            !validBlockingPolicy(lineage.frame) ||
+            !MediaAtomicOutputPolicyContract::accepts(
+                lineage.preparedFrame)) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video lineage requires complete planned lossless edge policies"));
+        }
+    }
+
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> configureVideoLineage(
+    MediaGraph& graph, const MediaVideoBranchConnectionOptions& options,
+    const MediaVideoTranscodeBranchNodes& nodes, MediaVideoLineagePropagation decoderLineage,
+    std::optional<MediaVideoLineagePropagation> encoderLineage)
+{
+    if (options.canonicalLineageCapacity) {
+        if (*options.canonicalLineageCapacity == 0) return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument("Synchronized video branch requires positive lineage capacity"));
+        const std::string capacity = std::to_string(*options.canonicalLineageCapacity);
+        std::vector<std::pair<MediaNodeId, const char*>> lineageNodes {
+            {nodes.videoDecode, "video_decode"},
+            {nodes.videoFrameRate, "video_frame_rate"},
+            {nodes.videoEncode, "video_encode"},
+        };
+        if (nodes.videoFilter.isValid()) {
+            lineageNodes.emplace_back(nodes.videoFilter, "video_filter");
+        }
+        for (const auto& [id, identity] : lineageNodes) {
+            if (!id.isValid()) continue;
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<void>::failure(status.error());
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<void>::failure(status.error());
+        }
+        if (nodes.hardwareTransfer.isValid()) {
+            const auto readinessOwner = nodes.videoFilter.isValid()
+                ? nodes.videoFilter : nodes.videoFrameRate;
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                    graph, owner, readinessOwner,
+                    "video.startup_preparation.owner", "1"); !status) {
+                return ::media::Result<void>::failure(
+                    status.error());
+            }
+        }
+        if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, nodes.videoEncode,
+                "video_encode.force_generation_start_key_frame",
+                *options.generationStartRequiresKeyFrame ? "1" : "0");
+            !status) {
+            return ::media::Result<void>::failure(
+                status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, nodes.codecResolver,
+                "video.lineage.capacity", capacity); !status) return ::media::Result<void>::failure(status.error());
+        const char* decoderCopyOpaque =
+            decoderLineage ==
+                MediaVideoLineagePropagation::CodecCopyOpaque
+            ? "1" : "0";
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<void>::failure(status.error());
+        if (nodes.videoDecode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoDecode, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<void>::failure(status.error());
+        if (encoderLineage) {
+            const char* encoderCopyOpaque = *encoderLineage == MediaVideoLineagePropagation::CodecCopyOpaque ? "1" : "0";
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<void>::failure(status.error());
+            if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoEncode, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<void>::failure(status.error());
+        }
+    }
+    return ::media::Result<void>::success();
+}
+
 } // namespace
 
 static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
     MediaGraph& graph,
     const MediaVideoTranscodeBranchOptions& options,
-    MediaSourceBranchEndpoints* source, MediaOutputEncoderEndpoints* output,
-    MediaEndpoint outputCodec)
+    MediaOutputEncoderEndpoints* output)
 {
-    const bool sourceOnly = source != nullptr;
     const bool outputOnly = output != nullptr;
     if (options.plan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(
@@ -206,80 +328,20 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument("shared decode branch requires video-only frame and source codec endpoints"));
     }
-    if (options.canonicalLineageCapacity) {
-        if (!options.generationStartRequiresKeyFrame) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Synchronized video branch requires planner generation-start key-frame policy"));
-        }
-        const auto& synchronizedFrames =
-            options.edgePolicies.synchronizedVideoFrame.queuePolicy;
-        if (!synchronizedFrames.bounded ||
-            synchronizedFrames.capacity == 0 ||
-            synchronizedFrames.overflowPolicy !=
-                MediaQueueOverflowPolicy::BlockProducer ||
-            synchronizedFrames.orderingPolicy !=
-                MediaQueueOrderingPolicy::Fifo ||
-            !synchronizedFrames.preserveOrdering) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Synchronized video branch requires its planned ordered frame policy"));
-        }
-        if (!MediaAtomicOutputPolicyContract::accepts(
-                options.edgePolicies.preparedVideoFrame)) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Synchronized video preparation requires a complete planned atomic output policy"));
-        }
-        const auto decoderLineage =
-            options.plan.selected.decoderLineagePropagation;
-        const auto encoderLineage =
-            options.plan.selected.encoderLineagePropagation;
-        if (decoderLineage == MediaVideoLineagePropagation::Unknown ||
-            encoderLineage == MediaVideoLineagePropagation::Unknown) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Synchronized video branch requires planner lineage propagation contracts"));
-        }
-        if (decoderLineage == MediaVideoLineagePropagation::CodecCopyOpaque ||
-            encoderLineage == MediaVideoLineagePropagation::CodecCopyOpaque) {
-            if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
-                return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                    status.error());
-            }
-        }
-    }
-    if (options.lineageEdgePolicies) {
-        const auto& lineage = *options.lineageEdgePolicies;
-        const auto validBlockingPolicy = [](const MediaEdgePolicy& policy) {
-            const auto& queue = policy.queuePolicy;
-            return queue.bounded && queue.capacity > 0 &&
-                queue.overflowPolicy ==
-                    MediaQueueOverflowPolicy::BlockProducer &&
-                queue.orderingPolicy == MediaQueueOrderingPolicy::Fifo &&
-                queue.preserveOrdering;
-        };
-        if (!MediaAtomicOutputPolicyContract::accepts(
-                lineage.startupPacket) ||
-            !validBlockingPolicy(lineage.frame) ||
-            !MediaAtomicOutputPolicyContract::accepts(
-                lineage.preparedFrame)) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Video lineage requires complete planned lossless edge policies"));
-        }
-    }
+    if (auto status = validateVideoLineage(options, options.plan.selected.decoderLineagePropagation,
+            options.plan.selected.encoderLineagePropagation); !status)
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
 
     MediaVideoTranscodeBranchNodes nodes = addVideoTranscodeNodes(graph,
                                                                   options.prefix,
                                                                   options.inputStartRequiresKeyFrame,
                                                                   options.canonicalLineageCapacity.has_value(),
                                                                   options.plan.filterActive,
-                                                                  options.sharedDecode.has_value(), sourceOnly, outputOnly);
-    if (!sourceOnly) outputCodec = {nodes.codecResolver, "encoder"};
-    if (sourceOnly || outputOnly) {
+                                                                  options.sharedDecode.has_value(), false, outputOnly);
+    const MediaEndpoint outputCodec{nodes.codecResolver, "encoder"};
+    if (outputOnly) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver,
-                "codec_resolver.mode", sourceOnly ? "source_decode" : "output_branch"); !status)
+                "codec_resolver.mode", "output_branch"); !status)
             return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (options.plan.outputFanout && !options.sharedDecode && !outputOnly) {
@@ -347,59 +409,13 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
     if (nodes.packetStartGate.isValid()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.packetStartGate, "packet_start_gate.require_key_frame", "1"); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
-    if (options.canonicalLineageCapacity) {
-        if (*options.canonicalLineageCapacity == 0) return ::media::Result<MediaEncodedBranchEndpoints>::failure(::media::ErrorInfo::invalidArgument("Synchronized video branch requires positive lineage capacity"));
-        const std::string capacity = std::to_string(*options.canonicalLineageCapacity);
-        std::vector<std::pair<MediaNodeId, const char*>> lineageNodes {
-            {nodes.videoDecode, "video_decode"},
-            {nodes.videoFrameRate, "video_frame_rate"},
-            {nodes.videoEncode, "video_encode"},
-        };
-        if (nodes.videoFilter.isValid()) {
-            lineageNodes.emplace_back(nodes.videoFilter, "video_filter");
-        }
-        for (const auto& [id, identity] : lineageNodes) {
-            if (!id.isValid()) continue;
-            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        }
-        if (!outputOnly) {
-            const auto readinessOwner = nodes.videoFilter.isValid()
-                ? nodes.videoFilter : nodes.videoFrameRate;
-            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                    graph, owner, readinessOwner,
-                    "video.startup_preparation.owner", "1"); !status) {
-                return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                    status.error());
-            }
-        }
-        if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                graph, owner, nodes.videoEncode,
-                "video_encode.force_generation_start_key_frame",
-                *options.generationStartRequiresKeyFrame ? "1" : "0");
-            !status) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-                status.error());
-        }
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                graph, owner, nodes.codecResolver,
-                "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        const char* encoderCopyOpaque =
-            options.plan.selected.encoderLineagePropagation ==
-                MediaVideoLineagePropagation::CodecCopyOpaque
-            ? "1" : "0";
-        const char* decoderCopyOpaque =
-            options.plan.selected.decoderLineagePropagation ==
-                MediaVideoLineagePropagation::CodecCopyOpaque
-            ? "1" : "0";
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        if (nodes.videoDecode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoDecode, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        if (nodes.videoEncode.isValid()) if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoEncode, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-    }
+    if (auto status = configureVideoLineage(graph, options, nodes,
+            options.plan.selected.decoderLineagePropagation,
+            options.plan.selected.encoderLineagePropagation); !status)
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = MediaVideoTranscodeOptionApplier::applyUserOptions(graph, nodes, options.parameters); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = MediaVideoPlanOptionApplier::applySelectedPlan(graph, nodes, options.plan); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-    if (auto status = addTranscodePorts(graph, options, nodes); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    if (auto status = addTranscodePorts(graph, options, nodes, options.plan.outputFanout.has_value()); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = connectTranscodePorts(graph, options, nodes, outputCodec); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
@@ -416,10 +432,6 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
         if (id.isValid()) processingStages.push_back(id);
     }
     if (nodes.videoEncode.isValid()) processing.output.push_back(nodes.videoEncode);
-    if (source) *source = {{nodes.videoFilter.isValid() ? nodes.videoFilter : nodes.videoFrameRate, "frame"},
-        nodes.codecResolver, options.canonicalLineageCapacity
-            ? std::optional<MediaNodeId>(nodes.videoFilter.isValid() ? nodes.videoFilter : nodes.videoFrameRate)
-            : std::nullopt, processing};
     if (output) {
         output->frameInput = {nodes.videoEncode, "frame"};
         output->codec = outputCodec;
@@ -436,27 +448,53 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
 ::media::Result<MediaEncodedBranchEndpoints> MediaVideoTranscodeBranchBuilder::build(
     MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options)
 {
-    return buildVideoSegment(graph, options, nullptr, nullptr, {});
+    return buildVideoSegment(graph, options, nullptr);
 }
 
 ::media::Result<MediaSourceBranchEndpoints> MediaVideoTranscodeBranchBuilder::buildSource(
-    MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options, MediaEndpoint outputEncoderCodec)
+    MediaGraph& graph, const MediaVideoSourceBranchOptions& options, MediaEndpoint outputEncoderCodec)
 {
-    if (!outputEncoderCodec.node.isValid() || !options.canonicalLineageCapacity ||
-        options.sharedDecode || options.plan.outputFanout)
-        return ::media::Result<MediaSourceBranchEndpoints>::failure(::media::ErrorInfo::invalidArgument(
-            "Video source segment requires a shared output codec and synchronized exclusive source preparation"));
-    MediaSourceBranchEndpoints source;
-    auto result = buildVideoSegment(graph, options, &source, nullptr, outputEncoderCodec);
-    if (!result) return ::media::Result<MediaSourceBranchEndpoints>::failure(result.error());
-    return ::media::Result<MediaSourceBranchEndpoints>::success(std::move(source));
+    using Result = ::media::Result<MediaSourceBranchEndpoints>;
+    if (!outputEncoderCodec.valid() || !options.canonicalLineageCapacity ||
+        *options.canonicalLineageCapacity == 0 || options.sharedDecode ||
+        options.inputStartRequiresKeyFrame || !options.generationStartRequiresKeyFrame ||
+        !options.plan.available || options.sourceStreamIndex < 0 ||
+        options.plan.decoderLineagePropagation == MediaVideoLineagePropagation::Unknown)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Video source requires planned decoder, canonical lineage and shared output codec"));
+    if (auto status = validateVideoLineage(options, options.plan.decoderLineagePropagation,
+            std::nullopt); !status) return Result::failure(status.error());
+    if (auto status = MediaGraphBuildSupport::requirePacketOutputEndpoint(graph, owner,
+            {options.packetSourceNode, options.packetSourcePort}, MediaStreamKind::Video,
+            MediaEdgeKind::InputPacket, options.sourceStreamIndex); !status) return Result::failure(status.error());
+    const auto nodes = addVideoTranscodeNodes(graph, options.prefix, false, true,
+        options.plan.filterActive, false, true, false);
+    const auto set = [&](MediaNodeId id, const char* key, const std::string& value) {
+        return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, key, value);
+    };
+    if (auto status = set(nodes.codecResolver, "codec_resolver.mode", "source_decode"); !status)
+        return Result::failure(status.error());
+    if (auto status = configureVideoLineage(graph, options, nodes,
+            options.plan.decoderLineagePropagation, std::nullopt); !status) return Result::failure(status.error());
+    const auto preparation = nodes.videoFilter.isValid() ? nodes.videoFilter : nodes.videoFrameRate;
+    if (auto status = MediaVideoPlanOptionApplier::applySourcePlan(graph, nodes, options.plan,
+            options.sourceStreamIndex, options.frameRate, options.maximumFrameDuplicationGap); !status)
+        return Result::failure(status.error());
+    if (auto status = addTranscodePorts(graph, options, nodes, false); !status) return Result::failure(status.error());
+    if (auto status = connectTranscodePorts(graph, options, nodes, outputEncoderCodec); !status) return Result::failure(status.error());
+    MediaProcessingNodeOwnership processing;
+    for (const auto id : {nodes.codecResolver, nodes.videoDecode, nodes.hardwareTransfer,
+             nodes.videoFrameRate, nodes.videoFilter}) {
+        if (id.isValid()) processing.source.push_back(id);
+    }
+    return Result::success({{preparation, "frame"}, nodes.codecResolver, preparation, std::move(processing)});
 }
 
 ::media::Result<MediaOutputEncoderEndpoints> MediaVideoTranscodeBranchBuilder::buildOutputEncoder(
     MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options)
 {
     MediaOutputEncoderEndpoints output;
-    auto result = buildVideoSegment(graph, options, nullptr, &output, {});
+    auto result = buildVideoSegment(graph, options, &output);
     if (!result) return ::media::Result<MediaOutputEncoderEndpoints>::failure(result.error());
     output.encoded = std::move(result).value();
     return ::media::Result<MediaOutputEncoderEndpoints>::success(std::move(output));

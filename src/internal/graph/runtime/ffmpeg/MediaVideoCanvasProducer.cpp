@@ -33,11 +33,9 @@ void releaseHeader(void* opaque, std::uint8_t*)
 }
 
 ::media::Status MediaVideoCanvasProducer::prepare(
-    const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames,
-    std::shared_ptr<MediaNodeWakeup> availabilityWakeup)
+    const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames)
 {
     if (black_) return invalid("canvas producer is already prepared");
-    if (!availabilityWakeup) return invalid("canvas requires its owner availability wakeup");
     if (!productionHwFrames || !productionHwFrames->data || plan.width <= 0 || plan.height <= 0 ||
         !plan.surfaceCount || !plan.maximumHeaderCount || !plan.maximumSurfaceBytes ||
         !plan.maximumStagingBytes || plan.maximumStagingBytes > std::numeric_limits<int>::max() ||
@@ -119,10 +117,11 @@ void releaseHeader(void* opaque, std::uint8_t*)
     const MediaVideoCanvasRectangle full{0, 0, plan.width, plan.height};
     status = created.value()->validate(*black.value(), *surfaces.front(), full);
     if (!status) return status;
+    status = created.value()->copy(*black.value(), *surfaces.front(), full);
+    if (!status) return status;
     frames_ = makeBufferRef(productionHwFrames);
     if (!frames_) return ::media::Status::failure(::media::ErrorInfo::allocationFailed("canvas frames reference"));
     outstanding_ = std::make_shared<std::atomic_size_t>(0);
-    availabilityWakeup_ = std::move(availabilityWakeup);
     plan_ = plan;
     adapter_ = std::move(created.value());
     surfaces_ = std::move(surfaces);

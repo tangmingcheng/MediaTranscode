@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 源端合同与准备画布独立审查 B
+
+基线 `9c0d53a9` 后33个src文件：Standards/限定阶段源码 Spec **PASS**。source-only输入、视频与音频配置复用原segment；画布使用真实pool执行黑场及tile copy，plan/pool绑定和mutex单次claim贯通。错误路径RAII及Shared/local配置映射经源码核对；未运行构建或媒体。
+
+六维维持 **10/8/6/12/2/4，共42/100**。完整合屏及交付 **FAIL（未完成）**：完整preflight caller、跨源总账、非选定纯视频、公共入口及Windows→RKMPP多源验收仍缺。局部surface上界不等于driver/RSS边界；旧Shared无进展/4对象和AAC重入未证明修复。
+
 ## 2026-09-28 准备解码器交接独立复审 B
 
 基线 `7a7312ac` 后22个src文件：Standards/限定阶段源码 Spec **PASS**。复审确认首帧释放后flush同一decoder、单次claim、storage lease随context deleter穿过takeContext；参数副本及side data纳入逻辑额度，claim只读snapshot。设备必要性按typed帧合同检查，DRM PRIME不再被无条件hw_device_ctx门槛拒绝；共用retention校验与已有单源lineage保持。

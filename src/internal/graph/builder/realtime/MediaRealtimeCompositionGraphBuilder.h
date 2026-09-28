@@ -2,7 +2,8 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
-#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
+#include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/runtime/factory/MediaAvSyncRuntimeBinding.h"
 
 #include <memory>
@@ -12,14 +13,17 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaPreparedVideoCanvas;
+
 struct MediaRealtimeCompositionGraphOptions final {
-    std::vector<MediaRealtimeRtpTranscodePlan> sources;
+    std::vector<MediaRealtimeCompositionSourcePlan> sources;
     std::vector<std::shared_ptr<MediaPreparedVideoDecoder>> preparedVideoDecoders;
     MediaPipelinePlan outputVideo;
     MediaVideoTranscodeParameters outputVideoParameters;
     MediaRealtimeAvSyncRuntimePlan outputRuntime;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregate;
     MediaBufferRef preparedVideoEncoder;
+    std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;
 };
 
 struct MediaRealtimeCompositionSourceTargets final {

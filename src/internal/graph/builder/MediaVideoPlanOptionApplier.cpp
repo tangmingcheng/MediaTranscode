@@ -129,6 +129,81 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
     return ::media::Result<void>::success();
 }
+::media::Result<void> applyDuplicationBound(
+    MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+    const std::optional<MediaRational>& maximumDuplicationGap)
+{
+    if (nodes.videoFrameRate.isValid()) {
+        if (auto status = setOption(graph, nodes.videoFrameRate,
+                "video.framerate.bound_duplication_gap",
+                boolOption(maximumDuplicationGap.has_value())); !status) return status;
+        if (maximumDuplicationGap) {
+            const auto gap = *maximumDuplicationGap;
+            if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
+                return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                    "Video frame-rate duplication gap contract is invalid"));
+            }
+            if (auto status = setOption(graph, nodes.videoFrameRate,
+                    "video.framerate.maximum_duplication_gap_num",
+                    std::to_string(gap.num)); !status) return status;
+            if (auto status = setOption(graph, nodes.videoFrameRate,
+                    "video.framerate.maximum_duplication_gap_den",
+                    std::to_string(gap.den)); !status) return status;
+        }
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> applyDecoderPolling(
+    MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+    const MediaVideoSourcePlan& source)
+{
+    if (nodes.videoDecode.isValid()) {
+        if (auto status = setOption(graph, nodes.videoDecode,
+                "video_decode.poll_output", boolOption(source.decoderReceiveInterval.has_value()));
+            !status) return status;
+        if (source.decoderReceiveInterval) {
+            if (auto status = setOption(graph, nodes.videoDecode,
+                    "video_decode.receive_interval_ns",
+                    std::to_string(source.decoderReceiveInterval->nanoseconds()));
+                !status) return status;
+        }
+    }
+
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> applySourceExecution(
+    MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+    const MediaVideoSourcePlan& source)
+{
+    if (source.transferDirection == MediaHardwareTransferDirection::Unknown) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner-selected transfer direction"));
+    }
+    if (nodes.hardwareTransfer.isValid()) if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(source.transferDirection)); !status) return status;
+    if (nodes.videoFilter.isValid()) {
+        if (source.filterImplementation == MediaVideoFilterImplementation::Unknown ||
+            source.filterImplementation == MediaVideoFilterImplementation::None) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
+        }
+        auto execution = MediaVideoFilterExecutionPlanner::forEncoder(source.filter.filterName);
+        if (!execution) return ::media::Result<void>::failure(execution.error());
+        if (auto status = MediaVideoPlanOptionApplier::applyFilterExecutionPlan(graph, nodes.videoFilter, execution.value()); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, source.filter.filterName); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFilter, "filter.name", source.filter.filterName); !status) return status;
+        if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", source.filter.hwaccelName); !status) return status;
+        if (auto status = setOption(
+                graph, nodes.videoFilter, "filter.pipeline.implementation",
+                mediaVideoFilterImplementationName(source.filterImplementation));
+            !status) return status;
+    }
+    return ::media::Result<void>::success();
+}
+
 } // namespace
 
 ::media::Result<void> MediaVideoPlanOptionApplier::applySelectedPlan(
@@ -144,24 +219,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     const MediaPipelineChainPlan& chain = plan.selected;
     auto decoderOptions = MediaVideoDecoderPlanOptionCodec::encode(chain.decoder, std::nullopt);
     if (!decoderOptions) return ::media::Result<void>::failure(decoderOptions.error());
-    if (nodes.videoFrameRate.isValid()) {
-        if (auto status = setOption(graph, nodes.videoFrameRate,
-                "video.framerate.bound_duplication_gap",
-                boolOption(plan.maximumFrameDuplicationGap.has_value())); !status) return status;
-        if (plan.maximumFrameDuplicationGap) {
-            const auto gap = *plan.maximumFrameDuplicationGap;
-            if (!gap.isKnown() || gap.num <= 0 || gap.den <= 0) {
-                return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
-                    "Video frame-rate duplication gap contract is invalid"));
-            }
-            if (auto status = setOption(graph, nodes.videoFrameRate,
-                    "video.framerate.maximum_duplication_gap_num",
-                    std::to_string(gap.num)); !status) return status;
-            if (auto status = setOption(graph, nodes.videoFrameRate,
-                    "video.framerate.maximum_duplication_gap_den",
-                    std::to_string(gap.den)); !status) return status;
-        }
-    }
+    if (auto status = applyDuplicationBound(graph, nodes, plan.maximumFrameDuplicationGap); !status) return status;
     std::vector<MediaNodeId> plannedNodes {
         nodes.codecResolver,
         nodes.videoDecode,
@@ -174,17 +232,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         plannedNodes.push_back(nodes.videoTimestamp);
     }
 
-    if (nodes.videoDecode.isValid()) {
-        if (auto status = setOption(graph, nodes.videoDecode,
-                "video_decode.poll_output", boolOption(chain.decoderReceiveInterval.has_value()));
-            !status) return status;
-        if (chain.decoderReceiveInterval) {
-            if (auto status = setOption(graph, nodes.videoDecode,
-                    "video_decode.receive_interval_ns",
-                    std::to_string(chain.decoderReceiveInterval->nanoseconds()));
-                !status) return status;
-        }
-    }
+    if (auto status = applyDecoderPolling(graph, nodes, chain); !status) return status;
 
     for (MediaNodeId nodeId : plannedNodes) {
         if (!nodeId.isValid()) {
@@ -219,30 +267,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.implementation",
                 mediaVideoFilterImplementationName(plan.sharedSource->copyImplementation)); !status) return status;
     }
-    if (chain.transferDirection == MediaHardwareTransferDirection::Unknown) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MediaVideoPlanOptionApplier requires planner-selected transfer direction"));
-    }
-    if (nodes.hardwareTransfer.isValid()) if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(chain.transferDirection)); !status) return status;
-    if (nodes.videoFilter.isValid()) {
-        if (chain.filterImplementation == MediaVideoFilterImplementation::Unknown ||
-            chain.filterImplementation == MediaVideoFilterImplementation::None) {
-            return ::media::Result<void>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
-        }
-        auto execution = MediaVideoFilterExecutionPlanner::forEncoder(chain.filter.filterName);
-        if (!execution) return ::media::Result<void>::failure(execution.error());
-        if (auto status = applyFilterExecutionPlan(graph, nodes.videoFilter, execution.value()); !status) return status;
-        if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
-        if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
-        if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
-        if (auto status = setOption(
-                graph, nodes.videoFilter, "filter.pipeline.implementation",
-                mediaVideoFilterImplementationName(chain.filterImplementation));
-            !status) return status;
-    }
+    if (auto status = applySourceExecution(graph, nodes, chain); !status) return status;
     if (nodes.videoTimestamp.isValid()) {
         if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
     }
@@ -257,6 +282,36 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
         !status) return status;
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+}
+
+::media::Result<void> MediaVideoPlanOptionApplier::applySourcePlan(
+    MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+    const MediaVideoSourcePlan& plan, int sourceStreamIndex,
+    MediaRational frameRate, const std::optional<MediaRational>& maximumDuplicationGap)
+{
+    if (!plan.available || sourceStreamIndex < 0 || frameRate.num <= 0 || frameRate.den <= 0 ||
+        plan.transferDirection == MediaHardwareTransferDirection::Unknown ||
+        (maximumDuplicationGap && (maximumDuplicationGap->num <= 0 || maximumDuplicationGap->den <= 0)))
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument("Video source requires authoritative frame execution facts"));
+    auto decoder = MediaVideoDecoderPlanOptionCodec::encode(plan.decoder, std::nullopt);
+    if (!decoder) return ::media::Result<void>::failure(decoder.error());
+    if (auto status = applyOptions(graph, nodes.codecResolver, decoder.value()); !status) return status;
+    for (const auto id : {nodes.codecResolver, nodes.videoDecode, nodes.hardwareTransfer,
+             nodes.videoFrameRate, nodes.videoFilter}) {
+        if (!id.isValid()) continue;
+        if (auto status = setStageOptions(graph, id, "decoder.pipeline", plan.decoder); !status) return status;
+        if (auto status = setStageOptions(graph, id, "filter.pipeline", plan.filter); !status) return status;
+        for (const auto& [key, value] : decoder.value().values()) {
+            if (key.starts_with("decoder.pipeline.input_retention.")) {
+                if (auto status = setOption(graph, id, key, value); !status) return status;
+            }
+        }
+    }
+    if (auto status = applyDecoderPolling(graph, nodes, plan); !status) return status;
+    if (auto status = setOption(graph, nodes.videoFrameRate, MediaTranscodeOptionKey::VideoFpsNum, std::to_string(frameRate.num)); !status) return status;
+    if (auto status = setOption(graph, nodes.videoFrameRate, MediaTranscodeOptionKey::VideoFpsDen, std::to_string(frameRate.den)); !status) return status;
+    if (auto status = applyDuplicationBound(graph, nodes, maximumDuplicationGap); !status) return status;
+    return applySourceExecution(graph, nodes, plan);
 }
 
 ::media::Result<void> MediaVideoPlanOptionApplier::applyFilterExecutionPlan(

@@ -17,7 +17,7 @@ public:
     static ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> build(
         MediaGraph& graph,
         const MediaRealtimeAvSyncInputSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
 private:
     MediaRealtimeAvSyncProtocolInputBuilder() = delete;

@@ -10,6 +10,7 @@
 namespace media::ffmpeg::graph {
 
 struct MediaAvContinuousAggregatePlan;
+class MediaPreparedVideoCanvas;
 
 struct MediaAvAggregateSourceRuntime final {
     std::shared_ptr<MediaAvSyncGroupRuntime> group;
@@ -21,6 +22,7 @@ struct MediaAvAggregateRuntimeDependencies final {
     std::shared_ptr<MediaAvSyncGroupRuntime> output;
     MediaOutputEpochActivationCapability activation;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregatePlan;
+    std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;
 };
 
 } // namespace media::ffmpeg::graph

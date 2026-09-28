@@ -38,7 +38,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildRtp(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     auto snapshotResult = Support::addNode(
         graph, MediaNodeKind::RtpClockSnapshotFanout,
@@ -178,7 +178,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildDemux(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan,
+    const MediaRealtimeAvSourceRuntimePlan& plan,
     const MediaDemuxTimestampInputClockAssemblyPlan& demuxPlan)
 {
     auto built = MediaDemuxClockInputSegmentBuilder::build(
@@ -212,7 +212,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 MediaRealtimeAvSyncProtocolInputBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (!plan.synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::

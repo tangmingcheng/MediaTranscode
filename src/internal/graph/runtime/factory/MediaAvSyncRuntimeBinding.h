@@ -18,6 +18,7 @@ namespace media::ffmpeg::graph {
 class MediaAvStartupVideoPreparationState;
 struct MediaAvContinuousAggregatePlan;
 class MediaPreparedVideoDecoder;
+class MediaPreparedVideoCanvas;
 
 struct MediaAvSyncComponentCoreRuntimeProduct final {};
 
@@ -61,6 +62,7 @@ struct MediaAvOutputDomainBinding final {
     MediaAvOutputDomainRegistration registration;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregatePlan;
     MediaBufferRef preparedVideoEncoder;
+    std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;
 };
 
 using MediaAvRuntimeDomainRole = std::variant<

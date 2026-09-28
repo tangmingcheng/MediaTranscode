@@ -204,7 +204,7 @@ struct SharedNodes final {
 ::media::Result<void> configureSharedNodes(
     MediaGraph& graph,
     const SharedNodes& nodes,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = MediaRealtimeAvSyncNodeConfigurator::
             configureLockedPacketGate(
@@ -249,7 +249,7 @@ struct SharedNodes final {
     MediaGraph& graph,
     const SharedNodes& nodes,
     const MediaRealtimeAvSyncProtocolInputEndpoints& protocol,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
@@ -350,7 +350,7 @@ struct SharedNodes final {
 MediaRealtimeAvSyncInputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
         !options.sources.audioPacket.valid() ||

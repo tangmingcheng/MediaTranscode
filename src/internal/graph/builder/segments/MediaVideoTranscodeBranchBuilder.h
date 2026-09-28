@@ -17,10 +17,8 @@ struct MediaSharedVideoDecodeEndpoints final {
     MediaEndpoint codec;
 };
 
-struct MediaVideoTranscodeBranchOptions {
+struct MediaVideoBranchConnectionOptions {
     std::string prefix = "video.transcode";
-    MediaPipelinePlan plan;
-    MediaVideoTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     std::optional<MediaVideoLineageEdgePolicySet> lineageEdgePolicies;
@@ -38,6 +36,18 @@ struct MediaVideoTranscodeBranchOptions {
 
 };
 
+struct MediaVideoTranscodeBranchOptions : MediaVideoBranchConnectionOptions {
+    MediaPipelinePlan plan;
+    MediaVideoTranscodeParameters parameters;
+};
+
+struct MediaVideoSourceBranchOptions : MediaVideoBranchConnectionOptions {
+    MediaVideoSourcePlan plan;
+    int sourceStreamIndex;
+    MediaRational frameRate;
+    std::optional<MediaRational> maximumFrameDuplicationGap;
+};
+
 class MediaVideoTranscodeBranchBuilder final {
 public:
     static ::media::Result<MediaEncodedBranchEndpoints> build(
@@ -45,7 +55,7 @@ public:
         const MediaVideoTranscodeBranchOptions& options);
 
     static ::media::Result<MediaSourceBranchEndpoints> buildSource(
-        MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options,
+        MediaGraph& graph, const MediaVideoSourceBranchOptions& options,
         MediaEndpoint outputEncoderCodec);
     static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
         MediaGraph& graph, const MediaVideoTranscodeBranchOptions& options);

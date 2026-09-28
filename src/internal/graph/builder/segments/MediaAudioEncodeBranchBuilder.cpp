@@ -50,7 +50,7 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
 }
 
 ::media::Result<void> validateLineageOptions(
-    const MediaAudioEncodeBranchOptions& options)
+    const MediaAudioEncodeBranchOptions& options, bool sourceOnly)
 {
     if (!options.lineageMode) {
         return ::media::Result<void>::failure(
@@ -59,7 +59,7 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
     }
     if (*options.lineageMode ==
         MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-        if (!options.encoderFifoRetention || !options.lineageCapacity || *options.lineageCapacity == 0 ||
+        if ((!sourceOnly && !options.encoderFifoRetention) || (sourceOnly && options.encoderFifoRetention) || !options.lineageCapacity || *options.lineageCapacity == 0 ||
             !options.correctionMode ||
             *options.correctionMode !=
                 MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
@@ -314,7 +314,7 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildAudioSegment(
             options.plan.sourceStreamIndex); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
-    if (auto status = validateLineageOptions(options); !status) {
+    if (auto status = validateLineageOptions(options, sourceOnly); !status) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (auto status = validateCorrectionOptions(options); !status) {

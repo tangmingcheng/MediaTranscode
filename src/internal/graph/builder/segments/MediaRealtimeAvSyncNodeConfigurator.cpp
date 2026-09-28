@@ -30,7 +30,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const bool isVideo = stream == MediaStreamKind::Video;
     const std::size_t acquiringCapacity = isVideo
@@ -101,7 +101,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const bool isVideo = stream == MediaStreamKind::Video;
     const MediaRunningTime acquiringTimeout = isVideo
@@ -155,7 +155,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
     MediaGraph& graph,
     MediaNodeId node,
     MediaScheduledStream stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& assembly = plan.assembly;
     const bool video = stream == MediaScheduledStream::Video;
@@ -232,8 +232,8 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
             std::get_if<MediaPacketDurationPlan>(
                 &assembly.audio.duration)) {
         if (!packet->requirePositiveDuration ||
-            !plan.planningFacts.inputAudioSampleRate ||
-            *plan.planningFacts.inputAudioSampleRate <= 0) {
+            !plan.inputAudioSampleRate ||
+            *plan.inputAudioSampleRate <= 0) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical packet-duration audio requires its planned sample rate"));
@@ -248,7 +248,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
         return setOption(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(
-                *plan.planningFacts.inputAudioSampleRate));
+                *plan.inputAudioSampleRate));
     }
     return ::media::Result<void>::failure(
         ::media::ErrorInfo::invalidArgument(
@@ -259,7 +259,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
 MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& startup = plan.synchronization.startup;
     const bool complete = startup.requireVideoKeyFrame &&
@@ -344,7 +344,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
 MediaRealtimeAvSyncNodeConfigurator::configureStartupClock(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = setOption(
             graph, node, "av_startup_clock.sync_group",
@@ -358,7 +358,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupClock(
 MediaRealtimeAvSyncNodeConfigurator::configurePlaybackEpochBinder(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     return setOption(
         graph, node, "playback_epoch_binder.sync_group",
@@ -369,7 +369,7 @@ MediaRealtimeAvSyncNodeConfigurator::configurePlaybackEpochBinder(
 MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = setOption(
         graph, node, "activated_startup_release_sequencer.sync_group",
@@ -388,7 +388,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
 MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = setOption(
         graph,

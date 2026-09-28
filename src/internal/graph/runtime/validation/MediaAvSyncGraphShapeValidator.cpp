@@ -99,7 +99,8 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
             return invalid("Continuous aggregation requires source domains and planned audio transcode");
         const auto& aggregate = *continuousOutput->aggregatePlan;
         if (aggregate.outputGroupKey != binding.outputGroupKey || aggregate.sources.size() != sourceCount ||
-            aggregate.audioSource >= sourceCount || !continuousOutput->preparedVideoEncoder)
+            aggregate.audioSource >= sourceCount || !continuousOutput->preparedVideoEncoder ||
+            !continuousOutput->preparedCanvas)
             return invalid("Aggregate source and output identities disagree with runtime domains");
         std::unordered_set<std::string> aggregateGroups;
         for (const auto& input : aggregate.sources) {

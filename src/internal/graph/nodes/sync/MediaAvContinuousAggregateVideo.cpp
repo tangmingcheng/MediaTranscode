@@ -60,7 +60,7 @@ namespace media::ffmpeg::graph {
     }
     auto reservation = context.reservePayload(nodeId(), MediaStreamKind::Video, MediaPayloadKind::Frame);
     if (!reservation) return ::media::Result<MediaBufferRef>::failure(reservation.error());
-    auto frame = m_canvas.compose(tiles);
+    auto frame = m_canvas->compose(tiles);
     if (!frame) return ::media::Result<MediaBufferRef>::failure(frame.error());
     frame.value()->pts = m_nextVideoFrame;
     frame.value()->duration = 1;

@@ -11,6 +11,7 @@
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
+#include "internal/graph/runtime/ffmpeg/MediaPreparedVideoCanvas.h"
 
 #include <algorithm>
 #include <tuple>
@@ -39,7 +40,7 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
 
 ::media::Status validateOptions(const MediaRealtimeCompositionGraphOptions& options)
 {
-    if (!options.aggregate || !options.preparedVideoEncoder || options.sources.empty() ||
+    if (!options.aggregate || !options.preparedVideoEncoder || !options.preparedCanvas || options.sources.empty() ||
         options.preparedVideoDecoders.size() != options.sources.size())
         return invalid("Composition requires planned sources, aggregate and prepared output encoder");
     const auto& aggregate = *options.aggregate;
@@ -47,6 +48,8 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
         options.preparedVideoEncoder.get());
     if (!preparedEncoder || !preparedEncoder->context())
         return invalid("Composition requires the actual prepared output codec context");
+    if (auto status = options.preparedCanvas->validateBinding(aggregate.canvas,
+            preparedEncoder->context()->hw_frames_ctx); !status) return status;
     const auto& output = options.outputRuntime;
     const auto& encoder = options.outputVideo.selected.encoder.encoderOpenContract;
     if (aggregate.sources.size() != options.sources.size() ||
@@ -72,20 +75,20 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
         if (auto device = options.preparedVideoDecoders[i]->validateHardwareDevice(
             preparedEncoder->context()->hw_device_ctx); !device) return device;
         const auto& source = options.sources[i];
-        const auto* runtime = std::get_if<MediaRealtimeAvSyncRuntimePlan>(&source.runtime);
+        const auto* runtime = &source.runtime;
         const auto& input = aggregate.sources[i];
-        if (!runtime || !runtime->groupKey.valid() || runtime->groupKey != input.groupKey ||
+        if (!runtime->groupKey.valid() || runtime->groupKey != input.groupKey ||
             !groups.insert(input.groupKey.value()).second ||
-            !source.videoPlan.enabled || source.videoPlan.branchMode != MediaBranchMode::TranscodeFrame ||
-            !source.videoPlan.selected.decoder.preparedInputRetention ||
+            !source.video.available || source.videoStreamIndex < 0 ||
+            !source.video.decoder.preparedInputRetention ||
             !runtime->audioPipeline.enabled || !runtime->audioPipeline.resolvedOutput ||
             !sameAudioFrames(*runtime->audioPipeline.resolvedOutput, aggregate.audio) ||
             !runtime->synchronization.startup.requireVideoKeyFrame || runtime->queues.frame == 0 ||
             !MediaAtomicOutputPolicyContract::accepts(runtime->edgePolicies.atomicMetadata) ||
             !MediaAtomicOutputPolicyContract::accepts(runtime->edgePolicies.preparedVideoFrame))
-            return invalid("Composition source requires its own complete synchronized A/V transcode plan");
-        const auto& frame = source.videoPlan.filterActive
-            ? source.videoPlan.selected.filter.outputFrame : source.videoPlan.selected.decoder.outputFrame;
+            return invalid("Composition source requires its own synchronized A/V source plan");
+        const auto& frame = source.video.filterActive
+            ? source.video.filter.outputFrame : source.video.decoder.outputFrame;
         const auto& tile = aggregate.canvas.tiles[i];
         if (!frame || frame->size.width != tile.width || frame->size.height != tile.height)
             return invalid("Composition source frame size differs from its planned tile");
@@ -126,7 +129,8 @@ MediaVideoTranscodeBranchOptions videoOptions(
 }
 
 ::media::Result<MediaAudioEncodeBranchOptions> audioOptions(
-    const std::string& prefix, const MediaRealtimeAvSyncRuntimePlan& runtime)
+    const std::string& prefix, const MediaRealtimeAvSourceRuntimePlan& runtime,
+    const std::optional<MediaAudioEncoderFifoRetentionPlan>& encoderFifo)
 {
     MediaAudioBranchSegmentOptions branch;
     branch.prefix = prefix;
@@ -135,8 +139,9 @@ MediaVideoTranscodeBranchOptions videoOptions(
     branch.edgePolicies = runtime.edgePolicies;
     // InputGraphBuilder already emits normalized synchronized releases.
     branch.normalizeInputPackets = false;
-    auto status = mapSynchronizedAudioBranchOptions(runtime, branch);
+    auto status = mapSynchronizedAudioSourceOptions(runtime, branch);
     if (!status) return ::media::Result<MediaAudioEncodeBranchOptions>::failure(status.error());
+    branch.encoderFifoRetention = encoderFifo;
     return ::media::Result<MediaAudioEncodeBranchOptions>::success(makeAudioEncodeBranchOptions(branch));
 }
 
@@ -196,7 +201,7 @@ MediaVideoTranscodeBranchOptions videoOptions(
     auto outputVideo = MediaVideoTranscodeBranchBuilder::buildOutputEncoder(graph,
         videoOptions(prefix + ".output.video", options.outputVideo, options.outputVideoParameters, outputRuntime));
     if (!outputVideo) return Result::failure(outputVideo.error());
-    auto outputAudioOptions = audioOptions(prefix + ".output.audio", outputRuntime);
+    auto outputAudioOptions = audioOptions(prefix + ".output.audio", outputRuntime, outputRuntime.encoderFifoRetention);
     if (!outputAudioOptions) return Result::failure(outputAudioOptions.error());
     auto outputAudio = MediaAudioEncodeBranchBuilder::buildOutputEncoder(graph, outputAudioOptions.value());
     if (!outputAudio) return Result::failure(outputAudio.error());
@@ -215,20 +220,29 @@ MediaVideoTranscodeBranchOptions videoOptions(
     std::vector<MediaRealtimeCompositionSourceTargets> targets;
     for (std::size_t i = 0; i < options.sources.size(); ++i) {
         const auto& plan = options.sources[i];
-        const auto& runtime = std::get<MediaRealtimeAvSyncRuntimePlan>(plan.runtime);
+        const auto& runtime = plan.runtime;
         const auto sourcePrefix = prefix + ".source_" + std::to_string(i);
         auto inputs = MediaRealtimeInputGraphBuilder::append(graph, sourcePrefix, plan);
         if (!inputs) return Result::failure(inputs.error());
         if (!inputs.value().synchronized) return Result::failure(::media::ErrorInfo::invalidArgument(
             "Composition source input lacks synchronized release endpoints"));
-        auto video = videoOptions(sourcePrefix + ".video", plan.videoPlan, plan.videoParameters, runtime);
+        MediaVideoSourceBranchOptions video;
+        video.prefix = sourcePrefix + ".video";
+        video.plan = plan.video;
+        video.sourceStreamIndex = plan.videoStreamIndex;
+        video.frameRate = plan.frameRate;
+        video.maximumFrameDuplicationGap = plan.maximumFrameDuplicationGap;
+        video.queues = runtime.queues;
+        video.edgePolicies = runtime.edgePolicies;
+        video.canonicalLineageCapacity = runtime.queues.frame;
+        video.generationStartRequiresKeyFrame = runtime.synchronization.startup.requireVideoKeyFrame;
         video.formatSourceNode = inputs.value().videoFormat.node;
         video.formatSourcePort = inputs.value().videoFormat.port;
         video.packetSourceNode = inputs.value().videoPacket.node;
         video.packetSourcePort = inputs.value().videoPacket.port;
         auto sourceVideo = MediaVideoTranscodeBranchBuilder::buildSource(graph, video, outputVideo.value().codec);
         if (!sourceVideo) return Result::failure(sourceVideo.error());
-        auto audio = audioOptions(sourcePrefix + ".audio", runtime);
+        auto audio = audioOptions(sourcePrefix + ".audio", runtime, std::nullopt);
         if (!audio) return Result::failure(audio.error());
         audio.value().formatSourceNode = inputs.value().audioFormat.node;
         audio.value().formatSourcePort = inputs.value().audioFormat.port;
@@ -292,7 +306,7 @@ MediaVideoTranscodeBranchOptions videoOptions(
     }
     domains.push_back({outputRuntime.groupKey, outputRuntime.synchronization,
         MediaAvOutputDomainBinding{{aggregateNode, scheduled.value().scheduler, publisher, outputMembers},
-            options.aggregate, options.preparedVideoEncoder}});
+            options.aggregate, options.preparedVideoEncoder, options.preparedCanvas}});
     auto outputProduct = std::visit([]<typename Product>(Product&& product) -> MediaAvSyncRuntimeOutputProduct {
         return MediaAvSyncRuntimeOutputProduct(std::forward<Product>(product));
     }, std::move(outputRuntime.protocolOutput));
