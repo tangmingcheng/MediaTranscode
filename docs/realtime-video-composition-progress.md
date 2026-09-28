@@ -131,3 +131,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 2026-09-28：独立输出runtime与共用发送段
 
 合屏输出不再继承源runtime，旧单源与合屏共用借用型输出segment合同。11源码双独立阶段PASS。Release前三次120秒超时；用户批准300秒后第四次全量成功。r38原规格源完整120秒exit0、VLC有画面，CLI仍无进展exit1/4逻辑对象；5项临时文件及媒体进程已清理。遵照最新要求未运行local。详见[输出runtime](realtime-video-composition-output-runtime.md)。输出planner产品形成、唯一资源事务、多源入口及双平台完整门禁仍未完成，42/100不变。
+
+## 2026-09-28：输出同步政策生产者
+
+输出master/video/metrics及RTP/TS规划提取到仅消费输出事实的planner，旧单源生产caller共用，再注入真实源政策。3源码双独立阶段PASS，Release全量构建exit0。r39源完整120秒exit0、VLC有画面，CLI仍无进展exit1/4逻辑对象；5项文件及媒体进程清理，指定源保留。仅运行realtime，命令指标见[输出同步规划](realtime-video-composition-output-sync.md)。历史经验阈值适用依据、source/output runtime装配、资源事务及多源协调器仍缺，完整FAIL/42不变。

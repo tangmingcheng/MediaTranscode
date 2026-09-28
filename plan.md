@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：合屏输出runtime已改为独立产品，旧单源与合屏共用借用型输出段合同，不再要求虚构源audioPipeline/assembly/transition。双独立阶段审查PASS；下一步接通真实输出政策、资源产品形成和多源准备协调器，详见[输出runtime](docs/realtime-video-composition-output-runtime.md)。原规格完整门禁未通过；按用户最新要求只运行realtime CLI。
+当前推进：独立输出同步政策producer已被现有单源生产planner调用，输出不再依赖源启动/clock/servo；双独立阶段审查PASS。完整source/output runtime装配、唯一输出资源、源准备和多源协调器仍未完成，见[输出同步规划](docs/realtime-video-composition-output-sync.md)。只运行realtime验收，原规格门禁不变。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

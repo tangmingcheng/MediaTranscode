@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 输出同步政策双审
+
+基线087baf55后3源码双独立Standards/阶段Spec PASS，旧RTP/TS/demux与copy/transcode值映射保持；输出政策有真实生产调用者。历史经验阈值工业依据仍缺，完整runtime装配/资源/多源入口及双平台门禁仍未完成。六维10/8/6/12/2/4，总42/100，完整FAIL。见[输出同步规划](docs/realtime-video-composition-output-sync.md)。
+
 ## 2026-09-28 输出runtime双审
 
 基线3a539650后11源码双独立Standards/阶段Spec均PASS。独立输出产品解除源runtime继承，借用视图共用三个发送/调度segment；旧链等价、引用寿命及校验保留已核对。完整输出planner、资源事务与多源入口尚未接通，六维10/8/6/12/2/4，总分42/100，完整FAIL。详见[输出runtime](docs/realtime-video-composition-output-runtime.md)。

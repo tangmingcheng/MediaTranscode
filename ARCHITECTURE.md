@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+MediaAvOutputSynchronizationPlanner只消费输出身份/layout/transport/cadence、deployment和编码事实，生成经ContinuousOutput校验的同步政策；旧单源planner立即复用并加入真实源政策，保留各源控制代次模式。协议与政策算法原值迁移，既有经验阈值仍待事实依据收口，见[输出同步规划](docs/realtime-video-composition-output-sync.md)。
+
 合屏输出使用独立MediaRealtimeAvOutputRuntimePlan，不继承源runtime；已解析音频取代完整源audioPipeline。单源和合屏在构图时借用MediaRealtimeAvOutputSegmentPlan，共用调度、RTP和MPEG-TS输出segment，节点不持有view引用。输出同步域校验继续拒绝源时钟/servo，详见[输出runtime边界](docs/realtime-video-composition-output-runtime.md)。
 
 音频输出编码段使用MediaAudioOutputEncoderOptions，仅消费解析后的编码格式、边策略和lineage/FIFO/group，不携带源索引或servo。源/共享分支与输出通过同步借用的内部视图复用同一节点及端口实现；AudioPlanOptionApplier共用编码配置映射，源字段只在真实源段写入，见[音频编码段](docs/realtime-video-composition-audio-output.md)。
