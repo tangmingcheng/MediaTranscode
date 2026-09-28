@@ -60,6 +60,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     const MediaAvOutputDomainBinding* continuousOutput = nullptr;
     std::size_t outputCount = 0;
     std::size_t sourceCount = 0;
+    std::unordered_set<const MediaPreparedVideoDecoder*> preparedDecoders;
     for (std::size_t index = 0; index < binding.domains.size(); ++index) {
         const auto& domain = binding.domains[index];
         if (!domain.groupKey.valid() || !groups.insert(domain.groupKey.value()).second)
@@ -71,6 +72,9 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
             shared->registration.processing.forEach([&](MediaNodeId id) { members[index].push_back(id); });
             ++outputCount;
         } else if (const auto* source = std::get_if<MediaAvSourceDomainBinding>(&domain.role)) {
+            if (!source->preparedVideoDecoder ||
+                !preparedDecoders.insert(source->preparedVideoDecoder.get()).second)
+                return invalid("Source domains require distinct prepared decoder ownership");
             members[index] = source->registration.processingMembers;
             ++sourceCount;
         } else {

@@ -90,6 +90,30 @@ void codecResolverLog(MediaGraphDiagnosticLevel level, const std::string& messag
 
 } // namespace
 
+::media::Status CodecResolverDecoderContextBuilder::validateInputRetention(
+    const AVCodecContext& context, const MediaNodeOptions& options)
+{
+    if (!options.has("decoder.pipeline.input_retention.maximum_internal_packets"))
+        return ::media::Status::success();
+    auto count = requiredPositiveIntNodeOption(&options, "CodecResolverNode",
+        "decoder.pipeline.input_retention.thread_count");
+    auto type = requiredNonNegativeIntNodeOption(&options, "CodecResolverNode",
+        "decoder.pipeline.input_retention.thread_type");
+    auto planned = requiredPositiveInt64NodeOption(&options, "CodecResolverNode",
+        "decoder.pipeline.input_retention.maximum_internal_packets");
+    if (!count || !type || !planned) return ::media::Status::failure(
+        !count ? count.error() : !type ? type.error() : planned.error());
+    auto observed = MediaDecoderInputRetentionAdapter::readAfterOpen(
+        context, options.value("pipeline.hwaccel"));
+    if (!observed || context.thread_count != count.value() ||
+        context.thread_type != type.value() ||
+        observed->maximumInternalPackets() > static_cast<std::uint64_t>(planned.value())) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "opened decoder threads or input retention differ from the prepared allocation contract"));
+    }
+    return ::media::Status::success();
+}
+
 ::media::Result<CodecResolverDecoderContextBuildResult>
 CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuildRequest& request)
 {
@@ -260,16 +284,9 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
         return Result::failure(FFmpegGraphError::fromCode(openRet, "avcodec_open2(video decoder)"));
     }
 
-    if (hasInputRetention) {
-        auto planned = requiredPositiveInt64NodeOption(options, "CodecResolverNode",
-            "decoder.pipeline.input_retention.maximum_internal_packets");
-        auto observed = MediaDecoderInputRetentionAdapter::readAfterOpen(*decoderContext, hwaccelName);
-        if (!planned) return Result::failure(planned.error());
-        if (!observed || observed->maximumInternalPackets() >
-            static_cast<std::uint64_t>(planned.value())) {
-            return Result::failure(::media::ErrorInfo::unsupported(
-                "opened decoder input retention exceeds its prepared allocation contract"));
-        }
+    if (options) {
+        if (auto retained = validateInputRetention(*decoderContext, *options); !retained)
+            return Result::failure(retained.error());
     }
     MediaDecoderRuntimeFacts facts{decoder->name, decoderContext->hwaccel_flags};
     codecResolverLog(MediaGraphDiagnosticLevel::State,

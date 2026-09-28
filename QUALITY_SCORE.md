@@ -1,4 +1,9 @@
 # MediaTranscode Quality Score
+## 2026-09-28 准备解码器交接独立复审 B
+
+基线 `7a7312ac` 后22个src文件：Standards/限定阶段源码 Spec **PASS**。复审确认首帧释放后flush同一decoder、单次claim、storage lease随context deleter穿过takeContext；参数副本及side data纳入逻辑额度，claim只读snapshot。设备必要性按typed帧合同检查，DRM PRIME不再被无条件hw_device_ctx门槛拒绝；共用retention校验与已有单源lineage保持。
+
+六维维持 **10/8/6/12/2/4，共42/100**。完整功能与交付/合并仍 **FAIL（未完成）**：协调器尚未接入交接，缺跨源总账、画布/设备真实证明及Windows→RKMPP多源验收。flush为void，不等于RKMPP恢复证据；Shared无进展/4对象及AAC重入未证明修复。本审查不运行构建或媒体。
 ## 2026-09-28 RTP 首帧与硬件帧合同独立复审 B
 
 基线 `f148bdca` 后18个src文件：Standards/限定阶段源码 Spec **PASS**，完整合屏与交付/合并 **FAIL**。只读快照消费复用 RTP/decoder 状态机，准备预算按并存关系形成独立逻辑额度；原截止时间、取消与采集结束显式传播。公共硬件帧校验由首帧和 output capability 复用，核对实际 format/sw_format、设备引用及分配尺寸；首帧另核对打开 decoder 的设备身份。

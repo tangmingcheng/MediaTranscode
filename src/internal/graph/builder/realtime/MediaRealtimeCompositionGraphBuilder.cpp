@@ -9,6 +9,8 @@
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
 
 #include <algorithm>
 #include <tuple>
@@ -37,9 +39,14 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
 
 ::media::Status validateOptions(const MediaRealtimeCompositionGraphOptions& options)
 {
-    if (!options.aggregate || !options.preparedVideoEncoder || options.sources.empty())
+    if (!options.aggregate || !options.preparedVideoEncoder || options.sources.empty() ||
+        options.preparedVideoDecoders.size() != options.sources.size())
         return invalid("Composition requires planned sources, aggregate and prepared output encoder");
     const auto& aggregate = *options.aggregate;
+    const auto* preparedEncoder = dynamic_cast<const FFmpegCodecContextBuffer*>(
+        options.preparedVideoEncoder.get());
+    if (!preparedEncoder || !preparedEncoder->context())
+        return invalid("Composition requires the actual prepared output codec context");
     const auto& output = options.outputRuntime;
     const auto& encoder = options.outputVideo.selected.encoder.encoderOpenContract;
     if (aggregate.sources.size() != options.sources.size() ||
@@ -55,15 +62,22 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
     if (!MediaAtomicOutputPolicyContract::accepts(output.edgePolicies.atomicMetadata))
         return invalid("Composition activation requires the planned atomic metadata policy");
     std::unordered_set<std::string> groups{output.groupKey.value()};
+    std::unordered_set<const MediaPreparedVideoDecoder*> preparedDecoders;
     std::unordered_set<std::string> ports{"video_codec", "audio_codec", aggregate.audioPort};
     if (aggregate.audioPort.empty()) return invalid("Composition requires a selected audio port");
     for (std::size_t i = 0; i < options.sources.size(); ++i) {
+        if (!options.preparedVideoDecoders[i] ||
+            !preparedDecoders.insert(options.preparedVideoDecoders[i].get()).second)
+            return invalid("Composition sources require distinct prepared decoder owners");
+        if (auto device = options.preparedVideoDecoders[i]->validateHardwareDevice(
+            preparedEncoder->context()->hw_device_ctx); !device) return device;
         const auto& source = options.sources[i];
         const auto* runtime = std::get_if<MediaRealtimeAvSyncRuntimePlan>(&source.runtime);
         const auto& input = aggregate.sources[i];
         if (!runtime || !runtime->groupKey.valid() || runtime->groupKey != input.groupKey ||
             !groups.insert(input.groupKey.value()).second ||
             !source.videoPlan.enabled || source.videoPlan.branchMode != MediaBranchMode::TranscodeFrame ||
+            !source.videoPlan.selected.decoder.preparedInputRetention ||
             !runtime->audioPipeline.enabled || !runtime->audioPipeline.resolvedOutput ||
             !sameAudioFrames(*runtime->audioPipeline.resolvedOutput, aggregate.audio) ||
             !runtime->synchronization.startup.requireVideoKeyFrame || runtime->queues.frame == 0 ||
@@ -243,7 +257,7 @@ MediaVideoTranscodeBranchOptions videoOptions(
         domains.push_back({runtime.groupKey, runtime.synchronization,
             MediaAvSourceDomainBinding{runtime.transition,
                 {inputs.value().synchronized->registration, *sourceVideo.value().startupPreparationOwner,
-                 std::move(members)}, nullptr}});
+                 std::move(members)}, nullptr, options.preparedVideoDecoders[i]}});
     }
     const auto& policies = outputRuntime.edgePolicies;
     for (const auto& [from, to, policy] : {

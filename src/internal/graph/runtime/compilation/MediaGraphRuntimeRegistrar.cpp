@@ -39,6 +39,7 @@ namespace media::ffmpeg::graph {
         std::optional<MediaPlaybackEpochActivationCapability>* activation;
         MediaAvReacquisitionAssemblyDependencies* reacquisition;
         std::shared_ptr<MediaAvStartupVideoPreparationState> preparation;
+        std::shared_ptr<MediaPreparedVideoDecoder> decoder;
     };
     std::vector<SourceAssembly> sources;
     MediaAvOutputDomainRuntimeState* outputDomain = nullptr;
@@ -51,13 +52,14 @@ namespace media::ffmpeg::graph {
             shared->registration.processing.forEach([&](MediaNodeId member) { members.push_back(member); });
             sources.push_back(SourceAssembly{domain.groupKey, &shared->registration.input,
                 shared->registration.preparationOwner, std::move(members), &shared->activation,
-                &shared->reacquisition, shared->videoPreparation});
+                &shared->reacquisition, shared->videoPreparation, nullptr});
             if (shared->registration.rtpSdpPublisher)
                 mpegTsRtpSdpPublisher = context.graph()->findNode(*shared->registration.rtpSdpPublisher);
         } else if (auto* source = std::get_if<MediaAvSourceDomainRuntimeState>(&domain.role)) {
             sources.push_back(SourceAssembly{domain.groupKey, &source->registration.input,
                 source->registration.preparationOwner, source->registration.processingMembers,
-                &source->activation, &source->reacquisition, source->videoPreparation});
+                &source->activation, &source->reacquisition, source->videoPreparation,
+                source->preparedVideoDecoder});
         } else {
             if (outputDomain) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "A/V registration rejects multiple continuous output domains"));
@@ -155,9 +157,9 @@ namespace media::ffmpeg::graph {
             auto* resolver = dynamic_cast<CodecResolverNode*>(runtimeNode.value().get());
             const auto* prepared = dynamic_cast<const FFmpegCodecContextBuffer*>(
                 outputDomain->preparedVideoEncoder.get());
-            if (!resolver || !prepared || !prepared->context() || !prepared->context()->hw_device_ctx)
+            if (!resolver || !prepared || !prepared->context())
                 return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                    "Composition registration requires its prepared encoder and shared hardware device"));
+                    "Composition registration requires its actual prepared encoder"));
             const auto mode = node.options.value("codec_resolver.mode");
             const bool outputMember = std::find(outputDomain->registration.processingMembers.begin(),
                 outputDomain->registration.processingMembers.end(), node.id) !=
@@ -165,9 +167,22 @@ namespace media::ffmpeg::graph {
             if (mode != (outputMember ? "output_branch" : "source_decode"))
                 return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "Composition codec resolver mode differs from its domain ownership"));
+            std::shared_ptr<MediaPreparedVideoDecoder> decoder;
+            if (!outputMember) {
+                for (const auto& source : sources) {
+                    if (std::find(source.members.begin(), source.members.end(), node.id) == source.members.end()) continue;
+                    if (decoder || !source.decoder) return ::media::Status::failure(
+                        ::media::ErrorInfo::invalidArgument("Source resolver lacks a unique prepared decoder owner"));
+                    decoder = source.decoder;
+                }
+                if (!decoder) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                    "Source resolver was not prepared before DAG registration"));
+                if (auto device = decoder->validateHardwareDevice(prepared->context()->hw_device_ctx); !device)
+                    return device;
+            }
             auto bound = outputMember
                 ? resolver->bindPreparedEncoder(outputDomain->preparedVideoEncoder)
-                : resolver->bindPreparedHardwareDevice(prepared->context()->hw_device_ctx);
+                : resolver->bindPreparedDecoder(std::move(decoder));
             if (!bound) return bound;
         }
         mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeNode,

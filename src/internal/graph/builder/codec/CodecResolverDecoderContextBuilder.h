@@ -23,6 +23,8 @@ struct CodecResolverDecoderContextBuildResult {
 
 class CodecResolverDecoderContextBuilder final {
 public:
+    static ::media::Status validateInputRetention(
+        const AVCodecContext& context, const MediaNodeOptions& options);
     static ::media::Result<CodecResolverDecoderContextBuildResult> build(
         const CodecResolverDecoderContextBuildRequest& request);
 };

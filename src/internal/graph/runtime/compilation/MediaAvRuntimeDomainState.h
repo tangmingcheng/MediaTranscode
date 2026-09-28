@@ -15,6 +15,7 @@ struct MediaAvSourceDomainRuntimeState final {
     std::optional<MediaPlaybackEpochActivationCapability> activation;
     MediaAvReacquisitionAssemblyDependencies reacquisition;
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparation;
+    std::shared_ptr<MediaPreparedVideoDecoder> preparedVideoDecoder;
 };
 
 struct MediaAvSharedSourceOutputDomainRuntimeState final {

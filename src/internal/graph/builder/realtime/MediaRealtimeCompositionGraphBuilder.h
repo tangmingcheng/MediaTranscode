@@ -14,6 +14,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaRealtimeCompositionGraphOptions final {
     std::vector<MediaRealtimeRtpTranscodePlan> sources;
+    std::vector<std::shared_ptr<MediaPreparedVideoDecoder>> preparedVideoDecoders;
     MediaPipelinePlan outputVideo;
     MediaVideoTranscodeParameters outputVideoParameters;
     MediaRealtimeAvSyncRuntimePlan outputRuntime;

@@ -2,6 +2,7 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/codec/MediaEncoderRateControlOptionAdapter.h"
+#include "internal/graph/builder/codec/MediaVideoDecoderPlanOptionCodec.h"
 #include "internal/graph/builder/codec/MediaVideoEncoderPlanOptionCodec.h"
 #include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
 #include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
@@ -87,20 +88,6 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodeId, prefix + ".filter", stage.filterName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hwaccel", stage.hwaccelName); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind())); !status) return status;
-    if (stage.preparedInputRetention) {
-        const auto& retention = *stage.preparedInputRetention;
-        for (const auto& field : std::vector<std::pair<std::string, std::string>>{
-                 {"thread_count", std::to_string(retention.threadCount)},
-                 {"thread_type", std::to_string(retention.threadType)},
-                 {"main_handoff_packets", std::to_string(retention.mainHandoffPackets)},
-                 {"frame_worker_packets", std::to_string(retention.frameWorkerPackets)},
-                 {"serial_private_packets", std::to_string(retention.serialPrivatePackets)},
-                 {"maximum_internal_packets", std::to_string(retention.maximumInternalPackets())},
-                 {"authority", retention.authority}}) {
-            if (auto status = setOption(graph, nodeId,
-                prefix + ".input_retention." + field.first, field.second); !status) return status;
-        }
-    }
     const auto* contract = stage.frameContract();
     if (auto status = setOption(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(contract ? contract->frameKind : MediaHardwareFrameKind::Unknown)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware())); !status) return status;
@@ -155,6 +142,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
 
     const MediaPipelineChainPlan& chain = plan.selected;
+    auto decoderOptions = MediaVideoDecoderPlanOptionCodec::encode(chain.decoder, std::nullopt);
+    if (!decoderOptions) return ::media::Result<void>::failure(decoderOptions.error());
     if (nodes.videoFrameRate.isValid()) {
         if (auto status = setOption(graph, nodes.videoFrameRate,
                 "video.framerate.bound_duplication_gap",
@@ -202,9 +191,15 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             continue;
         }
         if (auto status = setFullPlanOptions(graph, nodeId, plan); !status) return status;
+        // Preserve the existing decoder retention diagnostics on every planned node.
+        for (const auto& [key, value] : decoderOptions.value().values()) {
+            if (key.starts_with("decoder.pipeline.input_retention.")) {
+                if (auto status = setOption(graph, nodeId, key, value); !status) return status;
+            }
+        }
     }
 
-    if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder, chain.decoder.ffmpegName); !status) return status;
+    if (auto status = applyOptions(graph, nodes.codecResolver, decoderOptions.value()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
     auto encoderOptions = MediaVideoEncoderPlanOptionCodec::encode(chain.encoder);
     if (!encoderOptions) return ::media::Result<void>::failure(encoderOptions.error());
@@ -213,12 +208,6 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         auto rateControl = MediaEncoderRateControlOptionAdapter::encode(*chain.encoder.encoderRateControl);
         if (auto status = applyOptions(graph, nodes.videoEncode, rateControl); !status) return status;
     }
-    if (!chain.decoder.outputFrame) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MediaVideoPlanOptionApplier requires decoder output frame contract"));
-    }
-    const MediaHardwareDescriptor& decoderOutput = *chain.decoder.outputFrame;
     if (nodes.sourceCopy.isValid()) {
         if (!plan.sharedSource || !plan.sharedSource->copy ||
             plan.sharedSource->copyImplementation == MediaVideoFilterImplementation::Unknown ||
@@ -230,14 +219,6 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         if (auto status = setOption(graph, nodes.sourceCopy, "filter.pipeline.implementation",
                 mediaVideoFilterImplementationName(plan.sharedSource->copyImplementation)); !status) return status;
     }
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hardware", boolOption(decoderOutput.isHardwareBacked())); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(decoderOutput.deviceKind)); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(decoderOutput.frameKind)); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.pixel_format", decoderOutput.pixelFormat); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.surface_pixel_format", decoderOutput.surfacePixelFormat); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.requires_hw_device_ctx", boolOption(decoderOutput.requiresHardwareDeviceContext)); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, "decoder.output.requires_hw_frames_ctx", boolOption(decoderOutput.requiresHardwareFramesContext)); !status) return status;
     if (chain.transferDirection == MediaHardwareTransferDirection::Unknown) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(

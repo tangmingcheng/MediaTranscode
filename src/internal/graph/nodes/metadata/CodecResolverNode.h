@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include "internal/graph/planner/capability/MediaVideoEncoderReadback.h"
+#include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
 
 extern "C" {
 #include <libavutil/pixfmt.h>
@@ -20,7 +21,7 @@ public:
     explicit CodecResolverNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status bindPreparedEncoder(MediaBufferRef encoder);
-    ::media::Status bindPreparedHardwareDevice(AVBufferRef* device);
+    ::media::Status bindPreparedDecoder(std::shared_ptr<MediaPreparedVideoDecoder> decoder);
     MediaBufferRef inputSnapshot() const;
     ::media::Result<MediaVideoEncoderReadback> encoderReadback() const;
     MediaBufferRef timestampSource() const;
@@ -37,7 +38,7 @@ private:
 private:
     bool m_emitted = false;
     ::media::ffmpeg::BufferRefPtr m_decoderHardwareDevice;
-    ::media::ffmpeg::BufferRefPtr m_preparedHardwareDevice;
+    std::shared_ptr<MediaPreparedVideoDecoder> m_sourceDecoder;
     mutable std::mutex m_snapshotMutex;
     MediaBufferRef m_inputSnapshot;
     MediaBufferRef m_timestampSource;

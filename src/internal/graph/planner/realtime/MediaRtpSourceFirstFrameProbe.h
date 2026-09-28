@@ -6,6 +6,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpProbeLease.h"
 #include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
+#include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
 
 #include <stop_token>
 
@@ -38,9 +39,10 @@ enum class MediaRtpSourceFirstFrameDisposition {
 // Negotiation/copy proof remains the caller's common capability-probe step.
 struct MediaRtpSourceFirstFrameEvidence final {
     MediaRtpSourceFirstFrameEvidence(MediaPreparationStorageLease reservation,
-        CodecResolverDecoderContextBuildResult owner)
+        CodecResolverDecoderContextBuildResult owner, MediaHardwareDescriptor contract)
         : storage(std::move(reservation)), decoder(std::move(owner)),
-          disposition(MediaRtpSourceFirstFrameDisposition::NeedMoreEvidence) {}
+          disposition(MediaRtpSourceFirstFrameDisposition::NeedMoreEvidence),
+          frameContract(std::move(contract)) {}
     MediaRtpSourceFirstFrameEvidence(MediaRtpSourceFirstFrameEvidence&&) noexcept = default;
     MediaRtpSourceFirstFrameEvidence& operator=(MediaRtpSourceFirstFrameEvidence&&) = delete;
     MediaRtpSourceFirstFrameEvidence(const MediaRtpSourceFirstFrameEvidence&) = delete;
@@ -50,6 +52,7 @@ struct MediaRtpSourceFirstFrameEvidence final {
     CodecResolverDecoderContextBuildResult decoder;
     ::media::ffmpeg::FramePtr firstFrame;
     MediaRtpSourceFirstFrameDisposition disposition;
+    MediaHardwareDescriptor frameContract;
     std::size_t inspectedDatagrams = 0;
     std::size_t submittedAccessUnits = 0;
     bool decoderMayHavePendingOutput = false;
@@ -59,6 +62,10 @@ struct MediaRtpSourceFirstFrameEvidence final {
 
 class MediaRtpSourceFirstFrameProbe final {
 public:
+    static ::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>> prepareReplay(
+        MediaRtpSourceFirstFrameEvidence evidence,
+        const FFmpegInputStreamSnapshot& source);
+
     // decoder is the unused common-builder result (or the same owner after
     // an explicit caller-controlled flush), never a live production decoder.
     static ::media::Result<MediaRtpSourceFirstFrameEvidence> probe(

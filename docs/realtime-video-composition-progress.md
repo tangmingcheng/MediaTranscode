@@ -83,3 +83,7 @@ segment→registration→validator→registrar 的源/输出处理归属已落�
 ## 2026-09-21：输出身份与同步音频 FIFO
 
 源/输出 AU 类型身份、canonical 音频真实贡献保存和完整 timeline 校验已接入现有生产消费者；同步 FIFO 由 planner 推导并执行样本/PCM 字节/片段门禁。两名独立审查者对局部源码 PASS；直接 include 依赖修正后 Release 全量构建成功；r19 真实 CLI 暴露的 GroupContracts 漏项修复后再次全量成功，r20 首源完整120秒并显示画面，重入锁新代后仍报 AAC timeline 错误，CLI 自然退出1、逻辑资源归零。独立输出域、聚合、黑帧/静音及多源链路仍未完成，完整合屏 FAIL，42/100 不变。详见[输出身份记录](realtime-video-composition-output-identity.md)。
+
+## 2026-09-28：准备decoder一次性交接
+
+共用decoder选项映射、同context flush/claim、准备预算随实际codec所有权转移及组合域绑定已完成源码双审PASS。用户完成Release构建后使用现有产物r27复验，源完整120秒exit0、VLC有画面，CLI源结束后仍无进展exit1、4逻辑对象残留，完整门禁FAIL。命令、指标及5项产物清理已归档到[解码器交接记录](realtime-video-composition-decoder-handoff.md)。下一步接通源专用计划与完整preflight调用者，补全跨源资源准入、公共入口及多源矩阵；42/100不变。

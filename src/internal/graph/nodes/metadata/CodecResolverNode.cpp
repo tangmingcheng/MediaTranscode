@@ -54,15 +54,13 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return MediaNodeKind::CodecResolver;
 }
 
-::media::Status CodecResolverNode::bindPreparedHardwareDevice(AVBufferRef* device)
+::media::Status CodecResolverNode::bindPreparedDecoder(
+    std::shared_ptr<MediaPreparedVideoDecoder> decoder)
 {
-    if (m_emitted || m_preparedDecoder || m_preparedHardwareDevice || !device || !device->data)
+    if (m_emitted || m_preparedDecoder || m_sourceDecoder || !decoder)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Source decoder requires one prepared hardware device before runtime start"));
-    auto retained = ::media::ffmpeg::BufferRefPtr(av_buffer_ref(device));
-    if (!retained) return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
-        "Could not retain the prepared source hardware device"));
-    m_preparedHardwareDevice = std::move(retained);
+            "Source decoder requires one prepared owner before runtime start"));
+    m_sourceDecoder = std::move(decoder);
     return ::media::Status::success();
 }
 
@@ -215,11 +213,23 @@ MediaBufferRef CodecResolverNode::timestampSource() const
 
 ::media::Status CodecResolverNode::prepareDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
-    auto codecParameters = stream.cloneCodecParameters();
-    if (!codecParameters) return ::media::Status::failure(codecParameters.error());
-    CodecResolverDecoderContextBuildRequest request{
-        codecParameters.value().get(), stream.time, nodeOptions(context), m_preparedHardwareDevice.get()};
-    auto built = CodecResolverDecoderContextBuilder::build(request);
+    const auto prepare = [&]() -> ::media::Result<CodecResolverDecoderContextBuildResult> {
+        if (nodeOption(context, "codec_resolver.mode") == "source_decode") {
+            if (!m_sourceDecoder) return ::media::Result<CodecResolverDecoderContextBuildResult>::failure(
+                ::media::ErrorInfo::notInitialized("Source decoder was not prepared before publication"));
+            const auto* options = nodeOptions(context);
+            if (!options) return ::media::Result<CodecResolverDecoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("Prepared source decoder requires planned options"));
+            return m_sourceDecoder->claim(stream, *options);
+        }
+        if (m_sourceDecoder) return ::media::Result<CodecResolverDecoderContextBuildResult>::failure(
+            ::media::ErrorInfo::invalidArgument("Prepared source decoder bound to a different resolver role"));
+        auto codecParameters = stream.cloneCodecParameters();
+        if (!codecParameters) return ::media::Result<CodecResolverDecoderContextBuildResult>::failure(codecParameters.error());
+        return CodecResolverDecoderContextBuilder::build({
+            codecParameters.value().get(), stream.time, nodeOptions(context), nullptr});
+    };
+    auto built = prepare();
     if (!built) return ::media::Status::failure(built.error());
     auto decoder = std::move(built).value();
     m_decoderHardwareDevice = std::move(decoder.hardwareDevice);

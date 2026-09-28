@@ -80,6 +80,21 @@ MediaSourcePreparationStoragePlanner::plan(
     // control-block/allocator overhead is outside this logical byte scope.
     auto ownerBytes = add(sizeof(AVCodecContext),
         add(openedDecoder.context->extradata_size, AV_INPUT_BUFFER_PADDING_SIZE));
+    // Handoff retains an authoritative source-parameter copy until its single
+    // production claimant has verified the immutable input snapshot.
+    ownerBytes = add(ownerBytes, add(sizeof(AVCodecParameters),
+        add(openedDecoder.context->extradata_size, AV_INPUT_BUFFER_PADDING_SIZE)));
+    if (openedDecoder.context->nb_coded_side_data < 0 ||
+        (openedDecoder.context->nb_coded_side_data && !openedDecoder.context->coded_side_data))
+        return Result::failure(::media::ErrorInfo::invalidArgument("Decoder coded side data is invalid"));
+    for (int i = 0; i < openedDecoder.context->nb_coded_side_data; ++i) {
+        const auto& side = openedDecoder.context->coded_side_data[i];
+        if (side.size && !side.data)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Decoder coded side data has no storage"));
+        // The decoder and retained source parameters each own this payload.
+        ownerBytes = add(ownerBytes, multiply(2, add(sizeof(AVPacketSideData),
+            add(side.size, AV_INPUT_BUFFER_PADDING_SIZE))));
+    }
     if (openedDecoder.context.get_deleter().callbackOwner)
         ownerBytes = add(ownerBytes, sizeof(AVPixelFormat));
     if (openedDecoder.hardwareDevice) ownerBytes = add(ownerBytes, sizeof(AVBufferRef));

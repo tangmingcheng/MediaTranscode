@@ -77,6 +77,9 @@ struct CodecContextDeleter {
     // Travels with CodecContextPtr, including buffer takeContext(). The callback
     // state remains alive during avcodec_free_context, then with the deleter.
     std::shared_ptr<const void> callbackOwner;
+    // A preparation reservation follows the actual codec through buffer
+    // takeContext() and remains retained until avcodec_free_context completes.
+    std::shared_ptr<const void> storageOwner;
 
     void operator()(AVCodecContext* ctx) const noexcept
     {

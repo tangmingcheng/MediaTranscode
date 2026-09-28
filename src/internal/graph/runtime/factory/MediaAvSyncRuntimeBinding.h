@@ -17,6 +17,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvStartupVideoPreparationState;
 struct MediaAvContinuousAggregatePlan;
+class MediaPreparedVideoDecoder;
 
 struct MediaAvSyncComponentCoreRuntimeProduct final {};
 
@@ -46,6 +47,7 @@ struct MediaAvSourceDomainBinding final {
     MediaAvGenerationTransitionPlan transition;
     MediaAvSourceDomainRegistration registration;
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparationState;
+    std::shared_ptr<MediaPreparedVideoDecoder> preparedVideoDecoder;
 };
 
 struct MediaAvOutputDomainRegistration final {

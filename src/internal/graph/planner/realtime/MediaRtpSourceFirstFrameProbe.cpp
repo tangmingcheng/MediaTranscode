@@ -218,6 +218,27 @@ template<class Consumer>
 
 } // namespace
 
+::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>>
+MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence evidence,
+    const FFmpegInputStreamSnapshot& source)
+{
+    using Result = ::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>>;
+    if (evidence.disposition != MediaRtpSourceFirstFrameDisposition::FirstFrame ||
+        !evidence.firstFrame || !evidence.decoder.context || !evidence.storage) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP replay handoff requires validated first-frame evidence"));
+    }
+    auto codec = makeMediaVideoDecoderCodecApi();
+    if (!codec) return Result::failure(::media::ErrorInfo::allocationFailed(
+        "RTP replay handoff could not create the common codec adapter"));
+    // The caller has finished capability negotiation/copy with this frame.
+    // Release caller references before resetting the same codec for raw replay.
+    evidence.firstFrame.reset();
+    codec->flushBuffers(evidence.decoder.context.get());
+    return MediaPreparedVideoDecoder::create(std::move(evidence.decoder),
+        std::move(evidence.storage), source, std::move(evidence.frameContract));
+}
+
 ::media::Result<MediaRtpSourceFirstFrameEvidence> MediaRtpSourceFirstFrameProbe::probe(
     const MediaRawRtpProbeLease& lease, const MediaRtpSourceFirstFrameProbePlan& plan,
     CodecResolverDecoderContextBuildResult decoder,
@@ -261,7 +282,9 @@ template<class Consumer>
         if (!storage) return EvidenceResult::failure(storage.error());
         auto reserved = budget->reserve(storage.value().maximumBytes);
         if (!reserved) return EvidenceResult::failure(reserved.error());
-        MediaRtpSourceFirstFrameEvidence evidence(std::move(reserved).value(), std::move(decoder));
+        auto frameContract = *plan.source.decoder.outputFrame;
+        MediaRtpSourceFirstFrameEvidence evidence(std::move(reserved).value(), std::move(decoder),
+            std::move(frameContract));
         {
             auto configured = parseRtpVideoSignalingFacts(plan.depacketizer.codecName, plan.depacketizer.fmtp);
             if (!configured) return EvidenceResult::failure(configured.error());

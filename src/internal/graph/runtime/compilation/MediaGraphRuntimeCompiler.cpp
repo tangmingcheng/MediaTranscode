@@ -234,7 +234,8 @@ public:
                 preparedDomains.push_back(MediaAvRuntimeDomainState{
                     domain.groupKey, MediaAvSourceDomainRuntimeState{
                         source->registration, std::move(activation),
-                        std::move(dependencies).value(), std::move(preparation)}});
+                        std::move(dependencies).value(), std::move(preparation),
+                        source->preparedVideoDecoder}});
             }
         }
         if (!outputRegistered) {
