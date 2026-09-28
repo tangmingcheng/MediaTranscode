@@ -145,3 +145,8 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 2026-09-28：独立源时钟与装配
 
 源timing与canonical assembly一次规划，旧生产resolver/runtime直接消费，新旧入口共用源时钟专项校验。首审非法demux代次/阈值缺口修复后双独立复审PASS。两次Release全量成功；r41原规格源完整120秒exit0、VLC有画面，CLI自然exit1/无进展/4逻辑对象，完整FAIL。5文件及媒体/构建进程清理，固定源保留，仅realtime。详见[源时钟记录](realtime-video-composition-source-clock.md)。源校正容量、完整source runtime、唯一资源事务、纯视频和多源入口仍未完成，42/100不变。
+
+
+## 2026-09-28：源校正容量
+
+源组件界被旧共享链共用，源校正显式排除输出编码/协议项，组合图构图前重算校正政策。双审发现旧mailbox用metadata而真实命令边为frame，已同步修正并双复审PASS。两次Release全量成功；r42固定120秒源exit0、VLC有画面，CLI自然exit1/无进展/4逻辑对象，完整验收FAIL。5文件及媒体/编译进程清理，指定源保留，仅realtime。见[源校正记录](realtime-video-composition-source-correction.md)。校正可达性余量不等于全源资源总账；完整source runtime/资源事务/纯视频源/多源入口与Windows→RKMPP门禁仍未完成，42/100不变。

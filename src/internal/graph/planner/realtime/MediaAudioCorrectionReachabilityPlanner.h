@@ -15,11 +15,19 @@ struct MediaAudioCorrectionReachabilityResult final {
     std::int64_t maximumOutputBlockSamples;
 };
 
+struct MediaAudioSourceCorrectionFacts final {
+    int outputSampleRate;
+    MediaSynchronizedAudioSourceBounds bounds;
+};
+
+using MediaAudioCorrectionPlanningFacts = std::variant<
+    MediaRealtimeAvSyncPlanningFacts, MediaAudioSourceCorrectionFacts>;
+
 class MediaAudioCorrectionReachabilityPlanner final {
 public:
     static ::media::Result<MediaAudioCorrectionReachabilityResult> plan(
         const MediaAvSyncPlan& synchronization,
-        const MediaRealtimeAvSyncPlanningFacts& facts);
+        const MediaAudioCorrectionPlanningFacts& facts);
 
 private:
     MediaAudioCorrectionReachabilityPlanner() = delete;

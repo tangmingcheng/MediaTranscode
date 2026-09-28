@@ -10,6 +10,8 @@
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
+#include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
@@ -98,6 +100,22 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
             !MediaAtomicOutputPolicyContract::accepts(runtime->edgePolicies.atomicMetadata) ||
             !MediaAtomicOutputPolicyContract::accepts(runtime->edgePolicies.preparedVideoFrame))
             return invalid("Composition source requires its own synchronized A/V source plan");
+        if (!MediaAtomicOutputPolicyContract::accepts(runtime->edgePolicies.audioDriftTransaction) ||
+            runtime->edgePolicies.audioDriftTransaction.queuePolicy.capacity != runtime->queues.frame)
+            return invalid("Composition source correction edges differ from planned queue bounds");
+        auto sourceBounds = MediaRealtimeAvSyncComponentBoundsPlanner::planSource(
+            runtime->queues, runtime->audioPipeline);
+        if (!sourceBounds) return ::media::Status::failure(sourceBounds.error());
+        auto sourceCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
+            runtime->synchronization, MediaAudioSourceCorrectionFacts{
+                runtime->audioPipeline.resolvedOutput->sampleRate(), sourceBounds.value()});
+        if (!sourceCorrection) return ::media::Status::failure(sourceCorrection.error());
+        const auto& correction = sourceCorrection.value();
+        if (!runtime->audioCorrection || *runtime->audioCorrection != correction.correction ||
+            runtime->synchronization.audioServo.commandLeadNs != correction.commandLead ||
+            runtime->synchronization.audioServo.compensationWindowNs != correction.compensationWindow ||
+            runtime->synchronization.audioServo.frequencyFilterTimeConstantNs != correction.frequencyFilterTimeConstant)
+            return invalid("Composition source correction differs from its actual source processing path");
         const auto& frame = source.video.filterActive
             ? source.video.filter.outputFrame : source.video.decoder.outputFrame;
         const auto& tile = aggregate.canvas.tiles[i];

@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 源校正容量双审
+
+基线4e7bd5e7后8源码，两位独立最终Standards/阶段Spec PASS。旧共享链复用源容量，组合图重算源校正产品；首审命令mailbox事实映射缺陷已同步修正为实际frame事务边。校正可达性余量不是全源资源总账；完整source runtime、资源事务、多源入口和双平台门禁仍未完成，六维10/8/6/12/2/4，总42/100，完整FAIL。详见[源校正记录](docs/realtime-video-composition-source-correction.md)。
+
 ## 2026-09-28 源时钟规划双审
 
 基线400ffc4a后10源码双独立复审Standards/阶段Spec PASS；源timing与canonical assembly一次规划并由旧生产链直接消费。首审独立入口demux非法代次/阈值缺口已通过共用原源clock validator关闭。容量校正、多源准备、唯一资源事务及双平台门禁仍缺，六维10/8/6/12/2/4，总42/100，完整FAIL。详见[源时钟记录](docs/realtime-video-composition-source-clock.md)。

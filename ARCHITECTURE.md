@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+源音频校正组件界由共用planner推导，旧共享链在其上追加输出编码/调度界；源贡献路径不包含这些输出阶段。命令mailbox按实际audioDriftTransaction的frame容量记账，组合图重算源校正并核对政策，见[源校正容量](docs/realtime-video-composition-source-correction.md)。
+
 MediaRealtimeAvSourceClockPlanner以源输入合同生成源时间事实与canonical装配；旧共享resolver和runtime领取同次结果，源入口不依赖输出packetization或encoder延迟。专项源时钟验证由新旧路径共用，runtime validator重算整个assembly比较，见[源时钟规划](docs/realtime-video-composition-source-clock.md)。
 
 MediaRealtimeAvOutputRuntimePlanner独立装配音频FIFO、协议与datagram产品，消费一次生成的纯输出同步政策；旧生产caller共享同一装配。输出timing复用真实协议解析，并在移交资源前精确核对。源共享planner消费政策值副本，保留源启动/校正/transition，见[输出runtime装配](docs/realtime-video-composition-output-assembly.md)。

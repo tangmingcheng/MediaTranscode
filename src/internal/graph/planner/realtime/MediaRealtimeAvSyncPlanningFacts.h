@@ -48,15 +48,20 @@ struct MediaSynchronizedAudioPacketCopyBounds final {
                            const MediaSynchronizedAudioPacketCopyBounds&) = default;
 };
 
-struct MediaSynchronizedAudioFrameTranscodeBounds final {
+struct MediaSynchronizedAudioSourceBounds {
     std::int64_t decoderDelaySamples;
     std::int64_t decodeQueueSamples;
     std::int64_t resampleQueueSamples;
-    std::int64_t encodeQueueSamples;
-    std::int64_t schedulerQueueSamples;
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::size_t mailboxCapacity;
+    friend bool operator==(const MediaSynchronizedAudioSourceBounds&,
+                           const MediaSynchronizedAudioSourceBounds&) = default;
+};
+
+struct MediaSynchronizedAudioFrameTranscodeBounds final : MediaSynchronizedAudioSourceBounds {
+    std::int64_t encodeQueueSamples;
+    std::int64_t schedulerQueueSamples;
     friend bool operator==(const MediaSynchronizedAudioFrameTranscodeBounds&,
                            const MediaSynchronizedAudioFrameTranscodeBounds&) = default;
 };

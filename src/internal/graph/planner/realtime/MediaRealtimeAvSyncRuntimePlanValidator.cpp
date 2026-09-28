@@ -243,10 +243,9 @@ namespace media::ffmpeg::graph {
         if (correction.outputSampleRate <= 0 ||
             correction.epochOutputSampleIndex != 0 ||
             correction.worstCaseInFlightSamples < 0 ||
-            correction.protocolBatchSamples <= 0 ||
             correction.mailboxDeliveryMarginSamples <= 0 ||
             correction.maximumResamplerOutputBlockSamples <= 0 ||
-            correction.mailboxCapacity != runtime.queues.metadata ||
+            correction.mailboxCapacity != runtime.queues.frame ||
             !reachabilitySumRepresentable ||
             correction.commandLeadSamples <=
             correction.worstCaseInFlightSamples +
