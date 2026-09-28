@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlanValidator.h"
 #include "internal/graph/builder/realtime/MediaRealtimeCompositionGraphBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
@@ -12,10 +13,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
-#include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
-#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
-#include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
-#include "internal/graph/runtime/ffmpeg/MediaPreparedVideoCanvas.h"
 
 #include <algorithm>
 #include <tuple>
@@ -44,16 +41,10 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
 
 ::media::Status validateOptions(const MediaRealtimeCompositionGraphOptions& options)
 {
-    if (!options.aggregate || !options.preparedVideoEncoder || !options.preparedCanvas || options.sources.empty() ||
-        options.preparedVideoDecoders.size() != options.sources.size())
-        return invalid("Composition requires planned sources, aggregate and prepared output encoder");
-    const auto& aggregate = *options.aggregate;
-    const auto* preparedEncoder = dynamic_cast<const FFmpegCodecContextBuffer*>(
-        options.preparedVideoEncoder.get());
-    if (!preparedEncoder || !preparedEncoder->context())
-        return invalid("Composition requires the actual prepared output codec context");
-    if (auto status = options.preparedCanvas->validateBinding(aggregate.canvas,
-            preparedEncoder->context()->hw_frames_ctx); !status) return status;
+    if (auto status = MediaAvContinuousAggregatePlanValidator::validate(options.aggregate); !status) return status;
+    if (options.sources.empty())
+        return invalid("Composition requires planned sources and aggregate");
+    const auto& aggregate = options.aggregate;
     const auto& output = options.outputRuntime;
     if (auto status = MediaAvSyncPlanValidator::validateDomain(
             output.synchronization, MediaAvSyncDomainRole::ContinuousOutput); !status) return status;
@@ -76,15 +67,9 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
         *output.encoderFifoRetention != expectedFifo.value())
         return invalid("Composition output FIFO differs from its aggregate audio block contract");
     std::unordered_set<std::string> groups{output.groupKey.value()};
-    std::unordered_set<const MediaPreparedVideoDecoder*> preparedDecoders;
     std::unordered_set<std::string> ports{"video_codec", "audio_codec", aggregate.audioPort};
     if (aggregate.audioPort.empty()) return invalid("Composition requires a selected audio port");
     for (std::size_t i = 0; i < options.sources.size(); ++i) {
-        if (!options.preparedVideoDecoders[i] ||
-            !preparedDecoders.insert(options.preparedVideoDecoders[i].get()).second)
-            return invalid("Composition sources require distinct prepared decoder owners");
-        if (auto device = options.preparedVideoDecoders[i]->validateHardwareDevice(
-            preparedEncoder->context()->hw_device_ctx); !device) return device;
         const auto& source = options.sources[i];
         const auto* runtime = &source.runtime;
         if (auto status = MediaAvSyncPlanValidator::validateDomain(
@@ -165,7 +150,7 @@ MediaVideoOutputEncoderOptions videoOptions(
 }
 
 ::media::Status addAggregatePorts(MediaGraph& graph, MediaNodeId node,
-                                  const MediaAvContinuousAggregatePlan& plan)
+                                  const MediaAvContinuousAggregateTopology& plan)
 {
     using namespace MediaGraphBuildSupport;
     const auto input = [&](const std::string& port, MediaStreamKind stream,
@@ -208,14 +193,15 @@ MediaVideoOutputEncoderOptions videoOptions(
 
 } // namespace
 
-::media::Result<MediaRealtimeCompositionGraphAssembly> MediaRealtimeCompositionGraphBuilder::append(
-    MediaGraph& graph, const std::string& prefix, MediaRealtimeCompositionGraphOptions options)
+::media::Result<MediaRealtimeCompositionTopology> MediaRealtimeCompositionGraphBuilder::buildTopology(
+    const std::string& prefix, MediaRealtimeCompositionGraphOptions options)
 {
-    using Result = ::media::Result<MediaRealtimeCompositionGraphAssembly>;
-    if (!graph.empty() || prefix.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
+    using Result = ::media::Result<MediaRealtimeCompositionTopology>;
+    MediaGraph graph;
+    if (prefix.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
         "Composition assembly requires an empty graph and explicit node prefix"));
     if (auto status = validateOptions(options); !status) return Result::failure(status.error());
-    const auto& aggregate = *options.aggregate;
+    const auto& aggregate = options.aggregate;
     auto& outputRuntime = options.outputRuntime;
     auto outputVideo = MediaVideoTranscodeBranchBuilder::buildOutputEncoder(graph,
         videoOptions(prefix + ".output.video", options.outputVideo, outputRuntime));
@@ -236,7 +222,7 @@ MediaVideoOutputEncoderOptions videoOptions(
         const auto& members = branch->encoded.processing.output;
         outputMembers.insert(outputMembers.end(), members.begin(), members.end());
     }
-    std::vector<MediaAvRuntimeDomainBinding> domains;
+    std::vector<MediaAvSourceDomainRegistration> registrations;
     std::vector<MediaRealtimeCompositionSourceTargets> targets;
     for (std::size_t i = 0; i < options.sources.size(); ++i) {
         const auto& plan = options.sources[i];
@@ -288,10 +274,8 @@ MediaVideoOutputEncoderOptions videoOptions(
         const auto isolatedAudio = inputs.value().audioFormat.node != inputs.value().videoFormat.node
             ? std::optional<MediaNodeId>(inputs.value().audioFormat.node) : std::nullopt;
         targets.push_back({i, inputs.value().videoFormat.node, isolatedAudio, members});
-        domains.push_back({runtime.groupKey, runtime.synchronization,
-            MediaAvSourceDomainBinding{runtime.transition,
-                {inputs.value().synchronized->registration, *sourceVideo.value().startupPreparationOwner,
-                 std::move(members)}, nullptr, options.preparedVideoDecoders[i]}});
+        registrations.push_back({inputs.value().synchronized->registration,
+            *sourceVideo.value().startupPreparationOwner, std::move(members)});
     }
     const auto& policies = outputRuntime.edgePolicies;
     for (const auto& [from, to, policy] : {
@@ -327,26 +311,10 @@ MediaVideoOutputEncoderOptions videoOptions(
     } else {
         return Result::failure(::media::ErrorInfo::unsupported("Composition output requires a scheduled protocol adapter"));
     }
-    domains.push_back({outputRuntime.groupKey, outputRuntime.synchronization,
-        MediaAvOutputDomainBinding{{aggregateNode, scheduled.value().scheduler, publisher, outputMembers},
-            options.aggregate, options.preparedVideoEncoder, options.preparedCanvas}});
-    auto outputProduct = std::visit([]<typename Product>(Product&& product) -> MediaAvSyncRuntimeOutputProduct {
-        return MediaAvSyncRuntimeOutputProduct(std::forward<Product>(product));
-    }, std::move(outputRuntime.protocolOutput));
-    MediaAvSyncRuntimeBinding binding{std::move(domains), outputRuntime.groupKey, policies,
-        outputRuntime.datagramTransport, MediaSynchronizedAudioExecutionProduct::FrameTranscode, std::move(outputProduct)};
-    if (auto status = MediaAvSyncGraphShapeValidator::validate(graph, binding); !status)
-        return Result::failure(status.error());
-    return Result::success({std::move(binding), std::move(targets), std::move(outputMembers)});
-}
-
-::media::Result<MediaRealtimeCompositionGraph> MediaRealtimeCompositionGraphBuilder::buildGraph(
-    const std::string& prefix, MediaRealtimeCompositionGraphOptions options)
-{
-    MediaGraph graph;
-    auto assembly = append(graph, prefix, std::move(options));
-    if (!assembly) return ::media::Result<MediaRealtimeCompositionGraph>::failure(assembly.error());
-    return ::media::Result<MediaRealtimeCompositionGraph>::success({std::move(graph), std::move(assembly).value()});
+    MediaAvOutputDomainRegistration outputRegistration{
+        aggregateNode, scheduled.value().scheduler, publisher, std::move(outputMembers)};
+    return Result::success(MediaRealtimeCompositionTopology(std::move(graph), std::move(options),
+        std::move(registrations), std::move(outputRegistration), std::move(targets)));
 }
 
 } // namespace media::ffmpeg::graph

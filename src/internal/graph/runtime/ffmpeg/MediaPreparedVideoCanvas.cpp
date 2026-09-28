@@ -6,16 +6,16 @@ namespace media::ffmpeg::graph {
 namespace {
 bool samePlan(const MediaVideoCanvasPlan& left, const MediaVideoCanvasPlan& right)
 {
-    if (left.hardwareFormat != right.hardwareFormat || left.softwareFormat != right.softwareFormat ||
-        left.width != right.width || left.height != right.height ||
-        left.effectiveColorRange != right.effectiveColorRange || left.surfaceCount != right.surfaceCount ||
-        left.maximumSurfaceBytes != right.maximumSurfaceBytes ||
-        left.maximumStagingBytes != right.maximumStagingBytes ||
-        left.maximumHeaderCount != right.maximumHeaderCount || left.tiles.size() != right.tiles.size())
+    if (left.geometry.hardwareFormat != right.geometry.hardwareFormat || left.geometry.softwareFormat != right.geometry.softwareFormat ||
+        left.geometry.width != right.geometry.width || left.geometry.height != right.geometry.height ||
+        left.geometry.effectiveColorRange != right.geometry.effectiveColorRange || left.storage.surfaceCount != right.storage.surfaceCount ||
+        left.storage.maximumSurfaceBytes != right.storage.maximumSurfaceBytes ||
+        left.storage.maximumStagingBytes != right.storage.maximumStagingBytes ||
+        left.storage.maximumHeaderCount != right.storage.maximumHeaderCount || left.geometry.tiles.size() != right.geometry.tiles.size())
         return false;
-    for (std::size_t i = 0; i < left.tiles.size(); ++i) {
-        const auto& a = left.tiles[i];
-        const auto& b = right.tiles[i];
+    for (std::size_t i = 0; i < left.geometry.tiles.size(); ++i) {
+        const auto& a = left.geometry.tiles[i];
+        const auto& b = right.geometry.tiles[i];
         if (a.x != b.x || a.y != b.y || a.width != b.width || a.height != b.height) return false;
     }
     return true;
@@ -27,7 +27,7 @@ bool samePlan(const MediaVideoCanvasPlan& left, const MediaVideoCanvasPlan& righ
     std::span<const AVFrame* const> preparedTiles)
 try {
     using Result = ::media::Result<std::shared_ptr<MediaPreparedVideoCanvas>>;
-    if (preparedTiles.empty() || preparedTiles.size() != plan.tiles.size())
+    if (preparedTiles.empty() || preparedTiles.size() != plan.geometry.tiles.size())
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas requires every real tile frame"));
     for (const auto* tile : preparedTiles) if (!tile)
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas tile frame is missing"));
@@ -38,9 +38,9 @@ try {
     // Exercise the actual platform operation with production tile frames, not
     // only matching format names or allocating a same-shaped surrogate pool.
     for (std::size_t i = 0; i < preparedTiles.size(); ++i) {
-        status = producer->adapter_->validate(*preparedTiles[i], *producer->surfaces_.front(), plan.tiles[i]);
+        status = producer->adapter_->validate(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
         if (!status) return Result::failure(status.error());
-        status = producer->adapter_->copy(*preparedTiles[i], *producer->surfaces_.front(), plan.tiles[i]);
+        status = producer->adapter_->copy(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
         if (!status) return Result::failure(status.error());
     }
     prepared->producer_ = std::move(producer);

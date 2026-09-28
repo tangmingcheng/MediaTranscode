@@ -1,5 +1,9 @@
 # MediaTranscode Quality Score
 
+## 2026-09-28 最终逻辑拓扑与绑定双审
+
+基线2b3e7b24后16源码，move-only最终拓扑和物理绑定分离，canvas几何/存储分型，资源选项共用。首审几何/候选界前置校验缺口已修，双独立Standards/阶段Spec PASS。准备授权、aggregate多源总账及公共入口仍缺；六维10/8/6/12/2/4，总42/100，完整FAIL。见[本轮记录](docs/realtime-video-composition-topology.md)。
+
 ## 2026-09-28 真实接线依赖核查
 
 基线a7836de5源码核查发现实际encoder/canvas与最终图资源编译存在准备依赖环，单链峰值账本及aggregate保留合同不足以支撑多源总准入。下一步先分离最终逻辑拓扑、总合同与强制物理绑定；本轮仅文档诊断，无新运行证据。六维10/8/6/12/2/4，总42/100，完整FAIL。见[接线核查](docs/realtime-video-composition-wiring-gate.md)。

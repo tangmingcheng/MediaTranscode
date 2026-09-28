@@ -159,3 +159,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 真实接线依赖核查
 
 基线a7836de5：实际encoder/canvas是当前builder前置条件，但其pool容量来自后置最终graph compiler，已确认准备依赖环。资源ledger按单链阶段max记账且aggregate producer/retention缺合同，不能直接复用为N源准入。本轮源码诊断更正实施顺序为一次最终逻辑拓扑、总合同、真实资源准备、强制绑定；没有新增媒体测试或通过项，完整FAIL42。见[核查与具体边界](realtime-video-composition-wiring-gate.md)。
+
+## 最终逻辑拓扑与绑定
+
+原builder的实际资源前置已拆除：一次逻辑图、私有registration、实际资源bind复用同图；共用validator前置几何/aggregate合同，修后双独立审查通过。准备授权、aggregate总账、纯视频及公共多源入口仍未完成，不能宣称依赖环整体解决。完整FAIL42，详见[拓扑与绑定](realtime-video-composition-topology.md)。

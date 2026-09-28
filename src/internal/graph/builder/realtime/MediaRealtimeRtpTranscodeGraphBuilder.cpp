@@ -1,3 +1,4 @@
+#include "internal/graph/builder/realtime/MediaRealtimeGraphResourceBinding.h"
 #include "internal/graph/builder/realtime/MediaRealtimeInputGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
@@ -349,44 +350,8 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
             ::media::ErrorInfo::notInitialized(
                 "final realtime graph lacks its video codec resolver"));
     }
-    const auto& finalized = finalLedger.value();
-    if (!graph.setPayloadCreditPlan(finalized.payloadCreditPlan)) {
-        return ::media::Result<MediaGraph>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "realtime graph rejected its complete payload credit plan"));
-    }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-            graph, owner, codecResolver,
-            "resource.graph_payload_reserved_bytes",
-            std::to_string(
-                finalized.admittedGraphPayloadAndReservedStorageBytes));
-        !status) {
+    if (auto status = MediaRealtimeGraphResourceBinding::apply(graph, codecResolver, finalLedger.value()); !status)
         return ::media::Result<MediaGraph>::failure(status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-            graph, owner, codecResolver,
-            "resource.observed_external_allocation",
-            finalized.outOfScopeAuthorities.empty() ? "0" : "1");
-        !status) {
-        return ::media::Result<MediaGraph>::failure(status.error());
-    }
-    if (finalized.encoderFramesPool) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                graph, owner, codecResolver,
-                "encoder.hardware_frames.initial_pool_surfaces",
-                std::to_string(
-                    finalized.encoderFramesPool->initialPoolSurfaces));
-            !status) {
-            return ::media::Result<MediaGraph>::failure(status.error());
-        }
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                graph, owner, codecResolver,
-                "encoder.hardware_frames.pool_authority",
-                finalized.encoderFramesPool->authority);
-            !status) {
-            return ::media::Result<MediaGraph>::failure(status.error());
-        }
-    }
     std::visit([&](auto& runtime) {
         runtime.threadingPolicy.maxWorkerThreads = graph.nodeCount();
     }, plan.runtime);

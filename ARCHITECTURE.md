@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+合屏buildTopology持有一次最终逻辑图及无资源registration，move-only owner只公开const视图；bind消费同图，内部编译最终ledger并核验真实prepared资源后发布运行时绑定。canvas geometry/storage分型，几何与aggregate合同检查由planner/runtime共用。逻辑图不授权物理分配，准备预算及多源总账仍待实现，见[拓扑与绑定](docs/realtime-video-composition-topology.md)。
+
 同步planner以显式域生成源贡献或共享链政策，公共时钟/视频/metrics政策集中复用。MediaRealtimeAvSourceRuntimePlanner装配源clock、correction、有界startup边及source-only transition，返回既有组合图所需A/V源合同；公共多源prepare协调器尚未接入，见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。
 
 源音频校正组件界由共用planner推导，旧共享链在其上追加输出编码/调度界；源贡献路径不包含这些输出阶段。命令mailbox按实际audioDriftTransaction的frame容量记账，组合图重算源校正并核对政策，见[源校正容量](docs/realtime-video-composition-source-correction.md)。

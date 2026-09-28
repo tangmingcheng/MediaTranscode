@@ -5,7 +5,7 @@
 
 namespace media::ffmpeg::graph {
 
-// Prepared before DAG construction; owns the exact production surfaces until
+// Prepared after logical topology admission and before runtime binding; owns the exact production surfaces until
 // the aggregate owner claims them. No node wakeup exists during preparation.
 class MediaPreparedVideoCanvas final {
 public:

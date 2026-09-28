@@ -20,17 +20,25 @@ struct MediaVideoCanvasAllocation final {
     std::uint64_t stagingBytes;
 };
 
-struct MediaVideoCanvasPlan final {
+struct MediaVideoCanvasGeometry final {
     AVPixelFormat hardwareFormat;
     AVPixelFormat softwareFormat;
     int width;
     int height;
     MediaVideoColorRangeFact effectiveColorRange;
+    std::vector<MediaVideoCanvasRectangle> tiles;
+};
+
+struct MediaVideoCanvasStorage final {
     std::size_t surfaceCount;
     std::uint64_t maximumSurfaceBytes;
     std::uint64_t maximumStagingBytes;
     std::size_t maximumHeaderCount;
-    std::vector<MediaVideoCanvasRectangle> tiles;
+};
+
+struct MediaVideoCanvasPlan final {
+    MediaVideoCanvasGeometry geometry;
+    MediaVideoCanvasStorage storage;
 };
 
 } // namespace media::ffmpeg::graph

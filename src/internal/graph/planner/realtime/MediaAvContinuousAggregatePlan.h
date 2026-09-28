@@ -19,12 +19,12 @@ struct MediaAvAggregateSourcePlan final {
     std::optional<std::string> discardedAudioPort;
 };
 
-struct MediaAvContinuousAggregatePlan final {
+struct MediaAvContinuousAggregateTopology {
     MediaAvSyncGroupKey outputGroupKey;
     std::vector<MediaAvAggregateSourcePlan> sources;
     std::size_t audioSource;
     std::string audioPort;
-    MediaVideoCanvasPlan canvas;
+    MediaVideoCanvasGeometry canvas;
     MediaRational videoFrameRate;
     MediaResolvedAudioOutputPlan audio;
     MediaRunningTime preparationLead;
@@ -34,6 +34,10 @@ struct MediaAvContinuousAggregatePlan final {
     std::int64_t maximumAudioCandidateSamples;
     std::size_t maximumAudioContributions;
     std::uint64_t maximumMetadataBytes;
+};
+
+struct MediaAvContinuousAggregatePlan final : MediaAvContinuousAggregateTopology {
+    MediaVideoCanvasStorage canvasStorage;
 };
 
 } // namespace media::ffmpeg::graph

@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlanValidator.h"
 #include "internal/graph/nodes/sync/MediaAvContinuousAggregateNode.h"
 
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
@@ -52,30 +53,16 @@ MediaAvContinuousAggregateNode::sourcePurgeTarget(const MediaAvSyncGroupKey& gro
 {
     if (!m_dependencies.aggregatePlan || !m_dependencies.output || !m_dependencies.preparedCanvas ||
         m_dependencies.output->key() != plan().outputGroupKey ||
-        m_sources.empty() || m_sources.size() != m_dependencies.sources.size() ||
-        plan().audioSource >= m_sources.size() ||
-        plan().canvas.tiles.size() != m_sources.size() ||
-        plan().videoFrameRate.num <= 0 || plan().videoFrameRate.den <= 0 ||
-        plan().audio.sampleRate() <= 0 || plan().audio.codecFrameSamples() <= 0 ||
-        plan().initialGeneration == 0 || plan().initialAudioSample < 0 ||
-        plan().maximumAudioCandidates == 0 || plan().maximumAudioCandidateSamples <= 0 ||
-        plan().maximumAudioContributions == 0 || plan().maximumMetadataBytes == 0 ||
-        plan().preparationLead.nanoseconds() <= 0)
-        return invalid("Continuous aggregate requires its complete planner product");
+        m_sources.size() != plan().sources.size() || m_sources.size() != m_dependencies.sources.size())
+        return invalid("Continuous aggregate requires its runtime dependencies");
+    if (auto status = MediaAvContinuousAggregatePlanValidator::validate(plan()); !status) return status;
     m_nextAudioSample = plan().initialAudioSample;
     m_summaryPublished = false;
     for (std::size_t i = 0; i < m_sources.size(); ++i) {
         if (!m_dependencies.sources[i].group ||
             m_dependencies.sources[i].group->key() != plan().sources[i].groupKey ||
-            plan().sources[i].groupKey == plan().outputGroupKey ||
-            m_dependencies.sources[i].group->clock() != m_dependencies.output->clock() ||
-            plan().sources[i].maximumVideoCandidates == 0 ||
-            (plan().sources[i].discardedAudioPort &&
-             (i == plan().audioSource || plan().sources[i].discardedAudioPort->empty())))
-            return invalid("Continuous aggregate source clock or capacity differs from its plan");
-        for (std::size_t previous = 0; previous < i; ++previous)
-            if (plan().sources[previous].groupKey == plan().sources[i].groupKey)
-                return invalid("Aggregate source domains must be distinct");
+            m_dependencies.sources[i].group->clock() != m_dependencies.output->clock())
+            return invalid("Continuous aggregate source clock differs from its plan");
     }
     for (auto& source : m_sources) {
         if (auto status = source.purge->start(context.sharedNodeWakeup(nodeId())); !status) {
@@ -212,7 +199,7 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
             codec->sw_pix_fmt != range.encoderInput->surfacePixelFormat)
             return invalid("Canvas facts differ from the production encoder readback");
         if (!m_dependencies.preparedCanvas) return invalid("Aggregate requires its prepared canvas resources");
-        auto canvas = m_dependencies.preparedCanvas->claim(plan().canvas, codec->hw_frames_ctx,
+        auto canvas = m_dependencies.preparedCanvas->claim({plan().canvas, plan().canvasStorage}, codec->hw_frames_ctx,
             context.sharedNodeWakeup(nodeId()));
         if (!canvas) return ::media::Status::failure(canvas.error());
         m_canvas = std::move(canvas.value());

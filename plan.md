@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：已核实实际encoder/canvas与最终graph资源编译存在准备依赖环，下一步先分离最终逻辑拓扑、总准入和强制物理绑定，再接多源准备事务；不能循环单源preflight。见[接线依赖核查](docs/realtime-video-composition-wiring-gate.md)。已有源runtime入口尚无公共多源调用，仅realtime原规格验证。
+当前推进：最终逻辑拓扑与物理bind已拆开，geometry/storage分型及共用前置校验完成；生产池准备授权（驻留数与有界预算）、实际readback多源总准入仍缺，之后接公共多源事务。见[拓扑与绑定](docs/realtime-video-composition-topology.md)。仅realtime原规格验证。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 
