@@ -69,6 +69,11 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
         return invalid("Composition output contracts disagree with the aggregate canvas or audio grid");
     if (!MediaAtomicOutputPolicyContract::accepts(output.edgePolicies.atomicMetadata))
         return invalid("Composition activation requires the planned atomic metadata policy");
+    auto expectedFifo = MediaAudioEncoderFifoRetentionPlan::create(
+        aggregate.audio, aggregate.audio.codecFrameSamples());
+    if (!expectedFifo || !output.encoderFifoRetention ||
+        *output.encoderFifoRetention != expectedFifo.value())
+        return invalid("Composition output FIFO differs from its aggregate audio block contract");
     std::unordered_set<std::string> groups{output.groupKey.value()};
     std::unordered_set<const MediaPreparedVideoDecoder*> preparedDecoders;
     std::unordered_set<std::string> ports{"video_codec", "audio_codec", aggregate.audioPort};

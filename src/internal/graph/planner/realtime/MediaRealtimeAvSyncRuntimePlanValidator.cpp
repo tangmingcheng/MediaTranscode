@@ -139,8 +139,7 @@ namespace media::ffmpeg::graph {
         }
         auto expectedRetention = MediaAudioEncoderFifoRetentionPlan::create(
             *runtime.audioPipeline.resolvedOutput,
-            runtime.audioPipeline.selectedResampler->maximumOutputBlockSamples,
-            runtime.synchronization.audioServo);
+            expectedCorrection.value().maximumOutputBlockSamples);
         if (!expectedRetention || *runtime.encoderFifoRetention != expectedRetention.value()) {
             return invalid("audio encoder FIFO retention derivation");
         }

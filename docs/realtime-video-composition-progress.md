@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：输出音频FIFO容量
+
+源校正块上界由原校正planner形成，FIFO纯容量只依赖prepared格式和输入块事实；合屏builder核验aggregate固定块合同。6源码双独立阶段PASS；首次Release超时清理后重试全量成功。r36原规格120秒源exit0、VLC有画面，CLI仍无进展自然exit1/4对象，无新增FIFO错误；5项临时文件和进程清理完成。完整合屏仍未完成，见[FIFO记录](realtime-video-composition-audio-fifo.md)。
+
 ## 2026-09-28：源与输出域角色校验
 
 内部同步产品显式分Shared/Source/ContinuousOutput，构图、bootstrap、group和consumer核验同角色；源拒绝输出协议，输出拒绝源clock/servo。13源码双独立阶段PASS，Release全量exit0。r35原120秒源exit0、VLC有画面，CLI仍无进展自然exit1/4对象；5项临时文件与媒体进程清理完成。完整合屏仍未完成，见[域校验记录](realtime-video-composition-domain-validation.md)。

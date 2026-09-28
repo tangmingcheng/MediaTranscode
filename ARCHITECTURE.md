@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+音频FIFO容量产品只消费prepared编码格式和上游最大输入样本数。源校正块上界由AudioCorrectionReachabilityPlanner复用原量化器推导；aggregate按codecFrameSamples形成固定块，合屏builder核对相同FIFO合同。运行时入队前检查保留，容量是样本载荷界，不是进程RSS上限，见[FIFO规划](docs/realtime-video-composition-audio-fifo.md)。
+
 A/V同步计划显式区分SharedSourceOutput、SourceContribution与ContinuousOutput；binding与产品角色在构图和bootstrap核对。源域只保留接收时钟/恢复权限，输出域只持初始epoch激活权限；本地sender NTP需求由输出协议决定，不代替源RTCP映射。旧单源planner使用共享角色；新多源产品形成与资源事务仍未接通，见[域校验记录](docs/realtime-video-composition-domain-validation.md)。
 
 源域purge完成后由registrar绑定的既有节点wakeup通知域成员；gate在首次及背压重试的output commit处持有代次仲裁，旧包取消、新代屏障未完成则等待。startup clock保留精确失效代次，重复失效幂等；消费控制状态后继续排空队列。有限清理事务、有界恢复候选与可无限源缺失须区分，不能用源恢复超时替代独立输出时钟，见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。

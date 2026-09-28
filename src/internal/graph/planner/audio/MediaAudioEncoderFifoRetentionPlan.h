@@ -2,9 +2,6 @@
 
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "media_transcode/Result.h"
-#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
-#include "internal/graph/sync/MediaAudioCorrectionQuantizer.h"
-#include <algorithm>
 extern "C" {
 #include <libavutil/samplefmt.h>
 }
@@ -25,22 +22,8 @@ struct MediaAudioEncoderFifoRetentionPlan final {
                            const MediaAudioEncoderFifoRetentionPlan&) = default;
 
     static ::media::Result<MediaAudioEncoderFifoRetentionPlan> create(
-        const MediaResolvedAudioOutputPlan& output, std::int64_t resamplerBlock,
-        const MediaAvSyncAudioServoPolicy& servo)
+        const MediaResolvedAudioOutputPlan& output, std::int64_t maximumInput)
     {
-        if (resamplerBlock <= 0 || !servo.compensationWindowNs || !servo.commandLeadNs ||
-            !servo.outputSampleRate || *servo.outputSampleRate != output.sampleRate() ||
-            !servo.normalCorrectionLimitPpm || !servo.recoveryCorrectionLimitPpm) {
-            return ::media::Result<MediaAudioEncoderFifoRetentionPlan>::failure(
-                ::media::ErrorInfo::invalidArgument("audio FIFO requires complete prepared correction bounds"));
-        }
-        auto quantizer = MediaAudioCorrectionQuantizer::create(
-            *servo.compensationWindowNs, *servo.commandLeadNs, *servo.outputSampleRate);
-        if (!quantizer) return ::media::Result<MediaAudioEncoderFifoRetentionPlan>::failure(quantizer.error());
-        auto distance = quantizer.value().maximumCompensationDistance(
-            std::max(*servo.normalCorrectionLimitPpm, *servo.recoveryCorrectionLimitPpm));
-        if (!distance) return ::media::Result<MediaAudioEncoderFifoRetentionPlan>::failure(distance.error());
-        const auto maximumInput = std::max<std::int64_t>(resamplerBlock, distance.value());
         const int frame = output.codecFrameSamples();
         if (frame <= 0 || maximumInput <= 0 ||
             maximumInput > std::numeric_limits<int>::max() - frame + 1) {

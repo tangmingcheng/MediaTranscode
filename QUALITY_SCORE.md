@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 输出音频FIFO双审
+
+基线c5878f36后6源码，两名独立审查者均阶段Standards/Spec **PASS**。源校正上界归入校正planner，FIFO消费纯输入块事实；旧公式和写入前硬界保持，aggregate合同构图前精确核验。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏/验收/交付 **FAIL（未完成）**。载荷界不证明allocator/RSS硬界，源/输出产品形成、资源事务和多源公共入口仍缺，见[FIFO规划](docs/realtime-video-composition-audio-fifo.md)。
+
 ## 2026-09-28 域角色校验双审
 
 基线8099ca3a后13源码，两名未参与实现者均阶段Standards/Spec **PASS**。核对旧单源路径、源/输出合同、NTP与epoch权限、optional消费安全；没有新增公共参数或平台分叉。

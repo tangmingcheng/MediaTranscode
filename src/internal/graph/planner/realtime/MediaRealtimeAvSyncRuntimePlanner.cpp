@@ -277,8 +277,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 ::media::ErrorInfo::invalidArgument("audio FIFO requires selected resampler and encoder"));
         }
         auto retention = MediaAudioEncoderFifoRetentionPlan::create(
-            *audio.resolvedOutput, audio.selectedResampler->maximumOutputBlockSamples,
-            synchronization.audioServo);
+            *audio.resolvedOutput, correction->maximumOutputBlockSamples);
         if (!retention) return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(retention.error());
         encoderFifoRetention = std::move(retention).value();
     }

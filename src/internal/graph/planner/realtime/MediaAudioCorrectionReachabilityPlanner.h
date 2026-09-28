@@ -12,6 +12,7 @@ struct MediaAudioCorrectionReachabilityResult final {
     MediaRunningTime commandLead;
     MediaRunningTime compensationWindow;
     MediaRunningTime frequencyFilterTimeConstant;
+    std::int64_t maximumOutputBlockSamples;
 };
 
 class MediaAudioCorrectionReachabilityPlanner final {

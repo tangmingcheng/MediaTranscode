@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
+#include "internal/graph/sync/MediaAudioCorrectionQuantizer.h"
 
 #include <algorithm>
 #include <limits>
@@ -96,7 +97,11 @@ MediaAudioCorrectionReachabilityPlanner::plan(
                      : required.error());
     }
     if (!synchronization.audioServo.maximumMeasurementGapNs ||
-        !synchronization.audioServo.recoveryCorrectionLimitPpm) {
+        !synchronization.audioServo.recoveryCorrectionLimitPpm ||
+        !synchronization.audioServo.normalCorrectionLimitPpm ||
+        !synchronization.audioServo.outputSampleRate ||
+        *synchronization.audioServo.outputSampleRate != *facts.outputSampleRate ||
+        *facts.maximumResamplerOutputBlockSamples <= 0) {
         return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
             ::media::ErrorInfo::notInitialized(
                 "audio measurement correction facts are missing"));
@@ -152,6 +157,15 @@ MediaAudioCorrectionReachabilityPlanner::plan(
             ::media::ErrorInfo::invalidArgument(
                 "bounded audio queues exceed the synchronization policy duration"));
     }
+    auto quantizer = MediaAudioCorrectionQuantizer::create(
+        compensation.value(), commandLead.value(), *facts.outputSampleRate);
+    if (!quantizer) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(quantizer.error());
+    auto distance = quantizer.value().maximumCompensationDistance(
+        std::max(*synchronization.audioServo.normalCorrectionLimitPpm,
+                 *synchronization.audioServo.recoveryCorrectionLimitPpm));
+    if (!distance) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(distance.error());
+    const auto maximumOutputBlock = std::max<std::int64_t>(
+        *facts.maximumResamplerOutputBlockSamples, distance.value());
     return ::media::Result<MediaAudioCorrectionReachabilityResult>::success(
         MediaAudioCorrectionReachabilityResult{
             MediaAudioCorrectionReachabilityPlan{
@@ -161,7 +175,7 @@ MediaAudioCorrectionReachabilityPlanner::plan(
                 *facts.maximumResamplerOutputBlockSamples,
                 commandLeadSamples, *facts.mailboxCapacity},
             commandLead.value(), compensation.value(),
-            MediaRunningTime::fromNanoseconds(frequency.value())});
+            MediaRunningTime::fromNanoseconds(frequency.value()), maximumOutputBlock});
 }
 
 } // namespace media::ffmpeg::graph
