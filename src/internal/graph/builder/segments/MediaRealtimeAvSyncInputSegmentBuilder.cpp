@@ -363,6 +363,8 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
                  ? MediaEdgeKind::EncodedPacket
                  : MediaEdgeKind::InputPacket) ||
         !plan.groupKey.valid() ||
+        (plan.synchronization.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
+         plan.synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution) ||
         !MediaAvSyncPlanValidator::validateRuntime(plan.synchronization)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(

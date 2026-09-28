@@ -310,6 +310,7 @@ void planTsInput(MediaAvSyncPlan& plan,
                 "A/V synchronization requires a planned audio execution branch"));
     }
     MediaAvSyncPlan plan;
+    plan.domainRole = MediaAvSyncDomainRole::SharedSourceOutput;
     plan.sourceLifecycle = MediaAvSourceLifecyclePlan{lifecycleMode};
     if (preparedDemuxFacts) {
         auto finalized = MediaAvSyncStartupPolicyPlanner::finalizePrepared(

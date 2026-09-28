@@ -43,16 +43,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
            *maximumUnitBytes <= *bytes;
 }
 
-::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
+::media::Status validateMasterClock(const MediaAvSyncPlan& plan)
 {
-    if (!plan.sourceLifecycle ||
-        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
-         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
-        return invalid("sourceLifecycle");
-    if (!plan.sourceClockMode) return invalid("sourceClockMode");
-    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
-        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
     if (!plan.controlGenerationPolicy) {
         return invalid("controlGenerationPolicy");
     }
@@ -64,6 +56,62 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         !positive(plan.canonicalTimeBaseDenominator)) {
         return invalid("canonicalTimeBase");
     }
+
+    return ::media::Status::success();
+}
+
+::media::Status validateVideoPolicy(const MediaAvSyncPlan& plan)
+{
+    const auto& video = plan.video;
+    if (!positive(video.earlyHoldThresholdNs) ||
+        !positive(video.lateDisplayThresholdNs) ||
+        !positive(video.dropThresholdNs) || !video.allowRecoveryRepeat ||
+        !positive(video.maximumConsecutiveRecoveryActions) ||
+        *video.earlyHoldThresholdNs >= *video.lateDisplayThresholdNs ||
+        *video.lateDisplayThresholdNs >= *video.dropThresholdNs) {
+        return invalid("ordered video thresholds");
+    }
+
+    if (!positive(plan.recovery.hardDiscontinuityThresholdNs) ||
+        *video.dropThresholdNs >= *plan.recovery.hardDiscontinuityThresholdNs) {
+        return invalid("video hard discontinuity threshold");
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateMetrics(const MediaAvSyncPlan& plan)
+{
+    const auto& metrics = plan.metrics;
+    if (!metrics.collectStateAndGeneration || !*metrics.collectStateAndGeneration ||
+        !metrics.collectClockEvidence || !*metrics.collectClockEvidence ||
+        !metrics.collectQueueDurations || !*metrics.collectQueueDurations ||
+        !metrics.collectPhaseErrors || !*metrics.collectPhaseErrors ||
+        !metrics.collectAudioCorrection || !*metrics.collectAudioCorrection ||
+        !metrics.collectVideoRecoveryCounts || !*metrics.collectVideoRecoveryCounts ||
+        !metrics.collectDiscontinuityCounts || !*metrics.collectDiscontinuityCounts ||
+        !metrics.collectProtocolClockHealth || !*metrics.collectProtocolClockHealth ||
+        !positive(metrics.maximumStartupSkewNs) ||
+        !positive(metrics.maximumSteadyP95SkewNs) ||
+        !positive(metrics.maximumSteadyP99SkewNs) ||
+        !positive(metrics.maximumDriftNsPerHour) ||
+        *metrics.maximumSteadyP95SkewNs > *metrics.maximumSteadyP99SkewNs ||
+        *metrics.maximumSteadyP99SkewNs > *metrics.maximumStartupSkewNs) {
+        return invalid("metrics and acceptance thresholds");
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
+{
+    if (!plan.sourceLifecycle ||
+        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
+         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
+        return invalid("sourceLifecycle");
+    if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
+        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
+    if (auto status = validateMasterClock(plan); !status) return status;
 
     const auto& startup = plan.startup;
     if (!startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
@@ -184,15 +232,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         return invalid("finalized audio correction timing");
     }
 
+    if (auto status = validateVideoPolicy(plan); !status) return status;
     const auto& video = plan.video;
-    if (!positive(video.earlyHoldThresholdNs) ||
-        !positive(video.lateDisplayThresholdNs) ||
-        !positive(video.dropThresholdNs) || !video.allowRecoveryRepeat ||
-        !positive(video.maximumConsecutiveRecoveryActions) ||
-        *video.earlyHoldThresholdNs >= *video.lateDisplayThresholdNs ||
-        *video.lateDisplayThresholdNs >= *video.dropThresholdNs) {
-        return invalid("ordered video thresholds");
-    }
 
     const auto& recovery = plan.recovery;
     if (!positive(recovery.suspectThresholdNs) ||
@@ -204,23 +245,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         return invalid("ordered recovery thresholds");
     }
 
-    const auto& metrics = plan.metrics;
-    if (!metrics.collectStateAndGeneration || !*metrics.collectStateAndGeneration ||
-        !metrics.collectClockEvidence || !*metrics.collectClockEvidence ||
-        !metrics.collectQueueDurations || !*metrics.collectQueueDurations ||
-        !metrics.collectPhaseErrors || !*metrics.collectPhaseErrors ||
-        !metrics.collectAudioCorrection || !*metrics.collectAudioCorrection ||
-        !metrics.collectVideoRecoveryCounts || !*metrics.collectVideoRecoveryCounts ||
-        !metrics.collectDiscontinuityCounts || !*metrics.collectDiscontinuityCounts ||
-        !metrics.collectProtocolClockHealth || !*metrics.collectProtocolClockHealth ||
-        !positive(metrics.maximumStartupSkewNs) ||
-        !positive(metrics.maximumSteadyP95SkewNs) ||
-        !positive(metrics.maximumSteadyP99SkewNs) ||
-        !positive(metrics.maximumDriftNsPerHour) ||
-        *metrics.maximumSteadyP95SkewNs > *metrics.maximumSteadyP99SkewNs ||
-        *metrics.maximumSteadyP99SkewNs > *metrics.maximumStartupSkewNs) {
-        return invalid("metrics and acceptance thresholds");
-    }
+    if (auto status = validateMetrics(plan); !status) return status;
     return ::media::Status::success();
 }
 
@@ -464,35 +489,79 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         : validateProjectMpegTsOutput(plan);
 }
 
+::media::Status validateScoped(const MediaAvSyncPlan& plan, bool finalized)
+{
+    if (!plan.domainRole) return invalid("domainRole");
+    if (*plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput) {
+        if (plan.sourceClockMode || plan.sourceLifecycle || plan.rtpInput ||
+            plan.mpegTsInput || plan.demuxTimestampInput ||
+            plan.audioServo != MediaAvSyncAudioServoPolicy{}) {
+            return invalid("continuous output contains source clock or correction authority");
+        }
+        MediaAvSyncStartupPolicy outputStartup;
+        outputStartup.requireVideoKeyFrame = plan.startup.requireVideoKeyFrame;
+        outputStartup.outputLeadNs = plan.startup.outputLeadNs;
+        if (plan.startup != outputStartup || !plan.startup.requireVideoKeyFrame ||
+            !*plan.startup.requireVideoKeyFrame || !positive(plan.startup.outputLeadNs)) {
+            return invalid("continuous output activation policy");
+        }
+        if (auto status = validateMasterClock(plan); !status) return status;
+        if (auto status = validateVideoPolicy(plan); !status) return status;
+        if (auto status = validateMetrics(plan); !status) return status;
+        return validateOutput(plan);
+    }
+    if (*plan.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
+        *plan.domainRole != MediaAvSyncDomainRole::SourceContribution)
+        return invalid("domainRole");
+    const auto lifecycle = *plan.domainRole == MediaAvSyncDomainRole::SourceContribution
+        ? MediaAvSourceLifecycleMode::PreserveActivatedOutput
+        : MediaAvSourceLifecycleMode::FailSessionOnSourceLoss;
+    if (!plan.sourceLifecycle || plan.sourceLifecycle->mode != lifecycle)
+        return invalid("domain source lifecycle");
+    if (*plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
+        (plan.rtpOutput || plan.projectMpegTsOutput))
+        return invalid("source domain contains output authority");
+    if (auto status = validateShared(plan, finalized); !status) return status;
+    if (auto status = validateInputClock(plan); !status) return status;
+    return *plan.domainRole == MediaAvSyncDomainRole::SourceContribution
+        ? ::media::Status::success() : validateOutput(plan);
+}
+
 } // namespace
 
 ::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlan& plan)
 {
-    if (auto status = validateShared(plan, true); !status) return status;
-    if (auto status = validateInputClock(plan); !status) return status;
-    return validateOutput(plan);
+    return validateScoped(plan, true);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validatePolicy(
     const MediaAvSyncPlan& plan)
 {
-    if (auto status = validateShared(plan, false); !status) return status;
-    if (auto status = validateInputClock(plan); !status) return status;
-    return validateOutput(plan);
+    return validateScoped(plan, false);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validateRuntime(
     const MediaAvSyncPlan& plan)
 {
+    if (plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput)
+        return validateScoped(plan, false);
     const bool commandLead = plan.audioServo.commandLeadNs.has_value();
     const bool compensation =
         plan.audioServo.compensationWindowNs.has_value();
     const bool frequency =
         plan.audioServo.frequencyFilterTimeConstantNs.has_value();
-    if (commandLead != compensation || commandLead != frequency) {
+    if (commandLead != compensation || commandLead != frequency ||
+        (plan.domainRole == MediaAvSyncDomainRole::SourceContribution && !commandLead)) {
         return invalid("runtime audio correction timing product");
     }
     return commandLead ? validate(plan) : validatePolicy(plan);
+}
+
+::media::Status MediaAvSyncPlanValidator::validateDomain(
+    const MediaAvSyncPlan& plan, MediaAvSyncDomainRole expectedRole)
+{
+    if (plan.domainRole != expectedRole) return invalid("binding domain role");
+    return validateRuntime(plan);
 }
 
 } // namespace media::ffmpeg::graph

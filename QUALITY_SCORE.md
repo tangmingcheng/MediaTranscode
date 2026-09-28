@@ -1,4 +1,10 @@
 # MediaTranscode Quality Score
+## 2026-09-28 域角色校验双审
+
+基线8099ca3a后13源码，两名未参与实现者均阶段Standards/Spec **PASS**。核对旧单源路径、源/输出合同、NTP与epoch权限、optional消费安全；没有新增公共参数或平台分叉。
+
+六维仍 **10/8/6/12/2/4，共42/100**；完整合屏/验收/交付 **FAIL（未完成）**。新域产品形成、纯视频源、唯一资源/跨源总账与公共入口仍缺，见[域校验记录](docs/realtime-video-composition-domain-validation.md)。
+
 ## 2026-09-28 源恢复参与者双审
 
 基线958b1a68后4源码，两名未参与实现者均阶段Standards/Spec **PASS**。核对真实source builder与runtime注册，精确源集合排除输出encoder/sender，旧共享集合顺序保持；合屏builder在构图前核验完整合同。

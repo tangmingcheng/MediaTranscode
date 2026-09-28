@@ -1,4 +1,8 @@
 # 固定实时视频合屏实施记录
+## 2026-09-28：源与输出域角色校验
+
+内部同步产品显式分Shared/Source/ContinuousOutput，构图、bootstrap、group和consumer核验同角色；源拒绝输出协议，输出拒绝源clock/servo。13源码双独立阶段PASS，Release全量exit0。r35原120秒源exit0、VLC有画面，CLI仍无进展自然exit1/4对象；5项临时文件与媒体进程清理完成。完整合屏仍未完成，见[域校验记录](realtime-video-composition-domain-validation.md)。
+
 ## 2026-09-28：源恢复参与者合同
 
 同一planner按源贡献与共享源/输出职责产生精确参与者，旧单源顺序保留；合屏builder构图前拒绝完整集合错配。4源码双独立阶段PASS，首次Release全量成功、hash一致。r34原规格120秒源exit0、VLC有画面，CLI仍无进展exit1/4对象；5项产物和进程清理完成。纯源bootstrap校验仍要求输出协议，下一步须按domain拆分；完整目标未完成，见[本轮记录](realtime-video-composition-source-transition.md)。

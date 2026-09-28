@@ -10,6 +10,8 @@ public:
     static ::media::Status validate(const MediaAvSyncPlan& plan);
     static ::media::Status validatePolicy(const MediaAvSyncPlan& plan);
     static ::media::Status validateRuntime(const MediaAvSyncPlan& plan);
+    static ::media::Status validateDomain(
+        const MediaAvSyncPlan& plan, MediaAvSyncDomainRole expectedRole);
 
 private:
     MediaAvSyncPlanValidator() = delete;

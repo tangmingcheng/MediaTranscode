@@ -65,7 +65,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
         const auto& domain = binding.domains[index];
         if (!domain.groupKey.valid() || !groups.insert(domain.groupKey.value()).second)
             return invalid("A/V domains require unique valid group identities");
-        if (auto plan = MediaAvSyncPlanValidator::validateRuntime(domain.plan); !plan) return plan;
+        if (auto plan = MediaAvSyncPlanValidator::validateDomain(domain.plan, domain.domainRole()); !plan) return plan;
         if (const auto* shared = std::get_if<MediaAvSharedSourceOutputDomainBinding>(&domain.role)) {
             if (binding.domains.size() != 1)
                 return invalid("Shared source/output registration is a complete single domain contract");

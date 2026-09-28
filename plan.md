@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：输出编码与协议规划已解耦；源贡献generation合同已按真实处理职责独立，并由合屏builder作构图前精确校验。实际唯一输出资源、源/输出runtime与多源事务仍未完成，见[源恢复参与者](docs/realtime-video-composition-source-transition.md)。
+当前推进：源贡献、连续输出和旧共享链路使用显式内部域角色，构图及运行时按角色核对时钟、协议和epoch权限；纯源不再要求本地输出NTP，纯输出拒绝源时钟与servo。双独立阶段审查PASS；实际唯一输出资源、源/输出计划形成与多源事务仍未完成，见[域校验记录](docs/realtime-video-composition-domain-validation.md)。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

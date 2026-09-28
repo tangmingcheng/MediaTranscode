@@ -24,7 +24,7 @@ MediaAvSyncRuntimeBootstrap::createClocks(
             return ::media::Result<MediaAvSyncClockBundle>::failure(
                 ::media::ErrorInfo::invalidArgument("A/V runtime domain requires a valid group"));
         }
-        if (auto status = MediaAvSyncPlanValidator::validateRuntime(domain.plan); !status) {
+        if (auto status = MediaAvSyncPlanValidator::validateDomain(domain.plan, domain.domainRole()); !status) {
             return ::media::Result<MediaAvSyncClockBundle>::failure(status.error());
         }
         auto requirement = MediaAvSyncSharedNtpEpochRequirement::resolve(domain.plan);
@@ -53,11 +53,8 @@ MediaAvSyncRuntimeBootstrap::registerGroupAndIssueActivationCapability(
     std::shared_ptr<MediaAvEpochTransitionService> service;
     const auto* shared = std::get_if<MediaAvSharedSourceOutputDomainBinding>(&binding.role);
     const auto* source = std::get_if<MediaAvSourceDomainBinding>(&binding.role);
-    if (!binding.plan.sourceLifecycle ||
-        (source && binding.plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput) ||
-        (!source && binding.plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss))
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "A/V source lifecycle differs from its planned domain role"));
+    if (auto status = MediaAvSyncPlanValidator::validateDomain(binding.plan, binding.domainRole()); !status)
+        return Result::failure(status.error());
     if (shared || source) {
         auto transition = MediaAvEpochTransitionService::create(
             shared ? shared->transition : source->transition);

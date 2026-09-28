@@ -56,6 +56,12 @@ MediaAvSyncGroupRuntime::create(
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             status.error());
     }
+    if ((plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput) !=
+        (transitionService->transitionPlan() == nullptr)) {
+        return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V domain role differs from its epoch transition capability"));
+    }
     auto requirement =
         MediaAvSyncSharedNtpEpochRequirement::resolve(plan);
     if (!requirement) {

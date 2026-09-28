@@ -9,6 +9,7 @@
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
@@ -52,6 +53,8 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
     if (auto status = options.preparedCanvas->validateBinding(aggregate.canvas,
             preparedEncoder->context()->hw_frames_ctx); !status) return status;
     const auto& output = options.outputRuntime;
+    if (auto status = MediaAvSyncPlanValidator::validateDomain(
+            output.synchronization, MediaAvSyncDomainRole::ContinuousOutput); !status) return status;
     if (!output.synchronization.startup.requireVideoKeyFrame.has_value())
         return invalid("Composition output requires its planned generation-start key-frame policy");
     const auto& encoder = options.outputVideo.encoder.encoderOpenContract;
@@ -78,6 +81,8 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
             preparedEncoder->context()->hw_device_ctx); !device) return device;
         const auto& source = options.sources[i];
         const auto* runtime = &source.runtime;
+        if (auto status = MediaAvSyncPlanValidator::validateDomain(
+                runtime->synchronization, MediaAvSyncDomainRole::SourceContribution); !status) return status;
         const auto& input = aggregate.sources[i];
         if (!runtime->groupKey.valid() || runtime->groupKey != input.groupKey ||
             !groups.insert(input.groupKey.value()).second ||

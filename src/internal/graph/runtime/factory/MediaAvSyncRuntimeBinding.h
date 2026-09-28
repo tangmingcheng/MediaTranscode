@@ -74,6 +74,15 @@ struct MediaAvRuntimeDomainBinding final {
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan plan;
     MediaAvRuntimeDomainRole role;
+
+    MediaAvSyncDomainRole domainRole() const noexcept
+    {
+        if (std::holds_alternative<MediaAvSharedSourceOutputDomainBinding>(role))
+            return MediaAvSyncDomainRole::SharedSourceOutput;
+        if (std::holds_alternative<MediaAvSourceDomainBinding>(role))
+            return MediaAvSyncDomainRole::SourceContribution;
+        return MediaAvSyncDomainRole::ContinuousOutput;
+    }
 };
 
 struct MediaAvSyncRuntimeBinding final {
