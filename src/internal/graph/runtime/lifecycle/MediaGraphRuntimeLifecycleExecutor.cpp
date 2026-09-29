@@ -169,6 +169,11 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     auto schedulerStatus = runtime.m_state == MediaGraphRuntimeState::ThreadedRunning
         ? runtime.m_threadedExecutor.stop(runtime.m_context, runtime.m_scheduler)
         : runtime.m_scheduler.stop(runtime.m_context);
+    if (!schedulerStatus) {
+        // Complete failed shutdown before callers capture a final report.
+        abort(runtime);
+        return schedulerStatus;
+    }
     auto clearStatus = MediaGraphLifecycle::clearChannels(runtime.m_context);
     auto closeStatus = MediaGraphLifecycle::closeChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
@@ -176,15 +181,14 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
         std::visit([](auto& role) { role.activation.reset(); }, domain.role);
     }
     runtime.m_protocolOutputAuthority.reset();
-    if (!schedulerStatus) {
-        if (runtime.m_threadedExecutor.state() == MediaGraphThreadedExecutorState::Aborted) {
-            MediaGraphLifecycle::abortChannels(runtime.m_context);
-            runtime.m_state = MediaGraphRuntimeState::Aborted;
-        }
-        return schedulerStatus;
+    if (!clearStatus) {
+        abort(runtime);
+        return clearStatus;
     }
-    if (!clearStatus) return clearStatus;
-    if (!closeStatus) return closeStatus;
+    if (!closeStatus) {
+        abort(runtime);
+        return closeStatus;
+    }
     runtime.m_state = MediaGraphRuntimeState::Stopped;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.done state=Stopped");
     return ::media::Status::success();

@@ -1,6 +1,9 @@
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 
 #include <algorithm>
+#include <sstream>
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 namespace media::ffmpeg::graph {
 
@@ -223,8 +226,30 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
 void MediaGraphScheduler::abort(MediaGraphExecutionContext& context) noexcept
 {
     auto ordered = orderedRuntimeNodes(context);
+    const auto ledger = mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)
+        ? context.payloadCreditLedger() : nullptr;
     for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
+        const auto before = ledger ? ledger->snapshot() : MediaGraphPayloadCreditSnapshot{};
         (*it)->abort(context);
+        if (ledger) {
+            const auto after = ledger->snapshot();
+            try {
+                std::ostringstream message;
+                message << "node_abort_payload node=" << (*it)->nodeId().value
+                        << " before_objects=" << before.currentObjects
+                        << " after_objects=" << after.currentObjects
+                        << " before_bytes=" << before.currentBytes
+                        << " after_bytes=" << after.currentBytes
+                        << " before_reservations=" << before.reservations
+                        << " after_reservations=" << after.reservations
+                        << " before_releases=" << before.releases
+                        << " after_releases=" << after.releases;
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeLifecycle, message.str());
+            } catch (...) {
+                // Diagnostics must not prevent aborting subsequent nodes.
+            }
+        }
     }
 
     m_state = MediaGraphSchedulerState::Aborted;
