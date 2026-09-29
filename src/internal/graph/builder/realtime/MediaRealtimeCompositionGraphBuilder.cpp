@@ -315,6 +315,7 @@ MediaVideoOutputEncoderOptions videoOptions(
         aggregateNode, scheduled.value().scheduler, publisher, std::move(outputMembers)};
     MediaRealtimeCompositionTopology topology(std::move(graph), std::move(options),
         std::move(registrations), std::move(outputRegistration), std::move(targets));
+    if (auto sources = topology.planSourceResources(); !sources) return Result::failure(sources.error());
     if (auto retention = topology.planCanvasRetention(); !retention) return Result::failure(retention.error());
     return Result::success(std::move(topology));
 }

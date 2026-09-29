@@ -584,3 +584,5 @@ MediaAvGenerationTransitionPlanner 以共享源/输出或源贡献职责选择�
 canvas准备由拓扑数量与实际allocation生成不可修改的image-payload产品；准备入口强制预算与原deadline/stop，长期lease跨Prepared/Producer/发布帧持有，临时staging额度局部释放。它不含头对象/driver/poolcache，不能替代完整多源总账；见[准备边界](docs/realtime-video-composition-canvas-preparation.md)。
 
 producer registry消费逐node/stream/payload事实并对最终图完整覆盖校验；事实规划与实际frame合同解析由共享planner承担，runtime integration由受控实现表决定。该层不处理多源并发容量/alias总账，见[事实边界](docs/realtime-video-composition-producer-facts.md)。
+
+逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。

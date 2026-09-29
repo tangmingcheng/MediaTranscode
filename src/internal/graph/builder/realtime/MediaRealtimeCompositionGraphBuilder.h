@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/planner/realtime/MediaRealtimeCompositionSourceResourcesPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
@@ -26,13 +27,6 @@ struct MediaRealtimeCompositionGraphOptions final {
     MediaAvContinuousAggregateTopology aggregate;
 };
 
-struct MediaRealtimeCompositionSourceTargets final {
-    std::size_t sourceIndex;
-    MediaNodeId primaryInput;
-    std::optional<MediaNodeId> isolatedAudioInput;
-    std::vector<MediaNodeId> sourceMembers;
-};
-
 struct MediaRealtimeCompositionGraphAssembly final {
     MediaAvSyncRuntimeBinding runtimeBinding;
     std::vector<MediaRealtimeCompositionSourceTargets> sourceTargets;
@@ -52,6 +46,7 @@ public:
     MediaRealtimeCompositionTopology(const MediaRealtimeCompositionTopology&) = delete;
     MediaRealtimeCompositionTopology& operator=(const MediaRealtimeCompositionTopology&) = delete;
     const MediaGraph& graph() const noexcept { return graph_; }
+    ::media::Result<std::vector<MediaRealtimeCompositionSourceResources>> planSourceResources() const;
     ::media::Result<MediaVideoCanvasRetentionPlan> planCanvasRetention() const;
     ::media::Result<MediaVideoCanvasPreparationPlan> planCanvasPreparation(
         const MediaVideoCanvasAllocation& allocation) const;

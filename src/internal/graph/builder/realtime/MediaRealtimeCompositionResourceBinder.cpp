@@ -37,6 +37,8 @@ namespace media::ffmpeg::graph {
     const auto invalid = [](const char* message) {
         return Result::failure(::media::ErrorInfo::invalidArgument(message));
     };
+    auto sourceResources = topology.planSourceResources();
+    if (!sourceResources) return Result::failure(sourceResources.error());
     auto& graph = topology.graph_;
     auto& options = topology.options_;
     if (graph.empty() || options.sources.empty() ||

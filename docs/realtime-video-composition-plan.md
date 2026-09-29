@@ -85,3 +85,5 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 canvas 图像 payload 准备已接入租约与取消，见[准备记录](realtime-video-composition-canvas-preparation.md)。仅覆盖公开图像 payload，不得冒充全部准备预算；下一步仍为首次 pool/readback 准备事务与多源总账。
 
 逐producer事实与Registry已解耦并用于原生产编译，见[事实合同](realtime-video-composition-producer-facts.md)。下一步仍为逐allocation owner的独立源容量、候选与metadata总账；不以此解除aggregate最终门禁。
+
+逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](realtime-video-composition-source-resources.md)。

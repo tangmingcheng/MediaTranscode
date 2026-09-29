@@ -1,20 +1,11 @@
 #include "internal/graph/planner/realtime/MediaGraphFrameCreditContractPlanner.h"
 #include <charconv>
+#include <utility>
 
 namespace media::ffmpeg::graph {
-::media::Result<MediaFrameCreditContract> MediaGraphFrameCreditContractPlanner::plan(
-    const MediaNode& node,
-    std::uint64_t maximumLogicalBytes)
+::media::Result<std::string> MediaGraphFrameCreditContractPlanner::videoOutputPrefix(const MediaNode& node)
 {
-    using Result = ::media::Result<MediaFrameCreditContract>;
-    if (node.kind == MediaNodeKind::AudioDecode ||
-        node.kind == MediaNodeKind::AudioStartupTrim ||
-        node.kind == MediaNodeKind::AudioResample) {
-        return Result::success(MediaFrameCreditContract{
-            MediaFrameCreditAllocationScope::EngineLogicalBytes,
-            maximumLogicalBytes, 1,
-            "prepared-audio-frame-footprint+avframe-software-samples"});
-    }
+    using Result = ::media::Result<std::string>;
     std::string prefix;
     if (node.kind == MediaNodeKind::VideoDecode) {
         prefix = "decoder.pipeline.output";
@@ -49,6 +40,26 @@ namespace media::ffmpeg::graph {
         return Result::failure(::media::ErrorInfo::unsupported(
             "frame payload producer lacks a typed frame credit resolver"));
     }
+
+    return Result::success(std::move(prefix));
+}
+
+::media::Result<MediaFrameCreditContract> MediaGraphFrameCreditContractPlanner::plan(
+    const MediaNode& node,
+    std::uint64_t maximumLogicalBytes)
+{
+    using Result = ::media::Result<MediaFrameCreditContract>;
+    if (node.kind == MediaNodeKind::AudioDecode ||
+        node.kind == MediaNodeKind::AudioStartupTrim ||
+        node.kind == MediaNodeKind::AudioResample) {
+        return Result::success(MediaFrameCreditContract{
+            MediaFrameCreditAllocationScope::EngineLogicalBytes,
+            maximumLogicalBytes, 1,
+            "prepared-audio-frame-footprint+avframe-software-samples"});
+    }
+    auto resolvedPrefix = videoOutputPrefix(node);
+    if (!resolvedPrefix) return Result::failure(resolvedPrefix.error());
+    const auto& prefix = resolvedPrefix.value();
 
     const std::string presentKey = prefix + ".present";
     const std::string deviceKey = prefix + ".device";
