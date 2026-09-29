@@ -83,3 +83,5 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 逐源纯规划公共切片已完成源码双审和Release全量构建：decoder/filter候选、评分和源执行契约由新source与旧single共用；显式首帧协商仅提供graph配置/readback。r24原规格单源仍在源结束后无进展退出，完整门禁未通过。下一步继续真实输入lease、decoder callback/首帧lineage交接和逐owner资源准入，不把候选或synthetic probe当作准备成功。见[逐源规划记录](realtime-video-composition-source-planning.md)。
 
 canvas 图像 payload 准备已接入租约与取消，见[准备记录](realtime-video-composition-canvas-preparation.md)。仅覆盖公开图像 payload，不得冒充全部准备预算；下一步仍为首次 pool/readback 准备事务与多源总账。
+
+逐producer事实与Registry已解耦并用于原生产编译，见[事实合同](realtime-video-composition-producer-facts.md)。下一步仍为逐allocation owner的独立源容量、候选与metadata总账；不以此解除aggregate最终门禁。

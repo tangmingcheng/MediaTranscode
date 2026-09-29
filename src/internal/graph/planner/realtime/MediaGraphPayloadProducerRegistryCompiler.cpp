@@ -1,381 +1,102 @@
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
-
+#include "internal/graph/planner/realtime/MediaGraphPayloadProducerContract.h"
+#include "internal/graph/planner/realtime/MediaGraphFrameCreditContractPlanner.h"
 #include <algorithm>
-#include <charconv>
+#include <utility>
 #include <new>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-bool allocatesPayload(MediaNodeKind kind) noexcept
+template<class Left, class Right>
+bool sameKey(const Left& left, const Right& right) noexcept
 {
-    switch (kind) {
-    case MediaNodeKind::RawRtpInput:
-    case MediaNodeKind::Demux:
-    case MediaNodeKind::MpegTsDemux:
-    case MediaNodeKind::PacketNormalize:
-    case MediaNodeKind::VideoDecode:
-    case MediaNodeKind::HardwareTransfer:
-    case MediaNodeKind::VideoFilter:
-    case MediaNodeKind::VideoEncode:
-    case MediaNodeKind::AudioDecode:
-    case MediaNodeKind::AudioStartupTrim:
-    case MediaNodeKind::AudioResample:
-    case MediaNodeKind::AudioEncode:
-        return true;
-    default:
-        return false;
-    }
+    return left.nodeId == right.nodeId && left.streamKind == right.streamKind &&
+        left.payloadKind == right.payloadKind;
+}
 }
 
-bool runtimeIntegrated(MediaNodeKind kind) noexcept
-{
-    switch (kind) {
-    case MediaNodeKind::RawRtpInput:
-    case MediaNodeKind::Demux:
-    case MediaNodeKind::MpegTsDemux:
-    case MediaNodeKind::PacketNormalize:
-    case MediaNodeKind::VideoDecode:
-    case MediaNodeKind::HardwareTransfer:
-    case MediaNodeKind::VideoFilter:
-    case MediaNodeKind::VideoEncode:
-    case MediaNodeKind::AudioEncode:
-    case MediaNodeKind::AudioDecode:
-    case MediaNodeKind::AudioStartupTrim:
-    case MediaNodeKind::AudioResample:
-        return true;
-    default:
-        return false;
-    }
-}
-
-::media::Result<std::uint64_t> maximumBytes(
-    MediaNodeKind producerKind,
-    const MediaEdge& edge,
-    const MediaRealtimeGraphResourceLedgerPlan& ledger)
-{
-    if (producerKind == MediaNodeKind::RawRtpInput ||
-        producerKind == MediaNodeKind::Demux ||
-        producerKind == MediaNodeKind::MpegTsDemux ||
-        producerKind == MediaNodeKind::PacketNormalize) {
-        if (!ledger.preparedInputPayload ||
-            !ledger.preparedInputPayload->validate()) {
-            return ::media::Result<std::uint64_t>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "producer registry lacks a prepared input allocation envelope"));
-        }
-        const auto expectedSource = producerKind == MediaNodeKind::RawRtpInput
-            ? MediaPreparedInputPayloadSource::RawRtpAccessUnit
-            : producerKind == MediaNodeKind::Demux
-            ? MediaPreparedInputPayloadSource::GenericDemuxPacket
-            : producerKind == MediaNodeKind::MpegTsDemux
-                ? MediaPreparedInputPayloadSource::MpegTsPesPacket
-                : ledger.preparedInputPayload->source;
-        if (ledger.preparedInputPayload->source != expectedSource) {
-            return ::media::Result<std::uint64_t>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "producer registry input source conflicts with the final DAG"));
-        }
-        const auto* bound = ledger.preparedInputPayload->find(edge.streamKind);
-        if (!bound) {
-            return ::media::Result<std::uint64_t>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "producer registry input envelope lacks the selected stream"));
-        }
-        return ::media::Result<std::uint64_t>::success(
-            bound->maximumPayloadBytes);
-    }
-    if (edge.payloadKind == MediaPayloadKind::Packet &&
-        edge.streamKind == MediaStreamKind::Video &&
-        producerKind == MediaNodeKind::VideoEncode) {
-        return ::media::Result<std::uint64_t>::success(
-            ledger.media.videoUnitBytes);
-    }
-    if (edge.payloadKind == MediaPayloadKind::Packet &&
-        edge.streamKind == MediaStreamKind::Audio &&
-        producerKind == MediaNodeKind::AudioEncode &&
-        ledger.media.audioUnitBytes) {
-        return ::media::Result<std::uint64_t>::success(
-            *ledger.media.audioUnitBytes);
-    }
-    if (edge.payloadKind == MediaPayloadKind::Frame &&
-        edge.streamKind == MediaStreamKind::Video &&
-        (producerKind == MediaNodeKind::VideoDecode ||
-         producerKind == MediaNodeKind::HardwareTransfer ||
-         producerKind == MediaNodeKind::VideoFilter)) {
-        return ::media::Result<std::uint64_t>::success(
-            ledger.videoSurfaceUnitBytes);
-    }
-    if (edge.payloadKind == MediaPayloadKind::Frame &&
-        edge.streamKind == MediaStreamKind::Audio &&
-        (producerKind == MediaNodeKind::AudioDecode ||
-         producerKind == MediaNodeKind::AudioStartupTrim ||
-         producerKind == MediaNodeKind::AudioResample) &&
-        ledger.audioFrameUnitBytes) {
-        return ::media::Result<std::uint64_t>::success(
-            *ledger.audioFrameUnitBytes);
-    }
-    return ::media::Result<std::uint64_t>::failure(
-        ::media::ErrorInfo::unsupported(
-            "producer registry lacks a prepared payload bound"));
-}
-
-bool sameKey(
-    const MediaGraphPayloadProducerStrategy& strategy,
-    const MediaEdge& edge) noexcept
-{
-    return strategy.nodeId == edge.from.nodeId &&
-        strategy.streamKind == edge.streamKind &&
-        strategy.payloadKind == edge.payloadKind;
-}
-
-::media::Result<MediaFrameCreditContract> frameCreditContract(
-    const MediaNode& node,
-    std::uint64_t maximumLogicalBytes)
-{
-    using Result = ::media::Result<MediaFrameCreditContract>;
-    if (node.kind == MediaNodeKind::AudioDecode ||
-        node.kind == MediaNodeKind::AudioStartupTrim ||
-        node.kind == MediaNodeKind::AudioResample) {
-        return Result::success(MediaFrameCreditContract{
-            MediaFrameCreditAllocationScope::EngineLogicalBytes,
-            maximumLogicalBytes, 1,
-            "prepared-audio-frame-footprint+avframe-software-samples"});
-    }
-    std::string prefix;
-    if (node.kind == MediaNodeKind::VideoDecode) {
-        prefix = "decoder.pipeline.output";
-    } else if (node.kind == MediaNodeKind::VideoFilter) {
-        prefix = "filter.pipeline.output";
-    } else if (node.kind == MediaNodeKind::HardwareTransfer) {
-        if (!node.options.has("transfer.direction")) {
-            return Result::failure(::media::ErrorInfo::notInitialized(
-                "hardware transfer frame credit lacks planner direction"));
-        }
-        const auto direction = node.options.value("transfer.direction");
-        if (direction == "none") {
-            prefix = "decoder.pipeline.output";
-        } else if (direction == "download") {
-            if (!node.options.has("pipeline.filter_active")) {
-                return Result::failure(::media::ErrorInfo::notInitialized(
-                    "hardware transfer frame credit lacks filter topology fact"));
-            }
-            const auto filterActive =
-                node.options.value("pipeline.filter_active");
-            if (filterActive != "0" && filterActive != "1") {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "hardware transfer frame credit has invalid filter topology fact"));
-            }
-            prefix = filterActive == "1"
-                ? "filter.pipeline.input" : "encoder.pipeline.input";
-        } else {
-            return Result::failure(::media::ErrorInfo::unsupported(
-                "hardware transfer frame credit has no admitted output contract"));
-        }
-    } else {
-        return Result::failure(::media::ErrorInfo::unsupported(
-            "frame payload producer lacks a typed frame credit resolver"));
-    }
-
-    const std::string presentKey = prefix + ".present";
-    const std::string deviceKey = prefix + ".device";
-    const std::string kindKey = prefix + ".frame_kind";
-    const std::string pixelFormatKey = prefix + ".pixel_format";
-    const std::string widthKey = prefix + ".width";
-    const std::string heightKey = prefix + ".height";
-    if (!node.options.has(presentKey) ||
-        node.options.value(presentKey) != "1" ||
-        !node.options.has(deviceKey) ||
-        !node.options.has(kindKey) ||
-        !node.options.has(pixelFormatKey) ||
-        node.options.value(pixelFormatKey).empty() ||
-        !node.options.has(widthKey) || !node.options.has(heightKey)) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "frame payload producer lacks a complete planner frame contract"));
-    }
-    const auto positiveDimension = [&](const std::string& key) {
-        int value = 0;
-        const auto text = node.options.value(key);
-        const auto parsed = std::from_chars(
-            text.data(), text.data() + text.size(), value);
-        return parsed.ec == std::errc{} &&
-            parsed.ptr == text.data() + text.size() && value > 0;
-    };
-    if (!positiveDimension(widthKey) || !positiveDimension(heightKey)) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "frame payload producer has invalid planner dimensions"));
-    }
-    const auto frameKind = node.options.value(kindKey);
-    const auto device = node.options.value(deviceKey);
-    MediaFrameCreditAllocationScope allocationScope;
-    if (frameKind == "software") {
-        if (device != "software") {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "software frame credit conflicts with planner device"));
-        }
-        allocationScope = MediaFrameCreditAllocationScope::EngineLogicalBytes;
-    } else if (frameKind == "hardware" ||
-               frameKind == "hardware_mapped") {
-        if (device.empty() || device == "software" || device == "unknown") {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "device frame credit conflicts with planner device"));
-        }
-        allocationScope =
-            MediaFrameCreditAllocationScope::ExternalDeviceObservedOnly;
-    } else {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "frame payload producer has unsupported planner frame kind"));
-    }
-    return Result::success(MediaFrameCreditContract{
-        allocationScope, maximumLogicalBytes, 1,
-        prefix + "+opened-frame-readback+device=" + device});
-}
-
-std::string allocationAuthority(
-    MediaNodeKind producerKind,
-    const MediaEdge& edge,
-    const MediaRealtimeGraphResourceLedgerPlan& ledger,
-    bool deviceBacked)
-{
-    if ((producerKind == MediaNodeKind::RawRtpInput ||
-         producerKind == MediaNodeKind::Demux ||
-         producerKind == MediaNodeKind::MpegTsDemux ||
-         producerKind == MediaNodeKind::PacketNormalize) &&
-        ledger.preparedInputPayload) {
-        const auto* bound = ledger.preparedInputPayload->find(edge.streamKind);
-        if (bound) return bound->authority;
-    }
-    return deviceBacked
-        ? "prepared-logical-frame-bound+device-bytes-observed-only"
-        : "prepared-encoder-emission-or-frame-footprint-bound";
-}
-
-bool sameKey(
-    const MediaGraphPayloadProducerRequirement& requirement,
-    const MediaEdge& edge) noexcept
-{
-    return requirement.nodeId == edge.from.nodeId &&
-        requirement.streamKind == edge.streamKind &&
-        requirement.payloadKind == edge.payloadKind;
-}
-
-} // namespace
-
-::media::Result<MediaGraphPayloadCreditPlan>
-MediaGraphPayloadProducerRegistryCompiler::compile(
-    const MediaGraph& graph,
-    const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
-    std::uint64_t availablePayloadBytes,
-    std::uint64_t maximumPayloadObjects,
+::media::Result<MediaGraphPayloadCreditPlan> MediaGraphPayloadProducerRegistryCompiler::compile(
+    const MediaGraph& graph, std::span<const MediaGraphPayloadProducerFact> facts,
+    std::uint64_t availablePayloadBytes, std::uint64_t maximumPayloadObjects,
     std::span<const MediaNodeId> selectedNodes)
-{
+try {
     using Result = ::media::Result<MediaGraphPayloadCreditPlan>;
-    if (availablePayloadBytes == 0 || maximumPayloadObjects == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "payload producer registry requires positive global credits"));
+    const auto invalid = [](const char* message) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(message));
+    };
+    if (graph.empty() || availablePayloadBytes == 0 || maximumPayloadObjects == 0)
+        return invalid("payload producer registry requires a graph and positive global credits");
+    const auto selected = [&](MediaNodeId id) {
+        return selectedNodes.empty() || std::find(selectedNodes.begin(), selectedNodes.end(), id) != selectedNodes.end();
+    };
+    for (std::size_t i = 0; i < selectedNodes.size(); ++i) {
+        if (!graph.findNode(selectedNodes[i]) ||
+            std::find(selectedNodes.begin(), selectedNodes.begin() + i, selectedNodes[i]) != selectedNodes.begin() + i)
+            return invalid("payload producer selection contains a missing or duplicate node");
     }
     MediaGraphPayloadCreditPlan plan;
     plan.maximumBytes = availablePayloadBytes;
     plan.maximumObjects = maximumPayloadObjects;
     plan.producerStrategyVersion = 1;
     plan.integration = MediaGraphPayloadCreditIntegration::Complete;
-    plan.authority =
-        "final-dag-producer-registry+prepared-emission+global-payload-budget";
-    try {
-        for (const auto& node : graph.nodes()) {
-            if (!selectedNodes.empty() &&
-                std::find(selectedNodes.begin(), selectedNodes.end(), node.id) == selectedNodes.end()) continue;
-            if (!allocatesPayload(node.kind)) continue;
-            bool foundProducerEdge = false;
-            for (const auto& edge : graph.edges()) {
-                if (edge.from.nodeId != node.id ||
-                    (edge.payloadKind != MediaPayloadKind::Packet &&
-                     edge.payloadKind != MediaPayloadKind::Frame)) {
-                    continue;
-                }
-                foundProducerEdge = true;
-                if (std::any_of(
-                        plan.producers.begin(), plan.producers.end(),
-                        [&](const auto& strategy) {
-                            return sameKey(strategy, edge);
-                        })) {
-                    continue;
-                }
-                auto bound = maximumBytes(node.kind, edge, planningLedger);
-                if (!bound) {
-                    if (!std::any_of(
-                            plan.missingProducers.begin(),
-                            plan.missingProducers.end(),
-                            [&](const auto& requirement) {
-                                return sameKey(requirement, edge);
-                            })) {
-                        plan.missingProducers.push_back(
-                            MediaGraphPayloadProducerRequirement{
-                                node.id, edge.streamKind, edge.payloadKind,
-                                bound.error().message});
-                    }
-                    continue;
-                }
-                if (bound.value() == 0) {
-                    return Result::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "single producer payload bound is zero"));
-                }
-                const bool isFramePayload = edge.payloadKind ==
-                    MediaPayloadKind::Frame;
-                std::optional<MediaFrameCreditContract> frameCredit;
-                if (isFramePayload) {
-                    auto contract = frameCreditContract(node, bound.value());
-                    if (!contract) return Result::failure(contract.error());
-                    frameCredit = std::move(contract).value();
-                }
-                const bool externalDeviceFrame = frameCredit &&
-                    frameCredit->allocationScope ==
-                        MediaFrameCreditAllocationScope::
-                            ExternalDeviceObservedOnly;
-                if (!externalDeviceFrame &&
-                    bound.value() > availablePayloadBytes) {
-                    return Result::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "single producer payload exceeds the global credit pool"));
-                }
-                plan.producers.push_back(MediaGraphPayloadProducerStrategy{
-                    node.id, edge.streamKind, edge.payloadKind,
-                    externalDeviceFrame
-                        ? MediaGraphPayloadAllocationAccounting::
-                              ObservedOnlyExternalBytesAndEngineManagedObject
-                        : MediaGraphPayloadAllocationAccounting::
-                              EngineManagedBytesAndObject,
-                    std::move(frameCredit),
-                    bound.value(),
-                    runtimeIntegrated(node.kind),
-                    allocationAuthority(
-                        node.kind, edge, planningLedger,
-                        externalDeviceFrame)});
-                plan.maximumUnitBytes =
-                    (std::max)(plan.maximumUnitBytes, bound.value());
-            }
-            if (!foundProducerEdge) {
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "final DAG payload producer has no typed packet/frame output"));
-            }
+    plan.authority = "final-dag-producer-registry+prepared-emission+global-payload-budget";
+    for (std::size_t index = 0; index < facts.size(); ++index) {
+        const auto& fact = facts[index];
+        const auto* node = graph.findNode(fact.nodeId);
+        if (!node || !selected(node->id) || !mediaGraphPayloadProducerOutput(node->kind))
+            return invalid("payload fact does not belong to a selected integrated producer");
+        for (std::size_t previous = 0; previous < index; ++previous)
+            if (sameKey(facts[previous], fact)) return invalid("duplicate payload producer fact");
+        if (fact.payloadKind != MediaPayloadKind::Packet && fact.payloadKind != MediaPayloadKind::Frame)
+            return invalid("payload producer fact must describe a packet or frame");
+        const bool outputExists = std::any_of(graph.edges().begin(), graph.edges().end(), [&](const auto& edge) {
+            return edge.from.nodeId == fact.nodeId && edge.streamKind == fact.streamKind && edge.payloadKind == fact.payloadKind;
+        });
+        if (!outputExists) return invalid("payload producer fact has no matching graph output");
+        if (!acceptsMediaGraphPayloadProducerOutput(node->kind, fact.streamKind, fact.payloadKind))
+            return invalid("payload producer output conflicts with its runtime contract");
+        if (fact.payloadKind == MediaPayloadKind::Frame) {
+            auto expected = MediaGraphFrameCreditContractPlanner::plan(*node, fact.maximumLogicalBytes);
+            if (!expected) return Result::failure(expected.error());
+            if (!fact.frameCredit || fact.frameCredit->allocationScope != expected.value().allocationScope ||
+                fact.frameCredit->maximumLogicalBytes != expected.value().maximumLogicalBytes ||
+                fact.frameCredit->maximumObjectsPerAllocation != expected.value().maximumObjectsPerAllocation ||
+                fact.frameCredit->authority != expected.value().authority)
+                return invalid("prepared frame credit differs from the final node contract");
         }
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "payload producer registry"));
+        const bool device = fact.frameCredit && fact.frameCredit->allocationScope ==
+            MediaFrameCreditAllocationScope::ExternalDeviceObservedOnly;
+        MediaGraphPayloadProducerStrategy strategy{
+            fact.nodeId, fact.streamKind, fact.payloadKind,
+            device ? MediaGraphPayloadAllocationAccounting::ObservedOnlyExternalBytesAndEngineManagedObject
+                   : MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject,
+            fact.frameCredit, fact.maximumLogicalBytes, true, fact.authority};
+        if (!strategy.valid() || (fact.streamKind != MediaStreamKind::Audio && fact.streamKind != MediaStreamKind::Video))
+            return invalid("payload producer fact lacks a valid logical bound and frame contract");
+        if (!device && fact.maximumLogicalBytes > availablePayloadBytes)
+            return invalid("single producer payload exceeds the global credit pool");
+        plan.maximumUnitBytes = (std::max)(plan.maximumUnitBytes, fact.maximumLogicalBytes);
+        plan.producers.push_back(std::move(strategy));
     }
-    if (!plan.missingProducers.empty() || std::any_of(
-            plan.producers.begin(), plan.producers.end(),
-            [](const auto& strategy) {
-                return !strategy.runtimeIntegrated;
-            })) {
-        plan.integration = MediaGraphPayloadCreditIntegration::Incomplete;
+    // Cover actual output keys, not merely the facts supplied by a caller.
+    for (const auto& node : graph.nodes()) {
+        if (!selected(node.id) || !mediaGraphPayloadProducerOutput(node.kind)) continue;
+        bool foundOutput = false;
+        for (const auto& edge : graph.edges()) {
+            if (edge.from.nodeId != node.id ||
+                (edge.payloadKind != MediaPayloadKind::Packet && edge.payloadKind != MediaPayloadKind::Frame)) continue;
+            foundOutput = true;
+            if (!std::any_of(facts.begin(), facts.end(), [&](const auto& fact) {
+                    return fact.nodeId == node.id && fact.streamKind == edge.streamKind && fact.payloadKind == edge.payloadKind;
+                })) return invalid("final DAG payload producer is missing its own prepared fact");
+        }
+        if (!foundOutput) return invalid("final DAG payload producer has no typed packet/frame output");
     }
-    if (!plan.isStructurallyValid()) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "payload producer registry is structurally incomplete"));
-    }
+    if (!plan.isCompleteAndValid()) return invalid("payload producer registry is incomplete");
     return Result::success(std::move(plan));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaGraphPayloadCreditPlan>::failure(
+        ::media::ErrorInfo::allocationFailed("payload producer registry"));
 }
 
 } // namespace media::ffmpeg::graph

@@ -339,3 +339,5 @@ run31 正常启动后再注入 20% 输入丢包同样 FAIL：有效编码输出�
 run53/55/56/57的CBR/VBR双向恢复均通过，核心实际入队发送满足既定门禁；历史驱动聚集仍是部署风险。run57输入捕获自身遗漏已单列。Beta红绿分类诊断与8核构建成功，CLI哈希不变，未重复四路媒体测试。详见2026-09-08-rk-beta-classification-review.md及各验收报告。
 
 本轮canvas图像payload准备增加租约、失败回滚及原deadline/stop检查；不覆盖完整资源域或公共多源入口，合屏仍42/100、FAIL。源码独立审查评价及真实realtime结果见[准备记录](docs/realtime-video-composition-canvas-preparation.md)。
+
+逐producer事实接入共享编译路径，新增实际scope/输出键/覆盖校验；尚无完整多源总账或合屏运行证明，维持42/100、FAIL。详见[阶段记录](docs/realtime-video-composition-producer-facts.md)。

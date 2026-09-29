@@ -171,3 +171,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## canvas 图像 payload 准备
 
 基线874e4e83：同图 retention+真实 allocation 生成准备产品；prepare先租约、再分配，Prepared/Producer/发布HeaderLease共享长期额度，两份staging临时额度准备后归还。原deadline/stop统一检查，不可打断同步驱动。见[记录](realtime-video-composition-canvas-preparation.md)，完整FAIL42。
+
+## 逐producer事实
+
+基线5877d9db：原事实解析复用，FinalCompiler→FactsPlanner→Registry接入；Registry核对实际图输出键与node frame scope。完整多源总账未完成，aggregate仍failclosed。见[记录](realtime-video-composition-producer-facts.md)。

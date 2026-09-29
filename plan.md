@@ -622,3 +622,5 @@ Detailed design and execution checklist:
 - [ ] 双人独立审查、评分及新PR复核，记录命令结果并清理临时材料。
 
 本轮将图像 payload 预算、原 deadline/cancellation 与共享租约接入 canvas 准备，见[阶段记录](docs/realtime-video-composition-canvas-preparation.md)。首次 pool/readback、多源完整总账及公共入口仍待完成，完整 FAIL42。
+
+逐producer事实已从registry的整图ledger依赖中拆出，并接入原FinalCompiler；实际frame scope在消费时复核。见[阶段记录](docs/realtime-video-composition-producer-facts.md)。多源allocation总账及入口仍未完成，完整FAIL42。

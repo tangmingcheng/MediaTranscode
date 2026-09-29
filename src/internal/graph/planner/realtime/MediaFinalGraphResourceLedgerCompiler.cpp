@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
+#include "internal/graph/planner/realtime/MediaGraphPayloadProducerFactsPlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -577,8 +578,10 @@ compileLedger(
     const std::uint64_t availablePayloadBytes =
         ledger.maximumGraphPayloadAndReservedStorageBytes -
         ledger.admittedGraphPayloadAndReservedStorageBytes;
+    auto producerFacts = MediaGraphPayloadProducerFactsPlanner::plan(graph, planningLedger, selectedNodes);
+    if (!producerFacts) return Result::failure(producerFacts.error());
     auto payloadPlan = MediaGraphPayloadProducerRegistryCompiler::compile(
-        graph, planningLedger, availablePayloadBytes,
+        graph, producerFacts.value(), availablePayloadBytes,
         maximumPayloadObjects, selectedNodes);
     if (!payloadPlan) return Result::failure(payloadPlan.error());
     ledger.payloadCreditPlan = std::move(payloadPlan).value();
