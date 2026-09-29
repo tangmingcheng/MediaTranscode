@@ -349,3 +349,7 @@ run53/55/56/57的CBR/VBR双向恢复均通过，核心实际入队发送满足�
 共享canonical元数据已迁移为精确元素只读owner，源链和aggregate共同factory接入，identity按内容比较并持有寿命；不等于分配前全局准入，完整FAIL42。见[存储记录](docs/realtime-video-composition-metadata-storage.md)。
 
 raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
+
+## 2026-09-29 纯视频源成员合同调查
+
+固定双流假设贯穿clock、startup、release与epoch；成员模型方向可采用，但独立startup时钟调度缺权威推导，完整设计和实现仍FAIL。两名独立审查对本轮调查Standards/Spec均PASS；没有新构建或媒体通过项。六维10/8/6/12/2/4，总42/100。见[调查与实施门禁](docs/realtime-video-composition-source-membership.md)。

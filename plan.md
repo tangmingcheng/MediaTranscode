@@ -632,3 +632,5 @@ Detailed design and execution checklist:
 共享canonical元数据已迁移为精确元素只读owner，源链和aggregate共同factory接入，identity按内容比较并持有寿命；不等于分配前全局准入，完整FAIL42。见[存储记录](docs/realtime-video-composition-metadata-storage.md)。
 
 raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
+
+纯视频源调查确认clock/startup/release/epoch均强制双流，采用计划成员贯穿共同DAG；startup tick目前借用音频servo 10 ms，独立调度设计尚缺，不能填假音频。下一步先完整迁移成员型激活产品，再接纯视频源。见[成员合同与门禁](docs/realtime-video-composition-source-membership.md)。本轮仅调查，完整FAIL42。

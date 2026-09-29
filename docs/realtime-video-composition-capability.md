@@ -102,3 +102,5 @@ planner 形成格式、尺寸、有效范围、上传完成机制与内存边界
 独立审查发现并修复RGA布局校验缺口：仅检查DRM各plane不越界，不能证明其独立pitch/offset与RGA单一wstride/hstride等价。现在复用FFmpeg图像布局计算逐项核对格式、全部plane步长/偏移及填充容量，不等价时在import前失败。[Rockchip公共接口](https://github.com/airockchip/librga/blob/main/include/im2d_buffer.h)与[Linux DRM字节布局](https://github.com/torvalds/linux/blob/master/include/uapi/drm/drm_fourcc.h)是适配依据；RGB24对应little-endian DRM BGR888，不能按名称同名映射。部署FFmpeg fork的RGB24/BGR24描述与此不同，adapter拒绝该描述，没有修改外部依赖。
 
 紧凑NV15/NV20与16bit容器P010/P210的RGA packing等价性尚未证明，当前明确unsupported，不据此宣称硬件不支持。只有Windows Release编译及原规格单源r22回归证据；RGA文件不参与Windows编译，尚无本次RKMPP构建或运行通过证据。CUDA逐plane传实际地址和pitch，不存在上述地址折叠。首段画面、失败和清理见[聚合记录](realtime-video-composition-aggregate.md)。
+
+纯视频源调查确认clock/startup/release/epoch均强制双流，采用计划成员贯穿共同DAG；startup tick目前借用音频servo 10 ms，独立调度设计尚缺，不能填假音频。下一步先完整迁移成员型激活产品，再接纯视频源。见[成员合同与门禁](realtime-video-composition-source-membership.md)。本轮仅调查，完整FAIL42。

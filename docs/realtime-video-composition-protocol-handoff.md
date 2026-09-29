@@ -146,3 +146,5 @@ exit $LASTEXITCODE
 ```
 
 首源自然结束后再次执行同一FFmpeg命令，仅日志改为`composition-domain-r15-source-rejoin.log`。两次源执行会话均取得exit0，各3600帧/120秒。外部进程监控18轮、其中9轮取得CLI存活采样。两名独立审查者核对原始日志，局部证据PASS、完整恢复FAIL、评分42/100。结果归档后逐项删除r15 build/cli/source/source-rejoin/vlc日志、SDP及截图composition-domain-r15-2026-09-16-14h46m15s049.png；本轮CLI/两源/VLC和旧r13 PID16540均确认不存在。固定120秒源保留，无本轮临时脚本或抓包。
+
+纯视频源调查确认clock/startup/release/epoch均强制双流，采用计划成员贯穿共同DAG；startup tick目前借用音频servo 10 ms，独立调度设计尚缺，不能填假音频。下一步先完整迁移成员型激活产品，再接纯视频源。见[成员合同与门禁](realtime-video-composition-source-membership.md)。本轮仅调查，完整FAIL42。
