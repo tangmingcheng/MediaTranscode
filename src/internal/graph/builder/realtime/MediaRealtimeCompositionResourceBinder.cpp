@@ -1,3 +1,4 @@
+#include "internal/graph/planner/capability/MediaVideoEncoderPreparer.h"
 #include "internal/graph/builder/realtime/MediaRealtimeCompositionGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeGraphResourceBinding.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
@@ -9,6 +10,15 @@
 #include <unordered_set>
 
 namespace media::ffmpeg::graph {
+
+::media::Result<MediaVideoCanvasRetentionPlan> MediaRealtimeCompositionTopology::planCanvasRetention() const
+{
+    if (!options_.outputVideo.encoder.preparedEmission)
+        return ::media::Result<MediaVideoCanvasRetentionPlan>::failure(::media::ErrorInfo::notInitialized(
+            "Composition canvas retention lacks prepared output encoder emission"));
+    return MediaVideoCanvasRetentionPlanner::plan(graph_, output_.activationOwner,
+        *options_.outputVideo.encoder.preparedEmission);
+}
 
 ::media::Result<MediaRealtimeCompositionGraph> MediaRealtimeCompositionGraphBuilder::bind(
     MediaRealtimeCompositionTopology topology,
@@ -26,9 +36,16 @@ namespace media::ffmpeg::graph {
         resources.videoDecoders.size() != options.sources.size() ||
         !resources.videoEncoder || !resources.canvas)
         return invalid("Composition binding requires its topology and every prepared resource");
-    const auto* encoder = dynamic_cast<const FFmpegCodecContextBuffer*>(resources.videoEncoder.get());
+    auto* encoder = dynamic_cast<FFmpegCodecContextBuffer*>(resources.videoEncoder.get());
     if (!encoder || !encoder->context() || encoder->ownership() != FFmpegCodecContextOwnership::Owned)
         return invalid("Composition requires the owned actual prepared output codec context");
+    auto evidence = MediaVideoEncoderPreparer::inspect(*encoder->context(), options.outputVideo.encoder);
+    if (!evidence) return Result::failure(evidence.error());
+    auto retention = topology.planCanvasRetention();
+    if (!retention) return Result::failure(retention.error());
+    if (resources.canvasStorage.surfaceCount != retention.value().writableSurfaces ||
+        resources.canvasStorage.maximumHeaderCount != retention.value().maximumPublishedLeases)
+        return invalid("Composition canvas storage differs from final topology retention");
     const MediaVideoCanvasPlan canvas{options.aggregate.canvas, resources.canvasStorage};
     if (auto status = resources.canvas->validateBinding(canvas, encoder->context()->hw_frames_ctx); !status)
         return Result::failure(status.error());
@@ -44,7 +61,8 @@ namespace media::ffmpeg::graph {
     auto ledger = MediaFinalGraphResourceLedgerCompiler::compile(graph, planningLedger, {});
     if (!ledger) return Result::failure(ledger.error());
     const auto& pool = ledger.value().encoderFramesPool;
-    if (!pool || pool->initialPoolSurfaces == 0 || pool->authority.empty() ||
+    if (!pool || *pool != retention.value().encoderPool ||
+        pool->initialPoolSurfaces == 0 || pool->authority.empty() ||
         pool->initialPoolSurfaces > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
         return invalid("Composition final admission lacks its hardware pool contract");
     const auto* actualPool = reinterpret_cast<const AVHWFramesContext*>(encoder->context()->hw_frames_ctx->data);

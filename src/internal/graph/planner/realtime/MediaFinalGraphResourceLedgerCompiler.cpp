@@ -513,26 +513,11 @@ compileLedger(
     const bool hasSelectedEncoder = std::any_of(graph.nodes().begin(), graph.nodes().end(),
         [&](const auto& node) { return selected(node.id) && node.kind == MediaNodeKind::VideoEncode; });
     if (planningLedger.hardwareEncoderSurfacePool && hasSelectedEncoder) {
-        auto graphSurfaces = Arithmetic::add(
-            videoFrameEdgeSurfaces,
-            pipelinePendingSurfaces,
-            "graph in-flight and pending hardware surfaces");
-        auto pool = graphSurfaces
-            ? Arithmetic::add(
-            graphSurfaces.value(),
-            planningLedger.maximumEncoderRetainedFrames,
-            "encoder hardware frames initial pool")
-            : graphSurfaces;
-        if (!pool || pool.value() == 0) {
-            return Result::failure(
-                !pool ? pool.error() : ::media::ErrorInfo::notInitialized(
-                    "encoder hardware frame pool is empty"));
-        }
-        ledger.encoderFramesPool = MediaEncoderHardwareFramesPoolPlan{
-            pool.value(), videoFrameEdgeSurfaces,
-            pipelinePendingSurfaces,
-            planningLedger.maximumEncoderRetainedFrames,
-            "final-encoder-input-edge+typed-upstream-pending+opened-encoder-retained-frames"};
+        auto pool = MediaEncoderHardwareFramesPoolPlanner::plan({videoFrameEdgeSurfaces,
+            pipelinePendingSurfaces, planningLedger.maximumEncoderRetainedFrames, 0,
+            "final-encoder-input-edge+typed-upstream-pending+opened-encoder-retained-frames"});
+        if (!pool) return Result::failure(pool.error());
+        ledger.encoderFramesPool = std::move(pool).value();
         ledger.outOfScopeAuthorities.push_back(
             "device-and-driver-memory-is-out-of-scope-for-engine-managed-only");
     }

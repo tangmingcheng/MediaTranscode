@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/planner/realtime/MediaEncoderHardwareFramesPoolPlanner.h"
 #include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
 
@@ -28,14 +29,6 @@ struct MediaFinalGraphResourceLedgerEntry final {
     std::uint64_t maximumBufferObjects;
     std::uint64_t retainedItems;
     bool coveredByGlobalPayloadLedger;
-    std::string authority;
-};
-
-struct MediaEncoderHardwareFramesPoolPlan final {
-    std::uint64_t initialPoolSurfaces;
-    std::uint64_t graphInFlightSurfaces;
-    std::uint64_t pipelinePendingSurfaces;
-    std::uint64_t encoderRetainedSurfaces;
     std::string authority;
 };
 

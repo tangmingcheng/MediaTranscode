@@ -6,6 +6,11 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaVideoEncoderPreparationEvidence final {
+    MediaPreparedEncoderEmissionEnvelope emission;
+    MediaVideoEncoderReadback readback;
+};
+
 struct MediaPreparedVideoEncoder final {
     ::media::ffmpeg::CodecContextPtr context;
     MediaPreparedEncoderEmissionEnvelope emission;
@@ -16,6 +21,8 @@ struct MediaPreparedVideoEncoder final {
 // The request consumes existing planner options; no DAG or runtime is required.
 class MediaVideoEncoderPreparer final {
 public:
+    static ::media::Result<MediaVideoEncoderPreparationEvidence> inspect(
+        AVCodecContext& context, const MediaPipelineStagePlan& encoder);
     static ::media::Result<MediaPreparedVideoEncoder> prepare(
         const CodecResolverEncoderContextBuildRequest& request,
         const MediaPipelineStagePlan& encoder);

@@ -46,6 +46,8 @@ r13真实恢复已锁新代并生成协议计划，随后暴露AAC不支持flush
 
 逻辑拓扑与bind的拆分已实施，见[阶段记录](realtime-video-composition-topology.md)。下一块为准备授权及实际readback总准入；两者必须分开，不能用geometry先验值冒充实际分配字节。
 
+输出池驻留数量已可由同一逻辑拓扑生成，见[数量合同](realtime-video-composition-pool-retention.md)。这不允许直接分配；有界准备预算及实际readback总账仍需完成。
+
 ## 当前实施顺序：源处理与持续输出分离
 
 1. segment 显式返回源处理/输出处理成员；registration 校验互斥、完整覆盖和角色归属，runtime 消费同一产品。此步保留原整体 transition，不宣称恢复已修复。

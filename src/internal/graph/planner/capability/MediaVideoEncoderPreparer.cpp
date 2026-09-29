@@ -6,20 +6,24 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<MediaPreparedVideoEncoder> MediaVideoEncoderPreparer::prepare(
-    const CodecResolverEncoderContextBuildRequest& request,
-    const MediaPipelineStagePlan& encoder)
+namespace {
+::media::Status validatePlan(const MediaPipelineStagePlan& encoder)
 {
-    using Result = ::media::Result<MediaPreparedVideoEncoder>;
     if (!encoder.encoderRateControl || !encoder.preparedEmission ||
-        !encoder.encodedPacketLayout || !encoder.encoderOpenContract) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "prepared output lacks its encoder emission contract"));
-    }
-    auto opened = CodecResolverEncoderContextBuilder::build(request);
-    if (!opened) return Result::failure(opened.error());
+        !encoder.encodedPacketLayout || !encoder.encoderOpenContract)
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "Prepared output lacks its encoder emission contract"));
+    return ::media::Status::success();
+}
+}
+
+::media::Result<MediaVideoEncoderPreparationEvidence> MediaVideoEncoderPreparer::inspect(
+    AVCodecContext& context, const MediaPipelineStagePlan& encoder)
+{
+    using Result = ::media::Result<MediaVideoEncoderPreparationEvidence>;
+    if (auto status = validatePlan(encoder); !status) return Result::failure(status.error());
     auto emission = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
-        *opened.value().context, *encoder.encoderRateControl,
+        context, *encoder.encoderRateControl,
         encoder.encoderOpenContract->frameRate, *encoder.encodedPacketLayout,
         "retained-output-encoder:" + encoder.ffmpegName,
         encoder.preparedEmission->backend);
@@ -34,14 +38,27 @@ namespace media::ffmpeg::graph {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "retained output encoder exceeds its planned emission or retention envelope"));
     }
-    auto readback = MediaVideoEncoderReadback::capture(*opened.value().context);
+    auto readback = MediaVideoEncoderReadback::capture(context);
     if (!readback) return Result::failure(readback.error());
     if (readback.value().randomAccess != encoder.randomAccess) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Retained encoder random-access readback differs from the admitted probe"));
     }
+    return Result::success({std::move(emission).value(), std::move(readback).value()});
+}
+
+::media::Result<MediaPreparedVideoEncoder> MediaVideoEncoderPreparer::prepare(
+    const CodecResolverEncoderContextBuildRequest& request,
+    const MediaPipelineStagePlan& encoder)
+{
+    using Result = ::media::Result<MediaPreparedVideoEncoder>;
+    if (auto status = validatePlan(encoder); !status) return Result::failure(status.error());
+    auto opened = CodecResolverEncoderContextBuilder::build(request);
+    if (!opened) return Result::failure(opened.error());
+    auto evidence = inspect(*opened.value().context, encoder);
+    if (!evidence) return Result::failure(evidence.error());
     return Result::success({std::move(opened).value().context,
-        std::move(emission).value(), std::move(readback).value()});
+        std::move(evidence.value().emission), std::move(evidence.value().readback)});
 }
 
 } // namespace media::ffmpeg::graph

@@ -1,5 +1,7 @@
 ## `src/internal/graph/`
 
+输出池数量由共用EncoderHardwareFramesPoolPlanner形成；canvas按最终aggregate→encoder唯一有界边、两个实际pending及prepared encoder retained计循环surface/发布lease，另计固定黑底。bind重算并共用实际encoder inspect，源候选不混入输出pool。此数量合同不代表内存准备预算，见[输出池驻留](docs/realtime-video-composition-pool-retention.md)。
+
 合屏buildTopology持有一次最终逻辑图及无资源registration，move-only owner只公开const视图；bind消费同图，内部编译最终ledger并核验真实prepared资源后发布运行时绑定。canvas geometry/storage分型，几何与aggregate合同检查由planner/runtime共用。逻辑图不授权物理分配，准备预算及多源总账仍待实现，见[拓扑与绑定](docs/realtime-video-composition-topology.md)。
 
 同步planner以显式域生成源贡献或共享链政策，公共时钟/视频/metrics政策集中复用。MediaRealtimeAvSourceRuntimePlanner装配源clock、correction、有界startup边及source-only transition，返回既有组合图所需A/V源合同；公共多源prepare协调器尚未接入，见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。

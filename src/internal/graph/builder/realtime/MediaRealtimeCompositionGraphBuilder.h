@@ -6,6 +6,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlan.h"
 #include "internal/graph/planner/video/MediaVideoOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
+#include "internal/graph/planner/realtime/MediaVideoCanvasRetentionPlanner.h"
 #include "internal/graph/runtime/factory/MediaAvSyncRuntimeBinding.h"
 
 #include <memory>
@@ -51,6 +52,7 @@ public:
     MediaRealtimeCompositionTopology(const MediaRealtimeCompositionTopology&) = delete;
     MediaRealtimeCompositionTopology& operator=(const MediaRealtimeCompositionTopology&) = delete;
     const MediaGraph& graph() const noexcept { return graph_; }
+    ::media::Result<MediaVideoCanvasRetentionPlan> planCanvasRetention() const;
     const MediaAvContinuousAggregateTopology& aggregate() const noexcept { return options_.aggregate; }
 private:
     friend class MediaRealtimeCompositionGraphBuilder;

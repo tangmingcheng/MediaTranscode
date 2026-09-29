@@ -2,7 +2,7 @@
 
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：最终逻辑拓扑与物理bind已拆开，geometry/storage分型及共用前置校验完成；生产池准备授权（驻留数与有界预算）、实际readback多源总准入仍缺，之后接公共多源事务。见[拓扑与绑定](docs/realtime-video-composition-topology.md)。仅realtime原规格验证。
+当前推进：同一最终拓扑现可推导独立输出池驻留数量，bind复算并复用实际encoder回读检查；数量不是准备预算。下一步接原deadline/cancellation下的有界资源准备和实际readback多源总账，再接公共多源事务。见[输出池驻留](docs/realtime-video-composition-pool-retention.md)。仅realtime原规格验证。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 

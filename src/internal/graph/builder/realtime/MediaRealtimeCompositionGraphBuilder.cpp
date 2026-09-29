@@ -313,8 +313,10 @@ MediaVideoOutputEncoderOptions videoOptions(
     }
     MediaAvOutputDomainRegistration outputRegistration{
         aggregateNode, scheduled.value().scheduler, publisher, std::move(outputMembers)};
-    return Result::success(MediaRealtimeCompositionTopology(std::move(graph), std::move(options),
-        std::move(registrations), std::move(outputRegistration), std::move(targets)));
+    MediaRealtimeCompositionTopology topology(std::move(graph), std::move(options),
+        std::move(registrations), std::move(outputRegistration), std::move(targets));
+    if (auto retention = topology.planCanvasRetention(); !retention) return Result::failure(retention.error());
+    return Result::success(std::move(topology));
 }
 
 } // namespace media::ffmpeg::graph

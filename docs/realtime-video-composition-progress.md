@@ -163,3 +163,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 最终逻辑拓扑与绑定
 
 原builder的实际资源前置已拆除：一次逻辑图、私有registration、实际资源bind复用同图；共用validator前置几何/aggregate合同，修后双独立审查通过。准备授权、aggregate总账、纯视频及公共多源入口仍未完成，不能宣称依赖环整体解决。完整FAIL42，详见[拓扑与绑定](realtime-video-composition-topology.md)。
+
+## 输出池驻留数量
+
+最终拓扑可在opening前推导canvas数量，源候选不计输出池，固定黑底单列；旧单链池算术与actual encoder inspect共用，bind强制重算。双独立源码审查通过；准备预算及实际bytes总账未完成，完整FAIL42。见[驻留记录](realtime-video-composition-pool-retention.md)。
