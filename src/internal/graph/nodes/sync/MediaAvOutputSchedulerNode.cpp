@@ -180,11 +180,34 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waiting());
     }
-    if (!m_generationData->videoController &&
-        reacquisitionInProgress(
-            m_group->reacquisitionSnapshot().phase)) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waiting());
+    if (m_group->plan().domainRole != MediaAvSyncDomainRole::ContinuousOutput) {
+        auto arbitration = m_group->reserveGenerationArbitration();
+        if (!arbitration) {
+            return ::media::Result<MediaNodeProcessResult>::failure(arbitration.error());
+        }
+        const auto phase = arbitration.value().reacquisition().phase;
+        if (reacquisitionInProgress(phase)) {
+            // Purge callbacks can still replace the session in Purging. Only
+            // consume after every participant acknowledged, under the same
+            // arbitration that prevents another transition from beginning.
+            if (phase != MediaAvReacquisitionPhase::Acquiring &&
+                phase != MediaAvReacquisitionPhase::ReadyForActivation) {
+                return processWaiting();
+            }
+            auto mutation = m_generationState->reserveSessionMutation();
+            refreshGenerationSession();
+            auto video = fillHead(context, Input::Video);
+            if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
+            auto audio = fillHead(context, Input::Audio);
+            if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+            auto retired = preflightGenerations(
+                arbitration.value().reacquisition(), arbitration.value().epoch());
+            if (!retired) return ::media::Result<MediaNodeProcessResult>::failure(retired.error());
+            // Target media and ordered controls stay in the existing bounded
+            // heads. They acquire no publication authority while waiting.
+            return video.value() || audio.value() || retired.value()
+                ? processProgress() : processWaiting();
+        }
     }
     if (auto configured = configureActiveScheduling(); !configured) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -246,10 +269,21 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     if (control.value()) {
         return processTerminal(context, *control.value());
     }
-    auto generationPreflight = preflightGenerations();
+    const auto generationPreflight = [&]() -> ::media::Result<bool> {
+        if (m_group->plan().domainRole == MediaAvSyncDomainRole::ContinuousOutput) {
+            // The planner's independent output domain has an initial-only
+            // epoch service, with no source reacquisition coordinator.
+            return preflightGenerations(
+                {MediaAvReacquisitionPhase::Inactive, std::nullopt, std::nullopt},
+                m_group->epochTransitionSnapshot());
+        }
+        auto arbitration = m_group->reserveGenerationArbitration();
+        if (!arbitration) return ::media::Result<bool>::failure(arbitration.error());
+        return preflightGenerations(
+            arbitration.value().reacquisition(), arbitration.value().epoch());
+    }();
     if (!generationPreflight) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            generationPreflight.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(generationPreflight.error());
     }
     if (generationPreflight.value()) return processProgress();
     if (m_generationData->videoEof && m_generationData->audioEof && !m_generationData->videoHead && !m_generationData->audioHead && m_generationData->terminal) {
@@ -482,7 +516,9 @@ MediaAvOutputSchedulerNode::arbitrateControlHeads()
         m_generationData->nextEqualTimeVideo ? Input::Video : Input::Audio);
 }
 
-::media::Result<bool> MediaAvOutputSchedulerNode::preflightGenerations()
+::media::Result<bool> MediaAvOutputSchedulerNode::preflightGenerations(
+    const MediaAvReacquisitionSnapshot& reacquisition,
+    const MediaAvEpochTransitionSnapshot& epoch)
 {
     bool discardedOldHead = false;
     const auto inspect = [&](std::optional<MediaAvSchedulerHead>& head,
@@ -490,17 +526,20 @@ MediaAvOutputSchedulerNode::arbitrateControlHeads()
         if (!head || head->kind() == MediaAvSchedulerHeadKind::Control) {
             return ::media::Result<bool>::success(false);
         }
-        if (!m_generationData->activeGeneration) {
-            return ::media::Result<bool>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "A/V scheduler generation preflight has no active generation"));
-        }
-        if (head->generation() > *m_generationData->activeGeneration) {
+        auto classified = classifyMediaAvGenerationEvidence(
+            reacquisition, epoch, head->generation());
+        if (!classified) return ::media::Result<bool>::failure(classified.error());
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Future) {
             return ::media::Result<bool>::failure(
                 ::media::ErrorInfo::cancelled(
                     "A/V scheduler requires explicit generation reacquisition"));
         }
-        if (head->generation() < *m_generationData->activeGeneration) {
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Retired) {
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                std::string("av_scheduler_trace stage=retired_input stream=") +
+                    (video ? "video" : "audio") + " generation=" +
+                    std::to_string(head->generation()));
             head.reset();
             if (video) {
                 m_generationData->heldControllerSequence.reset();

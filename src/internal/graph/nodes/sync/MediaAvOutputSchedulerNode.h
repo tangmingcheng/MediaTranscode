@@ -17,6 +17,8 @@
 namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
+struct MediaAvReacquisitionSnapshot;
+struct MediaAvEpochTransitionSnapshot;
 class MediaProtocolOutputRuntimeAuthority;
 class MediaAvGenerationPurgeTarget;
 struct MediaAvOutputSchedulerNodeTestAccess;
@@ -139,7 +141,9 @@ private:
     ::media::Result<bool> fillHead(MediaGraphExecutionContext& context,
                                    Input input);
     ::media::Result<std::optional<Input>> arbitrateControlHeads();
-    ::media::Result<bool> preflightGenerations();
+    ::media::Result<bool> preflightGenerations(
+        const MediaAvReacquisitionSnapshot& reacquisition,
+        const MediaAvEpochTransitionSnapshot& epoch);
     ::media::Result<std::optional<Input>> selectMediaHead() const;
     ::media::Result<MediaNodeProcessResult> processSelected(
         MediaGraphExecutionContext& context, Input input);

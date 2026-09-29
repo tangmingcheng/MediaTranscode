@@ -83,3 +83,7 @@
 ## 2026-09-29 startup成员合同
 
 startup config携带members与完整可选音频产品，单成员复用keyframe/正preroll窗口、代际与deadline状态机；factory端口/options、node有限barrier/EOF、release origin及最终账本startup容量按实际成员处理，start/release对照注册计划。源码双审与Release全量重建通过；r54 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress、4逻辑对象未平衡。完整V源prepared/planner/builder接线、多源总准入/入口及恢复和双平台验收仍缺；六维10/8/6/12/2/4、42/100，完整FAIL。见[实现和实流记录](realtime-video-composition-startup-members.md)。
+
+## 2026-09-29 scheduler退休数据消费
+
+scheduler在purge全部确认后通过代际仲裁与session锁消费退休媒体，复用单一分类器和既有有界head；ContinuousOutput按显式initial-only合同保持独立输出。源码双审及Release全量重建通过。r55→r56同规格RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps对照：20项退休媒体被释放，两个10/10满队列消失，编码包入/出均39971；CLI仍no-progress自然exit1、4逻辑对象未归零，完整验收FAIL。可信终止/恢复、AAC重入、V源整链、多源总准入/入口及双平台合屏仍缺，六维10/8/6/12/2/4=42/100。见[实现与实流对照](realtime-video-composition-scheduler-retirement.md)。
