@@ -167,3 +167,7 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 ## 输出池驻留数量
 
 最终拓扑可在opening前推导canvas数量，源候选不计输出池，固定黑底单列；旧单链池算术与actual encoder inspect共用，bind强制重算。双独立源码审查通过；准备预算及实际bytes总账未完成，完整FAIL42。见[驻留记录](realtime-video-composition-pool-retention.md)。
+
+## canvas 图像 payload 准备
+
+基线874e4e83：同图 retention+真实 allocation 生成准备产品；prepare先租约、再分配，Prepared/Producer/发布HeaderLease共享长期额度，两份staging临时额度准备后归还。原deadline/stop统一检查，不可打断同步驱动。见[记录](realtime-video-composition-canvas-preparation.md)，完整FAIL42。

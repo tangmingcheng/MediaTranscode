@@ -23,26 +23,42 @@ bool samePlan(const MediaVideoCanvasPlan& left, const MediaVideoCanvasPlan& righ
 }
 
 ::media::Result<std::shared_ptr<MediaPreparedVideoCanvas>> MediaPreparedVideoCanvas::prepare(
-    const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames,
-    std::span<const AVFrame* const> preparedTiles)
+    const MediaVideoCanvasPreparationPlan& preparation, AVBufferRef* productionHwFrames,
+    std::span<const AVFrame* const> preparedTiles,
+    const std::shared_ptr<MediaPreparationStorageBudget>& payloadBudget,
+    const MediaPreparationControl& control)
 try {
     using Result = ::media::Result<std::shared_ptr<MediaPreparedVideoCanvas>>;
+    if (auto status = control.check("Canvas preparation"); !status) return Result::failure(status.error());
+    if (!payloadBudget) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Canvas preparation requires its admitted image-payload budget"));
+    const auto& plan = preparation.canvas();
     if (preparedTiles.empty() || preparedTiles.size() != plan.geometry.tiles.size())
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas requires every real tile frame"));
     for (const auto* tile : preparedTiles) if (!tile)
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas tile frame is missing"));
+    auto retained = payloadBudget->reserve(preparation.retainedPayloadBytes());
+    if (!retained) return Result::failure(retained.error());
+    // These reservations precede every owned allocation. Failure of the second
+    // reservation rolls the first back before any platform operation.
+    auto transient = payloadBudget->reserve(preparation.transientPayloadBytes());
+    if (!transient) return Result::failure(transient.error());
     auto prepared = std::shared_ptr<MediaPreparedVideoCanvas>(new MediaPreparedVideoCanvas);
+    prepared->payloadStorage_ = std::make_shared<const MediaPreparationStorageLease>(std::move(retained).value());
     auto producer = std::make_unique<MediaVideoCanvasProducer>();
-    auto status = producer->prepare(plan, productionHwFrames);
+    auto status = producer->prepare(plan, productionHwFrames, prepared->payloadStorage_, control);
     if (!status) return Result::failure(status.error());
     // Exercise the actual platform operation with production tile frames, not
     // only matching format names or allocating a same-shaped surrogate pool.
     for (std::size_t i = 0; i < preparedTiles.size(); ++i) {
+        if (auto checked = control.check("Canvas tile preparation"); !checked) return Result::failure(checked.error());
         status = producer->adapter_->validate(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
         if (!status) return Result::failure(status.error());
+        if (auto checked = control.check("Canvas tile preparation"); !checked) return Result::failure(checked.error());
         status = producer->adapter_->copy(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
         if (!status) return Result::failure(status.error());
     }
+    if (auto checked = control.check("Canvas preparation"); !checked) return Result::failure(checked.error());
     prepared->producer_ = std::move(producer);
     return Result::success(std::move(prepared));
 } catch (const std::bad_alloc&) {

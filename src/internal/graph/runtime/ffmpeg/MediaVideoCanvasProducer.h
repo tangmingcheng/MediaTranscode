@@ -1,6 +1,8 @@
 #pragma once
 
 #include "internal/graph/runtime/ffmpeg/MediaVideoCanvasAdapter.h"
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
+#include "internal/graph/runtime/resource/MediaPreparationControl.h"
 #include <atomic>
 #include <span>
 
@@ -17,8 +19,12 @@ public:
     ::media::Result<FramePtr> compose(std::span<const AVFrame* const> tiles);
 private:
     friend class MediaPreparedVideoCanvas;
-    ::media::Status prepare(const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames);
+    ::media::Status prepare(const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames,
+        std::shared_ptr<const MediaPreparationStorageLease> payloadStorage,
+        const MediaPreparationControl& control);
     ::media::Result<FramePtr> publish(const AVFrame& frame);
+    // Last released; output HeaderLease objects also retain this ownership.
+    std::shared_ptr<const MediaPreparationStorageLease> payloadStorage_;
     MediaVideoCanvasPlan plan_{};
     BufferRefPtr frames_;
     std::unique_ptr<MediaVideoCanvasAdapter> adapter_;

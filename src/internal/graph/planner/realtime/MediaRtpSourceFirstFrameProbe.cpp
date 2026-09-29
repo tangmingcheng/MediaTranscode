@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRtpSourceFirstFrameProbe.h"
+#include "internal/graph/runtime/resource/MediaPreparationControl.h"
 
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
@@ -21,15 +22,6 @@ namespace media::ffmpeg::graph {
 namespace {
 using Clock = std::chrono::steady_clock;
 using EvidenceResult = ::media::Result<MediaRtpSourceFirstFrameEvidence>;
-
-::media::Status checkDeadline(const MediaRtpSourceFirstFrameProbePlan& plan)
-{
-    if (plan.cancellation.stop_requested()) return ::media::Status::failure(
-        ::media::ErrorInfo::cancelled("RTP first-frame preparation was cancelled"));
-    if (Clock::now() >= plan.deadline) return ::media::Status::failure(
-        ::media::ErrorInfo::ioFailure("RTP first-frame preparation reached its original deadline"));
-    return ::media::Status::success();
-}
 
 bool equalSignaling(const MediaRtpVideoSignalingFacts& left,
                     const MediaRtpVideoSignalingFacts& right)
@@ -118,7 +110,7 @@ template<class Consumer>
     MediaRtpReorderBuffer reorder(plan.reorder);
     std::int64_t previousArrival = 0;
     for (const auto& datagram : lease.datagrams()) {
-        if (auto status = checkDeadline(plan); !status) return status;
+        if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status) return status;
         if (datagram.bytes.empty() || datagram.bytes.size() > storage.maximumDatagramBytes ||
             datagram.observedAtNs <= 0 || datagram.observedAtNs < previousArrival) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -260,7 +252,7 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
             return EvidenceResult::failure(::media::ErrorInfo::invalidArgument(
                 "RTP first-frame probe requires a bound prepared source and opened decoder"));
         }
-        if (auto status = checkDeadline(plan); !status) return EvidenceResult::failure(status.error());
+        if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status) return EvidenceResult::failure(status.error());
         if (auto status = validateBinding(plan, *decoder.context); !status)
             return EvidenceResult::failure(status.error());
         auto retention = MediaDecoderInputRetentionAdapter::readAfterOpen(
@@ -310,7 +302,7 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
             ::media::ErrorInfo::allocationFailed("RTP first-frame codec/frame allocation failed"));
         bool interrupted = false;
         const auto receive = [&]() -> ::media::Result<bool> {
-            if (auto status = checkDeadline(plan); !status)
+            if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status)
                 return ::media::Result<bool>::failure(status.error());
             const int received = codec->receiveFrame(evidence.decoder.context.get(), frame.get());
             if (received == AVERROR(EAGAIN)) return ::media::Result<bool>::success(false);
@@ -333,7 +325,7 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
             std::condition_variable_any condition;
             std::unique_lock lock(mutex);
             condition.wait_until(lock, plan.cancellation, until, [] { return false; });
-            return checkDeadline(plan);
+            return (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation"));
         };
         auto decoded = visitSnapshot(lease, plan, storage.value(), [&](const MediaRtpReorderResult& ordered)
             -> ::media::Result<bool> {
@@ -364,7 +356,7 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
                     }
                     // Do not release or replace pending input on EAGAIN.
                     while (unit.packet) {
-                        if (auto status = checkDeadline(plan); !status) return Result::failure(status.error());
+                        if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status) return Result::failure(status.error());
                         const int sent = codec->sendPacket(evidence.decoder.context.get(), unit.packet.get());
                         if (sent < 0 && sent != AVERROR(EAGAIN)) return Result::failure(
                             FFmpegGraphError::fromCode(sent, "RTP probe avcodec_send_packet"));

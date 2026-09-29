@@ -20,6 +20,14 @@ namespace media::ffmpeg::graph {
         *options_.outputVideo.encoder.preparedEmission);
 }
 
+::media::Result<MediaVideoCanvasPreparationPlan> MediaRealtimeCompositionTopology::planCanvasPreparation(
+    const MediaVideoCanvasAllocation& allocation) const
+{
+    auto retention = planCanvasRetention();
+    if (!retention) return ::media::Result<MediaVideoCanvasPreparationPlan>::failure(retention.error());
+    return MediaVideoCanvasPreparationPlanner::plan(options_.aggregate.canvas, retention.value(), allocation);
+}
+
 ::media::Result<MediaRealtimeCompositionGraph> MediaRealtimeCompositionGraphBuilder::bind(
     MediaRealtimeCompositionTopology topology,
     const MediaRealtimeGraphResourceLedgerPlan& planningLedger,

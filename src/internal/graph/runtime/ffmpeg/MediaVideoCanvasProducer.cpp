@@ -15,6 +15,7 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 struct HeaderLease final {
+    std::shared_ptr<const MediaPreparationStorageLease> payloadStorage;
     std::shared_ptr<std::atomic_size_t> outstanding;
     std::shared_ptr<MediaNodeWakeup> availabilityWakeup;
 };
@@ -33,9 +34,15 @@ void releaseHeader(void* opaque, std::uint8_t*)
 }
 
 ::media::Status MediaVideoCanvasProducer::prepare(
-    const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames)
+    const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames,
+    std::shared_ptr<const MediaPreparationStorageLease> payloadStorage,
+    const MediaPreparationControl& control)
 {
     if (black_) return invalid("canvas producer is already prepared");
+    if (!payloadStorage || !*payloadStorage) return invalid("canvas image payload was not admitted");
+    payloadStorage_ = std::move(payloadStorage);
+    const auto check = [&] { return control.check("Canvas preparation"); };
+    if (auto status = check(); !status) return status;
     if (auto status = MediaVideoCanvasGeometryValidator::validate(plan.geometry); !status) return status;
     if (!productionHwFrames || !productionHwFrames->data ||
         !plan.storage.surfaceCount || !plan.storage.maximumHeaderCount || !plan.storage.maximumSurfaceBytes ||
@@ -45,13 +52,19 @@ void releaseHeader(void* opaque, std::uint8_t*)
     if (pool->format != plan.geometry.hardwareFormat || pool->sw_format != plan.geometry.softwareFormat ||
         pool->width != plan.geometry.width || pool->height != plan.geometry.height)
         return invalid("canvas plan does not match prepared encoder frames");
+    if (plan.storage.surfaceCount >= static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        pool->initial_pool_size != static_cast<int>(plan.storage.surfaceCount + 1))
+        return invalid("canvas production pool differs from topology retention");
     auto created = MediaVideoCanvasAdapter::create(productionHwFrames);
     if (!created) return ::media::Status::failure(created.error());
+    if (auto status = check(); !status) return status;
     auto allocate = [&]() -> ::media::Result<FramePtr> {
+        if (auto status = check(); !status) return ::media::Result<FramePtr>::failure(status.error());
         auto frame = makeFrame();
         if (!frame) return ::media::Result<FramePtr>::failure(::media::ErrorInfo::allocationFailed("canvas frame header"));
         const int rc = av_hwframe_get_buffer(productionHwFrames, frame.get(), 0);
         if (rc < 0) return ::media::Result<FramePtr>::failure(FFmpegGraphError::fromCode(rc, "canvas production surface"));
+        if (auto status = check(); !status) return ::media::Result<FramePtr>::failure(status.error());
         auto allocation = readMediaVideoCanvasAllocation(*frame);
         if (!allocation) return ::media::Result<FramePtr>::failure(allocation.error());
         if (allocation.value().surfaceBytes != plan.storage.maximumSurfaceBytes ||
@@ -69,6 +82,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
         if (!frame) return ::media::Status::failure(frame.error());
         surfaces.push_back(std::move(frame.value()));
     }
+    if (auto status = check(); !status) return status;
     auto staging = makeFrame();
     if (!staging) return ::media::Status::failure(::media::ErrorInfo::allocationFailed("black staging header"));
     staging->format = plan.geometry.softwareFormat;
@@ -86,8 +100,10 @@ void releaseHeader(void* opaque, std::uint8_t*)
     rc = av_image_fill_black(staging->data, strides.data(), plan.geometry.softwareFormat,
         plan.geometry.effectiveColorRange.range, plan.geometry.width, plan.geometry.height);
     if (rc < 0) return FFmpegGraphError::statusFromCode(rc, "av_image_fill_black(canvas)");
+    if (auto status = check(); !status) return status;
     auto status = created.value()->upload(*staging, *black.value());
     if (!status) return status;
+    if (auto checked = check(); !checked) return checked;
     auto readback = makeFrame();
     if (!readback) return ::media::Status::failure(::media::ErrorInfo::allocationFailed("black readback header"));
     readback->format = staging->format;
@@ -98,16 +114,21 @@ void releaseHeader(void* opaque, std::uint8_t*)
     rc = av_image_fill_arrays(readback->data, readback->linesize, readback->buf[0]->data,
         plan.geometry.softwareFormat, plan.geometry.width, plan.geometry.height, 1);
     if (rc < 0) return FFmpegGraphError::statusFromCode(rc, "black readback layout");
+    if (auto checked = check(); !checked) return checked;
     status = created.value()->download(*black.value(), *readback);
     if (!status) return status;
+    if (auto checked = check(); !checked) return checked;
     if (std::memcmp(staging->buf[0]->data, readback->buf[0]->data,
         static_cast<std::size_t>(plan.storage.maximumStagingBytes)) != 0)
         return invalid("hardware black template pixel readback differs from explicit color range");
     const MediaVideoCanvasRectangle full{0, 0, plan.geometry.width, plan.geometry.height};
+    if (auto checked = check(); !checked) return checked;
     status = created.value()->validate(*black.value(), *surfaces.front(), full);
     if (!status) return status;
+    if (auto checked = check(); !checked) return checked;
     status = created.value()->copy(*black.value(), *surfaces.front(), full);
     if (!status) return status;
+    if (auto checked = check(); !checked) return checked;
     frames_ = makeBufferRef(productionHwFrames);
     if (!frames_) return ::media::Status::failure(::media::ErrorInfo::allocationFailed("canvas frames reference"));
     outstanding_ = std::make_shared<std::atomic_size_t>(0);
@@ -115,7 +136,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
     adapter_ = std::move(created.value());
     surfaces_ = std::move(surfaces);
     black_ = std::move(black.value());
-    return ::media::Status::success();
+    return check();
 }
 
 ::media::Result<FramePtr> MediaVideoCanvasProducer::publish(const AVFrame& frame)
@@ -124,7 +145,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
         return ::media::Result<FramePtr>::failure(::media::ErrorInfo::wouldBlock("canvas pending header bound reached"));
     FramePtr output(av_frame_clone(&frame));
     if (!output) return ::media::Result<FramePtr>::failure(::media::ErrorInfo::allocationFailed("canvas output header"));
-    auto* counter = new (std::nothrow) HeaderLease{outstanding_, availabilityWakeup_};
+    auto* counter = new (std::nothrow) HeaderLease{payloadStorage_, outstanding_, availabilityWakeup_};
     if (!counter) return ::media::Result<FramePtr>::failure(::media::ErrorInfo::allocationFailed("canvas header lease"));
     auto** refs = static_cast<AVBufferRef**>(av_realloc_array(output->extended_buf,
         output->nb_extended_buf + 1, sizeof(AVBufferRef*)));

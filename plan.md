@@ -620,3 +620,5 @@ Detailed design and execution checklist:
 - [x] 对照目标FFmpeg RKMPP AVOption，CLI初始/add统一允许并映射--profile，复用已验证的库/planner契约。
 - [ ] RKMPP全量重建，真实120秒CLI链路核对profile、增删、发送及VLC，成功后立即独立提交推送并交付新包。
 - [ ] 双人独立审查、评分及新PR复核，记录命令结果并清理临时材料。
+
+本轮将图像 payload 预算、原 deadline/cancellation 与共享租约接入 canvas 准备，见[阶段记录](docs/realtime-video-composition-canvas-preparation.md)。首次 pool/readback、多源完整总账及公共入口仍待完成，完整 FAIL42。

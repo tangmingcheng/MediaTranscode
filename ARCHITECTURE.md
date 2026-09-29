@@ -580,3 +580,5 @@ MediaVideoOutputPlanner独立规划encoder open合同、输出执行策略及pre
 MediaRealtimeAvProtocolOutputPlanner 只消费输出协议、节拍、队列字节界限、prepared emission与部署事实，生成协议及datagram产品；单源AvSyncRuntimePlanner复用它并继续拥有源assembly、校正、transition和FIFO规划。该接口不依赖decoder或输入clock；完整合屏准备和源/输出runtime拆分仍未完成。
 
 MediaAvGenerationTransitionPlanner 以共享源/输出或源贡献职责选择同一源处理子集合；源贡献合同仅包含源lineage、音频校正及aggregate_source清理目标，不包含输出编码和协议。CompositionGraphBuilder在增添节点前验证精确参与者集合。输出域仍仅初次激活，逐源重连不应重置它；完整生产源runtime规划尚未接通。
+
+canvas准备由拓扑数量与实际allocation生成不可修改的image-payload产品；准备入口强制预算与原deadline/stop，长期lease跨Prepared/Producer/发布帧持有，临时staging额度局部释放。它不含头对象/driver/poolcache，不能替代完整多源总账；见[准备边界](docs/realtime-video-composition-canvas-preparation.md)。
