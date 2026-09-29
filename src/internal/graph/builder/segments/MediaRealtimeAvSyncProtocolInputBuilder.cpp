@@ -4,6 +4,8 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
+
 #include <string>
 #include <utility>
 #include <variant>
@@ -64,6 +66,15 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const MediaNodeId video = videoResult.value();
     const MediaNodeId audio = audioResult.value();
     const MediaNodeId adapter = adapterResult.value();
+    if (!plan.synchronization.members)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized("RTP source adapter requires planned members"));
+    auto encodedMembers = MediaTranscodeStreamSetCodec::encode(*plan.synchronization.members);
+    if (!encodedMembers)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(encodedMembers.error());
+    if (auto status = Support::setOption(graph, adapter, "rtp_source_clock.members",
+            std::string(encodedMembers.value())); !status)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
 
     if (auto status = Support::addInput(
             graph, snapshot, "clock", MediaStreamKind::Metadata,

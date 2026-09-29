@@ -47,7 +47,8 @@ private:
     void resetState() noexcept;
 
     MediaRtpSourceClockMapperConfig m_videoConfig{};
-    MediaRtpSourceClockMapperConfig m_audioConfig{};
+    std::optional<MediaRtpSourceClockMapperConfig> m_audioConfig;
+    std::optional<MediaTranscodeStreamSet> m_members;
     std::unique_ptr<MediaRtpSourceClockMapper> m_videoMapper;
     std::unique_ptr<MediaRtpSourceClockMapper> m_audioMapper;
     std::unique_ptr<MediaRtpClockGroupValidator> m_validator;

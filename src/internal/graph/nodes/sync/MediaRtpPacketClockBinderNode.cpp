@@ -158,6 +158,10 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         }
         m_durationClockRate = clockRate.value();
     }
+    if (!m_syncGroup->plan().members ||
+        (m_streamKind == MediaStreamKind::Audio &&
+         *m_syncGroup->plan().members != MediaTranscodeStreamSet::AudioVideo))
+        return invalid("RTP packet binder requires its stream in the planned source members");
     m_configured = true;
     return ::media::Status::success();
 }
@@ -168,12 +172,8 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     const auto* group = dynamic_cast<const MediaRtpClockGroupBuffer*>(buffer.get());
     if (!group) return invalid("RTP packet binder clock input requires a group snapshot");
     const MediaRtpClockGroupSnapshot& snapshot = group->snapshot();
-    const bool discriminated =
-        (snapshot.state == MediaRtpClockGroupState::Locked) ==
-        snapshot.locked.has_value();
-    if (!discriminated) {
-        return invalid("RTP packet binder rejects malformed clock group snapshot");
-    }
+    if (auto status = snapshot.validateMembers(*m_syncGroup->plan().members); !status)
+        return status;
     if (snapshot.state != MediaRtpClockGroupState::Locked) {
         if (m_lockedSnapshot) invalidateClockProjection();
         return ::media::Status::success();
@@ -229,7 +229,7 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     const MediaRtpSourceClockCalibration& calibration =
         m_scheduledStream == MediaScheduledStream::Video
         ? m_lockedSnapshot->locked->video
-        : m_lockedSnapshot->locked->audio;
+        : *m_lockedSnapshot->locked->audio;
     if (!time.hasKnownTimeBase() || time.timeBase.num != 1 ||
         (m_streamKind == MediaStreamKind::Video &&
          time.timeBase.den != m_durationClockRate)) {

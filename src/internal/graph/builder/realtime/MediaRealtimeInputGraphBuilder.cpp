@@ -1,4 +1,5 @@
 #include "internal/graph/builder/realtime/MediaRealtimeInputGraphBuilder.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
@@ -201,7 +202,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const MediaAvSyncPlan& avSync,
     const MediaRealtimeEdgePolicySet& edgePolicies)
 {
-    if (!avSync.rtpInput || !avSync.rtpInput->input.clockLossPolicy ||
+    if (!avSync.members || *avSync.members != MediaTranscodeStreamSet::AudioVideo ||
+        !avSync.rtpInput || !avSync.rtpInput->input.clockLossPolicy ||
         !avSync.rtpInput->videoInput.clockRate ||
         !avSync.rtpInput->audioInput.clockRate ||
         !avSync.rtpInput->input.senderReportTimeoutNs ||
@@ -229,6 +231,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const auto set = [&](const char* key, std::string value) {
         return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, group, key, value);
     };
+    auto encodedMembers = MediaTranscodeStreamSetCodec::encode(*avSync.members);
+    if (!encodedMembers) return ::media::Result<MediaNodeId>::failure(encodedMembers.error());
+    if (auto status = set("rtp_clock_group.members", std::string(encodedMembers.value())); !status)
+        return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.invalidate_on_degraded",
             *avSync.rtpInput->input.clockLossPolicy == MediaRtpClockLossPolicy::InvalidateAndWait
                 ? "true" : "false"); !status)

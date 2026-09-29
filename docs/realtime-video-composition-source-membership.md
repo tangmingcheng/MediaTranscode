@@ -75,3 +75,7 @@
 ## 2026-09-29 startup独立截止调度
 
 源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](realtime-video-composition-startup-deadline.md)。
+
+## 2026-09-29 RTP源时钟成员合同
+
+计划成员贯穿RTP clock group、validator、snapshot及binder/projector/adapter，AV音频calibration与成员严格一致；单成员复用同一身份/时效/generation状态机，保留PlannedStreamPair现有CNAME政策。独立设计/源码双审及Release全量重建通过；r53 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡，非成功验收。纯视频完整startup/builder/resource、多源入口与总准入、AAC重入及双平台合屏仍未完成，六维10/8/6/12/2/4、42/100，完整FAIL。见[实现与证据](realtime-video-composition-clock-members.md)。

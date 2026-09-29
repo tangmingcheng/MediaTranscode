@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaStreamKind.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "media_transcode/Result.h"
@@ -18,12 +19,17 @@ enum class MediaRtpClockGroupState {
     ReacquireRequired
 };
 
+struct MediaRtpClockGroupAudioConfig final {
+    std::int64_t cnameTimeoutNs;
+    std::int64_t maximumClockOffsetSkewNs;
+};
+
 struct MediaRtpClockGroupValidatorConfig final {
+    MediaTranscodeStreamSet members;
     std::int64_t senderReportTimeoutNs;
     std::int64_t maximumExtrapolationNs;
-    std::int64_t maximumInterStreamClockOffsetSkewNs;
     std::int64_t videoCnameTimeoutNs;
-    std::int64_t audioCnameTimeoutNs;
+    std::optional<MediaRtpClockGroupAudioConfig> audio;
     bool requireMatchingCname;
     MediaRtpCommonEpochPolicy commonEpochPolicy;
     bool invalidateOnDegraded;
@@ -33,15 +39,18 @@ struct MediaRtpLockedClockGroup final {
     MediaRunningTime commonSourceEpoch;
     std::vector<std::uint8_t> cname;
     MediaRtpSourceClockCalibration video;
-    MediaRtpSourceClockCalibration audio;
+    std::optional<MediaRtpSourceClockCalibration> audio;
 };
 
 struct MediaRtpClockGroupSnapshot final {
+    MediaTranscodeStreamSet members;
     MediaRtpClockGroupState state;
     std::uint64_t groupGeneration;
     std::optional<MediaRtpLockedClockGroup> locked;
     std::optional<std::uint64_t> invalidatedGeneration;
     std::uint64_t evidenceRevision;
+
+    ::media::Status validateMembers(MediaTranscodeStreamSet expected) const;
 };
 
 class MediaRtpClockGroupValidator final {

@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/validation/MediaSourceClockShapeValidator.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 
@@ -18,10 +19,12 @@ namespace {
                 "RTP source-clock shape requires maximum extrapolation"));
     }
     const auto inputs = shape.nodes(MediaNodeKind::RawRtpInput);
-    if (inputs.size() != 2) {
+    const std::size_t expectedCount =
+        binding.plan.members == MediaTranscodeStreamSet::AudioVideo ? 2 : 1;
+    if (inputs.size() != expectedCount) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "RTP source-clock shape requires two raw RTP inputs"));
+                "RTP source-clock shape requires one raw RTP input per planned member"));
     }
     for (const MediaNode* input : inputs) {
         auto maximumExtrapolation = requiredPositiveInt64NodeOption(
@@ -53,19 +56,46 @@ namespace {
     const MediaAvSyncGraphShape shape(graph, binding.members);
     switch (*binding.plan.sourceClockMode) {
     case MediaAvSyncSourceClockMode::RtpSenderReports: {
+        if (!binding.plan.members ||
+            (*binding.plan.members != MediaTranscodeStreamSet::AudioVideo &&
+             *binding.plan.members != MediaTranscodeStreamSet::VideoOnly))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RTP source-clock shape requires known planned members"));
+        const std::size_t memberCount =
+            *binding.plan.members == MediaTranscodeStreamSet::AudioVideo ? 2 : 1;
         auto cardinality = shape.requireExact({
             {MediaNodeKind::RtpClockGroup, 1, "RTP clock group"},
             {MediaNodeKind::RtpClockSnapshotFanout, 1,
              "RTP clock snapshot fanout"},
             {MediaNodeKind::RtpSourceClockStateAdapter, 1,
              "RTP source-clock adapter"},
-            {MediaNodeKind::RtpPacketClockBinder, 2,
+            {MediaNodeKind::RtpPacketClockBinder, memberCount,
              "RTP packet clock binder"},
             {MediaNodeKind::MpegTsDemux, 0, "MPEG-TS demux"},
             {MediaNodeKind::DemuxPacketClockBinder, 0,
              "demux packet clock binder"}},
             "RTP source-clock shape");
         if (!cardinality) return cardinality;
+        const auto* group = shape.nodes(MediaNodeKind::RtpClockGroup).front();
+        const auto* adapter = shape.nodes(MediaNodeKind::RtpSourceClockStateAdapter).front();
+        if (!MediaGraphShapeQuery::matchesStreamSetOption(
+                group->options, "rtp_clock_group.members", *binding.plan.members) ||
+            !MediaGraphShapeQuery::matchesStreamSetOption(
+                adapter->options, "rtp_source_clock.members", *binding.plan.members))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RTP clock group and adapter must preserve the planned members"));
+        std::size_t videos = 0;
+        std::size_t audios = 0;
+        for (const auto* node : shape.nodes(MediaNodeKind::RtpPacketClockBinder)) {
+            auto stream = requiredStreamKindNodeOption(&node->options,
+                "RtpPacketClockBinder", "rtp_clock_binder.stream");
+            if (!stream) return ::media::Status::failure(stream.error());
+            if (stream.value() == MediaStreamKind::Video) ++videos;
+            else if (stream.value() == MediaStreamKind::Audio) ++audios;
+        }
+        if (videos != 1 || audios != memberCount - 1)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RTP clock binders must cover each planned member exactly once"));
         return validateRtpInputLiveness(shape, binding);
     }
     case MediaAvSyncSourceClockMode::MpegTsPcr:

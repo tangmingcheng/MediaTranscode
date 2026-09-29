@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/time/MediaSteadyClock.h"
@@ -47,7 +48,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
             return ::media::Result<MediaNodeProcessResult>::failure(
                 invalidation.error());
         }
-        const MediaStreamKind preferred = m_preferAudio
+        const MediaStreamKind preferred = m_audioConfig && m_preferAudio
             ? MediaStreamKind::Audio
             : MediaStreamKind::Video;
         const bool invalidationPriorityExhausted = invalidation.value() &&
@@ -65,7 +66,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         auto processed = processStream(context, first);
         if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
         MediaStreamKind selected = first;
-        if (processed.value() == StreamProcessOutcome::NoInput) {
+        if (processed.value() == StreamProcessOutcome::NoInput && m_audioConfig) {
             processed = processStream(context, secondary);
             if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
             selected = secondary;
@@ -89,15 +90,15 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     if (m_configured) return ::media::Status::success();
     const MediaNodeOptions* options = nodeOptions(context);
     auto videoRate = requiredPositiveIntNodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.video_clock_rate");
-    auto audioRate = requiredPositiveIntNodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_clock_rate");
+    auto memberOption = requiredNodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.members");
+    if (!memberOption) return ::media::Status::failure(memberOption.error());
+    auto members = MediaTranscodeStreamSetCodec::decode(memberOption.value());
+    if (!members) return ::media::Status::failure(members.error());
+    m_members = members.value();
     auto timeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.sender_report_timeout_ns");
     auto extrapolation = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_extrapolation_ns");
-    auto clockOffsetSkew = requiredPositiveInt64NodeOption(
-        options, "MediaRtpClockGroupNode",
-        "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns");
     auto residual = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_sender_clock_residual_ns");
     auto videoCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.video_cname_timeout_ns");
-    auto audioCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_cname_timeout_ns");
     auto invalidateOnDegraded = requiredBoolNodeOption(
         options, "MediaRtpClockGroupNode", "rtp_clock_group.invalidate_on_degraded");
     if (!invalidateOnDegraded) return ::media::Status::failure(invalidateOnDegraded.error());
@@ -108,21 +109,15 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     auto commonEpochPolicyValue = requiredNodeOption(
         options, "MediaRtpClockGroupNode",
         "rtp_clock_group.common_epoch_policy");
-    if (!videoRate || !audioRate || !timeout || !extrapolation ||
-        !clockOffsetSkew || !residual ||
-        !videoCnameTimeout || !audioCnameTimeout || !requireMatchingCname ||
+    if (!videoRate || !timeout || !extrapolation || !residual ||
+        !videoCnameTimeout || !requireMatchingCname ||
         !maximumRateError ||
         !commonEpochPolicyValue) {
         if (!videoRate) return ::media::Status::failure(videoRate.error());
-        if (!audioRate) return ::media::Status::failure(audioRate.error());
         if (!timeout) return ::media::Status::failure(timeout.error());
         if (!extrapolation) return ::media::Status::failure(extrapolation.error());
-        if (!clockOffsetSkew) {
-            return ::media::Status::failure(clockOffsetSkew.error());
-        }
         if (!residual) return ::media::Status::failure(residual.error());
         if (!videoCnameTimeout) return ::media::Status::failure(videoCnameTimeout.error());
-        if (!audioCnameTimeout) return ::media::Status::failure(audioCnameTimeout.error());
         if (!requireMatchingCname) {
             return ::media::Status::failure(requireMatchingCname.error());
         }
@@ -137,13 +132,29 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     m_videoConfig = {videoRate.value(), requireMatchingCname.value(),
                      timeout.value(), extrapolation.value(),
                      residual.value(), maximumRateError.value()};
-    m_audioConfig = {audioRate.value(), requireMatchingCname.value(),
-                     timeout.value(), extrapolation.value(),
-                     residual.value(), maximumRateError.value()};
+    std::optional<MediaRtpClockGroupAudioConfig> audio;
+    if (*m_members == MediaTranscodeStreamSet::AudioVideo) {
+        auto rate = requiredPositiveIntNodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_clock_rate");
+        auto cname = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_cname_timeout_ns");
+        auto skew = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns");
+        if (!rate) return ::media::Status::failure(rate.error());
+        if (!cname) return ::media::Status::failure(cname.error());
+        if (!skew) return ::media::Status::failure(skew.error());
+        m_audioConfig = MediaRtpSourceClockMapperConfig{
+            rate.value(), requireMatchingCname.value(), timeout.value(),
+            extrapolation.value(), residual.value(), maximumRateError.value()};
+        audio = MediaRtpClockGroupAudioConfig{cname.value(), skew.value()};
+    } else if (options->has("rtp_clock_group.audio_clock_rate") ||
+               options->has("rtp_clock_group.audio_cname_timeout_ns") ||
+               options->has("rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns") ||
+               context.findInputChannel(nodeId(), "audio_clock") ||
+               context.findInputChannel(nodeId(), "audio_event")) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video RTP clock group rejects unplanned audio configuration or input"));
+    }
     auto validator = MediaRtpClockGroupValidator::create(
-        {timeout.value(), extrapolation.value(), clockOffsetSkew.value(),
-         videoCnameTimeout.value(), audioCnameTimeout.value(),
-         requireMatchingCname.value(),
+        {*m_members, timeout.value(), extrapolation.value(),
+         videoCnameTimeout.value(), audio, requireMatchingCname.value(),
          commonEpochPolicy.value(), invalidateOnDegraded.value()});
     if (!validator) return ::media::Status::failure(validator.error());
     m_validator = std::make_unique<MediaRtpClockGroupValidator>(std::move(validator).value());
@@ -298,10 +309,9 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
         return ::media::Result<std::optional<MediaStreamKind>>::failure(
             status.error());
     }
-    if (auto status = fillPending(context, "audio_event", m_audioPending.event);
-        !status) {
-        return ::media::Result<std::optional<MediaStreamKind>>::failure(
-            status.error());
+    if (m_audioConfig) {
+        if (auto status = fillPending(context, "audio_event", m_audioPending.event); !status)
+            return ::media::Result<std::optional<MediaStreamKind>>::failure(status.error());
     }
     const auto invalidates = [](const MediaBufferRef& buffer) {
         const auto* event = buffer
@@ -346,7 +356,10 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
     }
     auto& mapper = streamKind == MediaStreamKind::Video ? m_videoMapper : m_audioMapper;
     auto& generation = streamKind == MediaStreamKind::Video ? m_videoGeneration : m_audioGeneration;
-    const auto& config = streamKind == MediaStreamKind::Video ? m_videoConfig : m_audioConfig;
+    if (streamKind == MediaStreamKind::Audio && !m_audioConfig)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP clock group received an unplanned audio member"));
+    const auto& config = streamKind == MediaStreamKind::Video ? m_videoConfig : *m_audioConfig;
     if (!mapper || !generation || *generation != evidence.generation) {
         auto created = MediaRtpSourceClockMapper::create(config, evidence.generation);
         if (!created) return ::media::Status::failure(created.error());
@@ -386,7 +399,9 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
-        "rtp_clock_group_snapshot state=" +
+        "rtp_clock_group_snapshot members=" +
+            std::string(snapshot.members == MediaTranscodeStreamSet::AudioVideo
+                ? "audio_video" : "video_only") + " state=" +
             std::to_string(static_cast<int>(snapshot.state)) +
             " generation=" + std::to_string(snapshot.groupGeneration) +
             " invalidated_generation=" + (snapshot.invalidatedGeneration
@@ -414,6 +429,8 @@ void MediaRtpClockGroupNode::resetState() noexcept
 {
     m_videoMapper.reset();
     m_audioMapper.reset();
+    m_audioConfig.reset();
+    m_members.reset();
     m_validator.reset();
     m_videoGeneration.reset();
     m_audioGeneration.reset();

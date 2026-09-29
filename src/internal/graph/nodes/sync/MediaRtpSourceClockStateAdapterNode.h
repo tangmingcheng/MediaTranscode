@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/model/MediaPacketSourceTiming.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
 #include <optional>
@@ -34,6 +35,7 @@ private:
         MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
+    std::optional<MediaTranscodeStreamSet> m_members;
     std::optional<Projection> m_lastEmittedProjection;
     std::optional<Projection> m_pendingProjection;
     MediaBufferRef m_pendingState;
