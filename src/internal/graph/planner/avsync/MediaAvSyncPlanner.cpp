@@ -181,6 +181,7 @@ void planTsInput(MediaAvSyncPlan& plan,
         ? MediaAvSourceLifecycleMode::PreserveActivatedOutput
         : MediaAvSourceLifecycleMode::FailSessionOnSourceLoss;
     MediaAvSyncPlan plan;
+    plan.members = MediaTranscodeStreamSet::AudioVideo;
     if (sourceContribution) {
         plan.domainRole = MediaAvSyncDomainRole::SourceContribution;
         MediaAvSynchronizationPolicyPlanner::apply(plan);

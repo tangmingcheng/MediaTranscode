@@ -67,3 +67,7 @@
 本轮不改变既有线程、队列或平台adapter，也不改变已拒绝的外部FFmpeg修复范围。设计审查必须分别判断成员模型、cadence未决项和整体实现，不能用“方向PASS”替代完整设计通过。
 
 审查：两名未参与正式文档修改的独立审查者最终Standards/本轮调查Spec均PASS；RFC措辞、bootstrap成员传递和generation classifier漏项已补齐。该结论仅覆盖调查与计划，不代表设计、实现或验收通过。
+
+## 首切片实施状态
+
+成员型epoch/release已贯穿现有A/V生产路径，plan→bootstrap→service冻结成员，重锚严格保留其余坐标，双源码审查与Release重建通过；r51完整退出仍FAIL。第一项只完成实现/构建，未完成运行验收，复选框保持未完成。见[实现与真实复验](realtime-video-composition-activation-members.md)。

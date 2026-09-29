@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaPlaybackActivation.h"
 #include "internal/graph/sync/MediaAvGenerationTransitionCoordinator.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 
@@ -35,16 +35,16 @@ private:
 };
 
 struct MediaAvActivatedOutputPermitReservation final {
-    MediaPlaybackEpoch epoch;
-    MediaAudioPlaybackOrigin audioOrigin;
+    MediaPlaybackActivation activation;
     std::optional<std::uint64_t> completedTransitionSequence;
     MediaAvOutputPermitCommitReservation reservation;
 };
 
 struct MediaAvEpochTransitionSnapshot final {
     MediaAvGenerationReadiness readiness;
-    std::optional<MediaPlaybackEpoch> playbackEpoch;
-    std::optional<MediaAudioPlaybackOrigin> audioOrigin;
+    std::optional<MediaPlaybackActivation> activation;
+    const MediaPlaybackEpoch* playbackEpoch() const noexcept
+    { return activation ? &activation->epoch() : nullptr; }
     bool outputPermitted;
     bool poisoned;
     std::optional<std::uint64_t> completedTransitionSequence;
@@ -53,8 +53,10 @@ struct MediaAvEpochTransitionSnapshot final {
 class MediaAvEpochTransitionService final {
 public:
     static ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>> create(
-        MediaAvGenerationTransitionPlan plan);
-    static std::shared_ptr<MediaAvEpochTransitionService> createInitialOnly();
+        MediaAvGenerationTransitionPlan plan, MediaTranscodeStreamSet members);
+    static ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>> createInitialOnly(
+        MediaTranscodeStreamSet members);
+    MediaTranscodeStreamSet members() const noexcept { return m_members; }
 
     ::media::Result<MediaAvGenerationPurge> beginReacquisition(
         MediaAvTransitionOrigin origin,
@@ -76,19 +78,14 @@ private:
     friend class MediaOutputEpochActivationCapability;
     friend struct MediaAvEpochTransitionServiceTestAccess;
     ::media::Status activateInitial(
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
+        MediaPlaybackActivation activation);
     ::media::Status activateNextAfter(
         std::uint64_t completedTransitionSequence,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
+        MediaPlaybackActivation activation);
     explicit MediaAvEpochTransitionService(
-        MediaAvGenerationTransitionCoordinator coordinator);
-    MediaAvEpochTransitionService() = default;
+        std::optional<MediaAvGenerationTransitionCoordinator> coordinator,
+        MediaTranscodeStreamSet members);
     bool outputPermittedLocked(std::uint64_t generation) const noexcept;
-    static ::media::Status validateEpochPair(
-        const MediaPlaybackEpoch& epoch,
-        const MediaAudioPlaybackOrigin& audioOrigin);
     ::media::Status failReacquisition(::media::ErrorInfo error);
     ::media::Status failLocked(::media::ErrorInfo error);
 
@@ -97,8 +94,8 @@ private:
     bool m_aborted = false;
     MediaAvGenerationReadiness m_readiness =
         MediaAvGenerationReadiness::Acquiring;
-    std::optional<MediaPlaybackEpoch> m_epoch;
-    std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;
+    const MediaTranscodeStreamSet m_members;
+    std::optional<MediaPlaybackActivation> m_activation;
     std::optional<std::uint64_t> m_completedTransitionSequence;
     std::optional<::media::ErrorInfo> m_firstError;
 };

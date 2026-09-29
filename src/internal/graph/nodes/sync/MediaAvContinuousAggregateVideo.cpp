@@ -26,8 +26,8 @@ namespace media::ffmpeg::graph {
         auto& source = m_sources[i];
         contributions.push_back({i, plan().canvas.tiles[i], MediaCanonicalVideoGeneratedBlack{}});
         const auto snapshot = m_dependencies.sources[i].group->epochTransitionSnapshot();
-        if (!snapshot.outputPermitted || !snapshot.playbackEpoch) continue;
-        const auto& epoch = *snapshot.playbackEpoch;
+        if (!snapshot.outputPermitted || !snapshot.playbackEpoch()) continue;
+        const auto& epoch = *snapshot.playbackEpoch();
         while (!source.video.empty()) {
             const auto lineage = FFmpegFrameView::canonicalLineage(source.video.front());
             if (lineage->generation != epoch.generation) {

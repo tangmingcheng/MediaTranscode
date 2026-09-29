@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
 
@@ -200,6 +202,7 @@ enum class MediaAvSyncDomainRole : std::uint8_t {
 };
 
 struct MediaAvSyncPlan {
+    std::optional<MediaTranscodeStreamSet> members;
     std::optional<MediaAvSyncDomainRole> domainRole;
     std::optional<MediaAvSourceLifecyclePlan> sourceLifecycle;
     std::optional<MediaAvSyncSourceClockMode> sourceClockMode;

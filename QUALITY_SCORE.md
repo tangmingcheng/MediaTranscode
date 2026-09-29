@@ -353,3 +353,7 @@ raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime 
 ## 2026-09-29 纯视频源成员合同调查
 
 固定双流假设贯穿clock、startup、release与epoch；成员模型方向可采用，但独立startup时钟调度缺权威推导，完整设计和实现仍FAIL。两名独立审查对本轮调查Standards/Spec均PASS；没有新构建或媒体通过项。六维10/8/6/12/2/4，总42/100。见[调查与实施门禁](docs/realtime-video-composition-source-membership.md)。
+
+## 2026-09-29 成员型激活产品双审
+
+32源码首切片Standards/Spec双独立PASS，成员和origin不可分割传递、精确重锚及generation分类接入。Release重建通过；r51既有A/V实流自然exit1/no-progress，清理后4逻辑对象，纯视频/多源仍缺。六维10/8/6/12/2/4，总42/100，完整FAIL。见[实流证据](docs/realtime-video-composition-activation-members.md)。

@@ -95,8 +95,11 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
 ::media::Status MediaAvBoundReleaseExtractorNode::stageRelease(
     const MediaAvStartupReleaseBuffer& release,
     std::size_t firstVideoIndex,
-    std::optional<MediaAudioPlaybackOrigin> audioOrigin)
+    const MediaPlaybackActivation& activation)
 {
+    if (activation != release.activation().reanchor(activation.epoch().masterRelease))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Release staging requires the same source epoch and planned members"));
     if (!m_firstReleaseDiagnosticEmitted) {
         std::ostringstream out;
         out << "av_release_trace stage=first_release generation="
@@ -135,6 +138,9 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
     m_stagedAudio.clear();
     m_stagedAudio.reserve(release.audio().size());
     for (const auto& unit : release.audio()) {
+        if (!activation.audioOrigin())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Audio release requires a planned audio origin"));
         if (m_audioBranchMode == MediaBranchMode::CopyPacket) {
             const auto* canonical =
                 dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
@@ -152,7 +158,7 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
         } else if (m_audioBranchMode == MediaBranchMode::TranscodeFrame) {
             auto staged = MediaAvReleasedAudioBuffer::create(
                 unit.media, unit.trimLeadingSamples,
-                audioOrigin.value_or(release.audioOrigin()));
+                *activation.audioOrigin());
             if (!staged) {
                 m_stagedVideo.clear();
                 m_stagedAudio.clear();
@@ -320,7 +326,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
             return processProgress();
         }
     if (phase == MediaAvStartupVideoPreparationPhase::OutputReady &&
-            preparation.anchoredEpoch && preparation.anchoredAudioOrigin &&
+            preparation.anchoredActivation &&
             !preparation.extractorOutputsReanchored &&
             m_initialOutputReservation && m_preparationTransaction) {
             const auto* transaction = dynamic_cast<
@@ -332,7 +338,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
                     "A/V bound release extractor lost its anchored transaction"));
             if (auto staged = stageRelease(
                     *release, preparation.committedVideoUnits,
-                    preparation.anchoredAudioOrigin); !staged) {
+                    *preparation.anchoredActivation); !staged) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     staged.error());
             }
@@ -420,7 +426,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
                 "A/V bound release extractor rejects a release outside the live playback epoch"));
     }
     if (!m_releaseStaged) {
-        if (auto status = stageRelease(*release); !status) {
+        if (auto status = stageRelease(*release, 0, release->activation()); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
     }
@@ -513,7 +519,7 @@ MediaAvBoundReleaseExtractorNode::processPreparation(
             return processWaiting();
         if (!m_releaseStaged) {
             if (auto staged = stageRelease(
-                    *release, snapshot.committedVideoUnits); !staged) {
+                    *release, snapshot.committedVideoUnits, release->activation()); !staged) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     staged.error());
             }
@@ -656,7 +662,7 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
     }
     if (!m_releaseStaged) {
         if (auto status = stageRelease(
-                *release, firstVideoIndex); !status) {
+                *release, firstVideoIndex, release->activation()); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 status.error());
         }

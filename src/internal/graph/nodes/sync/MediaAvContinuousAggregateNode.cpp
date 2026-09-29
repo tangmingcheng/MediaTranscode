@@ -340,7 +340,14 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
     const MediaPlaybackEpoch epoch{MediaRunningTime::fromNanoseconds(0), release.value(), plan().initialGeneration};
     const MediaAudioPlaybackOrigin origin{epoch.generation, epoch.sourceStart,
         epoch.masterRelease, plan().initialAudioSample, plan().audio.sampleRate()};
-    auto event = MediaPlaybackEpochActivatedBuffer::create(plan().outputGroupKey, epoch, origin, std::nullopt);
+    if (!m_dependencies.output || !m_dependencies.output->plan().members)
+        return ::media::Result<bool>::failure(::media::ErrorInfo::notInitialized(
+            "Aggregate activation requires planned output members"));
+    auto activation = MediaPlaybackActivation::create(
+        *m_dependencies.output->plan().members, epoch, origin);
+    if (!activation) return ::media::Result<bool>::failure(activation.error());
+    auto event = MediaPlaybackEpochActivatedBuffer::create(
+        plan().outputGroupKey, activation.value(), std::nullopt);
     if (!event) return ::media::Result<bool>::failure(event.error());
     const auto* port = context.graph()->findOutputPort(nodeId(), "activated");
     if (!port) return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument("Aggregate activation output is missing"));
@@ -352,7 +359,7 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
     auto publication = MediaAtomicOutputTransaction::acquire("Continuous output activation", batches);
     if (!publication) return ::media::Result<bool>::failure(publication.error());
     if (!publication.value()) return ::media::Result<bool>::success(false);
-    if (auto status = m_dependencies.activation.activateInitial(epoch, origin); !status)
+    if (auto status = m_dependencies.activation.activateInitial(activation.value()); !status)
         return ::media::Result<bool>::failure(status.error());
     publication.value()->commitReserved();
     m_epoch = epoch;

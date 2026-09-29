@@ -7,7 +7,7 @@ namespace media::ffmpeg::graph {
 namespace {
 
 bool reacquisitionPending(
-    const std::optional<MediaPlaybackEpoch>& epoch,
+    const MediaPlaybackEpoch* epoch,
     const std::optional<MediaAvReacquisitionRequest>& request) noexcept
 {
     if (!request) return false;
@@ -41,7 +41,7 @@ MediaAvSyncGroupRuntime::create(
     std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
     std::shared_ptr<MediaAvEpochTransitionService> transitionService)
 {
-    if (!transitionService) {
+    if (!transitionService || plan.members != transitionService->members()) {
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync group requires an epoch transition service"));
@@ -83,7 +83,7 @@ MediaAvSyncGroupRuntime::create(
 MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
 {
     const auto transition = m_transitionService->snapshot();
-    if (!transition.playbackEpoch || generation == 0) {
+    if (!transition.playbackEpoch() || generation == 0) {
         return ::media::Result<GenerationDisposition>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V sync group has no active generation"));
@@ -93,11 +93,11 @@ MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
             ::media::ErrorInfo::cancelled(
                 "Aborted A/V sync group rejects generation observations"));
     }
-    if (generation < transition.playbackEpoch->generation) {
+    if (generation < transition.playbackEpoch()->generation) {
         return ::media::Result<GenerationDisposition>::success(
             GenerationDisposition::Old);
     }
-    if (generation > transition.playbackEpoch->generation) {
+    if (generation > transition.playbackEpoch()->generation) {
         const MediaAvReacquisitionRequest request{
             generation, MediaAvReacquisitionReason::FutureGeneration};
         auto* coordinator = reacquisitionCoordinator();
@@ -149,7 +149,7 @@ MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
     std::lock_guard<std::mutex> lock(m_epochMutex);
     if (!m_reacquisitionRequest ||
         !reacquisitionPending(
-            transition.playbackEpoch, m_reacquisitionRequest) ||
+            transition.playbackEpoch(), m_reacquisitionRequest) ||
         request.observedGeneration >
             m_reacquisitionRequest->observedGeneration) {
         m_reacquisitionRequest = request;
@@ -277,7 +277,7 @@ MediaAvSyncGroupRuntime::reacquisitionRequest() const noexcept
     const auto transition = m_transitionService->snapshot();
     std::lock_guard<std::mutex> lock(m_epochMutex);
     if (m_reacquisitionRequest &&
-        !reacquisitionPending(transition.playbackEpoch,
+        !reacquisitionPending(transition.playbackEpoch(),
                               m_reacquisitionRequest)) {
         return std::nullopt;
     }
@@ -312,15 +312,15 @@ MediaAvSyncGroupRuntime::lifecycleState() const noexcept
         !pendingRequest) {
         return LifecycleState::Active;
     }
-    if (!transition.playbackEpoch) return LifecycleState::AwaitingEpoch;
+    if (!transition.playbackEpoch()) return LifecycleState::AwaitingEpoch;
     return LifecycleState::ReacquisitionRequired;
 }
 
 ::media::Result<MediaPlaybackEpoch> MediaAvSyncGroupRuntime::playbackEpoch() const
 {
     auto snapshot = m_transitionService->snapshot();
-    return snapshot.playbackEpoch
-        ? ::media::Result<MediaPlaybackEpoch>::success(*snapshot.playbackEpoch)
+    return snapshot.playbackEpoch()
+        ? ::media::Result<MediaPlaybackEpoch>::success(*snapshot.playbackEpoch())
         : ::media::Result<MediaPlaybackEpoch>::failure(
               ::media::ErrorInfo::notInitialized(
                   "A/V sync group has no active playback epoch"));

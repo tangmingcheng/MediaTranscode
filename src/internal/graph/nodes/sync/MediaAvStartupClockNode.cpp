@@ -66,7 +66,7 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         if (reacquisition.phase == MediaAvReacquisitionPhase::Purging ||
             reacquisition.phase == MediaAvReacquisitionPhase::Acquiring ||
             reacquisition.phase == MediaAvReacquisitionPhase::ReadyForActivation ||
-            arbitration.value().epoch().playbackEpoch) {
+            arbitration.value().epoch().playbackEpoch()) {
             auto classified = classifyMediaAvGenerationEvidence(
                 reacquisition, arbitration.value().epoch(), state.generation());
             if (!classified) return ::media::Status::failure(classified.error());

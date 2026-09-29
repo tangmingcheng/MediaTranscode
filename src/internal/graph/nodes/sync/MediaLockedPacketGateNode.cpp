@@ -311,7 +311,7 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
         auto arbitration = m_syncGroup->reserveGenerationArbitration();
         if (!arbitration) return GateDispositionResult::failure(arbitration.error());
         const auto& reacquisition = arbitration.value().reacquisition();
-        if (transitionActive(reacquisition.phase) || arbitration.value().epoch().playbackEpoch) {
+        if (transitionActive(reacquisition.phase) || arbitration.value().epoch().playbackEpoch()) {
             auto classified = classifyMediaAvGenerationEvidence(
                 reacquisition, arbitration.value().epoch(), state->generation());
             if (!classified) return GateDispositionResult::failure(classified.error());

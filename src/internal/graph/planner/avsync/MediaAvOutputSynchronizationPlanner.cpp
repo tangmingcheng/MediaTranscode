@@ -134,6 +134,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
                 "Output synchronization requires media identity and resolved audio rate"));
     }
     MediaAvSyncPlan plan;
+    plan.members = MediaTranscodeStreamSet::AudioVideo;
     plan.domainRole = MediaAvSyncDomainRole::ContinuousOutput;
     plan.controlGenerationPolicy = MediaControlGenerationPolicy::RequiredExact;
     plan.startup.requireVideoKeyFrame = true;

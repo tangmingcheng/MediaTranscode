@@ -47,10 +47,10 @@ bool isClosingOrOldGeneration(
     const MediaBoundCanonicalAudioBuffer& audio,
     const MediaAvEpochTransitionSnapshot& transition) noexcept
 {
-    if (transition.poisoned || !transition.playbackEpoch) return false;
+    if (transition.poisoned || !transition.playbackEpoch()) return false;
     const auto generation = audio.audioOrigin().generation;
-    if (generation < transition.playbackEpoch->generation) return true;
-    return generation == transition.playbackEpoch->generation &&
+    if (generation < transition.playbackEpoch()->generation) return true;
+    return generation == transition.playbackEpoch()->generation &&
         (transition.readiness != MediaAvGenerationReadiness::Locked ||
          !transition.outputPermitted);
 }
@@ -182,10 +182,8 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Audio drift controller requires trimmed bound canonical audio"));
     }
-    if (activated.audioOrigin != bound->audioOrigin() ||
-        activated.epoch.generation != activated.audioOrigin.generation ||
-        activated.epoch.sourceStart != activated.audioOrigin.sourceStart ||
-        activated.epoch.masterRelease != activated.audioOrigin.masterRelease) {
+    if (!activated.activation.audioOrigin() ||
+        *activated.activation.audioOrigin() != bound->audioOrigin()) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Audio drift controller requires the exact active playback origin"));
     }
@@ -203,7 +201,7 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
         fragments.back().interval.sampleRate);
     if (!sourceEnd) return ::media::Status::failure(sourceEnd.error());
     auto sourceEndMaster = mapCanonicalToMaster(
-        activated.epoch, sourceEnd.value());
+        activated.activation.epoch(), sourceEnd.value());
     if (!sourceEndMaster) {
         return ::media::Status::failure(sourceEndMaster.error());
     }
@@ -329,9 +327,7 @@ void MediaAudioDriftControllerNode::logDriftSample(
     if (!m_state->pending) return ::media::Result<bool>::success(true);
     const auto& origin = m_state->pending->origin;
     const auto& active = activated.value();
-    if (active.audioOrigin != origin || active.epoch.generation != origin.generation ||
-        active.epoch.sourceStart != origin.sourceStart ||
-        active.epoch.masterRelease != origin.masterRelease) {
+    if (!active.activation.audioOrigin() || *active.activation.audioOrigin() != origin) {
         return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
             "Audio drift candidate requires its exact active playback origin"));
     }

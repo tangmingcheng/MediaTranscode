@@ -54,7 +54,7 @@ classifyLockedPacketGateGeneration(
     }
     if (!epoch.poisoned &&
         epoch.readiness == MediaAvGenerationReadiness::Acquiring &&
-        !epoch.playbackEpoch && !epoch.audioOrigin &&
+        !epoch.activation &&
         !epoch.outputPermitted &&
         !epoch.completedTransitionSequence) {
         return generation == plannedInitialGeneration
@@ -66,17 +66,17 @@ classifyLockedPacketGateGeneration(
     }
     if (epoch.poisoned ||
         epoch.readiness != MediaAvGenerationReadiness::Locked ||
-        !epoch.playbackEpoch ||
+        !epoch.playbackEpoch() ||
         !epoch.outputPermitted) {
         return invalidClassification(
             "Locked packet gate requires an active permitted playback epoch");
     }
-    if (generation < epoch.playbackEpoch->generation) {
+    if (generation < epoch.playbackEpoch()->generation) {
         return ::media::Result<
             MediaLockedPacketGateDisposition>::success(
             MediaLockedPacketGateDisposition::DropOldGeneration);
     }
-    if (generation > epoch.playbackEpoch->generation) {
+    if (generation > epoch.playbackEpoch()->generation) {
         return invalidClassification(
             "Locked packet gate rejects an unplanned future generation");
     }

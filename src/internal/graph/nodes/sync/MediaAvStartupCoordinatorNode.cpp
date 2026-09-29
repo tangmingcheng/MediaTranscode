@@ -497,13 +497,17 @@ MediaAvStartupCoordinatorNode::prepareOutput(
             ::media::ErrorInfo::notInitialized(
                 "A/V startup release requires planned group and audio origin"));
     }
-    auto release = MediaAvStartupReleaseBuffer::create(
-        m_generationState->groupKey(),
-        releaseKind,
-        *epoch,
+    const auto plannedGroup = context.findAvSyncGroup(m_generationState->groupKey());
+    if (!plannedGroup || !plannedGroup->plan().members)
+        return ::media::Result<std::optional<MediaBufferRef>>::failure(
+            ::media::ErrorInfo::notInitialized("Startup release requires planned members"));
+    auto activation = MediaPlaybackActivation::create(
+        *plannedGroup->plan().members, *epoch,
         MediaAudioPlaybackOrigin{epoch->generation, epoch->sourceStart,
-                                 epoch->masterRelease, 0,
-                                 m_outputAudioSampleRate},
+                                 epoch->masterRelease, 0, m_outputAudioSampleRate});
+    if (!activation) return ::media::Result<std::optional<MediaBufferRef>>::failure(activation.error());
+    auto release = MediaAvStartupReleaseBuffer::create(
+        m_generationState->groupKey(), releaseKind, std::move(activation).value(),
         std::move(video), std::move(audio),
         completedTransitionSequence);
     if (!release) {

@@ -480,6 +480,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateScoped(const MediaAvSyncPlan& plan, bool finalized)
 {
     if (!plan.domainRole) return invalid("domainRole");
+    if (plan.members != MediaTranscodeStreamSet::AudioVideo)
+        return invalid("planned A/V domain members; video-only source assembly is not implemented");
     if (*plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput) {
         if (plan.sourceClockMode || plan.sourceLifecycle || plan.rtpInput ||
             plan.mpegTsInput || plan.demuxTimestampInput ||
@@ -519,7 +521,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 
 ::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlan& plan)
 {
-    if (!plan.sourceClockMode || !plan.controlGenerationPolicy ||
+    if (plan.members != MediaTranscodeStreamSet::AudioVideo ||
+        !plan.sourceClockMode || !plan.controlGenerationPolicy ||
         !positive(plan.recovery.reacquisitionTimeoutNs) ||
         !positive(plan.recovery.hardDiscontinuityThresholdNs))
         return invalid("source clock prerequisites");

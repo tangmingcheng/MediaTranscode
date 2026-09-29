@@ -24,13 +24,12 @@ classifyMediaAvGenerationEvidence(
     if (reacquisition.phase == MediaAvReacquisitionPhase::Inactive) {
         if (reacquisition.transition || epoch.poisoned || !epoch.outputPermitted ||
             epoch.readiness != MediaAvGenerationReadiness::Locked ||
-            !epoch.playbackEpoch || !epoch.audioOrigin ||
-            epoch.audioOrigin->generation != epoch.playbackEpoch->generation)
+            !epoch.activation)
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Generation evidence requires a consistent published epoch"));
-        if (generation < epoch.playbackEpoch->generation)
+        if (generation < epoch.playbackEpoch()->generation)
             return Result::success(MediaAvGenerationEvidenceDisposition::Retired);
-        if (generation == epoch.playbackEpoch->generation)
+        if (generation == epoch.playbackEpoch()->generation)
             return Result::success(MediaAvGenerationEvidenceDisposition::Target);
         return Result::success(MediaAvGenerationEvidenceDisposition::Future);
     }
@@ -47,9 +46,8 @@ classifyMediaAvGenerationEvidence(
         epoch.poisoned || epoch.outputPermitted ||
         epoch.readiness != (purging ? MediaAvGenerationReadiness::Reacquire
                                     : MediaAvGenerationReadiness::Acquiring) ||
-        !epoch.playbackEpoch || !epoch.audioOrigin ||
-        epoch.playbackEpoch->generation != transition.publishedGeneration ||
-        epoch.audioOrigin->generation != transition.publishedGeneration)
+        !epoch.activation ||
+        epoch.playbackEpoch()->generation != transition.publishedGeneration)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Generation evidence requires a consistent closed transition epoch"));
     if (generation >= transition.publishedGeneration && generation <= transition.oldGeneration)
@@ -304,7 +302,7 @@ bool MediaAvReacquisitionCoordinator::preservesActivatedOutput() const noexcept
     const auto output = m_output.lock();
     if (!output) return false;
     const auto active = output->epochTransitionSnapshot();
-    return !active.poisoned && active.outputPermitted && active.playbackEpoch &&
+    return !active.poisoned && active.outputPermitted && active.playbackEpoch() &&
         active.readiness == MediaAvGenerationReadiness::Locked;
 }
 
@@ -363,14 +361,14 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
             "A/V reacquisition requires a live epoch transition service"));
     }
     if (active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch || request.observedGeneration == 0) {
+        !active.playbackEpoch() || request.observedGeneration == 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V reacquisition requires an active locked playback epoch"));
     }
 
     const std::uint64_t activeGeneration =
-        active.playbackEpoch->generation;
+        active.playbackEpoch()->generation;
     const bool future =
         request.reason == MediaAvReacquisitionReason::FutureGeneration;
     if (future && request.observedGeneration <= activeGeneration) {
@@ -460,16 +458,16 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         if (!queued) return failTerminalLocked(queued.error());
         request = *m_request;
         if (active.poisoned || active.readiness != MediaAvGenerationReadiness::Locked ||
-            !active.playbackEpoch) {
+            !active.playbackEpoch()) {
             return failTerminalLocked(::media::ErrorInfo::notInitialized(
                 "A/V reacquisition lost its active locked playback epoch"));
         }
-        oldGeneration = active.playbackEpoch->generation;
+        oldGeneration = active.playbackEpoch()->generation;
         origin = MediaAvPublishedGeneration{oldGeneration};
     } else {
         const bool future = request.reason == MediaAvReacquisitionReason::FutureGeneration;
         if (!preservesActivatedOutput() || !m_transition || active.poisoned ||
-            active.outputPermitted || !active.playbackEpoch ||
+            active.outputPermitted || !active.playbackEpoch() ||
             (future ? request.observedGeneration <= m_transition->nextGeneration
                     : request.observedGeneration != m_transition->nextGeneration)) {
             return failTerminalLocked(::media::ErrorInfo::invalidArgument(
@@ -731,14 +729,14 @@ MediaAvReacquisitionCoordinator::classifyReleaseLocked(
     const auto active = m_transitionService->snapshot();
     if (active.poisoned ||
         active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch ||
+        !active.playbackEpoch() ||
         !active.outputPermitted) {
         return MediaAvStartupReleaseDisposition::Reject;
     }
-    if (generation < active.playbackEpoch->generation) {
+    if (generation < active.playbackEpoch()->generation) {
         return MediaAvStartupReleaseDisposition::DropOld;
     }
-    if (generation != active.playbackEpoch->generation) {
+    if (generation != active.playbackEpoch()->generation) {
         return MediaAvStartupReleaseDisposition::Reject;
     }
     if (kind == MediaAvStartupReleaseKind::NextAtomicRelease &&
@@ -840,8 +838,8 @@ MediaAvReacquisitionCoordinator::reserveActivation(
             reservation.m_transitionSequence) ||
         active.poisoned ||
         active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch ||
-        active.playbackEpoch->generation != reservation.m_generation ||
+        !active.playbackEpoch() ||
+        active.playbackEpoch()->generation != reservation.m_generation ||
         !active.outputPermitted) {
         return failTerminalLocked(::media::ErrorInfo::invalidArgument(
             "A/V reacquisition publication authorization requires the activated reserved epoch"));

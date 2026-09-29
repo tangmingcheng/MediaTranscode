@@ -20,8 +20,7 @@ public:
     static ::media::Result<MediaBufferRef> create(MediaBufferRef release);
     static ::media::Result<MediaBufferRef> reanchor(
         const MediaStartupReleaseTransactionBuffer& transaction,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
+        MediaPlaybackActivation activation);
     static ::media::Result<MediaBufferRef> createControl(MediaBufferRef control);
 
     MediaBufferType type() const noexcept override;

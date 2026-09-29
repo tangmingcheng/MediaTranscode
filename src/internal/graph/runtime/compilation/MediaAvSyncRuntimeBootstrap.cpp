@@ -57,11 +57,13 @@ MediaAvSyncRuntimeBootstrap::registerGroupAndIssueActivationCapability(
         return Result::failure(status.error());
     if (shared || source) {
         auto transition = MediaAvEpochTransitionService::create(
-            shared ? shared->transition : source->transition);
+            shared ? shared->transition : source->transition, *binding.plan.members);
         if (!transition) return Result::failure(transition.error());
         service = std::move(transition).value();
     } else {
-        service = MediaAvEpochTransitionService::createInitialOnly();
+        auto initial = MediaAvEpochTransitionService::createInitialOnly(*binding.plan.members);
+        if (!initial) return Result::failure(initial.error());
+        service = std::move(initial).value();
     }
     auto requirement = MediaAvSyncSharedNtpEpochRequirement::resolve(binding.plan);
     if (!requirement) return Result::failure(requirement.error());

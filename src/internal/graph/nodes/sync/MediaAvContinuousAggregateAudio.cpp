@@ -94,7 +94,7 @@ namespace {
         return status;
     };
     const auto sourceSnapshot = m_dependencies.sources[plan().audioSource].group->epochTransitionSnapshot();
-    if (sourceSnapshot.outputPermitted && sourceSnapshot.playbackEpoch) {
+    if (sourceSnapshot.outputPermitted && sourceSnapshot.playbackEpoch()) {
         while (!m_audio.empty() && cursor < end) {
             const auto& candidate = m_audio.front();
             const auto& samples = *candidate->media();
@@ -103,7 +103,7 @@ namespace {
                 m_audioCandidateSamples -= candidateCount;
                 m_audio.pop_front();
             };
-            if (candidate->audioOrigin().generation != sourceSnapshot.playbackEpoch->generation) {
+            if (candidate->audioOrigin().generation != sourceSnapshot.playbackEpoch()->generation) {
                 removeCandidate();
                 continue;
             }

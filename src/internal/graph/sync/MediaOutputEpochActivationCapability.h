@@ -19,12 +19,11 @@ public:
     MediaOutputEpochActivationCapability& operator=(
         const MediaOutputEpochActivationCapability&) = delete;
 
-    ::media::Status activateInitial(MediaPlaybackEpoch epoch,
-                                    MediaAudioPlaybackOrigin audioOrigin)
+    ::media::Status activateInitial(MediaPlaybackActivation activation)
     {
         auto service = m_service.lock();
         return service
-            ? service->activateInitial(epoch, audioOrigin)
+            ? service->activateInitial(std::move(activation))
             : ::media::Status::failure(::media::ErrorInfo::cancelled(
                   "Output epoch activation capability has expired"));
     }

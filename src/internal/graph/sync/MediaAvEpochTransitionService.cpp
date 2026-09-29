@@ -14,14 +14,19 @@ MediaAvOutputPermitCommitReservation::
 // Activation entry points are intentionally private to the runtime capability.
 
 MediaAvEpochTransitionService::MediaAvEpochTransitionService(
-    MediaAvGenerationTransitionCoordinator coordinator)
-    : m_coordinator(std::move(coordinator))
+    std::optional<MediaAvGenerationTransitionCoordinator> coordinator,
+    MediaTranscodeStreamSet members)
+    : m_coordinator(std::move(coordinator)), m_members(members)
 {
 }
 
 ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>>
-MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
+MediaAvEpochTransitionService::create(
+    MediaAvGenerationTransitionPlan plan, MediaTranscodeStreamSet members)
 {
+    if (members != MediaTranscodeStreamSet::AudioVideo && members != MediaTranscodeStreamSet::VideoOnly)
+        return ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>>::failure(
+            ::media::ErrorInfo::invalidArgument("Epoch service requires planned stream members"));
     auto coordinator = MediaAvGenerationTransitionCoordinator::create(
         std::move(plan));
     if (!coordinator) {
@@ -31,51 +36,41 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
     return ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>>::success(
         std::shared_ptr<MediaAvEpochTransitionService>(
             new MediaAvEpochTransitionService(
-                std::move(coordinator).value())));
+                std::move(coordinator).value(), members)));
 }
 
-std::shared_ptr<MediaAvEpochTransitionService>
-MediaAvEpochTransitionService::createInitialOnly()
+::media::Result<std::shared_ptr<MediaAvEpochTransitionService>>
+MediaAvEpochTransitionService::createInitialOnly(MediaTranscodeStreamSet members)
 {
-    return std::shared_ptr<MediaAvEpochTransitionService>(
-        new MediaAvEpochTransitionService());
+    using Result = ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>>;
+    if (members != MediaTranscodeStreamSet::AudioVideo)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Continuous output requires planned audio and video"));
+    return Result::success(std::shared_ptr<MediaAvEpochTransitionService>(
+        new MediaAvEpochTransitionService(std::nullopt, members)));
 }
 
 bool MediaAvEpochTransitionService::outputPermittedLocked(
     std::uint64_t generation) const noexcept
 {
-    return !m_aborted && !m_firstError && m_epoch &&
+    return !m_aborted && !m_firstError && m_activation &&
         m_readiness == MediaAvGenerationReadiness::Locked &&
-        m_epoch->generation == generation &&
+        m_activation->epoch().generation == generation &&
         (!m_coordinator || m_coordinator->outputPermitted(generation));
 }
 
-::media::Status MediaAvEpochTransitionService::validateEpochPair(
-    const MediaPlaybackEpoch& epoch,
-    const MediaAudioPlaybackOrigin& audioOrigin)
-{
-    if (epoch.generation == 0 || audioOrigin.generation != epoch.generation ||
-        audioOrigin.sourceStart != epoch.sourceStart ||
-        audioOrigin.masterRelease != epoch.masterRelease ||
-        audioOrigin.epochOutputSampleIndex < 0 ||
-        audioOrigin.outputSampleRate <= 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Playback epoch and audio origin must describe the same valid generation"));
-    }
-    return ::media::Status::success();
-}
-
 ::media::Status MediaAvEpochTransitionService::activateInitial(
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin)
+    MediaPlaybackActivation activation)
 {
-    auto valid = validateEpochPair(epoch, audioOrigin);
-    if (!valid) return valid;
+    if (activation.members() != m_members)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Epoch activation cannot change planned members"));
+    const auto& epoch = activation.epoch();
     std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
-    if (m_epoch || m_audioOrigin ||
+    if (m_activation ||
         m_readiness != MediaAvGenerationReadiness::Acquiring) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Initial epoch activation requires an acquiring empty service"));
@@ -84,8 +79,7 @@ bool MediaAvEpochTransitionService::outputPermittedLocked(
         auto permitted = m_coordinator->permitInitial(epoch.generation);
         if (!permitted) return permitted;
     }
-    m_epoch = epoch;
-    m_audioOrigin = audioOrigin;
+    m_activation = std::move(activation);
     m_completedTransitionSequence.reset();
     m_readiness = MediaAvGenerationReadiness::Locked;
     return ::media::Status::success();
@@ -163,11 +157,12 @@ MediaAvEpochTransitionService::beginReacquisition(
 
 ::media::Status MediaAvEpochTransitionService::activateNextAfter(
     std::uint64_t completedTransitionSequence,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin)
+    MediaPlaybackActivation activation)
 {
-    auto valid = validateEpochPair(epoch, audioOrigin);
-    if (!valid) return failReacquisition(valid.error());
+    if (activation.members() != m_members)
+        return failReacquisition(::media::ErrorInfo::invalidArgument(
+            "Epoch activation cannot change planned members"));
+    const auto& epoch = activation.epoch();
     std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
@@ -176,16 +171,15 @@ MediaAvEpochTransitionService::beginReacquisition(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Initial-only output domain rejects next epoch activation"));
     }
-    if (m_readiness != MediaAvGenerationReadiness::Acquiring || !m_epoch ||
-        !m_audioOrigin || epoch.generation <= m_epoch->generation) {
+    if (m_readiness != MediaAvGenerationReadiness::Acquiring || !m_activation ||
+        epoch.generation <= m_activation->epoch().generation) {
         return failLocked(::media::ErrorInfo::invalidArgument(
             "Next epoch activation requires a completed newer generation"));
     }
     auto published = m_coordinator->publishCompletedGeneration(
         completedTransitionSequence, epoch.generation);
     if (!published) return failLocked(published.error());
-    m_epoch = epoch;
-    m_audioOrigin = audioOrigin;
+    m_activation = std::move(activation);
     m_completedTransitionSequence = completedTransitionSequence;
     m_readiness = MediaAvGenerationReadiness::Locked;
     return ::media::Status::success();
@@ -222,11 +216,10 @@ MediaAvEpochTransitionSnapshot
 MediaAvEpochTransitionService::snapshot() const noexcept
 {
     std::lock_guard lock(m_mutex);
-    const std::uint64_t generation = m_epoch ? m_epoch->generation : 0;
+    const std::uint64_t generation = m_activation ? m_activation->epoch().generation : 0;
     return MediaAvEpochTransitionSnapshot{
         m_readiness,
-        m_epoch,
-        m_audioOrigin,
+        m_activation,
         outputPermittedLocked(generation),
         m_aborted || (m_coordinator && m_coordinator->poisoned()),
         m_completedTransitionSequence};
@@ -238,7 +231,7 @@ MediaAvEpochTransitionService::reserveOutputCommit(
 {
     std::unique_lock lock(m_mutex);
     if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
-        !m_epoch || m_epoch->generation != generation ||
+        !m_activation || m_activation->epoch().generation != generation ||
         !outputPermittedLocked(generation)) {
         return ::media::Result<
             MediaAvOutputPermitCommitReservation>::failure(
@@ -254,8 +247,8 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
 {
     std::unique_lock lock(m_mutex);
     if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
-        !m_epoch || !m_audioOrigin ||
-        !outputPermittedLocked(m_epoch->generation)) {
+        !m_activation ||
+        !outputPermittedLocked(m_activation->epoch().generation)) {
         return ::media::Result<
             MediaAvActivatedOutputPermitReservation>::failure(
                 ::media::ErrorInfo::cancelled(
@@ -264,7 +257,7 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
     return ::media::Result<
         MediaAvActivatedOutputPermitReservation>::success(
             MediaAvActivatedOutputPermitReservation{
-                *m_epoch, *m_audioOrigin, m_completedTransitionSequence,
+                *m_activation, m_completedTransitionSequence,
                 MediaAvOutputPermitCommitReservation(std::move(lock))});
 }
 
