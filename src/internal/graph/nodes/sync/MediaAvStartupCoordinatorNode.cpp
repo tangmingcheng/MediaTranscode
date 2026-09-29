@@ -28,7 +28,6 @@ MediaAvStartupCoordinatorNode::MediaAvStartupCoordinatorNode(
     , m_ownerPurge(std::make_shared<MediaOwnerThreadGenerationPurge>())
     , m_coordinator(std::move(preparation.m_coordinator))
     , m_generationState(std::move(preparation.m_generationState))
-    , m_outputAudioSampleRate(preparation.m_outputAudioSampleRate)
 {
 }
 
@@ -85,16 +84,20 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         auto video = fillSnapshotBarrierMedia(context, "video", m_pendingVideo,
                                               m_videoTerminalBarrierRemaining);
         if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
-        auto audio = fillSnapshotBarrierMedia(context, "audio", m_pendingAudio,
-                                              m_audioTerminalBarrierRemaining);
-        if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        if (m_coordinator->audioConfig()) {
+            auto audio = fillSnapshotBarrierMedia(context, "audio", m_pendingAudio,
+                                                  m_audioTerminalBarrierRemaining);
+            if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        }
         auto clock = fillTerminalBarrierClock(context);
         if (!clock) return ::media::Result<MediaNodeProcessResult>::failure(clock.error());
     } else if (!m_clockBarrierActive) {
         auto video = fillPendingMedia(context, "video", m_pendingVideo);
         if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
-        auto audio = fillPendingMedia(context, "audio", m_pendingAudio);
-        if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        if (m_coordinator->audioConfig()) {
+            auto audio = fillPendingMedia(context, "audio", m_pendingAudio);
+            if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        }
     } else {
         if (!m_clockBarrierSnapshotSealed) {
             if (auto status = sealClockBarrier(context); !status) {
@@ -105,9 +108,11 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         auto video = fillSnapshotBarrierMedia(context, "video", m_pendingVideo,
                                               m_videoClockBarrierRemaining);
         if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
-        auto audio = fillSnapshotBarrierMedia(context, "audio", m_pendingAudio,
-                                              m_audioClockBarrierRemaining);
-        if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        if (m_coordinator->audioConfig()) {
+            auto audio = fillSnapshotBarrierMedia(context, "audio", m_pendingAudio,
+                                                  m_audioClockBarrierRemaining);
+            if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
+        }
     }
     if (!m_terminalBarrierActive) {
         auto clock = fillPendingClock(context);
@@ -247,10 +252,12 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     };
     auto video = snapshotSize("video");
     if (!video) return ::media::Status::failure(video.error());
-    auto audio = snapshotSize("audio");
-    if (!audio) return ::media::Status::failure(audio.error());
     m_videoClockBarrierRemaining = video.value();
-    m_audioClockBarrierRemaining = audio.value();
+    if (m_coordinator->audioConfig()) {
+        auto audio = snapshotSize("audio");
+        if (!audio) return ::media::Status::failure(audio.error());
+        m_audioClockBarrierRemaining = audio.value();
+    }
     m_clockBarrierSnapshotSealed = true;
     return ::media::Status::success();
 }
@@ -272,15 +279,17 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     };
     auto video = snapshotSize("video", hasTerminalHead(m_pendingVideo));
     if (!video) return ::media::Status::failure(video.error());
-    auto audio = snapshotSize("audio", hasTerminalHead(m_pendingAudio));
-    if (!audio) return ::media::Status::failure(audio.error());
+    if (m_coordinator->audioConfig()) {
+        auto audio = snapshotSize("audio", hasTerminalHead(m_pendingAudio));
+        if (!audio) return ::media::Status::failure(audio.error());
+        m_audioTerminalBarrierRemaining = audio.value();
+    }
     MediaChannel* clock = context.findInputChannel(nodeId(), "clock");
     if (!clock) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "MediaAvStartupCoordinatorNode is missing the clock input"));
     }
     m_videoTerminalBarrierRemaining = video.value();
-    m_audioTerminalBarrierRemaining = audio.value();
     m_clockTerminalBarrierRemaining = clock->size();
     m_terminalBarrierActive = true;
     return ::media::Status::success();
@@ -376,7 +385,6 @@ MediaAvStartupCoordinatorNode::selectPending() const
     MediaGraphExecutionContext& context,
     PendingInput input)
 {
-    const char* portName = input == PendingInput::Video ? "video" : "audio";
     auto& pending = input == PendingInput::Video ? m_pendingVideo : m_pendingAudio;
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             pending.front().get())) {
@@ -390,8 +398,9 @@ MediaAvStartupCoordinatorNode::selectPending() const
                 "MediaAvStartupCoordinatorNode requires a common canonical envelope"));
     }
     const auto& unit = envelope->unit();
-    if ((unit.stream == MediaAvStartupStream::Video && std::string(portName) != "video") ||
-        (unit.stream == MediaAvStartupStream::Audio && std::string(portName) != "audio")) {
+    if (unit.stream != (input == PendingInput::Video
+            ? MediaAvStartupStream::Video : MediaAvStartupStream::Audio) ||
+        (unit.stream == MediaAvStartupStream::Audio && !m_coordinator->audioConfig())) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode stream does not match its input port"));
@@ -522,19 +531,16 @@ MediaAvStartupCoordinatorNode::prepareOutput(
     if (!epoch) {
         return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
     }
-    if (!m_generationState || m_outputAudioSampleRate <= 0) {
-        return ::media::Result<std::optional<MediaBufferRef>>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V startup release requires planned group and audio origin"));
-    }
     const auto plannedGroup = context.findAvSyncGroup(m_generationState->groupKey());
-    if (!plannedGroup || !plannedGroup->plan().members)
+    if (!plannedGroup || plannedGroup->plan().members != m_coordinator->members())
         return ::media::Result<std::optional<MediaBufferRef>>::failure(
-            ::media::ErrorInfo::notInitialized("Startup release requires planned members"));
+            ::media::ErrorInfo::notInitialized("Startup release requires its frozen planned members"));
+    std::optional<MediaAudioPlaybackOrigin> audioOrigin;
+    if (const auto* config = m_coordinator->audioConfig())
+        audioOrigin = MediaAudioPlaybackOrigin{epoch->generation, epoch->sourceStart,
+            epoch->masterRelease, 0, config->outputSampleRate};
     auto activation = MediaPlaybackActivation::create(
-        *plannedGroup->plan().members, *epoch,
-        MediaAudioPlaybackOrigin{epoch->generation, epoch->sourceStart,
-                                 epoch->masterRelease, 0, m_outputAudioSampleRate});
+        m_coordinator->members(), *epoch, std::move(audioOrigin));
     if (!activation) return ::media::Result<std::optional<MediaBufferRef>>::failure(activation.error());
     auto release = MediaAvStartupReleaseBuffer::create(
         m_generationState->groupKey(), releaseKind, std::move(activation).value(),
@@ -633,6 +639,10 @@ MediaAvStartupCoordinatorNode::processControl(
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "MediaAvStartupCoordinatorNode requires factory preparation"));
     }
+    const auto group = context.findAvSyncGroup(m_generationState->groupKey());
+    if (!group || group->plan().members != m_coordinator->members())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Startup coordinator members differ from the registered group"));
     auto reset = m_coordinator->reset();
     if (!reset) return ::media::Status::failure(reset.error().toErrorInfo());
     m_generationState->reset();

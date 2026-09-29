@@ -5,6 +5,8 @@
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
+
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -262,7 +264,8 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
     const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& startup = plan.synchronization.startup;
-    const bool complete = startup.requireVideoKeyFrame &&
+    const bool complete = plan.synchronization.members == MediaTranscodeStreamSet::AudioVideo &&
+        startup.requireVideoKeyFrame &&
         startup.trimAudioToCommonStart && startup.maximumWaitNs &&
         startup.prerollNs && startup.keyFrameWaitNs &&
         startup.maximumAudioTrimNs && startup.maximumInitialSkewNs &&
@@ -279,6 +282,10 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup coordinator requires a complete planner product"));
     }
+    auto encodedMembers = MediaTranscodeStreamSetCodec::encode(*plan.synchronization.members);
+    if (!encodedMembers) return ::media::Result<void>::failure(encodedMembers.error());
+    if (auto status = setOption(graph, node, "av_startup.members",
+            std::string(encodedMembers.value())); !status) return status;
     const auto setBool = [&](const char* key, bool value) {
         return setOption(graph, node, key, value ? "1" : "0");
     };

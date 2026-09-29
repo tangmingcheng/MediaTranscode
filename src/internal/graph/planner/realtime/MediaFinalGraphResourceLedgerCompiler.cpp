@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerFactsPlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
@@ -422,12 +423,20 @@ compileLedger(
                 retainedRefs = retained.value();
             }
             if (node.kind == MediaNodeKind::AvStartupCoordinator) {
-                auto video = optionUnsigned(node, "av_startup.video_capacity");
-                auto audio = optionUnsigned(node, "av_startup.audio_capacity");
-                if (!video || !audio) return Result::failure(
-                    !video ? video.error() : audio.error());
-                auto batch = Arithmetic::add(video.value(), audio.value(),
-                    "startup batch payload object retention");
+                auto members = MediaTranscodeStreamSetCodec::decode(
+                    node.options.value("av_startup.members"));
+                if (!members) return Result::failure(members.error());
+                auto batch = optionUnsigned(node, "av_startup.video_capacity");
+                if (!batch) return Result::failure(batch.error());
+                if (members.value() == MediaTranscodeStreamSet::AudioVideo) {
+                    auto audio = optionUnsigned(node, "av_startup.audio_capacity");
+                    if (!audio) return Result::failure(audio.error());
+                    batch = Arithmetic::add(batch.value(), audio.value(),
+                        "startup batch payload object retention");
+                } else if (node.options.has("av_startup.audio_capacity")) {
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "Video startup retention rejects unplanned audio capacity"));
+                }
                 auto retained = batch ? Arithmetic::add(retainedRefs, batch.value(),
                     "startup store and release-batch object credits") : batch;
                 if (!retained) return Result::failure(retained.error());

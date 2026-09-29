@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/validation/MediaAvCommonCoreShapeValidator.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 #include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 
@@ -118,6 +119,11 @@ const GroupOptionContract* findContract(
             ::media::ErrorInfo::invalidArgument(
                 "A/V common core requires one startup coordinator"));
     }
+    if (!binding.plan.members ||
+        !MediaGraphShapeQuery::matchesStreamSetOption(nodes.front()->options,
+            "av_startup.members", *binding.plan.members))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Startup coordinator members differ from its planner binding"));
     auto encoded = requiredNodeOption(
         &nodes.front()->options,
         "MediaAvStartupCoordinatorNode",

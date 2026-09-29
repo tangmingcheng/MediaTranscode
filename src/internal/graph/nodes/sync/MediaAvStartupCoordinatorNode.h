@@ -77,7 +77,6 @@ private:
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
     std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
-    int m_outputAudioSampleRate = 0;
     std::deque<MediaBufferRef> m_pendingVideo;
     std::deque<MediaBufferRef> m_pendingAudio;
     MediaBufferRef m_pendingClock;

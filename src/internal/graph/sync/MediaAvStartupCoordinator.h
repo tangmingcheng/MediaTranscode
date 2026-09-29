@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaPacketSourceTiming.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/sync/MediaAvSyncStateMachine.h"
 #include "internal/graph/sync/MediaAvSyncError.h"
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
@@ -64,26 +65,32 @@ struct MediaAvStartupAccessUnit final {
     std::optional<MediaAvAudioSampleSpan> audio;
 };
 
+struct MediaAvStartupAudioConfig final {
+    bool trimToCommonStart;
+    MediaRunningTime maximumTrim;
+    MediaRunningTime maximumInitialSkew;
+    std::size_t capacity;
+    std::uint64_t byteCapacity;
+    std::uint64_t maximumUnitBytes;
+    std::string identity;
+    int outputSampleRate;
+};
+
 struct MediaAvStartupConfig final {
+    MediaTranscodeStreamSet members;
     bool requireVideoKeyFrame;
-    bool trimAudioToCommonStart;
     bool allowDegradedClock;
     MediaAvSyncSourceClockMode sourceClockMode;
     MediaRunningTime maximumWait;
     MediaRunningTime preroll;
     MediaRunningTime keyFrameWait;
-    MediaRunningTime maximumAudioTrim;
-    MediaRunningTime maximumInitialSkew;
     MediaRunningTime maximumGap;
     MediaRunningTime outputLead;
     std::size_t videoCapacity;
-    std::size_t audioCapacity;
     std::uint64_t videoByteCapacity;
-    std::uint64_t audioByteCapacity;
     std::uint64_t maximumVideoUnitBytes;
-    std::uint64_t maximumAudioUnitBytes;
     std::string videoIdentity;
-    std::string audioIdentity;
+    std::optional<MediaAvStartupAudioConfig> audio;
 };
 
 struct MediaAvStartupSelection final {
@@ -148,6 +155,11 @@ public:
     void abort() noexcept;
     MediaAvSyncStatus reset() noexcept;
 
+    MediaTranscodeStreamSet members() const noexcept { return m_config.members; }
+    const MediaAvStartupAudioConfig* audioConfig() const noexcept
+    {
+        return m_config.audio ? &*m_config.audio : nullptr;
+    }
     MediaAvSyncState state() const noexcept;
     const std::optional<std::uint64_t>& generation() const noexcept;
     const std::optional<MediaPlaybackEpoch>& playbackEpoch() const noexcept;

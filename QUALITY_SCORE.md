@@ -365,3 +365,7 @@ raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime 
 ## 2026-09-29 RTP源时钟成员合同
 
 计划成员贯穿RTP clock group、validator、snapshot及binder/projector/adapter，AV音频calibration与成员严格一致；单成员复用同一身份/时效/generation状态机，保留PlannedStreamPair现有CNAME政策。独立设计/源码双审及Release全量重建通过；r53 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡，非成功验收。纯视频完整startup/builder/resource、多源入口与总准入、AAC重入及双平台合屏仍未完成，六维10/8/6/12/2/4、42/100，完整FAIL。见[实现与证据](docs/realtime-video-composition-clock-members.md)。
+
+## 2026-09-29 startup成员合同
+
+startup config携带members与完整可选音频产品，单成员复用keyframe/正preroll窗口、代际与deadline状态机；factory端口/options、node有限barrier/EOF、release origin及最终账本startup容量按实际成员处理，start/release对照注册计划。源码双审与Release全量重建通过；r54 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress、4逻辑对象未平衡。完整V源prepared/planner/builder接线、多源总准入/入口及恢复和双平台验收仍缺；六维10/8/6/12/2/4、42/100，完整FAIL。见[实现和实流记录](docs/realtime-video-composition-startup-members.md)。

@@ -110,34 +110,31 @@ std::size_t MediaAvStartupUnitIdHash::operator()(
 MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
     MediaAvStartupConfig config)
 {
-    if (!config.requireVideoKeyFrame ||
-        config.allowDegradedClock ||
+    const auto* audio = config.audio ? &*config.audio : nullptr;
+    if ((config.members != MediaTranscodeStreamSet::VideoOnly &&
+         config.members != MediaTranscodeStreamSet::AudioVideo) ||
+        (config.members == MediaTranscodeStreamSet::AudioVideo) != config.audio.has_value() ||
+        !config.requireVideoKeyFrame || config.allowDegradedClock ||
         config.maximumWait <= Zero || config.preroll <= Zero ||
-        config.keyFrameWait <= Zero || config.maximumAudioTrim <= Zero ||
-        config.maximumInitialSkew <= Zero || config.maximumGap <= Zero ||
-        config.outputLead <= Zero ||
-        config.maximumAudioTrim > config.preroll ||
-        config.maximumGap >= config.preroll ||
-        config.maximumInitialSkew >= config.outputLead ||
-        config.preroll >= config.keyFrameWait ||
-        config.keyFrameWait > config.maximumWait ||
-        config.videoCapacity == 0 || config.audioCapacity == 0 ||
+        config.keyFrameWait <= Zero || config.maximumGap <= Zero ||
+        config.outputLead <= Zero || config.maximumGap >= config.preroll ||
+        config.preroll >= config.keyFrameWait || config.keyFrameWait > config.maximumWait ||
+        config.videoCapacity == 0 ||
         config.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        config.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        config.videoByteCapacity == 0 || config.audioByteCapacity == 0 ||
-        config.maximumVideoUnitBytes == 0 || config.maximumAudioUnitBytes == 0 ||
+        config.videoByteCapacity == 0 || config.maximumVideoUnitBytes == 0 ||
         config.maximumVideoUnitBytes > config.videoByteCapacity ||
-        config.maximumAudioUnitBytes > config.audioByteCapacity ||
-        config.maximumVideoUnitBytes >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-        config.maximumAudioUnitBytes >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-        config.videoByteCapacity >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-        config.audioByteCapacity >
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-        config.videoIdentity.empty() || config.audioIdentity.empty() ||
-        config.videoIdentity == config.audioIdentity) {
+        config.videoByteCapacity > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+        config.videoIdentity.empty() ||
+        (audio && (audio->maximumTrim <= Zero || audio->maximumInitialSkew <= Zero ||
+                   audio->maximumTrim > config.preroll ||
+                   audio->maximumInitialSkew >= config.outputLead ||
+                   audio->capacity == 0 ||
+                   audio->capacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+                   audio->byteCapacity == 0 || audio->maximumUnitBytes == 0 ||
+                   audio->maximumUnitBytes > audio->byteCapacity ||
+                   audio->byteCapacity > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+                   audio->identity.empty() || audio->identity == config.videoIdentity ||
+                   audio->outputSampleRate <= 0))) {
         const auto zero = MediaRunningTime::fromNanoseconds(0);
         return MediaAvSyncResult<MediaAvStartupCoordinator>::failure(MediaAvSyncError(
             MediaAvSyncErrorCode::StartupInvalidTransition,
@@ -145,7 +142,7 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
             MediaAvSyncErrorState::Startup,
             "create_startup_coordinator",
             config.videoIdentity,
-            config.audioIdentity,
+            audio ? audio->identity : std::string{},
             std::nullopt,
             std::nullopt,
             std::nullopt,
@@ -163,7 +160,8 @@ MediaAvStartupCoordinator::MediaAvStartupCoordinator(MediaAvStartupConfig config
     : m_config(std::move(config))
     , m_state(m_config.sourceClockMode)
     , m_video(std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap))
-    , m_audio(std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap))
+    , m_audio(m_config.audio
+          ? std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap) : nullptr)
 {
 }
 
@@ -176,9 +174,15 @@ MediaAvStartupCoordinator& MediaAvStartupCoordinator::operator=(
 MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
     const MediaAvStartupAccessUnit& unit) const
 {
+    if ((unit.stream != MediaAvStartupStream::Video &&
+         unit.stream != MediaAvStartupStream::Audio) ||
+        (unit.stream == MediaAvStartupStream::Audio && !m_config.audio))
+        return MediaAvSyncStatus::failure(startupError(
+            MediaAvSyncErrorCode::SourceIdentityMismatch, "validate_startup_unit", &unit,
+            "startup unit is not a planned stream member"));
     const auto maximumUnitBytes = unit.stream == MediaAvStartupStream::Video
         ? m_config.maximumVideoUnitBytes
-        : m_config.maximumAudioUnitBytes;
+        : m_config.audio->maximumUnitBytes;
     if (unit.sequence == 0 || unit.payloadBytes == 0 ||
         unit.payloadBytes > maximumUnitBytes || unit.duration <= Zero) {
         return MediaAvSyncStatus::failure(startupError(
@@ -190,7 +194,7 @@ MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
     }
     const auto& expectedIdentity = unit.stream == MediaAvStartupStream::Video
         ? m_config.videoIdentity
-        : m_config.audioIdentity;
+        : m_config.audio->identity;
     if (unit.identity != expectedIdentity) {
         return MediaAvSyncStatus::failure(startupError(
             MediaAvSyncErrorCode::SourceIdentityMismatch,
@@ -339,10 +343,10 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
         : m_audioBytes;
     const std::size_t capacity = unit.stream == MediaAvStartupStream::Video
         ? m_config.videoCapacity
-        : m_config.audioCapacity;
+        : m_config.audio->capacity;
     const std::uint64_t byteCapacity = unit.stream == MediaAvStartupStream::Video
         ? m_config.videoByteCapacity
-        : m_config.audioByteCapacity;
+        : m_config.audio->byteCapacity;
     if (store.size() >= capacity || unit.payloadBytes > byteCapacity - bufferedBytes) {
         auto failed = markFailed(MediaAvSyncErrorCode::StartupCapacityExceeded,
                                  "startup buffer capacity exceeded");
@@ -367,12 +371,12 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
     bufferedBytes += payloadBytes;
     m_cumulativeSelectionWork.coverageOperations =
         m_video->cumulativeCoverageWork().coverageOperations +
-        m_audio->cumulativeCoverageWork().coverageOperations;
+        (m_audio ? m_audio->cumulativeCoverageWork().coverageOperations : 0);
     m_cumulativeSelectionWork.orderedIndexMutations =
         m_video->cumulativeCoverageWork().orderedIndexMutations +
-        m_audio->cumulativeCoverageWork().orderedIndexMutations;
+        (m_audio ? m_audio->cumulativeCoverageWork().orderedIndexMutations : 0);
 
-    if (m_videoLocked && m_audioLocked &&
+    if (m_videoLocked && (!m_audio || m_audioLocked) &&
         m_state.state() == MediaAvSyncState::AcquiringClock) {
         if (auto status = m_state.transition(MediaAvSyncEvent::ClocksLocked,
                                              *m_state.generation()); !status) {
@@ -393,17 +397,18 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
             {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
     }
-    if (m_audio->empty()) {
+    if (m_audio && m_audio->empty()) {
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
             {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
     }
     m_lastAttemptSelectionWork = {};
     auto videoCoverage = MediaAvStartupCoverageIndex::build(
         m_video->presentationSnapshot(), m_lastAttemptSelectionWork);
-    auto audioCoverage = MediaAvStartupCoverageIndex::build(
+    std::optional<MediaAvStartupCoverageIndex> audioCoverage;
+    if (m_audio) audioCoverage = MediaAvStartupCoverageIndex::build(
         m_audio->presentationSnapshot(), m_lastAttemptSelectionWork);
     auto selected = MediaAvStartupWindowSelector::select(
-        videoCoverage, audioCoverage, m_config,
+        videoCoverage, audioCoverage ? &*audioCoverage : nullptr, m_config,
         m_lastAttemptSelectionWork);
     m_cumulativeSelectionWork.indexedUnits +=
         m_lastAttemptSelectionWork.indexedUnits;
@@ -421,11 +426,11 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
     }
     const auto& window = *selected.value();
     std::uint32_t trimLeadingSamples = 0;
-    if (m_config.trimAudioToCommonStart) {
+    if (m_config.audio && m_config.audio->trimToCommonStart) {
         auto audioTrimTime = window.sourceStart.checkedSubtract(
             *window.audio->presentationTime);
         if (!audioTrimTime || audioTrimTime.value() < Zero ||
-            audioTrimTime.value() > m_config.maximumAudioTrim) {
+            audioTrimTime.value() > m_config.audio->maximumTrim) {
             auto failed = markFailed(
                 MediaAvSyncErrorCode::AudioTrimLimitExceeded,
                 "audio trim exceeds planned bound");
@@ -442,7 +447,7 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
                 failed.error());
         }
         trimLeadingSamples = trim.value();
-    } else if (*window.audio->presentationTime < window.sourceStart) {
+    } else if (window.audio && *window.audio->presentationTime < window.sourceStart) {
         auto failed = markFailed(
             MediaAvSyncErrorCode::AudioTrimLimitExceeded,
             "complete access-unit startup selected audio before the epoch");
@@ -453,11 +458,13 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
     MediaAvStartupRelease batch{
         MediaPlaybackEpoch{window.sourceStart, Zero, *m_state.generation()}, {}, {}};
     auto purged = m_video->prefixBefore(window.video, m_lastAttemptSelectionWork);
-    auto audioPurged = m_audio->prefixBefore(window.audio, m_lastAttemptSelectionWork);
-    purged.insert(purged.end(), audioPurged.begin(), audioPurged.end());
+    if (m_audio) {
+        auto audioPurged = m_audio->prefixBefore(window.audio, m_lastAttemptSelectionWork);
+        purged.insert(purged.end(), audioPurged.begin(), audioPurged.end());
+    }
     m_video->appendSuffixSelections(window.video, 0, batch.video,
                                     m_lastAttemptSelectionWork);
-    m_audio->appendSuffixSelections(window.audio, trimLeadingSamples, batch.audio,
+    if (m_audio) m_audio->appendSuffixSelections(window.audio, trimLeadingSamples, batch.audio,
                                     m_lastAttemptSelectionWork);
     auto releaseTime = observedAt.checkedAdd(m_config.outputLead);
     if (!releaseTime) {
@@ -480,7 +487,7 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(status.error());
     }
     m_video->clear();
-    m_audio->clear();
+    if (m_audio) m_audio->clear();
     m_videoBytes = 0;
     m_audioBytes = 0;
     m_epoch = batch.epoch;
@@ -575,6 +582,11 @@ MediaAvSyncStatus MediaAvStartupCoordinator::resumeAfterEvidence(MediaRunningTim
 
 MediaAvSyncStatus MediaAvStartupCoordinator::endOfStream(MediaAvStartupStream stream)
 {
+    if ((stream != MediaAvStartupStream::Video && stream != MediaAvStartupStream::Audio) ||
+        (stream == MediaAvStartupStream::Audio && !m_config.audio))
+        return MediaAvSyncStatus::failure(startupError(
+            MediaAvSyncErrorCode::SourceIdentityMismatch, "end_of_stream", nullptr,
+            "startup EOF is not a planned stream member"));
     if (m_state.state() == MediaAvSyncState::Running) {
         bool& ended = stream == MediaAvStartupStream::Video ? m_videoEof : m_audioEof;
         if (ended) {
@@ -640,19 +652,19 @@ const std::optional<MediaPlaybackEpoch>& MediaAvStartupCoordinator::playbackEpoc
 
 bool MediaAvStartupCoordinator::terminalEofReached() const noexcept
 {
-    return m_videoEof && m_audioEof;
+    return m_videoEof && (!m_audio || m_audioEof);
 }
 
 std::vector<MediaAvStartupUnitId> MediaAvStartupCoordinator::purge() noexcept
 {
     std::vector<MediaAvStartupUnitId> purged;
     auto videoIds = m_video->ids();
-    auto audioIds = m_audio->ids();
+    auto audioIds = m_audio ? m_audio->ids() : std::vector<MediaAvStartupUnitId>{};
     purged.reserve(videoIds.size() + audioIds.size());
     purged.insert(purged.end(), videoIds.begin(), videoIds.end());
     purged.insert(purged.end(), audioIds.begin(), audioIds.end());
     m_video->clear();
-    m_audio->clear();
+    if (m_audio) m_audio->clear();
     m_videoLocked = false;
     m_audioLocked = false;
     m_keyFrameWaitStartedAt.reset();
@@ -685,7 +697,8 @@ MediaAvSyncError MediaAvStartupCoordinator::startupError(
     const std::string expectedIdentity = unit
         ? (unit->stream == MediaAvStartupStream::Video
                ? m_config.videoIdentity
-               : m_config.audioIdentity)
+               : unit->stream == MediaAvStartupStream::Audio && m_config.audio
+                   ? m_config.audio->identity : std::string{})
         : std::string{};
     return MediaAvSyncError(
         code,
