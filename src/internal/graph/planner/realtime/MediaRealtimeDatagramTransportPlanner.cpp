@@ -1,7 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
-#include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelopePlanner.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -49,15 +48,8 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaVideoOnlySeparateRtpOutputRuntimePlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, nullptr);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(2);
@@ -68,7 +60,7 @@ MediaRealtimeDatagramTransportPlanner::plan(
         return create(
             sessionKey, deployment, std::move(endpoints),
             MediaWireTrafficEnvelopePlanner::plan(
-                deployment, emission.value(), output));
+                deployment, emission, output));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -81,16 +73,8 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaSeparateRtpOutputRuntimePlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate,
-    const MediaAudioPipelinePlan& audioPipeline)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, &audioPipeline);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(4);
@@ -105,7 +89,7 @@ MediaRealtimeDatagramTransportPlanner::plan(
         return create(
             sessionKey, deployment, std::move(endpoints),
             MediaWireTrafficEnvelopePlanner::plan(
-                deployment, emission.value(), output));
+                deployment, emission, output));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -118,18 +102,10 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaProjectMpegTsRuntimeOutputPlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate,
-    const MediaAudioPipelinePlan* audioPipeline)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, audioPipeline);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
     auto wire = MediaWireTrafficEnvelopePlanner::plan(
-        deployment, emission.value(), output);
+        deployment, emission, output);
     if (!wire) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             wire.error());

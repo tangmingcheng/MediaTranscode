@@ -9,7 +9,6 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeRtpTranscodePlanningDraft;
-struct MediaRealtimeRtpTranscodeRequest;
 struct MediaRealtimeOutputPlanningDraft;
 
 class MediaRealtimeAvSyncRuntimePlanner final {
@@ -17,8 +16,8 @@ public:
     static ::media::Result<MediaRealtimeAvSyncRuntimePlan> plan(
         MediaRealtimeRtpTranscodePlanningDraft& outer,
         MediaRealtimeOutputPlanningDraft& output,
-        const MediaRealtimeRtpTranscodeRequest& request,
         MediaAvSyncPlan synchronization,
+        MediaAvSyncPlan outputSynchronization,
         MediaRational outputFrameRate,
         const MediaPreparedRealtimeEmissionSet& preparedEmission);
 

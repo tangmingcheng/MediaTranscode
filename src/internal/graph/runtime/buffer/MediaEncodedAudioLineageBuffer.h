@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/runtime/storage/MediaImmutableArray.h"
+
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
@@ -17,16 +19,16 @@ public:
     MediaBufferType type() const noexcept override;
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     const MediaBufferRef& media() const noexcept;
-    const std::vector<MediaAudioIntervalFragment>& fragments() const noexcept;
+    std::span<const MediaAudioIntervalFragment> fragments() const noexcept;
     const MediaAudioPlaybackOrigin& audioOrigin() const noexcept;
 
 private:
     MediaEncodedAudioLineageBuffer(
         MediaBufferRef media,
-        std::vector<MediaAudioIntervalFragment> fragments,
+        MediaImmutableArray<MediaAudioIntervalFragment> fragments,
         MediaAudioPlaybackOrigin origin);
     MediaBufferRef m_media;
-    std::vector<MediaAudioIntervalFragment> m_fragments;
+    MediaImmutableArray<MediaAudioIntervalFragment> m_fragments;
     MediaAudioPlaybackOrigin m_origin;
 };
 

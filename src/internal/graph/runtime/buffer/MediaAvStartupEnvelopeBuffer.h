@@ -3,7 +3,7 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
-#include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaPlaybackActivation.h"
 #include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
@@ -53,8 +53,7 @@ public:
     static ::media::Result<MediaBufferRef> create(
         MediaAvSyncGroupKey groupKey,
         MediaAvStartupReleaseKind releaseKind,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin,
+        MediaPlaybackActivation activation,
         std::vector<MediaAvReleasedUnit> video,
         std::vector<MediaAvReleasedUnit> audio,
         std::optional<std::uint64_t> completedTransitionSequence);
@@ -63,7 +62,7 @@ public:
     const MediaAvSyncGroupKey& groupKey() const noexcept;
     MediaAvStartupReleaseKind releaseKind() const noexcept;
     const MediaPlaybackEpoch& epoch() const noexcept;
-    const MediaAudioPlaybackOrigin& audioOrigin() const noexcept;
+    const MediaPlaybackActivation& activation() const noexcept;
     const std::vector<MediaAvReleasedUnit>& video() const noexcept;
     const std::vector<MediaAvReleasedUnit>& audio() const noexcept;
     const std::optional<std::uint64_t>&
@@ -72,16 +71,14 @@ public:
 private:
     MediaAvStartupReleaseBuffer(MediaAvSyncGroupKey groupKey,
                                 MediaAvStartupReleaseKind releaseKind,
-                                MediaPlaybackEpoch epoch,
-                                MediaAudioPlaybackOrigin audioOrigin,
+                                MediaPlaybackActivation activation,
                                 std::vector<MediaAvReleasedUnit> video,
                                 std::vector<MediaAvReleasedUnit> audio,
                                 std::optional<std::uint64_t>
                                     completedTransitionSequence);
     MediaAvSyncGroupKey m_groupKey;
     MediaAvStartupReleaseKind m_releaseKind;
-    MediaPlaybackEpoch m_epoch;
-    MediaAudioPlaybackOrigin m_audioOrigin;
+    MediaPlaybackActivation m_activation;
     std::vector<MediaAvReleasedUnit> m_video;
     std::vector<MediaAvReleasedUnit> m_audio;
     std::optional<std::uint64_t> m_completedTransitionSequence;

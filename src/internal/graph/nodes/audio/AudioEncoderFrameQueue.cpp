@@ -14,9 +14,11 @@ namespace media::ffmpeg::graph {
 
 AudioEncoderFrameQueue::AudioEncoderFrameQueue(
     MediaAudioLineageExecutionMode lineageMode,
-    std::size_t lineageCapacity)
+    std::size_t lineageCapacity,
+    std::optional<MediaAudioEncoderFifoRetentionPlan> retention)
     : m_lineageMode(lineageMode)
     , m_lineageCapacity(lineageCapacity)
+    , m_retention(std::move(retention))
 {
 }
 
@@ -37,6 +39,25 @@ AudioEncoderFrameQueue::~AudioEncoderFrameQueue()
                 "AudioEncoderFrameQueue requires explicit sample format, sample rate, channel layout, and frame size"));
     }
 
+    if ((m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) !=
+        m_retention.has_value()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "audio encoder FIFO retention mode is inconsistent"));
+    }
+    if (m_retention) {
+        const auto& limit = *m_retention;
+        const int bytes = av_samples_get_buffer_size(nullptr,
+            codecContext.ch_layout.nb_channels, limit.maximumSamples,
+            codecContext.sample_fmt, 1);
+        if (limit.maximumInputSamples <= 0 || limit.maximumSamples < codecContext.frame_size ||
+            limit.maximumSamples - codecContext.frame_size != limit.maximumInputSamples - 1 ||
+            limit.maximumBytes <= 0 || bytes != limit.maximumBytes ||
+            limit.maximumFragments != static_cast<std::size_t>(limit.maximumSamples) ||
+            limit.frameSamples != codecContext.frame_size) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "audio encoder FIFO differs from prepared retention contract"));
+        }
+    }
     const int layoutStatus = av_channel_layout_copy(&m_channelLayout, &codecContext.ch_layout);
     if (layoutStatus < 0) {
         return FFmpegGraphError::statusFromCode(layoutStatus, "av_channel_layout_copy(audio encoder frame queue)");
@@ -85,6 +106,18 @@ AudioEncoderFrameQueue::~AudioEncoderFrameQueue()
     }
 
     const int required = queued + frame.nb_samples;
+    if (m_retention) {
+        const auto& limit = *m_retention;
+        const int bytes = av_samples_get_buffer_size(nullptr,
+            m_channelLayout.nb_channels, required, m_sampleFormat, 1);
+        if (queued >= m_frameSize || frame.nb_samples > limit.maximumInputSamples ||
+            required > limit.maximumSamples || bytes <= 0 || bytes > limit.maximumBytes ||
+            m_intervals.fragmentCount() > limit.maximumFragments ||
+            fragments.size() > limit.maximumFragments - m_intervals.fragmentCount()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "audio encoder FIFO input exceeds planned sample, byte, or fragment retention"));
+        }
+    }
     auto candidateIntervals = m_intervals;
     if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
         MediaAudioLineageCapacity capacity(m_lineageCapacity);

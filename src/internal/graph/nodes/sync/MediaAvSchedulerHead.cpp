@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaAvSchedulerHead.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 namespace media::ffmpeg::graph {

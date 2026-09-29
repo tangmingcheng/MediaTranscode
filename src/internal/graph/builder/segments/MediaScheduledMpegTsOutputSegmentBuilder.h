@@ -2,10 +2,12 @@
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvOutputSegmentPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
 
 #include <string>
+
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -25,6 +27,7 @@ struct MediaScheduledMpegTsOutputSegmentResult final {
     MediaNodeId mux;
     MediaNodeId scheduledDatagramSender;
     MediaNodeId rtpSdpPublisher;
+    std::vector<MediaNodeId> outputMembers;
 };
 
 struct MediaVideoOnlyScheduledMpegTsOutputSegmentOptions final {
@@ -39,7 +42,7 @@ public:
     static ::media::Result<MediaScheduledMpegTsOutputSegmentResult> build(
         MediaGraph& graph,
         const MediaScheduledMpegTsOutputSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvOutputSegmentPlan& plan);
     static ::media::Result<MediaScheduledMpegTsOutputSegmentResult>
     buildVideoOnly(
         MediaGraph& graph,

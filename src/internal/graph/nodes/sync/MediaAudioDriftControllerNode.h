@@ -4,6 +4,7 @@
 #include "internal/graph/sync/MediaAudioDriftServo.h"
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/sync/MediaAvReacquisitionRequest.h"
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
 #include "internal/graph/sync/lineage/MediaAudioSampleProjection.h"
 
@@ -36,6 +37,7 @@ public:
 
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
+    ::media::Status finishExecution(MediaGraphExecutionContext& context) noexcept override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
@@ -48,7 +50,8 @@ private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status stage(
         const MediaBufferRef& audio,
-        MediaAvActivatedOutputPermitReservation activated);
+        const MediaAvActivatedOutputPermitReservation& activated,
+        std::optional<MediaAvReacquisitionRequest>& reacquisition);
     ::media::Result<bool> commitIfReady(MediaGraphExecutionContext& context);
     static void logDriftSample(
         const MediaAudioDriftMeasurement& measurement,

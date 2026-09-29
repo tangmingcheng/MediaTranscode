@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <variant>
+#include "internal/graph/protocol/rtp/MediaRtpSourceUnavailable.h"
 
 namespace media::ffmpeg::graph {
 
@@ -17,13 +19,16 @@ struct MediaRtcpSenderReportTrackerConfig final {
     int64_t cnameTimeoutNs;
 };
 
+struct MediaRtcpObservationAccepted final {};
+using MediaRtcpObservation = std::variant<MediaRtcpObservationAccepted, MediaRtpClockInvalidation>;
+
 class MediaRtcpSenderReportTracker final {
 public:
     explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config);
 
     void observeMedia(uint32_t ssrc, int64_t observedAtNs);
     void observeContinuityLoss() noexcept;
-    ::media::Status observe(const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs);
+    ::media::Result<MediaRtcpObservation> observe(const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs);
     ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;
     ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(
         int64_t observedAtNs);

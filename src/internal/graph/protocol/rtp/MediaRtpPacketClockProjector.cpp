@@ -17,7 +17,11 @@ namespace {
     MediaScheduledStream stream,
     std::uint64_t extendedRtpTimestamp) const
 {
-    if (snapshot.state != MediaRtpClockGroupState::Locked || !snapshot.locked ||
+    if (auto status = snapshot.validateMembers(snapshot.members); !status)
+        return ::media::Result<MediaPacketSourceTiming>::failure(status.error());
+    if ((stream != MediaScheduledStream::Video && stream != MediaScheduledStream::Audio) ||
+        (stream == MediaScheduledStream::Audio && snapshot.members != MediaTranscodeStreamSet::AudioVideo) ||
+        snapshot.state != MediaRtpClockGroupState::Locked || !snapshot.locked ||
         snapshot.groupGeneration == 0) {
         return ::media::Result<MediaPacketSourceTiming>::failure(
             invalid("RTP packet clock projection requires a nonzero locked group snapshot"));
@@ -25,7 +29,7 @@ namespace {
     const MediaRtpSourceClockCalibration& calibration =
         stream == MediaScheduledStream::Video
         ? snapshot.locked->video
-        : snapshot.locked->audio;
+        : *snapshot.locked->audio;
     if (calibration.confidence != MediaRtpSourceClockConfidence::Locked ||
         calibration.rateDenominatorTicks <= 0 ||
         extendedRtpTimestamp >

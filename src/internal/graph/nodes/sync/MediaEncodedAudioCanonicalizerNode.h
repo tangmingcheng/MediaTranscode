@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <cstdint>
 #include <optional>
@@ -13,13 +14,14 @@ class MediaAvGenerationPurgeTarget;
 
 class MediaEncodedAudioCanonicalizerNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaEncodedAudioCanonicalizerNode(MediaNodeId nodeId);
+    MediaEncodedAudioCanonicalizerNode(MediaNodeId nodeId, MediaAvSyncGroupKey outputGroup);
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
     static ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
     canonicalize(const MediaBufferRef& encoded,
-                 MediaSourceAccessUnitSequence sequence);
+                 MediaOutputAccessUnitSequence sequence,
+                 const MediaAvSyncGroupKey& outputGroup);
 
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
@@ -34,6 +36,7 @@ protected:
 private:
     void resetState() noexcept;
     std::shared_ptr<MediaEncodedAudioCanonicalizerState> m_state;
+    MediaAvSyncGroupKey m_outputGroup;
 };
 
 } // namespace media::ffmpeg::graph

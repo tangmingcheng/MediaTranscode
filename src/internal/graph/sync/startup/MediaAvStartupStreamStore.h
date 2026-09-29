@@ -21,6 +21,7 @@ public:
     explicit MediaAvStartupStreamStore(MediaRunningTime maximumGap);
 
     bool empty() const noexcept;
+    bool hasKeyFrame() const noexcept;
     std::size_t size() const noexcept;
     std::uint64_t backSequence() const noexcept;
     ::media::Result<bool> append(MediaAvStartupAccessUnit unit);

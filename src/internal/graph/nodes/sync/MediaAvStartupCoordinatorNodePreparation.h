@@ -21,12 +21,10 @@ public:
 private:
     MediaAvStartupCoordinatorNodePreparation(
         std::unique_ptr<MediaAvStartupCoordinator> coordinator,
-        std::shared_ptr<MediaAvStartupGenerationState> generationState,
-        int outputAudioSampleRate);
+        std::shared_ptr<MediaAvStartupGenerationState> generationState);
 
     std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
-    int m_outputAudioSampleRate = 0;
 
     friend class MediaAvStartupCoordinatorNode;
     friend ::media::Result<MediaAvStartupCoordinatorNodePreparation>

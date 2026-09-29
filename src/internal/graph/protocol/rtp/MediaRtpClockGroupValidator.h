@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaStreamKind.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "media_transcode/Result.h"
@@ -18,27 +19,38 @@ enum class MediaRtpClockGroupState {
     ReacquireRequired
 };
 
+struct MediaRtpClockGroupAudioConfig final {
+    std::int64_t cnameTimeoutNs;
+    std::int64_t maximumClockOffsetSkewNs;
+};
+
 struct MediaRtpClockGroupValidatorConfig final {
+    MediaTranscodeStreamSet members;
     std::int64_t senderReportTimeoutNs;
     std::int64_t maximumExtrapolationNs;
-    std::int64_t maximumInterStreamClockOffsetSkewNs;
     std::int64_t videoCnameTimeoutNs;
-    std::int64_t audioCnameTimeoutNs;
+    std::optional<MediaRtpClockGroupAudioConfig> audio;
     bool requireMatchingCname;
     MediaRtpCommonEpochPolicy commonEpochPolicy;
+    bool invalidateOnDegraded;
 };
 
 struct MediaRtpLockedClockGroup final {
     MediaRunningTime commonSourceEpoch;
     std::vector<std::uint8_t> cname;
     MediaRtpSourceClockCalibration video;
-    MediaRtpSourceClockCalibration audio;
+    std::optional<MediaRtpSourceClockCalibration> audio;
 };
 
 struct MediaRtpClockGroupSnapshot final {
+    MediaTranscodeStreamSet members;
     MediaRtpClockGroupState state;
     std::uint64_t groupGeneration;
     std::optional<MediaRtpLockedClockGroup> locked;
+    std::optional<std::uint64_t> invalidatedGeneration;
+    std::uint64_t evidenceRevision;
+
+    ::media::Status validateMembers(MediaTranscodeStreamSet expected) const;
 };
 
 class MediaRtpClockGroupValidator final {
@@ -49,13 +61,15 @@ public:
     ::media::Status observe(MediaStreamKind streamKind,
                             const MediaRtcpClockEvidence& evidence,
                             MediaRtpSourceClockCalibration calibration);
-    MediaRtpClockGroupSnapshot snapshot(std::int64_t observedAtNs);
+    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs);
     void invalidate() noexcept;
 
 private:
     enum class Phase {
         InitialAcquisition,
-        ActiveGeneration
+        ActiveGeneration,
+        Reacquiring,
+        Exhausted
     };
 
     struct StreamState final {
@@ -64,8 +78,8 @@ private:
     };
 
     explicit MediaRtpClockGroupValidator(MediaRtpClockGroupValidatorConfig config) noexcept;
-    void discardExpiredInitialCandidates(std::int64_t observedAtNs) noexcept;
-    bool initialCandidateIsFresh(
+    void discardExpiredAcquisitionCandidates(std::int64_t observedAtNs) noexcept;
+    bool acquisitionCandidateIsFresh(
         const StreamState& stream,
         std::int64_t observedAtNs,
         std::int64_t cnameTimeoutNs) const noexcept;
@@ -76,6 +90,8 @@ private:
     std::optional<StreamState> m_audio;
     std::optional<MediaRunningTime> m_commonSourceEpoch;
     std::uint64_t m_groupGeneration = 0;
+    std::uint64_t m_evidenceRevision = 0;
+    std::optional<std::uint64_t> m_invalidatedGeneration;
     bool m_reacquireRequired = false;
     Phase m_phase = Phase::InitialAcquisition;
 };

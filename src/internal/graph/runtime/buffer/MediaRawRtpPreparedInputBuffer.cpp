@@ -2,6 +2,9 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressAdapterFactory.h"
 #include "internal/graph/time/MediaSteadyClock.h"
 
@@ -96,8 +99,80 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
     m_captureThread = std::jthread(
         [owner = this](std::stop_token stopToken) {
             owner->capture(stopToken);
+            {
+                std::scoped_lock lock(owner->m_mutex);
+                owner->m_captureFinished = true;
+            }
+            owner->m_ready.notify_all();
         });
+    m_captureStarted = true;
+    m_captureFinished = false;
     return ::media::Status::success();
+}
+
+::media::Result<MediaRawRtpProbeLease>
+MediaRawRtpPreparedInputBuffer::acquireProbeLease() const
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_captureError) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(*m_captureError);
+    }
+    if (!m_prepared || m_stopped || m_replayActive) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP probe requires a live prepared input before replay"));
+    }
+    return MediaRawRtpProbeLease::capture(
+        m_prepared->datagrams, m_prepared->byteBudget);
+}
+
+::media::Status MediaRawRtpPreparedInputBuffer::waitForProbeData(
+    std::size_t previousDatagramCount,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token stopToken)
+{
+    // Register before taking the lock so return unlocks before joining an
+    // in-flight stop callback. The shared mutex prevents a lost cancellation wake.
+    std::stop_callback cancellation(stopToken, [this] {
+        std::scoped_lock lock(m_mutex);
+        m_ready.notify_all();
+    });
+    std::unique_lock lock(m_mutex);
+    if (!m_prepared || m_stopped || m_replayActive ||
+        !m_captureStarted ||
+        previousDatagramCount > m_prepared->datagrams.size()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe wait requires its live preflight capture frontier"));
+    }
+    const auto budget = m_prepared->byteBudget->snapshot();
+    if (budget.runtimeActive || budget.probeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe must release its snapshot before waiting for more input"));
+    }
+    m_ready.wait_until(lock, deadline, [&] {
+        return stopToken.stop_requested() || m_stopped || m_replayActive ||
+            m_captureError || m_captureFinished ||
+            m_prepared->datagrams.size() > previousDatagramCount;
+    });
+    if (m_captureError) return ::media::Status::failure(*m_captureError);
+    if (auto status = m_prepared->byteBudget->validate(); !status) return status;
+    if (m_prepared->byteBudget->snapshot().runtimeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe input wait outlived preflight preparation"));
+    }
+    if (stopToken.stop_requested() || m_stopped || m_replayActive) {
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "raw RTP probe input wait was cancelled"));
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "raw RTP probe reached its original preparation deadline"));
+    }
+    if (m_prepared->datagrams.size() > previousDatagramCount) {
+        return ::media::Status::success();
+    }
+    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "raw RTP preflight capture ended before additional probe evidence"));
 }
 
 ::media::Result<MediaPreparedRawRtpReplayInfo>
@@ -135,14 +210,14 @@ MediaRawRtpPreparedInputBuffer::beginReplay()
     if (lastNs >= firstNs) {
         info.arrivalSpanMilliseconds = (lastNs - firstNs) / 1'000'000;
     }
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
+            status.error());
+    }
     auto activated = m_prepared->replayClock->activate();
     if (!activated) {
         return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
             activated.error());
-    }
-    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
-        return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
-            status.error());
     }
     m_replayEpoch = activated.value();
     if (firstNs > 0) {
@@ -261,6 +336,14 @@ MediaRawRtpPreparedInputBuffer::ingressObservation()
             ::media::ErrorInfo::notInitialized(
                 "raw RTP prepared input has no ingress observation collector"));
     }
+    if (m_captureThread.joinable()) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP ingress observation requires completed preflight capture"));
+    }
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(status.error());
+    }
     return m_prepared->ingressObservation->seal();
 }
 
@@ -319,6 +402,50 @@ MediaRawRtpPreparedInputBuffer::effectiveSocketReceivePayloadBytes() const
     }
     return ::media::Result<std::size_t>::success(
         static_cast<std::size_t>(capacity));
+}
+
+::media::Result<std::uint64_t>
+MediaRawRtpPreparedInputBuffer::sealedReplayAccessUnitBound() const
+{
+    using Result = ::media::Result<std::uint64_t>;
+    std::scoped_lock lock(m_mutex);
+    if (!m_prepared || m_stopped || m_replayActive || m_captureThread.joinable()) {
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "RTP replay retention requires completed capture before replay"));
+    }
+    if (m_captureError) return Result::failure(*m_captureError);
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
+        return Result::failure(status.error());
+    }
+    const auto codec = canonicalCodecName(m_prepared->identity.codecName);
+    const bool video = codec == "h264" || codec == "hevc";
+    if (!video && codec != "aac" && codec != "opus") {
+        return Result::failure(::media::ErrorInfo::unsupported(
+            "RTP replay retention has no codec completion contract"));
+    }
+    // One video AU can straddle the sealed replay/live boundary.
+    std::uint64_t units = video ? 1 : 0;
+    for (const auto& entry : m_prepared->datagrams) {
+        if (entry.datagram.channel != MediaRtpUdpChannel::Rtp) continue;
+        auto packet = MediaRtpPacketParser::parse(entry.datagram.bytes);
+        if (!packet) return Result::failure(packet.error());
+        if (packet.value().payloadType != m_prepared->identity.payloadType) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "sealed RTP replay payload identity differs from its plan"));
+        }
+        std::uint64_t completed = video ? (packet.value().marker ? 1 : 0) : 1;
+        if (codec == "aac") {
+            auto headers = MediaAacRtpAuHeaderPlanner::plan(packet.value().payload);
+            if (!headers) return Result::failure(headers.error());
+            // Counting every fragment header can overestimate, never undercount.
+            completed = headers.value().accessUnits.size();
+        }
+        auto total = MediaCheckedArithmetic::add(units, completed,
+            "sealed RTP replay access-unit retention");
+        if (!total) return Result::failure(total.error());
+        units = total.value();
+    }
+    return Result::success(units);
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::configureRuntimeIngress(
@@ -387,7 +514,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     return receiver->receiveNext(timeoutMilliseconds);
 }
 
-::media::Status MediaRawRtpPreparedInputBuffer::sealPreflight()
+::media::Status MediaRawRtpPreparedInputBuffer::finishPreflightCapture()
 {
     {
         std::scoped_lock lock(m_mutex);
@@ -404,7 +531,7 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     if (auto status = m_prepared->transport.reset(); !status) return status;
     std::scoped_lock lock(m_mutex);
     if (m_captureError) return ::media::Status::failure(*m_captureError);
-    return m_prepared->byteBudget->sealPreflight();
+    return m_prepared->byteBudget->validate();
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::stop() noexcept
@@ -488,6 +615,12 @@ void MediaRawRtpPreparedInputBuffer::capture(
                 budget.retainedBytes > budget.capacity ||
                 maximumDatagramBytes >
                     budget.capacity - budget.retainedBytes) {
+                if (budget.probeActive) {
+                    m_captureError = ::media::ErrorInfo::allocationFailed(
+                        "raw RTP capture exhausted shared storage while a probe snapshot was retained");
+                    (void)m_prepared->byteBudget->fail(*m_captureError);
+                    m_ready.notify_all();
+                }
                 return;
             }
             timeoutMs = m_prepared->captureReadTimeoutMs;

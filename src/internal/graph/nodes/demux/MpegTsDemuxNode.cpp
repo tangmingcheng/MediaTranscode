@@ -342,7 +342,7 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
         }
         MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
             MediaSourceClockReadiness::Acquiring,
-            m_initialSourceGeneration, false);
+            m_initialSourceGeneration, false, std::nullopt);
         if (context.findOutputChannel(nodeId(), "clock")) {
             return processProgress(emitOutput(context, "clock", state));
         }
@@ -400,7 +400,7 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
         m_reacquiringSourceGeneration = *m_lockedSourceGeneration + 1;
         MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
             MediaSourceClockReadiness::ReacquireRequired,
-            *m_lockedSourceGeneration, true);
+            *m_lockedSourceGeneration, true, std::nullopt);
         if (context.findOutputChannel(nodeId(), "clock")) {
             return processProgress(emitOutput(context, "clock", state));
         }
@@ -450,7 +450,7 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     m_lockedProjectionGeneration = checkpoint.value().generation;
     m_reacquiringSourceGeneration.reset();
     MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        MediaSourceClockReadiness::Locked, outputCheckpoint.generation, false);
+        MediaSourceClockReadiness::Locked, outputCheckpoint.generation, false, std::nullopt);
     if (context.findOutputChannel(nodeId(), "clock")) {
         return processProgress(emitOutput(context, "clock", state));
     }

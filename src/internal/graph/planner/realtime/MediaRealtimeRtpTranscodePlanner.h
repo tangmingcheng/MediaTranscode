@@ -136,6 +136,7 @@ private:
         const MediaPreparedRealtimeInput* preparedInput,
         const MediaPreparedRealtimeInput* preparedAudioInput,
         const MediaRtpIngressPlan* preparedVideoIngress,
+        const MediaRtpIngressPlan* preparedAudioIngress,
         std::optional<MediaPipelinePlan> preplannedVideo,
         const MediaDetectedRtpVideoSignaling* detectedVideoSignaling,
         const MediaRational* detectedVideoFrameRate);

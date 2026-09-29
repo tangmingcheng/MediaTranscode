@@ -330,6 +330,52 @@ MediaRealtimeGraphResourceLedgerPlanner::admitPreparedInput(
     return Result::success(std::move(ledger));
 }
 
+::media::Result<MediaRealtimeGraphResourceLedgerPlan>
+MediaRealtimeGraphResourceLedgerPlanner::admitInputRetention(
+    MediaRealtimeGraphResourceLedgerPlan ledger,
+    MediaPreparedInputRetentionPlan retention)
+{
+    using Result = ::media::Result<MediaRealtimeGraphResourceLedgerPlan>;
+    if (ledger.inputRetention || !ledger.preparedInputPayload) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "input retention requires one previously admitted input payload envelope"));
+    }
+    if (auto status = retention.validate(); !status) return Result::failure(status.error());
+    const auto* video = ledger.preparedInputPayload->find(MediaStreamKind::Video);
+    const auto* audio = ledger.preparedInputPayload->find(MediaStreamKind::Audio);
+    if (!video || !audio || video->maximumPayloadBytes != retention.video.maximumUnitBytes ||
+        audio->maximumPayloadBytes != retention.audio.maximumUnitBytes) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "input retention differs from the producer allocation envelope"));
+    }
+    auto retainedBytes = MediaCheckedArithmetic::add(
+        retention.video.maximumBytes, retention.audio.maximumBytes,
+        "audio/video startup retained payload credits");
+    auto retainedUnits = MediaCheckedArithmetic::add(
+        retention.video.maximumUnits, retention.audio.maximumUnits,
+        "audio/video startup retained payload objects");
+    auto total = retainedBytes ? MediaCheckedArithmetic::add(
+        ledger.maximumGraphPayloadAndReservedStorageBytes, retainedBytes.value(),
+        "graph budget with input startup retention") : retainedBytes;
+    if (!total || !retainedUnits) return Result::failure(
+        !total ? total.error() : retainedUnits.error());
+    try {
+        // Completion/partial-AU credits were admitted separately. Existing AU
+        // leases follow references through binder, edges and startup storage.
+        ledger.entries.push_back({
+            MediaRealtimeResourceAccountingGroup::PreparedInputStartupRetention,
+            MediaRealtimeQueueRetentionSemantics::BoundedFifo,
+            retainedUnits.value(), retainedBytes.value(),
+            retention.video.authority + "+" + retention.audio.authority});
+        ledger.inputRetention.emplace(std::move(retention));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "input retention resource ledger"));
+    }
+    ledger.maximumGraphPayloadAndReservedStorageBytes = total.value();
+    return Result::success(std::move(ledger));
+}
+
 ::media::Status MediaRealtimeGraphResourceLedgerPlanner::validate(
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
@@ -356,6 +402,9 @@ MediaRealtimeGraphResourceLedgerPlanner::admitPreparedInput(
         if (auto status = ledger.preparedInputPayload->validate(); !status) {
             return status;
         }
+    }
+    if (ledger.inputRetention) {
+        if (auto status = ledger.inputRetention->validate(); !status) return status;
     }
     bool retainLatest = false;
     for (const auto& entry : ledger.entries) {

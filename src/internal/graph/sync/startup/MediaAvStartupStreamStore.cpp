@@ -19,6 +19,14 @@ MediaAvStartupStreamStore::MediaAvStartupStreamStore(
 }
 
 bool MediaAvStartupStreamStore::empty() const noexcept { return m_arrival.empty(); }
+bool MediaAvStartupStreamStore::hasKeyFrame() const noexcept
+{
+    for (const auto& record : m_arrival) {
+        if (record.unit.keyFrame) return true;
+    }
+    return false;
+}
+
 std::size_t MediaAvStartupStreamStore::size() const noexcept { return m_arrival.size(); }
 std::uint64_t MediaAvStartupStreamStore::backSequence() const noexcept
 {

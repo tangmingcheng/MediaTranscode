@@ -43,9 +43,8 @@ private:
         const MediaAvStartupReleaseBuffer& release) const;
     void discardPendingRelease() noexcept;
     ::media::Status stageRelease(const MediaAvStartupReleaseBuffer& release,
-                                 std::size_t firstVideoIndex = 0,
-                                 std::optional<MediaAudioPlaybackOrigin>
-                                     audioOrigin = std::nullopt);
+                                 std::size_t firstVideoIndex,
+                                 const MediaPlaybackActivation& activation);
     ::media::Result<MediaNodeProcessResult> processPreparation(
         MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processBoundRelease(

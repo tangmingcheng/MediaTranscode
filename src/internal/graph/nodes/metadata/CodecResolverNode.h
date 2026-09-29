@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include "internal/graph/planner/capability/MediaVideoEncoderReadback.h"
+#include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
 
 extern "C" {
 #include <libavutil/pixfmt.h>
@@ -19,7 +20,10 @@ class CodecResolverNode final : public FFmpegNodeRuntime {
 public:
     explicit CodecResolverNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
     ::media::Status bindPreparedEncoder(MediaBufferRef encoder);
+    ::media::Status bindPreparedDecoder(std::shared_ptr<MediaPreparedVideoDecoder> decoder);
     MediaBufferRef inputSnapshot() const;
     ::media::Result<MediaVideoEncoderReadback> encoderReadback() const;
     MediaBufferRef timestampSource() const;
@@ -30,13 +34,14 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    void resetRuntimeState() noexcept;
     ::media::Status prepareDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
     ::media::Status prepareEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
 
 private:
     bool m_emitted = false;
     ::media::ffmpeg::BufferRefPtr m_decoderHardwareDevice;
-    AVPixelFormat m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
+    std::shared_ptr<MediaPreparedVideoDecoder> m_sourceDecoder;
     mutable std::mutex m_snapshotMutex;
     MediaBufferRef m_inputSnapshot;
     MediaBufferRef m_timestampSource;

@@ -6,6 +6,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -44,6 +45,8 @@ struct MediaPreparedRawRtpVideoOnlyProbe final {
     MediaDetectedRtpVideoSignaling signaling;
     MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
+    std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
+    std::chrono::steady_clock::time_point preparationDeadline;
 };
 
 struct MediaPreparedRawRtpAudioVideoProbe final {
@@ -51,6 +54,8 @@ struct MediaPreparedRawRtpAudioVideoProbe final {
     MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
     MediaPreparedRealtimeInput audio;
+    std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
+    std::chrono::steady_clock::time_point preparationDeadline;
 };
 
 using MediaPreparedRawRtpProbe = std::variant<
@@ -61,6 +66,7 @@ class MediaRawRtpInputPreparer final {
 public:
     static ::media::Result<MediaPreparedRawRtpProbe> prepare(
         const MediaRawRtpProbePlan& plan);
+    static ::media::Status sealPreflight(MediaPreparedRawRtpProbe& probe);
 
 private:
     MediaRawRtpInputPreparer() = delete;

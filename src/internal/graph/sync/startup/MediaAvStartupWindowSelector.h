@@ -14,7 +14,7 @@ class MediaAvStartupWindowSelector final {
 public:
     static ::media::Result<std::optional<MediaAvStartupWindow>> select(
         const MediaAvStartupCoverageIndex& video,
-        const MediaAvStartupCoverageIndex& audio,
+        const MediaAvStartupCoverageIndex* audio,
         const MediaAvStartupConfig& config,
         MediaAvStartupSelectionWork& work);
 };

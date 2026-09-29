@@ -1,7 +1,9 @@
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 
 #include "internal/graph/planner/realtime/MediaGraphPayloadProducerRegistryCompiler.h"
+#include "internal/graph/planner/realtime/MediaGraphPayloadProducerFactsPlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
@@ -420,6 +422,34 @@ compileLedger(
                 if (!retained) return Result::failure(retained.error());
                 retainedRefs = retained.value();
             }
+            if (node.kind == MediaNodeKind::AvStartupCoordinator) {
+                auto members = MediaTranscodeStreamSetCodec::decode(
+                    node.options.value("av_startup.members"));
+                if (!members) return Result::failure(members.error());
+                auto batch = optionUnsigned(node, "av_startup.video_capacity");
+                if (!batch) return Result::failure(batch.error());
+                if (members.value() == MediaTranscodeStreamSet::AudioVideo) {
+                    auto audio = optionUnsigned(node, "av_startup.audio_capacity");
+                    if (!audio) return Result::failure(audio.error());
+                    batch = Arithmetic::add(batch.value(), audio.value(),
+                        "startup batch payload object retention");
+                } else if (node.options.has("av_startup.audio_capacity")) {
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "Video startup retention rejects unplanned audio capacity"));
+                }
+                auto retained = batch ? Arithmetic::add(retainedRefs, batch.value(),
+                    "startup store and release-batch object credits") : batch;
+                if (!retained) return Result::failure(retained.error());
+                // Leases follow the batch through GraphEvent wrappers and the
+                // release extractor; reference copies do not allocate new AUs.
+                retainedRefs = retained.value();
+            } else if (node.kind == MediaNodeKind::RtpPacketClockBinder) {
+                auto acquiring = optionUnsigned(node, "rtp_clock_binder.acquiring_capacity");
+                auto retained = acquiring ? Arithmetic::add(retainedRefs, acquiring.value(),
+                    "RTP clock acquisition object credits") : acquiring;
+                if (!retained) return Result::failure(retained.error());
+                retainedRefs = retained.value();
+            }
             if (node.kind == MediaNodeKind::VideoEncode) {
                 auto retained = Arithmetic::add(
                     retainedRefs,
@@ -493,26 +523,11 @@ compileLedger(
     const bool hasSelectedEncoder = std::any_of(graph.nodes().begin(), graph.nodes().end(),
         [&](const auto& node) { return selected(node.id) && node.kind == MediaNodeKind::VideoEncode; });
     if (planningLedger.hardwareEncoderSurfacePool && hasSelectedEncoder) {
-        auto graphSurfaces = Arithmetic::add(
-            videoFrameEdgeSurfaces,
-            pipelinePendingSurfaces,
-            "graph in-flight and pending hardware surfaces");
-        auto pool = graphSurfaces
-            ? Arithmetic::add(
-            graphSurfaces.value(),
-            planningLedger.maximumEncoderRetainedFrames,
-            "encoder hardware frames initial pool")
-            : graphSurfaces;
-        if (!pool || pool.value() == 0) {
-            return Result::failure(
-                !pool ? pool.error() : ::media::ErrorInfo::notInitialized(
-                    "encoder hardware frame pool is empty"));
-        }
-        ledger.encoderFramesPool = MediaEncoderHardwareFramesPoolPlan{
-            pool.value(), videoFrameEdgeSurfaces,
-            pipelinePendingSurfaces,
-            planningLedger.maximumEncoderRetainedFrames,
-            "final-encoder-input-edge+typed-upstream-pending+opened-encoder-retained-frames"};
+        auto pool = MediaEncoderHardwareFramesPoolPlanner::plan({videoFrameEdgeSurfaces,
+            pipelinePendingSurfaces, planningLedger.maximumEncoderRetainedFrames, 0,
+            "final-encoder-input-edge+typed-upstream-pending+opened-encoder-retained-frames"});
+        if (!pool) return Result::failure(pool.error());
+        ledger.encoderFramesPool = std::move(pool).value();
         ledger.outOfScopeAuthorities.push_back(
             "device-and-driver-memory-is-out-of-scope-for-engine-managed-only");
     }
@@ -572,8 +587,10 @@ compileLedger(
     const std::uint64_t availablePayloadBytes =
         ledger.maximumGraphPayloadAndReservedStorageBytes -
         ledger.admittedGraphPayloadAndReservedStorageBytes;
+    auto producerFacts = MediaGraphPayloadProducerFactsPlanner::plan(graph, planningLedger, selectedNodes);
+    if (!producerFacts) return Result::failure(producerFacts.error());
     auto payloadPlan = MediaGraphPayloadProducerRegistryCompiler::compile(
-        graph, planningLedger, availablePayloadBytes,
+        graph, producerFacts.value(), availablePayloadBytes,
         maximumPayloadObjects, selectedNodes);
     if (!payloadPlan) return Result::failure(payloadPlan.error());
     ledger.payloadCreditPlan = std::move(payloadPlan).value();

@@ -16,11 +16,7 @@ std::atomic_uint64_t nextReleaseIdentity{1};
 {
     const auto* typed = dynamic_cast<const MediaAvStartupReleaseBuffer*>(
         release.get());
-    if (!typed || !typed->groupKey().valid() ||
-        typed->epoch().generation == 0 ||
-        typed->audioOrigin().generation != typed->epoch().generation ||
-        typed->audioOrigin().sourceStart != typed->epoch().sourceStart ||
-        typed->audioOrigin().masterRelease != typed->epoch().masterRelease) {
+    if (!typed || !typed->groupKey().valid()) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Startup release transaction requires a complete typed release"));
@@ -39,19 +35,18 @@ std::atomic_uint64_t nextReleaseIdentity{1};
 ::media::Result<MediaBufferRef>
 MediaStartupReleaseTransactionBuffer::reanchor(
     const MediaStartupReleaseTransactionBuffer& transaction,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin)
+    MediaPlaybackActivation activation)
 {
     const auto* release = transaction.release();
+    const auto& epoch = activation.epoch();
     if (!release || transaction.releaseIdentity() == 0 ||
-        epoch.sourceStart != release->epoch().sourceStart ||
-        epoch.generation != release->epoch().generation) {
+        activation != release->activation().reanchor(epoch.masterRelease)) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Release reanchor requires the same source epoch and identity"));
     }
     auto rebound = MediaAvStartupReleaseBuffer::create(
-        release->groupKey(), release->releaseKind(), epoch, audioOrigin,
+        release->groupKey(), release->releaseKind(), std::move(activation),
         release->video(), release->audio(),
         release->completedTransitionSequence());
     if (!rebound) return rebound;

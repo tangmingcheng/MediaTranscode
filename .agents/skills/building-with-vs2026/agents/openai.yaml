@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build with VS2026"
+  short_description: "VS2026 x64 Debug and Release rebuilds"
+  default_prompt: "Use $building-with-vs2026 to rebuild the requested x64 Debug or Release tree."

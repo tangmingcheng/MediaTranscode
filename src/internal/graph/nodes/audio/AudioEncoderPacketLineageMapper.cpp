@@ -7,45 +7,66 @@ extern "C" {
 }
 
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
-::media::Status AudioEncoderPacketLineageMapper::submit(
+AudioEncoderPacketLineageMapper::PreparedSubmission::PreparedSubmission(
+    AudioEncoderPacketLineageMapper& owner,
+    std::unique_ptr<MediaAudioIntervalAccumulator> intervals,
+    std::int64_t framePts, int frameSamples) noexcept
+    : m_owner(&owner), m_intervals(std::move(intervals)),
+      m_framePts(framePts), m_frameSamples(frameSamples)
+{
+}
+
+void AudioEncoderPacketLineageMapper::PreparedSubmission::commit() && noexcept
+{
+    m_owner->m_intervals.swap(*m_intervals);
+    if (!m_owner->m_nextPacketPts) m_owner->m_nextPacketPts = m_framePts;
+    m_owner->m_nextSubmittedPts = m_framePts + m_frameSamples;
+}
+
+::media::Result<AudioEncoderPacketLineageMapper::PreparedSubmission>
+AudioEncoderPacketLineageMapper::prepareSubmission(
     std::int64_t framePts,
     int frameSamples,
-    std::vector<MediaAudioIntervalFragment> fragments)
+    const std::vector<MediaAudioIntervalFragment>& fragments)
+try
 {
     if (framePts < 0 || frameSamples <= 0 ||
         framePts > std::numeric_limits<std::int64_t>::max() - frameSamples ||
         (m_nextSubmittedPts && framePts != *m_nextSubmittedPts)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        return ::media::Result<PreparedSubmission>::failure(::media::ErrorInfo::invalidArgument(
             "Audio encoder submitted lineage requires a contiguous frame timeline"));
     }
 
     std::int64_t lineageSamples = 0;
-    auto candidate = m_intervals;
-    for (auto& fragment : fragments) {
+    auto candidate = std::make_unique<MediaAudioIntervalAccumulator>(m_intervals);
+    for (const auto& fragment : fragments) {
         const auto samples = fragment.interval.sampleCount();
         if (!samples || *samples >
                 std::numeric_limits<std::int64_t>::max() - lineageSamples) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            return ::media::Result<PreparedSubmission>::failure(::media::ErrorInfo::invalidArgument(
                 "Audio encoder submitted lineage sample count overflows"));
         }
         lineageSamples += *samples;
-        if (auto status = candidate.push(std::move(fragment)); !status) {
-            return status;
+        if (auto status = candidate->push(fragment); !status) {
+            return ::media::Result<PreparedSubmission>::failure(status.error());
         }
     }
     if (lineageSamples != frameSamples) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        return ::media::Result<PreparedSubmission>::failure(::media::ErrorInfo::invalidArgument(
             "Audio encoder submitted lineage must exactly cover the frame"));
     }
 
-    if (!m_nextPacketPts) m_nextPacketPts = framePts;
-    m_nextSubmittedPts = framePts + frameSamples;
-    m_intervals = std::move(candidate);
-    return ::media::Status::success();
+    return ::media::Result<PreparedSubmission>::success(
+        PreparedSubmission(*this, std::move(candidate), framePts, frameSamples));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<PreparedSubmission>::failure(
+        ::media::ErrorInfo::allocationFailed(
+            "Audio encoder could not prepare submitted lineage"));
 }
 
 ::media::Result<std::optional<std::vector<MediaAudioIntervalFragment>>>

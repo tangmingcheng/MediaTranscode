@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include <type_traits>
 
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
@@ -52,6 +53,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaAvContinuousAggregateNode.h"
 #include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
@@ -220,11 +222,33 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             prepared.error());
     }
-    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-        std::make_unique<Node>(
-            node.id, mode.value(),
-            std::make_shared<typename Node::LineageState>(
-                mode.value(), prepared.value().capacity)));
+    if constexpr (std::is_same_v<Node, AudioEncodeNode>) {
+        std::optional<MediaAudioEncoderFifoRetentionPlan> retention;
+        if (mode.value() == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+            auto input = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.input_samples");
+            auto samples = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.samples");
+            auto bytes = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.bytes");
+            auto fragments = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.fragments");
+            auto frame = requiredPositiveIntNodeOption(&node.options, "AudioEncodeNode", "audio.fifo.frame_samples");
+            if (!input || !samples || !bytes || !fragments || !frame) {
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    !input ? input.error() : !samples ? samples.error() :
+                    !bytes ? bytes.error() : !fragments ? fragments.error() :
+                    frame.error());
+            }
+            retention = MediaAudioEncoderFifoRetentionPlan{input.value(), samples.value(),
+                bytes.value(), static_cast<std::size_t>(fragments.value()), frame.value()};
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<Node>(node.id, mode.value(),
+                std::make_shared<typename Node::LineageState>(mode.value(),
+                    prepared.value().capacity, std::move(retention))));
+    } else {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<Node>(node.id, mode.value(),
+                std::make_shared<typename Node::LineageState>(
+                    mode.value(), prepared.value().capacity)));
+    }
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createAudioStartupTrimStage(
@@ -527,8 +551,16 @@ template <typename Node>
                 node.id, std::move(group).value()));
     }
     case MediaNodeKind::EncodedAudioCanonicalizer:
+    {
+        auto group = requiredSyncGroup(
+            node, "MediaEncodedAudioCanonicalizerNode", "audio_canonicalizer.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(group.error());
+        }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaEncodedAudioCanonicalizerNode>(node.id));
+            std::make_unique<MediaEncodedAudioCanonicalizerNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::ScheduledOutputRouter:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaScheduledOutputRouterNode>(node.id));
@@ -625,6 +657,7 @@ template <typename Node>
         }
         auto publisher = MediaRtpSdpPublisherNode::create(
             node.id, decoded.value(), std::move(path).value(),
+            protocolOutputAuthority,
             std::make_unique<MediaPlatformAtomicFileReplacePort>());
         return publisher
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
@@ -924,6 +957,33 @@ MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
             std::move(syncGroup)));
 }
 
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createContinuousAggregateNode(
+    const MediaNode& node, MediaAvAggregateRuntimeDependencies dependencies)
+{
+    if (node.kind != MediaNodeKind::AvContinuousAggregate || !dependencies.aggregatePlan) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument("Continuous aggregate requires its planned node and dependencies"));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaAvContinuousAggregateNode>(node.id, std::move(dependencies)));
+}
+
+::media::Result<MediaRuntimeGenerationPurgeRegistration>
+MediaRuntimeNodeFactory::generationPurgeRegistrationForSource(
+    MediaRuntimeNode& runtime, const MediaAvSyncGroupKey& groupKey)
+{
+    auto* aggregate = dynamic_cast<MediaAvContinuousAggregateNode*>(&runtime);
+    auto target = aggregate ? aggregate->sourcePurgeTarget(groupKey) : nullptr;
+    if (!target) {
+        return ::media::Result<MediaRuntimeGenerationPurgeRegistration>::failure(
+            ::media::ErrorInfo::invalidArgument("Aggregate purge requires a planned source domain"));
+    }
+    return ::media::Result<MediaRuntimeGenerationPurgeRegistration>::success({
+        MediaAvGenerationParticipant::CanonicalLineage,
+        {"aggregate_source", std::move(target)}});
+}
+
 std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
@@ -1009,10 +1069,30 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
         return registration;
     }
     if (auto registration =
+            fixedGenerationPurgeRegistration<MediaDatagramTransportPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::DatagramTransportPlan)) {
+        return registration;
+    }
+    if (auto registration =
             fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
                 runtime,
                 MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
         return registration;
+    }
+    if (auto registration = fixedGenerationPurgeRegistration<MediaScheduledDatagramSenderNode>(
+            runtime, MediaAvGenerationParticipant::DatagramSender)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaRtpSdpPublisherNode>(
+            runtime, MediaAvGenerationParticipant::ProtocolDescription)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaMpegTsRtpSdpPublisherNode>(
+            runtime, MediaAvGenerationParticipant::ProtocolDescription)) return registration;
+    if (auto registration = fixedGenerationPurgeRegistration<MediaMpegTsDatagramMaterializerNode>(
+            runtime, MediaAvGenerationParticipant::ProjectMpegTsOutput)) return registration;
+    if (auto* materializer = dynamic_cast<MediaRtpDatagramMaterializerNode*>(&runtime)) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            materializer->scheduledStream() == MediaScheduledStream::Video
+                ? MediaAvGenerationParticipant::RtpVideoOutput : MediaAvGenerationParticipant::RtpAudioOutput,
+            {std::string(materializer->generationPurgeIdentity()), materializer->generationPurgeTarget()}};
     }
     if (auto registration =
             fixedGenerationPurgeRegistration<
@@ -1066,6 +1146,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
+    case MediaNodeKind::AvContinuousAggregate:
     case MediaNodeKind::VideoOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::CanonicalInput:

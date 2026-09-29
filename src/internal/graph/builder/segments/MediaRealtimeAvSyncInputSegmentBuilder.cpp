@@ -204,7 +204,7 @@ struct SharedNodes final {
 ::media::Result<void> configureSharedNodes(
     MediaGraph& graph,
     const SharedNodes& nodes,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = MediaRealtimeAvSyncNodeConfigurator::
             configureLockedPacketGate(
@@ -249,7 +249,7 @@ struct SharedNodes final {
     MediaGraph& graph,
     const SharedNodes& nodes,
     const MediaRealtimeAvSyncProtocolInputEndpoints& protocol,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
@@ -350,7 +350,7 @@ struct SharedNodes final {
 MediaRealtimeAvSyncInputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
         !options.sources.audioPacket.valid() ||
@@ -363,6 +363,8 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
                  ? MediaEdgeKind::EncodedPacket
                  : MediaEdgeKind::InputPacket) ||
         !plan.groupKey.valid() ||
+        (plan.synchronization.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
+         plan.synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution) ||
         !MediaAvSyncPlanValidator::validateRuntime(plan.synchronization)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -421,11 +423,22 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }
+    auto sourceMembers = std::move(protocol.value().sourceMembers);
+    const auto& shared = nodes.value();
+    sourceMembers.insert(sourceMembers.end(), {
+        shared.sourceClock, shared.videoGenerationGate, shared.audioGenerationGate,
+        shared.videoCanonical, shared.audioCanonical, shared.coordinator,
+        shared.startupClock, shared.epochBinder, shared.activationSequencer,
+        shared.releaseExtractor});
     return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::success(
         MediaRealtimeAvSyncInputEndpoints{
             MediaEndpoint{nodes.value().releaseExtractor, "video"},
             MediaEndpoint{nodes.value().releaseExtractor, "audio"},
-            MediaEndpoint{nodes.value().activationSequencer, "activated"}});
+            MediaEndpoint{nodes.value().activationSequencer, "activated"},
+            MediaAvRuntimeInputRegistration{
+                nodes.value().epochBinder, nodes.value().activationSequencer,
+                nodes.value().releaseExtractor, protocol.value().demuxClock},
+            std::move(sourceMembers)});
 }
 
 } // namespace media::ffmpeg::graph

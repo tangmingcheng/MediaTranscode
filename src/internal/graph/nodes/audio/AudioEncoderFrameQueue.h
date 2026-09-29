@@ -6,6 +6,8 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
+#include "internal/graph/planner/audio/MediaAudioEncoderFifoRetentionPlan.h"
 
 namespace media::ffmpeg::graph {
 
@@ -17,7 +19,8 @@ public:
     };
 
     AudioEncoderFrameQueue(MediaAudioLineageExecutionMode lineageMode,
-                           std::size_t lineageCapacity);
+                           std::size_t lineageCapacity,
+                           std::optional<MediaAudioEncoderFifoRetentionPlan> retention);
     ~AudioEncoderFrameQueue();
 
     AudioEncoderFrameQueue(const AudioEncoderFrameQueue&) = delete;
@@ -53,6 +56,7 @@ private:
     MediaAudioLineageExecutionMode m_lineageMode;
     std::size_t m_lineageCapacity = 0;
     MediaAudioIntervalAccumulator m_intervals;
+    std::optional<MediaAudioEncoderFifoRetentionPlan> m_retention;
     bool m_terminalFailure = false;
 };
 

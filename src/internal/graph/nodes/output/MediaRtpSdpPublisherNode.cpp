@@ -73,8 +73,10 @@ MediaRtpSdpPublisherNode::MediaRtpSdpPublisherNode(
     MediaNodeId nodeId,
     bool videoOnly,
     std::string path,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
     std::unique_ptr<MediaAtomicFileReplacePort> replacePort)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaRtpSdpPublisherNode"),
+      m_authority(std::move(authority)),
       m_videoOnly(videoOnly),
       m_path(std::move(path)),
       m_replacePort(std::move(replacePort))
@@ -86,13 +88,14 @@ MediaRtpSdpPublisherNode::create(
     MediaNodeId nodeId,
     MediaTranscodeStreamSet streamSet,
     std::string path,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
     std::unique_ptr<MediaAtomicFileReplacePort> replacePort)
 {
     using Result = ::media::Result<std::unique_ptr<MediaRtpSdpPublisherNode>>;
     auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
     if (!nodeId.isValid() || path.empty() ||
         path.find('\0') != std::string::npos || !replacePort ||
-        !encodedStreamSet) {
+        !encodedStreamSet || !authority || authority->streamSet() != streamSet) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP SDP publisher requires a stream set, path, and atomic port"));
     }
@@ -110,10 +113,11 @@ MediaRtpSdpPublisherNode::create(
     }
     auto node = std::unique_ptr<MediaRtpSdpPublisherNode>(
         new (std::nothrow) MediaRtpSdpPublisherNode(
-            nodeId, videoOnly, std::move(path), std::move(replacePort)));
-    return node ? Result::success(std::move(node))
-                : Result::failure(::media::ErrorInfo::allocationFailed(
-                      "MediaRtpSdpPublisherNode"));
+            nodeId, videoOnly, std::move(path), std::move(authority), std::move(replacePort)));
+    if (!node) return Result::failure(::media::ErrorInfo::allocationFailed("MediaRtpSdpPublisherNode"));
+    try { node->m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>(); }
+    catch (const std::bad_alloc&) { return Result::failure(::media::ErrorInfo::allocationFailed("RTP SDP purge")); }
+    return Result::success(std::move(node));
 }
 
 MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
@@ -144,7 +148,10 @@ MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
 {
     resetState();
     auto valid = validatePorts(context);
-    return valid ? FFmpegNodeRuntime::start(context) : valid;
+    if (!valid) return valid;
+    m_completedPurge.reset();
+    auto started = m_generationPurge->start(context.sharedNodeWakeup(nodeId()));
+    return started ? FFmpegNodeRuntime::start(context) : started;
 }
 
 ::media::Result<bool> MediaRtpSdpPublisherNode::acquire(
@@ -156,14 +163,25 @@ MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
     auto input = tryPopInputOptional(context, port);
     if (!input) return ::media::Result<bool>::failure(input.error());
     if (!input.value()) return ::media::Result<bool>::success(false);
-    if (destination) {
-        return ::media::Result<bool>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP SDP publisher rejects duplicate descriptions"));
-    }
     const auto* description =
         dynamic_cast<const MediaRtpSenderDescriptionBuffer*>(
             input.value()->get());
+    if (const auto* control = dynamic_cast<const MediaControlBuffer*>(input.value()->get())) {
+        if (control->controlKind() == MediaControlBufferKind::Abort)
+            return ::media::Result<bool>::failure(::media::ErrorInfo::cancelled("RTP SDP publisher received abort"));
+        if ((control->controlKind() == MediaControlBufferKind::Eof ||
+             control->controlKind() == MediaControlBufferKind::Flush) &&
+            control->generation() && m_completedPurge &&
+            *control->generation() == m_completedPurge->oldGeneration)
+            return ::media::Result<bool>::success(true);
+        auto activation = m_authority->currentActivation();
+        if (!activation || (control->generation()
+            ? *control->generation() != activation.value().generation : !m_videoOnly) ||
+            (control->controlKind() != MediaControlBufferKind::Eof && control->controlKind() != MediaControlBufferKind::Flush))
+            return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument("RTP SDP control requires exact active generation"));
+        // Channel closure, rather than a generation-local EOS, ends this publisher.
+        return ::media::Result<bool>::success(true);
+    }
     if (!description || description->stream() != expectedStream) {
         const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get());
@@ -174,6 +192,10 @@ MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
                 : ::media::ErrorInfo::invalidArgument(
                       "RTP SDP publisher requires a typed sender description"));
     }
+    if (m_completedPurge && description->generation() == m_completedPurge->oldGeneration)
+        return ::media::Result<bool>::success(true);
+    if (destination)
+        return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument("RTP SDP publisher rejects duplicate descriptions"));
     destination = std::move(*input.value());
     return ::media::Result<bool>::success(true);
 }
@@ -190,6 +212,19 @@ MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "RTP SDP descriptions conflict with their stream set/session"));
     }
+    auto activation = m_authority->currentActivation();
+    if (!activation) {
+        auto commit = m_authority->reserveCommit(video->generation());
+        if (!commit && commit.error().code == ::media::ErrorCode::Cancelled) return processWaiting();
+        return failTerminal(activation.error());
+    }
+    if (video->generation() < activation.value().generation) return processWaiting();
+    if (video->generation() != activation.value().generation)
+        return failTerminal(::media::ErrorInfo::invalidArgument("RTP SDP description is ahead of its authority"));
+    auto outputCommit = m_authority->reserveCommit(video->generation());
+    if (!outputCommit)
+        return outputCommit.error().code == ::media::ErrorCode::Cancelled
+            ? processWaiting() : failTerminal(outputCommit.error());
     std::vector<MediaRtpSdpMediaDescription> media;
     media.reserve(m_videoOnly ? 1u : 2u);
     media.push_back(video->media());
@@ -216,6 +251,61 @@ MediaNodeKind MediaRtpSdpPublisherNode::staticKind() noexcept
     m_video.reset();
     m_audio.reset();
     return processProgress();
+}
+
+::media::Status MediaRtpSdpPublisherNode::applyGenerationPurge(
+    MediaGraphExecutionContext& context, const MediaAvGenerationPurge& purge)
+{
+    const auto authorized = [&](std::uint64_t generation) {
+        return generation == purge.oldGeneration ||
+            (m_completedPurge && generation == m_completedPurge->oldGeneration);
+    };
+    const auto discard = [&](const MediaBufferRef& buffer) -> ::media::Status {
+        if (const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+            if (control->controlKind() == MediaControlBufferKind::Abort)
+                return ::media::Status::failure(::media::ErrorInfo::cancelled("SDP publisher aborted during purge"));
+            if (!control->generation() || !authorized(*control->generation()) ||
+                (control->controlKind() != MediaControlBufferKind::Eof &&
+                 control->controlKind() != MediaControlBufferKind::Flush))
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("SDP control is outside exact purge authorization"));
+            return ::media::Status::success();
+        }
+        const auto* description = dynamic_cast<const MediaRtpSenderDescriptionBuffer*>(buffer.get());
+        if (!description || !authorized(description->generation()))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RTP SDP description is outside exact purge authorization"));
+        return ::media::Status::success();
+    };
+    for (auto* pending : { &m_video, &m_audio }) {
+        if (*pending) {
+            auto status = discard(*pending);
+            if (!status) return status;
+            pending->reset();
+        }
+    }
+    for (auto* channel : context.inputChannels(nodeId())) {
+        if (!channel || channel->aborted())
+            return ::media::Status::failure(::media::ErrorInfo::cancelled("SDP publisher input aborted during purge"));
+        MediaBufferRef buffer;
+        while (channel->tryPop(buffer)) {
+            auto status = discard(buffer);
+            if (!status) return status;
+        }
+    }
+    m_completedPurge = purge;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaNodeProcessResult> MediaRtpSdpPublisherNode::process(
+    MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_generationPurge->pending()) {
+        auto status = applyGenerationPurge(context, *purge);
+        auto completed = m_generationPurge->complete(*purge, status);
+        if (!completed) return failTerminal(completed.error());
+        if (!status) return failTerminal(status.error());
+        return processProgress();
+    }
+    return FFmpegNodeRuntime::process(context);
 }
 
 ::media::Result<MediaNodeProcessResult> MediaRtpSdpPublisherNode::onProcess(
@@ -293,6 +383,7 @@ void MediaRtpSdpPublisherNode::resetState() noexcept
 ::media::Status MediaRtpSdpPublisherNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_generationPurge->stop();
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -303,6 +394,7 @@ void MediaRtpSdpPublisherNode::abort(
     resetState();
     m_terminalFailure = ::media::ErrorInfo::cancelled(
         "RTP SDP publisher was aborted");
+    m_generationPurge->stop();
     FFmpegNodeRuntime::abort(context);
 }
 

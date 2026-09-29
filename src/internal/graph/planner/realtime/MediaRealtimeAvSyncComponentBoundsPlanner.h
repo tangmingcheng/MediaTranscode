@@ -10,6 +10,9 @@ struct MediaGraphQueueParameters;
 
 class MediaRealtimeAvSyncComponentBoundsPlanner final {
 public:
+    static ::media::Result<MediaSynchronizedAudioSourceBounds> planSource(
+        const MediaGraphQueueParameters& queues,
+        const MediaAudioPipelinePlan& audio);
     static ::media::Result<MediaRealtimeAvSyncComponentBounds> plan(
         const MediaGraphQueueParameters& queues,
         const MediaAudioPipelinePlan& audio);

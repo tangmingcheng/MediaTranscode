@@ -148,7 +148,9 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    runtime.m_playbackEpochActivationCapability.reset();
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
+    }
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     if (primaryFailure) {
@@ -167,20 +169,26 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     auto schedulerStatus = runtime.m_state == MediaGraphRuntimeState::ThreadedRunning
         ? runtime.m_threadedExecutor.stop(runtime.m_context, runtime.m_scheduler)
         : runtime.m_scheduler.stop(runtime.m_context);
+    if (!schedulerStatus) {
+        // Complete failed shutdown before callers capture a final report.
+        abort(runtime);
+        return schedulerStatus;
+    }
     auto clearStatus = MediaGraphLifecycle::clearChannels(runtime.m_context);
     auto closeStatus = MediaGraphLifecycle::closeChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    runtime.m_playbackEpochActivationCapability.reset();
-    runtime.m_protocolOutputAuthority.reset();
-    if (!schedulerStatus) {
-        if (runtime.m_threadedExecutor.state() == MediaGraphThreadedExecutorState::Aborted) {
-            MediaGraphLifecycle::abortChannels(runtime.m_context);
-            runtime.m_state = MediaGraphRuntimeState::Aborted;
-        }
-        return schedulerStatus;
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
     }
-    if (!clearStatus) return clearStatus;
-    if (!closeStatus) return closeStatus;
+    runtime.m_protocolOutputAuthority.reset();
+    if (!clearStatus) {
+        abort(runtime);
+        return clearStatus;
+    }
+    if (!closeStatus) {
+        abort(runtime);
+        return closeStatus;
+    }
     runtime.m_state = MediaGraphRuntimeState::Stopped;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.done state=Stopped");
     return ::media::Status::success();
@@ -195,7 +203,9 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
-    runtime.m_playbackEpochActivationCapability.reset();
+    for (auto& domain : runtime.m_avDomains) {
+        std::visit([](auto& role) { role.activation.reset(); }, domain.role);
+    }
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.done state=Aborted");
@@ -212,8 +222,7 @@ void MediaGraphRuntimeLifecycleExecutor::reset(MediaGraphRuntime& runtime)
     runtime.m_context.setDiagnosticsEnabled(diagnostics);
     runtime.m_graph.clear();
     runtime.m_inputBindings.clear();
-    runtime.m_playbackEpochActivationCapability.reset();
-    runtime.m_videoPreparationState.reset();
+    runtime.m_avDomains.clear();
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_acceptanceCollector.reset();
     runtime.m_queueHighWatermark = 0;

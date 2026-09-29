@@ -98,7 +98,8 @@ enum class MediaNodeKind {
     MpegTsDatagramMaterializer = 72,
     DatagramTransportPlanSource = 73,
     VideoOutputFanout = 74,
-    EncodedVideoOutputFanout = 75
+    EncodedVideoOutputFanout = 75,
+    AvContinuousAggregate = 76
 };
 
 } // namespace media::ffmpeg::graph

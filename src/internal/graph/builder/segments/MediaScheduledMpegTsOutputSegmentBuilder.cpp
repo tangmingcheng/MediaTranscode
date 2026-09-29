@@ -10,6 +10,7 @@
 #include <optional>
 #include <tuple>
 #include <variant>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -307,9 +308,12 @@ struct CommonPlan final {
             plan.edgePolicies.atomicMetadata);
         if (!connected) return Result::failure(connected.error());
     }
+    std::vector<MediaNodeId> outputMembers{mux, planSource, adapter,
+        materializer, execution.value().transportPlanSource, scheduledDatagramSender};
+    if (rtpSdpPublisher.isValid()) outputMembers.push_back(rtpSdpPublisher);
     return Result::success(
         {planSource, adapter, mux,
-         scheduledDatagramSender, rtpSdpPublisher});
+         scheduledDatagramSender, rtpSdpPublisher, std::move(outputMembers)});
 }
 
 } // namespace
@@ -318,7 +322,7 @@ struct CommonPlan final {
 MediaScheduledMpegTsOutputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaScheduledMpegTsOutputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     if (!options.expectVideo || !options.expectAudio ||
         !plan.groupKey.valid() ||

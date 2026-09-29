@@ -79,15 +79,13 @@ MediaRunningTime MediaAvStartupClockBuffer::masterNow() const noexcept { return 
 MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     MediaAvSyncGroupKey groupKey,
     MediaAvStartupReleaseKind releaseKind,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin,
+    MediaPlaybackActivation activation,
     std::vector<MediaAvReleasedUnit> video,
     std::vector<MediaAvReleasedUnit> audio,
     std::optional<std::uint64_t> completedTransitionSequence)
     : m_groupKey(std::move(groupKey))
     , m_releaseKind(releaseKind)
-    , m_epoch(epoch)
-    , m_audioOrigin(audioOrigin)
+    , m_activation(std::move(activation))
     , m_video(std::move(video))
     , m_audio(std::move(audio))
     , m_completedTransitionSequence(completedTransitionSequence)
@@ -100,8 +98,7 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
 ::media::Result<MediaBufferRef> MediaAvStartupReleaseBuffer::create(
     MediaAvSyncGroupKey groupKey,
     MediaAvStartupReleaseKind releaseKind,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin,
+    MediaPlaybackActivation activation,
     std::vector<MediaAvReleasedUnit> video,
     std::vector<MediaAvReleasedUnit> audio,
     std::optional<std::uint64_t> completedTransitionSequence)
@@ -112,13 +109,16 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     bool shapeValid = false;
     switch (releaseKind) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease:
-        shapeValid = !video.empty() && !audio.empty();
+        shapeValid = !video.empty() && (activation.members() == MediaTranscodeStreamSet::VideoOnly
+            ? audio.empty() : !audio.empty());
         break;
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough:
-        shapeValid = !video.empty() || !audio.empty();
+        shapeValid = (!video.empty() || !audio.empty()) &&
+            (activation.members() == MediaTranscodeStreamSet::AudioVideo || audio.empty());
         break;
     case MediaAvStartupReleaseKind::NextAtomicRelease:
-        shapeValid = !video.empty() && !audio.empty();
+        shapeValid = !video.empty() && (activation.members() == MediaTranscodeStreamSet::VideoOnly
+            ? audio.empty() : !audio.empty());
         break;
     }
     const bool transitionSequenceValid =
@@ -126,12 +126,7 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
         ? completedTransitionSequence.has_value() &&
               *completedTransitionSequence != 0
         : !completedTransitionSequence.has_value();
-    if (!groupKey.valid() || epoch.generation == 0 ||
-        audioOrigin.generation != epoch.generation ||
-        audioOrigin.sourceStart != epoch.sourceStart ||
-        audioOrigin.masterRelease != epoch.masterRelease ||
-        audioOrigin.epochOutputSampleIndex < 0 ||
-        audioOrigin.outputSampleRate <= 0 || !shapeValid ||
+    if (!groupKey.valid() || !shapeValid ||
         !transitionSequenceValid) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -148,7 +143,7 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     }
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaAvStartupReleaseBuffer(
-            std::move(groupKey), releaseKind, epoch, audioOrigin,
+            std::move(groupKey), releaseKind, std::move(activation),
             std::move(video), std::move(audio),
             completedTransitionSequence)));
 }
@@ -171,10 +166,10 @@ MediaBufferType MediaAvStartupReleaseBuffer::type() const noexcept
     return MediaBufferType::Event;
 }
 
-const MediaPlaybackEpoch& MediaAvStartupReleaseBuffer::epoch() const noexcept { return m_epoch; }
+const MediaPlaybackEpoch& MediaAvStartupReleaseBuffer::epoch() const noexcept { return m_activation.epoch(); }
 const MediaAvSyncGroupKey& MediaAvStartupReleaseBuffer::groupKey() const noexcept { return m_groupKey; }
 MediaAvStartupReleaseKind MediaAvStartupReleaseBuffer::releaseKind() const noexcept { return m_releaseKind; }
-const MediaAudioPlaybackOrigin& MediaAvStartupReleaseBuffer::audioOrigin() const noexcept { return m_audioOrigin; }
+const MediaPlaybackActivation& MediaAvStartupReleaseBuffer::activation() const noexcept { return m_activation; }
 const std::vector<MediaAvReleasedUnit>& MediaAvStartupReleaseBuffer::video() const noexcept { return m_video; }
 const std::vector<MediaAvReleasedUnit>& MediaAvStartupReleaseBuffer::audio() const noexcept { return m_audio; }
 const std::optional<std::uint64_t>&

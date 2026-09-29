@@ -422,18 +422,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
 
     auto datagramTransport = std::visit(
         [&](const auto& plannedOutput) {
-            using Output = std::decay_t<decltype(plannedOutput)>;
-            if constexpr (std::is_same_v<
-                              Output,
-                              MediaProjectMpegTsRuntimeOutputPlan>) {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *outer.deployment, plannedOutput,
-                    outer.videoPlan, outputFrameRate, nullptr);
-            } else {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *outer.deployment, plannedOutput,
-                    outer.videoPlan, outputFrameRate);
-            }
+            return MediaRealtimeDatagramTransportPlanner::plan(
+                request.mediaId, *outer.deployment, plannedOutput, preparedEmission);
         },
         *adapter);
     if (!datagramTransport) {

@@ -1,5 +1,9 @@
 #pragma once
 
+#include "internal/graph/runtime/storage/MediaImmutableArray.h"
+
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaCanonicalAudioSampleInterval.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
@@ -20,14 +24,14 @@ public:
     const MediaBufferRef& media() const noexcept { return m_media; }
     const std::shared_ptr<const MediaCanonicalLineage>& lineage() const noexcept { return m_lineage; }
     const MediaCanonicalAudioSampleInterval& interval() const noexcept { return m_interval; }
-    const std::vector<MediaAudioIntervalFragment>& fragments() const noexcept { return m_fragments; }
+    std::span<const MediaAudioIntervalFragment> fragments() const noexcept { return m_fragments.view(); }
 private:
     MediaCanonicalAudioSamplesBuffer(MediaBufferRef media,
-        std::vector<MediaAudioIntervalFragment> fragments);
+        MediaImmutableArray<MediaAudioIntervalFragment> fragments);
     MediaBufferRef m_media;
     std::shared_ptr<const MediaCanonicalLineage> m_lineage;
     MediaCanonicalAudioSampleInterval m_interval;
-    std::vector<MediaAudioIntervalFragment> m_fragments;
+    MediaImmutableArray<MediaAudioIntervalFragment> m_fragments;
 };
 
 } // namespace media::ffmpeg::graph

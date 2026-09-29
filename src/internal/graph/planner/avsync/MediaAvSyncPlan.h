@@ -1,6 +1,9 @@
 #pragma once
 
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
+#include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
 
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/model/MediaControlGenerationPolicy.h"
@@ -41,6 +44,7 @@ struct MediaAvSyncStartupPolicy {
     std::optional<std::string> videoIdentity;
     std::optional<std::string> audioIdentity;
     std::optional<bool> allowDegradedClock;
+    friend bool operator==(const MediaAvSyncStartupPolicy&, const MediaAvSyncStartupPolicy&) = default;
 };
 
 enum class MediaAudioServoAntiWindupMode : std::uint8_t {
@@ -72,6 +76,7 @@ struct MediaAvSyncAudioServoPolicy {
     std::optional<MediaRunningTime> commandLeadNs;
     std::optional<int> outputSampleRate;
     std::optional<std::size_t> correctionLookaheadWindows;
+    friend bool operator==(const MediaAvSyncAudioServoPolicy&, const MediaAvSyncAudioServoPolicy&) = default;
 };
 
 struct MediaAvSyncVideoPolicy {
@@ -190,7 +195,16 @@ struct MediaAvSyncMetricsPolicy {
     std::optional<MediaRunningTime> maximumDriftNsPerHour;
 };
 
+enum class MediaAvSyncDomainRole : std::uint8_t {
+    SharedSourceOutput = 1,
+    SourceContribution = 2,
+    ContinuousOutput = 3
+};
+
 struct MediaAvSyncPlan {
+    std::optional<MediaTranscodeStreamSet> members;
+    std::optional<MediaAvSyncDomainRole> domainRole;
+    std::optional<MediaAvSourceLifecyclePlan> sourceLifecycle;
     std::optional<MediaAvSyncSourceClockMode> sourceClockMode;
     std::optional<MediaControlGenerationPolicy>
         controlGenerationPolicy;

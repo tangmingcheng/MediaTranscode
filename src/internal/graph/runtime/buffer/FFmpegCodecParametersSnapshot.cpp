@@ -26,6 +26,11 @@ bool FFmpegCodecParametersSnapshot::complete() const noexcept
     return m_parameters != nullptr;
 }
 
+const AVCodecParameters* FFmpegCodecParametersSnapshot::parameters() const noexcept
+{
+    return m_parameters.get();
+}
+
 ::media::Result<::media::ffmpeg::CodecParametersPtr>
 FFmpegCodecParametersSnapshot::cloneCodecParameters() const
 {

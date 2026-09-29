@@ -38,16 +38,25 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioPlanOptionApplier requires planned audio source stream index"));
     }
-    const auto& output = *plan.resolvedOutput;
     if (normalizePackets) {
         if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(
                 graph, owner, nodes.packetNormalize, MediaStreamKind::Audio,
                 plan.sourceStreamIndex, false); !status) return status;
     }
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(plan.sourceStreamIndex)); !status) return status;
+    return applyOutputPlan(graph, nodes, *plan.resolvedOutput);
+}
+
+::media::Result<void> MediaAudioPlanOptionApplier::applyOutputPlan(
+    MediaGraph& graph, const MediaAudioEncodeBranchNodes& nodes,
+    const MediaResolvedAudioOutputPlan& output)
+{
+    if (output.branchMode() != MediaBranchMode::TranscodeFrame)
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "Audio output options require a resolved frame encoder"));
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioCodec, output.codecName()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, output.encoderName()); !status) return status;
-    if (auto status = setOption(graph, nodes.encode, MediaTranscodeOptionKey::PlannedEncoder, output.encoderName()); !status) return status;
+    if (nodes.encode.isValid()) if (auto status = setOption(graph, nodes.encode, MediaTranscodeOptionKey::PlannedEncoder, output.encoderName()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioRateControl, mediaRateControlModeName(output.rateControl())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSampleRate, std::to_string(output.sampleRate())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioChannels, std::to_string(output.channels())); !status) return status;

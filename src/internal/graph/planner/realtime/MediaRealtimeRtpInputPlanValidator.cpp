@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpInputPlanValidator.h"
 
+#include <chrono>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -32,6 +33,23 @@ namespace {
         return invalid("prepared input ownership decision");
     }
     const auto& transport = *input.rtpTransport;
+    if (*input.requiresPreparedInput && !transport.ingress) {
+        return invalid("prepared input ingress product");
+    }
+    if (transport.ingress) {
+        const auto& ingress = *transport.ingress;
+        if (auto status = ingress.validateProduct(); !status) return status;
+        const auto delay = std::chrono::ceil<std::chrono::milliseconds>(
+            std::chrono::nanoseconds(ingress.maximumReorderDelayNanoseconds()));
+        if (transport.receiveBufferBytes <= 0 ||
+            static_cast<std::size_t>(transport.receiveBufferBytes) != ingress.socketReceiveCapacityBytes() ||
+            transport.maximumDatagramBytes <= 0 ||
+            static_cast<std::size_t>(transport.maximumDatagramBytes) != ingress.maximumDatagramBytes() ||
+            transport.reorderWindowPackets != ingress.reorderWindowPackets() ||
+            transport.maximumReorderDelayMs != delay.count()) {
+            return invalid("transport disagrees with prepared ingress product");
+        }
+    }
     if (transport.bindAddress.empty() || transport.rtpPort == 0 ||
         transport.rtcpPort == 0 || transport.rtcpPort != transport.rtpPort + 1 ||
         transport.payloadType > 127 || transport.clockRate <= 0 ||
@@ -54,7 +72,8 @@ namespace {
          transport.clockLossPolicy !=
              MediaRtpClockLossPolicy::FailOnExpired &&
          transport.clockLossPolicy !=
-             MediaRtpClockLossPolicy::WaitForEvidence) ||
+             MediaRtpClockLossPolicy::WaitForEvidence &&
+         transport.clockLossPolicy != MediaRtpClockLossPolicy::InvalidateAndWait) ||
         !transport.rtcpCompositionMode) {
         return invalid("clock loss or RTCP composition policy");
     }

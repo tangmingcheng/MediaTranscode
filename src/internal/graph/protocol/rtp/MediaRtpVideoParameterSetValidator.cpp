@@ -1,7 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 
-#include "internal/graph/protocol/rtp/MediaH264SpsCodedSizeParser.h"
-#include "internal/graph/protocol/rtp/MediaHevcSpsCodedSizeParser.h"
+#include "internal/graph/protocol/codec/MediaH264SpsCodedSizeParser.h"
+#include "internal/graph/protocol/codec/MediaHevcSpsCodedSizeParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 

@@ -18,7 +18,7 @@ public:
         MediaAvGenerationTransitionPlan plan);
 
     ::media::Result<MediaAvGenerationPurge> begin(
-        std::uint64_t oldGeneration,
+        MediaAvTransitionOrigin origin,
         std::uint64_t nextGeneration);
     ::media::Result<bool> acknowledge(
         MediaAvGenerationAcknowledgement acknowledgement);

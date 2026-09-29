@@ -1,8 +1,10 @@
 #pragma once
 
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
 #include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/time/MediaMasterClock.h"
 
@@ -17,6 +19,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvReacquisitionCoordinator;
 class MediaAvSyncGroupRuntime;
+class MediaNodeWakeup;
 struct MediaAvReacquisitionCoordinatorTestAccess;
 
 class MediaAvStartupReleasePublicationReservation final {
@@ -94,11 +97,29 @@ enum class MediaAvReacquisitionPhase : std::uint8_t {
     Publishing = 6
 };
 
+struct MediaAvSourceClockEvidence final {
+    std::uint64_t generation;
+    std::uint64_t revision;
+    MediaRunningTime acceptedAt;
+};
+
 struct MediaAvReacquisitionSnapshot final {
     MediaAvReacquisitionPhase phase;
     std::optional<MediaAvGenerationPurge> transition;
     std::optional<MediaAvReacquisitionReason> reason;
 };
+
+enum class MediaAvGenerationEvidenceDisposition : std::uint8_t {
+    Retired,
+    Target,
+    Future
+};
+
+::media::Result<MediaAvGenerationEvidenceDisposition>
+classifyMediaAvGenerationEvidence(
+    const MediaAvReacquisitionSnapshot& reacquisition,
+    const MediaAvEpochTransitionSnapshot& epoch,
+    std::uint64_t generation);
 
 class MediaAvGenerationPublicationReservation final {
 public:
@@ -165,13 +186,21 @@ class MediaAvReacquisitionCoordinator final
     : public std::enable_shared_from_this<MediaAvReacquisitionCoordinator> {
 public:
     static ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
-    create(std::shared_ptr<MediaAvEpochTransitionService> transition,
+    create(MediaAvSyncGroupKey groupKey,
+           std::shared_ptr<MediaAvEpochTransitionService> transition,
            std::shared_ptr<MediaMasterClock> clock,
-           std::vector<MediaAvGenerationParticipantGroup> participants);
+           std::vector<MediaAvGenerationParticipantGroup> participants,
+           std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+           MediaAvSourceLifecyclePlan lifecycle,
+           std::weak_ptr<const MediaAvSyncGroupRuntime> output);
 
+    bool preservesActivatedOutput() const noexcept;
+    ::media::Status observeClockEvidence(std::uint64_t generation, std::uint64_t revision);
+    std::optional<MediaAvSourceClockEvidence> clockEvidence() const noexcept;
     ::media::Status observe(MediaAvReacquisitionRequest request);
     ::media::Status request(MediaAvReacquisitionRequest request);
     ::media::Status pollTimeout();
+    ::media::Result<std::optional<MediaRunningTime>> progressPurge();
     MediaAvReacquisitionSnapshot snapshot() const noexcept;
     MediaAvGenerationArbitrationReservation
     reserveGenerationArbitration();
@@ -197,15 +226,21 @@ private:
     friend struct MediaAvReacquisitionCoordinatorTestAccess;
 
     MediaAvReacquisitionCoordinator(
+        MediaAvSyncGroupKey groupKey,
         std::shared_ptr<MediaAvEpochTransitionService> transition,
         std::shared_ptr<MediaMasterClock> clock,
-        std::vector<MediaAvGenerationParticipantGroup> participants);
+        std::vector<MediaAvGenerationParticipantGroup> participants,
+        std::vector<std::shared_ptr<MediaNodeWakeup>> domainWakeups,
+           MediaAvSourceLifecyclePlan lifecycle,
+           std::weak_ptr<const MediaAvSyncGroupRuntime> output);
 
     ::media::Status failTerminalLocked(::media::ErrorInfo error);
+    // Requires activation arbitration followed by m_mutex.
+    ::media::Result<bool> requestSatisfiedLocked(
+        const MediaAvReacquisitionRequest& request) const;
+    ::media::Status beginRequestLocked(MediaAvReacquisitionRequest request);
     ::media::Status validateAndQueueRequest(
         MediaAvReacquisitionRequest request);
-    ::media::Status rejectIncompatibleEvidence(
-        ::media::ErrorInfo error);
     std::unique_lock<std::mutex> acquireActivationArbitration();
     bool matchesActiveRequest(
         const MediaAvReacquisitionRequest& request) const noexcept;
@@ -226,12 +261,19 @@ private:
         MediaAvReacquisitionActivationReservation& reservation) noexcept;
 
     mutable std::mutex m_activationMutex;
+    std::mutex m_purgeMutex;
     mutable std::mutex m_mutex;
     mutable std::condition_variable m_activationWaitChanged;
     std::size_t m_activationWaiters = 0;
+    MediaAvSyncGroupKey m_groupKey;
+    MediaAvSourceLifecyclePlan m_lifecycle;
+    std::weak_ptr<const MediaAvSyncGroupRuntime> m_output;
+    std::optional<MediaAvReacquisitionRequest> m_queuedRequest;
+    std::optional<MediaAvSourceClockEvidence> m_clockEvidence;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::vector<MediaAvGenerationParticipantGroup> m_participants;
+    std::vector<std::shared_ptr<MediaNodeWakeup>> m_domainWakeups;
     MediaAvReacquisitionPhase m_phase =
         MediaAvReacquisitionPhase::Inactive;
     std::optional<MediaAvReacquisitionRequest> m_request;

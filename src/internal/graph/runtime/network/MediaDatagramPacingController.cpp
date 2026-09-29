@@ -69,6 +69,7 @@ MediaDatagramPacingController::create(MediaDatagramPacingContract contract)
             "Datagram pacing rejects an active reservation, generation rollback, or service-curve change"));
     }
     m_contract = std::move(contract);
+    m_lastSubmittedSequence.reset();
     return ::media::Status::success();
 }
 
@@ -178,6 +179,22 @@ MediaDatagramPacingController::reserve(
         m_telemetry.maximumWireBytesPerSecond, adjustedRate);
     ++m_telemetry.reservedDatagrams;
     return Result::success(reservation);
+}
+
+::media::Status MediaDatagramPacingController::cancelReservation(std::uint64_t generation)
+{
+    if (generation != m_contract.generation) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram pacing cancellation differs from active generation"));
+    }
+    if (m_pending) {
+        if (m_telemetry.cancelledReservations == (std::numeric_limits<std::uint64_t>::max)())
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "Datagram pacing cancellation counter overflowed"));
+        m_pending.reset();
+        ++m_telemetry.cancelledReservations;
+    }
+    return ::media::Status::success();
 }
 
 ::media::Status MediaDatagramPacingController::markSubmitted(

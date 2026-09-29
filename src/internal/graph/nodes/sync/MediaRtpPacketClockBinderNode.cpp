@@ -71,6 +71,19 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         return processProgress(bindPacket(context, std::move(buffered)));
     }
 
+    // Keep the next packet in the bounded input channel until clock
+    // acquisition can drain our queue. Clock input remains serviced above.
+    if (!m_lockedSnapshot &&
+        m_acquiringPackets.size() >= m_acquiringCapacity) {
+        if (!m_acquisitionDeadline->deadline()) {
+            return processProgress(invalid(
+                "Full RTP acquisition queue requires an established deadline"));
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
+    }
+
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());
@@ -145,6 +158,10 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         }
         m_durationClockRate = clockRate.value();
     }
+    if (!m_syncGroup->plan().members ||
+        (m_streamKind == MediaStreamKind::Audio &&
+         *m_syncGroup->plan().members != MediaTranscodeStreamSet::AudioVideo))
+        return invalid("RTP packet binder requires its stream in the planned source members");
     m_configured = true;
     return ::media::Status::success();
 }
@@ -155,12 +172,8 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     const auto* group = dynamic_cast<const MediaRtpClockGroupBuffer*>(buffer.get());
     if (!group) return invalid("RTP packet binder clock input requires a group snapshot");
     const MediaRtpClockGroupSnapshot& snapshot = group->snapshot();
-    const bool discriminated =
-        (snapshot.state == MediaRtpClockGroupState::Locked) ==
-        snapshot.locked.has_value();
-    if (!discriminated) {
-        return invalid("RTP packet binder rejects malformed clock group snapshot");
-    }
+    if (auto status = snapshot.validateMembers(*m_syncGroup->plan().members); !status)
+        return status;
     if (snapshot.state != MediaRtpClockGroupState::Locked) {
         if (m_lockedSnapshot) invalidateClockProjection();
         return ::media::Status::success();
@@ -216,7 +229,7 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     const MediaRtpSourceClockCalibration& calibration =
         m_scheduledStream == MediaScheduledStream::Video
         ? m_lockedSnapshot->locked->video
-        : m_lockedSnapshot->locked->audio;
+        : *m_lockedSnapshot->locked->audio;
     if (!time.hasKnownTimeBase() || time.timeBase.num != 1 ||
         (m_streamKind == MediaStreamKind::Video &&
          time.timeBase.den != m_durationClockRate)) {
@@ -248,6 +261,9 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     auto wrapped = FFmpegBufferFactory::wrapPacket(
         std::move(packet), m_streamKind, std::move(timing).value());
     if (!wrapped) return wrapped;
+    if (auto status = wrapped.value()->attachPayloadCredit(source->takePayloadCredit()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
     if (m_streamKind == MediaStreamKind::Video && inputKey &&
         !m_keyTraceEmitted) {
         m_keyTraceEmitted = true;

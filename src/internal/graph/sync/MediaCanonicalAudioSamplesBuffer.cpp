@@ -3,7 +3,7 @@
 namespace media::ffmpeg::graph {
 
 MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
-    MediaBufferRef media, std::vector<MediaAudioIntervalFragment> fragments)
+    MediaBufferRef media, MediaImmutableArray<MediaAudioIntervalFragment> fragments)
     : m_media(std::move(media))
     , m_lineage(fragments.front().lineage)
     , m_interval({fragments.front().interval.begin,
@@ -19,9 +19,10 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
     MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage,
     MediaCanonicalAudioSampleInterval interval)
 {
-    return create(
-        std::move(media),
-        std::vector<MediaAudioIntervalFragment>{{std::move(lineage), interval}});
+    auto fragment = MediaAudioIntervalFragment::fromSource(std::move(lineage), interval);
+    if (!fragment) return ::media::Result<MediaBufferRef>::failure(fragment.error());
+    return create(std::move(media), std::vector<MediaAudioIntervalFragment>{
+        std::move(fragment).value()});
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalAudioSamplesBuffer::create(
@@ -37,7 +38,7 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
     int sampleRate = 0;
     std::int64_t expectedBegin = -1;
     for (const auto& fragment : fragments) {
-        if (!fragment.lineage || !fragment.interval.sampleCount()) {
+        if (!fragment.valid()) {
             return ::media::Result<MediaBufferRef>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical audio samples require valid fragments"));
@@ -49,18 +50,20 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
             sampleRate = fragment.interval.sampleRate;
             expectedBegin = fragment.interval.begin;
         }
-        if (fragment.lineage->generation != generation ||
+        if (!sameMediaCanonicalTimeline(*fragments.front().lineage, *fragment.lineage) ||
             fragment.interval.sampleRate != sampleRate ||
             fragment.interval.begin != expectedBegin) {
             return ::media::Result<MediaBufferRef>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "Canonical audio fragments must be contiguous and same-generation"));
+                    "Canonical audio fragments must be contiguous and share a timeline"));
         }
         expectedBegin = fragment.interval.end;
     }
+    auto storage = MediaImmutableArray<MediaAudioIntervalFragment>::copy(fragments);
+    if (!storage) return ::media::Result<MediaBufferRef>::failure(storage.error());
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaCanonicalAudioSamplesBuffer(
-            std::move(media), std::move(fragments))));
+            std::move(media), std::move(storage).value())));
 }
 
 MediaBufferType MediaCanonicalAudioSamplesBuffer::type() const noexcept { return MediaBufferType::Event; }

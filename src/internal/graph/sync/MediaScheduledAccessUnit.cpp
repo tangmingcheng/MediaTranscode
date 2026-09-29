@@ -16,8 +16,8 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
     MediaRunningTime emitOnMasterValue,
     MediaRunningTime canonicalDurationValue,
     std::uint64_t generationValue,
-    MediaSourceAccessUnitSequence sourceSequenceValue,
-    std::optional<MediaSourceAccessUnitSequence> repeatedFromValue,
+    MediaCanonicalAccessUnitSequence canonicalSequenceValue,
+    std::optional<MediaCanonicalAccessUnitSequence> repeatedFromValue,
     std::optional<MediaVideoRepeatRequestId> repeatRequestIdValue,
     std::optional<MediaVideoSyncDecisionKind> videoDecisionValue)
     : media(std::move(mediaValue)), stream(streamValue),
@@ -27,7 +27,7 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
       dispatchOnMaster(dispatchOnMasterValue),
       emitOnMaster(emitOnMasterValue),
       canonicalDuration(canonicalDurationValue), generation(generationValue),
-      sourceSequence(sourceSequenceValue), repeatedFrom(repeatedFromValue),
+      canonicalSequence(canonicalSequenceValue), repeatedFrom(repeatedFromValue),
       repeatRequestId(repeatRequestIdValue), videoDecision(videoDecisionValue)
 {
 }
@@ -40,7 +40,7 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
     const bool hasRepeatIdentity = parameters.repeatedFrom.has_value() &&
         parameters.repeatRequestId.has_value() &&
         parameters.repeatRequestId->value() > 0 &&
-        parameters.sourceSequence == *parameters.repeatedFrom;
+        parameters.canonicalSequence == *parameters.repeatedFrom;
     bool allowedVideoDecision = false;
     if (parameters.videoDecision) {
         switch (*parameters.videoDecision) {
@@ -67,7 +67,7 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
               !parameters.repeatRequestId;
     if (!FFmpegPacketView::isPacket(parameters.media) ||
         parameters.media->streamKind() != expectedStream ||
-        parameters.generation == 0 || parameters.sourceSequence.value() == 0 ||
+        parameters.generation == 0 || parameters.canonicalSequence.value() == 0 ||
         parameters.canonicalDuration.nanoseconds() < 0 || !videoContract) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -87,8 +87,8 @@ MediaScheduledAccessUnit::MediaScheduledAccessUnit(
       m_emitOnMaster(parameters.emitOnMaster),
       m_canonicalDuration(parameters.canonicalDuration),
       m_generation(parameters.generation),
-      m_sourceSequence(parameters.sourceSequence),
-      m_repeatedFromSourceSequence(parameters.repeatedFrom),
+      m_canonicalSequence(parameters.canonicalSequence),
+      m_repeatedFromCanonicalSequence(parameters.repeatedFrom),
       m_repeatRequestId(parameters.repeatRequestId),
       m_videoDecision(parameters.videoDecision)
 {

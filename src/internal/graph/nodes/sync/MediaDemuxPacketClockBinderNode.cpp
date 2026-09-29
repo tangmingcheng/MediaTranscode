@@ -331,6 +331,9 @@ MediaDemuxPacketClockBinderNode::timedPacket(
             generation,
             timestamp.duration()->nanoseconds()});
     if (!wrapped) return wrapped;
+    if (auto status = wrapped.value()->attachPayloadCredit(source->takePayloadCredit()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
     wrapped.value()->setFormatDescriptor(format);
     wrapped.value()->setTimeDescriptor(time);
     wrapped.value()->setHardwareDescriptor(hardware);
@@ -377,7 +380,7 @@ MediaDemuxPacketClockBinderNode::publishClockState(
         snapshot.readiness ==
         MediaSourceClockReadiness::ReacquireRequired;
     MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        snapshot.readiness, snapshot.generation, discontinuity);
+        snapshot.readiness, snapshot.generation, discontinuity, std::nullopt);
     m_state->publishedClockRevision = snapshot.revision;
     return processProgress(emitOutput(context, "state", state));
 }

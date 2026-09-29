@@ -5,6 +5,8 @@
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
+
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -30,7 +32,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const bool isVideo = stream == MediaStreamKind::Video;
     const std::size_t acquiringCapacity = isVideo
@@ -101,7 +103,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const bool isVideo = stream == MediaStreamKind::Video;
     const MediaRunningTime acquiringTimeout = isVideo
@@ -155,7 +157,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
     MediaGraph& graph,
     MediaNodeId node,
     MediaScheduledStream stream,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& assembly = plan.assembly;
     const bool video = stream == MediaScheduledStream::Video;
@@ -232,8 +234,8 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
             std::get_if<MediaPacketDurationPlan>(
                 &assembly.audio.duration)) {
         if (!packet->requirePositiveDuration ||
-            !plan.planningFacts.inputAudioSampleRate ||
-            *plan.planningFacts.inputAudioSampleRate <= 0) {
+            !plan.inputAudioSampleRate ||
+            *plan.inputAudioSampleRate <= 0) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical packet-duration audio requires its planned sample rate"));
@@ -248,7 +250,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
         return setOption(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(
-                *plan.planningFacts.inputAudioSampleRate));
+                *plan.inputAudioSampleRate));
     }
     return ::media::Result<void>::failure(
         ::media::ErrorInfo::invalidArgument(
@@ -259,10 +261,11 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
 MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     const auto& startup = plan.synchronization.startup;
-    const bool complete = startup.requireVideoKeyFrame &&
+    const bool complete = plan.synchronization.members == MediaTranscodeStreamSet::AudioVideo &&
+        startup.requireVideoKeyFrame &&
         startup.trimAudioToCommonStart && startup.maximumWaitNs &&
         startup.prerollNs && startup.keyFrameWaitNs &&
         startup.maximumAudioTrimNs && startup.maximumInitialSkewNs &&
@@ -279,6 +282,10 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup coordinator requires a complete planner product"));
     }
+    auto encodedMembers = MediaTranscodeStreamSetCodec::encode(*plan.synchronization.members);
+    if (!encodedMembers) return ::media::Result<void>::failure(encodedMembers.error());
+    if (auto status = setOption(graph, node, "av_startup.members",
+            std::string(encodedMembers.value())); !status) return status;
     const auto setBool = [&](const char* key, bool value) {
         return setOption(graph, node, key, value ? "1" : "0");
     };
@@ -344,21 +351,16 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
 MediaRealtimeAvSyncNodeConfigurator::configureStartupClock(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
-    if (auto status = setOption(
-            graph, node, "av_startup_clock.sync_group",
-            plan.groupKey.value()); !status) return status;
-    return setOption(
-        graph, node, "av_startup_clock.interval_ns",
-        std::to_string(plan.assembly.startupClockInterval.nanoseconds()));
+    return setOption(graph, node, "av_startup_clock.sync_group", plan.groupKey.value());
 }
 
 ::media::Result<void>
 MediaRealtimeAvSyncNodeConfigurator::configurePlaybackEpochBinder(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     return setOption(
         graph, node, "playback_epoch_binder.sync_group",
@@ -369,7 +371,7 @@ MediaRealtimeAvSyncNodeConfigurator::configurePlaybackEpochBinder(
 MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = setOption(
         graph, node, "activated_startup_release_sequencer.sync_group",
@@ -388,7 +390,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
 MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
     MediaGraph& graph,
     MediaNodeId node,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = setOption(
         graph,

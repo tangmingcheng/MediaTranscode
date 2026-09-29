@@ -1,6 +1,7 @@
 #pragma once
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
 #include <optional>
+#include "internal/graph/model/MediaVideoColorRangeFact.h"
 
 #include "media_transcode/Result.h"
 #include <cstdint>
@@ -19,6 +20,7 @@ struct MediaVideoEncoderReadbackField final {
 };
 
 struct MediaVideoEncoderReadback final {
+    std::optional<MediaVideoColorRangeFact> effectiveColorRange;
     std::vector<MediaVideoEncoderReadbackField> fields;
     std::vector<std::uint8_t> extraData;
     std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;

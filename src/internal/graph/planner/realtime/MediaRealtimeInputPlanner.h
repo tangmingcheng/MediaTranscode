@@ -45,7 +45,8 @@ public:
         const MediaPipelinePlannerOptions& options,
         const MediaRealtimePreflightIo* io);
     static ::media::Result<MediaPreparedRawRtpProbe> prepareRawRtpVideo(
-        const MediaRealtimeRtpTranscodeRequest& request);
+        const MediaRealtimeInputConfig& input,
+        MediaTranscodeStreamSet streamSet);
 
 private:
     MediaRealtimeInputPlanner() = delete;

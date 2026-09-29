@@ -8,7 +8,7 @@ namespace media::ffmpeg::graph {
 
 MediaRawRtpPreparedByteBudget::MediaRawRtpPreparedByteBudget(
     std::size_t capacity) noexcept
-    : m_capacity(capacity)
+    : m_storage(capacity)
 {
 }
 
@@ -49,11 +49,10 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
 ::media::Status MediaRawRtpPreparedByteBudget::release(std::size_t bytes)
 {
     std::scoped_lock lock(m_mutex);
-    if (bytes > m_retainedBytes) {
+    if (!m_storage.release(bytes)) {
         return failLocked(::media::ErrorInfo::invalidArgument(
             "raw RTP prepared aggregate byte reservation underflow"));
     }
-    m_retainedBytes -= bytes;
     return ::media::Status::success();
 }
 
@@ -64,6 +63,27 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     return failLocked(std::move(error));
 }
 
+::media::Status MediaRawRtpPreparedByteBudget::reserveProbe(std::size_t bytes)
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return ::media::Status::failure(*m_error);
+    if (m_runtimeActive || m_probeActive || bytes == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe requires an unsealed budget without another probe lease"));
+    }
+    if (auto status = retainLocked(bytes, "probe"); !status) return status;
+    m_probeActive = true;
+    return ::media::Status::success();
+}
+
+void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
+{
+    std::scoped_lock lock(m_mutex);
+    // Only the move-only lease can release this reservation, exactly once.
+    (void)m_storage.release(bytes);
+    m_probeActive = false;
+}
+
 ::media::Status MediaRawRtpPreparedByteBudget::sealPreflight()
 {
     std::scoped_lock lock(m_mutex);
@@ -71,6 +91,10 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     if (m_runtimeActive) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP prepared byte budget was already sealed"));
+    }
+    if (m_probeActive) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP preflight cannot seal while a probe snapshot is retained"));
     }
     m_runtimeActive = true;
     return ::media::Status::success();
@@ -97,7 +121,8 @@ MediaRawRtpPreparedByteBudgetSnapshot
 MediaRawRtpPreparedByteBudget::snapshot() const noexcept
 {
     std::scoped_lock lock(m_mutex);
-    return {m_capacity, m_observedBytes, m_retainedBytes, m_runtimeActive};
+    return {m_storage.capacity(), m_observedBytes, m_storage.retainedBytes(), m_runtimeActive,
+        m_probeActive};
 }
 
 ::media::Status MediaRawRtpPreparedByteBudget::observeLocked(
@@ -105,11 +130,11 @@ MediaRawRtpPreparedByteBudget::snapshot() const noexcept
 {
     if (m_error) return ::media::Status::failure(*m_error);
     if (m_runtimeActive) return ::media::Status::success();
-    if (bytes > m_capacity - m_observedBytes) {
+    if (bytes > m_storage.capacity() - m_observedBytes) {
         return failLocked(::media::ErrorInfo::allocationFailed(
             "raw RTP probe exceeded total byte capacity: observed_bytes=" +
             std::to_string(m_observedBytes) + " capacity=" +
-            std::to_string(m_capacity)));
+            std::to_string(m_storage.capacity())));
     }
     m_observedBytes += bytes;
     return ::media::Status::success();
@@ -119,14 +144,13 @@ MediaRawRtpPreparedByteBudget::snapshot() const noexcept
     std::size_t bytes, std::string_view stream)
 {
     if (m_error) return ::media::Status::failure(*m_error);
-    if (bytes > m_capacity - m_retainedBytes) {
+    if (!m_storage.retain(bytes)) {
         return failLocked(::media::ErrorInfo::allocationFailed(
             "raw RTP prepared A/V capture exceeded aggregate byte capacity: stream=" +
             std::string(stream) + " retained_bytes=" +
-            std::to_string(m_retainedBytes) + " capacity=" +
-            std::to_string(m_capacity)));
+            std::to_string(m_storage.retainedBytes()) + " capacity=" +
+            std::to_string(m_storage.capacity())));
     }
-    m_retainedBytes += bytes;
     return ::media::Status::success();
 }
 

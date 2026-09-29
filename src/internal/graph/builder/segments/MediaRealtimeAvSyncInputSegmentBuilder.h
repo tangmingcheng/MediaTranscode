@@ -29,7 +29,7 @@ public:
     static ::media::Result<MediaRealtimeAvSyncInputEndpoints> build(
         MediaGraph& graph,
         const MediaRealtimeAvSyncInputSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
 private:
     MediaRealtimeAvSyncInputSegmentBuilder() = delete;

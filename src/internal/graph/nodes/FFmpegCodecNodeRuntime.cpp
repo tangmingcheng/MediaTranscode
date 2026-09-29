@@ -1,6 +1,8 @@
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 
 #include <utility>
+#include <sstream>
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
 
 namespace media::ffmpeg::graph {
@@ -31,6 +33,19 @@ void FFmpegCodecNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 
 void FFmpegCodecNodeRuntime::resetCodecContext() noexcept
 {
+    if (m_codecContextOwner &&
+        mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+        try {
+            std::ostringstream message;
+            message << "codec_owner_release node=" << nodeId().value
+                    << " kind=" << mediaGraphDiagnosticNodeKindName(kind())
+                    << " owner_references=" << m_codecContextOwner.use_count();
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeLifecycle, message.str());
+        } catch (...) {
+            // Diagnostics must not prevent releasing codec ownership.
+        }
+    }
     m_codecContext = nullptr;
     m_codecContextOwner.reset();
     m_codecParametersSnapshot.reset();

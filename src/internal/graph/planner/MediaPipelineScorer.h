@@ -8,6 +8,10 @@ namespace media::ffmpeg::graph {
 
 class MediaPipelineScorer final {
 public:
+    static bool sameFrameDomain(const MediaHardwareDescriptor& left,
+                                const MediaHardwareDescriptor& right) noexcept;
+    static MediaVideoSourcePlan scoreSource(MediaVideoSourcePlan source,
+                                            const MediaHardwareDescriptor& target);
     static MediaPipelineChainPlan scoreChain(MediaPipelineChainPlan chain,
                                              const MediaPipelinePlannerOptions& options);
 

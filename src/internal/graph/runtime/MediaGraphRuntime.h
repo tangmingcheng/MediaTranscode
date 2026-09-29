@@ -10,7 +10,7 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 #include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
-#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
+#include "internal/graph/runtime/compilation/MediaAvRuntimeDomainState.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -119,10 +119,7 @@ private:
     MediaRuntimeAcceptanceCollector m_acceptanceCollector;
     mutable std::atomic_size_t m_queueHighWatermark{ 0 };
     std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
-    std::optional<MediaPlaybackEpochActivationCapability>
-        m_playbackEpochActivationCapability;
-    std::shared_ptr<MediaAvStartupVideoPreparationState>
-        m_videoPreparationState;
+    std::vector<MediaAvRuntimeDomainState> m_avDomains;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority>
         m_protocolOutputAuthority;
     std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;

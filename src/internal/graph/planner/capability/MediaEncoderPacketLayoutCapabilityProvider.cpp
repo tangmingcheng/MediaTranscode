@@ -8,6 +8,8 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
+#include "internal/graph/protocol/codec/MediaVideoParameterSetFacts.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -97,7 +99,8 @@ LayoutResult classifyExtradata(const AVCodecContext& context)
               "opened encoder extradata does not identify packet layout"));
 }
 
-LayoutResult encodeProbeFrame(AVCodecContext& context)
+LayoutResult encodeProbeFrame(AVCodecContext& context,
+    std::optional<MediaVideoColorRangeFact>& effectiveColorRange)
 {
     auto frame = ::media::ffmpeg::makeFrame();
     auto packet = ::media::ffmpeg::makePacket();
@@ -161,8 +164,17 @@ LayoutResult encodeProbeFrame(AVCodecContext& context)
         code = avcodec_receive_packet(&context, packet.get());
         if (code == 0) {
             if (packet->data && packet->size > 0) {
-                return classifyPacket(std::span<const std::uint8_t>(
-                    packet->data, static_cast<std::size_t>(packet->size)));
+                const auto bytes = std::span<const std::uint8_t>(
+                    packet->data, static_cast<std::size_t>(packet->size));
+                auto layout = classifyPacket(bytes);
+                if (layout && (context.codec_id == AV_CODEC_ID_H264 || context.codec_id == AV_CODEC_ID_HEVC)) {
+                    effectiveColorRange = MediaVideoParameterSetFacts::fromAccessUnit(bytes,
+                        context.codec_id == AV_CODEC_ID_H264 ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc,
+                        layout.value());
+                }
+                if (effectiveColorRange) effectiveColorRange->encoderInput =
+                    MediaVideoEncoderColorInput{context.color_range, context.pix_fmt, context.sw_pix_fmt};
+                return layout;
             }
             av_packet_unref(packet.get());
             continue;
@@ -189,10 +201,14 @@ LayoutResult encodeProbeFrame(AVCodecContext& context)
 
 ::media::Result<MediaEncodedPacketLayout>
 MediaEncoderPacketLayoutCapabilityProvider::probeOpenedContext(
-    AVCodecContext& context)
+    AVCodecContext& context,
+    std::optional<MediaVideoColorRangeFact>& effectiveColorRange)
 {
+    effectiveColorRange = MediaVideoParameterSetFacts::fromExtradata(context);
+    if (effectiveColorRange) effectiveColorRange->encoderInput =
+        MediaVideoEncoderColorInput{context.color_range, context.pix_fmt, context.sw_pix_fmt};
     auto extradata = classifyExtradata(context);
-    return extradata ? extradata : encodeProbeFrame(context);
+    return extradata ? extradata : encodeProbeFrame(context, effectiveColorRange);
 }
 
 } // namespace media::ffmpeg::graph

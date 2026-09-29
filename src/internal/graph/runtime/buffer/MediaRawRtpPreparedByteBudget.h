@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/resource/MediaByteReservationCounter.h"
 
 #include <cstddef>
 #include <memory>
@@ -15,6 +16,7 @@ struct MediaRawRtpPreparedByteBudgetSnapshot final {
     std::size_t observedBytes;
     std::size_t retainedBytes;
     bool runtimeActive;
+    bool probeActive;
 };
 
 class MediaRawRtpPreparedByteBudget final {
@@ -34,17 +36,20 @@ public:
     MediaRawRtpPreparedByteBudgetSnapshot snapshot() const noexcept;
 
 private:
+    friend class MediaRawRtpProbeLease;
+    ::media::Status reserveProbe(std::size_t bytes);
+    void releaseProbe(std::size_t bytes) noexcept;
     explicit MediaRawRtpPreparedByteBudget(std::size_t capacity) noexcept;
     ::media::Status observeLocked(std::size_t bytes);
     ::media::Status retainLocked(
         std::size_t bytes, std::string_view stream);
     ::media::Status failLocked(::media::ErrorInfo error);
 
-    const std::size_t m_capacity;
+    MediaByteReservationCounter m_storage;
     mutable std::mutex m_mutex;
     std::size_t m_observedBytes = 0;
-    std::size_t m_retainedBytes = 0;
     bool m_runtimeActive = false;
+    bool m_probeActive = false;
     std::optional<::media::ErrorInfo> m_error;
 };
 

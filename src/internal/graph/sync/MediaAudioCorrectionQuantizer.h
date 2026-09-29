@@ -28,6 +28,8 @@ public:
         int stretchPpm,
         const MediaAudioCorrectionTelemetry& telemetry);
 
+    ::media::Result<int> maximumCompensationDistance(int maximumStretchPpm) const;
+
     ::media::Status resetEpoch(std::int64_t epochOutputSampleIndex);
     std::optional<std::int64_t> nextPlannedEnd() const noexcept;
 

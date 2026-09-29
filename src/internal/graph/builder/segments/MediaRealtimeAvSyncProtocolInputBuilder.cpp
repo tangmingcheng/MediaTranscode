@@ -4,6 +4,8 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
+
 #include <string>
 #include <utility>
 #include <variant>
@@ -38,7 +40,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildRtp(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     auto snapshotResult = Support::addNode(
         graph, MediaNodeKind::RtpClockSnapshotFanout,
@@ -64,6 +66,15 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const MediaNodeId video = videoResult.value();
     const MediaNodeId audio = audioResult.value();
     const MediaNodeId adapter = adapterResult.value();
+    if (!plan.synchronization.members)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized("RTP source adapter requires planned members"));
+    auto encodedMembers = MediaTranscodeStreamSetCodec::encode(*plan.synchronization.members);
+    if (!encodedMembers)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(encodedMembers.error());
+    if (auto status = Support::setOption(graph, adapter, "rtp_source_clock.members",
+            std::string(encodedMembers.value())); !status)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
 
     if (auto status = Support::addInput(
             graph, snapshot, "clock", MediaStreamKind::Metadata,
@@ -162,7 +173,8 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::success(
         MediaRealtimeAvSyncProtocolInputEndpoints{
             MediaEndpoint{video, "packet"}, MediaEndpoint{audio, "packet"},
-            MediaEndpoint{adapter, "state"}});
+            MediaEndpoint{adapter, "state"}, std::nullopt,
+            {snapshot, video, audio, adapter}});
 }
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildMpegTs(
@@ -177,7 +189,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildDemux(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan,
+    const MediaRealtimeAvSourceRuntimePlan& plan,
     const MediaDemuxTimestampInputClockAssemblyPlan& demuxPlan)
 {
     auto built = MediaDemuxClockInputSegmentBuilder::build(
@@ -199,7 +211,10 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
         MediaRealtimeAvSyncProtocolInputEndpoints{
             built.value().video,
             built.value().audio,
-            built.value().sourceClock});
+            built.value().sourceClock,
+            MediaAvDemuxClockRegistration{built.value().video.node,
+                                         built.value().audio.node},
+            {built.value().video.node, built.value().audio.node}});
 }
 
 } // namespace
@@ -208,7 +223,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 MediaRealtimeAvSyncProtocolInputBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (!plan.synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::

@@ -19,36 +19,23 @@ constexpr int kFullHardwareTransferStageScore = 800;
 constexpr int kMixedHardwareStageScore = 650;
 constexpr int kSoftwareStageScore = 300;
 
-bool sameFrameDomain(const MediaHardwareDescriptor& left,
-                     const MediaHardwareDescriptor& right) noexcept
+bool completeSourceFrameContracts(const MediaVideoSourcePlan& source) noexcept
 {
-    return left.deviceKind == right.deviceKind &&
-           left.frameKind == right.frameKind &&
-           left.deviceName == right.deviceName &&
-           left.pixelFormat == right.pixelFormat &&
-           left.surfacePixelFormat == right.surfacePixelFormat &&
-           left.zeroCopyPreferred == right.zeroCopyPreferred;
+    if (!source.decoder.outputFrame || source.transferDirection == MediaHardwareTransferDirection::Unknown)
+        return false;
+    if (!source.filterActive) return true;
+    return source.filter.inputFrame && source.filter.outputFrame &&
+        (source.transferDirection != MediaHardwareTransferDirection::None ||
+         MediaPipelineScorer::sameFrameDomain(*source.decoder.outputFrame, *source.filter.inputFrame));
 }
 
 bool completeFrameContracts(const MediaPipelineChainPlan& chain,
-                            const MediaPipelinePlannerOptions& options) noexcept
+                            const MediaPipelinePlannerOptions&) noexcept
 {
-    if (!chain.decoder.outputFrame || !chain.encoder.inputFrame ||
-        chain.transferDirection == MediaHardwareTransferDirection::Unknown) {
-        return false;
-    }
-    if (chain.filterActive) {
-        if (!chain.filter.inputFrame || !chain.filter.outputFrame) {
-            return false;
-        }
-        return chain.transferDirection == MediaHardwareTransferDirection::None
-                   ? sameFrameDomain(*chain.decoder.outputFrame, *chain.filter.inputFrame) &&
-                         sameFrameDomain(*chain.filter.outputFrame, *chain.encoder.inputFrame)
-                   : true;
-    }
-    return chain.transferDirection == MediaHardwareTransferDirection::None
-               ? sameFrameDomain(*chain.decoder.outputFrame, *chain.encoder.inputFrame)
-               : true;
+    if (!completeSourceFrameContracts(chain) || !chain.encoder.inputFrame) return false;
+    const auto& output = chain.filterActive ? chain.filter.outputFrame : chain.decoder.outputFrame;
+    return chain.transferDirection != MediaHardwareTransferDirection::None ||
+        MediaPipelineScorer::sameFrameDomain(*output, *chain.encoder.inputFrame);
 }
 
 bool sameHardwareDevice(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
@@ -83,21 +70,21 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
 }
 
 int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
-                                const MediaPipelineChainPlan& chain) noexcept
+                                bool allHardware, bool sameHardwareDevice, bool zeroCopy) noexcept
 {
     if (!stage.hardware()) {
         return kSoftwareStageScore;
     }
 
-    if (chain.allHardware && chain.sameHardwareDevice && chain.zeroCopy) {
+    if (allHardware && sameHardwareDevice && zeroCopy) {
         return kFullHardwareZeroCopyStageScore;
     }
 
-    if (chain.allHardware && chain.sameHardwareDevice) {
+    if (allHardware && sameHardwareDevice) {
         return kFullHardwareSameDeviceStageScore;
     }
 
-    if (chain.allHardware) {
+    if (allHardware) {
         return kFullHardwareTransferStageScore;
     }
 
@@ -202,6 +189,40 @@ MediaPipelineChainPlan unavailableChain(MediaPipelineChainPlan chain, std::strin
 
 } // namespace
 
+bool MediaPipelineScorer::sameFrameDomain(const MediaHardwareDescriptor& left,
+                                           const MediaHardwareDescriptor& right) noexcept
+{
+    return left.deviceKind == right.deviceKind && left.frameKind == right.frameKind &&
+        left.deviceName == right.deviceName && left.pixelFormat == right.pixelFormat &&
+        left.surfacePixelFormat == right.surfacePixelFormat &&
+        left.zeroCopyPreferred == right.zeroCopyPreferred;
+}
+
+MediaVideoSourcePlan MediaPipelineScorer::scoreSource(MediaVideoSourcePlan source,
+                                                     const MediaHardwareDescriptor& target)
+{
+    const auto& output = source.filterActive ? source.filter.outputFrame : source.decoder.outputFrame;
+    source.available = completeSourceFrameContracts(source) && output &&
+        *output == target && source.decoder.available &&
+        (!source.filterActive || source.filter.available);
+    source.allHardware = source.available && source.decoder.hardware() &&
+        (!source.filterActive || source.filter.hardware());
+    source.sameHardwareDevice = source.allHardware &&
+        source.decoder.deviceKind() == target.deviceKind &&
+        (!source.filterActive || source.filter.deviceKind() == target.deviceKind);
+    source.zeroCopy = source.sameHardwareDevice && source.decoder.zeroCopy() &&
+        (!source.filterActive || source.filter.zeroCopy()) && target.zeroCopyPreferred;
+    source.score = source.available
+        ? availableStageSemanticScore(source.decoder, source.allHardware,
+            source.sameHardwareDevice, source.zeroCopy) + source.decoder.priority : kUnavailableScore;
+    if (source.available && source.filterActive)
+        source.score += availableStageSemanticScore(source.filter, source.allHardware,
+            source.sameHardwareDevice, source.zeroCopy) + source.filter.priority;
+    source.reason = source.available ? "source candidate frame contracts matched; execution unverified"
+                                    : "source candidate is unavailable or has inconsistent frame contracts";
+    return source;
+}
+
 MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan chain,
                                                        const MediaPipelinePlannerOptions& options)
 {
@@ -229,11 +250,11 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
                      chain.decoder.zeroCopy() && chain.encoder.zeroCopy() &&
                      (!chain.filterActive || chain.filter.zeroCopy());
 
-    chain.score = availableStageSemanticScore(chain.decoder, chain) +
-                  availableStageSemanticScore(chain.encoder, chain) +
+    chain.score = availableStageSemanticScore(chain.decoder, chain.allHardware, chain.sameHardwareDevice, chain.zeroCopy) +
+                  availableStageSemanticScore(chain.encoder, chain.allHardware, chain.sameHardwareDevice, chain.zeroCopy) +
                   declaredStagePriority(chain, options);
     if (chain.filterActive) {
-        chain.score += availableStageSemanticScore(chain.filter, chain);
+        chain.score += availableStageSemanticScore(chain.filter, chain.allHardware, chain.sameHardwareDevice, chain.zeroCopy);
     }
 
     chain.reason = availableReason(chain, options);

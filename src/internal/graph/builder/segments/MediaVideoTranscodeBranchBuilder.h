@@ -6,6 +6,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/video/MediaVideoOutputPlan.h"
 
 #include <string>
 #include <optional>
@@ -17,10 +18,8 @@ struct MediaSharedVideoDecodeEndpoints final {
     MediaEndpoint codec;
 };
 
-struct MediaVideoTranscodeBranchOptions {
+struct MediaVideoBranchConnectionOptions {
     std::string prefix = "video.transcode";
-    MediaPipelinePlan plan;
-    MediaVideoTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     std::optional<MediaVideoLineageEdgePolicySet> lineageEdgePolicies;
@@ -38,11 +37,37 @@ struct MediaVideoTranscodeBranchOptions {
 
 };
 
+struct MediaVideoTranscodeBranchOptions : MediaVideoBranchConnectionOptions {
+    MediaPipelinePlan plan;
+    MediaVideoTranscodeParameters parameters;
+};
+
+struct MediaVideoSourceBranchOptions : MediaVideoBranchConnectionOptions {
+    MediaVideoSourcePlan plan;
+    int sourceStreamIndex;
+    MediaRational frameRate;
+    std::optional<MediaRational> maximumFrameDuplicationGap;
+};
+
+struct MediaVideoOutputEncoderOptions final {
+    std::string prefix;
+    MediaVideoOutputPlan plan;
+    MediaRealtimeEdgePolicySet edgePolicies;
+    std::size_t canonicalLineageCapacity;
+    bool generationStartRequiresKeyFrame;
+};
+
 class MediaVideoTranscodeBranchBuilder final {
 public:
     static ::media::Result<MediaEncodedBranchEndpoints> build(
         MediaGraph& graph,
         const MediaVideoTranscodeBranchOptions& options);
+
+    static ::media::Result<MediaSourceBranchEndpoints> buildSource(
+        MediaGraph& graph, const MediaVideoSourceBranchOptions& options,
+        MediaEndpoint outputEncoderCodec);
+    static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(
+        MediaGraph& graph, const MediaVideoOutputEncoderOptions& options);
 
 private:
     MediaVideoTranscodeBranchBuilder() = default;

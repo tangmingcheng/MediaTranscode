@@ -1,3 +1,9 @@
+# 当前任务：固定实时视频合屏
+
+用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
+
+当前推进：同一最终拓扑现可推导独立输出池驻留数量，bind复算并复用实际encoder回读检查；数量不是准备预算。下一步接原deadline/cancellation下的有界资源准备和实际readback多源总账，再接公共多源事务。见[输出池驻留](docs/realtime-video-composition-pool-retention.md)。仅realtime原规格验证。
+
 # 可复用工业级 Datagram 发送控制与核心参数收口
 
 - [x] Windows 与 RKMPP 单视频 H.264 720p30 → HEVC 1080p25 CBR 6 Mbps → MPEG-TS/RTP 发送控制门禁；RK 使用 50 Mbps 受管出口事实。
@@ -614,3 +620,47 @@ Detailed design and execution checklist:
 - [x] 对照目标FFmpeg RKMPP AVOption，CLI初始/add统一允许并映射--profile，复用已验证的库/planner契约。
 - [ ] RKMPP全量重建，真实120秒CLI链路核对profile、增删、发送及VLC，成功后立即独立提交推送并交付新包。
 - [ ] 双人独立审查、评分及新PR复核，记录命令结果并清理临时材料。
+
+本轮将图像 payload 预算、原 deadline/cancellation 与共享租约接入 canvas 准备，见[阶段记录](docs/realtime-video-composition-canvas-preparation.md)。首次 pool/readback、多源完整总账及公共入口仍待完成，完整 FAIL42。
+
+逐producer事实已从registry的整图ledger依赖中拆出，并接入原FinalCompiler；实际frame scope在消费时复核。见[阶段记录](docs/realtime-video-composition-producer-facts.md)。多源allocation总账及入口仍未完成，完整FAIL42。
+
+逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。
+
+共享canonical元数据已迁移为精确元素只读owner，源链和aggregate共同factory接入，identity按内容比较并持有寿命；不等于分配前全局准入，完整FAIL42。见[存储记录](docs/realtime-video-composition-metadata-storage.md)。
+
+raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
+
+纯视频源调查确认clock/startup/release/epoch均强制双流，采用计划成员贯穿共同DAG；startup tick目前借用音频servo 10 ms，独立调度设计尚缺，不能填假音频。下一步先完整迁移成员型激活产品，再接纯视频源。见[成员合同与门禁](docs/realtime-video-composition-source-membership.md)。本轮仅调查，完整FAIL42。
+
+成员型epoch/release已由plan经bootstrap进入service并贯穿release/重锚/恢复分类，现有A/V生产路径实际使用；双源码审查和Release重建通过，r51 realtime仍no-progress/4逻辑对象，纯视频装配与完整合屏未完成、FAIL42。见[激活产品记录](docs/realtime-video-composition-activation-members.md)。
+
+## 2026-09-29 startup独立截止调度
+
+源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](docs/realtime-video-composition-startup-deadline.md)。
+
+## 2026-09-29 RTP源时钟成员合同
+
+计划成员贯穿RTP clock group、validator、snapshot及binder/projector/adapter，AV音频calibration与成员严格一致；单成员复用同一身份/时效/generation状态机，保留PlannedStreamPair现有CNAME政策。独立设计/源码双审及Release全量重建通过；r53 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡，非成功验收。纯视频完整startup/builder/resource、多源入口与总准入、AAC重入及双平台合屏仍未完成，六维10/8/6/12/2/4、42/100，完整FAIL。见[实现与证据](docs/realtime-video-composition-clock-members.md)。
+
+## 2026-09-29 startup成员合同
+
+startup config携带members与完整可选音频产品，单成员复用keyframe/正preroll窗口、代际与deadline状态机；factory端口/options、node有限barrier/EOF、release origin及最终账本startup容量按实际成员处理，start/release对照注册计划。源码双审与Release全量重建通过；r54 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress、4逻辑对象未平衡。完整V源prepared/planner/builder接线、多源总准入/入口及恢复和双平台验收仍缺；六维10/8/6/12/2/4、42/100，完整FAIL。见[实现和实流记录](docs/realtime-video-composition-startup-members.md)。
+
+## 2026-09-29 scheduler退休数据消费
+
+scheduler在purge全部确认后通过代际仲裁与session锁消费退休媒体，复用单一分类器和既有有界head；ContinuousOutput按显式initial-only合同保持独立输出。源码双审及Release全量重建通过。r55→r56同规格RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps对照：20项退休媒体被释放，两个10/10满队列消失，编码包入/出均39971；CLI仍no-progress自然exit1、4逻辑对象未归零，完整验收FAIL。可信终止/恢复、AAC重入、V源整链、多源总准入/入口及双平台合屏仍缺，六维10/8/6/12/2/4=42/100。见[实现与实流对照](docs/realtime-video-composition-scheduler-retirement.md)。
+
+## 2026-09-29 停止资源生命周期
+
+resolver stop/abort释放自持快照与codec/device，mux abort复用已有会话释放，重采集配置保留策略不变。3源码双独立审查及Release全量重建通过；r57 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps（AAC CBR192kbps/44.1kHz双声道）仍自然exit1/no-progress，4对象/0bytes、71849/71845。resolver现存槽无credit，最终报告实时读取ledger，不能把4对象归因resolver或等同元数据。未修复完整退出/恢复，V源整链、多源总准入/入口及Windows→RKMPP仍缺，六维10/8/6/12/2/4=42/100、完整FAIL。见[资源释放与失败证据](docs/realtime-video-composition-resource-lifecycle.md)。
+
+## 2026-09-29 stop失败收尾闭环
+
+r58逐节点账本证实VideoEncode abort释放4项，旧final在作用域RAII reset前采集，不能称退出后持久泄漏。有效stop错误现在复用abort完成回收后原样返回；3源码双审及Release全量通过。r59 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720、30fps（AAC CBR192kbps/44.1kHz双声道）最终0objects/0bytes、71875/71875平衡，但CLI仍no-progress自然exit1，完整验收FAIL。暂不再把已验证的报告时序问题作为4对象未解阻塞；继续可信终止/恢复、AAC重入、V源整链、多源总准入/入口及Windows→RKMPP门禁，六维10/8/6/12/2/4=42/100。见[根因与同规格对照](docs/realtime-video-composition-credit-retention.md)。
+
+## 2026-09-29 无效终止窗口依赖清理
+
+删除从音频servo派生但没有运行时消费者的terminalDrainWindow，保留实际确认超时与终止状态机。源码双独立审查与Release全量重建通过；r60原规格realtime结果见[记录](docs/realtime-video-composition-transition-contract.md)。这是纯V接线的依赖清理，完整prepared/planner/builder、多源控制器与总准入、恢复和双平台门禁仍未完成；六维10/8/6/12/2/4=42/100，完整FAIL。

@@ -68,7 +68,7 @@ MediaAudioBranchSegmentBuilder::build(
               MediaAudioLineageExecutionMode::LegacyPlainPacket &&
           *options.lineageMode !=
               MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) ||
-         options.lineageCapacity || options.correctionGeneration ||
+         options.lineageCapacity || options.encoderFifoRetention || options.correctionGeneration ||
          options.correctionLookaheadWindows || options.syncGroup)) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(

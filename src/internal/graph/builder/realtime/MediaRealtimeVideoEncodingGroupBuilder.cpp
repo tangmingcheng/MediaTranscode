@@ -51,6 +51,7 @@ MediaRealtimeVideoEncodingGroupBuilder::appendFanout(
         return Result::failure(status.error());
     }
     encoded.packet = {fanout, "packet"};
+    encoded.processing.output.push_back(fanout);
     return Result::success(std::move(encoded));
 }
 

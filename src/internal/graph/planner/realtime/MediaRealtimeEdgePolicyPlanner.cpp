@@ -1,5 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+
+#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -105,6 +108,59 @@ MediaRealtimeEdgePolicyPlanner::planWithSynchronizedPacketMemoryBudget(
     memory.allowDynamicGrowth = false;
     return ::media::Result<MediaRealtimeEdgePolicySet>::success(
         std::move(policies));
+}
+
+::media::Result<MediaRealtimeEdgePolicySet>
+MediaRealtimeEdgePolicyPlanner::planWithAvStartupRelease(
+    const MediaGraphQueueParameters& queues,
+    std::uint64_t maximumBytes,
+    std::size_t maximumBuffers,
+    std::size_t maximumVideoReleaseUnits,
+    std::size_t maximumAudioReleaseUnits)
+{
+    if (maximumVideoReleaseUnits == 0 || maximumAudioReleaseUnits == 0) {
+        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V startup release requires explicit batch bounds"));
+    }
+    auto policies = planWithSynchronizedPacketMemoryBudget(
+        queues, maximumBytes, maximumBuffers);
+    if (!policies) return policies;
+    // Only release-extractor outputs reserve the entire input startup batch.
+    // Encoded and scheduled output edges retain their wire-residence bounds.
+    policies.value().startupVideoRelease =
+        planAtomicOutputPolicy(maximumVideoReleaseUnits);
+    policies.value().startupAudioRelease =
+        planAtomicOutputPolicy(maximumAudioReleaseUnits);
+    return policies;
+}
+
+::media::Result<MediaRealtimeEdgePolicySet> MediaRealtimeEdgePolicyPlanner::planSynchronizedSource(
+    const MediaGraphQueueParameters& queues,
+    const MediaAvSyncStartupPolicy& startup)
+{
+    if (!startup.videoByteCapacity ||
+        !startup.audioByteCapacity ||
+        !startup.videoCapacity ||
+        !startup.audioCapacity ||
+        *startup.videoByteCapacity == 0 ||
+        *startup.audioByteCapacity == 0 ||
+        queues.packet == 0 ||
+        *startup.videoByteCapacity >
+            (std::numeric_limits<std::uint64_t>::max)() -
+                *startup.audioByteCapacity) {
+        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V edge byte capacity is incomplete or not representable"));
+    }
+    const auto maximumBytes =
+        *startup.videoByteCapacity +
+        *startup.audioByteCapacity;
+    return MediaRealtimeEdgePolicyPlanner::
+        planWithAvStartupRelease(
+            queues, maximumBytes, queues.packet,
+            *startup.videoCapacity,
+            *startup.audioCapacity);
 }
 
 } // namespace media::ffmpeg::graph

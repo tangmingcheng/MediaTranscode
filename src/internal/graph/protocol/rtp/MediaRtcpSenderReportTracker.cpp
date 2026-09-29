@@ -54,27 +54,31 @@ void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
     invalidate();
 }
 
-::media::Status MediaRtcpSenderReportTracker::observe(
+::media::Result<MediaRtcpObservation> MediaRtcpSenderReportTracker::observe(
     const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs)
 {
+    using Result = ::media::Result<MediaRtcpObservation>;
     if (!m_mediaSsrc) {
-        return observePendingSource(packets, observedAtNs);
+        auto pending = observePendingSource(packets, observedAtNs);
+        return pending ? Result::success(MediaRtcpObservationAccepted{})
+                       : Result::failure(pending.error());
     }
     for (const MediaRtcpPacket& packet : packets) {
         if (packet.kind == MediaRtcpPacketKind::SenderReport && packet.senderReport) {
-            if (auto status = observeSenderReport(*packet.senderReport, observedAtNs); !status) return status;
+            if (auto status = observeSenderReport(*packet.senderReport, observedAtNs); !status) return Result::failure(status.error());
         } else if (packet.kind == MediaRtcpPacketKind::SourceDescription) {
             for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
-                if (auto status = observeSdes(chunk, observedAtNs); !status) return status;
+                if (auto status = observeSdes(chunk, observedAtNs); !status) return Result::failure(status.error());
             }
         } else if (packet.kind == MediaRtcpPacketKind::Bye && m_mediaSsrc &&
                    std::find(packet.byeSources.begin(), packet.byeSources.end(), *m_mediaSsrc) !=
                        packet.byeSources.end()) {
             invalidate();
-            return ::media::Status::failure(::media::ErrorInfo::cancelled("RTCP BYE ended active source"));
+            return Result::success(MediaRtpClockInvalidation{
+                m_generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs});
         }
     }
-    return ::media::Status::success();
+    return Result::success(MediaRtcpObservationAccepted{});
 }
 
 ::media::Result<MediaRtcpClockEvidence> MediaRtcpSenderReportTracker::evidence(

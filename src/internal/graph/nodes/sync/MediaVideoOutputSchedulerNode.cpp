@@ -267,7 +267,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             outputSchedule.value().dispatch,
             outputSchedule.value().emit,
             duration.value(), m_initialGeneration,
-            MediaSourceAccessUnitSequence(m_nextSequence++),
+            MediaCanonicalAccessUnitSequence(m_nextSequence++),
             std::nullopt, std::nullopt,
             MediaVideoSyncDecisionKind::Display});
     if (scheduled) m_lastDispatch = dispatch.value();
@@ -475,7 +475,7 @@ void MediaVideoOutputSchedulerNode::recordEncodedReady(
             ? dtsDelta.value().nanoseconds() : 0;
     }
     m_worstEncodedDts = unit.media()->dts();
-    m_worstEncodedSequence = unit.sourceSequence().value();
+    m_worstEncodedSequence = unit.canonicalSequence().value();
 }
 
 void MediaVideoOutputSchedulerNode::emitDiagnostics(

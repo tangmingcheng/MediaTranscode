@@ -1,7 +1,6 @@
 #include "application/realtime/MediaRealtimeOutputPreparer.h"
 
-#include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
-#include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
+#include "internal/graph/planner/capability/MediaVideoEncoderPreparer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/validation/MediaRealtimeVideoGraphShapeValidator.h"
@@ -63,18 +62,6 @@ namespace media::ffmpeg::graph {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "source codec snapshot contradicts prepared decoder identity or geometry"));
     }
-    // Raw RTP metadata carries codec/extradata and transport time base. Its
-    // geometry and cadence come from the same prepared facts used to open the
-    // shared decoder, not from an optional AVStream frame-rate guess.
-    codec.value()->width = source.width;
-    codec.value()->height = source.height;
-    MediaTimeDescriptor sourceTime = snapshot.time;
-    sourceTime.timeBase = request.sessionPlan.sourceTimeBase;
-    sourceTime.frameRate = source.frameRate;
-    MediaFormatDescriptor sourceFormat = snapshot.format;
-    sourceFormat.video.size = {source.width, source.height};
-    sourceFormat.video.frameRate = source.frameRate;
-    sourceFormat.time = sourceTime;
     auto identity = request.sessionRequest;
     identity.mediaId += ":" + request.prefix;
     for (const auto& group : request.groups) {
@@ -163,43 +150,19 @@ namespace media::ffmpeg::graph {
         device = reinterpret_cast<AVHWFramesContext*>(request.liveFrames->data)->device_ref;
     }
     CodecResolverEncoderContextBuildRequest encoderRequest;
-    encoderRequest.codecParameters = codec.value().get();
-    encoderRequest.sourceFormat = sourceFormat;
-    encoderRequest.sourceTime = sourceTime;
+    const auto& parameters = *codec.value();
+    encoderRequest.frameInput = MediaVideoEncoderFrameInput{
+        snapshot.format.video.sampleAspectRatio, parameters.color_range,
+        parameters.color_primaries, parameters.color_trc, parameters.color_space};
     encoderRequest.options = &resolver->options;
     encoderRequest.hardwareDevice = device;
-    auto encoder = CodecResolverEncoderContextBuilder::build(encoderRequest);
-    if (!encoder) return Result::failure(encoder.error());
     const auto& stage = planned.value().videoPlan.selected.encoder;
-    if (!stage.encoderRateControl || !stage.preparedEmission ||
-        !stage.encodedPacketLayout || !stage.encoderOpenContract) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "prepared output lacks its encoder emission contract"));
-    }
-    auto readback = MediaEncoderEmissionPreflightAdapter::readAfterOpen(
-        *encoder.value().context, *stage.encoderRateControl,
-        stage.encoderOpenContract->frameRate, *stage.encodedPacketLayout,
-        "retained-output-encoder:" + stage.ffmpegName,
-        stage.preparedEmission->backend);
-    if (!readback) return Result::failure(readback.error());
-    const auto& actual = readback.value();
-    const auto& admitted = *stage.preparedEmission;
-    if (actual.maximumAccessUnitPayloadBytes > admitted.maximumAccessUnitPayloadBytes ||
-        actual.maximumBurstPayloadBytes > admitted.maximumBurstPayloadBytes ||
-        actual.maximumEncoderRetainedFrames > admitted.maximumEncoderRetainedFrames ||
-        actual.peakPayloadBytesPerSecond > admitted.peakPayloadBytesPerSecond ||
-        actual.sustainedPayloadBytesPerSecond != admitted.sustainedPayloadBytesPerSecond) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "retained output encoder exceeds its planned emission or retention envelope"));
-    }
-    auto encoderReadback = MediaVideoEncoderReadback::capture(*encoder.value().context);
-    if (!encoderReadback) return Result::failure(encoderReadback.error());
-    if (encoderReadback.value().randomAccess != access) return Result::failure(
-        ::media::ErrorInfo::invalidArgument("Retained encoder random-access readback differs from the admitted probe"));
+    auto encoder = MediaVideoEncoderPreparer::prepare(encoderRequest, stage);
+    if (!encoder) return Result::failure(encoder.error());
     auto encodingContract = MediaRealtimeVideoEncodingGroupContractPlanner::plan(
         planned.value().videoPlan, request.sharedDecode.frame.node,
         request.sourceGeneration, request.sessionPlan.sourceTimeBase,
-        source.frameRate, encoderReadback.value());
+        source.frameRate, encoder.value().readback);
     if (!encodingContract) return Result::failure(encodingContract.error());
     auto wrapped = FFmpegBufferFactory::wrapCodecContext(std::move(encoder).value().context);
     if (!wrapped) return Result::failure(wrapped.error());

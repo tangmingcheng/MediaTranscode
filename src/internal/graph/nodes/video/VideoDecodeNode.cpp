@@ -314,7 +314,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
             << " size=" << packet->size;
         if (const auto lineage = FFmpegPacketView::canonicalLineage(buffer)) {
             out << " generation=" << lineage->generation
-                << " sequence=" << lineage->sourceSequence.value();
+                << " sequence=" << lineage->canonicalSequence().value();
         }
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,

@@ -2,13 +2,14 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
-#include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
+#include "internal/graph/planner/video/MediaVideoOutputPlanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <algorithm>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -39,45 +40,10 @@ bool isRkmppChain(const MediaPipelineChainPlan& chain) noexcept
            chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP;
 }
 
-::media::Result<MediaEncoderRateControlPlan>
-completeRateControlFromPreparedReadback(
-    const MediaPipelineStagePlan& encoder)
-{
-    using Result = ::media::Result<MediaEncoderRateControlPlan>;
-    if (!encoder.encoderRateControl || !encoder.preparedEmission) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "encoder rate-control completion requires prepared emission readback"));
-    }
-    MediaEncoderRateControlPlan completed = *encoder.encoderRateControl;
-    if (completed.bufferSizeKbits) {
-        return Result::success(std::move(completed));
-    }
-    constexpr std::uint64_t BitsPerKilobit = 1000;
-    const auto effectiveBits =
-        encoder.preparedEmission->effectiveVbvBufferBits;
-    if (!effectiveBits) {
-        return Result::success(std::move(completed));
-    }
-    if (*effectiveBits == 0 || *effectiveBits % BitsPerKilobit != 0 ||
-        *effectiveBits / BitsPerKilobit > static_cast<std::uint64_t>(
-            (std::numeric_limits<int>::max)())) {
-        return Result::failure(::media::ErrorInfo::notInitialized(
-            "opened encoder did not expose an exactly representable effective VBV readback"));
-    }
-    completed.bufferSizeKbits = static_cast<int>(
-        *effectiveBits / BitsPerKilobit);
-    return Result::success(std::move(completed));
-}
-
 bool sameFrameDomain(const MediaHardwareDescriptor& left,
                      const MediaHardwareDescriptor& right) noexcept
 {
-    return left.deviceKind == right.deviceKind &&
-           left.frameKind == right.frameKind &&
-           left.deviceName == right.deviceName &&
-           left.pixelFormat == right.pixelFormat &&
-           left.surfacePixelFormat == right.surfacePixelFormat &&
-           left.zeroCopyPreferred == right.zeroCopyPreferred &&
+    return MediaPipelineScorer::sameFrameDomain(left, right) &&
            left.requiresHardwareDeviceContext == right.requiresHardwareDeviceContext &&
            left.requiresHardwareFramesContext == right.requiresHardwareFramesContext;
 }
@@ -136,7 +102,11 @@ bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcep
         return ::media::Status::success();
     }
 
-    const auto expectedFilter = MediaVideoCapabilityScanner::planRkmppFilter(options);
+    const auto expectedFilter = MediaVideoCapabilityScanner::planRkmppFilter({
+        {options.probeWidth, options.probeHeight},
+        options.targetWidth > 0 && options.targetHeight > 0
+            ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
+        options.sourceFrameRate, options.lowLatency});
     if (!expectedFilter) return ::media::Status::failure(expectedFilter.error());
     if (chain.filter.filterName != expectedFilter.value() ||
         !chain.filter.inputFrame || !chain.filter.outputFrame ||
@@ -228,37 +198,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    chain.decoderLineagePropagation =
-        chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoLineagePropagation::SubmissionOrder
-        : MediaVideoLineagePropagation::CodecCopyOpaque;
-    chain.encoderLineagePropagation =
-        chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoLineagePropagation::SubmissionOrder
-        : MediaVideoLineagePropagation::CodecCopyOpaque;
-    chain.filterImplementation = !chain.filterActive
-        ? MediaVideoFilterImplementation::None
-        : chain.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoFilterImplementation::Rga
-        : MediaVideoFilterImplementation::Generic;
-    chain.encoderAbortPolicy =
-        chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
-        ? MediaVideoEncoderAbortPolicy::DrainThenAbort
-        : MediaVideoEncoderAbortPolicy::Immediate;
-    chain.decoderReceiveInterval.reset();
-    if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
-        // This backend can complete a frame after receive returned EAGAIN.
-        // Bound the next receive by the probed source cadence, not new input.
-        auto interval = MediaRunningTime::checkedFromTicks(
-            1, options.sourceFrameRate.den, options.sourceFrameRate.num);
-        if (!interval) return ::media::Status::failure(interval.error());
-        if (interval.value().nanoseconds() <= 0) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "RKMPP decoder receive requires a positive probed frame interval"));
-        }
-        chain.decoderReceiveInterval = interval.value();
-    }
-    return ::media::Status::success();
+    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(chain, options.sourceFrameRate);
+    if (!source) return source;
+    return MediaVideoOutputPlanner::materializeExecutionContract(chain);
 }
 
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
@@ -284,6 +226,8 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     if (inputInfo.frameRate.isKnown()) {
         options.sourceFrameRate = inputInfo.frameRate;
     }
+
+    options.sourceColorRange = inputInfo.sourceColorRange;
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets =
@@ -385,21 +329,64 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
                     : "no available planner-ranked hardware decoder/filter/encoder chain found"));
     }
     plan.filterActive = plan.selected.filterActive;
-    auto completedRateControl = completeRateControlFromPreparedReadback(
-        plan.selected.encoder);
+    auto completedRateControl = MediaVideoOutputPlanner::completePreparedRateControl(plan.selected);
     if (!completedRateControl) {
         return ::media::Result<MediaPipelinePlan>::failure(
             completedRateControl.error());
     }
-    plan.selected.encoder.encoderRateControl =
-        std::move(completedRateControl).value();
-    plan.selected.encoder.encoderOpenContract->rateControl =
-        *plan.selected.encoder.encoderRateControl;
     logSelectedPlan(options, plan);
     return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }
 
 } // namespace
+
+::media::Status MediaPipelinePlanner::materializeSourceExecutionContract(
+    MediaVideoSourcePlan& source, const MediaRational& sourceFrameRate)
+{
+    source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoLineagePropagation::SubmissionOrder : MediaVideoLineagePropagation::CodecCopyOpaque;
+    source.filterImplementation = !source.filterActive ? MediaVideoFilterImplementation::None
+        : source.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoFilterImplementation::Rga : MediaVideoFilterImplementation::Generic;
+    source.decoderReceiveInterval.reset();
+    if (source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
+        // This backend can complete a frame after receive returned EAGAIN.
+        // Bound the next receive by the probed source cadence, not new input.
+        auto interval = MediaRunningTime::checkedFromTicks(
+            1, sourceFrameRate.den, sourceFrameRate.num);
+        if (!interval) return ::media::Status::failure(interval.error());
+        if (interval.value().nanoseconds() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RKMPP decoder receive requires a positive probed frame interval"));
+        }
+        source.decoderReceiveInterval = interval.value();
+    }
+    return ::media::Status::success();
+}
+
+::media::Result<std::vector<MediaVideoSourcePlan>> MediaPipelinePlanner::planVideoSourceCandidates(
+    const MediaInputVideoStreamInfo& input, const MediaVideoSourcePlanningOptions& options,
+    const MediaHardwareDescriptor& target)
+{
+    using Result = ::media::Result<std::vector<MediaVideoSourcePlan>>;
+    if (input.streamIndex < 0 || input.width != options.sourceSize.width ||
+        input.height != options.sourceSize.height || input.frameRate.num <= 0 || input.frameRate.den <= 0 ||
+        input.sampleAspectRatio.num <= 0 || input.sampleAspectRatio.den <= 0 || options.sourceFrameRate.num != input.frameRate.num ||
+        options.sourceFrameRate.den != input.frameRate.den)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Source planning requires matching dimensions, cadence and authoritative SAR"));
+    auto candidates = MediaVideoCapabilityScanner::enumerateSourceCandidates(input.codecName, options, target);
+    if (!candidates) return Result::failure(candidates.error());
+    for (auto& source : candidates.value()) {
+        source = MediaPipelineScorer::scoreSource(std::move(source), target);
+        auto execution = materializeSourceExecutionContract(source, input.frameRate);
+        if (!execution) return Result::failure(execution.error());
+    }
+    std::sort(candidates.value().begin(), candidates.value().end(), [](const auto& left, const auto& right) {
+        return left.score != right.score ? left.score > right.score : left.label < right.label;
+    });
+    return candidates;
+}
 
 ::media::Status MediaPipelinePlanner::preflightSelectedCandidate(
     MediaPipelineChainPlan& selected,
@@ -576,19 +563,15 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     const auto frameRate = options.targetFrameRate.isKnown() ? options.targetFrameRate : sourceRate;
     const int sourceWidth = source.width > 0 ? source.width : options.probeWidth;
     const int sourceHeight = source.height > 0 ? source.height : options.probeHeight;
-    auto rateControl = MediaEncoderRateControlPlanner::plan(selectedEncoder.ffmpegName,
-        selectedEncoder.deviceKind(), rateControlRequest, frameRate, options.lowLatency);
-    if (!rateControl) return Result::failure(rateControl.error());
-    const auto& request = options.encoderOpenRequest;
+    auto open = MediaVideoOutputPlanner::planOpenContract(selectedEncoder,
+        {options.targetWidth > 0 ? options.targetWidth : sourceWidth,
+         options.targetHeight > 0 ? options.targetHeight : sourceHeight},
+        frameRate, rateControlRequest, options.encoderOpenRequest, options.lowLatency);
+    if (!open) return Result::failure(open.error());
     return Result::success({canonicalCodecName(source.codecName),
         canonicalCodecName(options.outputCodecName.empty() ? source.codecName : options.outputCodecName),
         sourceWidth, sourceHeight, sourceRate,
-        MediaEncoderOpenContract{selectedEncoder.ffmpegName,
-            options.targetWidth > 0 ? options.targetWidth : sourceWidth,
-            options.targetHeight > 0 ? options.targetHeight : sourceHeight,
-            frameRate, std::move(rateControl).value(), request.quality, request.preset,
-            request.tune, request.profile, request.level, request.gop, request.bFrames,
-            request.globalHeader, options.lowLatency}, options.filterRequired, options.allowPacketCopy});
+        std::move(open).value(), options.filterRequired, options.allowPacketCopy});
 }
 
 } // namespace media::ffmpeg::graph

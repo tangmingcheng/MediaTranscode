@@ -8,6 +8,19 @@ namespace media::ffmpeg::graph {
 MediaAvSyncSharedNtpEpochRequirement::resolve(
     const MediaAvSyncPlan& plan)
 {
+    if (plan.domainRole == MediaAvSyncDomainRole::SourceContribution) {
+        if (plan.rtpOutput || plan.projectMpegTsOutput ||
+            plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports) {
+            return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+                "Source NTP mapping requires its RTP input clock and no output authority"));
+        }
+        return ::media::Result<bool>::success(false);
+    }
+    if (plan.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
+        plan.domainRole != MediaAvSyncDomainRole::ContinuousOutput) {
+        return ::media::Result<bool>::failure(::media::ErrorInfo::notInitialized(
+            "A/V NTP requirement needs an explicit planned domain role"));
+    }
     if (plan.rtpOutput) {
         if (plan.projectMpegTsOutput ||
             !plan.rtpOutput->output.useSharedNtpEpoch) {

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "internal/graph/model/MediaPacketSourceTiming.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/sync/MediaAvSyncStateMachine.h"
 #include "internal/graph/sync/MediaAvSyncError.h"
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/sync/MediaAvGenerationTransition.h"
 #include "internal/graph/sync/startup/MediaAvStartupSelectionWork.h"
 
 #include <cstddef>
@@ -63,26 +65,32 @@ struct MediaAvStartupAccessUnit final {
     std::optional<MediaAvAudioSampleSpan> audio;
 };
 
+struct MediaAvStartupAudioConfig final {
+    bool trimToCommonStart;
+    MediaRunningTime maximumTrim;
+    MediaRunningTime maximumInitialSkew;
+    std::size_t capacity;
+    std::uint64_t byteCapacity;
+    std::uint64_t maximumUnitBytes;
+    std::string identity;
+    int outputSampleRate;
+};
+
 struct MediaAvStartupConfig final {
+    MediaTranscodeStreamSet members;
     bool requireVideoKeyFrame;
-    bool trimAudioToCommonStart;
     bool allowDegradedClock;
     MediaAvSyncSourceClockMode sourceClockMode;
     MediaRunningTime maximumWait;
     MediaRunningTime preroll;
     MediaRunningTime keyFrameWait;
-    MediaRunningTime maximumAudioTrim;
-    MediaRunningTime maximumInitialSkew;
     MediaRunningTime maximumGap;
     MediaRunningTime outputLead;
     std::size_t videoCapacity;
-    std::size_t audioCapacity;
     std::uint64_t videoByteCapacity;
-    std::uint64_t audioByteCapacity;
     std::uint64_t maximumVideoUnitBytes;
-    std::uint64_t maximumAudioUnitBytes;
     std::string videoIdentity;
-    std::string audioIdentity;
+    std::optional<MediaAvStartupAudioConfig> audio;
 };
 
 struct MediaAvStartupSelection final {
@@ -110,6 +118,21 @@ struct MediaAvStartupDecision final {
     std::vector<MediaAvStartupUnitId> purged;
 };
 
+struct MediaAvStartupAttemptExpired final {
+    std::uint64_t generation;
+    MediaAvSyncError error;
+    std::vector<MediaAvStartupUnitId> purged;
+};
+using MediaAvStartupPollOutcome = std::optional<MediaAvStartupAttemptExpired>;
+
+struct MediaAvStartupDeadlines final {
+    MediaRunningTime acquisition;
+    std::optional<MediaRunningTime> keyFrame;
+
+    MediaRunningTime wakeAt() const noexcept
+    { return keyFrame && *keyFrame < acquisition ? *keyFrame : acquisition; }
+};
+
 class MediaAvStartupCoordinator final {
 public:
     static MediaAvSyncResult<MediaAvStartupCoordinator> create(MediaAvStartupConfig config);
@@ -122,13 +145,21 @@ public:
 
     MediaAvSyncResult<MediaAvStartupDecision> submit(MediaAvStartupAccessUnit unit,
                                                       MediaRunningTime observedAt);
-    MediaAvSyncStatus poll(MediaRunningTime observedAt);
+    MediaAvSyncResult<MediaAvStartupPollOutcome> poll(MediaRunningTime observedAt);
+    MediaAvSyncResult<std::optional<MediaAvStartupDeadlines>> deadlines() const;
+    MediaAvSyncStatus resumeAfterEvidence(MediaRunningTime observedAt);
+    MediaAvSyncStatus retireGeneration(const MediaAvGenerationPurge& purge);
     MediaAvSyncStatus endOfStream(MediaAvStartupStream stream);
     MediaAvSyncStatus fail(std::string reason);
     void stop() noexcept;
     void abort() noexcept;
     MediaAvSyncStatus reset() noexcept;
 
+    MediaTranscodeStreamSet members() const noexcept { return m_config.members; }
+    const MediaAvStartupAudioConfig* audioConfig() const noexcept
+    {
+        return m_config.audio ? &*m_config.audio : nullptr;
+    }
     MediaAvSyncState state() const noexcept;
     const std::optional<std::uint64_t>& generation() const noexcept;
     const std::optional<MediaPlaybackEpoch>& playbackEpoch() const noexcept;
