@@ -660,3 +660,7 @@ resolver stop/abort释放自持快照与codec/device，mux abort复用已有会�
 ## 2026-09-29 stop失败收尾闭环
 
 r58逐节点账本证实VideoEncode abort释放4项，旧final在作用域RAII reset前采集，不能称退出后持久泄漏。有效stop错误现在复用abort完成回收后原样返回；3源码双审及Release全量通过。r59 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720、30fps（AAC CBR192kbps/44.1kHz双声道）最终0objects/0bytes、71875/71875平衡，但CLI仍no-progress自然exit1，完整验收FAIL。暂不再把已验证的报告时序问题作为4对象未解阻塞；继续可信终止/恢复、AAC重入、V源整链、多源总准入/入口及Windows→RKMPP门禁，六维10/8/6/12/2/4=42/100。见[根因与同规格对照](docs/realtime-video-composition-credit-retention.md)。
+
+## 2026-09-29 无效终止窗口依赖清理
+
+删除从音频servo派生但没有运行时消费者的terminalDrainWindow，保留实际确认超时与终止状态机。源码双独立审查与Release全量重建通过；r60原规格realtime结果见[记录](docs/realtime-video-composition-transition-contract.md)。这是纯V接线的依赖清理，完整prepared/planner/builder、多源控制器与总准入、恢复和双平台门禁仍未完成；六维10/8/6/12/2/4=42/100，完整FAIL。

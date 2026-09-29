@@ -117,8 +117,7 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
             return invalid("Composition source transition requires its source clock authority");
         auto expectedTransition = MediaAvGenerationTransitionPlanner::planSourceContribution(
             *runtime->synchronization.sourceClockMode, runtime->audioPipeline.branchMode,
-            source.video.filterActive, runtime->transition.acknowledgementTimeout,
-            runtime->transition.terminalDrainWindow);
+            source.video.filterActive, runtime->transition.acknowledgementTimeout);
         if (!expectedTransition) return ::media::Status::failure(expectedTransition.error());
         if (runtime->transition.participants != expectedTransition.value().participants)
             return invalid("Composition source transition differs from its exact source processing contract");

@@ -53,7 +53,6 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             facts.error());
     }
     if (!facts.value().timing.acknowledgementTimeout ||
-        !facts.value().timing.terminalDrainWindow ||
         !synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -120,8 +119,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         *synchronization.sourceClockMode,
         audio.branchMode,
         outer.videoPlan.filterActive,
-        *facts.value().timing.acknowledgementTimeout,
-        *facts.value().timing.terminalDrainWindow);
+        *facts.value().timing.acknowledgementTimeout);
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
         MediaRealtimeAvSyncRuntimePlan{
           MediaRealtimeAvSourceRuntimePlan{

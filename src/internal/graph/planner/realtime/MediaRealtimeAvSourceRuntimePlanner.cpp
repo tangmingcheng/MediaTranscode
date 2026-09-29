@@ -61,8 +61,7 @@ MediaRealtimeAvSourceRuntimePlanner::plan(
     if (!edges) return Result::failure(edges.error());
     auto transition = MediaAvGenerationTransitionPlanner::planSourceContribution(
         *synchronization.sourceClockMode, audio.branchMode, request.videoFilterActive,
-        *synchronization.recovery.reacquisitionTimeoutNs,
-        *synchronization.audioServo.maximumMeasurementGapNs);
+        *synchronization.recovery.reacquisitionTimeoutNs);
     if (!transition) return Result::failure(transition.error());
     return Result::success({
         std::move(audio), std::move(isolatedAudioInput), request.groupKey,

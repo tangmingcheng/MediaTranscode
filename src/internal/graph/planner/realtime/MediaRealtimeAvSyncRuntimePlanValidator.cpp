@@ -167,14 +167,9 @@ namespace media::ffmpeg::graph {
     if (auto status = validateThreading(runtime.threadingPolicy); !status) return status;
     if (runtime.transition.acknowledgementTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
-        runtime.transition.terminalDrainWindow <=
-            MediaRunningTime::fromNanoseconds(0) ||
         !runtime.planningFacts.acknowledgementTimeout ||
-        !runtime.planningFacts.terminalDrainWindow ||
         runtime.transition.acknowledgementTimeout !=
-            *runtime.planningFacts.acknowledgementTimeout ||
-        runtime.transition.terminalDrainWindow !=
-            *runtime.planningFacts.terminalDrainWindow) {
+            *runtime.planningFacts.acknowledgementTimeout) {
         return invalid("transition timeout");
     }
     if (runtime.outputAdapter !=
@@ -203,8 +198,7 @@ namespace media::ffmpeg::graph {
         *runtime.synchronization.sourceClockMode,
         runtime.audioPipeline.branchMode,
         runtime.videoFilterActive,
-        runtime.transition.acknowledgementTimeout,
-        runtime.transition.terminalDrainWindow);
+        runtime.transition.acknowledgementTimeout);
     if (runtime.transition.participants.size() !=
         expected.participants.size()) {
         return invalid("transition participant count");

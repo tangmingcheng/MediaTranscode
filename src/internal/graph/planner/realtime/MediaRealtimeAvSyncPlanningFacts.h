@@ -36,7 +36,6 @@ struct MediaRealtimeAvSyncPlanningFacts final : MediaRealtimeAvOutputTimingFacts
     std::optional<std::int64_t> maximumResamplerOutputBlockSamples;
     std::optional<std::size_t> mailboxCapacity;
     std::optional<MediaRunningTime> acknowledgementTimeout;
-    std::optional<MediaRunningTime> terminalDrainWindow;
     friend bool operator==(const MediaRealtimeAvSyncPlanningFacts&,
                            const MediaRealtimeAvSyncPlanningFacts&) = default;
 };

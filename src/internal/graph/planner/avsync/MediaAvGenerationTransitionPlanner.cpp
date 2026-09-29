@@ -58,15 +58,13 @@ MediaAvGenerationTransitionPlanner::planSourceContribution(
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
-    MediaRunningTime acknowledgementTimeout,
-    MediaRunningTime terminalDrainWindow)
+    MediaRunningTime acknowledgementTimeout)
 {
     if ((sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports &&
          sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr &&
          sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps) ||
         audioBranchMode != MediaBranchMode::TranscodeFrame ||
-        acknowledgementTimeout <= MediaRunningTime::fromNanoseconds(0) ||
-        terminalDrainWindow <= MediaRunningTime::fromNanoseconds(0)) {
+        acknowledgementTimeout <= MediaRunningTime::fromNanoseconds(0)) {
         return ::media::Result<MediaAvGenerationTransitionPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "source contribution transition requires an explicit clock, frame audio and positive timing"));
@@ -74,7 +72,7 @@ MediaAvGenerationTransitionPlanner::planSourceContribution(
     return ::media::Result<MediaAvGenerationTransitionPlan>::success({
         processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
             ProcessingDomain::SourceContribution),
-        acknowledgementTimeout, terminalDrainWindow});
+        acknowledgementTimeout});
 }
 
 MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
@@ -82,12 +80,11 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
-    MediaRunningTime acknowledgementTimeout,
-    MediaRunningTime terminalDrainWindow)
+    MediaRunningTime acknowledgementTimeout)
 {
     MediaAvGenerationTransitionPlan transition{
         processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
-            ProcessingDomain::SharedSourceOutput), acknowledgementTimeout, terminalDrainWindow};
+            ProcessingDomain::SharedSourceOutput), acknowledgementTimeout};
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});

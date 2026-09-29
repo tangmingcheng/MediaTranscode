@@ -136,7 +136,6 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         facts.mailboxCapacity = transcodeBounds->mailboxCapacity;
     }
     facts.acknowledgementTimeout = synchronization.recovery.reacquisitionTimeoutNs;
-    facts.terminalDrainWindow = synchronization.audioServo.maximumMeasurementGapNs;
     return ::media::Result<MediaRealtimeAvSyncResolvedFacts>::success({std::move(facts), std::move(source).value().assembly});
 }
 

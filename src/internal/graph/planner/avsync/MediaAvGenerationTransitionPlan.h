@@ -30,7 +30,6 @@ struct MediaAvGenerationParticipantPlan final {
 struct MediaAvGenerationTransitionPlan final {
     std::vector<MediaAvGenerationParticipantPlan> participants;
     MediaRunningTime acknowledgementTimeout;
-    MediaRunningTime terminalDrainWindow;
 };
 
 } // namespace media::ffmpeg::graph

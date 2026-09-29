@@ -18,8 +18,7 @@ MediaAvGenerationTransitionCoordinator::create(
     MediaAvGenerationTransitionPlan plan)
 {
     if (plan.participants.empty() ||
-        plan.acknowledgementTimeout.nanoseconds() <= 0 ||
-        plan.terminalDrainWindow.nanoseconds() <= 0) {
+        plan.acknowledgementTimeout.nanoseconds() <= 0) {
         return ::media::Result<MediaAvGenerationTransitionCoordinator>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Generation transition requires participants and valid durations"));

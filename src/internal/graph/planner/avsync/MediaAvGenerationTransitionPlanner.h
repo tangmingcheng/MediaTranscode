@@ -13,16 +13,14 @@ public:
         MediaAvSyncSourceClockMode sourceClockMode,
         MediaBranchMode audioBranchMode,
         bool videoFilterActive,
-        MediaRunningTime acknowledgementTimeout,
-        MediaRunningTime terminalDrainWindow);
+        MediaRunningTime acknowledgementTimeout);
 
     static MediaAvGenerationTransitionPlan plan(
         const std::variant<MediaSeparateRtpOutputRuntimePlan, MediaProjectMpegTsRuntimeOutputPlan>& output,
         MediaAvSyncSourceClockMode sourceClockMode,
         MediaBranchMode audioBranchMode,
         bool videoFilterActive,
-        MediaRunningTime acknowledgementTimeout,
-        MediaRunningTime terminalDrainWindow);
+        MediaRunningTime acknowledgementTimeout);
 };
 
 } // namespace media::ffmpeg::graph
