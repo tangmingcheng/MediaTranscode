@@ -177,3 +177,5 @@ MediaVideoOutputPlan及encoder-only segment移除对源decoder的反向依赖；
 基线5877d9db：原事实解析复用，FinalCompiler→FactsPlanner→Registry接入；Registry核对实际图输出键与node frame scope。完整多源总账未完成，aggregate仍failclosed。见[记录](realtime-video-composition-producer-facts.md)。
 
 逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。

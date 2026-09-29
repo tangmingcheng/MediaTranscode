@@ -626,3 +626,5 @@ Detailed design and execution checklist:
 逐producer事实已从registry的整图ledger依赖中拆出，并接入原FinalCompiler；实际frame scope在消费时复核。见[阶段记录](docs/realtime-video-composition-producer-facts.md)。多源allocation总账及入口仍未完成，完整FAIL42。
 
 逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。

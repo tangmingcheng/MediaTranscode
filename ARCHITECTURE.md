@@ -586,3 +586,5 @@ canvas准备由拓扑数量与实际allocation生成不可修改的image-payload
 producer registry消费逐node/stream/payload事实并对最终图完整覆盖校验；事实规划与实际frame合同解析由共享planner承担，runtime integration由受控实现表决定。该层不处理多源并发容量/alias总账，见[事实边界](docs/realtime-video-composition-producer-facts.md)。
 
 逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。

@@ -343,3 +343,5 @@ run53/55/56/57的CBR/VBR双向恢复均通过，核心实际入队发送满足�
 逐producer事实接入共享编译路径，新增实际scope/输出键/覆盖校验；尚无完整多源总账或合屏运行证明，维持42/100、FAIL。详见[阶段记录](docs/realtime-video-composition-producer-facts.md)。
 
 逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。
