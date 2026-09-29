@@ -76,6 +76,11 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         m_deferredTerminalError.reset();
         return ::media::Result<MediaNodeProcessResult>::failure(std::move(error));
     }
+    auto deadlines = m_coordinator->deadlines();
+    if (!deadlines) return ::media::Result<MediaNodeProcessResult>::failure(
+        deadlines.error().toErrorInfo());
+    const auto deadline = deadlines.value()
+        ? std::optional<MediaRunningTime>(deadlines.value()->wakeAt()) : std::nullopt;
     if (m_terminalBarrierActive) {
         auto video = fillSnapshotBarrierMedia(context, "video", m_pendingVideo,
                                               m_videoTerminalBarrierRemaining);
@@ -108,6 +113,23 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         auto clock = fillPendingClock(context);
         if (!clock) return ::media::Result<MediaNodeProcessResult>::failure(clock.error());
     }
+    if (!m_pendingClock && !m_terminalBarrierActive && deadline &&
+        !hasTerminalHead(m_pendingVideo) && !hasTerminalHead(m_pendingAudio)) {
+        const auto group = context.findAvSyncGroup(m_generationState->groupKey());
+        if (!group || !group->clock())
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::notInitialized("Startup deadline requires its planned master clock"));
+        auto now = group->clock()->now();
+        if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+        if (now.value() >= *deadline) {
+            m_pendingClock = makeMediaBufferRef<MediaAvStartupClockBuffer>(now.value());
+            m_pendingClockIsDeadline = true;
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "av_startup_deadline deadline_ns=" + std::to_string(deadline->nanoseconds()) +
+                    " observed_ns=" + std::to_string(now.value().nanoseconds()));
+        }
+    }
     if (m_pendingClock && !m_clockBarrierActive && !m_terminalBarrierActive) {
         if (auto status = activateClockBarrier(context); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
@@ -123,7 +145,13 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     if (activatedClockBarrier) return processProgress();
     auto selected = selectPending();
     if (!selected) return ::media::Result<MediaNodeProcessResult>::failure(selected.error());
-    if (!selected.value()) return processWaiting();
+    if (!selected.value()) {
+        return deadline && !m_terminalBarrierActive
+            ? ::media::Result<MediaNodeProcessResult>::success(
+                  MediaNodeProcessResult::waitingUntilInputOrDeadline(
+                      m_generationState->groupKey(), *deadline))
+            : processWaiting();
+    }
     return *selected.value() == PendingInput::Clock
         ? processClock(context)
         : processOne(context, *selected.value());
@@ -150,6 +178,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     if (!input) return ::media::Result<bool>::failure(input.error());
     if (!input.value()) return ::media::Result<bool>::success(false);
     m_pendingClock = std::move(*input.value());
+    m_pendingClockIsDeadline = false;
     return ::media::Result<bool>::success(true);
 }
 
@@ -168,6 +197,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     }
     --m_clockTerminalBarrierRemaining;
     m_pendingClock = std::move(*input.value());
+    m_pendingClockIsDeadline = false;
     return ::media::Result<bool>::success(true);
 }
 
@@ -228,6 +258,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 ::media::Status MediaAvStartupCoordinatorNode::activateTerminalBarrier(
     MediaGraphExecutionContext& context)
 {
+    if (m_pendingClockIsDeadline) resetClockBarrier();
     const auto snapshotSize = [&](const char* portName,
                                   bool terminalHead) -> ::media::Result<std::size_t> {
         if (terminalHead) return ::media::Result<std::size_t>::success(0);
@@ -308,18 +339,17 @@ MediaAvStartupCoordinatorNode::selectPending() const
     const auto* tick = dynamic_cast<const MediaAvStartupClockBuffer*>(m_pendingClock.get());
     if (!tick) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::internalError("Selected startup clock head is invalid"));
-    if (m_lastClock && tick->masterNow() < *m_lastClock) {
+    if (!m_pendingClockIsDeadline && m_lastClock && tick->masterNow() < *m_lastClock) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode rejects master clock regression"));
     }
-    m_lastClock = tick->masterNow();
-    m_pendingClock.reset();
-    m_clockBarrierActive = false;
-    m_clockBarrierSnapshotSealed = false;
-    m_videoClockBarrierRemaining = 0;
-    m_audioClockBarrierRemaining = 0;
-    auto outcome = m_coordinator->poll(*m_lastClock);
+    const auto observedAt = tick->masterNow();
+    // External notifications and the local timer are independent producers.
+    // Only external FIFO samples participate in that stream's regression check.
+    if (!m_pendingClockIsDeadline) m_lastClock = observedAt;
+    resetClockBarrier();
+    auto outcome = m_coordinator->poll(observedAt);
     if (!outcome) return ::media::Result<MediaNodeProcessResult>::failure(
         outcome.error().toErrorInfo());
     if (!outcome.value()) return processProgress();
@@ -629,15 +659,21 @@ void MediaAvStartupCoordinatorNode::abort(MediaGraphExecutionContext& context) n
     FFmpegNodeRuntime::abort(context);
 }
 
-void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
+void MediaAvStartupCoordinatorNode::resetClockBarrier() noexcept
 {
-    m_pendingVideo.clear();
-    m_pendingAudio.clear();
     m_pendingClock.reset();
+    m_pendingClockIsDeadline = false;
     m_clockBarrierActive = false;
     m_clockBarrierSnapshotSealed = false;
     m_videoClockBarrierRemaining = 0;
     m_audioClockBarrierRemaining = 0;
+}
+
+void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
+{
+    m_pendingVideo.clear();
+    m_pendingAudio.clear();
+    resetClockBarrier();
     m_terminalBarrierActive = false;
     m_videoTerminalBarrierRemaining = 0;
     m_audioTerminalBarrierRemaining = 0;

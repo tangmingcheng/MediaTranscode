@@ -111,12 +111,7 @@ namespace media::ffmpeg::graph {
         assembly.video.acquiringTimeout !=
             *runtime.synchronization.startup.maximumWaitNs ||
         assembly.audio.acquiringTimeout !=
-            *runtime.synchronization.startup.maximumWaitNs ||
-        !runtime.synchronization.audioServo.minimumUpdateIntervalNs ||
-        assembly.startupClockInterval <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        assembly.startupClockInterval !=
-            *runtime.synchronization.audioServo.minimumUpdateIntervalNs) {
+            *runtime.synchronization.startup.maximumWaitNs) {
         return invalid("production assembly common contract");
     }
     if (audioTranscode) {

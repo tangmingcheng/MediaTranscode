@@ -150,3 +150,7 @@ exit $LASTEXITCODE
 纯视频源调查确认clock/startup/release/epoch均强制双流，采用计划成员贯穿共同DAG；startup tick目前借用音频servo 10 ms，独立调度设计尚缺，不能填假音频。下一步先完整迁移成员型激活产品，再接纯视频源。见[成员合同与门禁](realtime-video-composition-source-membership.md)。本轮仅调查，完整FAIL42。
 
 成员型epoch/release已由plan经bootstrap进入service并贯穿release/重锚/恢复分类，现有A/V生产路径实际使用；双源码审查和Release重建通过，r51 realtime仍no-progress/4逻辑对象，纯视频装配与完整合屏未完成、FAIL42。见[激活产品记录](realtime-video-composition-activation-members.md)。
+
+## 2026-09-29 startup独立截止调度
+
+源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](realtime-video-composition-startup-deadline.md)。

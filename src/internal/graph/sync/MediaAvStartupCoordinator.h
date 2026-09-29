@@ -118,6 +118,14 @@ struct MediaAvStartupAttemptExpired final {
 };
 using MediaAvStartupPollOutcome = std::optional<MediaAvStartupAttemptExpired>;
 
+struct MediaAvStartupDeadlines final {
+    MediaRunningTime acquisition;
+    std::optional<MediaRunningTime> keyFrame;
+
+    MediaRunningTime wakeAt() const noexcept
+    { return keyFrame && *keyFrame < acquisition ? *keyFrame : acquisition; }
+};
+
 class MediaAvStartupCoordinator final {
 public:
     static MediaAvSyncResult<MediaAvStartupCoordinator> create(MediaAvStartupConfig config);
@@ -131,6 +139,7 @@ public:
     MediaAvSyncResult<MediaAvStartupDecision> submit(MediaAvStartupAccessUnit unit,
                                                       MediaRunningTime observedAt);
     MediaAvSyncResult<MediaAvStartupPollOutcome> poll(MediaRunningTime observedAt);
+    MediaAvSyncResult<std::optional<MediaAvStartupDeadlines>> deadlines() const;
     MediaAvSyncStatus resumeAfterEvidence(MediaRunningTime observedAt);
     MediaAvSyncStatus retireGeneration(const MediaAvGenerationPurge& purge);
     MediaAvSyncStatus endOfStream(MediaAvStartupStream stream);

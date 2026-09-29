@@ -38,9 +38,6 @@ bool validPacketDurationEvidence(
         !synchronization.startup.maximumWaitNs ||
         *synchronization.startup.maximumWaitNs <=
             MediaRunningTime::fromNanoseconds(0) ||
-        !synchronization.audioServo.minimumUpdateIntervalNs ||
-        *synchronization.audioServo.minimumUpdateIntervalNs <=
-            MediaRunningTime::fromNanoseconds(0) ||
         facts.inputVideoIdentity != synchronization.startup.videoIdentity ||
         facts.inputAudioIdentity != synchronization.startup.audioIdentity) {
         return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
@@ -168,8 +165,7 @@ bool validPacketDurationEvidence(
                 std::move(audioDuration),
                 MediaDecodeOrderMode::PresentationOrderNoReorder,
                 *synchronization.startup.audioCapacity,
-                *synchronization.startup.maximumWaitNs},
-            *synchronization.audioServo.minimumUpdateIntervalNs});
+                *synchronization.startup.maximumWaitNs}});
 }
 
 } // namespace

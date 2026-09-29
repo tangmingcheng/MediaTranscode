@@ -346,12 +346,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupClock(
     MediaNodeId node,
     const MediaRealtimeAvSourceRuntimePlan& plan)
 {
-    if (auto status = setOption(
-            graph, node, "av_startup_clock.sync_group",
-            plan.groupKey.value()); !status) return status;
-    return setOption(
-        graph, node, "av_startup_clock.interval_ns",
-        std::to_string(plan.assembly.startupClockInterval.nanoseconds()));
+    return setOption(graph, node, "av_startup_clock.sync_group", plan.groupKey.value());
 }
 
 ::media::Result<void>

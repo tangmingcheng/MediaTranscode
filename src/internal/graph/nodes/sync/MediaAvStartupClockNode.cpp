@@ -26,11 +26,7 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
     auto groupName = requiredNodeOption(
         nodeOptions(context), "MediaAvStartupClockNode",
         "av_startup_clock.sync_group");
-    auto interval = requiredPositiveInt64NodeOption(
-        nodeOptions(context), "MediaAvStartupClockNode",
-        "av_startup_clock.interval_ns");
     if (!groupName) return ::media::Status::failure(groupName.error());
-    if (!interval) return ::media::Status::failure(interval.error());
     m_groupKey.emplace(std::move(groupName).value());
     if (!m_groupKey->valid()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -46,7 +42,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "A/V startup clock requires clock input and tick output"));
     }
-    m_interval = MediaRunningTime::fromNanoseconds(interval.value());
     return FFmpegNodeRuntime::start(context);
 }
 
@@ -80,7 +75,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 if (local.value() == MediaAvGenerationEvidenceDisposition::Retired) {
                     m_invalidatedGeneration = *m_generation;
                     m_generation.reset();
-                    m_nextTick.reset();
                 }
             }
             if (classified.value() == MediaAvGenerationEvidenceDisposition::Retired)
@@ -103,7 +97,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         if (!requested) return requested;
         if (m_generation) m_invalidatedGeneration = *m_generation;
         m_generation.reset();
-        m_nextTick.reset();
         m_pendingClockState = buffer;
         return ::media::Status::success();
     }
@@ -120,7 +113,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 "Startup source unavailability requires an identified clock generation"));
         m_invalidatedGeneration = state.generation();
         m_generation.reset();
-        m_nextTick.reset();
         return ::media::Status::success();
     }
     if (discontinuity) {
@@ -134,7 +126,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         }
         m_invalidatedGeneration = state.generation();
         m_generation.reset();
-        m_nextTick.reset();
         return ::media::Status::success();
     }
     if (state.readiness() == MediaSourceClockReadiness::Acquiring) {
@@ -185,7 +176,6 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
             case MediaControlBufferKind::Flush:
                 m_generation.reset();
                 m_invalidatedGeneration.reset();
-                m_nextTick.reset();
                 m_pendingClockState.reset();
                 return processProgress();
             case MediaControlBufferKind::Abort:
@@ -210,6 +200,7 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
                 observed.error());
         }
     }
+    bool observedEvidence = state.value().has_value();
     if (m_pendingClockState) {
         if (state.value()) return processProgress();
         auto pending = std::move(m_pendingClockState);
@@ -219,24 +210,16 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
         if (auto observed = observe(*clockState, pending); !observed)
             return ::media::Result<MediaNodeProcessResult>::failure(observed.error());
         if (m_pendingClockState) return processWaiting();
+        observedEvidence = true;
     }
     if (!m_generation) {
         return state.value() ? processProgress() : processWaiting();
     }
+    if (!observedEvidence) return processWaiting();
     auto now = m_group->clock()->now();
     if (!now) {
         return ::media::Result<MediaNodeProcessResult>::failure(now.error());
     }
-    if (m_nextTick && now.value() < *m_nextTick) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntilInputOrDeadline(
-                *m_groupKey, *m_nextTick));
-    }
-    auto next = now.value().checkedAdd(*m_interval);
-    if (!next) {
-        return ::media::Result<MediaNodeProcessResult>::failure(next.error());
-    }
-    m_nextTick = next.value();
     auto tick = makeMediaBufferRef<MediaAvStartupClockBuffer>(now.value());
     return processProgress(emitOutput(context, "tick", tick));
 }
@@ -259,8 +242,6 @@ void MediaAvStartupClockNode::resetState() noexcept
 {
     m_groupKey.reset();
     m_group.reset();
-    m_interval.reset();
-    m_nextTick.reset();
     m_generation.reset();
     m_invalidatedGeneration.reset();
     m_pendingClockState.reset();

@@ -71,3 +71,7 @@
 ## 首切片实施状态
 
 成员型epoch/release已贯穿现有A/V生产路径，plan→bootstrap→service冻结成员，重锚严格保留其余坐标，双源码审查与Release重建通过；r51完整退出仍FAIL。第一项只完成实现/构建，未完成运行验收，复选框保持未完成。见[实现与真实复验](realtime-video-composition-activation-members.md)。
+
+## 2026-09-29 startup独立截止调度
+
+源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](realtime-video-composition-startup-deadline.md)。

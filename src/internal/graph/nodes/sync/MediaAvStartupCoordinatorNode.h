@@ -71,6 +71,7 @@ private:
         const MediaAvStartupDecision& decision,
         const MediaAvStartupEnvelopeBuffer& envelope);
     void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
+    void resetClockBarrier() noexcept;
     void clearTransientState() noexcept;
 
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
@@ -80,6 +81,7 @@ private:
     std::deque<MediaBufferRef> m_pendingVideo;
     std::deque<MediaBufferRef> m_pendingAudio;
     MediaBufferRef m_pendingClock;
+    bool m_pendingClockIsDeadline = false;
     bool m_clockBarrierActive = false;
     bool m_clockBarrierSnapshotSealed = false;
     std::size_t m_videoClockBarrierRemaining = 0;

@@ -490,31 +490,50 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
          std::move(purged)});
 }
 
+MediaAvSyncResult<std::optional<MediaAvStartupDeadlines>>
+MediaAvStartupCoordinator::deadlines() const
+{
+    using Result = MediaAvSyncResult<std::optional<MediaAvStartupDeadlines>>;
+    if (!m_acquisitionStartedAt) return Result::success(std::nullopt);
+    switch (m_state.state()) {
+    case MediaAvSyncState::AcquiringClock:
+    case MediaAvSyncState::PrimingStreams:
+    case MediaAvSyncState::Armed:
+    case MediaAvSyncState::Released:
+        break;
+    default:
+        return Result::success(std::nullopt);
+    }
+    auto acquisition = m_acquisitionStartedAt->checkedAdd(m_config.maximumWait);
+    if (!acquisition) return Result::failure(startupError(
+        MediaAvSyncErrorCode::TimeOverflow, "acquisition_deadline", nullptr,
+        acquisition.error().message));
+    std::optional<MediaRunningTime> keyFrame;
+    if (m_keyFrameWaitStartedAt &&
+        (m_config.requireVideoKeyFrame ? !m_video->hasKeyFrame() : m_video->empty())) {
+        auto expiry = m_keyFrameWaitStartedAt->checkedAdd(m_config.keyFrameWait);
+        if (!expiry) return Result::failure(startupError(
+            MediaAvSyncErrorCode::TimeOverflow, "key_frame_deadline", nullptr,
+            expiry.error().message));
+        keyFrame = expiry.value();
+    }
+    return Result::success(MediaAvStartupDeadlines{acquisition.value(), keyFrame});
+}
+
 MediaAvSyncResult<MediaAvStartupPollOutcome>
 MediaAvStartupCoordinator::poll(MediaRunningTime observedAt)
 {
     using Result = MediaAvSyncResult<MediaAvStartupPollOutcome>;
-    if (!m_acquisitionStartedAt || m_state.state() == MediaAvSyncState::Running ||
-        m_state.state() == MediaAvSyncState::Idle ||
-        m_state.state() == MediaAvSyncState::WaitingForEvidence)
-        return Result::success(std::nullopt);
+    auto pending = deadlines();
+    if (!pending) return Result::failure(pending.error());
+    if (!pending.value()) return Result::success(std::nullopt);
     const MediaRunningTime effectiveNow = advanceWatermark(observedAt);
-    auto elapsed = effectiveNow.checkedSubtract(*m_acquisitionStartedAt);
-    if (!elapsed) return Result::failure(startupError(
-        MediaAvSyncErrorCode::TimeOverflow, "poll", nullptr, elapsed.error().message));
     std::optional<MediaAvSyncErrorCode> expiry;
-    if (elapsed.value() >= m_config.maximumWait) expiry = MediaAvSyncErrorCode::StartupTimeout;
-    const auto videoSnapshot = m_keyFrameWaitStartedAt
-        ? m_video->presentationSnapshot() : std::vector<MediaAvStartupIndexedUnit>{};
-    if (!expiry && m_keyFrameWaitStartedAt &&
-        std::none_of(videoSnapshot.begin(), videoSnapshot.end(), [&](const auto& item) {
-            return !m_config.requireVideoKeyFrame || item.unit->keyFrame;
-        })) {
-        auto elapsedKey = effectiveNow.checkedSubtract(*m_keyFrameWaitStartedAt);
-        if (!elapsedKey) return Result::failure(startupError(
-            MediaAvSyncErrorCode::TimeOverflow, "poll_key_frame", nullptr, elapsedKey.error().message));
-        if (elapsedKey.value() >= m_config.keyFrameWait) expiry = MediaAvSyncErrorCode::KeyFrameTimeout;
-    }
+    // Preserve acquisition timeout priority when both deadlines have elapsed.
+    if (effectiveNow >= pending.value()->acquisition)
+        expiry = MediaAvSyncErrorCode::StartupTimeout;
+    else if (pending.value()->keyFrame && effectiveNow >= *pending.value()->keyFrame)
+        expiry = MediaAvSyncErrorCode::KeyFrameTimeout;
     if (!expiry) return Result::success(std::nullopt);
     auto error = startupError(*expiry, "poll", nullptr,
         *expiry == MediaAvSyncErrorCode::StartupTimeout

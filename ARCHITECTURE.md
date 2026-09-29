@@ -594,3 +594,7 @@ producer registry消费逐node/stream/payload事实并对最终图完整覆盖�
 raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
 
 成员型epoch/release已由plan经bootstrap进入service并贯穿release/重锚/恢复分类，现有A/V生产路径实际使用；双源码审查和Release重建通过，r51 realtime仍no-progress/4逻辑对象，纯视频装配与完整合屏未完成、FAIL42。见[激活产品记录](docs/realtime-video-composition-activation-members.md)。
+
+## 2026-09-29 startup独立截止调度
+
+源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](docs/realtime-video-composition-startup-deadline.md)。

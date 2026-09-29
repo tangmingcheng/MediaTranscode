@@ -128,7 +128,6 @@ struct MediaRealtimeAvSyncAssemblyPlan final {
     MediaClockEvidencePolicy evidencePolicy;
     MediaCanonicalVideoAssemblyPlan video;
     MediaCanonicalAudioAssemblyPlan audio;
-    MediaRunningTime startupClockInterval;
     friend bool operator==(const MediaRealtimeAvSyncAssemblyPlan&,
                            const MediaRealtimeAvSyncAssemblyPlan&) = default;
 };

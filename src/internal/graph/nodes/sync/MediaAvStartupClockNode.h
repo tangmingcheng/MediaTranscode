@@ -29,8 +29,6 @@ private:
 
     std::optional<MediaAvSyncGroupKey> m_groupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_group;
-    std::optional<MediaRunningTime> m_interval;
-    std::optional<MediaRunningTime> m_nextTick;
     std::optional<std::uint64_t> m_generation;
     std::optional<std::uint64_t> m_invalidatedGeneration;
     MediaBufferRef m_pendingClockState;
