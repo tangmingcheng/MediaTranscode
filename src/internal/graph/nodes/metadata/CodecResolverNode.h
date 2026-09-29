@@ -20,6 +20,8 @@ class CodecResolverNode final : public FFmpegNodeRuntime {
 public:
     explicit CodecResolverNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
     ::media::Status bindPreparedEncoder(MediaBufferRef encoder);
     ::media::Status bindPreparedDecoder(std::shared_ptr<MediaPreparedVideoDecoder> decoder);
     MediaBufferRef inputSnapshot() const;
@@ -32,6 +34,7 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    void resetRuntimeState() noexcept;
     ::media::Status prepareDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
     ::media::Status prepareEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
 

@@ -54,6 +54,55 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return MediaNodeKind::CodecResolver;
 }
 
+::media::Status CodecResolverNode::stop(MediaGraphExecutionContext& context)
+{
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
+
+void CodecResolverNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    FFmpegNodeRuntime::abort(context);
+    resetRuntimeState();
+}
+
+void CodecResolverNode::resetRuntimeState() noexcept
+{
+    std::lock_guard lock(m_snapshotMutex);
+    if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+        try {
+            const auto logOwner = [](const char* slot, const MediaBufferRef& buffer) {
+                if (!buffer) return;
+                const auto& credit = buffer->payloadCredit();
+                std::ostringstream message;
+                message << "release slot=" << slot
+                        << " bufferReferences=" << buffer.use_count()
+                        << " hasCredit=" << static_cast<bool>(credit)
+                        << " creditReferences=" << credit.use_count();
+                codecResolverLog(MediaGraphDiagnosticLevel::State, message.str());
+            };
+            logOwner("input", m_inputSnapshot);
+            logOwner("timestamp", m_timestampSource);
+            logOwner("decoder", m_preparedDecoder);
+            logOwner("encoder", m_preparedEncoder);
+            logOwner("encoder_parameters", m_encoderParametersSnapshot);
+        } catch (...) {
+            // Diagnostics must not prevent release of the node's owned resources.
+        }
+    }
+    m_preparedDecoder.reset();
+    m_preparedEncoder.reset();
+    m_sourceDecoder.reset();
+    m_inputSnapshot.reset();
+    m_timestampSource.reset();
+    m_encoderParametersSnapshot.reset();
+    m_decoderRuntimeFacts.reset();
+    m_encoderReadback.reset();
+    m_decoderHardwareDevice.reset();
+    m_emitted = false;
+}
+
 ::media::Status CodecResolverNode::bindPreparedDecoder(
     std::shared_ptr<MediaPreparedVideoDecoder> decoder)
 {

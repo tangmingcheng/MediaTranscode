@@ -149,6 +149,7 @@ void FileMuxNode::abort(MediaGraphExecutionContext& context) noexcept
         m_abortForwarded = true;
     }
     FFmpegNodeRuntime::abort(context);
+    releaseSession();
 }
 
 ::media::Status FileMuxNode::ensureSession(MediaGraphExecutionContext& context)
