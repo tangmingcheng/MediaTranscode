@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaVideoSharedSourcePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
+#include "internal/graph/planner/realtime/MediaRtpSourcePreflight.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpStartupPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
@@ -365,27 +366,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             "preplanned raw RTP video pipeline conflicts with resolved input"));
     }
     return ::media::Status::success();
-}
-
-::media::Result<int> remainingRawRtpStartupMilliseconds(
-    std::chrono::steady_clock::time_point deadline,
-    const char* phase)
-{
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline) {
-        return ::media::Result<int>::failure(::media::ErrorInfo::wouldBlock(
-            std::string("raw RTP preflight reached total open timeout during ") +
-            phase));
-    }
-    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
-        deadline - now);
-    if (remaining.count() <= 0 ||
-        remaining.count() > (std::numeric_limits<int>::max)()) {
-        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument(
-            "raw RTP preflight deadline is outside the supported range"));
-    }
-    return ::media::Result<int>::success(
-        static_cast<int>(remaining.count()));
 }
 
 } // namespace
@@ -1544,117 +1524,32 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     if (request.input.type && *request.input.type == RealtimeInputType::RtpPort) {
         const auto preflightDeadline = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(*request.input.openTimeoutMs);
-        auto remainingForProbe = remainingRawRtpStartupMilliseconds(
-            preflightDeadline, "video signaling detection");
-        if (!remainingForProbe) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                remainingForProbe.error());
-        }
-        MediaRealtimeInputConfig probeInput = request.input;
-        probeInput.openTimeoutMs = remainingForProbe.value();
-        auto probed = MediaRealtimeInputPlanner::prepareRawRtpVideo(
-            probeInput, *request.parameters.execution.streamSet);
-        if (!probed) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                probed.error());
-        }
-        auto remainingAfterProbe = remainingRawRtpStartupMilliseconds(
-            preflightDeadline, "video signaling detection");
-        if (!remainingAfterProbe) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                remainingAfterProbe.error());
-        }
-        const auto& detected = std::visit(
-            [](const auto& prepared)
-                -> const MediaDetectedRtpVideoSignaling& {
-                return prepared.signaling;
-            },
-            probed.value());
-        const auto& detectedFrameRate = std::visit(
-            [](const auto& prepared) -> const MediaRational& {
-                return prepared.sourceFrameRate;
-            },
-            probed.value());
-        auto* videoOnlyProbe = std::get_if<
-            MediaPreparedRawRtpVideoOnlyProbe>(&probed.value());
-        auto* audioVideoProbe = std::get_if<
-            MediaPreparedRawRtpAudioVideoProbe>(&probed.value());
-        const bool expectsAudioVideo =
-            request.parameters.execution.streamSet ==
-            MediaTranscodeStreamSet::AudioVideo;
-        if (expectsAudioVideo != (audioVideoProbe != nullptr)) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "raw RTP prepared probe stream set conflicts with request"));
-        }
-        MediaPreparedRealtimeInput& preparedVideo = audioVideoProbe
-            ? audioVideoProbe->video
-            : videoOnlyProbe->video;
-        MediaPreparedRealtimeInput* preparedAudio = audioVideoProbe
-            ? &audioVideoProbe->audio
-            : nullptr;
+        auto capturing = MediaRtpSourcePreflight::begin(
+            request.input, *request.parameters.execution.streamSet, preflightDeadline);
+        if (!capturing) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(capturing.error());
+        auto observed = capturing.value().observation();
+        if (!observed) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(observed.error());
         const auto* detectedForPlanning = request.input.videoRtp.fmtp
-            ? nullptr
-            : &detected;
+            ? nullptr : &observed.value().signaling;
         auto preplannedVideo = planRawRtpVideoPipeline(
-            request, detectedForPlanning, detectedFrameRate);
-        if (!preplannedVideo) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                preplannedVideo.error());
-        }
-        if (auto status = MediaRawRtpInputPreparer::sealPreflight(probed.value()); !status) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
-        }
-        auto videoIngress = MediaPreparedRtpIngressPlanner::plan(preparedVideo);
-        if (!videoIngress) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(videoIngress.error());
-        }
-        std::optional<MediaRtpIngressPlan> audioIngress;
-        if (preparedAudio) {
-            auto ingress = MediaPreparedRtpIngressPlanner::plan(*preparedAudio);
-            if (!ingress) {
-                return ::media::Result<MediaRealtimeTranscodePreflight>::failure(ingress.error());
-            }
-            audioIngress.emplace(std::move(ingress).value());
-        }
+            request, detectedForPlanning, observed.value().frameRate);
+        if (!preplannedVideo)
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(preplannedVideo.error());
+        auto sealed = std::move(capturing).value().seal();
+        if (!sealed) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(sealed.error());
+        auto resources = sealed.value().resources();
+        if (!resources) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(resources.error());
+        const auto& source = resources.value();
         auto planned = planWithInput(
-            request, nullptr, nullptr, &preparedVideo, preparedAudio,
-            &videoIngress.value(), audioIngress ? &*audioIngress : nullptr,
-            std::move(preplannedVideo).value(),
-            detectedForPlanning,
-            &detectedFrameRate);
+            request, nullptr, nullptr, &source.video, source.audio,
+            &source.videoIngress, source.audioIngress, std::move(preplannedVideo).value(),
+            detectedForPlanning, &observed.value().frameRate);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
-        auto remainingAfterPlanning = remainingRawRtpStartupMilliseconds(
-            preflightDeadline, "resolved product planning");
-        if (!remainingAfterPlanning) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                remainingAfterPlanning.error());
-        }
-        if (auto status = preparedVideo.configureRawRtpRuntimeIngress(
-                videoIngress.value()); !status) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                status.error());
-        }
-        if (preparedAudio) {
-            if (auto status = preparedAudio->configureRawRtpRuntimeIngress(*audioIngress);
-                !status) {
-                return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
-            }
-        }
-        MediaRealtimeTranscodePreflight result(
-            std::move(planned).value());
-        MediaPreparedRawRtpProbe ownedProbe = std::move(probed).value();
-        std::visit(
-            [&result](auto&& prepared) {
-                using Probe = std::decay_t<decltype(prepared)>;
-                result.prepared.emplace(std::move(prepared.video));
-                if constexpr (std::is_same_v<
-                                  Probe,
-                                  MediaPreparedRawRtpAudioVideoProbe>) {
-                    result.preparedAudio.emplace(std::move(prepared.audio));
-                }
-            },
-            std::move(ownedProbe));
+        auto inputs = std::move(sealed).value().release();
+        if (!inputs) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(inputs.error());
+        MediaRealtimeTranscodePreflight result(std::move(planned).value());
+        result.prepared.emplace(std::move(inputs.value().video));
+        result.preparedAudio = std::move(inputs.value().audio);
         return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
     }
 

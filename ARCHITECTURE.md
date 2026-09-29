@@ -590,3 +590,5 @@ producer registry消费逐node/stream/payload事实并对最终图完整覆盖�
 准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。
 
 共享canonical元数据已迁移为精确元素只读owner，源链和aggregate共同factory接入，identity按内容比较并持有寿命；不等于分配前全局准入，完整FAIL42。见[存储记录](docs/realtime-video-composition-metadata-storage.md)。
+
+raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
