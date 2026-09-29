@@ -310,7 +310,8 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         }
         incomingOrigin = bound->audioOrigin();
         media = bound->media()->media();
-        fragments = bound->media()->fragments();
+        const auto incomingFragments = bound->media()->fragments();
+        fragments.assign(incomingFragments.begin(), incomingFragments.end());
         if (auto status = m_lineageState->preflightIncomingLineage(
                 fragments); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());

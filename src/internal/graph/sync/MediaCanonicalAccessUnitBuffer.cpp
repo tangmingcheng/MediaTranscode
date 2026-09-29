@@ -9,7 +9,7 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
     MediaBufferRef media, MediaScheduledStream stream,
     std::shared_ptr<const MediaCanonicalLineage> lineage,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
-    std::vector<MediaCanonicalAudioContribution> audioContributions)
+    MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions)
     : m_media(std::move(media))
     , m_stream(stream)
     , m_lineage(std::move(lineage))
@@ -88,10 +88,12 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
     }
     if (auto valid = validateMediaCanonicalLineage(*lineage); !valid)
         return ::media::Result<MediaBufferRef>::failure(valid.error());
+    auto storage = MediaImmutableArray<MediaCanonicalAudioContribution>::copy(audioContributions);
+    if (!storage) return ::media::Result<MediaBufferRef>::failure(storage.error());
     return ::media::Result<MediaBufferRef>::success(
         MediaBufferRef(new MediaCanonicalAccessUnitBuffer(
             std::move(media), stream, std::move(lineage),
-            std::move(audioInterval), std::move(audioContributions))));
+            std::move(audioInterval), std::move(storage).value())));
 }
 
 MediaBufferType MediaCanonicalAccessUnitBuffer::type() const noexcept

@@ -29,14 +29,16 @@ namespace media::ffmpeg::graph {
         }
         expected = fragment.interval.end;
     }
+    auto storage = MediaImmutableArray<MediaAudioIntervalFragment>::copy(fragments);
+    if (!storage) return ::media::Result<MediaBufferRef>::failure(storage.error());
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaEncodedAudioLineageBuffer(
-            std::move(media), std::move(fragments), origin)));
+            std::move(media), std::move(storage).value(), origin)));
 }
 
 MediaEncodedAudioLineageBuffer::MediaEncodedAudioLineageBuffer(
     MediaBufferRef media,
-    std::vector<MediaAudioIntervalFragment> fragments,
+    MediaImmutableArray<MediaAudioIntervalFragment> fragments,
     MediaAudioPlaybackOrigin origin)
     : m_media(std::move(media)), m_fragments(std::move(fragments)), m_origin(origin)
 {
@@ -50,7 +52,7 @@ std::optional<std::uint64_t> MediaEncodedAudioLineageBuffer::payloadFootprintByt
     return m_media->payloadFootprintBytes();
 }
 const MediaBufferRef& MediaEncodedAudioLineageBuffer::media() const noexcept { return m_media; }
-const std::vector<MediaAudioIntervalFragment>& MediaEncodedAudioLineageBuffer::fragments() const noexcept { return m_fragments; }
+std::span<const MediaAudioIntervalFragment> MediaEncodedAudioLineageBuffer::fragments() const noexcept { return m_fragments.view(); }
 const MediaAudioPlaybackOrigin& MediaEncodedAudioLineageBuffer::audioOrigin() const noexcept { return m_origin; }
 
 } // namespace media::ffmpeg::graph

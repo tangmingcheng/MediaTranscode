@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
+#include "internal/graph/sync/MediaCanonicalIdentity.h"
 #include <variant>
 
 namespace media::ffmpeg::graph {
@@ -47,14 +47,14 @@ private:
 };
 
 struct MediaSourceAccessUnitIdentity final {
-    std::string sourceIdentity;
+    MediaCanonicalIdentity sourceIdentity;
     MediaSourceAccessUnitSequence sourceSequence;
     friend bool operator==(const MediaSourceAccessUnitIdentity&,
                            const MediaSourceAccessUnitIdentity&) noexcept = default;
 };
 
 struct MediaOutputAccessUnitIdentity final {
-    std::string outputIdentity;
+    MediaCanonicalIdentity outputIdentity;
     MediaScheduledStream stream;
     MediaOutputAccessUnitSequence outputSequence;
     friend bool operator==(const MediaOutputAccessUnitIdentity&,

@@ -7,7 +7,7 @@
 
 #include <memory>
 #include <optional>
-#include <string>
+#include <string_view>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -20,7 +20,7 @@ struct MediaCanonicalLineage final {
     MediaCanonicalAccessUnitIdentity identity;
     MediaTimeMappingConfidence mappingConfidence;
     std::uint64_t generation;
-    std::vector<MediaCanonicalVideoContribution> videoContributions;
+    MediaImmutableArray<MediaCanonicalVideoContribution> videoContributions;
 
     MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept;
 };
@@ -39,7 +39,7 @@ createMediaCanonicalLineage(
     std::optional<MediaRunningTime> decode,
     MediaRunningTime duration,
     MediaDecodeOrderMode decodeOrder,
-    std::string sourceIdentity,
+    std::string_view sourceIdentity,
     MediaSourceAccessUnitSequence sourceSequence,
     MediaTimeMappingConfidence mappingConfidence,
     std::uint64_t generation);
@@ -50,7 +50,9 @@ createMediaCanonicalOutputLineage(
     std::optional<MediaRunningTime> decode,
     MediaRunningTime duration,
     MediaDecodeOrderMode decodeOrder,
-    MediaOutputAccessUnitIdentity identity,
+    std::string_view outputIdentity,
+    MediaScheduledStream stream,
+    MediaOutputAccessUnitSequence outputSequence,
     MediaTimeMappingConfidence mappingConfidence,
     std::uint64_t generation,
     std::vector<MediaCanonicalVideoContribution> videoContributions);

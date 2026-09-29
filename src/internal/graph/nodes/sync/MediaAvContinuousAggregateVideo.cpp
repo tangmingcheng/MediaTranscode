@@ -78,8 +78,8 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaBufferRef>::failure(status.error());
     auto lineage = createMediaCanonicalOutputLineage(presentation.value(), std::nullopt,
         duration.value(), MediaDecodeOrderMode::PresentationOrderNoReorder,
-        {plan().outputGroupKey.value(), MediaScheduledStream::Video,
-         MediaOutputAccessUnitSequence(static_cast<std::uint64_t>(m_nextVideoFrame) + 1)},
+        plan().outputGroupKey.value(), MediaScheduledStream::Video,
+         MediaOutputAccessUnitSequence(static_cast<std::uint64_t>(m_nextVideoFrame) + 1),
         MediaTimeMappingConfidence::Locked, plan().initialGeneration, std::move(contributions));
     if (!lineage) return ::media::Result<MediaBufferRef>::failure(lineage.error());
     auto output = MediaCanonicalVideoFrameBuffer::create(std::move(wrapped).value(), std::move(lineage).value());

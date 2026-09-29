@@ -75,7 +75,7 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
     auto lineage = createMediaCanonicalOutputLineage(
         presentation.value(), std::nullopt, duration.value(),
         MediaDecodeOrderMode::PresentationOrderNoReorder,
-        MediaOutputAccessUnitIdentity{outputGroup.value(), MediaScheduledStream::Audio, sequence},
+        outputGroup.value(), MediaScheduledStream::Audio, sequence,
         MediaTimeMappingConfidence::Locked,
         origin.generation, {});
     if (!lineage) {

@@ -3,14 +3,14 @@
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
 
 #include <cstddef>
-#include <string_view>
+#include <span>
 #include <vector>
 
 namespace media::ffmpeg::graph {
 
 struct MediaAudioLineageKey final {
     std::uint64_t generation = 0;
-    std::string_view timelineIdentity;
+    MediaCanonicalIdentity timelineIdentity;
     std::uint64_t sequence = 0;
     bool output = false;
 
@@ -25,7 +25,7 @@ public:
     ::media::Status observe(
         const std::shared_ptr<const MediaCanonicalLineage>& lineage);
     ::media::Status observe(
-        const std::vector<MediaAudioIntervalFragment>& fragments);
+        std::span<const MediaAudioIntervalFragment> fragments);
     std::size_t leaseCount() const noexcept;
 
 private:

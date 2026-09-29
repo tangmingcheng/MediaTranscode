@@ -54,9 +54,9 @@ namespace {
     if (!duration) return ::media::Result<MediaBufferRef>::failure(duration.error());
     auto lineage = createMediaCanonicalOutputLineage(presentation.value(), std::nullopt,
         duration.value(), MediaDecodeOrderMode::PresentationOrderNoReorder,
-        {plan().outputGroupKey.value(), MediaScheduledStream::Audio,
+        plan().outputGroupKey.value(), MediaScheduledStream::Audio,
          MediaOutputAccessUnitSequence(static_cast<std::uint64_t>(
-             (begin - plan().initialAudioSample) / plan().audio.codecFrameSamples()) + 1)},
+             (begin - plan().initialAudioSample) / plan().audio.codecFrameSamples()) + 1),
         MediaTimeMappingConfidence::Locked, plan().initialGeneration, {});
     if (!lineage) return ::media::Result<MediaBufferRef>::failure(lineage.error());
     auto reservation = context.reservePayload(nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);

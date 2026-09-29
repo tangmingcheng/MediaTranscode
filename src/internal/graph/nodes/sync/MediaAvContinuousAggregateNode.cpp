@@ -503,30 +503,25 @@ void MediaAvContinuousAggregateNode::logSummary(const char* reason) noexcept
         if (!consume(sizeof(lineage))) return false;
         const auto& identity = lineage.identity;
         const auto stringBytes = std::holds_alternative<MediaSourceAccessUnitIdentity>(identity)
-            ? std::get<MediaSourceAccessUnitIdentity>(identity).sourceIdentity.capacity()
-            : std::get<MediaOutputAccessUnitIdentity>(identity).outputIdentity.capacity();
-        if (!consume(stringBytes) || !consume(1)) return false;
-        const auto unusedVideo = lineage.videoContributions.capacity() - lineage.videoContributions.size();
-        if (unusedVideo > remaining / sizeof(MediaCanonicalVideoContribution) ||
-            !consume(unusedVideo * sizeof(MediaCanonicalVideoContribution))) return false;
+            ? std::get<MediaSourceAccessUnitIdentity>(identity).sourceIdentity.storageBytes()
+            : std::get<MediaOutputAccessUnitIdentity>(identity).outputIdentity.storageBytes();
+        if (!consume(stringBytes)) return false;
+        if (!consume(lineage.videoContributions.storageBytes())) return false;
         for (const auto& contribution : lineage.videoContributions) {
-            if (!consume(sizeof(contribution))) return false;
             if (const auto* source = std::get_if<MediaCanonicalSourceStamp>(&contribution.origin))
-                if (!consume(source->identity.sourceIdentity.capacity()) || !consume(1)) return false;
+                if (!consume(source->identity.sourceIdentity.storageBytes())) return false;
         }
         return true;
     };
     const auto audioBytes = [&](const MediaBoundCanonicalAudioBuffer& audio) {
         if (!consume(sizeof(audio)) || !consume(sizeof(MediaCanonicalAudioSamplesBuffer))) return false;
-        const auto unusedFragments = audio.media()->fragments().capacity() - audio.media()->fragments().size();
-        if (unusedFragments > remaining / sizeof(MediaAudioIntervalFragment) ||
-            !consume(unusedFragments * sizeof(MediaAudioIntervalFragment))) return false;
+        if (!consume(audio.media()->fragments().size_bytes())) return false;
         for (const auto& fragment : audio.media()->fragments()) {
             // Counting a shared lineage for every fragment is conservative and
             // keeps the charge independent of allocator/address identities.
-            if (!consume(sizeof(fragment)) || !lineageBytes(*fragment.lineage)) return false;
+            if (!lineageBytes(*fragment.lineage)) return false;
             if (const auto* real = std::get_if<MediaCanonicalAudioRealSource>(&fragment.contribution.origin))
-                if (!consume(real->source.identity.sourceIdentity.capacity()) || !consume(1)) return false;
+                if (!consume(real->source.identity.sourceIdentity.storageBytes())) return false;
         }
         return true;
     };

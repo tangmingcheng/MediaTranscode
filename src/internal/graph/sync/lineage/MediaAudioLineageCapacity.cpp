@@ -40,7 +40,7 @@ MediaAudioLineageCapacity::MediaAudioLineageCapacity(
 }
 
 ::media::Status MediaAudioLineageCapacity::observe(
-    const std::vector<MediaAudioIntervalFragment>& fragments)
+    std::span<const MediaAudioIntervalFragment> fragments)
 {
     if (fragments.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
