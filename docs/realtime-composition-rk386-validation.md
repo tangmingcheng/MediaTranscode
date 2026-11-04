@@ -30,3 +30,7 @@
 取得构建终态后核对真实加载库、源哈希和输出接收网络路径，执行与 Windows r385 相同媒体规格的三源 realtime 合屏。源码预查指出输出网络账本的 GCC reservation allocator geometry 尚未支持；须以实际启动证据确认并修复项目内能力 adapter，不用默认容量或跳过账本。此前 dormant SourcePresentation 容器能力不能当作当前 CanonicalIntervals 链路的首阻塞。
 
 用户要求全 CPU 核心编译后，已明确中止原 4 并行构建（Ninja 报 interrupted by user，非编译故障或通过）。目标 nproc=8，内存7.7GiB、当时可用6.2GiB。当前同一会话11380执行 clean-first/all-target、--parallel 8，终态标记改为 RK386_ALL_CORES_EXIT；已清理72个旧构建文件并开始重建，结果待回收。
+
+本轮补充核验：远端复用120秒源与本机 SHA256 一致，includes.tar 的远端哈希也与表中一致。远端到本机192.168.96.122的路由经192.168.130.254/eth0；路由存在不等于UDP已成功接收。实际 Ninja PID1777165，参数 -j 8 all，构建仍在进行。
+
+只读源码调查进一步确认：远端 /home/tang/ffmpeg-rkmpp-close-ownership HEAD 为 ab1e61adaa21ff129caa8e01a1198156044567ed；rkmppdec.c 的 rkmpp_export_frame 将 MppFrame 和 DRM 描述分别封装为只读 AVBuffer，释放回调调用 mpp_frame_deinit，未在此路径生成独立像素副本。它与 CUDA safe-copy 的独立输出合同不同，不能在 adapter 中仅按设备名返回同一能力。当前合屏 source preparer 的 CUDA-only allocation/readiness 门禁可能早于网络几何失败；以首次实际CLI错误为准。尚未修改依赖或放宽门禁。
