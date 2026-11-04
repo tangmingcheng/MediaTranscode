@@ -19,3 +19,5 @@ rk388 三路 accepted−output 均为 6，Input−Accepted 均为 1。源码确�
 构建实证：Windows Release 全量 794 目标退出 0，两个 CLI 与 cache/ninja 产物存在；RKMPP 8 核增量 6/6，RK389_BUILD_EXIT=0。源码同步包 SHA256 为 69f0c405e8d184b82032d45c2f309272a02848890e15cf8c3149f485ffedeb2e；双端已核对。rk389 原规格实流正在运行，尚未判定通过。
 
 独立审查：progress_frame_review_a 与 progress_frame_review_b 均明确 PASS；两者均未参与实现。原规格实流早段与约 90 秒 VLC 原生快照均看到三格视频，非完整验收结论；后段与退出数据待归档。
+
+实流已完成并清理，见 realtime-composition-rk389-validation.md。三路发布 3599/3598/3599 帧，原 admission 停滞已在原规格链路中解除；全失源后持续黑屏输出。仍有 pressureFailures=4 与 VLC lost=3，完整合屏门禁未通过；后续推进失源/重入及剩余矩阵。
