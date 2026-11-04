@@ -888,3 +888,7 @@ r132失败13件、r133实际20件产物已记录后清理，各六PID无残留�
 最新证据见 docs/realtime-composition-r312-validation.md：Release739项exit0，诊断切片双独立静态PASS；三路原120秒RTP H264/AAC→HEVC CBR8000kbps 1280×720/30、AAC CBR192kbps→MPEG-TS/UDP，三格→全黑→选定AV源完整120秒重入→再次全黑，均由VLC原生快照核验。四个源exit0，CLI caller_stop exit0，errors0，payload预约/释放261506一致且归零；16项临时产物清理完毕。没有线端到达及内容A/V测量，不能记完整验收通过，不能据单次未复现关闭r310/r311超期或旧崩溃。
 
 下一实现按 docs/realtime-composition-ts-storage-closure.md：将series backing、cursor/control、continuity和batch描述符纳入同generation预算，基于最终图边与真实节点持有槽位编译容量；整体准备成功后才提交协议状态。现有queue/prefix/退休边界不重复实现。随后双审及Windows原规格验证；完整矩阵、C API和RKMPP门禁仍保留。
+
+## 2026-11-04：RKMPP 基础合屏与单视频源重入
+
+rk389 已解除 lineage admission 遮蔽异步 receive 的停滞；Windows Release 全量及 RKMPP 8 核增量成功，代码双审通过，三路原规格出图。rk390 完成 RTP H.264/AAC→MPEG-TS/UDP HEVC CBR8000kbps、1280×720/30、AAC192kbps：三格→源0匹配BYE后黑格→新发送进程generation2恢复→其余源自然结束仅重入格→全黑持续输出。重入FFmpeg完整120秒/3600帧exit0，CLI generation2发布3568帧；caller_stop exit0，payload163349预约/释放平衡归零。有限画面功能及文档边界双审PASS，完整验收仍未通过。临时产物与精确PID已清理；见 docs/realtime-composition-rk390-validation.md。下一步为所选音频源失源/重入及内容静音证据，再补异构2–4源、C API和双平台长期可靠性；Windows r385仍未关闭。
