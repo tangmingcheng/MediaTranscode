@@ -99,6 +99,7 @@ private:
     std::optional<std::chrono::nanoseconds> m_receiveInterval;
     std::uint64_t m_drmPrimeFrames = 0;
     std::uint64_t m_softwareFrames = 0;
+    std::uint64_t m_lineageAdmissionReceiveRetries = 0;
 };
 
 } // namespace media::ffmpeg::graph

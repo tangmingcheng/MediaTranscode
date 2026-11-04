@@ -182,7 +182,8 @@ bool VideoDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 {
     std::ostringstream summary;
     summary << "video_decode.zero_copy_summary drm_prime=" << m_drmPrimeFrames
-            << " software_frame=" << m_softwareFrames;
+            << " software_frame=" << m_softwareFrames
+            << " lineage_admission_receive_retries=" << m_lineageAdmissionReceiveRetries;
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeLifecycle,
                             summary.str());
@@ -202,6 +203,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     m_receiveInterval.reset();
     m_drmPrimeFrames = 0;
     m_softwareFrames = 0;
+    m_lineageAdmissionReceiveRetries = 0;
     m_lineageState->resetForLifecycle();
 }
 
@@ -416,6 +418,22 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         !m_lineageState->pendingPacket->opaque_ref &&
         !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
+        if (!attached && attached.error().code == ::media::ErrorCode::WouldBlock &&
+            m_receiveInterval) {
+            // Admission must not hide the planned asynchronous receive path:
+            // completed outputs release submission-order lineage slots.
+            ++m_lineageAdmissionReceiveRetries;
+            auto received = receiveFrames(context);
+            if (!received) return processProgress(::media::Status::failure(received.error()));
+            attached = attachPendingLineage();
+            if (!attached && attached.error().code == ::media::ErrorCode::WouldBlock) {
+                return ::media::Result<MediaNodeProcessResult>::success({
+                    MediaNodeProcessState::Waiting,
+                    MediaNodeProcessResult::DeadlineWait{
+                        std::chrono::steady_clock::now() + *m_receiveInterval,
+                        MediaNodeDeadlineWakePolicy::DeadlineOrCancellation}});
+            }
+        }
         if (!attached) return processProgress(std::move(attached));
     }
     if (!m_codecApi) {
