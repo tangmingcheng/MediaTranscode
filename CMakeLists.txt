@@ -8,8 +8,11 @@ set(CMAKE_SKIP_RPATH TRUE)
 find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-set(CMAKE_DEPFILE_FLAGS_CXX "")
-set(CMAKE_CXX_DEPFILE_FORMAT "")
+# Preserve compiler-provided depfiles for GCC incremental header rebuilds.
+if(MSVC)
+    set(CMAKE_DEPFILE_FLAGS_CXX "")
+    set(CMAKE_CXX_DEPFILE_FORMAT "")
+endif()
 set(CMAKE_CXX_SCANDEP_SOURCE "")
 
 set(TARGET_CORE "media_transcode_core")
