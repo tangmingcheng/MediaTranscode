@@ -6,14 +6,15 @@
 namespace media::ffmpeg::graph {
 ::media::Result<MediaPreparedFrameWrapperStoragePlan> MediaPreparedFrameWrapperStoragePlanner::plan(
     const MediaCompositionGraphTopology& topology, const MediaSourceLineageStoragePlan& lineage,
-    const MediaCudaFrameProducerFacts& decoder, const std::optional<MediaCudaFrameProducerFacts>& filter)
+    const MediaVideoFrameProducerFacts& decoder, const std::optional<MediaVideoFrameProducerFacts>& filter)
 try {
     using R = ::media::Result<MediaPreparedFrameWrapperStoragePlan>;
     const auto invalid = [](const char* message) { return R::failure(::media::ErrorInfo::invalidArgument(message)); };
-    if (!decoder.context || !decoder.maximumExtendedBufferReferences ||
-        (decoder.kind != MediaCudaFrameProducer::NativeSafeDecode && decoder.kind != MediaCudaFrameProducer::CuvidDecode) ||
-        (filter && (!filter->context || !filter->maximumExtendedBufferReferences || filter->kind != MediaCudaFrameProducer::ScaleCuda)))
-        return invalid("Prepared frame wrappers require admitted CUDA producer contracts");
+    if (!mediaVideoFrameProducerMaximumExtendedReferences(decoder) ||
+        !mediaVideoFrameProducerMatchesRole(decoder, MediaVideoFrameProducerRole::Decoder) ||
+        (filter && (!mediaVideoFrameProducerMaximumExtendedReferences(*filter) ||
+            !mediaVideoFrameProducerMatchesRole(*filter, MediaVideoFrameProducerRole::Filter))))
+        return invalid("Prepared frame wrappers require admitted hardware producer contracts");
     const MediaSourceLineageAllocationCost* frames = nullptr;
     for (const auto& allocation : lineage.allocations) {
         if (allocation.family != MediaSourceLineageAllocationFamily::FrameWrapper) continue;
@@ -43,7 +44,7 @@ try {
     }
     if (decoderConstructions != 1 || filterConstructions != (filter ? 1u : 0u))
         return invalid("Prepared frame wrapper producers differ from readiness membership");
-    // publish() captures CUDA readiness before wrapFrame(). Capture requires a
+    // publish() captures hardware readiness before wrapFrame(). Capture requires a
     // non-null hw_frames_ctx, so this contract selects HardwareFrameBuffer.
     // This charges only the raw wrapper/control allocation, not AVFrame or
     // readiness/attachment storage already covered by ownership components.

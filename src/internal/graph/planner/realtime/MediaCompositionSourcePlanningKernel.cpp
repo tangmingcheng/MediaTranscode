@@ -48,21 +48,30 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     if (!cadence) {
         const auto& video = request.video;
         if (!video.decoderOutputAllocation || !video.decoderOwnershipStorage ||
-            video.decoderReadiness->maximumExtendedBufferReferences !=
+            mediaVideoFrameProducerMaximumExtendedReferences(*video.decoderReadiness) !=
                 video.decoderOutputAllocation->maximumExtendedBufferReferences ||
             (video.filterActive && (!video.filterOwnershipStorage ||
-                video.filterReadiness->maximumExtendedBufferReferences !=
-                    video.decoderReadiness->maximumExtendedBufferReferences)))
+                !mediaVideoFrameProducerMaximumExtendedReferences(*video.filterReadiness))))
             return Result::failure(::media::ErrorInfo::notInitialized(
                 "Source presentation requires matching producer reference and ownership storage contracts"));
         auto ownership = MediaVideoFrameOwnershipStoragePlanner::plan({
             video.decoderOutputAllocation->maximumExtendedBufferReferences, true,
-            MediaVideoFrameReadiness::Kind::CudaEvent});
+            std::holds_alternative<MediaCudaFrameProducerFacts>(*video.decoderReadiness)
+                ? MediaVideoFrameReadiness::Kind::CudaEvent : MediaVideoFrameReadiness::Kind::Completed});
         if (!ownership) return Result::failure(ownership.error());
-        if (*video.decoderOwnershipStorage != ownership.value() ||
-            (video.filterActive && *video.filterOwnershipStorage != ownership.value()))
+        if (*video.decoderOwnershipStorage != ownership.value())
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Source ownership storage differs from its admitted producer references"));
+        if (video.filterActive) {
+            auto filterOwnership = MediaVideoFrameOwnershipStoragePlanner::plan({
+                *mediaVideoFrameProducerMaximumExtendedReferences(*video.filterReadiness), true,
+                std::holds_alternative<MediaCudaFrameProducerFacts>(*video.filterReadiness)
+                    ? MediaVideoFrameReadiness::Kind::CudaEvent : MediaVideoFrameReadiness::Kind::Completed});
+            if (!filterOwnership) return Result::failure(filterOwnership.error());
+            if (*video.filterOwnershipStorage != filterOwnership.value())
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "Filter ownership storage differs from its admitted producer references"));
+        }
     }
     MediaAudioPipelinePlan audio;
     audio.enabled = hasAudio;

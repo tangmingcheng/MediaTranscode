@@ -16,9 +16,22 @@ constexpr const char* contextKey = "video.readiness.context";
 constexpr const char* streamKey = "video.readiness.stream";
 constexpr const char* referencesKey = "video.readiness.maximum_extended_references";
 }
-::media::Result<MediaNodeOptions> MediaVideoFrameReadinessPlanCodec::encode(const MediaCudaFrameProducerFacts& facts)
+::media::Result<MediaNodeOptions> MediaVideoFrameReadinessPlanCodec::encode(const MediaVideoFrameProducerFacts& producer)
 {
     using Result = ::media::Result<MediaNodeOptions>;
+    if (const auto* completed = std::get_if<MediaSynchronousFrameProducerFacts>(&producer)) {
+        std::string name;
+        switch (completed->kind) {
+        case MediaSynchronousFrameProducer::RkmppDecode: name = "rkmpp_decode_completed"; break;
+        case MediaSynchronousFrameProducer::RgaFilter: name = "rga_filter_completed"; break;
+        default: return Result::failure(::media::ErrorInfo::invalidArgument("Synchronous frame producer is not admitted"));
+        }
+        MediaNodeOptions result;
+        result.set(kindKey, std::move(name));
+        result.set(referencesKey, std::to_string(completed->maximumExtendedBufferReferences));
+        return Result::success(std::move(result));
+    }
+    const auto& facts = std::get<MediaCudaFrameProducerFacts>(producer);
     if (!facts.context) return Result::failure(::media::ErrorInfo::invalidArgument("Frame readiness requires its prepared CUDA context"));
     std::string_view name;
     for (const auto& entry : names) if (entry.first == facts.kind) name = entry.second;
@@ -32,29 +45,36 @@ constexpr const char* referencesKey = "video.readiness.maximum_extended_referenc
         result.set(referencesKey, std::to_string(*facts.maximumExtendedBufferReferences));
     return Result::success(std::move(result));
 }
-::media::Result<std::optional<MediaCudaFrameProducerFacts>> MediaVideoFrameReadinessPlanCodec::decode(const MediaNodeOptions& options)
+::media::Result<std::optional<MediaVideoFrameProducerFacts>> MediaVideoFrameReadinessPlanCodec::decode(const MediaNodeOptions& options)
 {
-    using Result = ::media::Result<std::optional<MediaCudaFrameProducerFacts>>;
+    using Result = ::media::Result<std::optional<MediaVideoFrameProducerFacts>>;
     const auto invalid = [] { return Result::failure(::media::ErrorInfo::invalidArgument("Frame readiness options require a complete prepared producer contract")); };
     if (!options.has(kindKey) && !options.has(contextKey) && !options.has(streamKey) && !options.has(referencesKey)) return Result::success(std::nullopt);
-    if (!options.has(kindKey) || !options.has(contextKey) || !options.has(streamKey)) return invalid();
+    if (!options.has(kindKey)) return invalid();
     std::optional<MediaCudaFrameProducer> kind;
     const auto name = options.value(kindKey);
     for (const auto& entry : names) if (entry.second == name) kind = entry.first;
-    if (!kind) return invalid();
     const auto readHandle = [&options](const char* key, std::uintptr_t& handle) {
         const auto value = options.value(key);
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), handle);
         return !value.empty() && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
     };
-    std::uintptr_t context = 0, stream = 0;
-    if (!readHandle(contextKey, context) || !context || !readHandle(streamKey, stream)) return invalid();
     std::optional<std::size_t> references;
     if (options.has(referencesKey)) {
         std::uintptr_t value = 0;
         if (!readHandle(referencesKey, value)) return invalid();
         references = value;
     }
-    return Result::success(MediaCudaFrameProducerFacts{*kind, reinterpret_cast<void*>(context), reinterpret_cast<void*>(stream), references});
+    if (name == "rkmpp_decode_completed" || name == "rga_filter_completed") {
+        if (!references || options.has(contextKey) || options.has(streamKey)) return invalid();
+        return Result::success(MediaVideoFrameProducerFacts{MediaSynchronousFrameProducerFacts{
+            name == "rkmpp_decode_completed" ? MediaSynchronousFrameProducer::RkmppDecode
+                : MediaSynchronousFrameProducer::RgaFilter, *references}});
+    }
+    if (!kind || !options.has(contextKey) || !options.has(streamKey)) return invalid();
+    std::uintptr_t context = 0, stream = 0;
+    if (!readHandle(contextKey, context) || !context || !readHandle(streamKey, stream)) return invalid();
+    return Result::success(MediaVideoFrameProducerFacts{MediaCudaFrameProducerFacts{
+        *kind, reinterpret_cast<void*>(context), reinterpret_cast<void*>(stream), references}});
 }
 }

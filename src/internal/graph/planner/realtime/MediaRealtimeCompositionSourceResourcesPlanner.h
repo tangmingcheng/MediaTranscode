@@ -28,8 +28,8 @@ struct MediaCompositionFrameOwnershipFacts final {
     MediaVideoFrameOwnershipStoragePlan decoderGeometry;
     std::optional<MediaVideoFrameOwnershipStoragePlan> filterGeometry;
     std::shared_ptr<const void> allocationOwner;
-    MediaCudaFrameProducerFacts decoderReadiness;
-    std::optional<MediaCudaFrameProducerFacts> filterReadiness;
+    MediaVideoFrameProducerFacts decoderReadiness;
+    std::optional<MediaVideoFrameProducerFacts> filterReadiness;
 };
 
 // Per-source allocation facts, not simultaneous retention or global admission.

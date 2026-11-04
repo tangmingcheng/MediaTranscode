@@ -13,7 +13,7 @@ class MediaPreparedFrameWrapperStoragePlanner final {
 public:
     static ::media::Result<MediaPreparedFrameWrapperStoragePlan> plan(
         const MediaCompositionGraphTopology& topology, const MediaSourceLineageStoragePlan& lineage,
-        const MediaCudaFrameProducerFacts& decoder,
-        const std::optional<MediaCudaFrameProducerFacts>& filter);
+        const MediaVideoFrameProducerFacts& decoder,
+        const std::optional<MediaVideoFrameProducerFacts>& filter);
 };
 }

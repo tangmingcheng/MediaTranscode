@@ -70,10 +70,13 @@ struct PreparedTile final {
     }
     if ((!scale && !alias) || !plan.decoderReadiness)
         return Result::failure(::media::ErrorInfo::notInitialized("Prepared filter producer authority missing"));
+    const auto* decoderProducer = std::get_if<MediaCudaFrameProducerFacts>(&*plan.decoderReadiness);
+    if (!decoderProducer)
+        return Result::failure(::media::ErrorInfo::unsupported("Prepared filter has no admitted synchronous producer adapter"));
     auto producer = inspectMediaCudaFrameProducer(firstFrame,
-        scale ? MediaCudaFrameProducer::ScaleCuda : plan.decoderReadiness->kind);
+        scale ? MediaCudaFrameProducer::ScaleCuda : decoderProducer->kind);
     if (!producer) return Result::failure(producer.error());
-    producer.value().maximumExtendedBufferReferences = plan.decoderReadiness->maximumExtendedBufferReferences;
+    producer.value().maximumExtendedBufferReferences = decoderProducer->maximumExtendedBufferReferences;
     if (auto valid = validateMediaVideoFrameReferenceContract(firstFrame, *plan.decoderReadiness); !valid)
         return Result::failure(valid.error());
     if (auto waited = inputReadiness.enqueueCudaWait(producer.value().context, producer.value().stream); !waited)
@@ -101,13 +104,13 @@ struct PreparedTile final {
     if (!outputFacts) return Result::failure(outputFacts.error());
     if (outputFacts.value().context != producer.value().context || outputFacts.value().stream != producer.value().stream)
         return Result::failure(::media::ErrorInfo::invalidArgument("Prepared filter changed its authoritative CUDA stream"));
+    outputFacts.value().maximumExtendedBufferReferences = producer.value().maximumExtendedBufferReferences;
     plan.filterReadiness = outputFacts.value();
-    plan.filterReadiness->maximumExtendedBufferReferences = producer.value().maximumExtendedBufferReferences;
     if (auto valid = validateMediaVideoFrameReferenceContract(*tile, *plan.filterReadiness); !valid)
         return Result::failure(valid.error());
-    if (plan.filterReadiness->maximumExtendedBufferReferences) {
+    if (outputFacts.value().maximumExtendedBufferReferences) {
         auto storage = MediaVideoFrameOwnershipStoragePlanner::plan({
-            *plan.filterReadiness->maximumExtendedBufferReferences, true, MediaVideoFrameReadiness::Kind::CudaEvent});
+            *outputFacts.value().maximumExtendedBufferReferences, true, MediaVideoFrameReadiness::Kind::CudaEvent});
         if (!storage) return Result::failure(storage.error());
         plan.filterOwnershipStorage = storage.value();
     }
@@ -115,7 +118,7 @@ struct PreparedTile final {
         failure.release();
         return Result::success({std::move(tile), inputReadiness});
     }
-    auto readiness = captureMediaCudaFrameReadiness(*tile, resource, *plan.filterReadiness, inputAllocations.value());
+    auto readiness = captureMediaVideoFrameReadiness(*tile, resource, *plan.filterReadiness, inputAllocations.value());
     if (!readiness) return Result::failure(readiness.error());
     failure.release();
     return Result::success({std::move(tile), std::move(readiness).value()});
@@ -247,19 +250,19 @@ MediaRealtimeCompositionSourcePreparer::prepare(
                 ? MediaCudaFrameProducer::NativeSafeDecode : MediaCudaFrameProducer::CuvidDecode;
             auto producer = inspectMediaCudaFrameProducer(*evidence->firstFrame, authority);
             if (!producer) return Result::failure(producer.error());
-            candidate.decoderReadiness = producer.value();
             if (std::holds_alternative<MediaSourcePresentationTiming>(facts.timing)) {
                 // Both admitted decoder mechanisms publish copied CUDA video
                 // data buffers; no engine canvas lease exists on this source.
-                candidate.decoderReadiness->maximumExtendedBufferReferences =
+                producer.value().maximumExtendedBufferReferences =
                     candidate.decoderOutputAllocation->maximumExtendedBufferReferences;
                 auto storage = MediaVideoFrameOwnershipStoragePlanner::plan({
-                    *candidate.decoderReadiness->maximumExtendedBufferReferences, true,
+                    *producer.value().maximumExtendedBufferReferences, true,
                     MediaVideoFrameReadiness::Kind::CudaEvent});
                 if (!storage) return Result::failure(storage.error());
                 candidate.decoderOwnershipStorage = storage.value();
             }
-            auto readiness = captureMediaCudaFrameReadiness(*evidence->firstFrame,
+            candidate.decoderReadiness = producer.value();
+            auto readiness = captureMediaVideoFrameReadiness(*evidence->firstFrame,
                 captured.session->videoReferenceResource(), *candidate.decoderReadiness, nullptr);
             if (!readiness) return Result::failure(readiness.error());
             auto tile = prepareTile(candidate, *evidence->firstFrame, readiness.value(),

@@ -35,8 +35,8 @@ struct MediaVideoSourcePlan {
     std::optional<MediaRunningTime> decoderReceiveInterval;
     std::string reason;
     std::optional<MediaDecoderOutputAllocation> decoderOutputAllocation;
-    std::optional<MediaCudaFrameProducerFacts> decoderReadiness;
-    std::optional<MediaCudaFrameProducerFacts> filterReadiness;
+    std::optional<MediaVideoFrameProducerFacts> decoderReadiness;
+    std::optional<MediaVideoFrameProducerFacts> filterReadiness;
     std::optional<MediaVideoFilterExecutionPlan> filterExecution;
     std::optional<MediaVideoFrameOwnershipStoragePlan> decoderOwnershipStorage;
     std::optional<MediaVideoFrameOwnershipStoragePlan> filterOwnershipStorage;

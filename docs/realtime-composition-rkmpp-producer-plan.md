@@ -19,3 +19,11 @@ Completed 表示固定依赖的成功同步 API 已交付可消费帧，不需�
 ## 边界
 
 节点仍按现有线程模型运行，planner 负责能力与容量；不增加旁路媒体链。RGA 缓存保留量从已验证实现进入原 holder 计费，原队列及存储硬上限不放宽。错误/失源/重入维持原验收要求；API 已返回错误不能转换成 Completed。MPP/IEP 部分等待返回值未检查属于保留的依赖可靠性风险，本轮没有证据证明已发生未完成帧发布或释放安全缺陷。
+
+## 通用契约进度（2026-11-04）
+
+已将 source plan、options codec、runtime binding、失败保护及资源校验接到显式 CUDA/同步 producer variant。同步发布保留 AVFrame/AVBuffer，未知 producer 不默认 Completed；CUDA 继续使用原事件路径。decoder/filter 分别按实际引用合同规划，消费者不再拿自身输出引用界检查输入。两名独立审查者均明确 PASS。首次 Windows Release 构建会话 28789 退出 0；审查修正后的最终版本正在会话 6328 重建，尚待结果。
+
+具体 RKMPP 能力 adapter、独立 RGA 输出证据及 source gate 接通尚未完成；本步骤不宣称 rk386 已修复，不重复运行已知必败的相同实流。
+
+最终复验：审查修正后的 Windows Release 全量构建会话 6328 配置及构建均退出 0。所需构建文件与两个 CLI 产物已核对存在；未运行 local CLI。当前只完成通用契约迁移，RKMPP 具体 adapter 及实流仍待接通。

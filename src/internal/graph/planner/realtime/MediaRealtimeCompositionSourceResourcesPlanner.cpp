@@ -213,12 +213,10 @@ try {
             if (graph.findNode(id)->kind == MediaNodeKind::VideoFilter) filter = id;
         if (!source.video.decoderReadiness || filter.has_value() != source.video.filterReadiness.has_value())
             return invalid("Prepared frame wrapper producer readiness is missing");
-        const auto checkReadiness = [&](MediaNodeId id, const MediaCudaFrameProducerFacts& expected) -> ::media::Status {
+        const auto checkReadiness = [&](MediaNodeId id, const MediaVideoFrameProducerFacts& expected) -> ::media::Status {
             auto actual = MediaVideoFrameReadinessPlanCodec::decode(graph.findNode(id)->options);
             if (!actual) return ::media::Status::failure(actual.error());
-            if (!actual.value() || actual.value()->kind != expected.kind || actual.value()->context != expected.context ||
-                actual.value()->stream != expected.stream ||
-                actual.value()->maximumExtendedBufferReferences != expected.maximumExtendedBufferReferences)
+            if (!actual.value() || *actual.value() != expected)
                 return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Frame wrapper readiness differs from actual producer options"));
             return ::media::Status::success();
         };

@@ -329,8 +329,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = applySourceStageFacts(graph, {nodes.codecResolver, nodes.videoDecode},
             plan, decoder.value()); !status) return status;
     if (plan.decoderReadiness) {
-        if (plan.decoderReadiness->kind != MediaCudaFrameProducer::NativeSafeDecode &&
-            plan.decoderReadiness->kind != MediaCudaFrameProducer::CuvidDecode)
+        if (!mediaVideoFrameProducerMatchesRole(*plan.decoderReadiness, MediaVideoFrameProducerRole::Decoder))
             return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
                 "Decoder readiness does not describe its admitted producer operation"));
         auto readiness = MediaVideoFrameReadinessPlanCodec::encode(*plan.decoderReadiness);

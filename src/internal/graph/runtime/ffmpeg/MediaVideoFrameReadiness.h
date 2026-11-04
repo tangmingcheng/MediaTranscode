@@ -10,14 +10,14 @@ namespace media::ffmpeg::graph {
 // frame has an allocation-bound completion owner or the operation succeeded.
 class MediaVideoProducerFailureScope final {
 public:
-    explicit MediaVideoProducerFailureScope(std::optional<MediaCudaFrameProducerFacts> producer) noexcept;
+    explicit MediaVideoProducerFailureScope(std::optional<MediaVideoFrameProducerFacts> producer) noexcept;
     MediaVideoProducerFailureScope(MediaVideoProducerFailureScope&& other) noexcept;
     MediaVideoProducerFailureScope(const MediaVideoProducerFailureScope&) = delete;
     MediaVideoProducerFailureScope& operator=(const MediaVideoProducerFailureScope&) = delete;
     ~MediaVideoProducerFailureScope();
     void release() noexcept { m_producer.reset(); }
 private:
-    std::optional<MediaCudaFrameProducerFacts> m_producer;
+    std::optional<MediaVideoFrameProducerFacts> m_producer;
 };
 void completeMediaCudaProducerForRelease(const MediaCudaFrameProducerFacts& producer) noexcept;
 class MediaVideoFrameReadinessOperation {
@@ -52,7 +52,12 @@ private:
 // completion/payload owners, which have separate allocation products.
 ::media::Result<MediaSharedAllocationGeometry> mediaCudaFrameReadinessAllocationGeometry();
 ::media::Status validateMediaVideoFrameReferenceContract(
-    const AVFrame& frame, const MediaCudaFrameProducerFacts& producer);
+    const AVFrame& frame, const MediaVideoFrameProducerFacts& producer);
+
+::media::Result<MediaVideoFrameReadiness> captureMediaVideoFrameReadiness(
+    AVFrame& frame, const std::shared_ptr<MediaPreparationMemoryResource>& resource,
+    const MediaVideoFrameProducerFacts& producer,
+    std::shared_ptr<const MediaFfmpegPayloadReferences> consumedInputs);
 
 // The caller retains the unpublished frame and all pre-existing aliases until
 // this call returns. Attachment failure drains the recorded producer operation.
