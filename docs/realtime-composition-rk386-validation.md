@@ -28,3 +28,5 @@
 ## 后续
 
 取得构建终态后核对真实加载库、源哈希和输出接收网络路径，执行与 Windows r385 相同媒体规格的三源 realtime 合屏。源码预查指出输出网络账本的 GCC reservation allocator geometry 尚未支持；须以实际启动证据确认并修复项目内能力 adapter，不用默认容量或跳过账本。此前 dormant SourcePresentation 容器能力不能当作当前 CanonicalIntervals 链路的首阻塞。
+
+用户要求全 CPU 核心编译后，已明确中止原 4 并行构建（Ninja 报 interrupted by user，非编译故障或通过）。目标 nproc=8，内存7.7GiB、当时可用6.2GiB。当前同一会话11380执行 clean-first/all-target、--parallel 8，终态标记改为 RK386_ALL_CORES_EXIT；已清理72个旧构建文件并开始重建，结果待回收。
