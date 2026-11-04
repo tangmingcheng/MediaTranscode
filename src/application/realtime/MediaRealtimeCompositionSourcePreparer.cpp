@@ -1,5 +1,4 @@
 #include "internal/graph/planner/realtime/MediaRtpSourceProbeGoalPlanner.h"
-#include <string_view>
 #include <new>
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "application/realtime/MediaRealtimeCompositionSourcePreparer.h"
@@ -8,6 +7,8 @@
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
+#include "internal/graph/planner/capability/MediaVideoSourceProducerAdapter.h"
+#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
@@ -33,6 +34,8 @@ struct PreparedTile final {
 {
     using Result = ::media::Result<PreparedTile>;
     if (!plan.filterActive) {
+        if (plan.decoderOutputAllocation && !plan.decoderOutputAllocation->independentOfDecoderSurfaces())
+            return Result::failure(::media::ErrorInfo::unsupported("Borrowed decoder surfaces require a planned independent tile filter"));
         auto frame = ::media::ffmpeg::FramePtr(av_frame_clone(&firstFrame));
         if (!frame) return Result::failure(::media::ErrorInfo::allocationFailed(
             "Composition prepared tile reference"));
@@ -56,30 +59,20 @@ struct PreparedTile final {
         timeBase, frameRate,
         {raw.video.sampleAspectRatio.num, raw.video.sampleAspectRatio.den}});
     if (!filter) return Result::failure(filter.error());
-    bool scale = false;
-    bool alias = false;
-    for (unsigned i = 0; i < filter.value().graph->nb_filters; ++i) {
-        const auto* node = filter.value().graph->filters[i];
-        if (!node || !node->filter || !node->filter->name)
-            return Result::failure(::media::ErrorInfo::notInitialized("Prepared filter implementation missing"));
-        const std::string_view name(node->filter->name);
-        if (name == "buffer" || name == "buffersink") continue;
-        if (name == "scale_cuda" && !scale && !alias) scale = true;
-        else if (name == "null" && !scale && !alias) alias = true;
-        else return Result::failure(::media::ErrorInfo::unsupported("Prepared filter graph has no admitted producer stream contract"));
-    }
-    if ((!scale && !alias) || !plan.decoderReadiness)
+    if (!plan.decoderReadiness)
         return Result::failure(::media::ErrorInfo::notInitialized("Prepared filter producer authority missing"));
-    const auto* decoderProducer = std::get_if<MediaCudaFrameProducerFacts>(&*plan.decoderReadiness);
-    if (!decoderProducer)
-        return Result::failure(::media::ErrorInfo::unsupported("Prepared filter has no admitted synchronous producer adapter"));
-    auto producer = inspectMediaCudaFrameProducer(firstFrame,
-        scale ? MediaCudaFrameProducer::ScaleCuda : decoderProducer->kind);
+    auto producer = MediaVideoSourceProducerAdapter::filter(*filter.value().graph,
+        plan.filter.filterName, firstFrame, *plan.decoderReadiness);
     if (!producer) return Result::failure(producer.error());
-    producer.value().maximumExtendedBufferReferences = decoderProducer->maximumExtendedBufferReferences;
+    if (producer.value().isolation) {
+        auto execution = MediaVideoFilterExecutionPlanner::bindOutputEvidence(
+            *plan.filterExecution, *producer.value().isolation);
+        if (!execution) return Result::failure(execution.error());
+        plan.filterExecution = std::move(execution).value();
+    }
     if (auto valid = validateMediaVideoFrameReferenceContract(firstFrame, *plan.decoderReadiness); !valid)
         return Result::failure(valid.error());
-    if (auto waited = inputReadiness.enqueueCudaWait(producer.value().context, producer.value().stream); !waited)
+    if (auto waited = inputReadiness.waitBeforeConsumption(producer.value().producer); !waited)
         return Result::failure(waited.error());
     plan.filterExecution->inputConsumption = MediaVideoFilterInputConsumption::ImmediateSingleOutput;
     auto inputAllocations = MediaFfmpegPayloadReferences::capture(firstFrame, resource);
@@ -87,7 +80,7 @@ struct PreparedTile final {
     auto tile = ::media::ffmpeg::makeFrame();
     if (!tile) return Result::failure(::media::ErrorInfo::allocationFailed(
         "Composition prepared filtered tile"));
-    MediaVideoProducerFailureScope failure(producer.value());
+    MediaVideoProducerFailureScope failure(producer.value().producer);
     // The prepared frame is not published to the runtime and has no production
     // lineage. Execute the same negotiated filter implementation used by nodes.
     const int sent = av_buffersrc_add_frame_flags(filter.value().bufferSource,
@@ -100,21 +93,22 @@ struct PreparedTile final {
     if (auto valid = MediaVideoFrameContractValidator::validate(
             *tile, target, "composition prepared filtered tile"); !valid)
         return Result::failure(valid.error());
-    auto outputFacts = inspectMediaCudaFrameProducer(*tile, producer.value().kind);
-    if (!outputFacts) return Result::failure(outputFacts.error());
-    if (outputFacts.value().context != producer.value().context || outputFacts.value().stream != producer.value().stream)
-        return Result::failure(::media::ErrorInfo::invalidArgument("Prepared filter changed its authoritative CUDA stream"));
-    outputFacts.value().maximumExtendedBufferReferences = producer.value().maximumExtendedBufferReferences;
-    plan.filterReadiness = outputFacts.value();
-    if (auto valid = validateMediaVideoFrameReferenceContract(*tile, *plan.filterReadiness); !valid)
+    if (plan.filterExecution->output.allocation == MediaVideoFilterAllocation::IndependentOutputPool &&
+        (!tile->hw_frames_ctx || !firstFrame.hw_frames_ctx ||
+         tile->hw_frames_ctx->data == firstFrame.hw_frames_ctx->data))
+        return Result::failure(::media::ErrorInfo::invalidArgument("Prepared tile aliases its decoder pool"));
+    if (auto valid = MediaVideoSourceProducerAdapter::validateOutput(*tile, producer.value().producer); !valid)
         return Result::failure(valid.error());
-    if (outputFacts.value().maximumExtendedBufferReferences) {
+    plan.filterReadiness = producer.value().producer;
+    const auto references = mediaVideoFrameProducerMaximumExtendedReferences(*plan.filterReadiness);
+    if (references && std::holds_alternative<MediaSourcePresentationTiming>(timing)) {
         auto storage = MediaVideoFrameOwnershipStoragePlanner::plan({
-            *outputFacts.value().maximumExtendedBufferReferences, true, MediaVideoFrameReadiness::Kind::CudaEvent});
+            *references, true, std::holds_alternative<MediaCudaFrameProducerFacts>(*plan.filterReadiness)
+                ? MediaVideoFrameReadiness::Kind::CudaEvent : MediaVideoFrameReadiness::Kind::Completed});
         if (!storage) return Result::failure(storage.error());
         plan.filterOwnershipStorage = storage.value();
     }
-    if (alias) {
+    if (producer.value().aliasesInput) {
         failure.release();
         return Result::success({std::move(tile), inputReadiness});
     }
@@ -243,21 +237,14 @@ MediaRealtimeCompositionSourcePreparer::prepare(
             candidate.decoderOutputAllocation = std::move(allocation).value();
             if (!candidate.decoderOutputAllocation || candidate.transferDirection != MediaHardwareTransferDirection::None)
                 return Result::failure(::media::ErrorInfo::unsupported("Composition source lacks authoritative decoder readiness and direct transfer facts"));
-            if (candidate.decoderOutputAllocation->mechanism != MediaDecoderOutputAllocationMechanism::NativeCudaSafeCopy &&
-                candidate.decoderOutputAllocation->mechanism != MediaDecoderOutputAllocationMechanism::CuvidCopy)
-                return Result::failure(::media::ErrorInfo::unsupported("Prepared decoder allocation authority unsupported"));
-            const auto authority = candidate.decoderOutputAllocation->mechanism == MediaDecoderOutputAllocationMechanism::NativeCudaSafeCopy
-                ? MediaCudaFrameProducer::NativeSafeDecode : MediaCudaFrameProducer::CuvidDecode;
-            auto producer = inspectMediaCudaFrameProducer(*evidence->firstFrame, authority);
+            auto producer = MediaVideoSourceProducerAdapter::decoder(
+                *candidate.decoderOutputAllocation, *evidence->firstFrame);
             if (!producer) return Result::failure(producer.error());
             if (std::holds_alternative<MediaSourcePresentationTiming>(facts.timing)) {
-                // Both admitted decoder mechanisms publish copied CUDA video
-                // data buffers; no engine canvas lease exists on this source.
-                producer.value().maximumExtendedBufferReferences =
-                    candidate.decoderOutputAllocation->maximumExtendedBufferReferences;
                 auto storage = MediaVideoFrameOwnershipStoragePlanner::plan({
-                    *producer.value().maximumExtendedBufferReferences, true,
-                    MediaVideoFrameReadiness::Kind::CudaEvent});
+                    *mediaVideoFrameProducerMaximumExtendedReferences(producer.value()), true,
+                    std::holds_alternative<MediaCudaFrameProducerFacts>(producer.value())
+                        ? MediaVideoFrameReadiness::Kind::CudaEvent : MediaVideoFrameReadiness::Kind::Completed});
                 if (!storage) return Result::failure(storage.error());
                 candidate.decoderOwnershipStorage = storage.value();
             }

@@ -1,5 +1,6 @@
 #include "internal/graph/planner/capability/MediaDecoderOutputAllocationAdapter.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
+#include "internal/graph/planner/capability/MediaRkmppDependencyIdentity.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -7,6 +8,7 @@ extern "C" {
 }
 
 #include <new>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 
@@ -17,12 +19,28 @@ try {
     using Result = ::media::Result<std::optional<MediaDecoderOutputAllocation>>;
     if (decoder.decoderName.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
         "Decoder output allocation requires opened decoder identity"));
-    if (!expected.isHardwareBacked() || expected.deviceKind != MediaHardwareDeviceKind::CUDA)
+    if (!expected.isHardwareBacked() || (expected.deviceKind != MediaHardwareDeviceKind::CUDA &&
+        expected.deviceKind != MediaHardwareDeviceKind::RKMPP))
         return Result::success(std::nullopt);
     auto valid = MediaVideoFrameContractValidator::validateHardwareFrames(frames, expected,
         "decoder output allocation");
     if (!valid) return Result::failure(valid.error());
     const auto* context = reinterpret_cast<const AVHWFramesContext*>(frames->data);
+    if (expected.deviceKind == MediaHardwareDeviceKind::RKMPP) {
+        if (!MediaRkmppDependencyIdentity::matchesRuntime() ||
+            (decoder.decoderName != "h264_rkmpp" && decoder.decoderName != "hevc_rkmpp") ||
+            context->format != AV_PIX_FMT_DRM_PRIME ||
+            context->device_ref->size < sizeof(AVHWDeviceContext))
+            return Result::success(std::nullopt);
+        const char* type = av_hwdevice_get_type_name(
+            reinterpret_cast<const AVHWDeviceContext*>(context->device_ref->data)->type);
+        if (!type || std::string_view(type) != "rkmpp") return Result::success(std::nullopt);
+        // Fixed rkmpp_export_frame uses only frame.buf slots. Its MppFrame
+        // callback retains the borrowed surface and finally mpp_frame_deinit's
+        // it; the DRM descriptor is another owned buf slot, not a pixel copy.
+        return Result::success(MediaDecoderOutputAllocation{
+            MediaDecoderOutputAllocationMechanism::RkmppBorrowedSurface, decoder, expected, 0});
+    }
     if (context->device_ref->size < sizeof(AVHWDeviceContext) ||
         reinterpret_cast<const AVHWDeviceContext*>(context->device_ref->data)->type != AV_HWDEVICE_TYPE_CUDA)
         return Result::failure(::media::ErrorInfo::invalidArgument(

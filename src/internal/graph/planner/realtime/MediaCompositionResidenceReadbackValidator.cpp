@@ -38,8 +38,7 @@ try {
         if(filter){
             auto execution=MediaVideoFilterExecutionPlanCodec::decode(filter->options);
             if(!execution)return ::media::Status::failure(execution.error());
-            const auto retained=execution.value().timing==MediaVideoFilterTimingAuthority::SourceFrame?
-                execution.value().output.maximumRetainedInputFrames:0;
+            const auto retained=execution.value().output.maximumRetainedInputFrames;
             if(retained!=*expected.filterRetainedInputs)return invalid("Composition filter input retention readback differs");
         }
     }

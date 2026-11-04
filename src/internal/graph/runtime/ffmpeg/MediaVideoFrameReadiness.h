@@ -36,6 +36,7 @@ public:
     ::media::Status ensureCompleted() const;
     MediaVideoReadinessObservation observeCompletion() const noexcept;
     ::media::Status enqueueCudaWait(void* context, void* stream) const;
+    ::media::Status waitBeforeConsumption(const MediaVideoFrameProducerFacts& consumer) const;
 private:
     friend ::media::Result<MediaVideoFrameReadiness> captureMediaCudaFrameReadiness(
         AVFrame&, const std::shared_ptr<MediaPreparationMemoryResource>&, const MediaCudaFrameProducerFacts&, std::shared_ptr<const MediaFfmpegPayloadReferences>);

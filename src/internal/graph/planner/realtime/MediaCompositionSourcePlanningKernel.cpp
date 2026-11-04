@@ -45,6 +45,12 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
          request.video.decoderOutputAllocation->frame != *request.video.decoder.outputFrame))
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Composition decoder output allocation differs from its prepared source"));
+    if (request.video.decoderOutputAllocation && !request.video.decoderOutputAllocation->independentOfDecoderSurfaces() &&
+        (!request.video.filterActive || !request.video.filterExecution ||
+         request.video.filterExecution->output.allocation != MediaVideoFilterAllocation::IndependentOutputPool ||
+         request.video.filterExecution->output.completion != MediaVideoFilterCompletion::SynchronousOnReturn))
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "Borrowed decoder surfaces require the planned independent synchronous tile boundary"));
     if (!cadence) {
         const auto& video = request.video;
         if (!video.decoderOutputAllocation || !video.decoderOwnershipStorage ||

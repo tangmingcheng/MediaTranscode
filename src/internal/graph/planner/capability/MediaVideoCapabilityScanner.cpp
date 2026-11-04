@@ -1,5 +1,6 @@
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
+#include "internal/graph/planner/capability/MediaVideoSourceIsolationAdapter.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -328,6 +329,17 @@ MediaVideoCapabilityScanner::enumerateSourceCandidates(
     for (const auto& profile : profiles) {
         if (profile.device != target.deviceKind) continue;
         auto source = makeSourceCandidate(profile, canonicalCodecName(inputCodecName), options);
+        // Composition holds tiles independently of decoder progress. A borrowed
+        // MPP surface still requires the existing isolation filter at equal size.
+        if (profile.device == MediaHardwareDeviceKind::RKMPP && !source.filterActive) {
+            auto isolation = MediaVideoSourceIsolationAdapter::inspect(profile.device);
+            if (!isolation) return Result::failure(isolation.error());
+            source.filter = makeFilterStage("rga/rkmpp source isolation", isolation.value().filterDescription,
+                profile.hwaccel, profile.device, true, true, profile.filterPriority);
+            source.filter.inputFrame = source.decoder.outputFrame;
+            source.filter.outputFrame = target;
+            source.filterActive = true;
+        }
         const auto& output = source.filterActive ? source.filter.outputFrame : source.decoder.outputFrame;
         if (!output || *output != target)
             continue;

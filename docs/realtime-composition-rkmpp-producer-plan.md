@@ -27,3 +27,13 @@ Completed 表示固定依赖的成功同步 API 已交付可消费帧，不需�
 具体 RKMPP 能力 adapter、独立 RGA 输出证据及 source gate 接通尚未完成；本步骤不宣称 rk386 已修复，不重复运行已知必败的相同实流。
 
 最终复验：审查修正后的 Windows Release 全量构建会话 6328 配置及构建均退出 0。所需构建文件与两个 CLI 产物已核对存在；未运行 local CLI。当前只完成通用契约迁移，RKMPP 具体 adapter 及实流仍待接通。
+
+## RKMPP 适配器接通进度
+
+已实现借用表面分配机制、统一 decoder/filter producer adapter、真实 RGA graph 的 async_depth=0 读回与独立输出证据。准备与运行时均检查池身份；同尺寸 source 由 planner 创建 identity RGA。动态输出消费者显式核验独立分配，避免把借用表面误放行。filterExecution 的时序与分配解耦已覆盖 codec、node、驻留读回及最终引用计费；缓存的 1 个输入引用仍按部署实现证据计入。
+
+两名独立审查者对全部 20 个源码文件明确 PASS。Windows 初次构建会话 90850 退出 0；补齐两处计费消费者后的最终构建会话 54666 正在进行。RKMPP 同步相对 3f00905b 的 29 个源码文件，在原目录以 8 核增量构建，SSH 会话 84715，最终结果待收取。同步包 rk388-source.tar 的两端 SHA256 一致：644fd937f8ae61b7b2e2abb240682293a486b3bf562299f27944abfc24f0c833。
+
+尚未运行 rk388 实流；源码审查不代表原预检错误已在运行中解除，不代表恢复或可靠性通过。
+
+最终 Windows Release 构建会话 54666 配置/构建均退出 0，所需 cache/ninja/CLI 产物已核对存在。两端 rk388-source.tar 已按精确路径删除并核对不存在。RKMPP 正在执行 163 个实际受影响目标的增量构建，结果未定；本提交仍是开发修复，不是实流通过提交。

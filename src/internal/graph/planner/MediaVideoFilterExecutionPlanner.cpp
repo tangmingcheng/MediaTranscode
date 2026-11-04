@@ -2,6 +2,19 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::bindOutputEvidence(
+    MediaVideoFilterExecutionPlan plan, MediaVideoFilterIsolationEvidence evidence)
+{
+    using Result = ::media::Result<MediaVideoFilterExecutionPlan>;
+    if (!plan.valid() || plan.output.filterDescription != evidence.filterDescription)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Filter output evidence differs from the planned implementation"));
+    plan.output = std::move(evidence);
+    if (!plan.valid()) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Filter output evidence does not establish a complete execution contract"));
+    return Result::success(std::move(plan));
+}
+
 ::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::forNegotiatedOutput(
     std::string filterDescription, MediaVideoFrameLineageProduct frameProduct)
 {

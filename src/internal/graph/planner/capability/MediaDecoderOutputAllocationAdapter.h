@@ -9,14 +9,20 @@ struct AVBufferRef;
 
 namespace media::ffmpeg::graph {
 
-enum class MediaDecoderOutputAllocationMechanism { NativeCudaSafeCopy, CuvidCopy };
+enum class MediaDecoderOutputAllocationMechanism { NativeCudaSafeCopy, CuvidCopy, RkmppBorrowedSurface };
 
-// Independence from fixed decoder surfaces, not a device memory size bound.
+// Actual publication mechanism, not a device memory size bound. Borrowed
+// surfaces retain their decoder pool until all published AVBuffer owners retire.
 struct MediaDecoderOutputAllocation final {
     MediaDecoderOutputAllocationMechanism mechanism;
     MediaDecoderRuntimeFacts decoder;
     MediaHardwareDescriptor frame;
     std::size_t maximumExtendedBufferReferences;
+    bool independentOfDecoderSurfaces() const noexcept
+    {
+        return mechanism == MediaDecoderOutputAllocationMechanism::NativeCudaSafeCopy ||
+            mechanism == MediaDecoderOutputAllocationMechanism::CuvidCopy;
+    }
 };
 
 class MediaDecoderOutputAllocationAdapter final {

@@ -2,6 +2,7 @@
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
+#include "internal/graph/planner/capability/MediaVideoSourceIsolationAdapter.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
@@ -396,6 +397,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
             av_cmp_q(pixelAspect, preparedAspect) != 0)
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "VideoFilterNode source aspect ratio differs from prepared source facts"));
+    }
+    if (m_executionPlan->output.allocation == MediaVideoFilterAllocation::IndependentOutputPool) {
         if (!firstFrame->hw_frames_ctx) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoFilterNode independent output pool requires a hardware source pool"));
         m_lineageState->sourceFramesOwner = ::media::ffmpeg::makeBufferRef(firstFrame->hw_frames_ctx);
@@ -431,6 +434,13 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     VideoFilterGraphBuildResult built = std::move(graphResult).value();
+    if (m_executionPlan->output.allocation == MediaVideoFilterAllocation::IndependentOutputPool) {
+        auto actual = MediaVideoSourceIsolationAdapter::inspect(*built.graph, m_executionPlan->output.filterDescription);
+        if (!actual) return ::media::Status::failure(actual.error());
+        if (actual.value() != m_executionPlan->output)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFilterNode implementation differs from its independent output evidence"));
+    }
     m_lineageState->resetFilterGraph();
     m_lineageState->filterGraph = std::move(built.graph);
     m_lineageState->bufferSrcContext = built.bufferSource;

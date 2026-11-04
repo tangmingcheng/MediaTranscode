@@ -592,9 +592,8 @@ compileLedger(
             if (node.kind == MediaNodeKind::VideoFilter) {
                 auto execution = MediaVideoFilterExecutionPlanCodec::decode(node.options);
                 if (!execution) return Result::failure(execution.error());
-                const bool source = execution.value().timing == MediaVideoFilterTimingAuthority::SourceFrame;
-                filterRetainedInputs = source ? execution.value().output.maximumRetainedInputFrames : 0;
-                if (source) filterInputRetentionAuthority = execution.value().output.inputRetentionAuthority;
+                filterRetainedInputs = execution.value().output.maximumRetainedInputFrames;
+                filterInputRetentionAuthority = execution.value().output.inputRetentionAuthority;
             }
             auto nodeRetention = MediaNodeReferenceRetentionPlanner::plan({node.kind, incidentCapacities,
                 acquiringCapacity, descriptorCapacity, filterRetainedInputs});

@@ -45,10 +45,6 @@ namespace media::ffmpeg::graph {
     // producer describes its output, which may have a different allocation.
     const auto* ready = FFmpegFrameView::readiness(buffer);
     if (!ready) return ::media::Status::failure(::media::ErrorInfo::notInitialized("Planned filter input readiness missing"));
-    if (const auto* cuda = std::get_if<MediaCudaFrameProducerFacts>(&*plan.value()))
-        return ready->enqueueCudaWait(cuda->context, cuda->stream);
-    // A synchronous consumer must finish its input dependency before entering
-    // the platform API; unlike CUDA it cannot enqueue a foreign stream wait.
-    return ready->ensureCompleted();
+    return ready->waitBeforeConsumption(*plan.value());
 }
 }

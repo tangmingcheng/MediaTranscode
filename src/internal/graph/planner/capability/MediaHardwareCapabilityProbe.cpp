@@ -489,7 +489,7 @@ MediaHardwareCapability MediaHardwareCapabilityProbe::validateOutputBranch(
         auto allocation = MediaDecoderOutputAllocationAdapter::inspect(decoderFacts, runningFrames, expected);
         if (!allocation) return unavailable(allocation.error().describe());
         const bool independentCudaOutput = sourceAllocation.allocation == MediaVideoSourceAllocation::DecoderOutput &&
-            allocation.value().has_value();
+            allocation.value().has_value() && allocation.value()->independentOfDecoderSurfaces();
         if (!independentCudaOutput && !independentFilterOutput) {
             return unavailable(
                 "dynamic hardware output lacks authoritative independent decoder-output allocation or fixed-pool headroom evidence");

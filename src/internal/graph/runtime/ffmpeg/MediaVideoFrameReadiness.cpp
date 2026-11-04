@@ -72,4 +72,14 @@ MediaVideoReadinessObservation MediaVideoFrameReadiness::observeCompletion() con
     if (!m_operation) return ::media::Status::failure(::media::ErrorInfo::notInitialized("Frame readiness operation owner missing"));
     return m_operation->enqueueCudaWait(context, stream);
 }
+::media::Status MediaVideoFrameReadiness::waitBeforeConsumption(const MediaVideoFrameProducerFacts& consumer) const
+{
+    if (const auto* cuda = std::get_if<MediaCudaFrameProducerFacts>(&consumer))
+        return enqueueCudaWait(cuda->context, cuda->stream);
+    const auto& synchronous = std::get<MediaSynchronousFrameProducerFacts>(consumer);
+    if (synchronous.kind != MediaSynchronousFrameProducer::RgaFilter &&
+        synchronous.kind != MediaSynchronousFrameProducer::RkmppDecode)
+        return ::media::Status::failure(::media::ErrorInfo::unsupported("Frame consumer has no admitted completion contract"));
+    return ensureCompleted();
+}
 } // namespace media::ffmpeg::graph
