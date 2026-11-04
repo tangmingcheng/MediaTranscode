@@ -69,10 +69,9 @@ mt_beta_status invokeStatus(Operation&& operation) noexcept
     }
 }
 
-} // namespace
-
-extern "C" mt_beta_status mt_beta_realtime_start(
-    const mt_beta_realtime_config* config,
+template<class Config>
+mt_beta_status startSession(
+    const Config* config,
     const mt_beta_realtime_callbacks* callbacks,
     mt_beta_realtime_session** session)
 {
@@ -111,6 +110,24 @@ extern "C" mt_beta_status mt_beta_realtime_start(
         *session = nullptr;
         return MT_BETA_STATUS_INTERNAL_ERROR;
     }
+}
+
+} // namespace
+
+extern "C" mt_beta_status mt_beta_realtime_start(
+    const mt_beta_realtime_config* config,
+    const mt_beta_realtime_callbacks* callbacks,
+    mt_beta_realtime_session** session)
+{
+    return startSession(config, callbacks, session);
+}
+
+extern "C" mt_beta_status mt_beta_realtime_start_composition(
+    const mt_beta_realtime_composition_config* config,
+    const mt_beta_realtime_callbacks* callbacks,
+    mt_beta_realtime_session** session)
+{
+    return startSession(config, callbacks, session);
 }
 
 extern "C" mt_beta_status mt_beta_realtime_request_stop(

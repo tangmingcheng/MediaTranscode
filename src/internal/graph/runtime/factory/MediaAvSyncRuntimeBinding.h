@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaOutputReservationStoragePlan.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/runtime/factory/MediaAvRuntimeRegistrationPlan.h"
@@ -19,6 +20,8 @@ class MediaAvStartupVideoPreparationState;
 struct MediaAvContinuousAggregatePlan;
 class MediaPreparedVideoDecoder;
 class MediaPreparedVideoCanvas;
+class MediaPreparedRtpSourceSession;
+class MediaMasterClock;
 
 struct MediaAvSyncComponentCoreRuntimeProduct final {};
 
@@ -36,6 +39,7 @@ struct MediaAvSharedSourceOutputDomainBinding final {
     MediaAvGenerationTransitionPlan transition;
     MediaAvRuntimeRegistrationPlan registration;
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparationState;
+    MediaOutputReservationStoragePlan reservationStorage;
 };
 
 struct MediaAvSourceDomainRegistration final {
@@ -48,11 +52,14 @@ struct MediaAvSourceDomainBinding final {
     MediaAvGenerationTransitionPlan transition;
     MediaAvSourceDomainRegistration registration;
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparationState;
+    MediaOutputReservationStoragePlan reservationStorage;
     std::shared_ptr<MediaPreparedVideoDecoder> preparedVideoDecoder;
+    std::shared_ptr<MediaPreparedRtpSourceSession> preparedRtpSource;
 };
 
 struct MediaAvOutputDomainRegistration final {
     MediaNodeId activationOwner;
+    MediaNodeId audioAggregate;
     MediaNodeId outputScheduler;
     std::optional<MediaNodeId> rtpSdpPublisher;
     std::vector<MediaNodeId> processingMembers;
@@ -92,6 +99,8 @@ struct MediaAvSyncRuntimeBinding final {
     MediaDatagramTransportPlanTemplate datagramTransport;
     MediaSynchronizedAudioExecutionProduct audioExecutionProduct;
     MediaAvSyncRuntimeOutputProduct outputProduct;
+    MediaEncodedAccessUnitSchedulingPlan scheduling;
+    std::shared_ptr<MediaMasterClock> preparedMasterClock;
 };
 
 } // namespace media::ffmpeg::graph

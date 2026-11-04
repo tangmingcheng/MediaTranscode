@@ -25,6 +25,11 @@ if(POLICY CMP0141)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+# Keep optimized MSVC Release binaries diagnosable with matching symbols.
+if(MSVC)
+    add_compile_options("$<$<CONFIG:Release>:/Z7>")
+endif()
+
 set(MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES
     src/internal/graph/diagnostics/MediaGraphDiagnostics.cpp
     src/internal/graph/diagnostics/MediaGraphDiagnostics.h
@@ -196,10 +201,14 @@ target_link_libraries(${TARGET_CORE}
 )
 
 if(WIN32)
-    target_link_libraries(${TARGET_CORE} PUBLIC ws2_32)
+    target_link_libraries(${TARGET_CORE} PUBLIC ws2_32 avrt)
 endif()
 
 add_library(${TARGET_REALTIME_APPLICATION} STATIC
+    src/application/realtime/MediaRealtimeCompositionInputPreparer.cpp
+    src/application/realtime/MediaRealtimeCompositionPreparationState.cpp
+    src/application/realtime/MediaRealtimeCompositionPreparer.cpp
+    src/application/realtime/MediaRealtimeCompositionSourcePreparer.cpp
     src/application/realtime/MediaRealtimeOutputControl.cpp
     src/application/realtime/MediaRealtimeOutputPreparer.cpp
     src/application/realtime/MediaRealtimeOutputRunController.cpp
@@ -256,6 +265,11 @@ function(media_transcode_configure_app target_name linked_target)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /utf-8 /EHsc)
         target_link_options(${target_name} PRIVATE "$<$<CONFIG:Debug,RelWithDebInfo>:/DEBUG>")
+        target_link_options(${target_name} PRIVATE
+            "$<$<CONFIG:Release>:/DEBUG:FULL>"
+            "$<$<CONFIG:Release>:/OPT:REF>"
+            "$<$<CONFIG:Release>:/OPT:ICF>"
+        )
     endif()
 endfunction()
 
@@ -267,6 +281,7 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
 
     add_executable(${TARGET_REALTIME_VIDEO_CLI}
         tools/realtime_video_cli/main.cpp
+        tools/realtime_video_cli/RealtimeStopSignal.cpp
     )
     media_transcode_configure_app(
         ${TARGET_REALTIME_VIDEO_CLI}

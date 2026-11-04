@@ -46,7 +46,8 @@ public:
         const MediaRealtimePreflightIo* io);
     static ::media::Result<MediaPreparedRawRtpProbe> prepareRawRtpVideo(
         const MediaRealtimeInputConfig& input,
-        MediaTranscodeStreamSet streamSet);
+        MediaTranscodeStreamSet streamSet, std::stop_token cancellation,
+        const MediaPreparationStorageScope& scope, MediaRtpVideoPreparationIntent timingIntent);
 
 private:
     MediaRealtimeInputPlanner() = delete;

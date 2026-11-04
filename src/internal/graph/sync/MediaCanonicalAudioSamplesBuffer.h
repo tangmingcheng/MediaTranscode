@@ -19,7 +19,7 @@ public:
         MediaCanonicalAudioSampleInterval interval);
     static ::media::Result<MediaBufferRef> create(
         MediaBufferRef media,
-        std::vector<MediaAudioIntervalFragment> fragments);
+        std::span<const MediaAudioIntervalFragment> fragments);
     MediaBufferType type() const noexcept override;
     const MediaBufferRef& media() const noexcept { return m_media; }
     const std::shared_ptr<const MediaCanonicalLineage>& lineage() const noexcept { return m_lineage; }

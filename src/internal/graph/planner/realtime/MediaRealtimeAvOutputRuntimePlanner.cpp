@@ -4,10 +4,12 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvProtocolOutputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
+
 #include <utility>
 
 namespace media::ffmpeg::graph {
-
 ::media::Result<MediaRealtimeAvOutputRuntimePlan> MediaRealtimeAvOutputRuntimePlanner::plan(
     const MediaRealtimeAvOutputRuntimeRequest& request,
     MediaAvSyncPlan synchronization,
@@ -45,17 +47,25 @@ namespace media::ffmpeg::graph {
             "Output runtime requires frame encoding or packet copy without an encoder FIFO"));
     }
 
+    auto edges = MediaRealtimeEdgePolicyPlanner::planSynchronizedOutput(request.outputResources);
+    if (!edges) return Result::failure(edges.error());
+    auto audioInput = MediaRealtimeEdgePolicyPlanner::planCanonicalAudioInput(
+        request.audio.branchMode(), edges.value().synchronizedPacket, request.sourceAudioRelease);
+    if (!audioInput) return Result::failure(audioInput.error());
     auto protocol = MediaRealtimeAvProtocolOutputPlanner::plan(
         {request.groupKey, request.layout, request.transport,
          synchronization.rtpOutput, synchronization.projectMpegTsOutput,
          synchronization.startup.outputLeadNs, request.videoFrameRate,
          request.timing.outputSampleRate, request.timing.protocolBatchSamples,
-         request.edgePolicies.synchronizedPacket.bufferPolicy.memoryBudget.maxBytes,
+         edges.value().synchronizedPacket.bufferPolicy.memoryBudget.maxBytes,
          request.deployment, request.emission}, output);
     if (!protocol) return Result::failure(protocol.error());
     auto selected = std::move(protocol).value();
+    auto scheduling = MediaEncodedAccessUnitSchedulingPlan::derive(
+        selected.protocolOutput, request.deployment.encode().latency.targetResidence);
+    if (!scheduling) return Result::failure(scheduling.error());
     return Result::success({request.audio, request.groupKey, std::move(synchronization),
-        request.queues, request.edgePolicies, selected.activationOutputLead, selected.adapter,
+        request.outputResources.queues, std::move(edges).value(), std::move(audioInput).value(), selected.activationOutputLead, selected.adapter, scheduling.value(),
         std::move(selected.protocolOutput), std::move(selected.datagramTransport), std::move(fifo)});
 }
 

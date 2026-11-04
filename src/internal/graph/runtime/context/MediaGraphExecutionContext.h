@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/model/MediaWorkerExecutionPlan.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/context/MediaRuntimeSegmentOutputBinding.h"
@@ -56,6 +58,7 @@ public:
     const MediaChannelRegistry& channels() const noexcept;
 
     const std::vector<MediaNodeId>& executionOrder() const noexcept;
+    std::span<const MediaWorkerExecutionPlan> workerExecutionPlans() const { return m_workerExecutionPlans.view(); }
 
     MediaChannel* findInputChannel(MediaNodeId nodeId, const std::string& portName);
     const MediaChannel* findInputChannel(MediaNodeId nodeId, const std::string& portName) const;
@@ -105,6 +108,7 @@ private:
     bool m_ownsGlobalDiagnostics = true;
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
+    MediaFixedCapacityStorage<MediaWorkerExecutionPlan> m_workerExecutionPlans;
     std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
     std::unordered_map<uint32_t, std::shared_ptr<MediaGraphWorkerExitToken>> m_nodeExitTokens;
     MediaAvSyncGroupRegistry m_avSyncGroups;

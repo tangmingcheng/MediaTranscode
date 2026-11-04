@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlanner.h"
 
@@ -90,20 +91,24 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::invalidArgument("audio output requires resolved format and selected processing"));
     }
-    auto edgePolicies = MediaRealtimeEdgePolicyPlanner::planSynchronizedSource(outer.queues, synchronization.startup);
+    auto edgePolicies = MediaRealtimeEdgePolicyPlanner::planSynchronizedSource(
+        outer.queues, synchronization.startup, *synchronization.members);
     if (!edgePolicies) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             edgePolicies.error());
     }
 
-    if (!outer.deployment || (synchronization.rtpOutput && !audio.resolvedOutput)) {
+    if (!outer.deployment || !outer.resourceLedger || (synchronization.rtpOutput && !audio.resolvedOutput)) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V protocol output requires deployment and resolved output audio facts"));
     }
     const MediaAvSyncGroupKey groupKey("realtime.av");
     auto plannedOutput = MediaRealtimeAvOutputRuntimePlanner::plan(
-        {groupKey, *audio.resolvedOutput, outer.queues, edgePolicies.value(), facts.value().timing,
+        {groupKey, *audio.resolvedOutput, *outer.resourceLedger,
+         audio.branchMode == MediaBranchMode::CopyPacket
+             ? std::optional<MediaEdgePolicy>(edgePolicies.value().startupAudioRelease) : std::nullopt,
+         facts.value().timing,
          correction ? std::optional<std::int64_t>(correction->maximumOutputBlockSamples) : std::nullopt,
          outer.outputLayout, outer.outputTransport, outputFrameRate, *outer.deployment, preparedEmission},
         std::move(outputSynchronization), output);
@@ -111,18 +116,17 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(plannedOutput.error());
     }
     auto outputPlan = std::move(plannedOutput).value();
-    if (outputPlan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
-        outer.videoParameters.globalHeader = true;
-    }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         outputPlan.protocolOutput,
         *synchronization.sourceClockMode,
         audio.branchMode,
         outer.videoPlan.filterActive,
         *facts.value().timing.acknowledgementTimeout);
+    auto reservationStorage = MediaOutputReservationStoragePlanner::plan(MediaRuntimeLineageAllocation{});
+    if (!reservationStorage) return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(reservationStorage.error());
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
         MediaRealtimeAvSyncRuntimePlan{
-          MediaRealtimeAvSourceRuntimePlan{
+          MediaRealtimeAvSourceRuntimePlan{MediaRealtimeAvSourcePlanningProducts{
             std::move(audio),
             std::move(outer.isolatedAudioInput),
             groupKey,
@@ -138,7 +142,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt}, *outer.avSyncComponentBounds, facts.value().timing, outputPlan.outputAdapter, std::move(outputPlan.protocolOutput),
+                : std::nullopt}, std::move(reservationStorage).value()}, *outer.avSyncComponentBounds, facts.value().timing, std::move(outputPlan.edgePolicies), std::move(outputPlan.canonicalAudioInputPolicy), outputPlan.outputAdapter, outputPlan.scheduling, std::move(outputPlan.protocolOutput),
             std::move(outputPlan.datagramTransport), std::move(outputPlan.encoderFifoRetention)});
 }
 

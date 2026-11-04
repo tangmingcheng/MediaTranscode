@@ -1,11 +1,23 @@
 #include "internal/graph/planner/video/MediaVideoOutputPlanner.h"
 
 #include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
+#include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+std::vector<MediaPipelineStagePlan> MediaVideoOutputPlanner::planCandidates(
+    const std::string& codecName, MediaSize outputSize)
+{
+    auto candidates = MediaVideoCapabilityScanner::enumerateEncoderCandidates(codecName, outputSize);
+    std::stable_sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return left.priority > right.priority;
+    });
+    return candidates;
+}
 
 ::media::Result<MediaEncoderOpenContract> MediaVideoOutputPlanner::planOpenContract(
     const MediaPipelineStagePlan& encoder, MediaSize outputSize,
@@ -21,10 +33,14 @@ namespace media::ffmpeg::graph {
     auto rateControl = MediaEncoderRateControlPlanner::plan(encoder.ffmpegName,
         encoder.deviceKind(), rateControlRequest, outputFrameRate, lowLatency);
     if (!rateControl) return Result::failure(rateControl.error());
+    const bool nvenc = encoder.ffmpegName == "h264_nvenc" ||
+        encoder.ffmpegName == "hevc_nvenc" || encoder.ffmpegName == "av1_nvenc";
     return Result::success({encoder.ffmpegName, outputSize.width, outputSize.height,
         outputFrameRate, std::move(rateControl).value(), request.quality, request.preset,
         request.tune, request.profile, request.level, request.gop, request.bFrames,
-        request.globalHeader, lowLatency});
+        request.globalHeader, lowLatency, lowLatency && nvenc
+            ? MediaEncoderOutputBuffering::Immediate
+            : MediaEncoderOutputBuffering::BackendManaged});
 }
 
 ::media::Status MediaVideoOutputPlanner::materializeExecutionContract(MediaVideoOutputPlan& output)

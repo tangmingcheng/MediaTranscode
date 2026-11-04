@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/model/MediaPacketSourceTiming.h"
 #include "internal/graph/model/MediaDemuxPacketProvenance.h"
+#include "internal/graph/model/MediaRtpPacketProvenance.h"
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -16,7 +17,8 @@ public:
     FFmpegPacketBuffer(::media::ffmpeg::PacketPtr packet,
                        std::optional<MediaPacketSourceTiming> sourceTiming,
                        std::optional<MediaDemuxPacketProvenance> provenance =
-                           std::nullopt);
+                           std::nullopt,
+                       std::optional<MediaRtpPacketProvenance> rtpProvenance = std::nullopt);
 
     MediaBufferType type() const noexcept override;
     // Counts packet payload plus every FFmpeg side-data payload. Object allocator
@@ -28,11 +30,13 @@ public:
     ::media::ffmpeg::PacketPtr takePacket() noexcept;
     const std::optional<MediaPacketSourceTiming>& sourceTiming() const noexcept;
     const std::optional<MediaDemuxPacketProvenance>& demuxProvenance() const noexcept;
+    const std::optional<MediaRtpPacketProvenance>& rtpProvenance() const noexcept;
 
 private:
     ::media::ffmpeg::PacketPtr m_packet;
     std::optional<MediaPacketSourceTiming> m_sourceTiming;
     std::optional<MediaDemuxPacketProvenance> m_demuxProvenance;
+    std::optional<MediaRtpPacketProvenance> m_rtpProvenance;
 };
 
 } // namespace media::ffmpeg::graph

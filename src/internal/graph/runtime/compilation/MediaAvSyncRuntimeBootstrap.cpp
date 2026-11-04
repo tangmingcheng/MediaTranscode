@@ -33,6 +33,13 @@ MediaAvSyncRuntimeBootstrap::createClocks(
     }
     auto clocks = source.capture(requireSharedNtpEpoch);
     if (!clocks) return clocks;
+    if (binding.preparedMasterClock &&
+        (clocks.value().masterClock.get() != binding.preparedMasterClock.get() ||
+         clocks.value().masterClock.owner_before(binding.preparedMasterClock) ||
+         binding.preparedMasterClock.owner_before(clocks.value().masterClock)))
+        return ::media::Result<MediaAvSyncClockBundle>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Prepared source deadlines require the same master clock owner at runtime"));
     if (!clocks.value().masterClock ||
         static_cast<bool>(clocks.value().sharedNtpEpoch) !=
             requireSharedNtpEpoch) {

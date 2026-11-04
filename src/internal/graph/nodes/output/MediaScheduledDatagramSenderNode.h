@@ -1,6 +1,9 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/diagnostics/MediaDatagramReservationObservation.h"
+#include "internal/graph/diagnostics/MediaDatagramBatchObservation.h"
+#include "internal/graph/diagnostics/MediaDatagramSuccessfulSubmitObservation.h"
 #include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 #include "internal/graph/runtime/diagnostics/MediaVideoOutputReadyEvidence.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
@@ -82,11 +85,13 @@ private:
         MediaGraphExecutionContext& context) const noexcept;
     ::media::Status recordSubmittedPrefix(
         std::size_t count,
-        MediaRunningTime submitCompletedAt);
+        MediaRunningTime submitCompletedAt,
+        std::optional<MediaRunningTime> scopeAvailableAt);
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
         MediaRunningTime submitStartedAt,
-        MediaRunningTime submitCompletedAt);
+        MediaRunningTime submitCompletedAt,
+        std::optional<MediaRunningTime> scopeAvailableAt);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void emitDiagnostics(const char* stage) noexcept;
 
@@ -104,6 +109,10 @@ private:
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
     std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
     std::shared_ptr<MediaWireDatagramBatchBuffer> m_pendingBatch;
+    MediaDatagramReservationObservation m_reservationObservation;
+    MediaDatagramBatchObservation m_batchObservation;
+    MediaDatagramBatchObservation m_completedBatchObservation;
+    std::optional<MediaDatagramSuccessfulSubmitObservation> m_worstSuccessfulSubmit;
     MediaNodeWakeup m_wakeup;
     std::optional<std::uint64_t> m_generation;
     std::string m_serviceScopeId;
@@ -137,6 +146,8 @@ private:
     std::size_t m_groupBegin = 0;
     std::size_t m_groupCount = 0;
     std::uint64_t m_groupEndpointId = 0;
+    std::optional<MediaDatagramPacingReservation> m_groupPacingReservation;
+    MediaRunningTime m_groupReservedAt = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     bool m_groupDeadlineSubmitAttempted = false;

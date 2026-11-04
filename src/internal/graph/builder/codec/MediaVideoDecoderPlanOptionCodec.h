@@ -2,12 +2,14 @@
 
 #include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/planner/video/MediaPipelineStagePlan.h"
+#include "internal/graph/model/MediaVideoDecodeLineageProduct.h"
 
 namespace media::ffmpeg::graph {
 
 struct MediaVideoDecoderLineageOptions final {
     MediaVideoLineagePropagation propagation;
     std::size_t capacity;
+    MediaVideoDecodeLineageProduct product;
 };
 
 // Serializes a selected decoder without requiring an encoder or constructing a DAG.

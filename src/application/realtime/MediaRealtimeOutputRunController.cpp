@@ -1,4 +1,5 @@
 #include "application/realtime/MediaRealtimeOutputRunController.h"
+#include "application/realtime/MediaRealtimeOutputPublisher.h"
 
 #include "application/realtime/MediaRealtimeOutputPreparer.h"
 #include "application/realtime/MediaRealtimeEncodingGroupRegistry.h"
@@ -33,7 +34,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-struct OutputObserverFailure final { std::exception_ptr exception; };
+using OutputObserverFailure = MediaRealtimeOutputObserverFailure;
 
 MediaRealtimeOutputFailureStage outputFailureStage(MediaGraphWorkerFailurePhase phase)
 {
@@ -176,11 +177,7 @@ public:
 
     ::media::Status publish(MediaRealtimeOutputSnapshot snapshot)
     {
-        control.publishOutputSnapshot(snapshot);
-        if (observer.outputChanged) {
-            try { observer.outputChanged(snapshot); }
-            catch (...) { throw OutputObserverFailure{std::current_exception()}; }
-        }
+        MediaRealtimeOutputPublisher::publish(control, observer, snapshot);
         return ::media::Status::success();
     }
 

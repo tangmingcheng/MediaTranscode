@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInitialOutputResourcePartition.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/planner/realtime/MediaGraphPayloadResidencePlanner.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include <algorithm>
@@ -21,48 +22,12 @@ using Arithmetic = MediaCheckedArithmetic;
     std::uint64_t bytes = 0;
     std::uint64_t objects = 0;
     for (const auto& producer : credits.producers) {
-        std::vector<MediaNodeId> reachable{producer.nodeId};
-        const auto contains = [&](MediaNodeId id) {
-            return std::find(reachable.begin(), reachable.end(), id) != reachable.end();
-        };
-        for (std::size_t index = 0; index < reachable.size(); ++index) {
-            const auto current = reachable[index];
-            for (const auto& edge : graph.edges()) {
-                if (edge.from.nodeId == current &&
-                    edge.payloadKind == producer.payloadKind &&
-                    edge.streamKind == producer.streamKind && !contains(edge.to.nodeId)) {
-                    reachable.push_back(edge.to.nodeId);
-                }
-            }
-        }
-        std::uint64_t retained = 0;
-        for (const auto& entry : complete.entries) {
-            bool belongs = false;
-            if (entry.owner.starts_with("node:")) {
-                for (const auto id : reachable) {
-                    const auto* node = graph.findNode(id);
-                    if (node && entry.owner == "node:" + node->name) {
-                        belongs = true;
-                        break;
-                    }
-                }
-            } else if (entry.owner.starts_with("edge:")) {
-                for (const auto& edge : graph.edges()) {
-                    if (contains(edge.from.nodeId) &&
-                        edge.payloadKind == producer.payloadKind &&
-                        edge.streamKind == producer.streamKind &&
-                        entry.owner == "edge:" + edge.name) {
-                        belongs = true;
-                        break;
-                    }
-                }
-            }
-            if (!belongs) continue;
-            auto sum = Arithmetic::add(retained, entry.maximumBufferObjects,
-                                       "producer reachable retention credits");
-            if (!sum) return ::media::Status::failure(sum.error());
-            retained = sum.value();
-        }
+        auto residence = MediaGraphPayloadResidencePlanner::plan(graph,
+            {producer.nodeId, producer.streamKind, producer.payloadKind},
+            {complete.entries, complete.startupEventMedia, complete.startupNodeMedia});
+        if (!residence) return ::media::Status::failure(residence.error());
+        const auto& reachable = residence.value().reachableNodes;
+        const auto retained = residence.value().maximumRetainedObjects;
         const auto* node = graph.findNode(producer.nodeId);
         if (!node) return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("allocation budget lost its producer"));
@@ -148,7 +113,7 @@ using Arithmetic = MediaCheckedArithmetic;
                 ObservedOnlyExternalBytesAndEngineManagedObject
                 ? MediaFinalGraphResourceScope::ObservedOnlyDeviceAndDriverAllocation
                 : MediaFinalGraphResourceScope::EngineManagedPayloadAndReservedStorage,
-            ownedBytes, 0, retained, retained, true, authority});
+            ownedBytes, 0, retained, retained, true, authority, {}, {}, {}, {}, MediaFinalGraphReferenceKind::None});
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::GraphBuild,
             "producer_quota node=" + node->name + " engine_bytes=" +
@@ -165,6 +130,7 @@ using Arithmetic = MediaCheckedArithmetic;
     credits.maximumBytes = bytes;
     credits.maximumObjects = objects;
     credits.authority = "independent-producer-allocation-quotas+reachable-object-retention";
+    credits.accounts = {{"shared-payload", bytes, objects, credits.authority}};
     if (!credits.isCompleteAndValid()) return ::media::Status::failure(
         ::media::ErrorInfo::notInitialized("initial partition has no complete producer residence bound"));
     return ::media::Status::success();
@@ -196,6 +162,15 @@ MediaRealtimeInitialOutputResourcePartitionPlanner::plan(
     if (!encoding) return Result::failure(encoding.error());
     auto protocol = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, ledger, topology.outputNodeIds);
     if (!protocol) return Result::failure(protocol.error());
+    auto fixedNetwork = Arithmetic::add(shared.value().protocolGenerationStorage.admittedBytes,
+        encoding.value().protocolGenerationStorage.admittedBytes, "initial fixed network control partitions");
+    if (!fixedNetwork) return Result::failure(fixedNetwork.error());
+    fixedNetwork = Arithmetic::add(fixedNetwork.value(), protocol.value().protocolGenerationStorage.admittedBytes,
+        "initial complete fixed network control");
+    if (!fixedNetwork) return Result::failure(fixedNetwork.error());
+    if (fixedNetwork.value() != complete.value().protocolGenerationStorage.admittedBytes)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Initial fixed network control partitions differ from the complete graph"));
     for (auto* segment : {&shared.value(), &encoding.value()}) {
         if (auto status = boundProducerResidence(graph, complete.value(), ledger, *segment); !status)
             return Result::failure(status.error());
@@ -217,6 +192,7 @@ MediaRealtimeInitialOutputResourcePartitionPlanner::plan(
     if (!stagedStorage) return Result::failure(stagedStorage.error());
     shared.value().maximumGraphPayloadAndReservedStorageBytes = stagedStorage.value();
     shared.value().payloadCreditPlan.maximumBytes = stagedStorage.value();
+    shared.value().payloadCreditPlan.accounts.front().maximumBytes = stagedStorage.value();
     shared.value().payloadCreditPlan.authority += "+initial-fixed-storage-awaiting-extraction";
     return Result::success({std::move(shared).value(), std::move(encoding).value(),
         protocol.value().reservedStorageBytes});

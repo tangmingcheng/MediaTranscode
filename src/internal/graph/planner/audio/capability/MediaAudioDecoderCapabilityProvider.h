@@ -1,10 +1,12 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/model/MediaDecoderInputRetention.h"
 
 #include <cstdint>
 #include <span>
 #include <string>
+#include <optional>
 
 struct AVCodecParameters;
 
@@ -19,6 +21,7 @@ struct MediaSelectedAudioDecoder final {
     int outputChannels;
     std::int64_t delayOutputSamples;
     std::int64_t maximumOutputBlockInputSamples;
+    std::optional<MediaDecoderInputRetention> preparedInputRetention;
 };
 
 class MediaAudioDecoderCapabilityProvider final {

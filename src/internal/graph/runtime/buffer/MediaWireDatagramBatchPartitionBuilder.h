@@ -1,61 +1,76 @@
 #pragma once
-
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
-#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuilder.h"
-
-#include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <vector>
+#include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
+#include "internal/graph/runtime/buffer/MediaWireDatagramPartitionLayout.h"
 
 namespace media::ffmpeg::graph {
-
 using MediaWireDatagramBatchCollection =
-    std::vector<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    MediaFixedCapacityStorage<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
 
 class MediaWireDatagramBatchPartitionBuilder final {
+    struct Partition final {
+        MediaWireDatagramBatchBuffer::Prepared buffer;
+        std::size_t datagrams;
+    };
 public:
-    static ::media::Result<MediaWireDatagramBatchPartitionBuilder> create(
-        const std::string& sessionKey,
-        const std::string& serviceScopeId,
-        std::uint64_t generation,
-        const MediaDatagramBatchPlan& batchPlan,
-        MediaDatagramCommitTransaction commitTransaction);
-
-    ::media::Status append(
-        std::span<const std::uint8_t> bytes,
-        std::uint64_t endpointId,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime canonicalDeadline,
-        std::uint64_t globalSequence,
-        MediaWireMediaBoundary mediaBoundary);
-
-    ::media::Result<MediaWireDatagramBatchCollection> finish();
-
-private:
-    MediaWireDatagramBatchPartitionBuilder(
-        std::string sessionKey,
-        std::string serviceScopeId,
-        std::uint64_t generation,
-        MediaDatagramBatchPlan batchPlan,
-        MediaDatagramCommitTransaction commitTransaction) noexcept;
-    ::media::Status beginPartition();
-    ::media::Status finishPartition();
-
-    std::string m_sessionKey;
-    std::string m_serviceScopeId;
-    std::uint64_t m_generation;
-    MediaDatagramBatchPlan m_batchPlan;
-    MediaDatagramCommitTransaction m_commitTransaction;
-    std::optional<MediaWireDatagramBatchBuilder> m_current;
-    std::size_t m_currentDatagrams = 0;
-    std::uint64_t m_currentBytes = 0;
-    std::optional<MediaRunningTime> m_currentDeadline;
-    std::size_t m_totalDatagrams = 0;
-    MediaWireDatagramBatchCollection m_partitions;
-    bool m_finished = false;
+    // Incremental sizing accepts protocol facts before writer arrays exist.
+    // It uses the same partition cursor as construction and owns no payload.
+    class Sizing final {
+    public:
+        Sizing(const MediaDatagramBatchPlan& plan,
+            const MediaSharedAllocationGeometry& geometry) noexcept
+            : m_plan(plan), m_geometry(geometry) {}
+        ::media::Status append(std::size_t bytes, MediaRunningTime deadline);
+        ::media::Result<std::size_t> storageFootprint() const;
+    private:
+        ::media::Status accountPartition(const MediaWireDatagramPartitionLayout& layout);
+        MediaDatagramBatchPlan m_plan;
+        MediaSharedAllocationGeometry m_geometry;
+        MediaWireDatagramPartitionLayout m_layout;
+        std::size_t m_total = 0;
+        std::size_t m_partitions = 0;
+    };
+    static ::media::Result<std::size_t> storageOverheadContribution(
+        std::size_t datagrams, const MediaSharedAllocationGeometry& geometry);
+    // Published backing only: payload, descriptors, and the shared batch object.
+    static ::media::Result<std::size_t> partitionStorageFootprint(
+        std::size_t datagrams, std::size_t payloadBytes,
+        const MediaSharedAllocationGeometry& geometry);
+    static ::media::Result<std::size_t> publishedStorageUpperBound(
+        std::size_t datagrams, std::size_t payloadBytes,
+        const MediaSharedAllocationGeometry& geometry);
+    static ::media::Result<std::size_t> publicationCollectionStorageFootprint(
+        std::size_t partitions);
+    class Prepared final {
+    public:
+        Prepared(Prepared&&) noexcept = default;
+        Prepared& operator=(Prepared&&) noexcept = default;
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+        ::media::Result<MediaWireDatagramBatchCollection> bind(
+            MediaDatagramCommitTransaction transaction) &&;
+    private:
+        friend class MediaWireDatagramBatchPartitionBuilder;
+        Prepared(std::uint64_t generation, std::size_t datagrams,
+            MediaFixedCapacityStorage<Partition> partitions,
+            MediaWireDatagramBatchCollection output) noexcept
+            : m_generation(generation), m_datagrams(datagrams),
+              m_partitions(std::move(partitions)), m_output(std::move(output)) {}
+        std::uint64_t m_generation;
+        std::size_t m_datagrams;
+        MediaFixedCapacityStorage<Partition> m_partitions;
+        MediaWireDatagramBatchCollection m_output;
+    };
+    static ::media::Result<std::size_t> storageFootprint(
+        std::span<const MediaWireDatagramBatchInput> inputs,
+        const MediaDatagramBatchPlan& plan,
+        const MediaSharedAllocationGeometry& geometry);
+    static ::media::Result<Prepared> prepare(
+        std::shared_ptr<const MediaWireGlobalSequenceState> identity,
+        std::span<const MediaWireDatagramBatchInput> inputs,
+        const MediaDatagramBatchPlan& plan,
+        const MediaSharedAllocationGeometry& geometry,
+        const std::shared_ptr<MediaNetworkMemoryResource>& resource,
+        MediaNetworkStorageLease lease);
 };
-
 } // namespace media::ffmpeg::graph

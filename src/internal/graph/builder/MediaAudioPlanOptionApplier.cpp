@@ -1,3 +1,4 @@
+#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 #include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
@@ -44,6 +45,15 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
                 plan.sourceStreamIndex, false); !status) return status;
     }
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(plan.sourceStreamIndex)); !status) return status;
+    if (plan.selectedDecoder && plan.selectedDecoder->preparedInputRetention) {
+        auto retained = MediaDecoderInputRetentionOptionCodec::encode(*plan.selectedDecoder->preparedInputRetention);
+        if (!retained) return ::media::Status::failure(retained.error());
+        for (const auto& [key, value] : retained.value().values()) {
+            if (auto status = setOption(graph, nodes.codecResolver, key, value); !status) return status;
+        }
+        if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder,
+                plan.selectedDecoder->name); !status) return status;
+    }
     return applyOutputPlan(graph, nodes, *plan.resolvedOutput);
 }
 

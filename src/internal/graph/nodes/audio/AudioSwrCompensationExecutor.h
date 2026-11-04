@@ -23,7 +23,8 @@ public:
     static ::media::Result<AudioSwrCompensationExecutor> create(
         MediaAudioCorrectionExecutionMode mode,
         std::uint64_t generation,
-        std::size_t lookaheadWindows);
+        std::size_t lookaheadWindows,
+        std::optional<int> maximumOutputBlockSamples);
 
     ::media::Status enqueue(const MediaAudioCompensationCommand& command);
     ::media::Result<AudioSwrCompensationWindow> prepare(
@@ -42,7 +43,8 @@ public:
 private:
     AudioSwrCompensationExecutor(MediaAudioCorrectionExecutionMode mode,
                                  std::uint64_t generation,
-                                 std::size_t lookaheadWindows) noexcept;
+                                 std::size_t lookaheadWindows,
+                                 std::optional<int> maximumOutputBlockSamples) noexcept;
 
     MediaAudioCorrectionExecutionMode m_mode;
     std::uint64_t m_generation = 0;
@@ -52,6 +54,7 @@ private:
     std::optional<MediaAudioCompensationCommand> m_active;
     std::deque<MediaAudioCompensationCommand> m_pending;
     int m_activeRemaining = 0;
+    std::optional<int> m_maximumOutputBlockSamples;
     std::int64_t m_appliedNetSampleDelta = 0;
 };
 

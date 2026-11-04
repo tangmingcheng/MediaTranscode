@@ -11,6 +11,7 @@ struct MediaRealtimeInputGraph final {
     MediaEndpoint videoFormat;
     MediaEndpoint audioFormat;
     MediaEndpoint videoPacket;
+    MediaEndpoint videoFrame;
     MediaEndpoint audioPacket;
     std::optional<MediaRealtimeAvSyncInputEndpoints> synchronized;
     std::vector<MediaNodeId> sourceMembers;

@@ -16,7 +16,7 @@ public:
     ::media::Status open() override;
     ::media::Status writeAccessUnit(
         const AVPacket& packet,
-        MediaRtpTimestamp timestamp) override;
+        MediaRtpTimestamp timestamp, std::span<std::uint8_t> scratch) override;
 
 private:
     ScheduledRtpMuxStreamConfig m_config;

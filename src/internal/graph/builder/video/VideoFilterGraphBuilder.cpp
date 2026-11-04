@@ -63,9 +63,9 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
             ::media::ErrorInfo::invalidArgument("VideoFilterGraphBuilder requires input time base"));
     }
 
-    if (!rationalKnown(request.inputFrameRate)) {
+    if (request.inputFrameRate && !rationalKnown(*request.inputFrameRate)) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterGraphBuilder requires input frame rate"));
+            ::media::ErrorInfo::invalidArgument("VideoFilterGraphBuilder requires a valid supplied input frame rate"));
     }
 
     if (request.sampleAspectRatio.num < 0 || request.sampleAspectRatio.den <= 0) {
@@ -81,7 +81,7 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
                                       const AVFilter* bufferSource,
                                       const AVFrame* firstFrame,
                                       AVRational timeBase,
-                                      AVRational frameRate,
+                                      std::optional<AVRational> frameRate,
                                       AVRational pixelAspect,
                                       bool hardwareSource)
 {
@@ -102,7 +102,9 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
     parameters->height = firstFrame->height;
     parameters->time_base = timeBase;
     parameters->sample_aspect_ratio = pixelAspect;
-    parameters->frame_rate = frameRate;
+    // buffersrc.c accepts an unspecified frame rate; timestamped sources need
+    // not assert constant cadence merely to use spatial filters.
+    if (frameRate) parameters->frame_rate = *frameRate;
 
     if (hardwareSource) {
         parameters->hw_frames_ctx = av_buffer_ref(firstFrame->hw_frames_ctx);

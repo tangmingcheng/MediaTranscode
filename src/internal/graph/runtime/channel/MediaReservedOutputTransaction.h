@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaOutputReservationStoragePlan.h"
 
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/queue/MediaBlockingQueue.h"
@@ -35,10 +36,10 @@ public:
 
     static ReserveResult reserve(
         const char* owner,
-        std::span<const MediaAtomicOutputBatch> batches);
+        std::span<const MediaAtomicOutputBatch> batches, const MediaOutputReservationStoragePlan& storage);
     static ::media::Status authorize(
         std::span<const MediaOutputCapacityReservationHandle> handles,
-        const Authorization& authorization);
+        const Authorization& authorization, const MediaOutputReservationStoragePlan& storage);
 
     MediaReservedOutputTransaction(
         MediaReservedOutputTransaction&& other) noexcept;
@@ -58,6 +59,8 @@ public:
     ::media::Status cancel() noexcept;
 
 private:
+    friend class MediaOutputReservationStoragePlanner;
+    static ::media::Result<MediaOutputReservationLayout> allocationLayout();
     struct OwnedBatch final {
         MediaChannel* channel = nullptr;
         MediaBlockingQueue* queue = nullptr;
@@ -65,20 +68,20 @@ private:
     };
 
     MediaReservedOutputTransaction(
-        std::string owner,
-        std::vector<OwnedBatch> batches,
-        std::vector<MediaChannel*> channels,
-        std::vector<std::unique_lock<std::mutex>> channelLocks,
-        std::vector<std::unique_lock<std::mutex>> queueLocks,
-        std::shared_ptr<MediaOutputCapacityReservationRecord> record);
-    static std::vector<std::unique_lock<std::mutex>> lockChannels(
-        const std::vector<MediaChannel*>& channels);
+        MediaLineageAllocationScope allocation,
+        MediaFixedCapacityStorage<char> owner,
+        MediaFixedCapacityStorage<OwnedBatch> batches,
+        MediaFixedCapacityStorage<MediaChannel*> channels,
+        MediaFixedCapacityStorage<std::unique_lock<std::mutex>> channelLocks,
+        MediaFixedCapacityStorage<std::unique_lock<std::mutex>> queueLocks,
+        std::shared_ptr<MediaOutputCapacityReservationRecord> record) noexcept;
 
-    std::string m_owner;
-    std::vector<OwnedBatch> m_batches;
-    std::vector<MediaChannel*> m_channels;
-    std::vector<std::unique_lock<std::mutex>> m_channelLocks;
-    std::vector<std::unique_lock<std::mutex>> m_queueLocks;
+    MediaLineageAllocationScope m_allocation;
+    MediaFixedCapacityStorage<char> m_owner;
+    MediaFixedCapacityStorage<OwnedBatch> m_batches;
+    MediaFixedCapacityStorage<MediaChannel*> m_channels;
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> m_channelLocks;
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> m_queueLocks;
     std::shared_ptr<MediaOutputCapacityReservationRecord> m_record;
 };
 

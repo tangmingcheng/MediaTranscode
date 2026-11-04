@@ -106,7 +106,7 @@ bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcep
         {options.probeWidth, options.probeHeight},
         options.targetWidth > 0 && options.targetHeight > 0
             ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
-        options.sourceFrameRate, options.lowLatency});
+        MediaObservedVideoCadence{options.sourceFrameRate}, options.lowLatency});
     if (!expectedFilter) return ::media::Status::failure(expectedFilter.error());
     if (chain.filter.filterName != expectedFilter.value() ||
         !chain.filter.inputFrame || !chain.filter.outputFrame ||
@@ -198,7 +198,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(chain, options.sourceFrameRate);
+    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(chain, MediaObservedVideoCadence{options.sourceFrameRate});
     if (!source) return source;
     return MediaVideoOutputPlanner::materializeExecutionContract(chain);
 }
@@ -341,7 +341,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 } // namespace
 
 ::media::Status MediaPipelinePlanner::materializeSourceExecutionContract(
-    MediaVideoSourcePlan& source, const MediaRational& sourceFrameRate)
+    MediaVideoSourcePlan& source, const MediaVideoSourceTiming& timing)
 {
     source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoLineagePropagation::SubmissionOrder : MediaVideoLineagePropagation::CodecCopyOpaque;
@@ -350,6 +350,11 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         ? MediaVideoFilterImplementation::Rga : MediaVideoFilterImplementation::Generic;
     source.decoderReceiveInterval.reset();
     if (source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
+        const auto* cadence = std::get_if<MediaObservedVideoCadence>(&timing);
+        if (!cadence || cadence->rate.num <= 0 || cadence->rate.den <= 0)
+            return ::media::Status::failure(::media::ErrorInfo::unsupported(
+                "RKMPP receive polling requires authoritative cadence; source presentation timing has no polling interval"));
+        const auto& sourceFrameRate = cadence->rate;
         // This backend can complete a frame after receive returned EAGAIN.
         // Bound the next receive by the probed source cadence, not new input.
         auto interval = MediaRunningTime::checkedFromTicks(
@@ -369,17 +374,19 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     const MediaHardwareDescriptor& target)
 {
     using Result = ::media::Result<std::vector<MediaVideoSourcePlan>>;
-    if (input.streamIndex < 0 || input.width != options.sourceSize.width ||
-        input.height != options.sourceSize.height || input.frameRate.num <= 0 || input.frameRate.den <= 0 ||
-        input.sampleAspectRatio.num <= 0 || input.sampleAspectRatio.den <= 0 || options.sourceFrameRate.num != input.frameRate.num ||
-        options.sourceFrameRate.den != input.frameRate.den)
+    const auto* cadence = std::get_if<MediaObservedVideoCadence>(&options.timing);
+    if (options.timing.valueless_by_exception() || input.streamIndex < 0 ||
+        input.width != options.sourceSize.width || input.height != options.sourceSize.height ||
+        input.sampleAspectRatio.num <= 0 || input.sampleAspectRatio.den <= 0 ||
+        (cadence && (cadence->rate.num <= 0 || cadence->rate.den <= 0 ||
+            cadence->rate.num != input.frameRate.num || cadence->rate.den != input.frameRate.den)))
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Source planning requires matching dimensions, cadence and authoritative SAR"));
     auto candidates = MediaVideoCapabilityScanner::enumerateSourceCandidates(input.codecName, options, target);
     if (!candidates) return Result::failure(candidates.error());
     for (auto& source : candidates.value()) {
         source = MediaPipelineScorer::scoreSource(std::move(source), target);
-        auto execution = materializeSourceExecutionContract(source, input.frameRate);
+        auto execution = materializeSourceExecutionContract(source, options.timing);
         if (!execution) return Result::failure(execution.error());
     }
     std::sort(candidates.value().begin(), candidates.value().end(), [](const auto& left, const auto& right) {

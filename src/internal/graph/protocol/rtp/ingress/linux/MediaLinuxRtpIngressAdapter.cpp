@@ -325,6 +325,7 @@ MediaLinuxRtpIngressAdapter::interruptReceive() noexcept
 
 void MediaLinuxRtpIngressAdapter::logDiagnostics(const char* stage) noexcept
 {
+    try {
     if (!m_receiveState ||
         m_receiveState->diagnosticsLogged.exchange(
             true, std::memory_order_acq_rel)) {
@@ -358,6 +359,10 @@ void MediaLinuxRtpIngressAdapter::logDiagnostics(const char* stage) noexcept
             " pressure_failures=" + std::to_string(
                 m_receiveState->pressureFailures.load(std::memory_order_relaxed)) +
             " storage_reuse=preallocated post_start_allocation_path=none");
+
+    } catch (...) {
+        // Cleanup and protocol cancellation must finish when diagnostics cannot allocate.
+    }
 }
 
 } // namespace media::ffmpeg::graph

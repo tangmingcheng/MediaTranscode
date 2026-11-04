@@ -7,13 +7,23 @@
 #include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
+
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
+
 #include <optional>
+#include <memory_resource>
 
 namespace media::ffmpeg::graph {
 
 class MediaAvStartupEnvelopeBuffer final : public MediaBuffer {
+    class ConstructionKey final {
+        friend class MediaAvStartupEnvelopeBuffer;
+        ConstructionKey() = default;
+    };
 public:
-    static ::media::Result<MediaBufferRef> create(MediaBufferRef media,
+    using AllocationAllocator = std::pmr::polymorphic_allocator<MediaAvStartupEnvelopeBuffer>;
+    static ::media::Result<MediaBufferRef> create(const MediaStartupSharedObjectPlan& storage, MediaBufferRef media,
                                                    MediaAvStartupAccessUnit unit,
                                                    MediaRunningTime observedAt);
 
@@ -22,10 +32,10 @@ public:
     const MediaAvStartupAccessUnit& unit() const noexcept;
     MediaRunningTime observedAt() const noexcept;
 
-private:
-    MediaAvStartupEnvelopeBuffer(MediaBufferRef media,
+    MediaAvStartupEnvelopeBuffer(ConstructionKey, MediaBufferRef media,
                                  MediaAvStartupAccessUnit unit,
                                  MediaRunningTime observedAt);
+private:
     MediaBufferRef m_media;
     MediaAvStartupAccessUnit m_unit;
     MediaRunningTime m_observedAt;
@@ -46,41 +56,54 @@ struct MediaAvReleasedUnit final {
     std::uint32_t trimLeadingSamples;
 };
 
+using MediaAvReleasedUnits = MediaFixedCapacityStorage<MediaAvReleasedUnit>;
+
 class MediaAvStartupReleaseBuffer final : public MediaBuffer {
+    class ConstructionKey final {
+        friend class MediaAvStartupReleaseBuffer;
+        ConstructionKey() = default;
+    };
 public:
+    using AllocationAllocator = MediaLineageAllocator<MediaAvStartupReleaseBuffer>;
     static ::media::Status validateReleaseKind(
         MediaAvStartupReleaseKind releaseKind) noexcept;
     static ::media::Result<MediaBufferRef> create(
+        MediaStartupSharedObjectPlan storage,
         MediaAvSyncGroupKey groupKey,
         MediaAvStartupReleaseKind releaseKind,
         MediaPlaybackActivation activation,
-        std::vector<MediaAvReleasedUnit> video,
-        std::vector<MediaAvReleasedUnit> audio,
+        MediaAvReleasedUnits video,
+        MediaAvReleasedUnits audio,
         std::optional<std::uint64_t> completedTransitionSequence);
 
     MediaBufferType type() const noexcept override;
+    const MediaLineageAllocationScope& allocationScope() const noexcept { return m_storage.allocation(); }
+    const MediaStartupSharedObjectPlan& storagePlan() const noexcept { return m_storage; }
     const MediaAvSyncGroupKey& groupKey() const noexcept;
     MediaAvStartupReleaseKind releaseKind() const noexcept;
     const MediaPlaybackEpoch& epoch() const noexcept;
     const MediaPlaybackActivation& activation() const noexcept;
-    const std::vector<MediaAvReleasedUnit>& video() const noexcept;
-    const std::vector<MediaAvReleasedUnit>& audio() const noexcept;
+    const MediaAvReleasedUnits& video() const noexcept;
+    const MediaAvReleasedUnits& audio() const noexcept;
     const std::optional<std::uint64_t>&
     completedTransitionSequence() const noexcept;
 
-private:
-    MediaAvStartupReleaseBuffer(MediaAvSyncGroupKey groupKey,
+    MediaAvStartupReleaseBuffer(ConstructionKey, MediaStartupSharedObjectPlan storage,
+                                MediaAvSyncGroupKey groupKey,
                                 MediaAvStartupReleaseKind releaseKind,
                                 MediaPlaybackActivation activation,
-                                std::vector<MediaAvReleasedUnit> video,
-                                std::vector<MediaAvReleasedUnit> audio,
+                                MediaAvReleasedUnits video,
+                                MediaAvReleasedUnits audio,
                                 std::optional<std::uint64_t>
                                     completedTransitionSequence);
+private:
+    // Declared before storage so its owner outlives backing deallocation.
+    MediaStartupSharedObjectPlan m_storage;
     MediaAvSyncGroupKey m_groupKey;
     MediaAvStartupReleaseKind m_releaseKind;
     MediaPlaybackActivation m_activation;
-    std::vector<MediaAvReleasedUnit> m_video;
-    std::vector<MediaAvReleasedUnit> m_audio;
+    MediaAvReleasedUnits m_video;
+    MediaAvReleasedUnits m_audio;
     std::optional<std::uint64_t> m_completedTransitionSequence;
 };
 

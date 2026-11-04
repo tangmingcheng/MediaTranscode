@@ -10,8 +10,8 @@ constexpr std::uint64_t MaximumProtocolCounter =
     (std::numeric_limits<std::uint64_t>::max)();
 
 MediaRtpWireProtocolState::MediaRtpWireProtocolState(
-    MediaRtpWireDatagramMaterializerConfig config) noexcept
-    : generation(config.generation),
+    MediaRtpWireDatagramMaterializerConfig config, MediaRtpProtocolStoragePermit permit)
+    : storagePermit(std::move(permit)), generation(config.generation),
       rtpEndpointId(config.rtpEndpointId),
       rtcpEndpointId(config.rtcpEndpointId),
       rtpDeadline(config.rtpDeadline),
@@ -30,10 +30,29 @@ MediaRtpWireProtocolState::MediaRtpWireProtocolState(
       projectedPacketCount(config.initialPacketCount),
       projectedOctetCount(config.initialOctetCount),
       maximumDatagramBytes(config.maximumDatagramBytes),
-      maximumOutstandingDatagrams(config.maximumOutstandingDatagrams),
+      maximumOutstandingDatagrams(storagePermit.capacity()),
       batchPlan(config.batchPlan),
-      reservationWakeup(std::move(config.reservationWakeup))
+      reservationWakeup(std::move(config.reservationWakeup)),
+      reservations(storagePermit.capacity(), storagePermit.resource())
 {
+}
+
+::media::Result<std::size_t> MediaRtpWireProtocolState::reservationStorageFootprint(std::uint64_t capacity)
+{
+    auto geometry = reservationStorageGeometry(capacity);
+    if (!geometry) return ::media::Result<std::size_t>::failure(geometry.error());
+    return MediaNetworkMemoryResource::allocationFootprint(geometry.value().bytes, geometry.value().alignment);
+}
+
+::media::Result<MediaSharedAllocationGeometry>
+MediaRtpWireProtocolState::reservationStorageGeometry(std::uint64_t capacity)
+{
+    using Result = ::media::Result<MediaSharedAllocationGeometry>;
+    if (!capacity || capacity > (std::numeric_limits<std::size_t>::max)() / sizeof(ReservationRecord))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP reservation storage requires addressable positive capacity"));
+    return Result::success({static_cast<std::size_t>(capacity),
+        static_cast<std::size_t>(capacity) * sizeof(ReservationRecord), alignof(ReservationRecord)});
 }
 
 bool MediaRtpWireProtocolState::canAdmitReservation(
@@ -44,11 +63,16 @@ bool MediaRtpWireProtocolState::canAdmitReservation(
            datagrams <= maximumOutstandingDatagrams - outstandingDatagrams;
 }
 
+::media::Result<MediaSharedAllocationGeometry> MediaRtpWireCommitTransaction::allocationGeometry()
+{
+    return MediaDatagramCommitTransaction::allocationGeometry<MediaRtpWireCommitTransaction>();
+}
+
 MediaRtpWireCommitTransaction::MediaRtpWireCommitTransaction(
     std::shared_ptr<MediaRtpWireProtocolState> state,
     std::uint64_t reservationIdentity,
     MediaWireGlobalSequenceReservation globalReservation,
-    std::vector<MediaRtpWireCommitAction> actions,
+    MediaFixedCapacityStorage<MediaRtpWireCommitAction> actions,
     std::optional<MediaProtocolDatagramCommitTransaction>
         protocolCommit) noexcept
     : m_state(std::move(state)),
@@ -89,7 +113,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
 ::media::Status MediaRtpWireCommitTransaction::commitSubmittedPrefix(
     std::size_t begin,
     std::size_t count,
-    MediaRunningTime now) noexcept
+    const MediaDatagramSubmittedService& submitted) noexcept
 {
     if (!m_state) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -160,7 +184,7 @@ MediaRtpWireCommitTransaction::sequence(std::size_t index) const noexcept
                 "RTP wire media prefix lacks its protocol transaction range"));
         }
     }
-    auto globalCommitted = m_globalReservation.commit(begin, count, now);
+    auto globalCommitted = m_globalReservation.commit(begin, count, submitted);
     if (!globalCommitted) return poisonLocked(globalCommitted.error());
     if (protocolEntries != 0) {
         auto protocolCommitted =

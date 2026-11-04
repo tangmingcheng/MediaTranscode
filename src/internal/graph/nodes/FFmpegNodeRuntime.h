@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaNodeOptions.h"
+#include "internal/graph/diagnostics/MediaSourceVideoObservation.h"
 #include "internal/graph/nodes/MediaOutputCommitReservation.h"
 #include "internal/graph/nodes/MediaNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
@@ -30,10 +31,12 @@ public:
     ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
+    MediaSourceVideoObservation m_sourceVideoObservation;
     bool canFinishProcess() const noexcept override;
     ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
     ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());
     std::size_t pendingOutputBufferCount() const noexcept;
+    const MediaBuffer* pendingOutputBuffer() const noexcept;
     bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
     void cancelPendingOutputTransfer() noexcept;
     virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
@@ -89,6 +92,7 @@ private:
         std::vector<MediaChannel*> channels;
         std::size_t nextChannel = 0;
         bool atomic = false;
+        bool diagnosticDropped = false;
     };
     ::media::Result<AtomicTransferResult> publishAtomicOutput(
         MediaGraphExecutionContext& context,

@@ -6,6 +6,7 @@
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaCanonicalAudioSourceTimeline.h"
 
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
 #include <optional>
 #include <string>
 
@@ -15,18 +16,18 @@ class MediaAvSyncGroupRuntime;
 
 class MediaCanonicalInputNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaCanonicalInputNode(MediaNodeId nodeId);
+    MediaCanonicalInputNode(MediaNodeId nodeId, MediaStartupSharedObjectPlan envelopeStorage);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
     static ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
-    canonicalize(MediaBufferRef encodedAccessUnit,
+    canonicalize(const MediaLineageAllocationScope& allocation, MediaBufferRef encodedAccessUnit,
                  const MediaPacketSourceTiming& protocolTiming,
                  MediaRunningTime duration,
                  MediaScheduledStream stream,
                  MediaDecodeOrderMode decodeOrder,
-                 std::string sourceIdentity,
+                 std::string_view sourceIdentity,
                  MediaSourceAccessUnitSequence sourceSequence,
                  std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
 
@@ -48,6 +49,7 @@ private:
     ::media::Result<std::uint32_t> audioSampleCountFor(
         const MediaBufferRef& packet) const;
     void resetState() noexcept;
+    MediaStartupSharedObjectPlan m_envelopeStorage;
     std::optional<MediaScheduledStream> m_stream;
     std::optional<MediaDecodeOrderMode> m_decodeOrder;
     bool m_keyTraceEmitted = false;

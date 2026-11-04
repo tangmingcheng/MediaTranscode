@@ -2,10 +2,10 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::forEncoder(
-    std::string filterDescription)
+::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::forNegotiatedOutput(
+    std::string filterDescription, MediaVideoFrameLineageProduct frameProduct)
 {
-    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::PreparedEncoderMetadata,
+    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::PreparedEncoderMetadata, frameProduct,
         MediaVideoFilterAspectPolicy::PreserveSourceAspect,
         {std::move(filterDescription), MediaVideoFilterAllocation::NegotiatedOutput,
          MediaVideoFilterCompletion::NegotiatedOutput, {}, {}, 0, {}}, {}, {}};
@@ -18,7 +18,7 @@ namespace media::ffmpeg::graph {
     MediaRational sourceFrameRate, MediaRational sourceSampleAspectRatio,
     MediaVideoFilterIsolationEvidence evidence)
 {
-    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::SourceFrame,
+    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::SourceFrame, MediaVideoFrameLineageProduct::CanonicalInterval,
         MediaVideoFilterAspectPolicy::PreserveSourceAspect,
         std::move(evidence), sourceFrameRate, sourceSampleAspectRatio};
     if (!plan.valid()) return ::media::Result<MediaVideoFilterExecutionPlan>::failure(

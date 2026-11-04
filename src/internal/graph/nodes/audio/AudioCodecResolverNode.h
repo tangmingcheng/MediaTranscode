@@ -19,7 +19,7 @@ protected:
 private:
     ::media::Result<const FFmpegInputStreamSnapshot*> resolveSourceStream(MediaGraphExecutionContext& context,
                                                                           const FFmpegInputSnapshotBuffer& format) const;
-    ::media::Result<::media::ffmpeg::CodecContextPtr> buildDecoderContext(const FFmpegInputStreamSnapshot& stream) const;
+    ::media::Result<::media::ffmpeg::CodecContextPtr> buildDecoderContext(const FFmpegInputStreamSnapshot& stream, const MediaNodeOptions* options) const;
     ::media::Result<::media::ffmpeg::CodecContextPtr> buildEncoderContext(MediaGraphExecutionContext& context) const;
     ::media::Status emitCodecContext(MediaGraphExecutionContext& context,
                                       const char* portName,

@@ -1,4 +1,5 @@
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
+#include "internal/graph/builder/codec/MediaVideoEncoderPlanOptionCodec.h"
 #include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 
@@ -205,6 +206,15 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
             copyOpaque.error());
     }
+    if (request.preparationLineage) {
+        if ((options && options->has("video.lineage.capacity")) ||
+            (*request.preparationLineage != MediaVideoLineagePropagation::CodecCopyOpaque &&
+             *request.preparationLineage != MediaVideoLineagePropagation::SubmissionOrder))
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(::media::ErrorInfo::invalidArgument(
+                "Prepared encoder requires one explicit lineage authority"));
+        copyOpaque = ::media::Result<bool>::success(
+            *request.preparationLineage == MediaVideoLineagePropagation::CodecCopyOpaque);
+    }
     if (copyOpaque.value()) {
 #if defined(AV_CODEC_FLAG_COPY_OPAQUE)
         if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
@@ -326,6 +336,11 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(qualityStatus.error());
     }
 
+    auto outputBuffering = MediaVideoEncoderPlanOptionCodec::decodeOutputBuffering(options);
+    if (!outputBuffering) return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(outputBuffering.error());
+    if (auto status = MediaEncoderOpenContractAdapter::applyOutputBuffering(
+            *encoderContext, outputBuffering.value()); !status)
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(status.error());
     const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
     if (openRet < 0) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
@@ -337,6 +352,9 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             status.error());
     }
 
+    if (auto status = MediaEncoderOpenContractAdapter::verifyOutputBuffering(
+            *encoderContext, outputBuffering.value()); !status)
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(status.error());
     result.context = std::move(encoderContext);
     return ::media::Result<CodecResolverEncoderContextBuildResult>::success(std::move(result));
 }

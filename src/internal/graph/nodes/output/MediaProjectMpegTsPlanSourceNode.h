@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 
 #include <memory>
 #include <optional>
@@ -20,10 +21,14 @@ private:
     void resetForGenerationPurge() noexcept override
     {
         pendingPlan.reset();
+        activation.reset();
+        transportPlan.reset();
         publishedGeneration.reset();
         published = false;
     }
 
+    std::optional<MediaProtocolOutputActivation> activation;
+    MediaBufferRef transportPlan;
     MediaBufferRef pendingPlan;
     std::optional<std::uint64_t> publishedGeneration;
     bool published = false;
@@ -47,6 +52,7 @@ public:
     std::shared_ptr<MediaAvGenerationPurgeTarget>
     generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
@@ -61,6 +67,9 @@ protected:
 private:
     void resetState() noexcept;
 
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge =
+        std::make_shared<MediaOwnerThreadGenerationPurge>();
+    std::optional<MediaAvGenerationPurge> m_completedPurge;
     MediaProtocolOutputSessionKey m_sessionKey;
     MediaTranscodeStreamSet m_streamSet;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> m_outputPlan;

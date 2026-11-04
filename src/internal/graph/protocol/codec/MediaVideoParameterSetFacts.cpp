@@ -26,7 +26,7 @@ std::optional<MediaVideoColorRangeFact> MediaVideoParameterSetFacts::fromAccessU
         const auto parsed = codec == MediaAnnexBCodec::H264
             ? MediaH264SpsCodedSizeParser::parse(unit, &fact)
             : MediaHevcSpsCodedSizeParser::parse(unit, &fact);
-        if (!parsed || !fact || (result && result->range != fact->range)) return std::nullopt;
+        if (!parsed || !fact || (result && (result->range != fact->range || result->color != fact->color))) return std::nullopt;
         // All possible SPS choices must agree; do not guess the active SPS.
         if (result) fact->signaled = fact->signaled && result->signaled;
         result = fact;

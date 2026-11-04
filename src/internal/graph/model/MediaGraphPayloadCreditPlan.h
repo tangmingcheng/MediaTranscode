@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@ struct MediaGraphPayloadProducerStrategy final {
     std::uint64_t maximumReservationBytes = 0;
     bool runtimeIntegrated = false;
     std::string authority;
+    std::string accountId;
 
     bool valid() const noexcept
     {
@@ -89,6 +91,21 @@ struct MediaGraphPayloadProducerStrategy final {
     }
 };
 
+struct MediaGraphPayloadProducerKey final {
+    MediaNodeId nodeId;
+    MediaStreamKind streamKind;
+    MediaPayloadKind payloadKind;
+    friend bool operator==(const MediaGraphPayloadProducerKey&,
+                           const MediaGraphPayloadProducerKey&) = default;
+};
+
+struct MediaGraphPayloadCreditAccountPlan final {
+    std::string accountId;
+    std::uint64_t maximumBytes;
+    std::uint64_t maximumObjects;
+    std::string authority;
+};
+
 struct MediaGraphPayloadProducerRequirement final {
     MediaNodeId nodeId;
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
@@ -113,6 +130,7 @@ struct MediaGraphPayloadCreditPlan final {
     std::string authority;
     std::vector<MediaGraphPayloadProducerStrategy> producers;
     std::vector<MediaGraphPayloadProducerRequirement> missingProducers;
+    std::vector<MediaGraphPayloadCreditAccountPlan> accounts;
 
     bool isStructurallyValid() const noexcept
     {
@@ -138,12 +156,39 @@ struct MediaGraphPayloadCreditPlan final {
             !missingProducers.empty()) {
             return false;
         }
+        if (accounts.empty()) return false;
+        std::uint64_t accountBytes = 0;
+        std::uint64_t accountObjects = 0;
+        for (std::size_t i = 0; i < accounts.size(); ++i) {
+            const auto& account = accounts[i];
+            if (account.accountId.empty() || account.authority.empty() ||
+                account.maximumObjects == 0 ||
+                account.maximumBytes > (std::numeric_limits<std::uint64_t>::max)() - accountBytes ||
+                account.maximumObjects > (std::numeric_limits<std::uint64_t>::max)() - accountObjects)
+                return false;
+            for (std::size_t j = 0; j < i; ++j)
+                if (accounts[j].accountId == account.accountId) return false;
+            bool used = false;
+            for (const auto& producer : producers)
+                if (producer.accountId == account.accountId) used = true;
+            if (!used) return false;
+            accountBytes += account.maximumBytes;
+            accountObjects += account.maximumObjects;
+        }
+        if (accountBytes != maximumBytes || accountObjects != maximumObjects) return false;
         for (std::size_t index = 0; index < producers.size(); ++index) {
             if (!producers[index].valid() ||
                 producers[index].maximumReservedBytes() > maximumUnitBytes ||
                 !producers[index].runtimeIntegrated) {
                 return false;
             }
+            bool admitted = false;
+            for (const auto& account : accounts) {
+                if (producers[index].accountId == account.accountId &&
+                    producers[index].maximumReservedBytes() <= account.maximumBytes)
+                    admitted = true;
+            }
+            if (!admitted) return false;
             for (std::size_t previous = 0; previous < index; ++previous) {
                 if (producers[previous].nodeId == producers[index].nodeId &&
                     producers[previous].streamKind == producers[index].streamKind &&

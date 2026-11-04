@@ -18,6 +18,18 @@ MediaDecoderInputRetentionAdapter::readAfterOpen(
     // allocations. pthread_frame owns one submitted avpkt per frame worker.
     MediaDecoderInputRetention facts{context.thread_count, context.thread_type,
                                     1, 0, 0, {}};
+    if (hardwareBackend.empty() && workers == 0 &&
+        context.codec_type == AVMEDIA_TYPE_AUDIO && (name == "aac" || name == "aac_fixed" || name == "opus")) {
+        // decode.c owns buffer_pkt and may retain an incompletely consumed
+        // in_pkt between simple callback calls. AAC returns consumed bytes;
+        // native Opus returns the complete avpkt->size and keeps no AVPacket.
+        // No frame workers or codec-private compressed-packet owner exists.
+        facts.serialPrivatePackets = name == "opus" ? 0 : 1;
+        facts.authority = name == "opus"
+            ? "ffmpeg-native-opus-full-packet-simple-callback+decode-buffer-pkt"
+            : "ffmpeg-native-aac-partial-simple-callback+decode-buffer-pkt+in-pkt";
+        return facts;
+    }
     if ((name == "h264" || name == "hevc") &&
         (hardwareBackend.empty() || hardwareBackend == "cuda" ||
          hardwareBackend == "d3d11va" || hardwareBackend == "dxva2" ||

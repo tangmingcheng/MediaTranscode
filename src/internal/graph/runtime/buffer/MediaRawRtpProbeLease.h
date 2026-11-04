@@ -1,11 +1,12 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpUdpChannel.h"
+#include "internal/graph/runtime/buffer/MediaPreparedRtpDatagramStorage.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <span>
 
@@ -13,7 +14,6 @@ namespace media::ffmpeg::graph {
 
 class MediaRawRtpPreparedByteBudget;
 class MediaRawRtpPreparedInputBuffer;
-struct MediaPreparedRawRtpDatagram;
 
 struct MediaRawRtpProbeDatagram final {
     MediaRtpUdpChannel channel;
@@ -21,7 +21,8 @@ struct MediaRawRtpProbeDatagram final {
     std::int64_t observedAtNs;
 };
 
-// Owns an immutable preflight snapshot, without consuming or activating replay.
+// Pins immutable entries through a frozen reference table, independently of
+// queue positions. An active lease prevents replay sealing.
 // Views remain valid only while this lease (or its moved-to owner) is alive.
 class MediaRawRtpProbeLease final {
 public:
@@ -31,23 +32,28 @@ public:
     MediaRawRtpProbeLease(MediaRawRtpProbeLease&& other) noexcept;
     MediaRawRtpProbeLease& operator=(MediaRawRtpProbeLease&& other) noexcept;
 
-    std::span<const MediaRawRtpProbeDatagram> datagrams() const noexcept;
+    std::size_t datagramCount() const noexcept;
+    std::uint64_t ingressFrontier() const noexcept;
+    ::media::Result<MediaRawRtpProbeDatagram> datagram(std::size_t index) const;
 
 private:
     friend class MediaRawRtpPreparedInputBuffer;
     MediaRawRtpProbeLease(
         std::shared_ptr<MediaRawRtpPreparedByteBudget> budget,
-        std::size_t reservedBytes) noexcept;
+        MediaFixedCapacityStorage<MediaPreparedRtpDatagramOwner> entries,
+        std::uint64_t frontier,
+        std::shared_ptr<const MediaRawRtpPreparedInputBuffer> owner) noexcept;
     static ::media::Result<MediaRawRtpProbeLease> capture(
-        const std::deque<MediaPreparedRawRtpDatagram>& datagrams,
-        const std::shared_ptr<MediaRawRtpPreparedByteBudget>& budget);
+        const MediaFixedCapacityStorage<MediaPreparedRtpDatagramOwner>& entries,
+        std::uint64_t frontier,
+        const std::shared_ptr<MediaRawRtpPreparedByteBudget>& budget,
+        std::shared_ptr<const MediaRawRtpPreparedInputBuffer> owner);
     void release() noexcept;
 
     std::shared_ptr<MediaRawRtpPreparedByteBudget> m_budget;
-    std::unique_ptr<std::uint8_t[]> m_payload;
-    std::unique_ptr<MediaRawRtpProbeDatagram[]> m_datagrams;
-    std::size_t m_count = 0;
-    std::size_t m_reservedBytes = 0;
+    std::shared_ptr<const MediaRawRtpPreparedInputBuffer> m_owner;
+    MediaFixedCapacityStorage<MediaPreparedRtpDatagramOwner> m_entries;
+    std::uint64_t m_frontier = 0;
 };
 
 } // namespace media::ffmpeg::graph

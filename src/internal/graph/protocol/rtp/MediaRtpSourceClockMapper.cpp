@@ -37,17 +37,25 @@ bool ntpLess(const MediaRtcpNtpTimestamp& lhs, const MediaRtcpNtpTimestamp& rhs)
 
 } // namespace
 
-::media::Result<MediaRtpSourceClockMapper> MediaRtpSourceClockMapper::create(
-    MediaRtpSourceClockMapperConfig config,
-    std::uint64_t generation)
+::media::Status MediaRtpSourceClockMapper::validateConfig(
+    const MediaRtpSourceClockMapperConfig& config)
 {
     if (config.clockRate <= 0 || config.senderReportTimeoutNs <= 0 ||
         config.maximumExtrapolationNs <= config.senderReportTimeoutNs ||
         config.maximumResidualNs <= 0 || config.maximumRateErrorPpm <= 0 ||
         config.maximumRateErrorPpm >= 1'000'000) {
-        return ::media::Result<MediaRtpSourceClockMapper>::failure(
+        return ::media::Status::failure(
             invalid("RTP source clock mapper requires complete ordered planner thresholds"));
     }
+    return ::media::Status::success();
+}
+
+::media::Result<MediaRtpSourceClockMapper> MediaRtpSourceClockMapper::create(
+    MediaRtpSourceClockMapperConfig config,
+    std::uint64_t generation)
+{
+    if (auto status = validateConfig(config); !status)
+        return ::media::Result<MediaRtpSourceClockMapper>::failure(status.error());
     auto srUnwrapper = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::Rtp32, generation);
     auto packetUnwrapper = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::Rtp32, generation);
     if (!srUnwrapper) return ::media::Result<MediaRtpSourceClockMapper>::failure(srUnwrapper.error());

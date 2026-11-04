@@ -126,8 +126,8 @@ int opusFrameSamples(int config) noexcept
 
 } // namespace
 
-MediaOpusRtpDepacketizer::MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig config)
-    : m_config(std::move(config))
+MediaOpusRtpDepacketizer::MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation)
+    : MediaRtpDepacketizer(std::move(allocation)), m_config(std::move(config))
 {
 }
 
@@ -139,7 +139,7 @@ MediaOpusRtpDepacketizer::MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig co
     if (!duration) return ::media::Result<MediaRtpDepacketizerResult>::failure(duration.error());
     auto unit = makeRtpAccessUnit(packet.payload, packet.timestamp, m_config.clockRate, duration.value(), true);
     if (!unit) return ::media::Result<MediaRtpDepacketizerResult>::failure(unit.error());
-    MediaRtpDepacketizerResult result; result.accessUnits.push_back(std::move(unit).value());
+    MediaRtpDepacketizerResult result{allocation()}; result.accessUnits.push_back(std::move(unit).value());
     return ::media::Result<MediaRtpDepacketizerResult>::success(std::move(result));
 }
 

@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
     const auto* hardware = av_pix_fmt_desc_get(geometry.hardwareFormat);
     const auto* descriptor = av_pix_fmt_desc_get(geometry.softwareFormat);
     if (geometry.width <= 0 || geometry.height <= 0 || geometry.tiles.empty() ||
+        geometry.sampleAspectRatio.num <= 0 || geometry.sampleAspectRatio.den <= 0 ||
         (geometry.effectiveColorRange.range != AVCOL_RANGE_MPEG &&
          geometry.effectiveColorRange.range != AVCOL_RANGE_JPEG) ||
         !hardware || !(hardware->flags & AV_PIX_FMT_FLAG_HWACCEL) ||

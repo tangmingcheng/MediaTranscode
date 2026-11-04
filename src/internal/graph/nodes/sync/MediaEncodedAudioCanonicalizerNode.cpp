@@ -97,9 +97,9 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
         contributions.push_back(fragment.contribution);
     }
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
-        input->media(), std::move(lineage).value(),
+        MediaRuntimeLineageAllocation{}, input->media(), std::move(lineage).value(),
         MediaCanonicalAudioSampleInterval{
-            begin, end, origin.outputSampleRate}, std::move(contributions));
+            begin, end, origin.outputSampleRate}, std::move(contributions), std::nullopt);
     if (!canonical) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             canonical.error());
@@ -119,6 +119,8 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
 ::media::Status MediaEncodedAudioCanonicalizerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_inputObservation.log(nodeId().value, "canonicalizer_input");
+    m_commitObservation.log(nodeId().value, "canonicalizer_committed");
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -126,12 +128,16 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
 void MediaEncodedAudioCanonicalizerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_inputObservation.log(nodeId().value, "canonicalizer_input");
+    m_commitObservation.log(nodeId().value, "canonicalizer_committed");
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
 
 void MediaEncodedAudioCanonicalizerNode::resetState() noexcept
 {
+    m_inputObservation = {};
+    m_commitObservation = {};
     m_state->resetForLifecycle();
 }
 
@@ -181,6 +187,8 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
         }
         const auto begin = encoded->fragments().front().interval.begin;
         const auto end = encoded->fragments().back().interval.end;
+        m_inputObservation.observe(encoded->audioOrigin().generation,
+            {begin, end, encoded->audioOrigin().outputSampleRate});
         auto disposition = m_state->classifyObservation(
             encoded->audioOrigin().generation);
         if (!disposition) {
@@ -229,6 +237,8 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
         !observed) {
         return ::media::Result<MediaNodeProcessResult>::failure(observed.error());
     }
+    m_commitObservation.observe(m_state->pending->generation,
+        *m_state->pending->output->audioSampleInterval());
     m_state->expectedNextSample = m_state->pending->nextSample;
     m_state->nextSequence = m_state->pending->nextSequence;
     m_state->pending.reset();

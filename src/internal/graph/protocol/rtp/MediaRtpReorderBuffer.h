@@ -38,6 +38,12 @@ struct MediaRtpReorderResult final {
 
 class MediaRtpReorderBuffer final {
 public:
+    // Exact stored value is shared with the allocation-layout planner.
+    struct Entry final {
+        MediaRtpPacket packet;
+        std::chrono::steady_clock::time_point receivedAt;
+    };
+    using StoredValue = std::pair<const std::uint16_t, Entry>;
     explicit MediaRtpReorderBuffer(MediaRtpReorderConfig config);
     ::media::Result<MediaRtpReorderResult> push(MediaRtpPacket packet,
                                                 std::chrono::steady_clock::time_point receivedAt);
@@ -46,10 +52,6 @@ public:
     void reset() noexcept;
 
 private:
-    struct Entry final {
-        MediaRtpPacket packet;
-        std::chrono::steady_clock::time_point receivedAt;
-    };
     void drainContiguous(MediaRtpReorderResult& result);
     std::map<uint16_t, Entry>::const_iterator nearestPending() const noexcept;
 

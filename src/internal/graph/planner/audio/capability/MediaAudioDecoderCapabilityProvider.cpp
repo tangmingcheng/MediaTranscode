@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -106,7 +107,7 @@ namespace {
         MediaSelectedAudioDecoder{
             decoder->name, sampleFormat, layout, inputSampleRate,
             context->sample_rate, outputChannels, context->delay,
-            maximumAccessUnitSamples});
+            maximumAccessUnitSamples, MediaDecoderInputRetentionAdapter::readAfterOpen(*context, {})});
 }
 
 } // namespace

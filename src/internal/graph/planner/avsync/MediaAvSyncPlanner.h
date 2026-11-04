@@ -7,10 +7,15 @@
 #include "media_transcode/Result.h"
 
 #include <variant>
+#include <functional>
 
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeGraphResourceLedgerPlan;
+struct MediaAvSourceCapacityFacts;
+using MediaAvSyncCapacityFacts = std::variant<
+    std::reference_wrapper<const MediaRealtimeGraphResourceLedgerPlan>,
+    std::reference_wrapper<const MediaAvSourceCapacityFacts>>;
 
 struct MediaAvSourceContributionDomain final {};
 using MediaAvSynchronizationDomain =
@@ -26,10 +31,10 @@ public:
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
         MediaAvSynchronizationDomain domain,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
-        const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
+        MediaAvSyncCapacityFacts capacity,
         const MediaRealtimeDeploymentEnvelope& deployment,
         MediaBranchMode audioBranchMode,
-        int resolvedOutputAudioSampleRate);
+        std::optional<int> resolvedOutputAudioSampleRate);
 
 private:
     MediaAvSyncPlanner() = delete;

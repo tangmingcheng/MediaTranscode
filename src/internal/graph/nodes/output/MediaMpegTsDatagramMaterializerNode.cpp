@@ -13,6 +13,7 @@
 #include <new>
 #include <sstream>
 #include <utility>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -27,9 +28,11 @@ namespace {
 MediaMpegTsDatagramMaterializerNode::
 MediaMpegTsDatagramMaterializerNode(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+    std::shared_ptr<MediaMpegTsMaterializerGenerationSession> generationSession)
     : FFmpegNodeRuntime(
           nodeId, staticKind(), "MediaMpegTsDatagramMaterializerNode"),
+      m_generationSession(std::move(generationSession)),
       m_authority(std::move(authority))
 {
     m_generationState = std::make_shared<MediaProtocolOutputGenerationState>(
@@ -39,19 +42,19 @@ MediaMpegTsDatagramMaterializerNode(
 ::media::Result<std::unique_ptr<MediaMpegTsDatagramMaterializerNode>>
 MediaMpegTsDatagramMaterializerNode::create(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+    std::shared_ptr<MediaMpegTsMaterializerGenerationSession> generationSession)
 {
     using Result = ::media::Result<
         std::unique_ptr<MediaMpegTsDatagramMaterializerNode>>;
-    if (!nodeId.isValid() || !authority ||
-        !authority->sharedNtpEpoch()) {
+    if (!nodeId.isValid() || !authority || !generationSession) {
         return Result::failure(invalid(
             "MPEG-TS datagram materializer requires id and runtime authority"));
     }
     try {
     auto node = std::unique_ptr<MediaMpegTsDatagramMaterializerNode>(
         new (std::nothrow) MediaMpegTsDatagramMaterializerNode(
-            nodeId, std::move(authority)));
+            nodeId, std::move(authority), std::move(generationSession)));
     if (!node) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaMpegTsDatagramMaterializerNode"));
@@ -173,6 +176,9 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
         return ::media::Status::failure(invalid(
             "MPEG-TS RTP protocol and endpoint geometry differ"));
     }
+    const auto ntpEpoch = m_authority->sharedNtpEpoch();
+    if (!ntpEpoch) return ::media::Status::failure(invalid(
+        "MPEG-TS RTP materializer requires its planned shared NTP epoch"));
     auto rtpDeadline = shaping.wireDeadlinePlan(rtpEndpointId.value());
     auto rtcpDeadline = shaping.wireDeadlinePlan(rtcpEndpointId.value());
     if (!rtpDeadline || !rtcpDeadline) {
@@ -197,8 +203,8 @@ MediaNodeKind MediaMpegTsDatagramMaterializerNode::staticKind() noexcept
             rtp->tsPacketsPerPayload(), rtp->maximumDatagramBytes(),
             shaping.backlog().maximumDatagrams,
             shaping.batch(),
-            m_authority->sharedNtpEpoch()->masterAtCapture(),
-            *m_authority->sharedNtpEpoch(),
+            ntpEpoch->masterAtCapture(),
+            *ntpEpoch,
             std::move(reportSchedule).value(), rtp->cname(),
             context.sharedNodeWakeup(nodeId())});
     if (!created) return ::media::Status::failure(created.error());
@@ -212,9 +218,13 @@ MediaMpegTsDatagramMaterializerNode::process(MediaGraphExecutionContext& context
 {
     if (auto purge = m_generationPurge->pending()) {
         auto activation = m_authority->currentActivation();
-        if (!activation || activation.value().generation != purge->oldGeneration)
-            return processProgress(::media::Status::failure(activation
-                ? invalid("Materializer purge differs from the globally revoked generation") : activation.error()));
+        if (!activation || activation.value().generation != purge->publishedGeneration ||
+            purge->oldGeneration < purge->publishedGeneration) {
+            auto status = ::media::Status::failure(activation
+                ? invalid("Materializer purge differs from the globally revoked generation") : activation.error());
+            auto completed = m_generationPurge->complete(*purge, status);
+            return processProgress(completed ? status : completed);
+        }
         ::media::Status status = ::media::Status::success();
         if (const auto* transport = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
                 m_generationSession->data->transportPlan.get())) {
@@ -326,6 +336,8 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         }
         if (!input.value()) return processWaiting();
         m_generationSession->data->pendingProtocolBatch = std::move(*input.value());
+        auto& observation = m_generationSession->data->observation;
+        observation.beginBatch(mediaDiagnosticMasterClockNow(*m_authority));
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             m_generationSession->data->pendingProtocolBatch.get())) {
@@ -360,29 +372,52 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
             permit.error().code == ::media::ErrorCode::Cancelled
                 ? ::media::ErrorInfo::wouldBlock("MPEG-TS materialization awaits purge") : permit.error());
         return std::visit(
-        [batch, materializedAt = materializedAt.value()](auto& materializer) {
-            return materializer.materializeProtocolBatch(
-                *batch, materializedAt);
+        [this, batch, materializedAt = materializedAt.value()](auto& materializer)
+            -> ::media::Result<MediaWireDatagramBatchCollection> {
+            if constexpr (std::is_same_v<std::decay_t<decltype(materializer)>, MediaMpegTsRtpWireDatagramMaterializer>) {
+                auto& pending = m_generationSession->data->pendingPreparation;
+                if (!pending) {
+                    auto owner = std::dynamic_pointer_cast<MediaMpegTsProtocolDatagramBatchBuffer>(
+                        m_generationSession->data->pendingProtocolBatch);
+                    auto prepared = materializer.prepareProtocolBatch(std::move(owner), materializedAt);
+                    if (!prepared) return ::media::Result<MediaWireDatagramBatchCollection>::failure(prepared.error());
+                    pending.emplace(std::move(prepared).value());
+                }
+                auto completionAt = m_authority->now();
+                if (!completionAt) return ::media::Result<MediaWireDatagramBatchCollection>::failure(completionAt.error());
+                auto result = materializer.complete(*pending, completionAt.value());
+                if (result) pending.reset();
+                return result;
+            } else {
+                auto owner = std::dynamic_pointer_cast<MediaMpegTsProtocolDatagramBatchBuffer>(
+                    m_generationSession->data->pendingProtocolBatch);
+                auto prepared = materializer.prepareProtocolBatch(std::move(owner), materializedAt);
+                if (!prepared) return ::media::Result<MediaWireDatagramBatchCollection>::failure(prepared.error());
+                auto completionAt = m_authority->now();
+                if (!completionAt) return ::media::Result<MediaWireDatagramBatchCollection>::failure(completionAt.error());
+                return materializer.complete(completionAt.value());
+            }
         },
         *m_generationSession->data->materializer);
     }();
+    m_generationSession->data->observation.recordAttempt(materializedAt.value(),
+        mediaDiagnosticMasterClockNow(*m_authority), wire ? nullptr : &wire.error());
+    if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+        const auto* transport = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
+            m_generationSession->data->transportPlan.get());
+        if (transport && transport->globalSequence()) {
+            const auto completed = transport->globalSequence()->snapshot().lastCompletedReservation;
+            m_generationSession->data->observation.completedReservationAtLastAttempt = completed;
+        }
+    }
     if (!wire) {
+        if (wire.error().code != ::media::ErrorCode::WouldBlock)
+            m_generationSession->data->observation.logFailure(*batch, materializedAt.value(), wire.error());
         return processProgress(::media::Status::failure(wire.error()));
     }
     recordMaterialized(wire.value(), materializedAt.value());
-    try {
-        for (auto& partition : wire.value()) {
-            m_generationSession->data->pendingOutputs.push_back(std::move(partition));
-        }
-    } catch (const std::bad_alloc&) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "MPEG-TS wire output partitions"));
-    }
-    if (m_generationSession->data->pendingOutputs.empty()) {
-        return ::media::Result<MediaNodeProcessResult>::failure(invalid(
-            "MPEG-TS wire materializer emitted no batch partitions"));
-    }
+    auto staged = m_generationSession->data->pendingOutputs.stage(std::move(wire).value());
+    if (!staged) return processProgress(staged);
     auto emitted = emitOutput(
         context, "wire_batch", m_generationSession->data->pendingOutputs.front());
     return emitted ? processProgress() : processProgress(std::move(emitted));
@@ -395,11 +430,16 @@ MediaMpegTsDatagramMaterializerNode::onProcess(
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "MPEG-TS wire batch commit differs from pending output"));
     }
+    m_generationSession->data->observation.lastWirePublishedAt =
+        mediaDiagnosticMasterClockNow(*m_authority);
     m_generationSession->data->pendingOutputs.pop_front();
     if (m_generationSession->data->pendingOutputs.empty()) {
         const auto* protocol = dynamic_cast<const MediaMpegTsProtocolDatagramBatchBuffer*>(
             m_generationSession->data->pendingProtocolBatch.get());
-        if (!protocol || protocol->datagrams().empty()) m_generationSession->data->pendingProtocolBatch.reset();
+        if (!protocol || protocol->datagrams().empty()) {
+            if (protocol) m_generationSession->data->observation.completeBatch();
+            m_generationSession->data->pendingProtocolBatch.reset();
+        }
     }
     return ::media::Status::success();
 }
@@ -418,11 +458,23 @@ MediaMpegTsDatagramMaterializerNode::finishProtocol(MediaGraphExecutionContext& 
         if (!publication) return publication.error().code == ::media::ErrorCode::Cancelled
             ? processWaiting() : processProgress(::media::Status::failure(publication.error()));
         if (auto* rtp = std::get_if<MediaMpegTsRtpWireDatagramMaterializer>(&*m_generationSession->data->materializer)) {
-            auto now = m_authority->now();
-            if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
-            auto report = rtp->materializeTerminalReport(now.value(), now.value(), now.value());
-            if (!report) return processProgress(::media::Status::failure(report.error()));
-            if (report.value()) m_generationSession->data->pendingOutputs.push_back(std::move(report).value());
+            auto& pending = m_generationSession->data->pendingPreparation;
+            if (!pending) {
+                auto now = m_authority->now();
+                if (!now) return processProgress(::media::Status::failure(now.error()));
+                auto report = rtp->prepareTerminalReport(now.value(), now.value(), now.value());
+                if (!report) return processProgress(::media::Status::failure(report.error()));
+                if (report.value()) pending.emplace(std::move(*report.value()));
+            }
+            if (pending) {
+                auto now = m_authority->now();
+                if (!now) return processProgress(::media::Status::failure(now.error()));
+                auto completed = rtp->complete(*pending, now.value());
+                if (!completed) return processProgress(::media::Status::failure(completed.error()));
+                pending.reset();
+                auto staged = m_generationSession->data->pendingOutputs.stage(std::move(completed).value());
+                if (!staged) return processProgress(staged);
+            }
         }
         m_generationSession->data->terminalReportPrepared = true;
     }
@@ -510,12 +562,14 @@ void MediaMpegTsDatagramMaterializerNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
     m_generationSession->data->pendingOutputs.clear();
+    m_generationSession->data->pendingPreparation.reset();
     m_generationSession->data->pendingProtocolBatch.reset();
     m_generationSession->data->terminal.reset();
     m_generationSession->data->terminalReportPrepared = false;
     m_generationSession->data->materializer.reset();
     m_generationSession->data->transportPlan.reset();
     m_generationSession->data->protocolPlan.reset();
+    m_generationSession->data->observation = {};
     m_maximumMaterializedAfterReleaseNanoseconds = 0;
     m_worstMaterializedAtNanoseconds = 0;
     m_worstCanonicalReleaseNanoseconds = 0;

@@ -3,6 +3,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
@@ -46,6 +47,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
 ::media::Status HardwareTransferNode::start(MediaGraphExecutionContext& context)
 {
+    freezeSourceReferenceResource();
     resetRuntimeState();
     auto direction = requiredNodeOption(
         nodeOptions(context), "HardwareTransferNode", "transfer.direction");
@@ -248,7 +250,7 @@ void HardwareTransferNode::logSummary() const
         return FFmpegGraphError::statusFromCode(propsRet, "av_frame_copy_props(downloaded frame)");
     }
 
-    auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video);
+    auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video, MediaRuntimeLineageAllocation{});
     if (!output) {
         return ::media::Status::failure(output.error());
     }
@@ -291,9 +293,16 @@ void HardwareTransferNode::logSummary() const
     MediaBufferRef transferred = output.value();
     if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
         auto canonical = MediaCanonicalVideoFrameBuffer::create(
-            transferred, std::move(lineage));
+            transferred, std::move(lineage), std::nullopt);
         if (!canonical) return ::media::Status::failure(canonical.error());
         transferred = std::move(canonical).value();
+    } else if (const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get())) {
+        if (!sourceReferenceResource()) return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("Display transfer has no source allocation owner"));
+        auto display = MediaVideoDecodeBuffer::withDisplayLineage(
+            *sourceReferenceResource(), transferred, source->displayLineage());
+        if (!display) return ::media::Status::failure(display.error());
+        transferred = std::move(display).value();
     }
     return emitTracedOutput(context, transferred);
 }

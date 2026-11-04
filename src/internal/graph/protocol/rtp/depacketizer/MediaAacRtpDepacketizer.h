@@ -8,7 +8,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAacRtpDepacketizer final : public MediaRtpDepacketizer {
 public:
-    explicit MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config);
+    explicit MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
 

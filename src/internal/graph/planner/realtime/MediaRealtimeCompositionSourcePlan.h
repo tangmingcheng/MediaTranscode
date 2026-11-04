@@ -1,8 +1,17 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionSourceBranchPlanner.h"
+#include "internal/graph/planner/realtime/MediaStartupBatchStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaStartupRouteStoragePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/planner/video/MediaVideoSourcePlan.h"
+#include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
+#include <vector>
+#include "internal/graph/planner/realtime/MediaRtpClockRouteStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpContainerStoragePlan.h"
 
 namespace media::ffmpeg::graph {
 
@@ -15,6 +24,14 @@ struct MediaRealtimeCompositionSourcePlan final {
     MediaRational frameRate;
     std::optional<MediaRational> maximumFrameDuplicationGap;
     MediaRealtimeAvSourceRuntimePlan runtime;
+    std::vector<MediaPreparedRtpStorageReservation> preparationStorage;
+    MediaCompositionProducerHolderFacts producerHolders;
+    std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
+    std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
+    std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
+    MediaCompositionSourceBranchPlan branchConnections;
+    std::vector<MediaSourceInputConnection> inputConnections;
+    std::optional<MediaPreparedRtpSourceContainerBounds> preparedPacketContainers;
 };
 
 } // namespace media::ffmpeg::graph

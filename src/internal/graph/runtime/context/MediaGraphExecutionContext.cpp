@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/planner/MediaWorkerExecutionPlanner.h"
 
 #include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
@@ -84,6 +85,9 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         return ::media::Status::failure(
             ::media::ErrorInfo::allocationFailed("input activity evidence"));
     }
+    auto workers = MediaWorkerExecutionPlanner::plan(graph, m_executionOrder);
+    if (!workers) { reset(); return ::media::Status::failure(workers.error()); }
+    m_workerExecutionPlans = std::move(workers).value();
     m_graph = &graph;
     m_compiled = true;
 
@@ -241,6 +245,9 @@ MediaGraphExecutionContext::exportOutput(MediaPortId id) const
     for (const auto id : topology.value().order) {
         if (contains(id)) m_executionOrder.push_back(id);
     }
+    auto workers = MediaWorkerExecutionPlanner::plan(*m_graph, m_executionOrder);
+    if (!workers) { reset(); return ::media::Status::failure(workers.error()); }
+    m_workerExecutionPlans = std::move(workers).value();
     m_compiled = true;
     return ::media::Status::success();
 }
@@ -251,6 +258,9 @@ void MediaGraphExecutionContext::detachExecutionNodes(std::span<const MediaNodeI
         return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
     };
     std::erase_if(m_executionOrder, contains);
+    // Preserve the original root backing until reset: detached branch contracts
+    // coexist with it and are separately admitted by the resource planner.
+    m_workerExecutionPlans.eraseIf([&](const auto& plan) { return contains(plan.node); });
     for (const auto id : nodes) {
         m_nodeWakeups.erase(id.value);
         m_nodeExitTokens.erase(id.value);
@@ -290,6 +300,7 @@ void MediaGraphExecutionContext::reset()
     m_payloadCreditLedger.reset();
     m_inputActivity.reset();
     m_executionOrder.clear();
+    m_workerExecutionPlans = {};
     m_nodeWakeups.clear();
     m_nodeExitTokens.clear();
     m_compiled = false;
@@ -364,6 +375,11 @@ MediaGraphExecutionContext::reservePayloadBatch(
              strategy.streamKind != streamKind)) {
             continue;
         }
+        if (selected && streamKind == MediaStreamKind::Any &&
+            selected->accountId != strategy.accountId) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "stream-agnostic allocation requires one planner allocation owner"));
+        }
         if (!selected || strategy.maximumReservationBytes >
                 selected->maximumReservationBytes) {
             selected = &strategy;
@@ -412,7 +428,8 @@ MediaGraphExecutionContext::reservePayloadBatch(
             "runtime payload batch credit request"));
     }
     auto leases = m_payloadCreditLedger->tryReserveOrArm(
-        producer, ledgerBytes, sharedNodeWakeup(producer));
+        {selected->nodeId, selected->streamKind, selected->payloadKind},
+        ledgerBytes, sharedNodeWakeup(producer));
     if (!leases) return Result::failure(leases.error());
     try {
         std::vector<MediaGraphPayloadReservation> reservations;

@@ -18,45 +18,12 @@ void saturatingAdd(Value& target, Value added) noexcept
 
 } // namespace
 
-void MediaTsEmissionDiagnostics::recordCommittedDatagram(
-    std::size_t wireBytes,
-    MediaRunningTime plannedWait,
-    MediaRunningTime deadline,
-    MediaRunningTime actualEmission) noexcept
-{
-    saturatingAdd(m_snapshot.datagrams, std::uint64_t{1});
-    saturatingAdd(
-        m_snapshot.wireBytes, static_cast<std::uint64_t>(wireBytes));
-    const std::int64_t waitNanoseconds =
-        (std::max)(plannedWait.nanoseconds(), std::int64_t{0});
-    if (waitNanoseconds == 0) {
-        saturatingAdd(m_snapshot.immediateDeadlines, std::uint64_t{1});
-    } else {
-        saturatingAdd(m_snapshot.deferredDeadlines, std::uint64_t{1});
-        saturatingAdd(m_snapshot.plannedWaitNanoseconds, waitNanoseconds);
-    }
-    if (actualEmission > deadline) {
-        const auto lateness = actualEmission.checkedSubtract(deadline);
-        if (lateness) {
-            saturatingAdd(m_snapshot.lateDatagrams, std::uint64_t{1});
-            m_snapshot.maximumLatenessNanoseconds = (std::max)(
-                m_snapshot.maximumLatenessNanoseconds,
-                lateness.value().nanoseconds());
-        }
-    }
-}
-
 void MediaTsEmissionDiagnostics::recordPendingBytes(
     std::size_t bytes) noexcept
 {
     m_snapshot.pendingBytes = bytes;
     m_snapshot.peakPendingBytes =
         (std::max)(m_snapshot.peakPendingBytes, bytes);
-}
-
-void MediaTsEmissionDiagnostics::recordPressureFailure() noexcept
-{
-    saturatingAdd(m_snapshot.pressureFailures, std::uint64_t{1});
 }
 
 void MediaTsEmissionDiagnostics::recordAccessUnitDecision(
@@ -95,8 +62,13 @@ void MediaTsEmissionDiagnostics::recordProtocolBatchProduced(
     MediaRunningTime produced,
     MediaRunningTime release,
     MediaRunningTime deadline,
-    std::uint64_t datagrams) noexcept
+    std::uint64_t datagrams,
+    std::uint64_t tsPayloadBytes) noexcept
 {
+    // Publication is not physical submission. Count every handed-off batch,
+    // including those produced before their release, independently of maxima.
+    saturatingAdd(m_snapshot.producedDatagrams, datagrams);
+    saturatingAdd(m_snapshot.producedTsPayloadBytes, tsPayloadBytes);
     const auto afterRelease = produced.checkedSubtract(release);
     if (!afterRelease ||
         afterRelease.value().nanoseconds() <=
@@ -155,17 +127,10 @@ void MediaTsEmissionDiagnostics::logSnapshot(
     std::ostringstream out;
     out << "mpegts_emission stage=" << stage
         << " generation=" << generation
-        << " datagrams=" << m_snapshot.datagrams
-        << " wire_bytes=" << m_snapshot.wireBytes
-        << " immediate_deadlines=" << m_snapshot.immediateDeadlines
-        << " deferred_deadlines=" << m_snapshot.deferredDeadlines
-        << " planned_wait_ns=" << m_snapshot.plannedWaitNanoseconds
-        << " late_datagrams=" << m_snapshot.lateDatagrams
-        << " maximum_lateness_ns="
-        << m_snapshot.maximumLatenessNanoseconds
+        << " produced_datagrams=" << m_snapshot.producedDatagrams
+        << " produced_ts_payload_bytes=" << m_snapshot.producedTsPayloadBytes
         << " pending_bytes=" << m_snapshot.pendingBytes
         << " peak_pending_bytes=" << m_snapshot.peakPendingBytes
-        << " pressure_failures=" << m_snapshot.pressureFailures
         << " access_units=" << m_snapshot.accessUnits
         << " current_scheduling_debt_ns="
         << m_snapshot.currentSchedulingDebtNanoseconds

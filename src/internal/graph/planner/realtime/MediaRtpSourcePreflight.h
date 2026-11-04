@@ -1,8 +1,11 @@
 #pragma once
 
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
+#include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
+#include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "internal/graph/planner/realtime/MediaRawRtpInputPreparer.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
 
 #include <chrono>
 #include <optional>
@@ -11,10 +14,21 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeInputConfig;
+struct MediaRealtimeCompositionSourceFacts;
+struct MediaPreparedInputRetentionPlan;
+struct MediaPreparedInputRetentionStream;
+class MediaPreparedRtpSourceSession;
+class MediaMasterClock;
+struct MediaPreparedRtpStorageAdmission;
 
 struct MediaRtpSourceObservation final {
     MediaDetectedRtpVideoSignaling signaling;
-    MediaRational frameRate;
+    MediaVideoSourceTiming timing;
+};
+
+struct MediaCapturingRtpSourceView final {
+    const MediaPreparedRealtimeInput& video;
+    const MediaPreparedRealtimeInput* audio;
 };
 
 struct MediaPreparedRtpSourceInputs final {
@@ -28,6 +42,11 @@ struct MediaPreparedRtpSourceView final {
     const MediaPreparedRealtimeInput* audio;
     const MediaRtpIngressPlan& videoIngress;
     const MediaRtpIngressPlan* audioIngress;
+    const MediaPreparedInputRetentionPlan* continuousRetention;
+    const MediaPreparedInputRetentionStream* continuousAudioRetention;
+    std::optional<MediaPreparedRtpStorageReservation> continuousStorage;
+    std::shared_ptr<MediaPreparationMemoryResource> continuousVideoResource;
+    const MediaPreparedRtpStorageAdmission* continuousAdmission;
 };
 
 class MediaPreparedRtpSource final {
@@ -44,12 +63,14 @@ private:
     friend class MediaRtpSourcePreflight;
     MediaPreparedRtpSource(MediaPreparedRawRtpProbe probe,
         MediaRtpIngressPlan videoIngress, std::optional<MediaRtpIngressPlan> audioIngress,
-        std::chrono::steady_clock::time_point deadline);
+        std::chrono::steady_clock::time_point deadline,
+        std::shared_ptr<MediaPreparedRtpSourceSession> continuousSource);
 
     std::optional<MediaPreparedRawRtpProbe> m_probe;
     MediaRtpIngressPlan m_videoIngress;
     std::optional<MediaRtpIngressPlan> m_audioIngress;
     std::chrono::steady_clock::time_point m_deadline;
+    std::shared_ptr<MediaPreparedRtpSourceSession> m_continuousSource;
 };
 
 // Input-only preparation: no encoder, output URL, graph ledger or output runtime.
@@ -62,15 +83,31 @@ public:
 
     static ::media::Result<MediaRtpSourcePreflight> begin(
         const MediaRealtimeInputConfig& input, MediaTranscodeStreamSet streamSet,
-        std::chrono::steady_clock::time_point deadline);
+        std::chrono::steady_clock::time_point deadline, std::stop_token cancellation,
+        const MediaPreparationStorageScope& scope, MediaRtpVideoPreparationIntent timingIntent);
     ::media::Result<MediaRtpSourceObservation> observation() const;
+    ::media::Result<MediaCapturingRtpSourceView> resources() const;
+    ::media::Status waitForVideoData(std::uint64_t previousIngressFrontier,
+        std::stop_token cancellation);
+    ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>> installContinuousSession(
+        const MediaRealtimeCompositionSourceFacts& facts,
+        const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation);
+    ::media::Status validateContinuousPreparation(
+        const std::shared_ptr<MediaPreparedRtpSourceSession>& source) const;
     ::media::Result<MediaPreparedRtpSource> seal() &&;
 
 private:
     MediaRtpSourcePreflight(MediaPreparedRawRtpProbe probe,
-        std::chrono::steady_clock::time_point deadline);
+        std::chrono::steady_clock::time_point deadline,
+        std::optional<MediaPreparedRtpIngressCandidate> videoCandidate,
+        std::optional<MediaPreparedRtpIngressCandidate> audioCandidate,
+        MediaPreparationStorageScope scope);
+    MediaPreparationStorageScope m_storageScope;
     std::optional<MediaPreparedRawRtpProbe> m_probe;
     std::chrono::steady_clock::time_point m_deadline;
+    std::shared_ptr<MediaPreparedRtpSourceSession> m_continuousSource;
+    std::optional<MediaPreparedRtpIngressCandidate> m_videoCandidate;
+    std::optional<MediaPreparedRtpIngressCandidate> m_audioCandidate;
 };
 
 } // namespace media::ffmpeg::graph

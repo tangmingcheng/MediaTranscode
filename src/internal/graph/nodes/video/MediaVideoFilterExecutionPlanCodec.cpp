@@ -9,7 +9,11 @@ namespace media::ffmpeg::graph {
     if (!plan.valid()) return ::media::Result<MediaNodeOptions>::failure(
         ::media::ErrorInfo::invalidArgument("video filter execution plan is incomplete"));
     MediaNodeOptions result;
+    if (plan.inputConsumption) result.set("filter.execution.input_consumption", "immediate_single_output");
     const bool source = plan.timing == MediaVideoFilterTimingAuthority::SourceFrame;
+    result.set("filter.execution.frame_product",
+        plan.frameProduct == MediaVideoFrameLineageProduct::CanonicalInterval
+            ? "canonical_interval" : "source_display_point");
     result.set("filter.execution.aspect", "preserve_source_aspect");
     result.set("filter.execution.timing", source ? "source_frame" : "prepared_encoder_metadata");
     result.set("filter.execution.allocation", source ? "independent_output_pool" : "negotiated_output");
@@ -35,6 +39,14 @@ namespace media::ffmpeg::graph {
     const auto invalid = [] { return Result::failure(::media::ErrorInfo::invalidArgument(
         "video filter execution options differ from a complete planner product")); };
     MediaVideoFilterExecutionPlan plan{};
+    if (options.has("filter.execution.input_consumption")) {
+        if (options.value("filter.execution.input_consumption") != "immediate_single_output") return invalid();
+        plan.inputConsumption = MediaVideoFilterInputConsumption::ImmediateSingleOutput;
+    }
+    const auto product = options.value("filter.execution.frame_product");
+    if (product == "canonical_interval") plan.frameProduct = MediaVideoFrameLineageProduct::CanonicalInterval;
+    else if (product == "source_display_point") plan.frameProduct = MediaVideoFrameLineageProduct::SourceDisplayPoint;
+    else return invalid();
     if (options.value("filter.execution.aspect") != "preserve_source_aspect") return invalid();
     plan.aspect = MediaVideoFilterAspectPolicy::PreserveSourceAspect;
     const auto timing = options.value("filter.execution.timing");

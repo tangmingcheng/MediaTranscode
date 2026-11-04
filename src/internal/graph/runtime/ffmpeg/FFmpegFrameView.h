@@ -6,13 +6,17 @@
 namespace media::ffmpeg::graph {
 
 struct MediaCanonicalLineage;
+struct MediaVideoDisplayLineage;
 
 class FFmpegFrameView final {
 public:
     static AVFrame* writableFrame(const MediaBufferRef& buffer) noexcept;
     static const AVFrame* frame(const MediaBufferRef& buffer) noexcept;
+    static const MediaVideoFrameReadiness* readiness(const MediaBufferRef& buffer) noexcept;
     static bool isFrame(const MediaBufferRef& buffer) noexcept;
     static std::shared_ptr<const MediaCanonicalLineage> canonicalLineage(
+        const MediaBufferRef& buffer) noexcept;
+    static std::shared_ptr<const MediaVideoDisplayLineage> displayLineage(
         const MediaBufferRef& buffer) noexcept;
     static const std::shared_ptr<MediaGraphPayloadCreditLease>& payloadCredit(
         const MediaBufferRef& buffer) noexcept;

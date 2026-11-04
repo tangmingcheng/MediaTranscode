@@ -12,7 +12,7 @@ class MediaPreparedVideoCanvas final {
 public:
     static ::media::Result<std::shared_ptr<MediaPreparedVideoCanvas>> prepare(
         const MediaVideoCanvasPreparationPlan& plan, AVBufferRef* productionHwFrames,
-        std::span<const AVFrame* const> preparedTiles,
+        std::span<const MediaVideoCanvasTile> preparedTiles,
         const std::shared_ptr<MediaPreparationStorageBudget>& payloadBudget,
         const MediaPreparationControl& control);
     ::media::Status validateBinding(

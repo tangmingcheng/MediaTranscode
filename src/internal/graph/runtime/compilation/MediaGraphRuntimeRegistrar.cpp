@@ -1,8 +1,10 @@
+#include "internal/graph/nodes/sync/MediaContinuousAudioAggregateNode.h"
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeRegistrar.h"
 
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/runtime/compilation/MediaDatagramServiceScopeAssembler.h"
+#include "internal/graph/planner/realtime/MediaNetworkStorageWakeupPlanner.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
@@ -11,6 +13,11 @@
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/nodes/input/RawRtpInputNode.h"
+#include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
+#include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
+#include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
+#include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 
 #include <algorithm>
 #include <utility>
@@ -40,6 +47,7 @@ namespace media::ffmpeg::graph {
         MediaAvReacquisitionAssemblyDependencies* reacquisition;
         std::shared_ptr<MediaAvStartupVideoPreparationState> preparation;
         std::shared_ptr<MediaPreparedVideoDecoder> decoder;
+        std::shared_ptr<MediaPreparedRtpSourceSession> rtpSource;
     };
     std::vector<SourceAssembly> sources;
     MediaAvOutputDomainRuntimeState* outputDomain = nullptr;
@@ -52,14 +60,14 @@ namespace media::ffmpeg::graph {
             shared->registration.processing.forEach([&](MediaNodeId member) { members.push_back(member); });
             sources.push_back(SourceAssembly{domain.groupKey, &shared->registration.input,
                 shared->registration.preparationOwner, std::move(members), &shared->activation,
-                &shared->reacquisition, shared->videoPreparation, nullptr});
+                &shared->reacquisition, shared->videoPreparation, nullptr, nullptr});
             if (shared->registration.rtpSdpPublisher)
                 mpegTsRtpSdpPublisher = context.graph()->findNode(*shared->registration.rtpSdpPublisher);
         } else if (auto* source = std::get_if<MediaAvSourceDomainRuntimeState>(&domain.role)) {
             sources.push_back(SourceAssembly{domain.groupKey, &source->registration.input,
                 source->registration.preparationOwner, source->registration.processingMembers,
                 &source->activation, &source->reacquisition, source->videoPreparation,
-                source->preparedVideoDecoder});
+                source->preparedVideoDecoder, source->preparedRtpSource});
         } else {
             if (outputDomain) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "A/V registration rejects multiple continuous output domains"));
@@ -128,7 +136,8 @@ namespace media::ffmpeg::graph {
             node.kind == MediaNodeKind::DemuxPacketClockBinder ||
             node.kind == MediaNodeKind::MpegTsRtpSdpPublisher)
             continue;
-        if (outputDomain && node.id == outputDomain->registration.activationOwner) continue;
+        if (outputDomain && (node.id == outputDomain->registration.activationOwner ||
+            node.id == outputDomain->registration.audioAggregate)) continue;
         if (scheduler.findNode(node.id)) continue;
         if (!MediaRuntimeNodeFactory::supported(node.kind)) {
             return ::media::Status::failure(::media::ErrorInfo::unsupported(
@@ -142,17 +151,134 @@ namespace media::ffmpeg::graph {
         for (const auto& scope : serviceScopes.value()) {
             if (scope.sender == node.id) { serviceScope = scope.arbiter; break; }
         }
+        std::optional<MediaNetworkStorageWakeupPlan> storageWakeups;
+        if (node.kind == MediaNodeKind::DatagramTransportPlanSource) {
+            auto planned = MediaNetworkStorageWakeupPlanner::plan(*context.graph(), node.id);
+            if (!planned) return ::media::Status::failure(planned.error());
+            storageWakeups = std::move(planned).value();
+        }
         std::shared_ptr<MediaAvStartupVideoPreparationState> preparation;
+        std::shared_ptr<MediaAvSyncGroupRuntime> preparationGroup;
+        std::optional<MediaLineageAllocationScope> preparationAllocation;
         for (const auto& source : sources) {
             if (node.id == source.input->releaseExtractor || node.id == source.preparationOwner) {
                 if (preparation) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "Runtime preparation consumer belongs to multiple source domains"));
                 preparation = source.preparation;
+                preparationGroup = context.findAvSyncGroup(source.groupKey);
+                if (node.kind == MediaNodeKind::VideoPreparation) {
+                    if (!preparationGroup) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                        "Video preparation has no registered source group"));
+                    if (preparationGroup->plan().startup.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan) {
+                        if (!source.rtpSource || !source.rtpSource->videoReferenceResource())
+                            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                                "Video preparation has no prepared source allocation owner"));
+                        preparationAllocation.emplace(MediaPreparedLineageAllocation{source.rtpSource->videoReferenceResource()});
+                    } else if (preparationGroup->plan().startup.videoReadiness == MediaVideoStartupReadiness::IntervalCoverage) {
+                        preparationAllocation.emplace(MediaRuntimeLineageAllocation{});
+                    } else {
+                        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                            "Video preparation has no planned source readiness"));
+                    }
+                }
             }
         }
-        auto runtimeNode = MediaRuntimeNodeFactory::create(
-            node, binding, preparation, protocolOutputAuthority, serviceScope);
+        std::shared_ptr<MediaAvSyncGroupRuntime> decodedStartupGroup;
+        std::shared_ptr<MediaPreparationMemoryResource> decodedStartupAllocation;
+        if (node.kind == MediaNodeKind::DecodedVideoStartup || node.kind == MediaNodeKind::CanonicalInput ||
+            node.kind == MediaNodeKind::AvStartupCoordinator ||
+            node.kind == MediaNodeKind::PlaybackEpochBinder) {
+            bool foundSource = false;
+            for (const auto& source : sources) {
+                if (std::find(source.members.begin(), source.members.end(), node.id) == source.members.end()) continue;
+                if (foundSource) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Decoded startup belongs to multiple source domains"));
+                foundSource = true;
+                decodedStartupGroup = context.findAvSyncGroup(source.groupKey);
+                if (node.kind != MediaNodeKind::DecodedVideoStartup && decodedStartupGroup &&
+                    decodedStartupGroup->plan().startup.videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan)
+                    continue;
+                if (!source.rtpSource) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                    "Decoded startup has no prepared source allocation owner"));
+                decodedStartupAllocation = source.rtpSource->videoReferenceResource();
+            }
+        }
+        if (node.kind == MediaNodeKind::VideoPreparation && !preparationAllocation)
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Video preparation has no explicit source allocation domain"));
+        auto runtimeNode = node.kind == MediaNodeKind::DecodedVideoStartup
+            ? MediaRuntimeNodeFactory::createDecodedVideoStartup(node, std::move(decodedStartupGroup),
+                std::move(decodedStartupAllocation))
+            : node.kind == MediaNodeKind::CanonicalInput && decodedStartupAllocation
+            ? MediaRuntimeNodeFactory::createCanonicalInput(node,
+                MediaPreparedLineageAllocation{std::move(decodedStartupAllocation)})
+            : node.kind == MediaNodeKind::AvStartupCoordinator && decodedStartupAllocation
+            ? MediaRuntimeNodeFactory::createStartupCoordinator(node,
+                MediaPreparedLineageAllocation{std::move(decodedStartupAllocation)})
+            : node.kind == MediaNodeKind::PlaybackEpochBinder && decodedStartupAllocation
+            ? MediaRuntimeNodeFactory::createStartupBinder(node,
+                MediaPreparedLineageAllocation{std::move(decodedStartupAllocation)})
+            : node.kind == MediaNodeKind::VideoPreparation
+            ? MediaRuntimeNodeFactory::createVideoPreparation(
+                node, std::move(preparationGroup), preparation, std::move(*preparationAllocation))
+            : MediaRuntimeNodeFactory::create(
+                node, binding, preparation, protocolOutputAuthority, serviceScope,
+                storageWakeups ? &*storageWakeups : nullptr,
+                context.graph()->protocolGenerationStorageFor(node.id));
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
+        if (auto* consumer = dynamic_cast<MediaSourceReferenceAllocation*>(runtimeNode.value().get())) {
+            const SourceAssembly* owner = nullptr;
+            for (const auto& source : sources) {
+                if (std::find(source.members.begin(), source.members.end(), node.id) == source.members.end()) continue;
+                if (owner) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Source frame processor belongs to multiple source domains"));
+                owner = &source;
+            }
+            if (owner) {
+                auto group = context.findAvSyncGroup(owner->groupKey);
+                if (!group) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                    "Source frame processor has no registered source group"));
+                if (!owner->rtpSource && group->plan().startup.videoReadiness ==
+                        MediaVideoStartupReadiness::DecodedPresentationSpan)
+                    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                        "Source frame processor has no prepared allocation owner"));
+                if (owner->rtpSource) {
+                    if (auto status = consumer->bindSourceReferenceResource(
+                            owner->rtpSource->videoReferenceResource()); !status) return status;
+                }
+            }
+        }
+        for (const auto& source : sources) {
+            if (!source.rtpSource) continue;
+            if (!source.input->rtpClock || source.input->demuxClock)
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP source requires its typed RTP registration"));
+            const auto& rtp = *source.input->rtpClock;
+            if (rtp.audioRaw.has_value() != rtp.audioBinder.has_value() ||
+                rtp.audioRaw.has_value() != source.rtpSource->plan().audio.has_value())
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration has inconsistent stream members"));
+            auto group = context.findAvSyncGroup(source.groupKey);
+            if (!group || group->clock() != source.rtpSource->clock())
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration requires its original master clock"));
+            if (node.id == rtp.videoRaw || (rtp.audioRaw && node.id == *rtp.audioRaw)) {
+                auto* raw = dynamic_cast<RawRtpInputNode*>(runtimeNode.value().get());
+                if (!raw) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration does not name a raw input"));
+                if (auto status = raw->bindPreparedSession(source.rtpSource); !status) return status;
+            } else if (node.id == rtp.clockGroup) {
+                auto* clock = dynamic_cast<MediaRtpClockGroupNode*>(runtimeNode.value().get());
+                if (!clock) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration does not name a clock group"));
+                if (auto status = clock->bindPreparedSession(source.rtpSource); !status) return status;
+            } else if (node.id == rtp.videoBinder || (rtp.audioBinder && node.id == *rtp.audioBinder)) {
+                auto* binder = dynamic_cast<MediaRtpPacketClockBinderNode*>(runtimeNode.value().get());
+                if (!binder) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration does not name a packet clock binder"));
+                if (auto status = binder->bindPreparedSession(source.rtpSource); !status) return status;
+            }
+        }
         if (outputDomain && node.kind == MediaNodeKind::CodecResolver) {
             auto* resolver = dynamic_cast<CodecResolverNode*>(runtimeNode.value().get());
             const auto* prepared = dynamic_cast<const FFmpegCodecContextBuffer*>(
@@ -250,10 +376,19 @@ namespace media::ffmpeg::graph {
             }
             inputs.push_back(MediaAvAggregateSourceRuntime{std::move(group), source.preparation});
         }
+        auto coordination = std::make_shared<MediaAvAggregateCoordination>(*outputDomain->aggregatePlan);
+        outputDomain->coordination = coordination;
+        const auto* audioNode = context.graph()->findNode(outputDomain->registration.audioAggregate);
+        if (!audioNode || audioNode->kind != MediaNodeKind::ContinuousAudioAggregate)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Continuous output lacks its audio aggregate"));
+        preparedNodes.push_back(std::make_unique<MediaContinuousAudioAggregateNode>(audioNode->id,
+            MediaContinuousAudioAggregateDependencies{
+                inputs[outputDomain->aggregatePlan->audioSource].group, output,
+                outputDomain->aggregatePlan, coordination}));
         auto runtimeNode = MediaRuntimeNodeFactory::createContinuousAggregateNode(
             *owner, MediaAvAggregateRuntimeDependencies{
                 std::move(inputs), std::move(output), std::move(*outputDomain->activation),
-                outputDomain->aggregatePlan, outputDomain->preparedCanvas});
+                outputDomain->aggregatePlan, outputDomain->preparedCanvas, std::move(coordination)});
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
@@ -287,12 +422,28 @@ namespace media::ffmpeg::graph {
                 std::move(registration.value().registration));
             if (!registered) return registered;
         }
+        if (outputDomain && source.groupKey == outputDomain->aggregatePlan->sources[
+            outputDomain->aggregatePlan->audioSource].groupKey) {
+            const auto audio = std::find_if(preparedNodes.begin(), preparedNodes.end(), [&](const auto& node) {
+                return node->nodeId() == outputDomain->registration.audioAggregate;
+            });
+            if (audio == preparedNodes.end()) return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized("Selected source purge lacks its audio aggregate"));
+            const auto* runtime = dynamic_cast<MediaContinuousAudioAggregateNode*>(audio->get());
+            if (!runtime) return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Audio aggregate role differs"));
+            if (auto status = assembler.value().registerTarget(MediaAvGenerationParticipant::CanonicalLineage,
+                {"aggregate_audio", runtime->sourcePurgeTarget()}); !status) return status;
+        }
         auto participants = assembler.value().seal();
         if (!participants) return ::media::Status::failure(participants.error());
         std::vector<std::shared_ptr<MediaNodeWakeup>> wakeups;
         wakeups.reserve(source.members.size());
         for (const auto member : source.members) wakeups.push_back(context.sharedNodeWakeup(member));
-        if (outputDomain) wakeups.push_back(context.sharedNodeWakeup(outputDomain->registration.activationOwner));
+        if (outputDomain) {
+            wakeups.push_back(context.sharedNodeWakeup(outputDomain->registration.activationOwner));
+            if (source.groupKey == outputDomain->aggregatePlan->sources[outputDomain->aggregatePlan->audioSource].groupKey)
+                wakeups.push_back(context.sharedNodeWakeup(outputDomain->registration.audioAggregate));
+        }
         auto coordinator = MediaAvReacquisitionCoordinator::create(
             source.groupKey, source.reacquisition->transitionService,
             source.reacquisition->masterClock, std::move(participants).value(), std::move(wakeups),

@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/builder/segments/MediaOutputSegmentBindings.h"
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
@@ -25,6 +26,8 @@ struct MediaScheduledRtpOutputSegmentResult final {
     MediaNodeId audioSender;
     MediaNodeId sdpPublisher;
     std::vector<MediaNodeId> outputMembers;
+    MediaOutputSegmentBindings bindings;
+    MediaOutputSegmentBindings executionBindings;
 };
 
 struct MediaVideoOnlyScheduledRtpOutputSegmentOptions final {
@@ -37,6 +40,8 @@ struct MediaVideoOnlyScheduledRtpOutputSegmentOptions final {
 struct MediaVideoOnlyScheduledRtpOutputSegmentResult final {
     MediaNodeId videoSender;
     MediaNodeId sdpPublisher;
+    MediaOutputSegmentBindings bindings;
+    MediaOutputSegmentBindings executionBindings;
 };
 
 class MediaScheduledRtpOutputSegmentBuilder final {

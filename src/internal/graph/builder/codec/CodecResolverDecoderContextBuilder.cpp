@@ -1,6 +1,7 @@
+#include "internal/graph/sync/lineage/MediaVideoDecodeLineageOption.h"
 #include "internal/graph/builder/codec/CodecResolverDecoderContextBuilder.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
-#include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
+#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -90,29 +91,6 @@ void codecResolverLog(MediaGraphDiagnosticLevel level, const std::string& messag
 
 } // namespace
 
-::media::Status CodecResolverDecoderContextBuilder::validateInputRetention(
-    const AVCodecContext& context, const MediaNodeOptions& options)
-{
-    if (!options.has("decoder.pipeline.input_retention.maximum_internal_packets"))
-        return ::media::Status::success();
-    auto count = requiredPositiveIntNodeOption(&options, "CodecResolverNode",
-        "decoder.pipeline.input_retention.thread_count");
-    auto type = requiredNonNegativeIntNodeOption(&options, "CodecResolverNode",
-        "decoder.pipeline.input_retention.thread_type");
-    auto planned = requiredPositiveInt64NodeOption(&options, "CodecResolverNode",
-        "decoder.pipeline.input_retention.maximum_internal_packets");
-    if (!count || !type || !planned) return ::media::Status::failure(
-        !count ? count.error() : !type ? type.error() : planned.error());
-    auto observed = MediaDecoderInputRetentionAdapter::readAfterOpen(
-        context, options.value("pipeline.hwaccel"));
-    if (!observed || context.thread_count != count.value() ||
-        context.thread_type != type.value() ||
-        observed->maximumInternalPackets() > static_cast<std::uint64_t>(planned.value())) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "opened decoder threads or input retention differ from the prepared allocation contract"));
-    }
-    return ::media::Status::success();
-}
 
 ::media::Result<CodecResolverDecoderContextBuildResult>
 CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuildRequest& request)
@@ -159,6 +137,17 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
         options, "video.lineage.decoder_copy_opaque");
     if (!copyOpaque) {
         return Result::failure(copyOpaque.error());
+    }
+    auto lineageProduct = parseMediaVideoDecodeLineageOption(options, copyOpaque.value());
+    if (!lineageProduct) return Result::failure(lineageProduct.error());
+    if (request.preparationLineage) {
+        if ((options && options->has("video.lineage.capacity")) ||
+            (*request.preparationLineage != MediaVideoLineagePropagation::CodecCopyOpaque &&
+             *request.preparationLineage != MediaVideoLineagePropagation::SubmissionOrder))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Prepared decoder requires one explicit lineage authority"));
+        copyOpaque = ::media::Result<bool>::success(
+            *request.preparationLineage == MediaVideoLineagePropagation::CodecCopyOpaque);
     }
     if (copyOpaque.value()) {
 #if defined(AV_CODEC_FLAG_COPY_OPAQUE)
@@ -279,16 +268,17 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
         decoderContext->thread_count = count.value();
         decoderContext->thread_type = type.value();
     }
+    const bool suppliedHardwareFramesContext = decoderContext->hw_frames_ctx != nullptr;
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
     if (openRet < 0) {
         return Result::failure(FFmpegGraphError::fromCode(openRet, "avcodec_open2(video decoder)"));
     }
 
     if (options) {
-        if (auto retained = validateInputRetention(*decoderContext, *options); !retained)
+        if (auto retained = MediaDecoderInputRetentionOptionCodec::validateOpened(*decoderContext, *options); !retained)
             return Result::failure(retained.error());
     }
-    MediaDecoderRuntimeFacts facts{decoder->name, decoderContext->hwaccel_flags};
+    MediaDecoderRuntimeFacts facts{decoder->name, decoderContext->hwaccel_flags, suppliedHardwareFramesContext};
     codecResolverLog(MediaGraphDiagnosticLevel::State,
         std::string("decoder.runtime name=") + decoder->name +
         " hwaccel_flags=" + std::to_string(decoderContext->hwaccel_flags));

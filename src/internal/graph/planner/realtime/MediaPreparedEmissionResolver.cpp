@@ -41,10 +41,20 @@ MediaPreparedEmissionResolver::resolve(
     MediaRational outputFrameRate,
     const MediaAudioPipelinePlan* audioPipeline)
 {
-    const auto& video = videoPipeline.selected.encoder.preparedEmission;
-    if (!videoPipeline.enabled ||
-        videoPipeline.branchMode != MediaBranchMode::TranscodeFrame ||
-        !video || video->sustainedPayloadBytesPerSecond == 0 ||
+    if (!videoPipeline.enabled || videoPipeline.branchMode != MediaBranchMode::TranscodeFrame)
+        return ::media::Result<MediaPreparedRealtimeEmissionSet>::failure(
+            ::media::ErrorInfo::notInitialized("wire planning requires frame transcode output"));
+    return resolveOutput(videoPipeline.selected, outputFrameRate, audioPipeline);
+}
+
+::media::Result<MediaPreparedRealtimeEmissionSet>
+MediaPreparedEmissionResolver::resolveOutput(
+    const MediaVideoOutputPlan& videoOutput,
+    MediaRational outputFrameRate,
+    const MediaAudioPipelinePlan* audioPipeline)
+{
+    const auto& video = videoOutput.encoder.preparedEmission;
+    if (!video || video->sustainedPayloadBytesPerSecond == 0 ||
         video->peakPayloadBytesPerSecond <
             video->sustainedPayloadBytesPerSecond ||
         video->maximumAccessUnitPayloadBytes == 0 ||
@@ -64,7 +74,7 @@ MediaPreparedEmissionResolver::resolve(
     }
 
     MediaPreparedRealtimeEmissionSet resolved{
-        *video, std::nullopt, std::nullopt, std::nullopt};
+        *video, std::nullopt, std::nullopt, std::nullopt, videoOutput.encoder.preparedCodecParameters};
     if (!audioPipeline) {
         return ::media::Result<MediaPreparedRealtimeEmissionSet>::success(
             std::move(resolved));
@@ -72,7 +82,8 @@ MediaPreparedEmissionResolver::resolve(
     const auto& audio = audioPipeline->preparedEmission;
     if (!audioPipeline->enabled ||
         audioPipeline->branchMode != MediaBranchMode::TranscodeFrame ||
-        !audio || audio->sustainedPayloadBytesPerSecond == 0 ||
+        !audio || audio->codecId == AV_CODEC_ID_NONE ||
+        audio->sustainedPayloadBytesPerSecond == 0 ||
         audio->peakPayloadBytesPerSecond <
             audio->sustainedPayloadBytesPerSecond ||
         audio->maximumAccessUnitPayloadBytes == 0 ||

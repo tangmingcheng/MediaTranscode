@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaVideoCanvasPlan.h"
+#include "internal/graph/model/MediaVideoFrameLineageProduct.h"
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -17,6 +18,15 @@ struct MediaAvAggregateSourcePlan final {
     std::string videoPort;
     std::size_t maximumVideoCandidates;
     std::optional<std::string> discardedAudioPort;
+    std::string videoIdentity;
+    std::optional<std::string> audioIdentity;
+    MediaVideoFrameLineageProduct videoProduct;
+};
+
+struct MediaAvAggregateStoragePlan final {
+    std::uint64_t fixedStorageBytes;
+    std::uint64_t retainedMetadataBytes;
+    std::uint64_t maximumRetainedObjects;
 };
 
 struct MediaAvContinuousAggregateTopology {
@@ -34,6 +44,7 @@ struct MediaAvContinuousAggregateTopology {
     std::int64_t maximumAudioCandidateSamples;
     std::size_t maximumAudioContributions;
     std::uint64_t maximumMetadataBytes;
+    MediaAvAggregateStoragePlan storage;
 };
 
 struct MediaAvContinuousAggregatePlan final : MediaAvContinuousAggregateTopology {

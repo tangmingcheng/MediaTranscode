@@ -6,12 +6,14 @@
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaRtpDatagramMaterializerNodePlanCodec.h"
 #include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
+#include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 #include "internal/graph/runtime/validation/MediaDatagramOutputGraphShapeValidator.h"
 #include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 
 #include <array>
 #include <initializer_list>
+#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -327,7 +329,7 @@ bool exactAudioVideoCodecEdges(
     const MediaPort* materializerBatch =
         materializer.findInputPort("protocol_batch");
     const MediaPort* muxBatch = mux.findOutputPort("batch");
-    if (source.inputPorts.size() != 1 || source.outputPorts.size() != 1 ||
+    if (source.inputPorts.size() != 2 || source.outputPorts.size() != 1 ||
         !MediaGraphShapeQuery::validPort(sourceActivation, MediaPortDirection::Input,
                    MediaStreamKind::Metadata, MediaEdgeKind::Event,
                    MediaPayloadKind::GraphEvent) ||
@@ -415,11 +417,18 @@ bool exactAudioVideoCodecEdges(
     const MediaAvDomainValidationView& binding,
     const MediaProjectMpegTsRuntimeOutputPlan& product)
 {
+    std::optional<int> outputSampleRate;
+    if (const auto* output = std::get_if<MediaAvOutputDomainBinding>(&binding.role)) {
+        if (output->aggregatePlan)
+            outputSampleRate = output->aggregatePlan->audio.sampleRate();
+    } else if (std::holds_alternative<MediaAvSharedSourceOutputDomainBinding>(binding.role)) {
+        outputSampleRate = binding.plan.audioServo.outputSampleRate;
+    }
     const auto* program = product.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
-        binding.plan.audioServo.outputSampleRate &&
-        *binding.plan.audioServo.outputSampleRate ==
+        outputSampleRate &&
+        *outputSampleRate ==
             MediaAacSampleRates[program->aac.samplingFrequencyIndex];
     if (!binding.plan.projectMpegTsOutput ||
         !binding.plan.projectMpegTsOutput->outputMux ||

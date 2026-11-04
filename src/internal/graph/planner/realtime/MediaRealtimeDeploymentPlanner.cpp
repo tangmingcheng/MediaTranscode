@@ -4,12 +4,12 @@
 
 #include "internal/graph/planner/realtime/MediaDatagramRouteProbe.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramPayloadPlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpEmissionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTransportTimingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
-#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
 #include <algorithm>
@@ -158,9 +158,11 @@ template <typename Emission>
 {
     const auto ipHeader = mtu.addressFamily == MediaIpAddressFamily::Ipv4
         ? Ipv4HeaderBytes : Ipv6HeaderBytes;
-    const auto maximumUdpPayload = (std::min)(
-        mtu.senderMaximumPayloadBytes,
-        mtu.maximumIpPacketBytes - ipHeader - UdpHeaderBytes);
+    auto payload = MediaRealtimeDatagramPayloadPlanner::maximumPayloadBytes(mtu);
+    if (!payload) {
+        return ::media::Result<MediaWireTrafficEnvelope>::failure(payload.error());
+    }
+    const auto maximumUdpPayload = payload.value();
     auto videoUnits = accessUnitsPerSecond(
         emission.video.accessUnitsPerSecondNumerator,
         emission.video.accessUnitsPerSecondDenominator,
@@ -210,28 +212,39 @@ template <typename Emission>
                 ::media::ErrorInfo::unsupported(
                     "route MTU cannot carry fragmented RTP payload"));
         }
-        const auto capacity = maximumUdpPayload -
-            RtpAndMaximumFragmentHeaderBytes;
-        const auto codecName = canonicalCodecName(
-            request.parameters.video.codecName);
-        if (codecName != "h264" && codecName != "hevc") {
+        if (!emission.videoCodecParameters) {
             return ::media::Result<MediaWireTrafficEnvelope>::failure(
-                ::media::ErrorInfo::unsupported(
-                    "separate RTP admission requires H.264 or HEVC output"));
+                ::media::ErrorInfo::notInitialized("RTP admission requires opened video codec facts"));
         }
-        const auto codec = codecName == "h264"
-            ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
+        auto videoEmission = MediaPreparedRtpEmissionPlanner::video(
+            emission.video, *emission.videoCodecParameters,
+            static_cast<std::size_t>(maximumUdpPayload));
+        if (!videoEmission) {
+            return ::media::Result<MediaWireTrafficEnvelope>::failure(videoEmission.error());
+        }
+        const auto codec = videoEmission.value().packetizationMode() ==
+            MediaScheduledRtpPacketizationMode::H264AnnexB
+                ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
         auto videoPacketRate = MediaDeterministicVideoRtpPacketizer::
             maximumDatagramsForPayloadWindow(
                 emission.video.peakPayloadBytesPerSecond,
                 videoUnits.value(), codec,
                 maximumUdpPayload - RtpHeaderBytes);
+        std::optional<MediaRtpAccessUnitEmissionContract> audioEmission;
+        if (emission.audio) {
+            auto preparedAudio = MediaPreparedRtpEmissionPlanner::audio(
+                *emission.audio, static_cast<std::size_t>(maximumUdpPayload));
+            if (!preparedAudio) {
+                return ::media::Result<MediaWireTrafficEnvelope>::failure(preparedAudio.error());
+            }
+            audioEmission = std::move(preparedAudio).value();
+        }
         auto audioPacketRate = emission.audio
-            ? MediaCheckedArithmetic::add(
-                  ceilDivide(
-                      emission.audio->peakPayloadBytesPerSecond, capacity),
-                  audioUnits.value(),
-                  "audio RTP payload packet rate")
+            ? MediaCheckedArithmetic::ceilScale(
+                  audioEmission->maximumDatagramsPerAccessUnit(),
+                  emission.audio->accessUnitsPerSecondNumerator,
+                  emission.audio->accessUnitsPerSecondDenominator,
+                  "RTP contracted datagram rate")
             : ::media::Result<std::uint64_t>::success(0);
         auto payloadPacketRate = videoPacketRate && audioPacketRate
             ? MediaCheckedArithmetic::add(
@@ -248,23 +261,11 @@ template <typename Emission>
                 emission.video.maximumBurstPayloadBytes,
                 emission.video.maximumEncoderRetainedFrames, codec,
                 maximumUdpPayload - RtpHeaderBytes);
-        auto audioBurstDatagrams = emission.audio
-            ? MediaCheckedArithmetic::add(
-                  ceilDivide(
-                      emission.audio->maximumBurstPayloadBytes, capacity),
-                  1U, "audio RTP burst boundary")
-            : ::media::Result<std::uint64_t>::success(0);
-        auto videoAtomicDatagrams = MediaDeterministicVideoRtpPacketizer::
-            maximumDatagramsForPayloadWindow(
-                emission.video.maximumAccessUnitPayloadBytes, 1U, codec,
-                maximumUdpPayload - RtpHeaderBytes);
-        auto audioAtomicDatagrams = emission.audio
-            ? MediaCheckedArithmetic::add(
-                  ceilDivide(
-                      emission.audio->maximumAccessUnitPayloadBytes,
-                      capacity),
-                  1U, "audio RTP atomic access-unit boundary")
-            : ::media::Result<std::uint64_t>::success(0);
+        auto audioBurstDatagrams = ::media::Result<std::uint64_t>::success(
+            audioEmission ? audioEmission->maximumDatagramsPerAccessUnit() : 0);
+        auto videoAtomicDatagrams = ::media::Result<std::uint64_t>::success(
+            videoEmission.value().maximumDatagramsPerAccessUnit());
+        auto audioAtomicDatagrams = audioBurstDatagrams;
         auto mediaBurstDatagrams =
             videoBurstDatagrams && audioBurstDatagrams
             ? MediaCheckedArithmetic::add(
@@ -600,16 +601,34 @@ template <typename Emission>
         "prepared-emission+protocol-upper-envelope+route-mtu"});
 }
 
-std::uint64_t endpointCount(const MediaRealtimeRtpTranscodeRequest& request)
+::media::Result<MediaDatagramProtocolLayout> protocolLayout(
+    const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (request.output.transport == MediaOutputTransportKind::UdpDatagrams) {
-        return 1;
+    using Result = ::media::Result<MediaDatagramProtocolLayout>;
+    if (!request.output.transport) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Datagram output transport must be explicit"));
+    const auto streams = request.parameters.execution.streamSet;
+    if (streams != MediaTranscodeStreamSet::VideoOnly &&
+        streams != MediaTranscodeStreamSet::AudioVideo) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram output stream set is unsupported"));
     }
-    return request.parameters.execution.streamSet ==
-            MediaTranscodeStreamSet::AudioVideo &&
-            request.output.streamLayout ==
-                RealtimeOutputStreamLayout::SeparateStreams
-        ? 4 : 2;
+    if (request.output.streamLayout == RealtimeOutputStreamLayout::SeparateStreams &&
+        request.output.transport == MediaOutputTransportKind::RtpAvp) {
+        return Result::success(streams == MediaTranscodeStreamSet::AudioVideo
+            ? MediaDatagramProtocolLayout::SeparateAvRtp
+            : MediaDatagramProtocolLayout::VideoRtp);
+    }
+    if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
+        switch (*request.output.transport) {
+        case MediaOutputTransportKind::RtpAvp:
+            return Result::success(MediaDatagramProtocolLayout::MpegTsRtp);
+        case MediaOutputTransportKind::UdpDatagrams:
+            return Result::success(MediaDatagramProtocolLayout::MpegTsUdp);
+        }
+    }
+    return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Datagram transport and stream layout are unsupported"));
 }
 
 ::media::Result<MediaRealtimeDeploymentLatencyBudget> pacingLatency(
@@ -722,7 +741,19 @@ MediaRealtimeDeploymentPlanner::planBase(
         return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(
             transportTiming.error());
     }
-    const auto count = endpointCount(request);
+    auto layout = protocolLayout(request);
+    if (!layout) return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(layout.error());
+    auto topology = mediaDatagramProtocolTopology(layout.value());
+    if (!topology) return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(topology.error());
+    auto payload = MediaRealtimeDatagramPayloadPlanner::maximumPayloadBytes(mtu.value());
+    if (!payload) return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(payload.error());
+    auto producers = MediaPreparedRtpEmissionPlanner::producers(layout.value(), emission,
+        static_cast<std::size_t>(payload.value()), MediaRtpOutputIdentityPlanner::cname(request.mediaId));
+    if (!producers) return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(producers.error());
+    auto mpegTsProducer = planMpegTsProducer(layout.value(), static_cast<std::size_t>(payload.value()),
+        MediaRtpOutputIdentityPlanner::cname(request.mediaId));
+    if (!mpegTsProducer) return ::media::Result<MediaRealtimeDeploymentBasePlan>::failure(mpegTsProducer.error());
+    const auto count = topology.value().endpointRoles.size();
     const auto maximumResidence = latency.value().maximumResidence;
     MediaRealtimeDeploymentBasePlan result{
         {MediaDatagramServiceScopeKind::ProvisionedEgress,
@@ -739,7 +770,7 @@ MediaRealtimeDeploymentPlanner::planBase(
          "planner-owned-asynchronous-transmit-evidence"},
         std::move(transportTiming).value(),
         std::nullopt, std::move(wire).value(),
-        provisionedWireCapacityBytesPerSecond, count};
+        provisionedWireCapacityBytesPerSecond, layout.value(), std::move(producers).value(), std::move(mpegTsProducer).value()};
     if (request.output.transport == MediaOutputTransportKind::RtpAvp) {
         result.rtcpSession = MediaRealtimeRtcpSessionCapability{
             2, "unicast-sender-and-single-destination"};
@@ -787,7 +818,7 @@ MediaRealtimeDeploymentPlanner::complete(
         wire.maximumAtomicDatagrams);
     auto network = MediaRealtimeNetworkResourceLedgerPlanner::plan(
         base.latency, base.observation, wire,
-        base.localPorts.addressFamily, base.endpointCount);
+        base.localPorts.addressFamily, base.protocolLayout, base.rawRtpProducers, base.mpegTsProducer);
     if (!network) {
         return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
             network.error());
@@ -802,7 +833,8 @@ MediaRealtimeDeploymentPlanner::complete(
     }
     MediaRealtimeDeploymentEnvelopeEncoding encoding{
         std::move(base.serviceScope), std::move(base.mtu), std::move(service),
-        {totalNetwork.value(), "prepared-wire-resource-ledger"},
+        {totalNetwork.value(), base.protocolLayout, "prepared-wire-resource-ledger",
+         std::move(base.rawRtpProducers), std::move(base.mpegTsProducer)},
         std::move(base.localPorts), std::move(base.latency),
         std::move(base.observation), std::move(base.transportTiming),
         std::move(base.rtcpSession)};

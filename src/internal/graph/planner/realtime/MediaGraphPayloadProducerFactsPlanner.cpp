@@ -13,6 +13,7 @@ namespace {
     const MediaRealtimeGraphResourceLedgerPlan& ledger)
 {
     if (producerKind == MediaNodeKind::RawRtpInput ||
+        producerKind == MediaNodeKind::RtpPacketClockBinder ||
         producerKind == MediaNodeKind::Demux ||
         producerKind == MediaNodeKind::MpegTsDemux ||
         producerKind == MediaNodeKind::PacketNormalize) {
@@ -22,7 +23,8 @@ namespace {
                 ::media::ErrorInfo::unsupported(
                     "producer registry lacks a prepared input allocation envelope"));
         }
-        const auto expectedSource = producerKind == MediaNodeKind::RawRtpInput
+        const auto expectedSource = (producerKind == MediaNodeKind::RawRtpInput ||
+                                     producerKind == MediaNodeKind::RtpPacketClockBinder)
             ? MediaPreparedInputPayloadSource::RawRtpAccessUnit
             : producerKind == MediaNodeKind::Demux
             ? MediaPreparedInputPayloadSource::GenericDemuxPacket
@@ -85,6 +87,7 @@ std::string allocationAuthority(
     bool deviceBacked)
 {
     if ((producerKind == MediaNodeKind::RawRtpInput ||
+         producerKind == MediaNodeKind::RtpPacketClockBinder ||
          producerKind == MediaNodeKind::Demux ||
          producerKind == MediaNodeKind::MpegTsDemux ||
          producerKind == MediaNodeKind::PacketNormalize) &&
@@ -118,7 +121,7 @@ try {
             if (!bound) return Result::failure(bound.error());
             std::optional<MediaFrameCreditContract> frame;
             if (edge.payloadKind == MediaPayloadKind::Frame) {
-                auto contract = MediaGraphFrameCreditContractPlanner::plan(node, bound.value());
+                auto contract = MediaGraphFrameCreditContractPlanner::plan(node, edge.streamKind, bound.value());
                 if (!contract) return Result::failure(contract.error());
                 frame = std::move(contract).value();
             }

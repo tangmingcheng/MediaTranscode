@@ -1,0 +1,180 @@
+# TS 存储闭合实施契约
+
+2026-10-22：源码与独立审查确认整体 FAIL。本文件约束下一实施，不代表已实现或通过验收。不新增公共字段、独立预算根或平台专用媒体链路。
+
+## 权威依据与当前差异
+
+GStreamer 采用共享内存对象、最后引用归还及有上限的 buffer pool：https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html 。本仓库已存在等价的基础分配机制，但 TS 所有权尚未接入。
+
+- `MediaBudgetMemoryResource` 先预约实际分配请求、头部与对齐，真实释放后归还 lease；沿用当前 generation 的 `MediaWireGlobalSequenceState::storageResource()`。
+- `MediaFixedCapacityStorage` 提供精确数组及环形存储。直接把 vector/deque 换成 PMR 不足以证明容量；不得猜测 STL capacity、deque块/map或shared控制块大小。
+- `MediaTsTransportPacketizer::prepareRemaining` 清除 active cursor 后仍保留 continuity reservation；每PID一个active不等于每PID一个存活series。
+- `MediaTsMuxSession::takeScheduledBatch` 出队扣账，但 prefix→commit state→cursor→packet backing 仍可能存活。队列 maxBytes 不是总存储上界。
+- `MediaRealtimeNetworkResourceLedgerPlanner` 的TS collectionBytes为0；final ledger标记network覆盖尚不成立。
+
+## 必须一起完成的接线
+
+1. 最终planner由现有seriesBounds、最终图边容量及已核验的pending/active/handoff所有权，形成typed storage产品：每类packet/descriptor容量、同时存活series、continuity及mux队列容量、framing/cache、control/model/shared allocation geometry、prefix容量。排队、待交接、materializer pending、wire active和sender handoff的同时持有必须计入；不得仅取最大单项。
+2. 将产品加入现有reservedUserspaceBytes并回填UDP/RTP及普通、动态、合屏路径。确认回填发生在final graph容量确定之后；codec完整往返并复验。
+3. 从既有DatagramTransportPlan向mux传递同generation resource控制事实；与project runtime plan核对session/generation，二者齐备才activate。Binding携带typed产品与同一个resource。实现前核对控制边无环及启动顺序；禁止在mux创建第二预算根。
+4. 复用FixedCapacityStorage替换隐式增长容器；packet backing、descriptor、cursor、batch、commit state和type-erased transaction model全部预算化。model实际布局须包含虚表等开销；共享控制块使用经审计的geometry。
+5. 一个series整体预约后拆分到各实际分配，必须先于连续性变更、revision推进和active清除。prefix也必须先于global reservation及protocol offset推进准备成功。预算压力保持原输入/状态并等待释放唤醒；真实堆失败保留terminal错误。
+6. lease跟随实际allocation直到最后owner释放；workspace缓存仍占用额度。取消、generation purge、部分prefix提交失败及下游丢弃均须覆盖。
+
+## 平台与验收门禁
+
+共享allocation probe当前仅接受MSVC STL145/202604，其他实现显式unsupported；不能据此宣称RKMPP支持。Linux须基于目标标准库真实能力补adapter证据，媒体DAG仍共享。
+
+完成全部接线后冻结代码，两个未参与实现的智能体逐项审查容量及所有权图；修复后双复审。先Windows Release原规格realtime三源/失源/重入和压力失败路径，记录预算高水位、最终释放、CPU/内存及A/V；再RKMPP。VLC仅原生快照，逐轮记录后清理临时产物。RSS平稳、构建通过或单切片PASS均不替代完整闭合。
+
+## 调度并行审查边界
+
+缺头等待没有时间唤醒；但processMedia里的releaseTime是最早可释放时间，不是最晚失败截止，不能到release就报错。通用FFmpeg send/receive及COPY_OPAQUE允许零/多输出，不能用一次packet或EAGAIN证明输入AU完整结束。NVENC的surface bitstream输出及opaque转移提供进一步adapter调查入口；尚未形成planner capability与有序future-dispatch frontier。不得用上一AU+duration猜测下一DTS，或通过放宽截止规避r291。
+
+## 控制事实接线实施（2026-10-22）
+
+已选择通过现有project plan-source汇合activation与transport plan，强校验同session/generation后在runtime plan携带同一globalSequence，mux generation state持有并purge释放。共享builder覆盖AV/VideoOnly，shape验证两路输入及同activation来源。首次双审发现VideoOnly端口计数遗漏和purge并发回写，均已修复；复用owner-thread purge排空两输入、授权退休transport并取消pending publication。最后仅将激活permit正常撤权Cancelled转WouldBlock等待purge，其他错误保留，最终双独立源码审查PASS。
+
+首轮Release全量735项exit0；最后撤权修订后另一次全量重建正在执行，不能沿用首轮结果证明最新源码。此切片只接控制资源事实；实际TS分配、typed存活上界以及storage-release通知直达mux仍未接通，不记预算闭合。
+
+最新撤权修订后Release全量735项configure/build=0，cache/Ninja/两个CLI齐全，未运行local CLI。r300原规格三源实流已输出，约33秒sender sequence19477提交晚94872ns而失败，CLI1；payload归零、34323预约与释放一致。没有late_output_commit记录，不能直接归因r291或控制接线。源与VLC已中止并清理，10项临时产物删除，见realtime-composition-r300-validation.md；不计本切片媒体验收通过。
+
+## 存储释放唤醒接线决定（2026-10-22，待实现）
+
+已核验MediaDatagramTransportPlanSourceNode::start仅收集typed transport直接消费者；project plan-source转交同一资源到mux后，mux不在通知集合。MediaGraphExecutionContext仅提供按ID获取wakeup，没有可直接复用的资源转发订阅接口。registerReservationWakeup属于wire序列预约等待域，不能替代存储释放通知。
+
+采用编译期planner按最终图和真实资源传递边生成内部typed集合{transportSource,sessionKey,producerTargets}：保留直接transport消费者，并从同session的project runtime plan边及typed TS batch生产边确认mux，去重并校验存在性/所属关系。运行时不递归猜测下游；registrar/factory注入产品，start只做ID到weak wakeup绑定。复用MediaStorageReleaseNotification的冻结weak targets和预算释放后通知，不新增另一套通知系统。可参考runtime/compilation/MediaDatagramServiceScopeAssembler与MediaGraphRuntimeRegistrar的规划/装配分离，决策仍在planner。缺失或不匹配产品须在运行前失败。
+
+此项尚未编码，不能记为预算闭合；仍须实际TS分配lease、最终容量和所有权完整接线、双审及真实Windows/RKMPP验收。等待序号取样须继续由现有节点执行器保证，避免释放发生于检查压力与进入等待之间时丢唤醒。
+
+## 通知接线实现与双审（2026-10-22）
+
+已新增MediaNetworkStorageWakeupPlanner，在最终图生成source/session/producerTargets；transport节点只绑定已规划ID的weak wakeup。普通registrar和动态MediaRealtimeSegmentFactory均显式注入，动态路径拒绝segment外目标，factory缺产品失败。8个源码文件UTF-8/CRLF检查与git diff --check通过。
+
+两个未参与实现的独立智能体scheduler_frontier_audit、storage_wakeup_review_b均明确PASS：真实typed forwarding/TS batch边、同session及动态隔离、weak生命周期、pressureArmed锁外通知与worker先采样序号均核对。源码结论不替代媒体验收，不代表实际TS分配已纳入预算。Release全量构建已启动，结果待核验；预定r303验证命令见对应文档。
+
+通知接线后Release全量736项exit0，r303无调试器三源120秒/失源全黑/caller_stop基础链路完成；源及CLI均exit0，errors0，payload0，预约释放143842一致。压力失败0，未覆盖重入或动态输出，不能证明压力唤醒实际触发或旧崩溃/超期修复。结果及命令见realtime-composition-r303-validation.md。
+
+## Prefix 提交对象闭合（2026-10-22，实施中）
+
+当前真实代码：MediaMpegTsUdpWireDatagramMaterializer::complete和MediaRtpWireDatagramMaterializer::complete先globalSequence.reserve，再由takeCommitTransaction调用make_unique分配TS prefix Model。此分配位于不可重试的序号预约之后，尚未计入预算。沿现有MediaWireCommitPreparation的整体预约/预分配策略修正，不改变媒体时序、协议截止或失败约束。
+
+实现范围：commitStorage增加仅TS适用的内部prefix几何事实；由真实Model类型sizeof/alignof取得（含虚表），不估算布局。统一准备阶段从同一network resource预约并持有未构造内存；complete仅在预备内存中构造和绑定prefix，成功后推进protocol offset。UDP/RTP共用，raw RTP不要求TS字段。producer slot、active和sender handoff同时持有的开销均纳入现有storage planner；所有权跟随实际Model析构和释放归还lease。缺产品/几何不符明确失败，pressure保留pending状态；不得提前构造会在析构时abandon协议的已激活prefix。
+
+本项仅闭合prefix；series backing、批描述符、完整cursor/control/continuity及mux缓存仍须继续接入。整体TS预算未完成。
+
+## TS 全部存活分配的上界核验（2026-10-22）
+
+独立源码核验补充：mux队列、mux待生成AU、FileMuxNode输出交接、protocol边队列、materializer当前batch、wire pending/queue/active及sender提交后交接都可能同时持有series。materializer prepared与当前batch引用可为别名；只能凭互斥证明收紧，不能取阶段最大值。continuity reservation保留到整个series提交。旧generation backing与新session共存也须纳入最终ledger，不能假定purge立即销毁所有shared owner。
+
+可证明的保守结构：Nseries=Qmux+Qprotocol+Qwire+Nglobal+H，其中Qmux=floor(maximumQueuedBytes/188)，Qprotocol/Qwire来自最终实际边硬容量，Nglobal来自已有最大未完成datagram数，H必须来自节点类型化持有槽位合同，不写样例常量。series backing/descriptor按现有seriesBounds每类上界及真实allocation geometry计费；总和允许别名重复保守计费，但不得遗漏阶段。prefix仅沿wire preparation计费，避免重复计入series。
+
+持久存储另外相加：video+audio两个framing缓存、保留的packet cache、PAT/PMT backing、参数集、continuity固定容量、mux固定队列及packetizer control。vector/deque的size上界不是capacity上界，需要fixed-capacity替换或权威分配几何。上述仍是待实施容量合同，不是已完成预算证明。
+
+2026-10-23续验：当前源码已包含prefix预分配、placement绑定及UDP/RTP调用，network ledger/global geometry校验同步存在。原智能体已结束，重新启动两位独立审查者核验实际源码；Release clean-first/all-target重建已启动，尚未取得结果，r304未运行。
+
+2026-10-23 prefix_review_a与prefix_review_b对当前prefix增量均明确PASS：真实Model几何、整体预约第五块、UDP/RTP complete仅绑定、deleter先析构后释放、rawRTP无prefix与TS terminal保守计费均核验。此为静态审查，不覆盖尚未接入的series/cursor/control等存储。
+
+2026-10-23 prefix重建736项exit0，r304实流约70秒再次0xc0000409/ucrtbase+a527e崩溃，未完成120秒，不能记修复验证通过。原始错误及指标见r304文档，产物和进程已清理。
+## 最终图预算回填核验（2026-10-23）
+
+源码确认：MediaRealtimeDeploymentPlanner::complete 先生成 network ledger；MediaRealtimeAvProtocolOutputPlanner 随后才从 maximumQueuedPacketBytes 生成 TS emission。现有 MediaMpegTsProducerPlan 仅有 datagram/RTCP 大小，无法在早期预算中表达完整 TS 存储。不能只把 deque 换成固定容器并宣称预算闭合。
+
+实施顺序：最终拓扑确定后，从 typed protocol emission、seriesBounds、实际边硬容量及节点持有合同编译内部 TS storage 产品；回填 transport/deployment 及 network ledger，再执行最终资源准入。必须覆盖普通 build、合屏 ResourceBinder 和动态 appendProtocolOutput（其使用 compileReferenceStorage，不能依赖普通 build 的回填）。运行时必须验证最终产品存在且匹配，不能以缺省产品绕过。
+
+崩溃排查与此项独立：r304 最后遥测出现 graphPayloadPressureFailures=1，但没有调用栈，不能据此认定 payload ledger、prefix 或 TS 分配为根因。当前显式终止候选包括 payload lease 释放下溢与 shared allocation 几何不符；继续核对调用链，尚无已证实缺陷。WER 暂不作为开发前提，也不将调试器下未复现记为修复通过。
+补充核验：maximumNetworkMemoryBytes 的消费者为 transport activate、codec 和 deployment 校验；运行时 Buffer::create 与 service-scope assembler 从最终图 source 解码。可由 finalizer 从基础计划及最终图重算唯一运行时产品，shape 校验同样重算后精确比较，不能简单忽略 deployment 差异。Buffer 创建必须拒绝缺少最终 TS 产品的计划，早期规划校验与运行激活边界须显式区分。
+
+独立只读审查 prefix_review_a 未找到 payload ledger 在合法单 owner 调用下的 underflow 或双扣账反例。已确认条件性风险：tryReserveOrArm 为 noexcept，pressureFailures 增加后构造 wouldBlock 错误字符串仍可能分配；如果该分配抛异常会 terminate。当前没有现场分配失败证据，不将此路径认定为 r301/r304 根因，也不据此修改失败语义。
+## 固定 mux 队列实施与双审（2026-10-23）
+
+已实现内部 MediaTsMuxQueueStoragePlan 与 MediaTsFinalGraphStoragePlanner。最终图依据实际 typed forwarding 核验唯一 FileMux，以 emission queued bytes / 188 推导引用槽位，按真实 sizeof/alignment/header 计费。普通、合屏和动态入口均在最终资源编译前回填；shape 独立重算并精确比较，runtime factory、Buffer、globalSequence 拒绝缺少最终产品。
+
+mux 从同 generation network resource 预约并分配固定队列；入队前校验非空完整 TS 包、剩余字节及槽位。实际释放后归还 lease，清空元素不提前归还 backing 信用。prefix_review_a、prefix_review_b 对此切片均明确静态 PASS，核验预分配/有界存储/allocator 生命周期与 GStreamer allocation/pool 原则一致；未将引用环队列等同完整媒体 buffer pool。
+
+Release clean-first/all-target 构建正在执行，尚未取得结果。r308 命令已准备、未运行。series backing、descriptor、cursor/control、continuity、framing/cache、PSI 及跨 generation 完整存活预算仍未闭合。
+首次队列切片Release738项exit0。r308执行环境下RTP匹配包为0、VLC本机RC访问被拒绝，未进入合屏；r309改用允许本机网络的执行环境，真实输入探测成功，但finalizer误把所有协议计划消费者当成mux，preflight失败。builder明确plan同时送mux/adapter/materializer及RTP SDP，只有mux产生TS protocol batch。单文件修正为先按真实TS batch输出识别owner，再验证唯一FileMux，原typed forwarding校验保留。双复审及第二次全量构建正在执行。两轮错误及命令已归档，各轮产物和精确PID已清理，均不记通过。
+## 代际退休屏障缺口与实施方向（2026-10-23）
+
+只读核验发现 FileMuxNode 的 purge target 直接返回 generationState；session purge 清空 mux session/transport，却不触及 FFmpegNodeRuntime 的 m_pendingTransfer。FileMux 也继承默认无条件 output commit 授权，因而 ACK 后旧 TS batch 仍可能存活并在下一次 drain 发布。global sequence 的 outstanding 清零不是 allocation/shared owner 归零证明，不能据此假定仅一代或固定两代存活。
+
+先复用现有 MediaOwnerThreadGenerationPurge，在 mux worker 取消 pending transfer、按已有精确协议授权处理旧输入、清理 session，最后 ACK；发布使用 generation authority，核对 permit/session/owner 锁顺序，避免purge等待和publication互锁。旧代局部 shared owner 必须在 ACK 前离开作用域。此为 TS 存储上界与重入的必要前置，不是r310超期或旧崩溃根因判定。
+
+工业依据：GStreamer FLUSH_START/STOP 先拒绝旧流并释放挂起buffer，再与stream执行同步完成清理后恢复数据流。复用本项目已有owner-thread机制实现对应退休边界，不引入另一条媒体链路。来源：https://gstreamer.freedesktop.org/documentation/additional/design/events.html 。后续仍需完整节点holder与实际边容量合同，不能用匿名经验H替代。
+r310后续证据：mux owner修复后Release738项exit0、双复审PASS，原规格实流正常三格输出，约103秒materializer不可变deadline失败。最后8次阻塞是serial=1而非count/bytes容量不足；head尚余21包27660 wire bytes。前次重试距deadline4.728796ms，按6.25MB/s仅余量服务约4.4256ms，下一次入口晚8.945404ms。源码未发现典型丢唤醒；global reserve与最后commit在同锁管理blocked，worker在process前采样sequence。Windows已有高精度waitable timer，不能套用15ms普通定时器解释。
+
+缺少head最后提交/notify瞬间与worker恢复时间的关联证据，暂不能将间隔归因为特定调度阶段。串行门禁也是当前单active存储预算依据，禁止直接删除门禁或靠增加partial通知绕过。r310三源均自然exit0，CLI错误退出，payload最终0且预约释放118880一致；仅内部A/V phase范围4535–4536ns。完整命令、指标和清理见r310记录，不记验收通过。
+下游独立只读核验（prefix_review_b）：TS materializer先排空三路输入、取消基类pending，再同步析构旧generation data后ACK；sender清session、pacing及全部pending/queued/submit引用后ACK；project plan-source排空输入、取消pending并清plan/activation后ACK。当前process局部owner在ACK前已销毁，publication每次重新取得authority permit，不跨等待缓存。未发现这三者成功ACK后继续发布旧series的路径。
+
+该结论不是全图证明：transport-plan source、AU adapter、SDP publisher、实际participant覆盖名单和动态branch退役仍须补齐；单节点ACK不能替代全部参与者完成屏障。FileMux修复正在实施，不能提前按一代计算总额。后续真实复验沿r293的完整三源120秒→失源全黑→AV源完整120秒重入规格，保留原参数；既有r293 generation=2日志只作为历史复现定位，不证明最新修复通过。
+完整participant审计补充（prefix_review_b）：transport-plan source和AU adapter同样直接state purge，ACK不等待worker局部引用/基类pending清空；影响旧network resource或编码AU寿命，不能直接推导TS series无限积累。SDP publisher已有owner-thread同步清理且未发现同类缺口。participant group覆盖transport/sender/project plan/adapter/mux/materializer及RTP SDP，全部child成功才完成transition；问题在个别child成功语义早于实际释放。动态branch的Retired包含worker join和nodes/channels/context销毁，但candidate/drain重叠期总预算仍待证明。
+
+当前实施已扩展至FileMux、transport-plan source、AU adapter三个owner的同类退休边界，使用既有mailbox与精确输入授权；尚未整体冻结、复审或构建。不得以局部审计或代码已写入宣称跨代存储上界完成。
+退休切片首次复审未通过：review_a指出A/V process入口后撤权与EOF finish并发，adapter finish的Cancelled被FileMux remember缓存为terminal failure，worker可能先退出，后续owner purge无法执行。另一审查者初次PASS不足以覆盖该窗口，已要求修复后两者重新完整审查。还需核验finish成功后、terminal publication遇撤权到worker完成之间的邻近窗口，不能仅吞Cancelled或在外层持state/session锁调用finish造成递归死锁。
+
+VideoOnly EOF疑点已收窄：authority是固定generation，未证明无代际EOF会进入purge，因此没有据此修改EOF链或放宽授权。A/V EOF由scheduler绑定activeGeneration，复审针对其真实撤权窗口。
+9文件退休切片修复后双复审完成：prefix_review_a、prefix_review_b均明确静态PASS。adapter仅将finish申请permit时的Cancelled转WouldBlock；FileMux进入AwaitingGenerationPurge，不发布EOF或结束worker，purge复位completion/phase。finish成功后publication撤权已有基类Dropped保护，未重复实现。正常EOF及其他错误保持原语义。此前审查遗漏已记录，不以旧PASS替代复审。
+
+Release全量重建正在执行；r311已准备原规格三源120秒→全黑→AV源120秒重入命令，尚未运行。该切片仅闭合三个owner本地退休边界，不宣称完整TS分配或动态branch重叠预算完成。
+退休切片Release739项exit0后，r311原规格真实流约21秒再次deadline失败，尚未进入重入。当前batch在mux出队至materializer首次出队间隔70.2533ms，自身attempts=1/blocked=0，首次尝试已晚4.034156ms。最终payload归零、预约释放20009一致。不能据此确认退休修复运行通过，也不能把该等待直接当作r310当前batch的serial重试。详细命令、指标及11项清理见r311文档。
+
+下一步增加既有观测中的固定前批关联事实（前一batch等待/完成/发布及global reservation完成），只在失败时输出，不逐包记录、不改变媒体策略或截止。先区分前批串行服务与通知后worker调度，避免无依据删除单active预算依赖的serial门禁。
+r311关联观测方案：沿既有MediaProtocolBatchMaterializationObservation保留一个固定大小的已完成前批摘要（出队、attempt、阻塞、完整wire发布、预约身份），global snapshot保留最近完整预约对应的网络提交后样本及身份。必须按identity关联，不能将任意最近提交误认作阻塞前驱。样本来自sender传入的physicalCompletedAt，早于global pop/notify，因此不得命名为通知完成或直接宣称notify到worker耗时。失败时一次性输出，generation purge重置，不逐包日志、不参与策略。
+
+global state自身当前使用普通new/shared所有权，尚无完整固定对象计费证明；新增固定诊断字段不改变有界性，但不能据此声称全部TS存储已纳入预算。实际media/descriptor/cursor/continuity等预算工作继续保留。
+
+关联诊断4文件冻结后，prefix_review_a与prefix_review_b均明确静态PASS：仅完整wire发布保存前批，阻塞head_id保留reserve锁内原文，完整预约identity/range/submittedAt同锁更新与读取；时间不是notify或worker恢复时刻。固定摘要有有界开销，不能宣称完整TS预算闭合。Release全量重建已启动，尚未确认成功。
+
+## 2026-10-23 当前续接点：r312 完成场景，整体仍未通过
+
+最新证据见 docs/realtime-composition-r312-validation.md：Release739项exit0，诊断切片双独立静态PASS；三路原120秒RTP H264/AAC→HEVC CBR8000kbps 1280×720/30、AAC CBR192kbps→MPEG-TS/UDP，三格→全黑→选定AV源完整120秒重入→再次全黑，均由VLC原生快照核验。四个源exit0，CLI caller_stop exit0，errors0，payload预约/释放261506一致且归零；16项临时产物清理完毕。没有线端到达及内容A/V测量，不能记完整验收通过，不能据单次未复现关闭r310/r311超期或旧崩溃。
+
+下一实现按 docs/realtime-composition-ts-storage-closure.md：将series backing、cursor/control、continuity和batch描述符纳入同generation预算，基于最终图边与真实节点持有槽位编译容量；整体准备成功后才提交协议状态。现有queue/prefix/退休边界不重复实现。随后双审及Windows原规格验证；完整矩阵、C API和RKMPP门禁仍保留。
+
+## 连续未发布代际退休修正（2026-10-23）
+
+独立跨代审计证明：publication撤销与既有permit退出先于清理；所有TS参与者ACK后才允许重新Acquiring，封闭owner的边、pending、session及token已释放，未找到跨ACK持有TS backing的weak registry。故静态完整参与者覆盖且清理成功时，可按单active generation规划，不能用额外经验代数代替屏障。动态branch重叠预算仍须独立证明。
+
+发现并修正两处连续退休错误：published=1、old=2、next=3时，project plan source和materializer原按currentActivation==old判断，错误拒绝合法未发布代退休；改核验publishedGeneration并拒绝old<published，后续state.purge仍严格检查pending generation/transition sequence。materializer的校验失败分支补齐mailbox完成，原错误保留。与FileMux既有合同一致，未增加状态机或放宽协议输入。修复待双审与新构建/真实复验，r312不能证明该未发布窗口。
+
+连续未发布退休2文件已获prefix_review_a/b明确静态PASS。存储前置9文件也双独立限定PASS：builder写exact span，7类allocation先总预约再拆分且失败RAII归还；payload cursor的bad_alloc转换为allocationFailed，identity/active仅在分配成功后推进。Backpressure对单次超本级/父级容量仍invalidArgument，暂时不足才WouldBlock。当前prepare无生产调用，batch真实shared_ptr(new)仍须改为与probe对应的allocate_shared，packetOwner亦须随fixed backing同步，不能计作完整预算。Release全量重建会话73023已启动。
+
+### 单代holder合同的代码依据
+
+- mux：pendingEmission单槽、逐项maintenance临时cursor、现有muxQueueStorage.slots及FileMux出队publication单槽可同时持有，不能取最大值。
+- protocol/wire：采用最终实际bounded边容量，拒绝未证明的分叉。materializer当前protocol与prepared是同一owner别名；base pending与发布front也是别名。
+- sender：非空queued batch数受maximumBacklogDatagrams限制，current由队列移交不能重复算同一series。MediaProtocolDatagramCommitTransaction完整提交立即reset model，wire payload独立复制，故最后commit后的wire对象不必然继续持有series。
+- continuity：每个未完整提交series至多一条reservation，按PID投影真实同时存活上界；active cursor清除不意味着series释放。cache/framing/tables/control持久成本另计，空闲缓存仍收费。
+- shared对象：allocation header持有resource直至真实deallocate；weak token不保活packet backing，控制块额度仍须跟随实际allocation，不按强引用归零提前归还。
+
+最新冻结源码Release全量740项构建成功，configure/build exit0；未运行local CLI，未以构建代替实时验收。存储准备仍待完整实际分配及typed容量接线。
+
+## 实际series分配接线（实施中）
+
+root新增MediaTsSeriesStoragePlan，按真实7块几何×存活上界计series，另计control、实际ledger数组数量及cache backing/owner；producer、codec、network ledger和globalSequence开始传递同一产品。codec保存权威容量输入并重新推导实际几何，runtime缺最终产品失败。当前final graph尚未生成存活上界产品，运行时由实现智能体接fixed packet/cursor/continuity及batch消费；属于半接线状态，不可启动测试或引用上轮740项构建证明。framing/tables和动态branch重叠仍单列未完成。
+
+最终图已开始生成named ownership产品并回填series预算，显式区分mux queue/pending/maintenance/publication、protocol边、materializer current、global reservation及sender commit退休槽。核验UDP/RTP均先global commit归还额度，再protocol commit释放model，因此最后一个单线程退休槽不能省略；wire边/queue/current的未提交series已归global覆盖，不重复整项计费。
+
+压力接线新发现：FileMux尚未保留未接纳AU，adapter会将WouldBlock终端化；维护组PAT成功后PMT/PCR准备压力不能整体重放。实施调整为FileMux单pendingWrite与精确purge清理，以及维护组在任何时钟/continuity推进前整体准备全部存储。维护准备槽必须同步替换旧单临时cursor容量，当前planner中的该分项仍待更新，不能构建/验收。
+
+冻结前预审修正：producer已拒绝series存在而queue缺失，ownership自身复用typed wakeup拓扑验证；maintenance槽由实际准备array的tuple_size取得。运行时packet/descriptor/cursor/control/continuity与prepared shared/model已接，维护组总预约与物理分配先于PCR/continuity提交。AU时钟token遇压力RAII撤销，不commit媒体时钟；唯一revision不回滚，保留防ABA。
+
+新压力路径预审：FileMux写入先生成维护输出再遇AU压力时，已改为立即drain内部输出再等待，避免本机队列阻塞释放。另flush调用poll并丢弃output的路径已证实，正在增加保留输出的内部poll模式及flush控制重试；此修复完成前尚未整体冻结/构建。runtime9文件已冻结，framing/PSI与dynamic重叠仍未闭合。
+
+本轮整体冻结双审完成：未参与实现的prefix_review_a、ts_series_review_c均明确静态PASS。review_b参与FileMux/adapter实现，不作为本轮独立审查者。flush已复用pollInternal保留输出，pendingSessionInput统一AU/flush，先排输出后重试/转发一次；purge前精确授权与清理。两审只覆盖series实际存储及压力接线，不替代剩余framing/tables、dynamic预算及实流验收。Release全量构建会话99240正在运行，禁止写源码。
+
+首轮完整构建99240失败：MediaTsMuxSession maintenanceGroupGeometry仍接受vector引用，调用点已为span，编译器C2664。已改为只读span参数，原几何和溢出检查不变；两名独立审查者复核PASS。第二轮clean-first/all-target构建67264已启动，尚未确认成功。
+
+第二轮Release742项clean-first/all-target构建成功，configure/build exit0。真实realtime复验沿r313，尚未运行，不能引用r312证明当前源码通过。
+
+r313当前源码复验失败：约248秒在AV重入中materializer不可变期限超期，CLI1，四源0，payload归零且229196次预约全部释放。串行head26282完成时间比下一batch期限晚1.689668ms；之后26.9微秒即再次尝试，当前证据不支持将这次失败归因于完成后的长时间丢唤醒。planner ledger仍明确要求commitBeforeNextReservation，且MpegTsOwnedStorage按single active计费，不得直接删除串行门禁。sender按实际提交完成时间累加serviceDuration；尚缺该head逐包release/deadline/等待与提交耗时证据，不能认定是容量不足或pacer算法错误。详见r313记录；完整合屏仍未通过。
+
+本轮诊断依据GStreamer tracing边界观测设计：https://gstreamer.freedesktop.org/documentation/additional/design/tracing.html 。仅复用边界时间关联方法，不照搬调度算法。sender owner-thread增加固定当前/最近完成两份MediaDatagramBatchObservation，无packet所有权、动态数组或每包日志；终止时输出batch首末sequence/release/deadline/submit，以及最大start lateness及其已有wait样本。submit interval包括scope/publication检查，不能当作纯socket耗时；尚不能分解所有scope等待。未改参数、门禁或失败语义。两份固定节点成员的整体节点预算仍随原完整资源闭合项核验，不宣称全预算完成。当前待双审和Release构建，不能引用旧二进制验证。
+
+本轮诊断双审完成：r313_timing_review与r313_diagnostic_review_b均静态PASS。已修复start/purge旧摘要残留，以及确定PartialSubmittedPrefix漏记；ambiguous不冒充确定提交。Release全量重建会话78367已启动，configure/generate完成，构建结果待取回。
+
+r314：Release742项构建exit0，新诊断已实流输出。四源0、CLI caller_stop0、运行错误0、payload归零且257190预约释放一致。VLC初始控制端口被r313残留占用，已纠正记录并经提升权限CIM清理；本轮缺初始三格快照，因此不记完整通过。已确认失源全黑、AV重入恢复、最终全黑。175617 datagrams，平均进程CPU1.627690%，peakWS273571840；发送峰值迟到30.5881ms仍存在，历史deadline/崩溃没有证明修复。详见r314实际命令、指标和逐项清理。
+
+r315新证据：重复原规格失败，CLI1/初始三源0，重入中止-1；三格/全黑已由本轮VLC原生快照核实。global head16254与sender序号87334–87374对应，最大start lateness14.498660ms落在wait返回附近，最大提交区间271200ns。前批自身deadline比后批晚约33.33ms；完成时后批已晚2.681124ms，随后21us再次materialize。不能把本次失败解释为完成后丢唤醒，也未证明Windows timer根因。14项产物已清理、提升权限CIM六PID无残留。
+
+等待路径复核：MediaNodeWakeup使用CREATE_WAITABLE_TIMER_HIGH_RESOLUTION、SetWaitableTimerEx相对100ns单位并向上取整、TolerableDelay=0，WaitForMultipleObjects后获取mutex并返回；没有普通毫秒sleep替代。Microsoft waitable timer文档仅保证到期进入signaled，不能用此API存在证明线程立即运行：https://learn.microsoft.com/en-us/windows/win32/sync/waitable-timer-objects 。r315仍缺timer进入signaled与线程运行的系统级分解；另独立审查维护包deadline比前序AU更早的规划约束，不自行调整timer/期限。

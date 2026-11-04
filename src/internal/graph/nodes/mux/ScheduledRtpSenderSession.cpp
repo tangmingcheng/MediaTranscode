@@ -132,7 +132,7 @@ ScheduledRtpSenderSession::create(
 
 ::media::Status ScheduledRtpSenderSession::sendAccessUnit(
     const AVPacket& packet,
-    MediaRunningTime presentationOnMaster)
+    MediaRunningTime presentationOnMaster, std::span<std::uint8_t> scratch)
 {
     OperationGuard guard(m_operationActive);
     if (!guard.entered()) return operationRejected();
@@ -146,7 +146,7 @@ ScheduledRtpSenderSession::create(
     }
     auto timestamp = m_rtpMapper.map(presentationOnMaster);
     if (!timestamp) return ::media::Status::failure(timestamp.error());
-    auto written = m_packetizer->writeAccessUnit(packet, timestamp.value());
+    auto written = m_packetizer->writeAccessUnit(packet, timestamp.value(), scratch);
     if (!written) {
         poison(written.error());
         return ::media::Status::failure(*m_terminalFailure);
@@ -186,13 +186,25 @@ ScheduledRtpSenderSession::dispatchSenderReport(MediaRunningTime now)
         timestamp.value(),
         m_counters.packetCount(),
         m_counters.octetCount());
-    auto datagram = MediaRtcpSenderReportGenerator::serialize(parameters);
-    if (!datagram) {
-        poison(datagram.error());
+    auto plan = MediaRtcpSenderReportGenerator::prepare(parameters, false);
+    if (!plan) {
+        poison(plan.error());
+        return DispatchResult::failure(*m_terminalFailure);
+    }
+    std::vector<std::uint8_t> datagram;
+    try {
+        datagram.resize(plan.value().bytes());
+    } catch (const std::bad_alloc&) {
+        poison(::media::ErrorInfo::allocationFailed("RTCP sender report storage"));
+        return DispatchResult::failure(*m_terminalFailure);
+    }
+    auto written = MediaRtcpSenderReportGenerator::writeInto(plan.value(), datagram);
+    if (!written) {
+        poison(written.error());
         return DispatchResult::failure(*m_terminalFailure);
     }
     try {
-        auto sent = m_rtcpSink(datagram.value());
+        auto sent = m_rtcpSink(datagram);
         if (!sent) return DispatchResult::failure(sent.error());
     } catch (...) {
         poison(::media::ErrorInfo::internalError(

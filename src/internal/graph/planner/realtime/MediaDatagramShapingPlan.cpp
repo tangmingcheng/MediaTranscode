@@ -4,8 +4,10 @@
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 #include <new>
+#include <sstream>
 #include <unordered_set>
 #include <utility>
 
@@ -172,7 +174,8 @@ validateEvidence(const MediaDatagramShapingPlanEncoding& encoding)
 ::media::Result<MediaRunningTime>
 MediaDatagramWireDeadlinePlan::canonicalDeadline(
     MediaRunningTime canonicalRelease,
-    MediaRunningTime materializedAt) const noexcept
+    MediaRunningTime materializedAt,
+    std::optional<MediaRunningTime> protocolDeadline) const noexcept
 {
     using Result = ::media::Result<MediaRunningTime>;
     if (endpointId == 0 ||
@@ -185,7 +188,26 @@ MediaDatagramWireDeadlinePlan::canonicalDeadline(
     // Wire residence starts when the datagram exists and is eligible to send.
     // Source lateness is not time spent in the wire queue. Fix this deadline
     // once at materialization; sender retries must never extend it.
-    return (std::max)(canonicalRelease, materializedAt).checkedAdd(maximumResidence);
+    if (protocolDeadline &&
+        (*protocolDeadline < canonicalRelease || materializedAt > *protocolDeadline)) {
+        char detail[512];
+        std::snprintf(detail, sizeof(detail),
+            "protocol datagram exceeded its absolute emission deadline before materialization"
+            " endpoint=%llu release_ns=%lld materialized_ns=%lld protocol_deadline_ns=%lld"
+            " deadline_before_release=%d materialized_after_deadline=%d",
+            static_cast<unsigned long long>(endpointId),
+            static_cast<long long>(canonicalRelease.nanoseconds()),
+            static_cast<long long>(materializedAt.nanoseconds()),
+            static_cast<long long>(protocolDeadline->nanoseconds()),
+            *protocolDeadline < canonicalRelease ? 1 : 0,
+            materializedAt > *protocolDeadline ? 1 : 0);
+        return Result::failure(::media::ErrorInfo::invalidArgument(detail));
+    }
+    auto residenceDeadline = (std::max)(canonicalRelease, materializedAt).checkedAdd(maximumResidence);
+    if (!residenceDeadline) return Result::failure(residenceDeadline.error());
+    return Result::success(protocolDeadline
+        ? (std::min)(residenceDeadline.value(), *protocolDeadline)
+        : residenceDeadline.value());
 }
 
 ::media::Result<MediaDatagramShapingPlan>
@@ -214,9 +236,24 @@ MediaDatagramShapingPlan::decode(MediaDatagramShapingPlanEncoding encoding)
         encoding.networkMemory.maximumSocketBytes >
             encoding.networkMemory.maximumTotalBytes -
                 encoding.networkMemory.reservedUserspaceBytes) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "datagram shaping plan requires complete scope, service, resource, "
-            "and backlog facts"));
+        std::ostringstream detail;
+        detail << "datagram shaping plan requires complete scope, service, resource, and backlog facts"
+            << " session_empty=" << encoding.sessionKey.empty()
+            << " generation=" << encoding.generation
+            << " endpoints=" << encoding.endpoints.size()
+            << " service_authority_empty=" << encoding.serviceCurve.authority.empty()
+            << " pacing_bytes_per_second=" << encoding.serviceCurve.pacingWireBytesPerSecond
+            << " maximum_bytes_per_second=" << encoding.serviceCurve.maximumWireBytesPerSecond
+            << " burst_bytes=" << encoding.serviceCurve.burstWireBytes
+            << " backlog_datagrams=" << encoding.backlog.maximumDatagrams
+            << " backlog_bytes=" << encoding.backlog.maximumBytes
+            << " residence_ns=" << encoding.backlog.maximumResidence.nanoseconds()
+            << " batch_datagrams=" << encoding.batch.maximumDatagrams
+            << " batch_bytes=" << encoding.batch.maximumBytes
+            << " memory_total=" << encoding.networkMemory.maximumTotalBytes
+            << " memory_userspace=" << encoding.networkMemory.reservedUserspaceBytes
+            << " memory_socket=" << encoding.networkMemory.maximumSocketBytes;
+        return Result::failure(::media::ErrorInfo::invalidArgument(detail.str()));
     }
 
     std::unordered_set<std::uint64_t> endpointIds;

@@ -37,7 +37,7 @@ public:
     mutable std::mutex mutex;
     MediaGraphPayloadCreditSnapshot snapshot;
     struct Pending final {
-        MediaNodeId producer;
+        MediaGraphPayloadProducerKey producer;
         std::vector<std::uint64_t> bytes;
         std::uint64_t totalBytes = 0;
         std::weak_ptr<MediaNodeWakeup> wakeup;
@@ -159,7 +159,17 @@ MediaGraphPayloadCreditLedger::reserveRetentionGrowth(MediaGraphPayloadRetention
     if (!growth.sourceAccountProducer.isValid() || !growth.additionalObjects)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Retention growth requires an existing producer and additional live-reference objects"));
-    auto selected = accountForProducer(growth.sourceAccountProducer);
+    const MediaGraphPayloadProducerStrategy* source = nullptr;
+    for (const auto& producer : m_plan.producers) {
+        if (producer.nodeId != growth.sourceAccountProducer) continue;
+        if (source && source->accountId != producer.accountId)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Retention growth requires an unambiguous allocation owner"));
+        source = &producer;
+    }
+    if (!source) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Retention growth producer has no admitted account"));
+    auto selected = accountForProducer({source->nodeId, source->streamKind, source->payloadKind});
     if (!selected) return Result::failure(selected.error());
     auto target = std::move(selected).value();
     std::lock_guard accountsLock(m_accountsMutex);
@@ -214,22 +224,19 @@ MediaGraphPayloadBranchReservation::~MediaGraphPayloadBranchReservation()
 }
 
 ::media::Result<std::shared_ptr<MediaGraphPayloadCreditState>>
-MediaGraphPayloadCreditLedger::accountForProducer(MediaNodeId producer) const
+MediaGraphPayloadCreditLedger::accountForProducer(MediaGraphPayloadProducerKey producer) const
 {
     using Result = ::media::Result<std::shared_ptr<MediaGraphPayloadCreditState>>;
     std::lock_guard lock(m_accountsMutex);
-    const auto found = m_producerAccounts.find(producer.value);
+    const auto found = m_producerAccounts.find({producer.nodeId.value, producer.streamKind, producer.payloadKind});
     if (found != m_producerAccounts.end()) {
         auto account = found->second.lock();
         if (!account) return Result::failure(::media::ErrorInfo::cancelled(
             "payload producer belongs to a retired output branch"));
         return Result::success(std::move(account));
     }
-    const bool initial = std::any_of(m_plan.producers.begin(), m_plan.producers.end(),
-        [producer](const auto& strategy) { return strategy.nodeId == producer; });
-    if (!initial) return Result::failure(::media::ErrorInfo::invalidArgument(
+    return Result::failure(::media::ErrorInfo::invalidArgument(
         "payload producer has no admitted account"));
-    return Result::success(m_state);
 }
 
 ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>
@@ -237,12 +244,14 @@ MediaGraphPayloadCreditLedger::extractInitialBranch(
     MediaGraphPayloadCreditPlan sharedPlan, MediaGraphPayloadCreditPlan outputPlan)
 {
     using Result = ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>;
-    if (!sharedPlan.isCompleteAndValid() || !outputPlan.isCompleteAndValid())
+    if (!sharedPlan.isCompleteAndValid() || !outputPlan.isCompleteAndValid() ||
+        sharedPlan.accounts.size() != 1 || outputPlan.accounts.size() != 1 ||
+        m_plan.accounts.size() != 1)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "initial payload partition requires two complete planner contracts"));
     std::lock_guard accountsLock(m_accountsMutex);
     std::unique_lock initialLock(m_state->mutex);
-    if (!m_branchAccounts.empty() || !m_producerAccounts.empty() || m_state->cancelled ||
+    if (!m_branchAccounts.empty() || m_state->cancelled ||
         m_state->plan.maximumObjects != m_plan.maximumObjects ||
         m_state->plan.maximumBytes != m_plan.maximumBytes ||
         m_state->snapshot.currentBytes || m_state->snapshot.currentObjects ||
@@ -268,9 +277,9 @@ MediaGraphPayloadCreditLedger::extractInitialBranch(
             "initial payload partition must cover the exact original producer registry"));
     for (const auto& shared : sharedPlan.producers) {
         if (std::any_of(outputPlan.producers.begin(), outputPlan.producers.end(),
-                       [&shared](const auto& output) { return output.nodeId == shared.nodeId; }))
+                       [&shared, &sameIdentity](const auto& output) { return sameIdentity(output, shared); }))
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "initial payload producer node cannot belong to both accounts"));
+                "initial payload producer key cannot belong to both accounts"));
     }
     for (const auto* plan : {&sharedPlan, &outputPlan}) {
         for (const auto& producer : plan->producers) {
@@ -292,7 +301,9 @@ MediaGraphPayloadCreditLedger::extractInitialBranch(
             new MediaGraphPayloadBranchReservation(output));
         decltype(m_producerAccounts) producers;
         for (const auto& producer : output->plan.producers)
-            producers.emplace(producer.nodeId.value, output);
+            producers.emplace(std::tuple{producer.nodeId.value, producer.streamKind, producer.payloadKind}, output);
+        for (const auto& producer : sharedPlan.producers)
+            producers.emplace(std::tuple{producer.nodeId.value, producer.streamKind, producer.payloadKind}, m_state);
         decltype(m_branchAccounts) accounts;
         accounts.push_back(output);
         auto sharedStatePlan = sharedPlan;
@@ -310,14 +321,18 @@ MediaGraphPayloadCreditLedger::extractInitialBranch(
 MediaGraphPayloadCreditLedger::reserveBranch(MediaGraphPayloadCreditPlan plan)
 {
     using Result = ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>>;
-    if (!plan.isCompleteAndValid()) return Result::failure(::media::ErrorInfo::invalidArgument(
+    if (!plan.isCompleteAndValid() || plan.accounts.size() != 1) return Result::failure(::media::ErrorInfo::invalidArgument(
         "branch admission requires a complete planner payload contract"));
     std::lock_guard lock(m_accountsMutex);
     for (const auto& producer : plan.producers) {
-        const auto existing = m_producerAccounts.find(producer.nodeId.value);
+        const auto existing = m_producerAccounts.find({producer.nodeId.value, producer.streamKind, producer.payloadKind});
         if ((existing != m_producerAccounts.end() && !existing->second.expired()) ||
             std::any_of(m_plan.producers.begin(), m_plan.producers.end(),
-                [&producer](const auto& initial) { return initial.nodeId == producer.nodeId; })) {
+                [&producer](const auto& initial) {
+                    return initial.nodeId == producer.nodeId &&
+                        initial.streamKind == producer.streamKind &&
+                        initial.payloadKind == producer.payloadKind;
+                })) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "branch admission cannot reuse an existing payload producer ID"));
         }
@@ -356,7 +371,7 @@ MediaGraphPayloadCreditLedger::reserveBranch(MediaGraphPayloadCreditPlan plan)
         auto producers = m_producerAccounts;
         std::erase_if(producers, [](const auto& entry) { return entry.second.expired(); });
         for (const auto& producer : account->plan.producers)
-            producers.emplace(producer.nodeId.value, account);
+            producers.emplace(std::tuple{producer.nodeId.value, producer.streamKind, producer.payloadKind}, account);
         auto accounts = m_branchAccounts;
         std::erase_if(accounts, [](const auto& weak) { return weak.expired(); });
         accounts.push_back(account);
@@ -427,6 +442,8 @@ MediaGraphPayloadCreditLedger::admitFixedStorage(
         if (initial) {
             m_state->plan.maximumBytes -= bytes;
             m_plan.maximumBytes -= bytes;
+            m_plan.accounts.front().maximumBytes -= bytes;
+            m_state->plan.accounts.front().maximumBytes -= bytes;
         }
         m_branchAccounts.swap(accounts);
         return Result::success(std::move(reservation));
@@ -527,101 +544,44 @@ MediaGraphPayloadCreditLedger::create(MediaGraphPayloadCreditPlan plan)
             "graph payload credit plan requires bounded bytes, objects, unit, and authority"));
     }
     try {
-        auto state = std::make_shared<MediaGraphPayloadCreditState>(
-            plan, std::make_shared<MediaGraphPayloadAggregate>());
-        return Result::success(std::shared_ptr<MediaGraphPayloadCreditLedger>(
-            new MediaGraphPayloadCreditLedger(
-                std::move(plan), std::move(state))));
+        auto aggregate = std::make_shared<MediaGraphPayloadAggregate>();
+        std::vector<std::shared_ptr<MediaGraphPayloadCreditState>> states;
+        for (const auto& account : plan.accounts) {
+            auto partition = plan;
+            partition.maximumBytes = account.maximumBytes;
+            partition.maximumObjects = account.maximumObjects;
+            partition.accounts = {account};
+            std::erase_if(partition.producers, [&account](const auto& producer) {
+                return producer.accountId != account.accountId;
+            });
+            states.push_back(std::make_shared<MediaGraphPayloadCreditState>(
+                std::move(partition), aggregate));
+        }
+        auto ledger = std::shared_ptr<MediaGraphPayloadCreditLedger>(
+            new MediaGraphPayloadCreditLedger(std::move(plan), states.front()));
+        for (std::size_t i = 0; i < states.size(); ++i) {
+            for (const auto& producer : states[i]->plan.producers)
+                ledger->m_producerAccounts.emplace(
+                    std::tuple{producer.nodeId.value, producer.streamKind, producer.payloadKind}, states[i]);
+            if (i != 0) ledger->m_branchAccounts.push_back(states[i]);
+        }
+        ledger->m_initialAccounts = std::move(states);
+        return Result::success(std::move(ledger));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaGraphPayloadCreditLedger"));
     }
 }
 
-::media::Result<MediaGraphPayloadCreditLease>
-MediaGraphPayloadCreditLedger::tryReserve(std::uint64_t bytes) noexcept
-{
-    auto batch = tryReserveBatch(std::span<const std::uint64_t>(&bytes, 1));
-    if (!batch) {
-        return ::media::Result<MediaGraphPayloadCreditLease>::failure(
-            batch.error());
-    }
-    auto leases = std::move(batch).value();
-    return ::media::Result<MediaGraphPayloadCreditLease>::success(
-        std::move(leases.front()));
-}
-
-::media::Result<std::vector<MediaGraphPayloadCreditLease>>
-MediaGraphPayloadCreditLedger::tryReserveBatch(
-    std::span<const std::uint64_t> bytes) noexcept
-{
-    using Result =
-        ::media::Result<std::vector<MediaGraphPayloadCreditLease>>;
-    if (bytes.empty()) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "graph payload credit batch reservation is empty"));
-    }
-    std::uint64_t totalBytes = 0;
-    for (const auto value : bytes) {
-        if (value > m_plan.maximumUnitBytes) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "graph payload credit reservation exceeds its unit contract"));
-        }
-        if (value > (std::numeric_limits<std::uint64_t>::max)() - totalBytes) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "graph payload credit batch byte total is not representable"));
-        }
-        totalBytes += value;
-    }
-    std::vector<MediaGraphPayloadCreditLease> leases;
-    try {
-        leases.reserve(bytes.size());
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "graph payload credit batch lease identities"));
-    }
-    {
-        std::lock_guard lock(m_state->mutex);
-        AggregatePublication publication(*m_state);
-        if (m_state->cancelled) return Result::failure(::media::ErrorInfo::cancelled(
-            "graph payload credit admission was cancelled"));
-        const auto objectCount = static_cast<std::uint64_t>(bytes.size());
-        const bool bytePressure = totalBytes > m_state->plan.maximumBytes ||
-            m_state->snapshot.currentBytes >
-                m_state->plan.maximumBytes - totalBytes;
-        const bool objectPressure = objectCount > m_state->plan.maximumObjects ||
-            m_state->snapshot.currentObjects >
-                m_state->plan.maximumObjects - objectCount;
-        if (bytePressure || objectPressure) {
-            ++m_state->snapshot.pressureFailures;
-            return Result::failure(::media::ErrorInfo::wouldBlock(
-                "graph payload credit ledger is at its planner hard bound"));
-        }
-        for (const auto value : bytes) {
-            leases.push_back(MediaGraphPayloadCreditLease(m_state, value));
-        }
-        m_state->snapshot.currentBytes += totalBytes;
-        m_state->snapshot.currentObjects += objectCount;
-        m_state->snapshot.highWaterBytes = (std::max)(
-            m_state->snapshot.highWaterBytes,
-            m_state->snapshot.currentBytes);
-        m_state->snapshot.highWaterObjects = (std::max)(
-            m_state->snapshot.highWaterObjects,
-            m_state->snapshot.currentObjects);
-        m_state->snapshot.reservations += objectCount;
-    }
-    return Result::success(std::move(leases));
-}
-
 ::media::Result<std::vector<MediaGraphPayloadCreditLease>>
 MediaGraphPayloadCreditLedger::tryReserveOrArm(
-    MediaNodeId producer,
+    MediaGraphPayloadProducerKey producer,
     std::span<const std::uint64_t> bytes,
     std::shared_ptr<MediaNodeWakeup> wakeup) noexcept
 {
     using Result =
         ::media::Result<std::vector<MediaGraphPayloadCreditLease>>;
-    if (!producer.isValid() || !wakeup || bytes.empty()) {
+    if (!producer.nodeId.isValid() || !wakeup || bytes.empty()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "graph payload waiter requires producer, demand, and wake handle"));
     }
@@ -655,6 +615,10 @@ MediaGraphPayloadCreditLedger::tryReserveOrArm(
             return Result::failure(::media::ErrorInfo::cancelled(
                 "graph payload credit waiters were cancelled"));
         }
+        if (totalBytes > account->plan.maximumBytes ||
+            bytes.size() > account->plan.maximumObjects)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "graph payload demand exceeds its allocation owner hard bound"));
         auto existing = std::find_if(
             account->waiters.begin(), account->waiters.end(),
             [producer](const auto& waiter) {
@@ -709,6 +673,34 @@ MediaGraphPayloadCreditLedger::tryReserveOrArm(
     }
     if (nextWakeup) nextWakeup->notify();
     return Result::success(std::move(leases));
+}
+
+::media::Status MediaGraphPayloadCreditLedger::cancelProducerWaiter(
+    MediaGraphPayloadProducerKey producer) noexcept
+{
+    auto selected = accountForProducer(producer);
+    if (!selected) return ::media::Status::failure(selected.error());
+    auto account = std::move(selected).value();
+    std::shared_ptr<MediaNodeWakeup> nextWakeup;
+    {
+        std::lock_guard lock(account->mutex);
+        AggregatePublication publication(*account);
+        if (account->cancelled)
+            return ::media::Status::failure(::media::ErrorInfo::cancelled(
+                "Payload producer retirement requires an active account"));
+        auto waiter = std::find_if(account->waiters.begin(), account->waiters.end(),
+            [producer](const auto& pending) { return pending.producer == producer; });
+        if (waiter == account->waiters.end()) return ::media::Status::success();
+        if (waiter->granted) {
+            // No lease was issued, so reservation/release counters do not change.
+            account->snapshot.currentBytes -= waiter->totalBytes;
+            account->snapshot.currentObjects -= waiter->bytes.size();
+        }
+        account->waiters.erase(waiter);
+        nextWakeup = promoteOne(*account);
+    }
+    if (nextWakeup) nextWakeup->notify();
+    return ::media::Status::success();
 }
 
 void MediaGraphPayloadCreditLedger::cancelBlockedWaiters() noexcept

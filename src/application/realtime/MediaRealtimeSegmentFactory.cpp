@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/nodes/video/EncodedVideoOutputFanoutNode.h"
+#include "internal/graph/planner/realtime/MediaNetworkStorageWakeupPlanner.h"
 
 #include <algorithm>
 #include <set>
@@ -24,11 +25,24 @@ namespace media::ffmpeg::graph {
     for (const auto id : nodes) {
         const auto* node = graph->findNode(id);
         if (!node) return Result::failure(::media::ErrorInfo::invalidArgument("segment node is absent from its graph"));
+        std::optional<MediaNetworkStorageWakeupPlan> storageWakeups;
+        if (node->kind == MediaNodeKind::DatagramTransportPlanSource) {
+            auto planned = MediaNetworkStorageWakeupPlanner::plan(*graph, node->id);
+            if (!planned) return Result::failure(planned.error());
+            for (const auto target : planned.value().producerTargets) {
+                if (std::find(nodes.begin(), nodes.end(), target) == nodes.end())
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "Storage notification producer is outside its runtime segment"));
+            }
+            storageWakeups = std::move(planned).value();
+        }
         auto created = node->kind == MediaNodeKind::VideoOutputScheduler
             ? MediaRuntimeNodeFactory::createVideoOutputScheduler(*node, authority)
             : node->kind == MediaNodeKind::MpegTsRtpSdpPublisher
             ? MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(*node, authority)
-            : MediaRuntimeNodeFactory::create(*node, nullptr, nullptr, authority, serviceScope);
+            : MediaRuntimeNodeFactory::create(*node, nullptr, nullptr, authority, serviceScope,
+                storageWakeups ? &*storageWakeups : nullptr,
+                graph->protocolGenerationStorageFor(node->id));
         if (!created) return Result::failure(created.error());
         if (auto* candidate = dynamic_cast<CodecResolverNode*>(created.value().get())) {
             resolver = candidate;

@@ -1,14 +1,18 @@
+#include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
 
 #include <algorithm>
 #include <atomic>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <new>
-#include <unordered_map>
+#include <string_view>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -26,12 +30,33 @@ struct MediaOutputCapacityReservationRecord final {
         std::size_t count = 0;
     };
 
+    using AllocationAllocator = MediaLineageAllocator<MediaOutputCapacityReservationRecord>;
+    MediaOutputCapacityReservationRecord(MediaLineageAllocationScope owner,
+        MediaFixedCapacityStorage<ChannelCount> counts, std::uint64_t id) noexcept
+        : allocation(std::move(owner)), identity(id), channels(std::move(counts)) {}
+
+    MediaLineageAllocationScope allocation;
     std::mutex mutex;
-    std::uint64_t identity = 0;
+    const std::uint64_t identity;
     MediaOutputCapacityReservationState state =
         MediaOutputCapacityReservationState::Pending;
-    std::vector<ChannelCount> channels;
+    const MediaFixedCapacityStorage<ChannelCount> channels;
 };
+
+::media::Result<MediaOutputReservationLayout> MediaReservedOutputTransaction::allocationLayout()
+{
+    using Record = MediaOutputCapacityReservationRecord;
+    auto record = probeMediaSharedAllocationGeometry<Record>(std::type_identity<Record::AllocationAllocator>{});
+    if (!record) return ::media::Result<MediaOutputReservationLayout>::failure(record.error());
+    return ::media::Result<MediaOutputReservationLayout>::success({
+        {1, sizeof(OwnedBatch), alignof(OwnedBatch)},
+        {1, sizeof(Record::ChannelCount), alignof(Record::ChannelCount)},
+        {1, sizeof(MediaChannel*), alignof(MediaChannel*)},
+        {1, sizeof(std::unique_lock<std::mutex>), alignof(std::unique_lock<std::mutex>)},
+        {1, sizeof(std::shared_ptr<Record>), alignof(std::shared_ptr<Record>)},
+        {1, sizeof(MediaBufferRef), alignof(MediaBufferRef)},
+        {1, sizeof(char), alignof(char)}, record.value()});
+}
 
 namespace {
 
@@ -40,8 +65,8 @@ std::atomic_uint64_t g_nextReservationIdentity{1};
 class MediaReservedOutputLockScope final {
 public:
     MediaReservedOutputLockScope(
-        std::vector<std::unique_lock<std::mutex>>& channelLocks,
-        std::vector<std::unique_lock<std::mutex>>& queueLocks) noexcept
+        std::span<std::unique_lock<std::mutex>> channelLocks,
+        std::span<std::unique_lock<std::mutex>> queueLocks) noexcept
         : m_channelLocks(channelLocks)
         , m_queueLocks(queueLocks)
     {
@@ -65,42 +90,17 @@ public:
         for (auto& lock : m_channelLocks) {
             if (lock.owns_lock()) lock.unlock();
         }
+        // The backing may move to the returned transaction after explicit unlock.
+        m_queueLocks = {};
+        m_channelLocks = {};
     }
 
 private:
-    std::vector<std::unique_lock<std::mutex>>& m_channelLocks;
-    std::vector<std::unique_lock<std::mutex>>& m_queueLocks;
+    std::span<std::unique_lock<std::mutex>> m_channelLocks;
+    std::span<std::unique_lock<std::mutex>> m_queueLocks;
 };
 
-std::vector<MediaChannel*> sortedChannels(
-    const std::vector<MediaOutputCapacityReservationRecord::ChannelCount>& counts)
-{
-    std::vector<MediaChannel*> channels;
-    channels.reserve(counts.size());
-    for (const auto& count : counts) channels.push_back(count.channel);
-    std::sort(channels.begin(), channels.end(), [](MediaChannel* lhs,
-                                                    MediaChannel* rhs) {
-        if (lhs->id() != rhs->id()) return lhs->id() < rhs->id();
-        return std::less<MediaChannel*>{}(lhs, rhs);
-    });
-    channels.erase(std::unique(channels.begin(), channels.end()),
-                   channels.end());
-    return channels;
-}
-
 } // namespace
-
-std::vector<std::unique_lock<std::mutex>>
-MediaReservedOutputTransaction::lockChannels(
-    const std::vector<MediaChannel*>& channels)
-{
-    std::vector<std::unique_lock<std::mutex>> locks;
-    locks.reserve(channels.size());
-    for (MediaChannel* channel : channels) {
-        locks.emplace_back(channel->m_mutationMutex);
-    }
-    return locks;
-}
 
 MediaOutputCapacityReservationHandle::MediaOutputCapacityReservationHandle(
     std::shared_ptr<MediaOutputCapacityReservationRecord> record)
@@ -119,13 +119,15 @@ std::uint64_t MediaOutputCapacityReservationHandle::identity() const noexcept
 }
 
 MediaReservedOutputTransaction::MediaReservedOutputTransaction(
-    std::string owner,
-    std::vector<OwnedBatch> batches,
-    std::vector<MediaChannel*> channels,
-    std::vector<std::unique_lock<std::mutex>> channelLocks,
-    std::vector<std::unique_lock<std::mutex>> queueLocks,
-    std::shared_ptr<MediaOutputCapacityReservationRecord> record)
-    : m_owner(std::move(owner))
+    MediaLineageAllocationScope allocation,
+    MediaFixedCapacityStorage<char> owner,
+    MediaFixedCapacityStorage<OwnedBatch> batches,
+    MediaFixedCapacityStorage<MediaChannel*> channels,
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> channelLocks,
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> queueLocks,
+    std::shared_ptr<MediaOutputCapacityReservationRecord> record) noexcept
+    : m_allocation(std::move(allocation))
+    , m_owner(std::move(owner))
     , m_batches(std::move(batches))
     , m_channels(std::move(channels))
     , m_channelLocks(std::move(channelLocks))
@@ -136,7 +138,8 @@ MediaReservedOutputTransaction::MediaReservedOutputTransaction(
 
 MediaReservedOutputTransaction::MediaReservedOutputTransaction(
     MediaReservedOutputTransaction&& other) noexcept
-    : m_owner(std::move(other.m_owner))
+    : m_allocation(std::move(other.m_allocation))
+    , m_owner(std::move(other.m_owner))
     , m_batches(std::move(other.m_batches))
     , m_channels(std::move(other.m_channels))
     , m_channelLocks(std::move(other.m_channelLocks))
@@ -156,6 +159,7 @@ MediaReservedOutputTransaction& MediaReservedOutputTransaction::operator=(
     m_channelLocks = std::move(other.m_channelLocks);
     m_queueLocks = std::move(other.m_queueLocks);
     m_record = std::move(other.m_record);
+    m_allocation = std::move(other.m_allocation);
     return *this;
 }
 
@@ -167,92 +171,109 @@ MediaReservedOutputTransaction::~MediaReservedOutputTransaction()
 MediaReservedOutputTransaction::ReserveResult
 MediaReservedOutputTransaction::reserve(
     const char* owner,
-    std::span<const MediaAtomicOutputBatch> batches)
+    std::span<const MediaAtomicOutputBatch> batches, const MediaOutputReservationStoragePlan& storage)
 {
+    auto allocation = storage.allocation();
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(storage, allocation); !valid)
+        return ReserveResult::failure(valid.error());
     try {
-    std::string ownerName = owner ? owner : "Reserved output transaction";
+    const std::string_view ownerName = owner ? owner : "Reserved output transaction";
     if (batches.empty()) {
         return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
-            ownerName + " requires explicit output batches"));
+            std::string(ownerName) + " requires explicit output batches"));
     }
-
-    std::unordered_map<MediaChannel*, std::size_t> required;
-    std::vector<OwnedBatch> ownedBatches;
-    ownedBatches.reserve(batches.size());
+    auto* resource = MediaLineageAllocator<std::byte>{allocation}.resource();
+    if (!resource) return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
+        "Reserved output transaction requires its allocation owner"));
+    using Record = MediaOutputCapacityReservationRecord;
+    MediaFixedCapacityStorage<Record::ChannelCount> counts(batches.size(), *resource);
     for (const auto& batch : batches) {
-        if (!batch.channel) {
-            return ReserveResult::failure(::media::ErrorInfo::notInitialized(
-                ownerName + " requires explicit outputs"));
+        if (!batch.channel) return ReserveResult::failure(::media::ErrorInfo::notInitialized(
+            std::string(ownerName) + " requires explicit outputs"));
+        auto* queue = dynamic_cast<MediaBlockingQueue*>(batch.channel->m_queue.get());
+        if (!queue) return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
+            std::string(ownerName) + " requires bounded FIFO blocking ordered outputs"));
+        if (batch.buffers.size() > queue->capacity())
+            return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
+                std::string(ownerName) + " batch exceeds its prepared output queue storage"));
+        counts.push_back({batch.channel, batch.buffers.size()});
+    }
+    auto ordered = counts.view();
+    std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.channel->id() != rhs.channel->id()) return lhs.channel->id() < rhs.channel->id();
+        return std::less<MediaChannel*>{}(lhs.channel, rhs.channel);
+    });
+    Record::ChannelCount* previous = nullptr;
+    for (auto& item : counts) {
+        if (previous && previous->channel == item.channel) {
+            const auto capacity = item.channel->m_queue->capacity();
+            if (previous->count > capacity || item.count > capacity - previous->count)
+                return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
+                    std::string(ownerName) + " batch exceeds its prepared output queue storage"));
+            previous->count += item.count;
+            item.channel = nullptr;
+        } else {
+            previous = &item;
         }
-        auto* queue = dynamic_cast<MediaBlockingQueue*>(
-            batch.channel->m_queue.get());
-        if (!queue) {
-            return ReserveResult::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    ownerName +
-                    " requires bounded FIFO blocking ordered outputs"));
-        }
-        auto prepared = queue->preparePush(batch.buffers);
+    }
+    counts.eraseIf([](const auto& item) { return item.channel == nullptr; });
+    if (storage.prepared()) {
+        auto cost = MediaOutputReservationStoragePlanner::reservationBytes(*storage.prepared(),
+            batches | std::views::transform([](const auto& batch) { return batch.buffers.size(); }),
+            counts.size(), ownerName.size());
+        if (!cost) return ReserveResult::failure(cost.error());
+    }
+    MediaFixedCapacityStorage<OwnedBatch> ownedBatches(batches.size(), *resource);
+    for (const auto& batch : batches) {
+        auto* queue = static_cast<MediaBlockingQueue*>(batch.channel->m_queue.get());
+        auto prepared = queue->preparePush(batch.buffers, allocation);
         if (!prepared) return ReserveResult::failure(prepared.error());
-        required[batch.channel] += batch.buffers.size();
-        ownedBatches.push_back(
-            {batch.channel, queue, std::move(prepared).value()});
+        ownedBatches.push_back({batch.channel, queue, std::move(prepared).value()});
     }
-
-    auto record = std::make_shared<MediaOutputCapacityReservationRecord>();
-    record->identity = g_nextReservationIdentity.fetch_add(
-        1, std::memory_order_relaxed);
-    record->channels.reserve(required.size());
-    for (const auto& [channel, count] : required) {
-        record->channels.push_back({channel, count});
+    MediaFixedCapacityStorage<char> ownerStorage(ownerName.size(), *resource);
+    for (const auto character : ownerName) ownerStorage.push_back(character);
+    MediaFixedCapacityStorage<MediaChannel*> channels(counts.size(), *resource);
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> channelLocks(counts.size(), *resource);
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> queueLocks(counts.size(), *resource);
+    for (const auto& item : counts) {
+        channels.push_back(item.channel);
+        channelLocks.push_back(std::unique_lock<std::mutex>{});
+        queueLocks.push_back(std::unique_lock<std::mutex>{});
     }
-    std::sort(record->channels.begin(), record->channels.end(),
-              [](const auto& lhs, const auto& rhs) {
-                  if (lhs.channel->id() != rhs.channel->id())
-                      return lhs.channel->id() < rhs.channel->id();
-                  return std::less<MediaChannel*>{}(lhs.channel, rhs.channel);
-              });
-    auto channels = sortedChannels(record->channels);
-    auto locks = lockChannels(channels);
+    auto record = std::allocate_shared<Record>(Record::AllocationAllocator{allocation}, allocation,
+        std::move(counts), g_nextReservationIdentity.fetch_add(1, std::memory_order_relaxed));
+    MediaReservedOutputLockScope locks(channelLocks.view(), queueLocks.view());
+    for (std::size_t index = 0; index < channels.size(); ++index)
+        channelLocks[index] = std::unique_lock<std::mutex>(channels[index]->m_mutationMutex);
     for (const auto& item : record->channels) {
         MediaChannel* channel = item.channel;
         if (!channel->m_queue || channel->m_queue->aborted() ||
-            channel->m_queue->closed() || channel->m_closeRequested) {
+            channel->m_queue->closed() || channel->m_closeRequested)
             return ReserveResult::failure(::media::ErrorInfo::cancelled(
-                ownerName + " output is closed"));
-        }
-        if (!MediaAtomicOutputPolicyContract::accepts(channel->m_policy)) {
+                std::string(ownerName) + " output is closed"));
+        if (!MediaAtomicOutputPolicyContract::accepts(channel->m_policy))
             return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
-                ownerName +
-                " requires bounded FIFO blocking ordered outputs"));
-        }
-        const std::size_t capacity = channel->m_queue->capacity();
-        if (item.count > capacity) {
+                std::string(ownerName) + " requires bounded FIFO blocking ordered outputs"));
+        const auto capacity = channel->m_queue->capacity();
+        if (item.count > capacity)
             return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
-                ownerName + " batch exceeds planned output capacity"));
-        }
-        if (channel->m_reservedCapacity >
-                capacity - item.count || channel->m_queue->size() >
-                capacity - item.count - channel->m_reservedCapacity) {
+                std::string(ownerName) + " batch exceeds planned output capacity"));
+        if (channel->m_reservedCapacity > capacity - item.count ||
+            channel->m_queue->size() > capacity - item.count - channel->m_reservedCapacity)
             return ReserveResult::success(std::nullopt);
-        }
     }
-    std::vector<std::unique_lock<std::mutex>> channelLocks(channels.size());
-    std::vector<std::unique_lock<std::mutex>> queueLocks(channels.size());
-    MediaReservedOutputTransaction transaction(
-        std::move(ownerName),
-        std::move(ownedBatches),
-        std::move(channels),
-        std::move(channelLocks),
-        std::move(queueLocks),
-        std::move(record));
-    for (const auto& item : transaction.m_record->channels) {
+    MediaReservedOutputTransaction transaction(std::move(allocation), std::move(ownerStorage),
+        std::move(ownedBatches), std::move(channels), std::move(channelLocks), std::move(queueLocks), std::move(record));
+    for (const auto& item : transaction.m_record->channels)
         item.channel->m_reservedCapacity += item.count;
-    }
+    locks.unlock();
     return ReserveResult::success(std::move(transaction));
     } catch (const std::bad_alloc&) {
         return ReserveResult::failure(::media::ErrorInfo::internalError(
             "Reserved output transaction allocation failed"));
+    } catch (const std::length_error&) {
+        return ReserveResult::failure(::media::ErrorInfo::internalError(
+            "Reserved output transaction storage size is not representable"));
     }
 }
 
@@ -267,12 +288,12 @@ MediaReservedOutputTransaction::handle() const
 {
     if (!m_record || batches.size() != m_batches.size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            m_owner + " replacement requires the reserved batch shape"));
+            std::string(m_owner.begin(), m_owner.end()) + " replacement requires the reserved batch shape"));
     }
     std::lock_guard lock(m_record->mutex);
     if (m_record->state != MediaOutputCapacityReservationState::Pending) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            m_owner + " replacement requires a pending reservation"));
+            std::string(m_owner.begin(), m_owner.end()) + " replacement requires a pending reservation"));
     }
     for (std::size_t index = 0; index < batches.size(); ++index) {
         const auto& batch = batches[index];
@@ -280,13 +301,13 @@ MediaReservedOutputTransaction::handle() const
         if (batch.channel != reserved.channel ||
             batch.buffers.size() != reserved.prepared.size()) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                m_owner + " replacement changed reserved capacity"));
+                std::string(m_owner.begin(), m_owner.end()) + " replacement changed reserved capacity"));
         }
         for (const auto& buffer : batch.buffers) {
             if (!buffer) {
                 return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    m_owner + " replacement rejects null buffers"));
+                    std::string(m_owner.begin(), m_owner.end()) + " replacement rejects null buffers"));
             }
         }
     }
@@ -301,61 +322,88 @@ MediaReservedOutputTransaction::handle() const
 
 ::media::Status MediaReservedOutputTransaction::authorize(
     std::span<const MediaOutputCapacityReservationHandle> handles,
-    const Authorization& authorization)
+    const Authorization& authorization, const MediaOutputReservationStoragePlan& storage)
 {
-    if (handles.empty() || !authorization) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Reserved output authorization requires reservations and callback"));
-    }
-    std::vector<std::shared_ptr<MediaOutputCapacityReservationRecord>> records;
-    records.reserve(handles.size());
-    for (const auto& handle : handles) {
-        if (!handle.m_record) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+    auto allocation = storage.allocation();
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(storage, allocation); !valid) return valid;
+    if (handles.empty() || !authorization) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Reserved output authorization requires reservations and callback"));
+    auto* resource = MediaLineageAllocator<std::byte>{allocation}.resource();
+    if (!resource) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Reserved output authorization requires its scratch allocation owner"));
+    MediaFixedCapacityStorage<std::shared_ptr<MediaOutputCapacityReservationRecord>> records(0, *resource);
+    MediaFixedCapacityStorage<MediaChannel*> channels(0, *resource);
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> recordLocks(0, *resource);
+    MediaFixedCapacityStorage<std::unique_lock<std::mutex>> channelLocks(0, *resource);
+    try {
+        records = MediaFixedCapacityStorage<std::shared_ptr<MediaOutputCapacityReservationRecord>>(handles.size(), *resource);
+        for (const auto& handle : handles) {
+            if (!handle.m_record) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Reserved output authorization rejects an invalid handle"));
+            records.push_back(handle.m_record);
         }
-        records.push_back(handle.m_record);
+        auto ordered = records.view();
+        std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) { return lhs->identity < rhs->identity; });
+        if (std::adjacent_find(ordered.begin(), ordered.end()) != ordered.end())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Reserved output authorization rejects duplicate handles"));
+        std::uint64_t total = 0;
+        for (const auto& record : records) {
+            // Immutable after record construction; no state is inspected before locking.
+            auto count = MediaCheckedArithmetic::add(total, record->channels.size(), "authorization channel scratch");
+            if (!count) return ::media::Status::failure(count.error());
+            total = count.value();
+        }
+        if (total > (std::numeric_limits<std::size_t>::max)())
+            return ::media::Status::failure(::media::ErrorInfo::allocationFailed("Authorization scratch exceeds addressable size"));
+        channels = MediaFixedCapacityStorage<MediaChannel*>(static_cast<std::size_t>(total), *resource);
+        for (const auto& record : records)
+            for (const auto& item : record->channels) channels.push_back(item.channel);
+        auto orderedChannels = channels.view();
+        std::sort(orderedChannels.begin(), orderedChannels.end(), [](MediaChannel* lhs, MediaChannel* rhs) {
+            if (lhs->id() != rhs->id()) return lhs->id() < rhs->id();
+            return std::less<MediaChannel*>{}(lhs, rhs);
+        });
+        MediaChannel* previous = nullptr;
+        channels.eraseIf([&](MediaChannel* channel) {
+            if (channel == previous) return true;
+            previous = channel;
+            return false;
+        });
+        if (storage.prepared()) {
+            auto cost = MediaOutputReservationStoragePlanner::authorizationBytes(*storage.prepared(), records.size(), channels.capacity(), channels.size());
+            if (!cost) return ::media::Status::failure(cost.error());
+        }
+        recordLocks = MediaFixedCapacityStorage<std::unique_lock<std::mutex>>(records.size(), *resource);
+        channelLocks = MediaFixedCapacityStorage<std::unique_lock<std::mutex>>(channels.size(), *resource);
+        for (std::size_t i = 0; i < records.size(); ++i) recordLocks.push_back(std::unique_lock<std::mutex>{});
+        for (std::size_t i = 0; i < channels.size(); ++i) channelLocks.push_back(std::unique_lock<std::mutex>{});
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("Reserved output authorization scratch allocation failed"));
+    } catch (const std::length_error&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("Reserved output authorization scratch size is not representable"));
     }
-    std::sort(records.begin(), records.end(), [](const auto& lhs,
-                                                  const auto& rhs) {
-        return lhs->identity < rhs->identity;
-    });
-    if (std::adjacent_find(records.begin(), records.end()) != records.end()) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Reserved output authorization rejects duplicate handles"));
-    }
-    std::vector<std::unique_lock<std::mutex>> recordLocks;
-    recordLocks.reserve(records.size());
-    for (const auto& record : records) recordLocks.emplace_back(record->mutex);
-
-    std::vector<MediaOutputCapacityReservationRecord::ChannelCount> counts;
+    for (std::size_t i = 0; i < records.size(); ++i) recordLocks[i] = std::unique_lock<std::mutex>(records[i]->mutex);
     for (const auto& record : records) {
-        if (record->state != MediaOutputCapacityReservationState::Pending) {
+        if (record->state != MediaOutputCapacityReservationState::Pending)
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Reserved output authorization requires pending reservations"));
-        }
-        counts.insert(counts.end(), record->channels.begin(),
-                      record->channels.end());
     }
-    const auto channels = sortedChannels(counts);
-    auto channelLocks = lockChannels(channels);
+    for (std::size_t i = 0; i < channels.size(); ++i)
+        channelLocks[i] = std::unique_lock<std::mutex>(channels[i]->m_mutationMutex);
     for (const auto& record : records) {
         for (const auto& item : record->channels) {
             if (!item.channel->m_queue || item.channel->m_queue->aborted() ||
-                item.channel->m_queue->closed() ||
-                item.channel->m_closeRequested ||
-                item.channel->m_reservedCapacity < item.count) {
+                item.channel->m_queue->closed() || item.channel->m_closeRequested ||
+                item.channel->m_reservedCapacity < item.count)
                 return ::media::Status::failure(::media::ErrorInfo::cancelled(
                     "Reserved output authorization found a closed output"));
-            }
         }
     }
     if (auto status = authorization(); !status) return status;
     for (const auto& record : records) {
         record->state = MediaOutputCapacityReservationState::Authorized;
-        for (const auto& item : record->channels) {
-            item.channel->m_authorizedCapacity += item.count;
-        }
+        for (const auto& item : record->channels) item.channel->m_authorizedCapacity += item.count;
     }
     return ::media::Status::success();
 }
@@ -365,15 +413,15 @@ MediaReservedOutputTransaction::handle() const
 {
     if (!m_record) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            m_owner + " reservation is not pending"));
+            std::string(m_owner.begin(), m_owner.end()) + " reservation is not pending"));
     }
     std::unique_lock recordLock(m_record->mutex);
     if (m_record->state != MediaOutputCapacityReservationState::Authorized) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            m_owner + " reservation is not authorized"));
+            std::string(m_owner.begin(), m_owner.end()) + " reservation is not authorized"));
     }
     MediaReservedOutputLockScope outputLocks(
-        m_channelLocks, m_queueLocks);
+        m_channelLocks.view(), m_queueLocks.view());
     try {
         for (std::size_t index = 0; index < m_channels.size(); ++index) {
             m_channelLocks[index] = std::unique_lock<std::mutex>(
@@ -395,7 +443,7 @@ MediaReservedOutputTransaction::handle() const
             }
             m_record->state = MediaOutputCapacityReservationState::Cancelled;
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
-                m_owner + " reservation was aborted"));
+                std::string(m_owner.begin(), m_owner.end()) + " reservation was aborted"));
         }
         if (finalAuthorization) {
             if (auto authorized = finalAuthorization(); !authorized) {
@@ -405,11 +453,11 @@ MediaReservedOutputTransaction::handle() const
     } catch (const std::exception& exception) {
         return ::media::Status::failure(
             ::media::ErrorInfo::internalError(
-                m_owner + " commit threw: " + exception.what()));
+                std::string(m_owner.begin(), m_owner.end()) + " commit threw: " + exception.what()));
     } catch (...) {
         return ::media::Status::failure(
             ::media::ErrorInfo::internalError(
-                m_owner + " commit threw"));
+                std::string(m_owner.begin(), m_owner.end()) + " commit threw"));
     }
     for (auto& batch : m_batches) {
         const std::size_t count = batch.prepared.size();
@@ -459,8 +507,12 @@ MediaReservedOutputTransaction::handle() const
     }
     const bool authorized =
         m_record->state == MediaOutputCapacityReservationState::Authorized;
-    const auto channels = sortedChannels(m_record->channels);
-    auto channelLocks = lockChannels(channels);
+    MediaReservedOutputLockScope outputLocks(
+        m_channelLocks.view(), m_queueLocks.view());
+    for (std::size_t index = 0; index < m_channels.size(); ++index) {
+        m_channelLocks[index] = std::unique_lock<std::mutex>(
+            m_channels[index]->m_mutationMutex);
+    }
     for (const auto& item : m_record->channels) {
         item.channel->m_reservedCapacity -= item.count;
         if (authorized) item.channel->m_authorizedCapacity -= item.count;
@@ -468,8 +520,8 @@ MediaReservedOutputTransaction::handle() const
     }
     m_record->state = MediaOutputCapacityReservationState::Cancelled;
     recordLock.unlock();
-    for (auto& lock : channelLocks) lock.unlock();
-    for (MediaChannel* channel : channels) {
+    outputLocks.unlock();
+    for (MediaChannel* channel : m_channels) {
         channel->publishReservedCapacityMutation();
     }
     m_record.reset();

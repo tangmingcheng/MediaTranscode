@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
 #include <optional>
 
 namespace media::ffmpeg::graph {
@@ -13,7 +14,9 @@ class MediaPlaybackEpochBinderNode final : public MediaRuntimeNode {
 public:
     MediaPlaybackEpochBinderNode(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey groupKey);
+        MediaAvSyncGroupKey groupKey,
+        MediaStartupSharedObjectPlan releaseStorage,
+        MediaStartupSharedObjectPlan controlStorage);
 
     static MediaNodeKind staticKind() noexcept;
     MediaNodeId nodeId() const noexcept override;
@@ -28,6 +31,8 @@ private:
     ::media::Result<MediaNodeProcessResult> failTerminal(
         ::media::ErrorInfo error);
 
+    MediaStartupSharedObjectPlan m_releaseStorage;
+    MediaStartupSharedObjectPlan m_controlStorage;
     MediaNodeId m_nodeId;
     MediaAvSyncGroupKey m_groupKey;
     MediaBufferRef m_pendingRelease;

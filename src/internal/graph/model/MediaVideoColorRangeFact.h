@@ -1,5 +1,6 @@
 #pragma once
 #include <optional>
+#include "internal/graph/model/MediaVideoColorContract.h"
 
 extern "C" {
 #include <libavutil/pixfmt.h>
@@ -20,6 +21,7 @@ struct MediaVideoColorRangeFact final {
     AVColorRange range;
     bool signaled;
     std::optional<MediaVideoEncoderColorInput> encoderInput;
+    std::optional<MediaVideoColorContract> color;
     friend bool operator==(const MediaVideoColorRangeFact&,
                            const MediaVideoColorRangeFact&) = default;
 };

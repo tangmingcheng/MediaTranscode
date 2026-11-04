@@ -16,6 +16,7 @@ struct MediaAvSourceDomainRuntimeState final {
     MediaAvReacquisitionAssemblyDependencies reacquisition;
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparation;
     std::shared_ptr<MediaPreparedVideoDecoder> preparedVideoDecoder;
+    std::shared_ptr<MediaPreparedRtpSourceSession> preparedRtpSource;
 };
 
 struct MediaAvSharedSourceOutputDomainRuntimeState final {
@@ -25,12 +26,15 @@ struct MediaAvSharedSourceOutputDomainRuntimeState final {
     std::shared_ptr<MediaAvStartupVideoPreparationState> videoPreparation;
 };
 
+class MediaAvAggregateCoordination;
+
 struct MediaAvOutputDomainRuntimeState final {
     MediaAvOutputDomainRegistration registration;
     std::optional<MediaOutputEpochActivationCapability> activation;
     std::shared_ptr<const MediaAvContinuousAggregatePlan> aggregatePlan;
     MediaBufferRef preparedVideoEncoder;
     std::shared_ptr<MediaPreparedVideoCanvas> preparedCanvas;
+    std::shared_ptr<MediaAvAggregateCoordination> coordination;
 };
 
 struct MediaAvRuntimeDomainState final {

@@ -101,43 +101,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     return ::media::Status::success();
 }
 
-::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
+::media::Status validateAudioServo(const MediaAvSyncPlan& plan, bool finalized)
 {
-    if (!plan.sourceLifecycle ||
-        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
-         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
-        return invalid("sourceLifecycle");
-    if (!plan.sourceClockMode) return invalid("sourceClockMode");
-    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
-        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
-    if (auto status = validateMasterClock(plan); !status) return status;
-
-    const auto& startup = plan.startup;
-    if (!startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
-        !startup.trimAudioToCommonStart ||
-        !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
-        !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
-        !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
-        !positive(startup.maximumGapNs) ||
-        *startup.maximumAudioTrimNs > *startup.prerollNs ||
-        *startup.maximumGapNs >= *startup.prerollNs ||
-        *startup.maximumInitialSkewNs >= *startup.outputLeadNs ||
-        *startup.prerollNs >= *startup.keyFrameWaitNs ||
-        *startup.keyFrameWaitNs > *startup.maximumWaitNs ||
-        !positive(startup.videoCapacity) || !positive(startup.audioCapacity) ||
-        !validByteCapacity(startup.videoCapacity, startup.maximumVideoUnitBytes,
-                           startup.videoByteCapacity) ||
-        !validByteCapacity(startup.audioCapacity, startup.maximumAudioUnitBytes,
-                           startup.audioByteCapacity) ||
-        *startup.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        *startup.audioCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        !presentText(startup.videoIdentity) || !presentText(startup.audioIdentity) ||
-        *startup.videoIdentity == *startup.audioIdentity ||
-        !startup.allowDegradedClock || *startup.allowDegradedClock) {
-        return invalid("ordered startup thresholds");
-    }
-
     const auto& servo = plan.audioServo;
     if (!positive(servo.deadbandNs) ||
         !positive(servo.phaseFilterTimeConstantNs) ||
@@ -232,6 +197,60 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         return invalid("finalized audio correction timing");
     }
 
+    return ::media::Status::success();
+}
+
+::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
+{
+    if (!plan.sourceLifecycle ||
+        (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
+         plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
+        return invalid("sourceLifecycle");
+    if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (plan.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports)
+        return invalid("sourceLifecycle requires authoritative RTP clock evidence");
+    if (auto status = validateMasterClock(plan); !status) return status;
+
+    const auto& startup = plan.startup;
+    const bool hasAudio = plan.members == MediaTranscodeStreamSet::AudioVideo;
+    const bool validAudioStartup = hasAudio
+        ? positive(startup.maximumAudioTrimNs) && positive(startup.prerollNs) &&
+          *startup.maximumAudioTrimNs <= *startup.prerollNs &&
+          validByteCapacity(startup.audioCapacity, startup.maximumAudioUnitBytes,
+                            startup.audioByteCapacity) &&
+          *startup.audioCapacity <= static_cast<std::size_t>((std::numeric_limits<int>::max)()) &&
+          presentText(startup.audioIdentity) && presentText(startup.videoIdentity) &&
+          *startup.audioIdentity != *startup.videoIdentity
+        : !startup.maximumAudioTrimNs && !startup.audioCapacity &&
+          !startup.maximumAudioUnitBytes && !startup.audioByteCapacity &&
+          !startup.audioIdentity && startup.trimAudioToCommonStart == false;
+    if (!startup.videoReadiness || !encodeMediaVideoStartupReadiness(*startup.videoReadiness) ||
+        !startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
+        !startup.trimAudioToCommonStart || !validAudioStartup ||
+        !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
+        !positive(startup.keyFrameWaitNs) ||
+        !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
+        !positive(startup.maximumGapNs) ||
+        *startup.maximumGapNs >= *startup.prerollNs ||
+        *startup.maximumInitialSkewNs >= *startup.outputLeadNs ||
+        *startup.prerollNs >= *startup.keyFrameWaitNs ||
+        *startup.keyFrameWaitNs > *startup.maximumWaitNs ||
+        !positive(startup.videoCapacity) ||
+        !validByteCapacity(startup.videoCapacity, startup.maximumVideoUnitBytes,
+                           startup.videoByteCapacity) ||
+        *startup.videoCapacity > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
+        !presentText(startup.videoIdentity) ||
+        !startup.allowDegradedClock || *startup.allowDegradedClock) {
+        return invalid("ordered startup thresholds");
+    }
+
+    if (hasAudio) {
+        if (auto status = validateAudioServo(plan, finalized); !status) return status;
+    } else if (plan.audioServo != MediaAvSyncAudioServoPolicy{}) {
+        return invalid("video-only source contains audio correction products");
+    }
+
     if (auto status = validateVideoPolicy(plan); !status) return status;
     const auto& video = plan.video;
 
@@ -273,11 +292,16 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         return invalid("RTP input clock contract");
     }
     const auto& rtp = *plan.rtpInput;
-    if (!validRtpInputStream(rtp.videoInput) || !validRtpInputStream(rtp.audioInput) ||
+    const bool hasAudio = plan.members == MediaTranscodeStreamSet::AudioVideo;
+    const bool validAudio = hasAudio ? validRtpInputStream(rtp.audioInput)
+        : !rtp.audioInput.identity && !rtp.audioInput.payloadType && !rtp.audioInput.clockRate;
+    const auto association = hasAudio ? MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair
+                                     : MediaAvSyncRtpStreamAssociationMode::PlannedSingleStream;
+    if (!validRtpInputStream(rtp.videoInput) || !validAudio ||
         rtp.input.commonEpochPolicy !=
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
         rtp.input.streamAssociationMode !=
-            MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair ||
+            association ||
         !rtp.input.rtcpCompositionMode ||
         *rtp.input.rtcpCompositionMode !=
             MediaRtcpCompositionMode::ReducedSizeRfc5506 ||
@@ -480,8 +504,11 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateScoped(const MediaAvSyncPlan& plan, bool finalized)
 {
     if (!plan.domainRole) return invalid("domainRole");
-    if (plan.members != MediaTranscodeStreamSet::AudioVideo)
-        return invalid("planned A/V domain members; video-only source assembly is not implemented");
+    const bool videoContribution = plan.members == MediaTranscodeStreamSet::VideoOnly &&
+        plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
+        plan.sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports;
+    if (plan.members != MediaTranscodeStreamSet::AudioVideo && !videoContribution)
+        return invalid("planned domain members");
     if (*plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput) {
         if (plan.sourceClockMode || plan.sourceLifecycle || plan.rtpInput ||
             plan.mpegTsInput || plan.demuxTimestampInput ||
@@ -496,7 +523,12 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
             return invalid("continuous output activation policy");
         }
         if (auto status = validateMasterClock(plan); !status) return status;
-        if (auto status = validateVideoPolicy(plan); !status) return status;
+        if (plan.video.earlyHoldThresholdNs || plan.video.lateDisplayThresholdNs ||
+            plan.video.dropThresholdNs || plan.video.allowRecoveryRepeat ||
+            plan.video.maximumConsecutiveRecoveryActions ||
+            plan.recovery.suspectThresholdNs || plan.recovery.hardDiscontinuityThresholdNs ||
+            plan.recovery.reacquisitionTimeoutNs)
+            return invalid("continuous output contains display or source recovery policy" );
         if (auto status = validateMetrics(plan); !status) return status;
         return validateOutput(plan);
     }
@@ -521,7 +553,10 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 
 ::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlan& plan)
 {
-    if (plan.members != MediaTranscodeStreamSet::AudioVideo ||
+    const bool videoContribution = plan.members == MediaTranscodeStreamSet::VideoOnly &&
+        plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
+        plan.sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports;
+    if ((plan.members != MediaTranscodeStreamSet::AudioVideo && !videoContribution) ||
         !plan.sourceClockMode || !plan.controlGenerationPolicy ||
         !positive(plan.recovery.reacquisitionTimeoutNs) ||
         !positive(plan.recovery.hardDiscontinuityThresholdNs))
@@ -559,7 +594,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     const bool frequency =
         plan.audioServo.frequencyFilterTimeConstantNs.has_value();
     if (commandLead != compensation || commandLead != frequency ||
-        (plan.domainRole == MediaAvSyncDomainRole::SourceContribution && !commandLead)) {
+        (plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
+         plan.members == MediaTranscodeStreamSet::AudioVideo && !commandLead)) {
         return invalid("runtime audio correction timing product");
     }
     return commandLead ? validate(plan) : validatePolicy(plan);

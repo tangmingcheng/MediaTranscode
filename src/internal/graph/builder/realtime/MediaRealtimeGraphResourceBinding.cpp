@@ -9,7 +9,8 @@ namespace media::ffmpeg::graph {
     const auto* node = graph.findNode(codecResolver);
     if (!node || node->kind != MediaNodeKind::CodecResolver ||
         !ledger.payloadCreditPlan.isCompleteAndValid() ||
-        !graph.setPayloadCreditPlan(ledger.payloadCreditPlan))
+        !graph.setPayloadCreditPlan(ledger.payloadCreditPlan) ||
+        !graph.appendProtocolGenerationStorage(ledger.protocolGenerationStorage))
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Realtime graph requires its output codec resolver and complete payload credit plan"));
     const auto set = [&](const char* key, const std::string& value) {

@@ -92,12 +92,10 @@ VideoFrameRateNode::VideoFrameRateNode(MediaNodeId nodeId)
 
 VideoFrameRateNode::VideoFrameRateNode(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaVideoFrameRateState> state,
-    std::optional<MediaAvStartupVideoPreparationCapability> preparation)
+    std::shared_ptr<MediaVideoFrameRateState> state)
     : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFrameRateNode")
     , m_state(std::move(state))
     , m_exposesGenerationPurgeTarget(true)
-    , m_preparationCapability(std::move(preparation))
 {
 }
 
@@ -135,7 +133,6 @@ bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) co
 ::media::Status VideoFrameRateNode::stop(MediaGraphExecutionContext& context)
 {
     auto guard = m_state->lock();
-    if (m_preparationCapability) (void)m_preparationCapability->cancel();
     auto status = FFmpegNodeRuntime::stop(context);
     resetRuntimeState();
     return status;
@@ -144,7 +141,6 @@ bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) co
 void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept
 {
     auto guard = m_state->lock();
-    if (m_preparationCapability) (void)m_preparationCapability->cancel();
     FFmpegNodeRuntime::abort(context);
     resetRuntimeState();
 }
@@ -154,7 +150,6 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     m_state->resetLifecycle();
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
-    m_preparedReservation.reset();
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
@@ -163,18 +158,6 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     auto& state = m_state->data();
     if (state.terminalPending) {
         return continueTerminal(context);
-    }
-    if (m_preparationCapability) {
-        auto prepared = preparePendingOutput(context);
-        if (!prepared) {
-            return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
-        }
-        if (prepared.value()) return processProgress();
-        const auto phase = m_preparationCapability->snapshot().phase;
-        if (m_preparedReservation ||
-            phase == MediaAvStartupVideoPreparationPhase::OutputReady) {
-            return processWaiting();
-        }
     }
     const bool hadPendingOutput = !state.pendingFrames.empty();
     auto pendingDrain = drainPending(context);
@@ -253,13 +236,6 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
     }
 
-    if (m_preparationCapability) {
-        auto prepared = preparePendingOutput(context);
-        if (!prepared) {
-            return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
-        }
-        if (prepared.value() || m_preparedReservation) return processWaiting();
-    }
 
     auto drainStatus = drainPending(context);
     if (!drainStatus) {
@@ -268,48 +244,6 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
-::media::Result<bool> VideoFrameRateNode::preparePendingOutput(
-    MediaGraphExecutionContext& context)
-{
-    if (!m_preparationCapability) {
-        return ::media::Result<bool>::success(false);
-    }
-    const auto snapshot = m_preparationCapability->snapshot();
-    if (m_preparedReservation) {
-        if (snapshot.phase !=
-            MediaAvStartupVideoPreparationPhase::ReleaseCommitted) {
-            return ::media::Result<bool>::success(false);
-        }
-        auto committed = m_preparedReservation->commit();
-        if (!committed) return ::media::Result<bool>::failure(committed.error());
-        m_preparedReservation.reset();
-        return ::media::Result<bool>::success(true);
-    }
-    auto& pending = m_state->data().pendingFrames;
-    if (snapshot.phase != MediaAvStartupVideoPreparationPhase::Feeding ||
-        pending.empty()) {
-        return ::media::Result<bool>::success(false);
-    }
-    const MediaBufferRef output = pending.front().buffer;
-    const std::array<MediaAtomicOutputBatch, 1> batches{
-        MediaAtomicOutputBatch{
-            context.findOutputChannel(nodeId(), "frame"),
-            std::span(&output, 1)}};
-    auto reservation = MediaReservedOutputTransaction::reserve(
-        "VideoFrameRateNode prepared frame", batches);
-    if (!reservation) return ::media::Result<bool>::failure(reservation.error());
-    if (!reservation.value()) return ::media::Result<bool>::success(false);
-    m_preparedReservation.emplace(std::move(*reservation.value()));
-    auto ready = m_preparationCapability->markOutputReady(
-        snapshot.generation, snapshot.releaseIdentity,
-        m_preparedReservation->handle());
-    if (!ready) {
-        m_preparedReservation.reset();
-        return ::media::Result<bool>::failure(ready.error());
-    }
-    pending.pop_front();
-    return ::media::Result<bool>::success(false);
-}
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::continueTerminal(
     MediaGraphExecutionContext& context)
@@ -574,7 +508,7 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
             toMediaRational(state.inputTimeBase));
         if (!derived) return ::media::Status::failure(derived.error());
         auto canonical = MediaCanonicalVideoFrameBuffer::create(
-            output, std::move(derived).value());
+            output, std::move(derived).value(), std::nullopt);
         if (!canonical) return ::media::Status::failure(canonical.error());
         output = std::move(canonical).value();
     }
@@ -649,7 +583,7 @@ const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* fra
 
     MediaBufferRef remembered = cloned.value();
     if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
-        auto canonical = MediaCanonicalVideoFrameBuffer::create(remembered, std::move(lineage));
+        auto canonical = MediaCanonicalVideoFrameBuffer::create(remembered, std::move(lineage), std::nullopt);
         if (!canonical) return ::media::Status::failure(canonical.error());
         remembered = std::move(canonical).value();
     }

@@ -6,7 +6,7 @@ namespace media::ffmpeg::graph {
 
 class MediaOpusRtpDepacketizer final : public MediaRtpDepacketizer {
 public:
-    explicit MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig config);
+    explicit MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
 

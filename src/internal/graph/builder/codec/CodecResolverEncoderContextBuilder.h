@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 
 #include <optional>
 #include "media_transcode/Result.h"
@@ -27,6 +28,7 @@ struct CodecResolverEncoderContextBuildRequest {
     std::optional<MediaVideoEncoderFrameInput> frameInput;
     const MediaNodeOptions* options = nullptr;
     AVBufferRef* hardwareDevice = nullptr;
+    std::optional<MediaVideoLineagePropagation> preparationLineage;
 };
 
 struct CodecResolverEncoderContextBuildResult {

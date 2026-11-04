@@ -8,6 +8,7 @@ bool samePlan(const MediaVideoCanvasPlan& left, const MediaVideoCanvasPlan& righ
 {
     if (left.geometry.hardwareFormat != right.geometry.hardwareFormat || left.geometry.softwareFormat != right.geometry.softwareFormat ||
         left.geometry.width != right.geometry.width || left.geometry.height != right.geometry.height ||
+        left.geometry.sampleAspectRatio != right.geometry.sampleAspectRatio ||
         left.geometry.effectiveColorRange != right.geometry.effectiveColorRange || left.storage.surfaceCount != right.storage.surfaceCount ||
         left.storage.maximumSurfaceBytes != right.storage.maximumSurfaceBytes ||
         left.storage.maximumStagingBytes != right.storage.maximumStagingBytes ||
@@ -24,7 +25,7 @@ bool samePlan(const MediaVideoCanvasPlan& left, const MediaVideoCanvasPlan& righ
 
 ::media::Result<std::shared_ptr<MediaPreparedVideoCanvas>> MediaPreparedVideoCanvas::prepare(
     const MediaVideoCanvasPreparationPlan& preparation, AVBufferRef* productionHwFrames,
-    std::span<const AVFrame* const> preparedTiles,
+    std::span<const MediaVideoCanvasTile> preparedTiles,
     const std::shared_ptr<MediaPreparationStorageBudget>& payloadBudget,
     const MediaPreparationControl& control)
 try {
@@ -35,13 +36,13 @@ try {
     const auto& plan = preparation.canvas();
     if (preparedTiles.empty() || preparedTiles.size() != plan.geometry.tiles.size())
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas requires every real tile frame"));
-    for (const auto* tile : preparedTiles) if (!tile)
+    for (const auto& tile : preparedTiles) if (!tile.frame || !tile.readiness)
         return Result::failure(::media::ErrorInfo::invalidArgument("prepared canvas tile frame is missing"));
-    auto retained = payloadBudget->reserve(preparation.retainedPayloadBytes());
+    auto retained = payloadBudget->reserve(preparation.retainedPayloadBytes(), MediaStorageAdmission::RequiredAllocation);
     if (!retained) return Result::failure(retained.error());
     // These reservations precede every owned allocation. Failure of the second
     // reservation rolls the first back before any platform operation.
-    auto transient = payloadBudget->reserve(preparation.transientPayloadBytes());
+    auto transient = payloadBudget->reserve(preparation.transientPayloadBytes(), MediaStorageAdmission::RequiredAllocation);
     if (!transient) return Result::failure(transient.error());
     auto prepared = std::shared_ptr<MediaPreparedVideoCanvas>(new MediaPreparedVideoCanvas);
     prepared->payloadStorage_ = std::make_shared<const MediaPreparationStorageLease>(std::move(retained).value());
@@ -52,12 +53,17 @@ try {
     // only matching format names or allocating a same-shaped surrogate pool.
     for (std::size_t i = 0; i < preparedTiles.size(); ++i) {
         if (auto checked = control.check("Canvas tile preparation"); !checked) return Result::failure(checked.error());
-        status = producer->adapter_->validate(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
+        const auto& tile = *preparedTiles[i].frame;
+        const MediaVideoColorContract actual{tile.color_range, tile.color_primaries, tile.color_trc, tile.colorspace};
+        if (!plan.geometry.effectiveColorRange.color || actual != *plan.geometry.effectiveColorRange.color)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Prepared tile color differs from canvas contract"));
+        status = producer->adapter_->validate(*preparedTiles[i].frame, *producer->surfaces_.front(), plan.geometry.tiles[i]);
         if (!status) return Result::failure(status.error());
         if (auto checked = control.check("Canvas tile preparation"); !checked) return Result::failure(checked.error());
-        status = producer->adapter_->copy(*preparedTiles[i], *producer->surfaces_.front(), plan.geometry.tiles[i]);
-        if (!status) return Result::failure(status.error());
     }
+    status = producer->adapter_->copyBatch({*producer->black_, *producer->surfaces_.front(),
+        {0, 0, plan.geometry.width, plan.geometry.height}, preparedTiles, plan.geometry.tiles});
+    if (!status) return Result::failure(status.error());
     if (auto checked = control.check("Canvas preparation"); !checked) return Result::failure(checked.error());
     prepared->producer_ = std::move(producer);
     return Result::success(std::move(prepared));

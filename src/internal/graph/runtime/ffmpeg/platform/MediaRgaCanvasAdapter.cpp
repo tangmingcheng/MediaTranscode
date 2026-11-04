@@ -154,9 +154,16 @@ public:
     ::media::Status validate(const AVFrame& source, const AVFrame& target,
         const MediaVideoCanvasRectangle& rectangle) override
     { return process(source, target, rectangle, false); }
-    ::media::Status copy(const AVFrame& source, AVFrame& target,
-        const MediaVideoCanvasRectangle& rectangle) override
-    { return process(source, target, rectangle, true); }
+    ::media::Status executeBatch(const MediaVideoCanvasCopyBatch& batch) override
+    {
+        return batch.visit([&](const AVFrame& source, const MediaVideoCanvasRectangle& rectangle,
+            const MediaVideoFrameReadiness& readiness) {
+                if (readiness.kind() != MediaVideoFrameReadiness::Kind::Completed)
+                    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                        "RGA canvas requires a completed producer operation"));
+                return process(source, batch.target, rectangle, true);
+            });
+    }
     ::media::Status upload(const AVFrame& source, AVFrame& target) override
     { return transfer(source, target, false); }
     ::media::Status download(const AVFrame& source, AVFrame& target) override

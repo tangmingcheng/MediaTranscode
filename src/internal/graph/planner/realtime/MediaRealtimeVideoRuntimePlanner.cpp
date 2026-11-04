@@ -225,7 +225,6 @@ planSeparateRtp(
             std::in_place_type<MediaMpegTsRtpOutputPlan>,
             std::move(rtp).value());
     }
-    outer.videoParameters.globalHeader = true;
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
         startup.byteCapacity,
@@ -234,11 +233,14 @@ planSeparateRtp(
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());
     }
+    auto series = MediaTsProtocolSeriesBoundsPlanner::plan(protocol.value().muxPlan(), preparedEmission);
+    if (!series) return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(series.error());
     return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::success(
         MediaProjectMpegTsRuntimeOutputPlan{
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
             std::move(emission).value(),
+            std::move(series).value(),
             outer.outputTransport == MediaOutputTransportKind::RtpAvp
                 ? startup.byteCapacity
                 : 0,

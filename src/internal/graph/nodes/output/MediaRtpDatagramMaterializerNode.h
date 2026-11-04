@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/nodes/output/MediaRtpWirePreparedTransaction.h"
+#include "internal/graph/nodes/output/MediaRtpAccessUnitCollection.h"
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
@@ -7,11 +9,11 @@
 #include "internal/graph/nodes/output/MediaRtpWireDatagramMaterializer.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
+#include "internal/graph/nodes/output/MediaPendingWireDatagrams.h"
 
 #include <memory>
 #include <optional>
 #include <vector>
-#include <deque>
 
 namespace media::ffmpeg::graph {
 
@@ -29,12 +31,13 @@ struct MediaRtpMaterializerGenerationData final {
     MediaBufferRef stagedConfigurationAccessUnit;
     MediaBufferRef pendingAccessUnit;
     MediaBufferRef pendingDescription;
-    std::deque<MediaBufferRef> pendingWireOutputs;
+    MediaPendingWireDatagrams pendingWireOutputs;
+    std::optional<MediaRtpWirePreparedTransaction> pendingPreparation;
     bool descriptionEmitted = false;
     std::unique_ptr<ScheduledRtpPacketizerSession> packetizer;
     std::optional<MediaRtpWireDatagramMaterializer> wireMaterializer;
-    std::vector<std::vector<std::uint8_t>> packetizedBytes;
-    std::vector<std::size_t> packetizedPayloadOctets;
+    std::optional<MediaNetworkStorageLease> wirePreparationReservation;
+    std::optional<MediaRtpAccessUnitCollection> packetizedAccessUnit;
 };
 
 using MediaRtpMaterializerGenerationSession = MediaProtocolOutputGenerationData<MediaRtpMaterializerGenerationData>;
@@ -46,7 +49,8 @@ public:
            MediaProtocolOutputSessionKey plannedSessionKey,
            MediaScheduledRtpOutputPlan outputPlan,
            MediaSeparateRtpSdpRuntimePlan sdpPlan,
-           MediaRtpDatagramMaterializerNodeDependencies dependencies);
+           MediaRtpDatagramMaterializerNodeDependencies dependencies,
+        std::shared_ptr<MediaRtpMaterializerGenerationSession> generationSession);
     static MediaNodeKind staticKind() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept { return m_generationPurge; }
     ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
@@ -70,7 +74,8 @@ private:
         MediaProtocolOutputSessionKey plannedSessionKey,
         MediaScheduledRtpOutputPlan outputPlan,
         MediaSeparateRtpSdpRuntimePlan sdpPlan,
-        MediaRtpDatagramMaterializerNodeDependencies dependencies);
+        MediaRtpDatagramMaterializerNodeDependencies dependencies,
+        std::shared_ptr<MediaRtpMaterializerGenerationSession> generationSession);
     ::media::Status validatePorts(MediaGraphExecutionContext& context) const;
     ::media::Result<bool> acquireBindings(
         MediaGraphExecutionContext& context);
@@ -87,7 +92,7 @@ private:
         MediaGraphExecutionContext& context);
     ::media::Result<bool> discardPurgedScheduled(MediaBufferRef& buffer);
     void resetState() noexcept;
-    std::shared_ptr<MediaRtpMaterializerGenerationSession> m_generationSession = std::make_shared<MediaRtpMaterializerGenerationSession>();
+    std::shared_ptr<MediaRtpMaterializerGenerationSession> m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>();
     std::optional<MediaAvGenerationPurge> m_completedPurge;

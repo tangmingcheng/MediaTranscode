@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/diagnostics/MediaNodeWaitObservation.h"
 
 #include <algorithm>
 #include <limits>
@@ -75,9 +76,20 @@ void MediaNodeWakeup::notify() noexcept
 ::media::Result<MediaNodeWakeup::WaitOutcome> MediaNodeWakeup::wait(
     Sequence observedSequence,
     MediaNodeDeadlineWakePolicy wakePolicy,
-    std::optional<std::chrono::nanoseconds> timeout)
+    std::optional<std::chrono::nanoseconds> timeout,
+    MediaNodeWaitObservation* observation)
 {
+    MediaNodeWaitObservationScope observed(observation);
 #if defined(_WIN32)
+    if (observation) {
+        // Correlate this calling thread with external scheduling evidence.
+        // Frequency failure is diagnostic-only and never replaces wait errors.
+        observation->windowsProcessId = GetCurrentProcessId();
+        observation->windowsThreadId = GetCurrentThreadId();
+        LARGE_INTEGER frequency{};
+        if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0)
+            observation->windowsQpcFrequency = frequency.QuadPart;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_platformError != 0) {
@@ -110,20 +122,37 @@ void MediaNodeWakeup::notify() noexcept
             nanoseconds / 100 + (nanoseconds % 100 == 0 ? 0 : 1);
         LARGE_INTEGER dueTime{};
         dueTime.QuadPart = -(std::max)(std::int64_t{1}, hundredNanoseconds);
-        if (!SetWaitableTimerEx(
-                static_cast<HANDLE>(m_deadlineTimer), &dueTime, 0,
-                nullptr, nullptr, nullptr, 0)) {
+        if (observation) {
+            observation->windowsDue100ns = dueTime.QuadPart;
+            observation->armBefore = mediaSteadyClockNowNs();
+        }
+        const BOOL armed = SetWaitableTimerEx(
+            static_cast<HANDLE>(m_deadlineTimer), &dueTime, 0,
+            nullptr, nullptr, nullptr, 0);
+        const DWORD armError = armed ? ERROR_SUCCESS : GetLastError();
+        if (observation) {
+            observation->armAfter = mediaSteadyClockNowNs();
+            if (!armed) observation->windowsError = armError;
+        }
+        if (!armed) {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_activeWaitPolicy.reset();
             return ::media::Result<WaitOutcome>::failure(
-                waitFailure("deadline arm", GetLastError()));
+                waitFailure("deadline arm", armError));
         }
         handles[1] = static_cast<HANDLE>(m_deadlineTimer);
         handleCount = 2;
     }
 
+    if (observation) observation->apiBefore = mediaSteadyClockNowNs();
     const DWORD waited = WaitForMultipleObjects(
         handleCount, handles, FALSE, INFINITE);
+    const DWORD waitError = waited == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+    if (observation) {
+        observation->apiReturned = mediaSteadyClockNowNs();
+        observation->windowsWaitResult = waited;
+        if (waited == WAIT_FAILED) observation->windowsError = waitError;
+    }
     if (timeout && waited == WAIT_OBJECT_0) {
         (void)CancelWaitableTimer(static_cast<HANDLE>(m_deadlineTimer));
     }
@@ -131,7 +160,7 @@ void MediaNodeWakeup::notify() noexcept
         std::lock_guard<std::mutex> lock(m_mutex);
         m_activeWaitPolicy.reset();
         return ::media::Result<WaitOutcome>::failure(
-            waitFailure("wait", GetLastError()));
+            waitFailure("wait", waitError));
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);

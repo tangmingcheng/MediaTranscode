@@ -201,7 +201,7 @@ VideoOutputFanoutNode::hardwareFrames() const
             output->setHardwareDescriptor(input->hardwareDescriptor());
             output->setFlags(input->flags());
             if (auto lineage = FFmpegFrameView::canonicalLineage(input))
-                return MediaCanonicalVideoFrameBuffer::create(std::move(output), std::move(lineage));
+                return MediaCanonicalVideoFrameBuffer::create(std::move(output), std::move(lineage), std::nullopt);
             return ::media::Result<MediaBufferRef>::success(std::move(output));
         });
     if (!published) return processProgress(std::move(published));

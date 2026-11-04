@@ -9,6 +9,6 @@ class MediaGraphFrameCreditContractPlanner final {
 public:
     static ::media::Result<std::string> videoOutputPrefix(const MediaNode& node);
     static ::media::Result<MediaFrameCreditContract> plan(
-        const MediaNode& node, std::uint64_t maximumLogicalBytes);
+        const MediaNode& node, MediaStreamKind stream, std::uint64_t maximumLogicalBytes);
 };
 } // namespace media::ffmpeg::graph

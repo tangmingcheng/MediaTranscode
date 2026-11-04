@@ -13,8 +13,21 @@ MediaAvStartupUnitId idOf(const MediaAvStartupAccessUnit& unit) noexcept
 } // namespace
 
 MediaAvStartupStreamStore::MediaAvStartupStreamStore(
-    MediaRunningTime maximumGap)
-    : m_maximumGap(maximumGap)
+    MediaRunningTime maximumGap,
+    MediaAvStartupIndexStoragePlan indexStorage, MediaLineageAllocationScope allocation)
+    : m_allocation(std::move(allocation)), m_indexStorage(std::move(indexStorage)),
+      m_arrivalResource(m_indexStorage, MediaAvStartupIndexClass::Arrival,
+          *MediaLineageAllocator<std::byte>{m_allocation}.resource()),
+      m_presentationResource(m_indexStorage, MediaAvStartupIndexClass::Presentation,
+          *MediaLineageAllocator<std::byte>{m_allocation}.resource()),
+      m_coverageResource(m_indexStorage, MediaAvStartupIndexClass::Coverage,
+          *MediaLineageAllocator<std::byte>{m_allocation}.resource()),
+      m_pendingResource(m_indexStorage, MediaAvStartupIndexClass::Pending,
+          *MediaLineageAllocator<std::byte>{m_allocation}.resource()),
+      m_snapshot(m_indexStorage.capacity, *MediaLineageAllocator<std::byte>{m_allocation}.resource()),
+      m_maximumGap(maximumGap), m_readiness(m_indexStorage.readiness),
+      m_arrival(&m_arrivalResource),
+      m_presentation(&m_presentationResource), m_coverage(&m_coverageResource)
 {
 }
 
@@ -35,15 +48,35 @@ std::uint64_t MediaAvStartupStreamStore::backSequence() const noexcept
 
 ::media::Result<bool> MediaAvStartupStreamStore::append(
     MediaAvStartupAccessUnit unit)
+try
 {
-    auto end = unit.presentationTime->checkedAdd(unit.duration);
-    if (!end) return ::media::Result<bool>::failure(end.error());
-    auto expandedEnd = end.value().checkedAdd(m_maximumGap);
-    if (!expandedEnd) {
-        return ::media::Result<bool>::failure(expandedEnd.error());
+    if (!unit.presentationTime)
+        return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+            "Startup store requires a mapped presentation"));
+    std::optional<Interval> interval;
+    if (m_readiness == MediaVideoStartupReadiness::IntervalCoverage) {
+        const auto* duration = std::get_if<MediaRunningTime>(&unit.timing);
+        if (!duration || duration->nanoseconds() <= 0)
+            return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+                "Interval startup store requires positive duration"));
+        auto end = unit.presentationTime->checkedAdd(*duration);
+        if (!end) return ::media::Result<bool>::failure(end.error());
+        auto expanded = end.value().checkedAdd(m_maximumGap);
+        if (!expanded) return ::media::Result<bool>::failure(expanded.error());
+        interval = Interval{end.value(), expanded.value()};
+    } else if (m_readiness == MediaVideoStartupReadiness::DecodedPresentationSpan) {
+        if (!std::holds_alternative<MediaAvStartupDisplayPoint>(unit.timing) ||
+            (!m_arrival.empty() &&
+                (*unit.presentationTime < *m_arrival.back().unit.presentationTime ||
+                 unit.generation != m_arrival.back().unit.generation ||
+                 unit.sequence <= m_arrival.back().unit.sequence)))
+            return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+                "Display startup store requires ordered points from one generation"));
+    } else {
+        return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
+            "Startup store has no planned readiness"));
     }
-    m_arrival.push_back(
-        {std::move(unit), m_nextOrdinal++, end.value(), expandedEnd.value()});
+    m_arrival.push_back({std::move(unit), m_nextOrdinal++, interval});
     auto iterator = std::prev(m_arrival.end());
     const auto& stored = iterator->unit;
     const PresentationKey key{stored.presentationTime->nanoseconds(),
@@ -53,13 +86,20 @@ std::uint64_t MediaAvStartupStreamStore::backSequence() const noexcept
         return ::media::Result<bool>::success(false);
     }
     const Record* appended = &*iterator;
-    for (auto& [candidate, state] : m_coverage) {
-        (void)candidate;
-        applyInterval(state, *appended);
+    if (appended->interval) {
+        for (auto& [candidate, state] : m_coverage) {
+            (void)candidate;
+            applyInterval(state, *appended);
+        }
+        m_coverage.emplace(appended, CoverageState{
+            *stored.presentationTime, appended->interval->end,
+            appended->interval->expandedEnd,
+            Pending{&m_pendingResource}});
     }
-    m_coverage.emplace(appended, CoverageState{
-        *stored.presentationTime, appended->end, appended->expandedEnd, {}});
     return ::media::Result<bool>::success(true);
+} catch (const std::bad_alloc&) {
+    return ::media::Result<bool>::failure(
+        ::media::ErrorInfo::allocationFailed("Startup indexed storage allocation failed"));
 }
 
 void MediaAvStartupStreamStore::applyInterval(
@@ -67,11 +107,11 @@ void MediaAvStartupStreamStore::applyInterval(
     const Record& interval)
 {
     ++m_cumulativeCoverageWork.coverageOperations;
-    if (interval.end <= state.anchorStart) return;
+    if (interval.interval->end <= state.anchorStart) return;
     if (*interval.unit.presentationTime <= state.reachableThrough) {
-        if (interval.end > state.frontier) {
-            state.frontier = interval.end;
-            state.reachableThrough = interval.expandedEnd;
+        if (interval.interval->end > state.frontier) {
+            state.frontier = interval.interval->end;
+            state.reachableThrough = interval.interval->expandedEnd;
             promoteReachable(state);
         }
         return;
@@ -91,52 +131,64 @@ void MediaAvStartupStreamStore::promoteReachable(CoverageState& state)
         state.pending.erase(first);
         ++m_cumulativeCoverageWork.orderedIndexMutations;
         ++m_cumulativeCoverageWork.coverageOperations;
-        if (interval->end > state.frontier) {
-            state.frontier = interval->end;
-            state.reachableThrough = interval->expandedEnd;
+        if (interval->interval->end > state.frontier) {
+            state.frontier = interval->interval->end;
+            state.reachableThrough = interval->interval->expandedEnd;
         }
     }
 }
 
-std::vector<MediaAvStartupIndexedUnit>
-MediaAvStartupStreamStore::presentationSnapshot() const
+MediaAvStartupPresentationSnapshot
+MediaAvStartupStreamStore::presentationSnapshot()
 {
-    std::vector<MediaAvStartupIndexedUnit> snapshot;
-    snapshot.reserve(m_presentation.size());
+    m_snapshot.clear();
     for (const auto& [key, iterator] : m_presentation) {
         (void)key;
-        const auto coverage = m_coverage.find(&*iterator);
-        snapshot.push_back(
-            {&iterator->unit, iterator->arrivalOrdinal, coverage->second.frontier});
+        if (m_readiness == MediaVideoStartupReadiness::DecodedPresentationSpan) {
+            m_snapshot.push_back({&iterator->unit, iterator->arrivalOrdinal,
+                MediaAvStartupDisplayFrontier{*m_arrival.back().unit.presentationTime}});
+        } else {
+            const auto coverage = m_coverage.find(&*iterator);
+            m_snapshot.push_back({&iterator->unit, iterator->arrivalOrdinal,
+                MediaAvStartupIntervalFrontier{coverage->second.frontier}});
+        }
     }
-    return snapshot;
+    return m_snapshot.view();
 }
 
-std::vector<MediaAvStartupUnitId> MediaAvStartupStreamStore::ids() const
+void MediaAvStartupStreamStore::appendIds(MediaAvStartupIds& output) const
 {
-    std::vector<MediaAvStartupUnitId> result;
-    result.reserve(m_arrival.size());
-    for (const auto& record : m_arrival) result.push_back(idOf(record.unit));
-    return result;
+    for (const auto& record : m_arrival) output.push_back(idOf(record.unit));
 }
 
-std::vector<MediaAvStartupUnitId> MediaAvStartupStreamStore::prefixBefore(
-    const MediaAvStartupAccessUnit* selected,
+::media::Result<std::size_t> MediaAvStartupStreamStore::prefixCount(
+    const MediaAvStartupAccessUnit* selected, MediaAvStartupSelectionWork& work) const
+{
+    std::size_t count = 0;
+    for (const auto& record : m_arrival) {
+        ++work.releaseUnitsVisited;
+        if (&record.unit == selected) return ::media::Result<std::size_t>::success(count);
+        ++count;
+    }
+    return ::media::Result<std::size_t>::failure(::media::ErrorInfo::invalidArgument(
+        "Startup selected unit is absent from arrival storage"));
+}
+
+void MediaAvStartupStreamStore::appendPrefixIds(
+    const MediaAvStartupAccessUnit* selected, MediaAvStartupIds& output,
     MediaAvStartupSelectionWork& work) const
 {
-    std::vector<MediaAvStartupUnitId> result;
     for (const auto& record : m_arrival) {
         ++work.releaseUnitsVisited;
         if (&record.unit == selected) break;
-        result.push_back(idOf(record.unit));
+        output.push_back(idOf(record.unit));
     }
-    return result;
 }
 
 void MediaAvStartupStreamStore::appendSuffixSelections(
     const MediaAvStartupAccessUnit* selected,
     std::uint32_t firstTrim,
-    std::vector<MediaAvStartupSelection>& output,
+    MediaAvStartupSelections& output,
     MediaAvStartupSelectionWork& work) const
 {
     bool append = false;
@@ -152,6 +204,7 @@ void MediaAvStartupStreamStore::appendSuffixSelections(
 
 void MediaAvStartupStreamStore::clear() noexcept
 {
+    m_snapshot.clear();
     m_coverage.clear();
     m_presentation.clear();
     m_arrival.clear();

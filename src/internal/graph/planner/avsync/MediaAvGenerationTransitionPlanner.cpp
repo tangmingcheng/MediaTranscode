@@ -1,5 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/sync/MediaDemuxClockBinderGenerationIdentities.h"
+#include "internal/graph/sync/MediaRtpIngressFrontiers.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 #include <utility>
@@ -13,13 +14,18 @@ std::vector<MediaAvGenerationParticipantPlan> processingParticipants(
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
+    MediaVideoStartupReadiness videoReadiness,
     ProcessingDomain domain)
 {
     std::vector<std::string> children{
         "startup_generation_state",
         "video_decode",
-        "video_frame_rate"
+        "video_preparation"
     };
+    if (videoReadiness == MediaVideoStartupReadiness::IntervalCoverage)
+        children.push_back("video_frame_rate");
+    else if (videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan)
+        children.push_back("decoded_video_startup");
     if (videoFilterActive) children.push_back("video_filter");
     if (domain == ProcessingDomain::SharedSourceOutput) children.push_back("video_encode");
     if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
@@ -41,6 +47,16 @@ std::vector<MediaAvGenerationParticipantPlan> processingParticipants(
             children.begin(),
             std::string(MediaDemuxVideoClockBinderGenerationIdentity));
     }
+    if (sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports) {
+        children.insert(children.end(), {
+            std::string(MediaRtpVideoIngressGenerationIdentity),
+            std::string(MediaRtpVideoBinderGenerationIdentity)});
+        if (audioBranchMode != MediaBranchMode::Drop) {
+            children.insert(children.end(), {
+                std::string(MediaRtpAudioIngressGenerationIdentity),
+                std::string(MediaRtpAudioBinderGenerationIdentity)});
+        }
+    }
     if (domain == ProcessingDomain::SourceContribution) children.push_back("aggregate_source");
     std::vector<MediaAvGenerationParticipantPlan> participants;
     participants.push_back({MediaAvGenerationParticipant::CanonicalLineage, std::move(children)});
@@ -58,21 +74,28 @@ MediaAvGenerationTransitionPlanner::planSourceContribution(
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
-    MediaRunningTime acknowledgementTimeout)
+    MediaVideoStartupReadiness videoReadiness,
+    MediaRunningTime acknowledgementTimeout, bool selectedAudio)
 {
-    if ((sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports &&
+    if ((videoReadiness != MediaVideoStartupReadiness::IntervalCoverage &&
+         videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan) ||
+        (selectedAudio && audioBranchMode != MediaBranchMode::TranscodeFrame) ||
+        (sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports &&
          sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr &&
          sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps) ||
-        audioBranchMode != MediaBranchMode::TranscodeFrame ||
+        (audioBranchMode != MediaBranchMode::TranscodeFrame &&
+         !(audioBranchMode == MediaBranchMode::Drop &&
+           sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports)) ||
         acknowledgementTimeout <= MediaRunningTime::fromNanoseconds(0)) {
         return ::media::Result<MediaAvGenerationTransitionPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "source contribution transition requires an explicit clock, frame audio and positive timing"));
     }
+    auto participants = processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
+        videoReadiness, ProcessingDomain::SourceContribution);
+    if (selectedAudio) participants.front().requiredChildren.push_back("aggregate_audio");
     return ::media::Result<MediaAvGenerationTransitionPlan>::success({
-        processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
-            ProcessingDomain::SourceContribution),
-        acknowledgementTimeout});
+        std::move(participants), acknowledgementTimeout});
 }
 
 MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
@@ -84,7 +107,7 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
 {
     MediaAvGenerationTransitionPlan transition{
         processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
-            ProcessingDomain::SharedSourceOutput), acknowledgementTimeout};
+            MediaVideoStartupReadiness::IntervalCoverage, ProcessingDomain::SharedSourceOutput), acknowledgementTimeout};
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});

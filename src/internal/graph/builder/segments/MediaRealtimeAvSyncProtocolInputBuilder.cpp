@@ -1,3 +1,5 @@
+#include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
+#include "internal/graph/model/MediaRtpClockRoute.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncProtocolInputBuilder.h"
 
 #include "internal/graph/builder/segments/MediaDemuxClockInputSegmentBuilder.h"
@@ -7,6 +9,8 @@
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 
 #include <string>
+#include <string_view>
+#include <vector>
 #include <utility>
 #include <variant>
 
@@ -18,17 +22,23 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 ::media::Result<void> validateSources(
     const MediaGraph& graph,
     const MediaRealtimeAvSyncInputSources& sources,
-    bool requireProtocolClock)
+    bool requireProtocolClock,
+    bool hasAudio)
 {
     if (auto status = Support::validateOutput(
             graph, sources.videoPacket, MediaStreamKind::Video,
             MediaEdgeKind::InputPacket, MediaPayloadKind::Packet); !status) {
         return status;
     }
-    if (auto status = Support::validateOutput(
-            graph, sources.audioPacket, MediaStreamKind::Audio,
-            MediaEdgeKind::InputPacket, MediaPayloadKind::Packet); !status) {
-        return status;
+    if (!hasAudio && sources.audioPacket.valid())
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "Video-only protocol input rejects an audio endpoint"));
+    if (hasAudio) {
+        if (auto status = Support::validateOutput(
+                graph, sources.audioPacket, MediaStreamKind::Audio,
+                MediaEdgeKind::InputPacket, MediaPayloadKind::Packet); !status) {
+            return status;
+        }
     }
     return requireProtocolClock
         ? Support::validateOutput(
@@ -42,29 +52,47 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const MediaRealtimeAvSyncInputSegmentOptions& options,
     const MediaRealtimeAvSourceRuntimePlan& plan)
 {
+    const MediaRtpClockRouteShape declaration{*plan.synchronization.members};
+    const bool hasAudio = declaration.has(MediaRtpClockRouteRole::AudioInput);
+    std::vector<MediaNodeId> rawInputs{options.sources.videoPacket.node};
+    if (hasAudio) rawInputs.push_back(options.sources.audioPacket.node);
+    for (const auto rawId : rawInputs) {
+        const auto* raw = graph.findNode(rawId);
+        if (!raw || raw->kind != MediaNodeKind::RawRtpInput ||
+            raw->options.has("rtp.sync_group")) {
+            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP source requires uniquely owned raw ingress nodes"));
+        }
+        if (auto status = Support::setOption(graph, rawId,
+                "rtp.sync_group", plan.groupKey.value()); !status)
+            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
+    }
     auto snapshotResult = Support::addNode(
-        graph, MediaNodeKind::RtpClockSnapshotFanout,
+        graph, declaration.nodeKind(MediaRtpClockRouteRole::Fanout),
         options.prefix + ".rtp.clock_snapshot", "RTP clock snapshot fanout");
     auto videoResult = Support::addNode(
-        graph, MediaNodeKind::RtpPacketClockBinder,
+        graph, declaration.nodeKind(MediaRtpClockRouteRole::VideoBinder),
         options.prefix + ".video.protocol_binder", "RTP video clock binder");
-    auto audioResult = Support::addNode(
-        graph, MediaNodeKind::RtpPacketClockBinder,
-        options.prefix + ".audio.protocol_binder", "RTP audio clock binder");
+    std::optional<MediaNodeId> audio;
+    if (hasAudio) {
+        auto added = Support::addNode(graph, declaration.nodeKind(MediaRtpClockRouteRole::AudioBinder),
+            options.prefix + ".audio.protocol_binder", "RTP audio clock binder");
+        if (!added) return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(added.error());
+        audio = added.value();
+    }
     auto adapterResult = Support::addNode(
-        graph, MediaNodeKind::RtpSourceClockStateAdapter,
+        graph, declaration.nodeKind(MediaRtpClockRouteRole::StateAdapter),
         options.prefix + ".rtp.source_clock_adapter",
         "RTP source clock state adapter");
-    if (!snapshotResult || !videoResult || !audioResult || !adapterResult) {
+    if (!snapshotResult || !videoResult || !adapterResult) {
         const auto& error = !snapshotResult ? snapshotResult.error()
-            : !videoResult ? videoResult.error()
-            : !audioResult ? audioResult.error() : adapterResult.error();
+            : !videoResult ? videoResult.error() : adapterResult.error();
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(error);
     }
     const MediaNodeId snapshot = snapshotResult.value();
     const MediaNodeId video = videoResult.value();
-    const MediaNodeId audio = audioResult.value();
     const MediaNodeId adapter = adapterResult.value();
     if (!plan.synchronization.members)
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
@@ -83,6 +111,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             failure(status.error());
     }
     for (const char* port : {"video", "audio", "startup"}) {
+        if (!hasAudio && std::string_view(port) == "audio") continue;
         if (auto status = Support::addOutput(
                 graph, snapshot, port, MediaStreamKind::Metadata,
                 MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
@@ -91,9 +120,9 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
                 failure(status.error());
         }
     }
-    for (const auto [node, stream] : {
-             std::pair{video, MediaStreamKind::Video},
-             std::pair{audio, MediaStreamKind::Audio}}) {
+    std::vector<std::pair<MediaNodeId, MediaStreamKind>> binders{{video, MediaStreamKind::Video}};
+    if (audio) binders.emplace_back(*audio, MediaStreamKind::Audio);
+    for (const auto [node, stream] : binders) {
         if (auto status = Support::addInput(
                 graph, node, "packet", stream, MediaEdgeKind::InputPacket,
                 MediaPayloadKind::Packet); !status) {
@@ -133,48 +162,41 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     }
 
     const auto& metadata = plan.edgePolicies.metadata;
-    const auto& packet = plan.edgePolicies.synchronizedPacket;
-    if (auto status = Support::connect(
-            graph, options.sources.protocolClock, snapshot, "clock",
-            "RTP group clock -> snapshot fanout", metadata); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
+    const MediaRtpProtocolNodeBindings bindings{
+        {options.sources.protocolClock.node, options.sources.videoPacket.node, video,
+            hasAudio ? std::optional{options.sources.audioPacket.node} : std::nullopt, audio},
+        snapshot, adapter};
+    for (const auto& connection : MediaRtpClockRouteConnections) {
+        if (connection.payload != MediaRtpClockRoutePayload::Snapshot || (!declaration.has(connection.from) || !declaration.has(connection.to))) continue;
+        const auto from = connection.from == MediaRtpClockRouteRole::Group
+            ? options.sources.protocolClock : MediaEndpoint{bindings.routeNode(connection.from), connection.output};
+        if (auto status = Support::connect(graph, from, bindings.routeNode(connection.to), connection.input,
+                connection.label, metadata); !status)
+            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
     }
-    if (auto status = Support::connect(
-            graph, snapshot, "video", video, "clock",
-            "RTP snapshot -> video binder", metadata); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
+    if (!plan.synchronization.members || !plan.synchronization.startup.videoReadiness)
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized("RTP source connection facts are absent"));
+    auto packets = MediaSourceInputConnectionsPlanner::plan(*plan.synchronization.members,
+        *plan.synchronization.startup.videoReadiness, MediaAvSyncSourceClockMode::RtpSenderReports,
+        plan.edgePolicies);
+    if (!packets) return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(packets.error());
+    for (const auto& connection : packets.value()) {
+        if (connection.phase != MediaSourceInputConnectionPhase::ProtocolPackets) continue;
+        const bool videoPacket = connection.from == MediaSourceInputRole::RawVideo;
+        const auto from = videoPacket ? options.sources.videoPacket : options.sources.audioPacket;
+        const auto to = videoPacket ? video : audio.value_or(MediaNodeId::invalid());
+        if (auto status = Support::connect(graph, from, to, std::string(connection.input),
+                std::string(connection.label), connection.policy); !status)
+            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
     }
-    if (auto status = Support::connect(
-            graph, snapshot, "audio", audio, "clock",
-            "RTP snapshot -> audio binder", metadata); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
-    if (auto status = Support::connect(
-            graph, snapshot, "startup", adapter, "clock",
-            "RTP snapshot -> source clock adapter", metadata); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
-    if (auto status = Support::connect(
-            graph, options.sources.videoPacket, video, "packet",
-            "RTP video packet -> clock binder", packet); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
-    if (auto status = Support::connect(
-            graph, options.sources.audioPacket, audio, "packet",
-            "RTP audio packet -> clock binder", packet); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
+    std::vector<MediaNodeId> members{snapshot, video, adapter};
+    if (audio) members.push_back(*audio);
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::success(
         MediaRealtimeAvSyncProtocolInputEndpoints{
-            MediaEndpoint{video, "packet"}, MediaEndpoint{audio, "packet"},
-            MediaEndpoint{adapter, "state"}, std::nullopt,
-            {snapshot, video, audio, adapter}});
+            MediaEndpoint{video, "packet"}, audio ? MediaEndpoint{*audio, "packet"} : MediaEndpoint{},
+            MediaEndpoint{adapter, "state"}, std::nullopt, std::move(members),
+            bindings});
 }
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildMpegTs(
@@ -234,8 +256,13 @@ MediaRealtimeAvSyncProtocolInputBuilder::build(
         *plan.synchronization.sourceClockMode;
     const bool demux =
         sourceClock == MediaAvSyncSourceClockMode::DemuxTimestamps;
+    const bool hasAudio = plan.synchronization.members == MediaTranscodeStreamSet::AudioVideo;
+    if ((!hasAudio && plan.synchronization.members != MediaTranscodeStreamSet::VideoOnly) ||
+        (!hasAudio && sourceClock != MediaAvSyncSourceClockMode::RtpSenderReports))
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument("Single-member protocol input requires planned RTP video"));
     if (auto status = validateSources(
-            graph, options.sources, !demux); !status) {
+            graph, options.sources, !demux, hasAudio); !status) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(status.error());
     }

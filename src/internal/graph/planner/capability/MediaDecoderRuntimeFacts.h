@@ -8,6 +8,7 @@ namespace media::ffmpeg::graph {
 struct MediaDecoderRuntimeFacts final {
     std::string decoderName;
     int hardwareAccelerationFlags;
+    bool suppliedHardwareFramesContext;
 };
 
 } // namespace media::ffmpeg::graph

@@ -114,7 +114,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
         activity->observe(*receivedAtNs);
     }
 
-    auto buffer = FFmpegBufferFactory::wrapPacket(
+    auto buffer = FFmpegBufferFactory::wrapPacket(*std::pmr::new_delete_resource(),
         std::move(packet), streamKind, std::nullopt, provenance);
     if (!buffer) {
         return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());

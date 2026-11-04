@@ -32,6 +32,7 @@ namespace MediaAudioCorrectionOptionKey {
 inline constexpr const char* Mode = "audio_correction.mode";
 inline constexpr const char* Generation = "audio_correction.generation";
 inline constexpr const char* LookaheadWindows = "audio_correction.lookahead_windows";
+inline constexpr const char* MaximumOutputBlockSamples = "audio_correction.maximum_output_block_samples";
 }
 
 class MediaAudioCompensationCommand final {

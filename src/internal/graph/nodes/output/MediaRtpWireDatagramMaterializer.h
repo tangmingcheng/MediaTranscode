@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/nodes/output/MediaRtpWireInputBatch.h"
 
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
@@ -51,15 +52,8 @@ struct MediaRtpWireDatagramMaterializerSnapshot final {
     bool poisoned;
 };
 
-struct MediaPacketizedRtpDatagramView final {
-    std::span<const std::uint8_t> bytes;
-    std::size_t payloadOctets;
-    MediaRunningTime presentationOnMaster;
-    MediaRunningTime canonicalRelease;
-    MediaWireMediaBoundary mediaBoundary;
-};
-
 class MediaRtpWireProtocolState;
+class MediaRtpWirePreparedTransaction;
 class MediaMpegTsProtocolDatagramBatchBuffer;
 
 class MediaRtpWireDatagramMaterializer final {
@@ -67,25 +61,18 @@ public:
     static ::media::Result<MediaRtpWireDatagramMaterializer> create(
         MediaRtpWireDatagramMaterializerConfig config);
 
-    ::media::Result<MediaWireDatagramBatchCollection> materialize(
-        std::span<const std::uint8_t> packetizedRtp,
-        std::size_t payloadOctets,
-        MediaRunningTime presentationOnMaster,
-        MediaRunningTime canonicalRelease,
-        MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaPacketizedRtpDatagramView> datagrams,
-                     MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeProtocolBatch(
-        std::span<const MediaPacketizedRtpDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
-        MediaRunningTime materializedAt);
+    ::media::Result<MediaRtpWirePreparedTransaction> prepareBatch(
+        MediaRtpWireInputBatch datagrams,
+        std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer> protocolBatch,
+        MediaRunningTime materializedAt,
+        MediaNetworkStorageLease* prepaid);
+    ::media::Result<MediaWireDatagramBatchCollection> complete(
+        MediaRtpWirePreparedTransaction& pending, MediaRunningTime now);
 
-    // A null successful result means no RTP/RTCP participation: no BYE
+    // An empty successful result means no RTP/RTCP participation: no BYE
     // is permitted (RFC 3550 section 6.3.7).
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-    materializeTerminalReport(
+    ::media::Result<std::optional<MediaRtpWirePreparedTransaction>>
+    prepareTerminalReport(
         MediaRunningTime reportInstant,
         MediaRunningTime canonicalRelease,
         MediaRunningTime materializedAt);
@@ -103,12 +90,6 @@ public:
 private:
     explicit MediaRtpWireDatagramMaterializer(
         std::shared_ptr<MediaRtpWireProtocolState> state) noexcept;
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatchReserved(
-        std::span<const MediaPacketizedRtpDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
-        MediaRunningTime materializedAt);
-
     std::shared_ptr<MediaRtpWireProtocolState> m_state;
 };
 

@@ -4,13 +4,16 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<std::uint64_t> MediaRtcpWireGeometry::compoundPayloadBytes(
+::media::Result<std::uint64_t> MediaRtcpWireGeometry::sdesPayloadBytes(
     std::size_t cnameBytes)
 {
-    constexpr std::uint64_t SenderReportBytes = 28;
-    constexpr std::uint64_t SdesFixedBytes = 10;
+    if (cnameBytes == 0 || cnameBytes > 255) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument("RTCP CNAME requires 1 to 255 bytes"));
+    }
+    // RFC 3550 section 6.5: END precedes alignment, even at a word boundary.
     auto raw = MediaCheckedArithmetic::add(
-        SdesFixedBytes, static_cast<std::uint64_t>(cnameBytes),
+        sdesCnamePrefixBytes() + 1, static_cast<std::uint64_t>(cnameBytes),
         "RTCP SDES bytes");
     auto padded = raw
         ? MediaCheckedArithmetic::ceilScale(
@@ -20,9 +23,16 @@ namespace media::ffmpeg::graph {
         ? MediaCheckedArithmetic::multiply(
               padded.value(), 4, "RTCP padded SDES bytes")
         : padded;
+    return paddedBytes;
+}
+
+::media::Result<std::uint64_t> MediaRtcpWireGeometry::compoundPayloadBytes(
+    std::size_t cnameBytes)
+{
+    auto paddedBytes = sdesPayloadBytes(cnameBytes);
     return paddedBytes
         ? MediaCheckedArithmetic::add(
-              SenderReportBytes, paddedBytes.value(), "RTCP compound bytes")
+              senderReportPayloadBytes(), paddedBytes.value(), "RTCP compound bytes")
         : paddedBytes;
 }
 

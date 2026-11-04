@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include <type_traits>
 
@@ -56,6 +57,7 @@
 #include "internal/graph/nodes/sync/MediaAvContinuousAggregateNode.h"
 #include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
+#include "internal/graph/planner/realtime/MediaStartupSharedObjectPlanner.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
@@ -74,6 +76,8 @@
 #include "internal/graph/nodes/video/EncodedVideoOutputFanoutNode.h"
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/nodes/video/VideoPreparationNode.h"
+#include "internal/graph/nodes/sync/MediaDecodedVideoStartupNode.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
@@ -91,6 +95,29 @@
 
 namespace media::ffmpeg::graph {
 namespace {
+
+template<class Session>
+::media::Result<std::shared_ptr<Session>> createGenerationSession(
+    const MediaNode& node, const MediaProtocolGenerationStorageInstance* planned)
+{
+    using Result = ::media::Result<std::shared_ptr<Session>>;
+    if (!planned || planned->owner != node.id || planned->kind != node.kind)
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "Materializer requires its sealed generation storage instance"));
+    auto budget = MediaNetworkStorageBudget::create(planned->geometry.totalBytes,
+        MediaStandaloneStorage<MediaNetworkStorageDomain>{}, MediaStorageReleaseUnobserved{});
+    if (!budget) return Result::failure(budget.error());
+    auto resource = MediaNetworkMemoryResource::create(budget.value());
+    if (!resource) return Result::failure(resource.error());
+    auto session = Session::create(planned->geometry, resource.value());
+    if (!session) return Result::failure(session.error());
+    // Every byte in this fixed pool belongs to the one shared session and two
+    // slots. No activation/purge can allocate a fourth block from this pool.
+    if (budget.value()->snapshot().retainedBytes != planned->geometry.totalBytes)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Generation storage allocation differs from admitted pool bytes"));
+    return session;
+}
 
 template <typename Node>
 std::optional<MediaRuntimeGenerationPurgeRegistration>
@@ -143,8 +170,7 @@ template <typename Node>
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoFrameRateStage(
-    const MediaNode& node,
-    const std::shared_ptr<MediaAvStartupVideoPreparationState>& preparationState)
+    const MediaNode& node)
 {
     auto capacity = prepareMediaVideoLineageStageCapacity(
         node, VideoFrameRateNode::generationPurgeIdentity());
@@ -152,32 +178,10 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             capacity.error());
     }
-    std::optional<MediaAvStartupVideoPreparationCapability> preparation;
-    if (node.options.value("video.startup_preparation.owner") == "1") {
-        if (!capacity.value()) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Video startup preparation owner requires canonical lineage capacity"));
-        }
-        if (!preparationState) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "Planned video startup preparation owner requires shared state"));
-        }
-        auto issued = MediaAvStartupVideoPreparationCapability::issue(
-            preparationState,
-            MediaAvStartupVideoPreparationRole::OutputReadiness);
-        if (!issued) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                issued.error());
-        }
-        preparation.emplace(std::move(issued).value());
-    }
     if (capacity.value()) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<VideoFrameRateNode>(
-                node.id, std::make_shared<MediaVideoFrameRateState>(true),
-                std::move(preparation)));
+                node.id, std::make_shared<MediaVideoFrameRateState>(true)));
     }
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
         std::make_unique<VideoFrameRateNode>(node.id));
@@ -279,14 +283,14 @@ template <typename Node>
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
 {
-    return create(node, nullptr, nullptr, nullptr, nullptr);
+    return create(node, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
     const MediaNode& node,
     MediaPreparedRealtimeInputBinding* binding)
 {
-    return create(node, binding, nullptr, nullptr, nullptr);
+    return create(node, binding, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
@@ -295,7 +299,7 @@ template <typename Node>
     const std::shared_ptr<MediaAvStartupVideoPreparationState>&
         videoPreparationState)
 {
-    return create(node, binding, videoPreparationState, nullptr, nullptr);
+    return create(node, binding, videoPreparationState, nullptr, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
@@ -305,7 +309,9 @@ template <typename Node>
         videoPreparationState,
     const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
         protocolOutputAuthority,
-    const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter)
+    const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter,
+    const MediaNetworkStorageWakeupPlan* storageWakeups,
+    const MediaProtocolGenerationStorageInstance* generationStorage)
 {
     switch (node.kind) {
     case MediaNodeKind::FileInput:
@@ -320,6 +326,16 @@ template <typename Node>
                                                 std::move(binding->prepared)));
     case MediaNodeKind::RawRtpInput:
     {
+        std::optional<MediaRtpIngressBinding> ingressBinding;
+        if (node.options.has("rtp.sync_group")) {
+            auto group = requiredNodeOption(&node.options, "RawRtpInputNode", "rtp.sync_group");
+            auto stream = requiredStreamKindNodeOption(&node.options, "RawRtpInputNode", "rtp.stream_kind");
+            if (!group || !stream)
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    !group ? group.error() : stream.error());
+            ingressBinding.emplace(MediaRtpIngressBinding{
+                MediaAvSyncGroupKey(std::move(group).value()), stream.value()});
+        }
         auto requiresPrepared = requiredBoolNodeOption(
             &node.options, "RawRtpInputNode",
             "rtp.prepared_input_required");
@@ -348,14 +364,14 @@ template <typename Node>
             }
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<RawRtpInputNode>(
-                    node.id, std::move(binding->prepared)));
+                    node.id, std::move(binding->prepared), std::move(ingressBinding)));
         }
         if (binding) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "node-owned RawRtpInput rejects prepared binding"));
         }
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id));
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id, std::move(ingressBinding)));
     }
     case MediaNodeKind::Demux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<DemuxNode>(node.id));
@@ -379,33 +395,15 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoTimestampNode>(node.id));
     case MediaNodeKind::HardwareTransfer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<HardwareTransferNode>(node.id));
+    case MediaNodeKind::DecodedVideoStartup:
+    case MediaNodeKind::VideoPreparation:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Video preparation requires its compiler-injected source sync group"));
     case MediaNodeKind::VideoFrameRate:
-        return createVideoFrameRateStage(node, videoPreparationState);
+        return createVideoFrameRateStage(node);
     case MediaNodeKind::VideoFilter:
-    {
-        auto prepared = prepareMediaVideoLineageStage(
-            node, VideoFilterNode::generationPurgeIdentity());
-        if (!prepared) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                prepared.error());
-        }
-        if (!videoPreparationState) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-                std::make_unique<VideoFilterNode>(
-                    node.id, std::move(prepared).value()));
-        }
-        auto capability = MediaAvStartupVideoPreparationCapability::issue(
-            videoPreparationState,
-            MediaAvStartupVideoPreparationRole::OutputReadiness);
-        if (!capability) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                capability.error());
-        }
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<VideoFilterNode>(
-                node.id, std::move(prepared).value(),
-                std::move(capability).value()));
-    }
+        return createVideoLineageStage<VideoFilterNode>(node);
     case MediaNodeKind::VideoEncode:
         return createVideoLineageStage<VideoEncodeNode>(node);
     case MediaNodeKind::AudioCodecResolver:
@@ -426,9 +424,13 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
     case MediaNodeKind::RtpClockGroup:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MediaRtpClockGroupNode>(node.id));
-    case MediaNodeKind::RtpPacketClockBinder:
+    case MediaNodeKind::RtpPacketClockBinder: {
+        auto stream = requiredStreamKindNodeOption(
+            &node.options, "MediaRtpPacketClockBinderNode", "rtp_clock_binder.stream");
+        if (!stream) return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(stream.error());
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaRtpPacketClockBinderNode>(node.id));
+            std::make_unique<MediaRtpPacketClockBinderNode>(node.id, stream.value()));
+    }
     case MediaNodeKind::DemuxPacketClockBinder:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -437,14 +439,7 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpClockSnapshotFanoutNode>(node.id));
     case MediaNodeKind::AvStartupCoordinator: {
-        auto prepared = prepareMediaAvStartupCoordinatorNode(node);
-        if (!prepared) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                prepared.error());
-        }
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaAvStartupCoordinatorNode>(
-                node.id, std::move(prepared).value()));
+        return createStartupCoordinator(node, MediaRuntimeLineageAllocation{});
     }
     case MediaNodeKind::AvOutputScheduler:
         if (!protocolOutputAuthority ||
@@ -462,21 +457,9 @@ template <typename Node>
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly scheduler requires compiler-injected output authority"));
     case MediaNodeKind::PlaybackEpochBinder:
-    {
-        auto group = requiredSyncGroup(
-            node, "MediaPlaybackEpochBinderNode",
-            "playback_epoch_binder.sync_group");
-        if (!group) {
-            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-                group.error());
-        }
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaPlaybackEpochBinderNode>(
-                node.id, std::move(group).value()));
-    }
+        return createStartupBinder(node, MediaRuntimeLineageAllocation{});
     case MediaNodeKind::CanonicalInput:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaCanonicalInputNode>(node.id));
+        return createCanonicalInput(node, MediaRuntimeLineageAllocation{});
     case MediaNodeKind::LockedPacketGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaLockedPacketGateNode>(node.id));
@@ -498,9 +481,12 @@ template <typename Node>
                 encodedAudioBranch.error());
         }
         MediaBranchMode audioBranchMode = MediaBranchMode::Drop;
+        const bool hasAudioOutput = node.findOutputPort("audio") != nullptr;
         if (!parseMediaBranchMode(encodedAudioBranch.value(), audioBranchMode) ||
-            (audioBranchMode != MediaBranchMode::CopyPacket &&
-             audioBranchMode != MediaBranchMode::TranscodeFrame)) {
+            (hasAudioOutput
+                ? (audioBranchMode != MediaBranchMode::CopyPacket &&
+                   audioBranchMode != MediaBranchMode::TranscodeFrame)
+                : audioBranchMode != MediaBranchMode::Drop)) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MediaAvBoundReleaseExtractorNode requires a planned audio branch mode"));
@@ -669,14 +655,18 @@ template <typename Node>
     {
         auto decoded =
             MediaDatagramTransportPlanSourceNodePlanCodec::decode(node);
-        if (!decoded || !protocolOutputAuthority) {
+        if (!decoded || !protocolOutputAuthority || !storageWakeups) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 decoded ? ::media::ErrorInfo::notInitialized(
-                              "Datagram transport plan source requires output authority")
+                              "Datagram transport plan source requires output authority and storage notification plan")
                         : decoded.error());
         }
+        const auto& tsProducer = decoded.value().encode().deployment.resources.mpegTsProducer;
+        if (tsProducer && !tsProducer->muxQueueStorage)
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized("TS runtime registration requires final graph storage admission"));
         auto created = MediaDatagramTransportPlanSourceNode::create(
-            node.id, std::move(decoded).value(), protocolOutputAuthority);
+            node.id, std::move(decoded).value(), protocolOutputAuthority, *storageWakeups);
         return created
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                   std::move(created).value())
@@ -692,13 +682,15 @@ template <typename Node>
                               "RTP materializer requires output authority")
                         : decoded.error());
         }
+        auto session = createGenerationSession<MediaRtpMaterializerGenerationSession>(node, generationStorage);
+        if (!session) return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(session.error());
         MediaRtpDatagramMaterializerNodeDependencies dependencies{
             protocolOutputAuthority,
             std::make_unique<ScheduledRtpPacketizerSessionFactory>()};
         auto created = MediaRtpDatagramMaterializerNode::create(
             node.id, std::move(decoded.value().sessionKey),
             std::move(decoded.value().output), std::move(decoded.value().sdp),
-            std::move(dependencies));
+            std::move(dependencies), std::move(session).value());
         return created
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                   std::move(created).value())
@@ -712,8 +704,10 @@ template <typename Node>
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS materializer requires output authority"));
         }
+        auto session = createGenerationSession<MediaMpegTsMaterializerGenerationSession>(node, generationStorage);
+        if (!session) return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(session.error());
         auto created = MediaMpegTsDatagramMaterializerNode::create(
-            node.id, protocolOutputAuthority);
+            node.id, protocolOutputAuthority, std::move(session).value());
         return created
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                   std::move(created).value())
@@ -802,6 +796,103 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::unsupported("MediaRuntimeNodeFactory unsupported node kind"));
     }
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::createCanonicalInput(
+    const MediaNode& node, MediaLineageAllocationScope allocation)
+{
+    using Result = ::media::Result<std::unique_ptr<MediaRuntimeNode>>;
+    if (node.kind != MediaNodeKind::CanonicalInput)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Canonical input storage requires its actual node"));
+    auto storage = MediaStartupSharedObjectPlanner::plan(
+        MediaStartupSharedObjectRole::Envelope, std::move(allocation));
+    if (!storage) return Result::failure(storage.error());
+    return Result::success(std::make_unique<MediaCanonicalInputNode>(node.id, std::move(storage).value()));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::createStartupBinder(
+    const MediaNode& node, MediaLineageAllocationScope allocation)
+{
+    using Result = ::media::Result<std::unique_ptr<MediaRuntimeNode>>;
+    if (node.kind != MediaNodeKind::PlaybackEpochBinder)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Startup binder requires its planned node kind"));
+    auto group = requiredSyncGroup(node, "MediaPlaybackEpochBinderNode", "playback_epoch_binder.sync_group");
+    if (!group) return Result::failure(group.error());
+    auto release = MediaStartupSharedObjectPlanner::plan(MediaStartupSharedObjectRole::ReleaseTransaction, allocation);
+    if (!release) return Result::failure(release.error());
+    auto control = MediaStartupSharedObjectPlanner::plan(MediaStartupSharedObjectRole::ControlTransaction, std::move(allocation));
+    if (!control) return Result::failure(control.error());
+    return Result::success(std::make_unique<MediaPlaybackEpochBinderNode>(
+        node.id, std::move(group).value(), std::move(release).value(), std::move(control).value()));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::createStartupCoordinator(
+    const MediaNode& node, MediaLineageAllocationScope allocation)
+try {
+    using Result = ::media::Result<std::unique_ptr<MediaRuntimeNode>>;
+    auto prepared = prepareMediaAvStartupCoordinatorNode(node, std::move(allocation));
+    if (!prepared) return Result::failure(prepared.error());
+    return Result::success(std::make_unique<MediaAvStartupCoordinatorNode>(node.id, std::move(prepared).value()));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+        ::media::ErrorInfo::allocationFailed("Startup coordinator preparation allocation failed"));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::createDecodedVideoStartup(
+    const MediaNode& node, std::shared_ptr<MediaAvSyncGroupRuntime> group,
+    std::shared_ptr<MediaPreparationMemoryResource> allocation)
+{
+    using Result = ::media::Result<std::unique_ptr<MediaRuntimeNode>>;
+    auto identity = requiredNodeOption(&node.options, "MediaDecodedVideoStartupNode",
+        "decoded_video_startup.source_identity");
+    auto generation = requiredPositiveInt64NodeOption(&node.options, "MediaDecodedVideoStartupNode",
+        "decoded_video_startup.initial_generation");
+    if (!identity) return Result::failure(identity.error());
+    if (!generation) return Result::failure(generation.error());
+    if (node.kind != MediaNodeKind::DecodedVideoStartup || !allocation || !group || !group->clock() ||
+        group->plan().startup.videoIdentity != std::optional<std::string>{identity.value()} ||
+        group->plan().startup.videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Decoded startup requires its original source group and display readiness"));
+    auto storage = MediaStartupSharedObjectPlanner::plan(
+        MediaStartupSharedObjectRole::Envelope, MediaPreparedLineageAllocation{allocation});
+    if (!storage) return Result::failure(storage.error());
+    return Result::success(std::make_unique<MediaDecodedVideoStartupNode>(
+        node.id, std::move(group), std::move(allocation), std::move(storage).value(), std::move(identity).value(),
+        static_cast<std::uint64_t>(generation.value())));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::createVideoPreparation(
+    const MediaNode& node, std::shared_ptr<MediaAvSyncGroupRuntime> group,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>& preparation,
+    MediaLineageAllocationScope allocation)
+{
+    using Result = ::media::Result<std::unique_ptr<MediaRuntimeNode>>;
+    if (node.kind != MediaNodeKind::VideoPreparation || !group || !preparation ||
+        preparation->snapshot().groupKey != group->key() ||
+        node.options.value("video.startup_preparation.owner") != "1")
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Video preparation requires its unique source owner and runtime dependencies"));
+    const auto productName = node.options.value("video.preparation.frame_product");
+    MediaVideoFrameLineageProduct product;
+    if (productName == "canonical_interval") product = MediaVideoFrameLineageProduct::CanonicalInterval;
+    else if (productName == "source_display_point") product = MediaVideoFrameLineageProduct::SourceDisplayPoint;
+    else return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Video preparation requires an explicit planned frame lineage product"));
+    const bool prepared = std::holds_alternative<MediaPreparedLineageAllocation>(allocation);
+    if (prepared != (product == MediaVideoFrameLineageProduct::SourceDisplayPoint) ||
+        !MediaLineageAllocator<MediaBufferRef>{allocation}.resource() ||
+        group->plan().startup.videoReadiness != (prepared ? MediaVideoStartupReadiness::DecodedPresentationSpan
+            : MediaVideoStartupReadiness::IntervalCoverage))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Video preparation allocation domain differs from its source readiness"));
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(preparation->reservationStorage(), allocation); !valid)
+        return Result::failure(valid.error());
+    auto capability = MediaAvStartupVideoPreparationCapability::issue(
+        preparation, MediaAvStartupVideoPreparationRole::OutputReadiness);
+    if (!capability) return Result::failure(capability.error());
+    return Result::success(std::make_unique<VideoPreparationNode>(
+        node.id, std::move(group), std::move(capability).value(), product));
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>>
@@ -988,6 +1079,17 @@ std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
 {
+    if (auto* raw = dynamic_cast<RawRtpInputNode*>(&runtime);
+        raw && raw->generationPurgeTarget()) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            MediaAvGenerationParticipant::CanonicalLineage,
+            {std::string(raw->generationPurgeIdentity()), raw->generationPurgeTarget()}};
+    }
+    if (auto* binder = dynamic_cast<MediaRtpPacketClockBinderNode*>(&runtime)) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            MediaAvGenerationParticipant::CanonicalLineage,
+            {std::string(binder->generationPurgeIdentity()), binder->generationPurgeTarget()}};
+    }
     if (auto* binder =
             dynamic_cast<MediaDemuxPacketClockBinderNode*>(&runtime)) {
         return MediaRuntimeGenerationPurgeRegistration{
@@ -1005,6 +1107,16 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
             fixedGenerationPurgeRegistration<VideoDecodeNode>(
                 runtime,
                 MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaDecodedVideoStartupNode>(
+                runtime, MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoPreparationNode>(
+                runtime, MediaAvGenerationParticipant::CanonicalLineage)) {
         return registration;
     }
     if (auto registration =
@@ -1129,6 +1241,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoOutputFanout:
     case MediaNodeKind::VideoTimestamp:
     case MediaNodeKind::HardwareTransfer:
+    case MediaNodeKind::DecodedVideoStartup:
+    case MediaNodeKind::VideoPreparation:
     case MediaNodeKind::VideoFrameRate:
     case MediaNodeKind::VideoFilter:
     case MediaNodeKind::VideoEncode:
@@ -1146,6 +1260,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
+    case MediaNodeKind::ContinuousAudioAggregate:
     case MediaNodeKind::AvContinuousAggregate:
     case MediaNodeKind::VideoOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:

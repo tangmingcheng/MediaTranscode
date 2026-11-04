@@ -1,9 +1,12 @@
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/planner/realtime/MediaRtpSourceFirstFrameProbe.h"
 #include "internal/graph/runtime/resource/MediaPreparationControl.h"
+#include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
-#include "internal/graph/protocol/codec/MediaVideoNalUnitScanner.h"
+#include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCodecApi.h"
@@ -36,39 +39,6 @@ bool equalSignaling(const MediaRtpVideoSignalingFacts& left,
     return a.vps == b.vps && a.sps == b.sps && a.pps == b.pps;
 }
 
-struct ParameterBinding final {
-    const MediaRtpVideoSignalingFacts& expected;
-    bool vps = false;
-    bool sps = false;
-    bool pps = false;
-    bool conflict = false;
-
-    static void visit(void* opaque, std::span<const std::uint8_t> nal)
-    {
-        auto& self = *static_cast<ParameterBinding*>(opaque);
-        while (!nal.empty() && nal.back() == 0) nal = nal.first(nal.size() - 1);
-        if (nal.empty()) { self.conflict = true; return; }
-        const std::vector<std::uint8_t>* expected = nullptr;
-        if (const auto* h264 = std::get_if<MediaH264SignalingFacts>(&self.expected)) {
-            switch (nal.front() & 0x1f) {
-            case 7: expected = &h264->sps; self.sps = true; break;
-            case 8: expected = &h264->pps; self.pps = true; break;
-            default: self.conflict = true; return;
-            }
-        } else {
-            const auto& hevc = std::get<MediaHevcSignalingFacts>(self.expected);
-            switch ((nal.front() >> 1) & 0x3f) {
-            case 32: expected = &hevc.vps; self.vps = true; break;
-            case 33: expected = &hevc.sps; self.sps = true; break;
-            case 34: expected = &hevc.pps; self.pps = true; break;
-            default: self.conflict = true; return;
-            }
-        }
-        self.conflict = self.conflict ||
-            !std::equal(nal.begin(), nal.end(), expected->begin(), expected->end());
-    }
-};
-
 ::media::Status validateBinding(const MediaRtpSourceFirstFrameProbePlan& plan,
                                 const AVCodecContext& decoder)
 {
@@ -87,17 +57,9 @@ struct ParameterBinding final {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RTP first-frame decoder differs from the prepared codec-parameter snapshot"));
     }
-    ParameterBinding binding{plan.signaling.facts};
-    auto scanned = MediaVideoNalUnitScanner::visit(
+    return MediaRtpVideoParameterSetValidator::validateBinding(
         {parameters.extradata, static_cast<std::size_t>(parameters.extradata_size)},
-        h264 ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc,
-        MediaEncodedPacketLayout::startCodeDelimited(), &binding, ParameterBinding::visit);
-    if (!scanned) return scanned;
-    if (binding.conflict || !binding.sps || !binding.pps || (!h264 && !binding.vps)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "RTP first-frame extradata differs from the authoritative signaling sets"));
-    }
-    return ::media::Status::success();
+        plan.signaling.facts, true);
 }
 
 // One bounded reorder owner per pass. Arrival timestamps are replayed as
@@ -109,8 +71,11 @@ template<class Consumer>
 {
     MediaRtpReorderBuffer reorder(plan.reorder);
     std::int64_t previousArrival = 0;
-    for (const auto& datagram : lease.datagrams()) {
+    for (std::size_t index = 0; index < lease.datagramCount(); ++index) {
         if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status) return status;
+        auto borrowed = lease.datagram(index);
+        if (!borrowed) return ::media::Status::failure(borrowed.error());
+        const auto& datagram = borrowed.value();
         if (datagram.bytes.empty() || datagram.bytes.size() > storage.maximumDatagramBytes ||
             datagram.observedAtNs <= 0 || datagram.observedAtNs < previousArrival) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -169,7 +134,7 @@ template<class Consumer>
     });
     if (!visited) return Result::failure(visited.error());
     if (!complete) return Result::success(false);
-    auto detected = observer.value().detected(lease.datagrams().size(), 0, 0);
+    auto detected = observer.value().detected(lease.datagramCount(), 0, 0);
     if (!detected) return Result::failure(detected.error());
     if (!equalSignaling(detected.value().facts, plan.signaling.facts)) return Result::failure(
         ::media::ErrorInfo::invalidArgument("RTP probe snapshot parameter sets changed"));
@@ -210,35 +175,30 @@ template<class Consumer>
 
 } // namespace
 
-::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>>
-MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence evidence,
-    const FFmpegInputStreamSnapshot& source)
-{
-    using Result = ::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>>;
-    if (evidence.disposition != MediaRtpSourceFirstFrameDisposition::FirstFrame ||
-        !evidence.firstFrame || !evidence.decoder.context || !evidence.storage) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "RTP replay handoff requires validated first-frame evidence"));
-    }
-    auto codec = makeMediaVideoDecoderCodecApi();
-    if (!codec) return Result::failure(::media::ErrorInfo::allocationFailed(
-        "RTP replay handoff could not create the common codec adapter"));
-    // The caller has finished capability negotiation/copy with this frame.
-    // Release caller references before resetting the same codec for raw replay.
-    evidence.firstFrame.reset();
-    codec->flushBuffers(evidence.decoder.context.get());
-    return MediaPreparedVideoDecoder::create(std::move(evidence.decoder),
-        std::move(evidence.storage), source, std::move(evidence.frameContract));
-}
-
-::media::Result<MediaRtpSourceFirstFrameEvidence> MediaRtpSourceFirstFrameProbe::probe(
-    const MediaRawRtpProbeLease& lease, const MediaRtpSourceFirstFrameProbePlan& plan,
-    CodecResolverDecoderContextBuildResult decoder,
-    const std::shared_ptr<MediaPreparationStorageBudget>& budget)
+namespace {
+::media::Result<MediaRtpSourceFirstFrameEvidence> probePreparedInput(
+    const MediaRawRtpProbeLease* lease, std::span<const MediaBufferRef> packets,
+    const MediaRtpSourceFirstFrameProbePlan& plan,
+    MediaRtpSourceDecoderProbeOwner owner)
 {
     try {
-        if (!budget || !decoder.context || !avcodec_is_open(decoder.context.get()) ||
-            !plan.source.decoder.outputFrame || lease.datagrams().empty() ||
+        auto& decoder = owner.decoder;
+        const auto* identityGoal = std::get_if<MediaSourceIdentityProbeGoal>(&plan.goal);
+        if (identityGoal && (lease || !identityGoal->budget || identityGoal->source.empty() || !identityGoal->generation ||
+            (identityGoal->requirement != MediaSourceIdentityProbeRequirement::MappedFrame &&
+             identityGoal->requirement != MediaSourceIdentityProbeRequirement::ReorderedFrames)))
+            return EvidenceResult::failure(::media::ErrorInfo::invalidArgument(
+                "Identity probe requires completed source AUs and explicit source storage"));
+#if defined(AV_CODEC_FLAG_COPY_OPAQUE)
+        if (identityGoal && (!decoder.context || !(decoder.context->flags & AV_CODEC_FLAG_COPY_OPAQUE)))
+#else
+        if (identityGoal)
+#endif
+            return EvidenceResult::failure(::media::ErrorInfo::unsupported("Identity probe requires opened COPY_OPAQUE decoder"));
+        if ((lease && plan.input != MediaSourcePreparationInput::RawDatagrams) ||
+            (!lease && plan.input != MediaSourcePreparationInput::CompletedAccessUnits) ||
+            !owner.storage || !decoder.context || !avcodec_is_open(decoder.context.get()) ||
+            !plan.source.decoder.outputFrame || (lease && lease->datagramCount() == 0) ||
             plan.timeBase.num <= 0 || plan.timeBase.den <= 0 ||
             plan.sampleAspectRatio.num <= 0 || plan.sampleAspectRatio.den <= 0 ||
             plan.signaling.clockRate <= 0 ||
@@ -270,49 +230,77 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
         }
         auto storage = MediaSourcePreparationStoragePlanner::plan(
             plan.maximumDatagramBytes, plan.reorder, plan.depacketizer, plan.envelope, *retention,
-            decoder, *plan.source.decoder.outputFrame);
+            decoder, *plan.source.decoder.outputFrame, plan.input);
         if (!storage) return EvidenceResult::failure(storage.error());
-        auto reserved = budget->reserve(storage.value().maximumBytes);
-        if (!reserved) return EvidenceResult::failure(reserved.error());
+        if (storage.value().maximumBytes > owner.storage.bytes())
+            return EvidenceResult::failure(::media::ErrorInfo::invalidArgument(
+                "RTP probe exceeds its retained decoder preparation admission"));
         auto frameContract = *plan.source.decoder.outputFrame;
-        MediaRtpSourceFirstFrameEvidence evidence(std::move(reserved).value(), std::move(decoder),
-            std::move(frameContract));
+        MediaRtpSourceFirstFrameEvidence evidence(std::move(owner.storage), std::move(decoder),
+            std::move(frameContract), storage.value());
+        if (identityGoal && packets.empty()) {
+            evidence.insufficiency = "Snapshot has no completed source AUs yet";
+            return EvidenceResult::success(std::move(evidence));
+        }
+        if (identityGoal) {
+            auto identity = MediaRtpSourceIdentityProbe::create(packets.size(), *identityGoal,
+                storage.value().softwareFrameBytes);
+            if (!identity) return EvidenceResult::failure(identity.error());
+            evidence.identityProbe = std::move(identity).value();
+        }
         {
             auto configured = parseRtpVideoSignalingFacts(plan.depacketizer.codecName, plan.depacketizer.fmtp);
             if (!configured) return EvidenceResult::failure(configured.error());
             if (!equalSignaling(configured.value(), plan.signaling.facts)) return EvidenceResult::failure(
                 ::media::ErrorInfo::invalidArgument("RTP depacketizer signaling differs from prepared source"));
         }
-        auto signaling = verifySnapshotSignaling(lease, plan, storage.value());
-        if (!signaling) return EvidenceResult::failure(signaling.error());
-        evidence.inspectedDatagrams = lease.datagrams().size();
-        if (!signaling.value()) {
-            evidence.insufficiency = "Snapshot has no complete matching parameter-set evidence";
-            return EvidenceResult::success(std::move(evidence));
+        if (lease) {
+            auto signaling = verifySnapshotSignaling(*lease, plan, storage.value());
+            if (!signaling) return EvidenceResult::failure(signaling.error());
+            evidence.inspectedDatagrams = lease->datagramCount();
+            if (!signaling.value()) {
+                evidence.insufficiency = "Snapshot has no complete matching parameter-set evidence";
+                return EvidenceResult::success(std::move(evidence));
+            }
         }
-        auto depacketizer = MediaRtpDepacketizerFactory::create(
-            plan.depacketizer, storage.value().maximumAccessUnitBytes);
-        if (!depacketizer) return EvidenceResult::failure(depacketizer.error());
-        // Snapshot start is not an AU boundary. The shared continuity state
-        // discards the first unknown timestamp, even when its marker is set.
-        depacketizer.value()->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
         auto codec = makeMediaVideoDecoderCodecApi();
         auto frame = ::media::ffmpeg::makeFrame();
         if (!codec || !frame) return EvidenceResult::failure(
             ::media::ErrorInfo::allocationFailed("RTP first-frame codec/frame allocation failed"));
         bool interrupted = false;
-        const auto receive = [&]() -> ::media::Result<bool> {
+        struct ReceiveProgress { bool complete; bool producedFrame; };
+        const auto receive = [&]() -> ::media::Result<ReceiveProgress> {
+            bool produced = false;
             if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status)
-                return ::media::Result<bool>::failure(status.error());
-            const int received = codec->receiveFrame(evidence.decoder.context.get(), frame.get());
-            if (received == AVERROR(EAGAIN)) return ::media::Result<bool>::success(false);
-            if (received < 0) return ::media::Result<bool>::failure(
-                FFmpegGraphError::fromCode(received, "RTP probe avcodec_receive_frame"));
-            auto valid = validateFirstFrame(plan, evidence.decoder, *frame);
-            if (!valid) return ::media::Result<bool>::failure(valid.error());
-            evidence.firstFrame = std::move(frame);
-            evidence.disposition = MediaRtpSourceFirstFrameDisposition::FirstFrame;
-            return ::media::Result<bool>::success(true);
+                return ::media::Result<ReceiveProgress>::failure(status.error());
+            for (;;) {
+                const int received = codec->receiveFrame(evidence.decoder.context.get(), frame.get());
+                if (received == AVERROR(EAGAIN)) return ::media::Result<ReceiveProgress>::success({false, produced});
+                if (received < 0) return ::media::Result<ReceiveProgress>::failure(
+                    FFmpegGraphError::fromCode(received, "RTP probe avcodec_receive_frame"));
+                produced = true;
+                auto valid = validateFirstFrame(plan, evidence.decoder, *frame);
+                if (!valid) return ::media::Result<ReceiveProgress>::failure(valid.error());
+                if (evidence.identityProbe) {
+                    auto matched = evidence.identityProbe->received(*frame, *evidence.decoder.context);
+                    if (!matched) return ::media::Result<ReceiveProgress>::failure(matched.error());
+                }
+                if (!evidence.firstFrame) {
+                    evidence.firstFrame = std::move(frame);
+                    if (evidence.identityProbe && !evidence.identityProbe->complete()) {
+                        frame = ::media::ffmpeg::makeFrame();
+                        if (!frame) return ::media::Result<ReceiveProgress>::failure(
+                            ::media::ErrorInfo::allocationFailed("Identity probe receive frame allocation failed"));
+                    }
+                } else av_frame_unref(frame.get());
+                if (!evidence.identityProbe || evidence.identityProbe->complete()) {
+                    evidence.disposition = MediaRtpSourceFirstFrameDisposition::FirstFrame;
+                    return ::media::Result<ReceiveProgress>::success({true, true});
+                }
+                if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check(
+                        "RTP identity probe receive")); !status)
+                    return ::media::Result<ReceiveProgress>::failure(status.error());
+            }
         };
         const auto waitCadence = [&]() -> ::media::Status {
             if (!plan.source.decoderReceiveInterval) return ::media::Status::failure(
@@ -327,57 +315,110 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
             condition.wait_until(lock, plan.cancellation, until, [] { return false; });
             return (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation"));
         };
-        auto decoded = visitSnapshot(lease, plan, storage.value(), [&](const MediaRtpReorderResult& ordered)
-            -> ::media::Result<bool> {
+        const auto submit = [&](const AVPacket& packet, MediaRational timeBase,
+                                std::uint32_t rtpTimestamp,
+                                std::shared_ptr<const MediaVideoDecodeLineage> lineage) -> ::media::Result<bool> {
             using Result = ::media::Result<bool>;
-            for (const auto& gap : ordered.discontinuities) {
-                depacketizer.value()->discontinuity(gap.reason);
-                if (evidence.submittedAccessUnits) {
-                    interrupted = true;
-                    return Result::success(false);
-                }
+            if (!packet.data || packet.size <= 0 ||
+                static_cast<std::size_t>(packet.size) > storage.value().maximumAccessUnitBytes ||
+                packet.opaque || packet.opaque_ref || (packet.flags & AV_PKT_FLAG_CORRUPT) ||
+                av_cmp_q({timeBase.num, timeBase.den}, {plan.timeBase.num, plan.timeBase.den}) != 0)
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "RTP probe AU violates byte/token contract"));
+            if (auto valid = MediaRtpVideoParameterSetValidator::validateBinding(
+                    {packet.data, static_cast<std::size_t>(packet.size)}, plan.signaling.facts, false); !valid)
+                return Result::failure(valid.error());
+            if (!evidence.firstRandomAccessTimestamp) {
+                if (!(packet.flags & AV_PKT_FLAG_KEY)) return Result::success(true);
+                evidence.firstRandomAccessTimestamp = rtpTimestamp;
             }
-            for (const auto& packet : ordered.packets) {
-                auto units = depacketizer.value()->push(packet);
-                if (!units) return Result::failure(units.error());
-                if (units.value().accessUnits.size() > storage.value().maximumAccessUnitsPerPush)
-                    return Result::failure(::media::ErrorInfo::internalError("RTP probe AU count exceeds plan"));
-                for (auto& unit : units.value().accessUnits) {
-                    if (!unit.packet || unit.packet->size <= 0 ||
-                        static_cast<std::size_t>(unit.packet->size) > storage.value().maximumAccessUnitBytes ||
-                        unit.packet->opaque || unit.packet->opaque_ref ||
-                        (unit.packet->flags & AV_PKT_FLAG_CORRUPT) ||
-                        av_cmp_q({unit.timeBase.num, unit.timeBase.den},
-                                 {plan.timeBase.num, plan.timeBase.den}) != 0)
-                        return Result::failure(::media::ErrorInfo::invalidArgument("RTP probe AU violates byte/token contract"));
-                    if (!evidence.firstRandomAccessTimestamp) {
-                        if (!(unit.packet->flags & AV_PKT_FLAG_KEY)) continue;
-                        evidence.firstRandomAccessTimestamp = unit.rtpTimestamp;
+            ::media::ffmpeg::PacketPtr cloned;
+            const AVPacket* submittedPacket = &packet;
+            if (evidence.identityProbe) {
+                auto prepared = evidence.identityProbe->prepare(packet, lineage);
+                if (!prepared) return Result::failure(prepared.error());
+                cloned = std::move(prepared).value();
+                submittedPacket = cloned.get();
+            }
+            // The decoder borrows this reference; the source owner keeps its
+            // original AVPacket and preparation reservation for runtime.
+            bool pending = true;
+            while (pending) {
+                if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check(
+                        "RTP first-frame preparation")); !status) return Result::failure(status.error());
+                const int sent = codec->sendPacket(evidence.decoder.context.get(), submittedPacket);
+                if (sent < 0 && sent != AVERROR(EAGAIN)) return Result::failure(
+                    FFmpegGraphError::fromCode(sent, "RTP probe avcodec_send_packet"));
+                if (sent == 0) {
+                    pending = false;
+                    ++evidence.submittedAccessUnits;
+                    if (evidence.identityProbe) {
+                        auto recorded = evidence.identityProbe->submitted(*lineage);
+                        if (!recorded) return Result::failure(recorded.error());
                     }
-                    // Do not release or replace pending input on EAGAIN.
-                    while (unit.packet) {
-                        if (auto status = (MediaPreparationControl{plan.deadline, plan.cancellation}.check("RTP first-frame preparation")); !status) return Result::failure(status.error());
-                        const int sent = codec->sendPacket(evidence.decoder.context.get(), unit.packet.get());
-                        if (sent < 0 && sent != AVERROR(EAGAIN)) return Result::failure(
-                            FFmpegGraphError::fromCode(sent, "RTP probe avcodec_send_packet"));
-                        if (sent == 0) {
-                            unit.packet.reset();
-                            ++evidence.submittedAccessUnits;
-                            evidence.decoderMayHavePendingOutput = true;
-                        }
-                        auto output = receive();
-                        if (!output) return output;
-                        if (output.value()) return Result::success(false);
-                        if (unit.packet) {
-                            if (auto waited = waitCadence(); !waited) return Result::failure(waited.error());
-                        }
-                    }
+                    evidence.decoderMayHavePendingOutput = true;
+                }
+                auto output = receive();
+                if (!output) return Result::failure(output.error());
+                if (output.value().complete) return Result::success(false);
+                if (pending && !output.value().producedFrame) {
+                    if (auto waited = waitCadence(); !waited) return Result::failure(waited.error());
                 }
             }
             return Result::success(true);
-        });
+        };
+        auto decoded = [&]() -> ::media::Status {
+            if (!lease) {
+                for (const auto& buffer : packets) {
+                    const auto* packet = FFmpegPacketView::packet(buffer);
+                    const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get());
+                    const auto* canonical = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
+                    if (!packet || packet->pts < 0 ||
+                        (identityGoal ? (!source || source->decodedSequence().has_value())
+                                      : (!canonical || canonical->streamKind() != MediaStreamKind::Video || !canonical->sourceTiming())))
+                        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                            "Continuous RTP probe input differs from its planned timing product"));
+                    const auto timeBase = identityGoal ? source->lineage()->packetTimeBase : canonical->timeDescriptor().timeBase;
+                    auto progress = submit(*packet, timeBase, static_cast<std::uint32_t>(packet->pts),
+                        identityGoal ? source->lineage() : nullptr);
+                    if (!progress) return ::media::Status::failure(progress.error());
+                    if (!progress.value()) break;
+                }
+                return ::media::Status::success();
+            }
+            auto depacketizer = MediaRtpDepacketizerFactory::create(
+                plan.depacketizer, storage.value().maximumAccessUnitBytes, MediaRuntimeLineageAllocation{});
+            if (!depacketizer) return ::media::Status::failure(depacketizer.error());
+            // Snapshot start is not an AU boundary. Preserve the shared
+            // continuity algorithm used by the raw probe path.
+            depacketizer.value()->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+            return visitSnapshot(*lease, plan, storage.value(), [&](const MediaRtpReorderResult& ordered)
+                -> ::media::Result<bool> {
+                using Result = ::media::Result<bool>;
+                for (const auto& gap : ordered.discontinuities) {
+                    depacketizer.value()->discontinuity(gap.reason);
+                    if (evidence.submittedAccessUnits) {
+                        interrupted = true;
+                        return Result::success(false);
+                    }
+                }
+                for (const auto& packet : ordered.packets) {
+                    auto units = depacketizer.value()->push(packet);
+                    if (!units) return Result::failure(units.error());
+                    if (units.value().accessUnits.size() > storage.value().maximumAccessUnitsPerPush)
+                        return Result::failure(::media::ErrorInfo::internalError("RTP probe AU count exceeds plan"));
+                    for (const auto& unit : units.value().accessUnits) {
+                        if (!unit.packet) return Result::failure(::media::ErrorInfo::invalidArgument(
+                            "RTP probe AU has no packet"));
+                        auto progress = submit(*unit.packet, unit.timeBase, unit.rtpTimestamp, nullptr);
+                        if (!progress || !progress.value()) return progress;
+                    }
+                }
+                return Result::success(true);
+            });
+        }();
         if (!decoded) return EvidenceResult::failure(decoded.error());
-        if (!evidence.firstFrame && !interrupted && evidence.submittedAccessUnits &&
+        if (evidence.disposition == MediaRtpSourceFirstFrameDisposition::NeedMoreEvidence && !interrupted && evidence.submittedAccessUnits &&
             plan.source.decoderReceiveInterval) {
             // One source-cadence completion opportunity, then explicit finite
             // evidence exhaustion; no null packet, drain, or hidden reacquire.
@@ -385,7 +426,11 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
             auto output = receive();
             if (!output) return EvidenceResult::failure(output.error());
         }
-        if (!evidence.firstFrame) evidence.insufficiency = interrupted
+        if (evidence.identityProbe && !evidence.identityProbe->complete())
+            evidence.insufficiency = identityGoal->requirement == MediaSourceIdentityProbeRequirement::ReorderedFrames
+                ? "Snapshot lacks verified input PTS and decoded identity reorder witnesses"
+                : "Snapshot lacks a decoded frame with verified source identity";
+        else if (!evidence.firstFrame) evidence.insufficiency = interrupted
             ? "Snapshot has a sequence gap after decoder submission; reset before replay"
             : "Snapshot has no complete random-access prefix yielding a first frame";
         return EvidenceResult::success(std::move(evidence));
@@ -393,6 +438,22 @@ MediaRtpSourceFirstFrameProbe::prepareReplay(MediaRtpSourceFirstFrameEvidence ev
         return EvidenceResult::failure(::media::ErrorInfo::allocationFailed(
             "RTP first-frame preparation allocation failed"));
     }
+}
+
+} // namespace
+
+::media::Result<MediaRtpSourceFirstFrameEvidence> MediaRtpSourceFirstFrameProbe::probe(
+    const MediaRawRtpProbeLease& lease, const MediaRtpSourceFirstFrameProbePlan& plan,
+    MediaRtpSourceDecoderProbeOwner owner)
+{
+    return probePreparedInput(&lease, {}, plan, std::move(owner));
+}
+
+::media::Result<MediaRtpSourceFirstFrameEvidence> MediaRtpSourceFirstFrameProbe::probe(
+    std::span<const MediaBufferRef> packets, const MediaRtpSourceFirstFrameProbePlan& plan,
+    MediaRtpSourceDecoderProbeOwner owner)
+{
+    return probePreparedInput(nullptr, packets, plan, std::move(owner));
 }
 
 } // namespace media::ffmpeg::graph

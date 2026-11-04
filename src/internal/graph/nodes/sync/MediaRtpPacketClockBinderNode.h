@@ -1,7 +1,8 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/protocol/rtp/MediaRtpPacketClockProjector.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
+#include "internal/graph/runtime/session/MediaRtpPacketClockSession.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketTimestampAligner.h"
 #include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 
@@ -14,10 +15,18 @@
 namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
+class MediaPreparedRtpSourceSession;
+struct MediaPreparedRtpPrefix;
 
 class MediaRtpPacketClockBinderNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaRtpPacketClockBinderNode(MediaNodeId nodeId);
+    MediaRtpPacketClockBinderNode(MediaNodeId nodeId, MediaStreamKind stream);
+    ~MediaRtpPacketClockBinderNode() override;
+    ::media::Status bindPreparedSession(std::shared_ptr<MediaPreparedRtpSourceSession> source);
+    ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
+    std::string_view generationPurgeIdentity() const noexcept;
+    std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
     static MediaNodeKind staticKind() noexcept;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -27,6 +36,9 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    using PacketDisposition = MediaRtpPacketClockSession::PacketDisposition;
+    ::media::Result<bool> retireExpiredCandidates();
+    ::media::Result<bool> resumeCandidateBinding();
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status acceptClock(const MediaBufferRef& buffer);
     ::media::Status bufferAcquiring(MediaBufferRef buffer);
@@ -34,28 +46,20 @@ private:
                                MediaBufferRef buffer);
     ::media::Status finishPacketInput(MediaGraphExecutionContext& context,
                                       MediaBufferRef terminal);
-    ::media::Result<MediaBufferRef> timedPacket(MediaBufferRef buffer,
-                                                std::uint64_t& extendedTimestamp);
-    void invalidateClockProjection() noexcept;
     void resetState() noexcept;
+    ::media::Status emitPacket(MediaGraphExecutionContext& context, MediaBufferRef buffer);
 
-    MediaRtpPacketClockProjector m_projector;
-    MediaRtpPacketTimestampAligner m_timestampAligner;
-    std::optional<MediaRtpClockGroupSnapshot> m_lockedSnapshot;
-    std::deque<MediaBufferRef> m_acquiringPackets;
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
     std::optional<MediaAvSyncGroupKey> m_syncGroupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
-    std::optional<MediaInitialClockAcquisitionDeadline> m_acquisitionDeadline;
-    MediaBufferRef m_videoLookahead;
-    std::optional<std::uint64_t> m_videoLookaheadTimestamp;
-    std::optional<std::int64_t> m_lastPositiveVideoDelta;
-    MediaBufferRef m_pendingTerminal;
-    MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
-    MediaScheduledStream m_scheduledStream = MediaScheduledStream::Video;
-    std::size_t m_acquiringCapacity = 0;
-    int m_durationClockRate = 0;
+    const MediaStreamKind m_streamKind;
+    // Keeps preparation reservations until the handed-off binder is destroyed.
+    std::shared_ptr<MediaPreparedRtpSourceSession> m_preparedSource;
+    std::optional<MediaRtpPacketClockSession> m_clockSession;
+    MediaLineageUniquePtr<MediaPreparedRtpPrefix> m_preparedPrefix{
+        nullptr, MediaLineageObjectDeleter<MediaPreparedRtpPrefix>{MediaRuntimeLineageAllocation{}}};
+    MediaBufferRef m_preparedPendingCredit;
     bool m_configured = false;
-    bool m_keyTraceEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

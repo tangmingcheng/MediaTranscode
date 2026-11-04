@@ -13,11 +13,9 @@ enum class MediaAvSchedulerCommitKind { Video, Audio, Terminal };
 
 struct MediaAvSchedulerPendingCommit final {
     MediaAvSchedulerCommitKind kind;
-    MediaBufferRef displayedVideoClone;
-    std::optional<MediaCanonicalAccessUnitSequence> displayedVideoSequence;
-    std::optional<MediaRunningTime> displayedVideoMasterTime;
     bool terminalFinishes = false;
     std::optional<std::uint64_t> generation;
+    std::optional<MediaRunningTime> scheduledAt;
 };
 
 } // namespace media::ffmpeg::graph

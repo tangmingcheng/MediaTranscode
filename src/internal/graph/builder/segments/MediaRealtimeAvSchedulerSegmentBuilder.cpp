@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include <algorithm>
 #include <string_view>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -45,11 +46,15 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
     }
     if (plan.audioBranchMode == MediaBranchMode::CopyPacket &&
         !MediaAtomicOutputPolicyContract::accepts(
-            plan.edgePolicies.startupAudioRelease)) {
+            plan.canonicalAudioInputPolicy)) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler packet-copy audio requires its planner atomic release policy"));
     }
+    if (plan.audioBranchMode == MediaBranchMode::TranscodeFrame &&
+        plan.canonicalAudioInputPolicy != plan.edgePolicies.synchronizedPacket)
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "Encoded scheduler audio input differs from its output retention product"));
     return ::media::Result<void>::success();
 }
 
@@ -90,37 +95,6 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, false);
 }
 
-::media::Result<MediaRunningTime> transportLead(
-    const MediaRealtimeAvOutputSegmentPlan& plan)
-{
-    if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
-        const auto* output = std::get_if<MediaSeparateRtpOutputRuntimePlan>(
-            &plan.protocolOutput);
-        if (!output) {
-            return ::media::Result<MediaRunningTime>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Separate RTP scheduler requires a separate RTP output plan"));
-        }
-        if (output->video.senderLead.nanoseconds() <= 0 ||
-            output->audio.senderLead.nanoseconds() <= 0 ||
-            output->video.senderLead != output->audio.senderLead) {
-            return ::media::Result<MediaRunningTime>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Separate RTP scheduler requires matching positive planner-owned sender leads"));
-        }
-        return ::media::Result<MediaRunningTime>::success(
-            output->video.senderLead);
-    }
-    const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
-        &plan.protocolOutput);
-    if (!output) {
-        return ::media::Result<MediaRunningTime>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Project MPEG-TS scheduler requires a project MPEG-TS output plan"));
-    }
-    return ::media::Result<MediaRunningTime>::success(
-        output->protocol.muxPlan().transportDecodeLead());
-}
 
 } // namespace
 
@@ -160,11 +134,13 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler segment rejects duplicate scheduling authority"));
     }
+    auto declaration=MediaOutputSegmentPlanner::scheduler(plan.edgePolicies,plan.canonicalAudioInputPolicy);
+    if(!declaration)return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(declaration.error());
     MediaNodeId scheduler = graph.addNode(
-        MediaNodeKind::AvOutputScheduler, options.prefix + ".scheduler",
+        *declaration.value().kind(MediaOutputSegmentRole::Scheduler), options.prefix + ".scheduler",
         "Shared A/V output scheduler");
     MediaNodeId router = graph.addNode(
-        MediaNodeKind::ScheduledOutputRouter, options.prefix + ".router",
+        *declaration.value().kind(MediaOutputSegmentRole::Router), options.prefix + ".router",
         "Typed scheduled output router");
     if (!scheduler.isValid() || !router.isValid()) {
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
@@ -177,16 +153,15 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }
-    auto lead = transportLead(plan);
-    if (!lead) {
-        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
-            lead.error());
-    }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-            graph, Owner, scheduler, "av_scheduler.transport_lead_ns",
-            std::to_string(lead.value().nanoseconds())); !status) {
-        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
-            status.error());
+    if (auto status = plan.scheduling.validate(plan.protocolOutput,
+            plan.scheduling.protocolPreparationLead); !status)
+        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(status.error());
+    for (const auto& [key, value] : {
+             std::pair{"av_scheduler.transport_lead_ns", std::to_string(plan.scheduling.transportLead.nanoseconds())},
+             std::pair{"av_scheduler.protocol_preparation_lead_ns", std::to_string(plan.scheduling.protocolPreparationLead.nanoseconds())},
+             std::pair{"av_scheduler.submission", std::string("encoded_access_unit")}}) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, Owner, scheduler, key, value); !status)
+            return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(status.error());
     }
     const char* routerMode =
         plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs
@@ -202,32 +177,15 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }
-    const auto& policy = plan.edgePolicies.synchronizedPacket;
-    const auto& audioPolicy =
-        plan.audioBranchMode == MediaBranchMode::CopyPacket
-            ? plan.edgePolicies.startupAudioRelease
-            : policy;
-    if (auto status = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, options.canonicalVideo.node,
-            options.canonicalVideo.port, scheduler, "video",
-            "canonical video -> shared scheduler", policy); !status) {
-        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
-            status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, options.canonicalAudio.node,
-            options.canonicalAudio.port, scheduler, "audio",
-            "canonical audio -> shared scheduler", audioPolicy); !status) {
-        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
-            status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, scheduler, "scheduled", router, "scheduled",
-            "shared scheduler -> typed router", policy); !status) {
-        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
-            status.error());
-    }
+    MediaOutputSegmentBindings bindings{std::move(declaration).value(),{}};
+    bindings.endpoint(MediaOutputSegmentRole::VideoPacket)=options.canonicalVideo;
+    bindings.endpoint(MediaOutputSegmentRole::AudioPacket)=options.canonicalAudio;
+    bindings.endpoint(MediaOutputSegmentRole::Scheduler)={scheduler,""};
+    bindings.endpoint(MediaOutputSegmentRole::Router)={router,""};
+    if(auto status=bindings.connect(graph,Owner);!status)
+        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(status.error());
     MediaRealtimeAvSchedulerSegmentResult result;
+    result.bindings=std::move(bindings);
     result.scheduler = scheduler;
     result.outputMembers = {scheduler, router};
     if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {

@@ -1,11 +1,11 @@
 #pragma once
 
 #include "internal/graph/runtime/queue/MediaQueue.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -42,7 +42,7 @@ private:
 
 private:
     MediaQueuePolicy m_policy;
-    std::vector<MediaBufferRef> m_ring;
+    MediaFixedCapacityStorage<MediaBufferRef> m_ring;
     std::size_t m_capacity = 0;
     mutable std::mutex m_mutex;
     std::condition_variable m_notEmpty;

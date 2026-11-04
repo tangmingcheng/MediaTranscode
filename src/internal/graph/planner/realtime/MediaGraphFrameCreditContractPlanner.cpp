@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaGraphFrameCreditContractPlanner.h"
+#include "internal/graph/planner/realtime/MediaAvAggregateFrameCreditPlanner.h"
 #include <charconv>
 #include <utility>
 
@@ -46,9 +47,18 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaFrameCreditContract> MediaGraphFrameCreditContractPlanner::plan(
     const MediaNode& node,
+    MediaStreamKind stream,
     std::uint64_t maximumLogicalBytes)
 {
     using Result = ::media::Result<MediaFrameCreditContract>;
+    if ((node.kind == MediaNodeKind::AvContinuousAggregate || node.kind == MediaNodeKind::ContinuousAudioAggregate)) {
+        auto contract = MediaAvAggregateFrameCreditPlanner::decode(node.options, stream);
+        if (!contract) return contract;
+        if (contract.value().maximumLogicalBytes != maximumLogicalBytes)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Aggregate producer bound differs from its prepared frame product"));
+        return contract;
+    }
     if (node.kind == MediaNodeKind::AudioDecode ||
         node.kind == MediaNodeKind::AudioStartupTrim ||
         node.kind == MediaNodeKind::AudioResample) {

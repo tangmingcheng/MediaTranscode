@@ -133,7 +133,7 @@ public:
         MediaPipelinePlannerOptions options);
 
     static ::media::Status materializeSourceExecutionContract(
-        MediaVideoSourcePlan& source, const MediaRational& sourceFrameRate);
+        MediaVideoSourcePlan& source, const MediaVideoSourceTiming& timing);
     static ::media::Result<std::vector<MediaVideoSourcePlan>> planVideoSourceCandidates(
         const MediaInputVideoStreamInfo& input, const MediaVideoSourcePlanningOptions& options,
         const MediaHardwareDescriptor& target);

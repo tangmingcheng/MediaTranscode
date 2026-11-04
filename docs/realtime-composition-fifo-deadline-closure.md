@@ -1,0 +1,153 @@
+# 合屏 MPEG-TS 串行发送期限闭合
+
+## 已证实的问题
+
+r315 的前批87334–87374与sender摘要精确对应：其deadline为155912933101ns，后批为155879602776ns，前批最后提交155882283900ns。前批在自身期限内完成仍导致后批超期。后批具体PID/类别尚无证据，不能直接称其为PCR。
+
+当前Mux在AU emit之前生成已到期维护数据，然后把整个AU转成一批。维护期限另按due+周期生成；EmissionSchedule计算serviceWindow后丢弃，availableAt不包含物理服务时间。独立审查r313_diagnostic_review_b对FIFO非抢占可行性给出FAIL。不得以删除serial、抬高后批期限或减小源规格处理。
+
+## 工业依据与差异
+
+FFmpeg在PES的TS包循环内检查并插入PCR，支持在协议包边界安排维护数据，而不是必须等整个AU结束：https://ffmpeg.org/doxygen/8.1/mpegtsenc_8c_source.html 。其同步muxrate时钟不是本项目异步共享服务域，不能直接复制时间算法。
+
+Windows高精度waitable timer到期只使对象signaled；现有证据未拆开timer唤醒与线程调度：https://learn.microsoft.com/en-us/windows/win32/sync/waitable-timer-objects 。修复不能宣称用户态调度获得硬实时保证。
+
+## 实施顺序
+
+1. 核对planner已持有的service rate、wire overhead、prepared最大AU及协议维护周期，形成FIFO非抢占阻塞的类型化事实合同。当前managed capacity和pacer rate不证明OS服务下界；不得声称硬实时保证，也不得把新增平台硬实时保证变成原目标的完成前提。保留实际超期失败语义，优先消除协议整批排序造成的结构性阻塞。
+2. 对照FFmpeg包边界插入策略，选定global编号之前的TS批分段/维护排序产品。复用packet cursor、协议batch、单sender与既有DAG；禁止创建合屏专用发送链。分段点不能破坏PES、continuity或随机访问尾标记。
+3. 同步推导增加的batch、descriptor、commit/control及在途holder上界，使用实际allocation geometry；不增加公开容量参数。维护组准备保持事务式预约，压力时不推进时钟/continuity。
+4. 保留原始release/deadline及原错误；planner缺事实在构建前拒绝。runtime仅执行计划，不能根据运行迟到重新发明排序或fallback。
+5. 冻结后两名未参与实现的智能体独立审查；Release全量构建后复验原120秒三源、失源和重入。记录前后批序号、期限与实际提交，之后继续Windows完整矩阵，再RKMPP。
+
+## 当前状态
+
+已完成共享series、前缀view预算、有界cursor预约与生产发布窗口/维护插入接线。r317原规格实流已进入DAG，但2ns发布窗口无法容纳215040ns的最短发送时长，需补充基于现有速率与wire geometry的必要可行性检查；不能将静态双审或构建成功视为实流通过。managed rate不作为OS服务下界。历史崩溃、完整TS存储、HEVC重排入口和C API完整验收仍独立未完成。所有现有未提交修改保留。
+
+## 服务与所有权核验
+
+MediaDatagramServiceScopeContract只有capacityWireBytesPerSecond及authority；arbiter以实际完成时间推进theoreticalArrival，约束最大发送速度。MediaDatagramPacingRatePlanner由peak、burst/residence及WebRTC无反馈比例推导目标速率，不提供线程调度保证。maximumReleaseJitter是既有部署预算，不能冒充测得的每包定时唤醒上界。
+
+MediaTsPendingEmission::materializeProtocolBatch将整个m_cursor移动到MediaMpegTsProtocolDatagramBatchBuffer，随后m_materialized=true。现有nextPayloadBytes虽能计算单datagram，但不能直接复用为生产分段：必须给共享series backing、cursor位置、continuity commit和最终VideoRandomAccessUnitEnd形成一致的有界分段产品。global编号后不再重排。当前正审查该接口最小改造，不新增第二条发送链。
+
+## 实施进度：共享series所有权
+
+已修改MediaMpegTsProtocolDatagramBatchBuffer两文件：原commit state扩为SeriesState，统一持有原transaction、prepared packet series和descriptor storage；batch与commit prefix共享同一状态，不复制媒体。seriesStorageGeometry继续探测实际新类型以及变小的batch类型，不沿用旧sizeof。当前只有所有权重构，仍是整AU发布，未接入有限前缀、维护插入或发布前瞻限制。两名未参与实现者正在审查。源码已晚于12:36:25二进制，禁止用旧产物宣称此切片运行通过。
+
+共享所有权切片双审：r313_timing_review与r313_diagnostic_review_b均明确静态PASS。确认无series/cursor/control反向环、prefix持有packet backing、实际geometry同步、失败RAII和poison语义保留。开始Release全量构建，尚未取回结果。前缀视图后续必须使用series绝对提交偏移并限制各view结束位置；最终随机访问标记只属于末段；不能让每个view重新从0提交，也不能重复消耗原一次性七角色存储。
+
+共享所有权切片Release全量742项构建完成，configure/build exit0（会话61338），四项必需产物已核查存在。只证明构建成功；未启动实流，此切片仍未改变发送排序。继续实现前缀与维护窗口完整切片后再做原规格实流复验。
+
+有界view基础接口已实施（未接入生产）：takePrefixView只消费调用方已预约的实际batch-owner allocation，成功后才推进源；view按绝对begin/end共享series，takeCommitTransaction仍用绝对偏移，materializedDatagrams对外诊断返回局部偏移。数据和末段标记直接引用原descriptor，无复制；payloadFootprint缓存该view数据量，避免每次查询遍历。SeriesState保存resource和探测所得batch geometry，实际结构变更仍由probe计费。新增同时存活view的数量预算、发布前瞻和维护窗口尚未实施，当前接口不能单独投入实流；双审进行中，源码晚于12:56:47产物。
+
+前缀预算接线已实施：ownership.prefixViews按实际mux queue/publication/protocol edge/materializer current/global outstanding/sender retirement持有槽求和；pending AU及维护准备只保留root，不加入view项。SeriesStorage增加内部maximumPrefixViews，按实际batchOwner allocationFootprint乘该上界计费，保留原series backing预算；FinalGraph生成，内部codec保存数量并重新推导geometry与总额，缺字段/零上界拒绝。尚未生产发布views，也未实现maintenance窗口；以上预算须连同后续实际holder调用链复审。
+
+## 同PID前缀预约前置修正
+
+审查确认PCR与视频映射同一continuity ledger；整AU prepareRemaining把尾CC预留，直接在view之间插PCR会使用错误插入点CC，并因ledger.front仍AU而无法提交。因此仅view分段明确不通过。
+
+已将cursor接口替换为显式prepareSeries(maximumPackets)，按有限begin/end预留；原生产create仍传整packetCount，当前发送行为不变。同cursor只有一个pending，必须上一前缀完全commit后才可继续，未引入多个并发预约。恢复需active空、仍为该PID最新payload cursor、projected CC符合begin；新增latestPayloadCursors身份防止16包计数回绕误授权，PCR不更新payload身份。部分已commit而取消未完AU将poison。实际control/cursor几何仍由原probe推导。该切片双审中，尚未编译。后续仍需分离backing/token、短前缀commit对象及维护窗口，不能直接启用现有整AU token交错。
+
+## cursor生命周期与后续接线核验
+
+SeriesState现持有cursor，声明早于transaction，确保借用cursor的提交模型先销毁；create先将cursor移入最终series地址再绑定模型。r313_timing_review与r313_diagnostic_review_b均明确静态PASS，覆盖失败RAII、移动、地址稳定、mutex与实际geometry。累计切片已完成Release全量742项构建（会话63602），configure/build exit0。未启动实流；构建成功不代表FIFO修复或合屏验收通过。
+
+下一步接线必须分离只读packet backing与有界reservation。已核验MediaProtocolDatagramCommitTransaction在完整提交时立即释放model，因此重绑下一段需要明确的模型存储预算与reservation身份校验；不得让旧prefix操作新transaction。MediaTsPendingEmission仍整AU materialize并标记finished，Mux随后completePending；这些完成边界必须随最后前缀统一调整，不能只替换batch粒度。
+
+## 有界提交重绑与完成通知
+
+已增加cursor只读remainingPackets，先建立descriptor再预约continuity；backing由series内cursor保有，不再额外保留PreparedPacketSeries。确认storage release仅pressureArmed时通知，不能冒充提交完成事件；新增waitForCommit在series mutex下检查并注册weak producer wakeup，完整提交、错误和abandon均解锁后通知，沿现有GraphWorker process前采样sequence的等待协议。尚未接入mux调用，不能宣称生产等待闭合。
+
+create现显式接收maximumReservationDatagrams；现有两处生产调用传最终storagePlan.maximumDatagrams，仍保持整AU。reserveNextPrefix要求前段全部转交且完整commit，再消费精确admitted model并预约下一段；调用方须先waitForCommit成功再申请下一model，禁止提前申请造成未计费重叠。prefix保存series内单调begin/end身份，提交用区间局部offset，旧identity失配仅poison而不abandon新事务。可见descriptor、view及commit获取均限制在已预约区间，尾标记仍只在最后descriptor。
+
+r313_timing_review与r313_diagnostic_review_b对以上最终切片均明确静态PASS。Release全量742项重建成功（会话17230，configure/build exit0，四项必需产物已核验）；未运行短分段或原规格实流。后续必须把mux完成边界、producer wakeup传递、每轮精确存储准入、PCR先于后缀预约和有限发布窗口一起接入，不能只把初始预约改成一个datagram。
+
+下一生产接线经独立只读核验：FileMuxNode::ensureSession取得当前nodeId的已注册共享wakeup，经内部factory/adapter传入Mux Binding，不新增公开参数或序列化planner字段。提交等待必须保留WouldBlock，由adapter排空已有batch后交FileMux转普通processWaiting；不得返回零进度成功而进入DeadlineOrCancellation。finishIfReady目前将WouldBlock解释为revoked finish并等待generation purge，须与分段提交等待区分；write重试仍必须保证失败时AU未被接收，flush不得取走待输出batch。
+
+## 发布窗口合同与producer唤醒接线
+
+已实现FileMux当前context wakeup经内部factory、adapter到Mux Binding的传递；Project入口和Mux create拒绝缺失wakeup，不新建旁路对象，FFmpegFile分支不增加该依赖。尚未调用commit等待。
+
+独立审查否决了仅逐datagram发送、只处理已到期maintenance的方案：它仍允许当前AU datagram的期限晚于未来PCR期限。新增MediaTsPrefixPublicationPlanner独立内部产品，保留AU deadline，completionLimit=min(AU deadline,下一维护合法release)。now已到AU deadline立即失败；due已到或prefix release无正窗口时先处理维护合法边界，否则返回前缀窗口。正窗口不是服务能力保证，无OS服务下界前提，不增加用户参数。该规则基于已有FFmpeg TS包边界维护插入原则，补足本项目异步发布所需的明确期限约束；生产仍须原规格验证调度开销与持续吞吐。
+
+r313_timing_review和r313_diagnostic_review_b对两项均明确静态PASS。还需将产品接到未发布descriptor，并在UDP及TS/RTP共同执行更严格上限，同时诊断保留AU原deadline；maintenance后推进下一合法release，禁止对同一过期boundary忙转。上述生产接线尚未实施。
+
+期限消费者核验：UDP sizing/earliestDeadline与outputInputs两处须同步使用completionLimit；TS/RTP只修改通用RTP materializer的protocolBatch分支，普通RTP/RTCP不受影响。sender及materializer telemetry读取wire有效deadline，不能称其为原AU deadline。后续须提供generation/global sequence到原协议期限的精确关联，或明确诊断缺口；仅在materialization失败日志同时打印两值不足以证明sender失败现场保留完整原期限。
+
+本轮Release全量743项重建成功（会话16114，configure/build exit0），CMakeCache、build.ninja及两个CLI产物已核验；没有运行local CLI或实流，没有新增测试产物。该结果仅覆盖构建，不代表前缀发布接线或合屏验收通过。
+
+## 前缀期限传播复审
+
+未发布descriptor现保留AU原deadline与completionLimit，重预约只更新未发布区间；UDP与TS/RTP统一执行限制，wire descriptor携带两项只读诊断事实，实际sizeof继续纳入现有存储预算。关联RTCP报告取自身期限与首媒体有效期限的较小值，并携带受保护AU事实；普通RTP和独立RTCP不变。当前同一reservation内共用发布窗口，未来混合窗口需重新审查。
+
+r313_timing_review与r313_diagnostic_review_b均明确静态PASS。Release全量743项重建成功（会话19026，configure/build exit0），四项必需产物已核验；未运行local CLI或实流。生产pending AU仍整批发布，故此切片不代表FIFO根因修复完成。
+
+## 前缀存储准备与接线边界
+
+新增MediaTsPrefixStoragePreparation，仅按实际protocol geometry一次预约view及可选commit model，split后分配失败均RAII回收，不推进continuity或schedule。首次已有model只申请view；后续须waitForCommit成功且旧model释放后申请。准备中的view占用既有publication holder，禁止满槽额外预取。两名独立审查者均静态PASS；Release全量744项重建成功（会话72981，configure/build exit0），四项必需产物已核验；生产调用尚未添加，未运行local CLI或实流。
+
+接线核验：writeAccessUnit拥有AU后须返回已接收，后续压力由poll表达，不能让调用方重试同一AU；pending须保留到末段实际commit。每轮先检查上一段commit，再由发布planner决定maintenance边界或prefix窗口；maintenance预约必须先于同PID后缀continuity预约。adapter当前pending成功分支无条件给DeadlineOrCancellation，接线时必须优先取出刚生成的batch，commit等待则返回WouldBlock。finish仅在pending完全结束后调用，取消走abort，不将清理记作自然完成。
+
+## 生产前缀发布接线
+
+PendingEmission现保留series root与AU时钟直到末段实际提交，每次发布一个不可分割wire datagram；下一model仅在waitForCommit成功后预约。write接收AU后返回成功，poll执行后续存储压力、维护边界和发布。adapter优先取出新batch，提交等待保留WouldBlock，末段完成返回progress；hasPendingOutput覆盖等待中的AU，FileMux在EOF前先排空。删除此前未被调用的旧writer式pending方法。
+
+首段构造权限通过deferFirstReservation显式释放；恢复仍校验payload identity和projected CC。若PCR先消费discontinuity，仅在未发布首包上清除对应标志并同步元数据，不移动payload或改变包长。projected discontinuity按整个有界未提交ledger累计clear事件推导，不能只读tail局部事件；committed已清除时直接返回。pending期间维护组也由发布planner限制到本组、AU及下一PCR/PSI边界，保留原协议deadline用于诊断。
+
+两名独立审查者对最终切片均明确静态PASS。61777构建exit0但开始早于最终修正，不计最终源码验证；冻结后Release全量744项重建成功（会话99104，configure/build exit0），四项必需产物已核验。原规格三源120秒、全黑、AV重入及VLC原生快照尚未重新执行，不能声称r315已通过。
+
+首次discontinuity消费对照：[FFmpeg 8.1 mpegts_insert_pcr_only](https://www.ffmpeg.org/doxygen/8.1/mpegtsenc_8c_source.html#l01381)在写入0x80标志后立即清除stream discontinuity。此处保留相同的首个实际排序包唯一消费语义；因本项目预构造AU并异步提交，需要在未发布backing及有界预约ledger中同步投影状态。
+
+复验预检：提升权限确认62020由Chrome网络进程PID27808占用，非本轮进程，不清理。候选62024/62025无UDP绑定，后续CLI和VLC统一使用62024；其余原规格保持。当前尚未启动r316。
+
+## r316/r317真实链路结果
+
+r316在受限执行环境输入探测零包超时，未进入DAG。r317以本机网络权限运行同规格真实源，进入DAG后sequence74因2ns窗口小于GBRA215040ns服务增量失败。两轮命令、指标及原错误分别记录于对应验收文档，精确PID残留已清理，分别删除10/9项产物，源文件保留。尚无VLC画面、失源或重入通过证据。
+
+下一修改须复用现有pacing速率上限/合同与实际endpoint wire geometry，由planner在发布前检查至少一个原子datagram的必要发送时长；窗口不足时不得先发布后交sender失败，也不得使用经验时间常量或增加OS硬实时保证前提。TS/RTP需计入前置关联RTCP，不能仅按TS payload大小推导。
+
+## r317窗口可行性修复
+
+新增内部MediaTsPrefixServicePlan，从已有activated shaping的最大允许wire速率、实际endpoint IP/UDP头、emission协议头及CNAME派生；复用MediaCheckedArithmetic逐datagram向上取整。TS/RTP每protocol batch加入一个可能关联SR的保守额度，maintenance按各PAT/PMT/PCR cursor分别累计。产品由既有transport plan输入经runtime plan、generation session传入Mux，不新增公开参数或重复序列化速率。
+
+发布planner以max(release,真实now)+服务额度检查窗口：原AU期限不可容纳则失败，仅维护边界过近则等待该边界。maintenance使用真实master clock，避免把availableThrough未来lookahead误作当前时刻。产品校验RTP/report一致及最大datagram符合activated endpoint边界。两名独立审查者最终静态PASS，Release全量745项重建成功（会话93992，configure/build exit0），四项必需产物已核验。
+
+限制：最大速率只代表最快允许值；实际pacer可更慢，已有服务债务和OS调度仍可能导致失败。可选SR额度可能比本次实际需求更保守。该检查排除r317的数学不可能窗口，不等于精确可调度性或实流通过。
+
+## r318实流结果与下一边界
+
+745项最终重建后，以本机网络权限执行原规格r318。未再出现r317的2ns窗口拒绝，但sequence47实际submit比GBRA允许时刻晚49740ns，CLI退出1。AU原deadline与prefix limit均已出现在诊断中；详见r318文档。无VLC快照、失源或重入通过证据；测试PID及9项产物已清理。
+
+源码已存在timingPolicy.maximumReleaseJitter的DeploymentServiceSlo事实，并验证小于PCR interval。下一步审查该既有预算是否应纳入发布窗口的服务额度，禁止按本次49740ns或历史迟到样本发明margin。尚未实施jitter预算接线，也不能断言当前已解决调度迟到。
+
+## r318 后续参数来源核验
+
+已追溯到 MediaRealtimeDeploymentPlanner::pacingLatency：maximumReleaseJitter 实际等于按 requiredPacingRate 推导的最大 datagram 串行化时长，authority 为 prepared-deadline-admitted-rate-maximum-datagram-serialization。下游 DeploymentServiceSlo 标签不能把它转换为已测量或调用方提供的 OS 调度上界。因此撤回直接将该值作为线程发布余量的修复假设，尚未修改生产代码。
+
+下一步核验 prefix completionLimit 直接取 nextMaintenanceRelease 的必要性：维护包具有独立 release 与 completion deadline，须结合 FIFO、continuity 预约及实际服务债务推导前缀准入条件；不得通过放宽原 AU deadline、添加经验 margin 或降低源规格规避失败。已交独立审查者核对该约束。
+
+## 维护释放时刻与完成期限纠正（设计审查）
+
+两名独立审查者 r313_timing_review、r313_diagnostic_review_b 均撤回此前对 completionLimit=min(AU deadline,next maintenance release) 的充分性判断：release 是最早服务时刻，不能据此推出前驱必须完成的时刻。上文“前缀期限传播复审”等 PASS 仅保留其当时的静态实现审查记录，不再代表该期限策略正确。
+
+当前 writeDueMaintenance 明确采用 PCR release+PCR interval、PSI release+PSI repeat interval 作为自身完成期限。FFmpeg 8.1 mpegtsenc.c 的 PES 包循环在包边界检查并插入到期 PCR/SI（https://ffmpeg.org/doxygen/8.1/mpegtsenc_8c_source.html），没有将维护 release 变为前驱 deadline；其同步生成模型不能直接证明本项目跨线程发送的时限保证。
+
+修正方向：保留单 datagram 不可抢占发布、实际 commit 后才预约下一前缀、同 PID continuity ledger 与原 AU deadline；维护到期后优先发布。前驱服务上限须从受保护维护的 completion deadline 扣除维护服务需求推导，覆盖 PCR/PSI 不同释放顺序与共同到期情形，不能仅删除现有 limit。所有几何与速率复用已有 planner 产品，计算溢出或不可能窗口明确失败，不新增公开字段、默认值、线程或无界队列。
+
+债务核验：MediaDatagramPacingController::markSubmitted 在提交完成时间上加实际 reservation.serviceDuration，形成私有 theoreticalArrivalTime；现有 global queue 的均值和提交日志不足以重建该值。sender 正常与 partial 路径当前先 recordSubmittedPrefix 再 markSubmitted，前者可能唤醒 producer。若增加内部服务边界反馈，必须与 generation/sequence 和 commit 发布顺序统一，不能从 producer 跨线程读取 sender 私有状态；共享 scope 的额外 notBefore 仍不能视为已被该反馈覆盖。
+
+实施仍待多维护期限的有界规划核对。上述为设计调查结论，尚未修改生产源码、重建或启动新一轮实流，r318 仍为失败。
+## 近期维护服务筛查实施
+
+已将 release 截断替换为类型化近期维护义务（release、原 completion deadline、必要 service duration）。按实际 FIFO 顺序逆推 latestStart=min(后继 latestStart,自身 deadline)-service，逐项验证不早于 release，再与原 AU deadline 取较小值。该逆向约束传播对应常规 backward scheduling（https://opess.ethz.ch/course/section-13-3/13-3-3-backward-scheduling-and-forward-scheduling/），不是新的实时调度保证。
+
+Mux 使用固定两项数组表示下一 PSI 与 PCR；同刻 PSI 在前，PAT/PMT 分别计入可能关联的 SR 服务量，复用原 wire geometry。MediaTsPublicationOrder 显式区分媒体让位与已选维护保序，修复初审发现的“已选维护因后续 release 已到而错误终止”。没有新增公开参数、线程或队列；单 datagram 发布及 commit 等待不变。prepareSeries 释放 active 构造槽，因此已预约未提交的维护不阻止只读 packet-count 查询；重复查询 mutex 的性能影响仍须实流观察。
+
+范围仅为给定两项近期义务的乐观静态筛查：不覆盖两者之间可能出现的其他周期实例，不包含真实 pacing/shared-scope debt，不保证 OS 调度或整个 AU 可调度。各实际维护实例仍单独检查原 deadline，sender 保留真实提交失败。服务债务反馈和完整周期分析仍属未完成项，不能据此宣称 r318 或合屏验收通过。
+最终六文件经两名独立审查者均明确局部静态 PASS。Release 全量745项重建成功（会话71320，configure/build exit0），四项必需产物核验，realtime CLI 为2026-10-23 14:50:20。未运行local CLI。r319已启动原规格三源，VLC原生快照确认三格、全失源黑屏及AV源重入左下格；完整结果与限制见r319记录，尚不计全验收通过。PAT/PMT查询依据committed discontinuity，可能保守高估包数，不称精确未来包数。
+
+## r319统计缺口修复设计
+
+源码核验recordCommittedDatagram与recordPressureFailure没有调用点，旧mux datagrams/wire_bytes及其等待、迟到、压力字段无采样来源。沿GStreamer multiudpsink区分bytes-to-serve与bytes-served的语义（https://gstreamer.freedesktop.org/documentation/udp/multiudpsink.html），mux仅在takeScheduledBatch成功交出时统计produced_datagrams和produced_ts_payload_bytes；实际提交、wire开销、迟到与压力仍以sender证据为准。复用已有recordProtocolBatchProduced，不新增线程、队列、公开输入或媒体策略；删除失效旧方法与字段。计数先于延迟峰值的提前返回，使用饱和加法，保证早于release产生的批次也计数。需双人复审及Release真实链路核对，不以计数修复替代剩余时序闭环。
+
+统计修复经两名独立审查者静态PASS，Release全量745项成功。r320原规格三源120秒实流，正常排空后mux/sender均84612 datagrams与98319112 TS payload bytes，实际对账一致；期限错误0，图payload回零。记录见r320文档；声音/内容A/V、NIC时序及周期/debt等原未完成项不变，不计完整验收通过。

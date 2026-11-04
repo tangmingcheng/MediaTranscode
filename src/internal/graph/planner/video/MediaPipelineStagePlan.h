@@ -20,11 +20,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
+
+class FFmpegCodecParametersSnapshot;
 
 enum class MediaPipelineStageRole {
     Decoder,
@@ -49,6 +52,7 @@ struct MediaPipelineStagePlan {
     std::optional<MediaEncoderRateControlPlan> encoderRateControl;
     std::optional<MediaEncoderOpenContract> encoderOpenContract;
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
+    std::shared_ptr<const FFmpegCodecParametersSnapshot> preparedCodecParameters;
     std::optional<MediaDecoderInputRetention> preparedInputRetention;
     std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
 

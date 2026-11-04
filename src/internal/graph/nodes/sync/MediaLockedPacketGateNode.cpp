@@ -1,8 +1,10 @@
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
+#include "internal/graph/sync/MediaAvInitialClockAdmission.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -332,11 +334,10 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
             MediaLockedPacketGateDisposition::WithholdForReacquisition)
             : GateDispositionResult::failure(requested.error());
     }
-    if (m_syncGroup->plan().sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput &&
-        !m_syncGroup->preservesActivatedOutput() &&
-        (discontinuity || state->readiness() == MediaSourceClockReadiness::Degraded))
-        return GateDispositionResult::failure(invalidGateEvidence(
-            "Initial composition source admission lost clock evidence"));
+    if (auto admitted = validateMediaInitialSourceClockAvailability(
+            m_syncGroup->plan().sourceLifecycle->mode, m_syncGroup->preservesActivatedOutput(),
+            state->readiness(), discontinuity); !admitted)
+        return GateDispositionResult::failure(admitted.error());
     if (m_syncGroup->preservesActivatedOutput() && discontinuity) {
         if (state->generation() == 0 ||
             (discontinuity && state->readiness() != MediaSourceClockReadiness::ReacquireRequired))
@@ -515,8 +516,19 @@ MediaLockedPacketGateNode::classifyLockedGeneration(
 ::media::Result<std::uint64_t>
 MediaLockedPacketGateNode::packetGeneration(const MediaBufferRef& buffer) const
 {
-    const auto* packet =
-        dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
+    if (!m_syncGroup || !m_syncGroup->plan().startup.videoReadiness ||
+        !m_syncGroup->plan().startup.videoIdentity)
+        return ::media::Result<std::uint64_t>::failure(invalidGateEvidence(
+            "Locked packet gate requires its planned startup media contract"));
+    const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get());
+    const bool sourceAccessUnit = m_streamKind == MediaStreamKind::Video &&
+        *m_syncGroup->plan().startup.videoReadiness ==
+            MediaVideoStartupReadiness::DecodedPresentationSpan;
+    if (sourceAccessUnit != (source != nullptr))
+        return ::media::Result<std::uint64_t>::failure(invalidGateEvidence(
+            "Locked packet gate media differs from its planned startup contract"));
+    const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(
+        source ? source->media().get() : buffer.get());
     if (!packet || !packet->sourceTiming() ||
         packet->streamKind() != m_streamKind ||
         packet->sourceTiming()->readiness !=
@@ -527,6 +539,16 @@ MediaLockedPacketGateNode::packetGeneration(const MediaBufferRef& buffer) const
             ::media::ErrorInfo::invalidArgument(
                 "Locked packet gate rejects packet clock evidence"));
     }
+    if (source && (!source->lineage() || source->decodedSequence() ||
+        source->decodedPresentation() ||
+        source->lineage()->mappingConfidence != MediaTimeMappingConfidence::Locked ||
+        source->lineage()->generation != packet->sourceTiming()->generation ||
+        source->lineage()->identity.sourceIdentity.view() !=
+            *m_syncGroup->plan().startup.videoIdentity ||
+        packet->sourceTiming()->presentationNs !=
+            std::optional<std::int64_t>{source->lineage()->presentation.nanoseconds()}))
+        return ::media::Result<std::uint64_t>::failure(invalidGateEvidence(
+            "Locked packet gate rejects inconsistent source-AU clock evidence"));
     return ::media::Result<std::uint64_t>::success(
         packet->sourceTiming()->generation);
 }

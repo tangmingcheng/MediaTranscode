@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -101,14 +102,29 @@ using MediaCanonicalAudioDurationPlan =
     std::variant<MediaPacketDurationPlan,
                  MediaPlannedAudioSamplesDurationPlan>;
 
-struct MediaCanonicalVideoAssemblyPlan final {
-    std::string sourceIdentity;
+struct MediaCanonicalVideoAssemblyTiming final {
     MediaCanonicalVideoDurationPlan duration;
     MediaDecodeOrderMode decodeOrder;
+    friend bool operator==(const MediaCanonicalVideoAssemblyTiming&,
+                           const MediaCanonicalVideoAssemblyTiming&) = default;
+};
+
+// The decoder establishes ordered display points; no packet duration or DTS
+// policy is implied by this startup representation.
+struct MediaDecodedVideoAssemblyTiming final {
+    friend bool operator==(const MediaDecodedVideoAssemblyTiming&,
+                           const MediaDecodedVideoAssemblyTiming&) = default;
+};
+using MediaVideoInputAssemblyTiming = std::variant<
+    MediaCanonicalVideoAssemblyTiming, MediaDecodedVideoAssemblyTiming>;
+
+struct MediaVideoInputAssemblyPlan final {
+    std::string sourceIdentity;
+    MediaVideoInputAssemblyTiming timing;
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
-    friend bool operator==(const MediaCanonicalVideoAssemblyPlan&,
-                           const MediaCanonicalVideoAssemblyPlan&) = default;
+    friend bool operator==(const MediaVideoInputAssemblyPlan&,
+                           const MediaVideoInputAssemblyPlan&) = default;
 };
 
 struct MediaCanonicalAudioAssemblyPlan final {
@@ -126,8 +142,8 @@ struct MediaRealtimeAvSyncAssemblyPlan final {
     MediaInitialGenerationPolicy generationPolicy;
     std::uint64_t initialGeneration;
     MediaClockEvidencePolicy evidencePolicy;
-    MediaCanonicalVideoAssemblyPlan video;
-    MediaCanonicalAudioAssemblyPlan audio;
+    MediaVideoInputAssemblyPlan video;
+    std::optional<MediaCanonicalAudioAssemblyPlan> audio;
     friend bool operator==(const MediaRealtimeAvSyncAssemblyPlan&,
                            const MediaRealtimeAvSyncAssemblyPlan&) = default;
 };

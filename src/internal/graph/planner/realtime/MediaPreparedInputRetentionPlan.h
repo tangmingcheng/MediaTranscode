@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -16,12 +17,15 @@ struct MediaPreparedInputRetentionStream final {
     std::uint64_t maximumBytes;
     std::uint64_t maximumUnitBytes;
     std::string authority;
+
+    bool valid() const noexcept;
+    bool operator==(const MediaPreparedInputRetentionStream&) const = default;
 };
 
 struct MediaPreparedInputRetentionPlan final {
     MediaRunningTime acquisitionWindow;
     MediaPreparedInputRetentionStream video;
-    MediaPreparedInputRetentionStream audio;
+    std::optional<MediaPreparedInputRetentionStream> audio;
 
     ::media::Status validate() const;
 };

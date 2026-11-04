@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
+#include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -12,7 +13,7 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-class HardwareTransferNode final : public FFmpegNodeRuntime {
+class HardwareTransferNode final : public FFmpegNodeRuntime, public MediaSourceReferenceAllocation {
 public:
     explicit HardwareTransferNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;

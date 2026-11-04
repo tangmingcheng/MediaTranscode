@@ -31,6 +31,10 @@ MediaAvSyncGroupRuntime::MediaAvSyncGroupRuntime(
     , m_sharedNtpEpoch(std::move(sharedNtpEpoch))
     , m_transitionService(std::move(transitionService))
 {
+    if (m_plan.sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports &&
+        m_plan.members) {
+        m_rtpIngressFrontiers.emplace(*m_plan.members);
+    }
 }
 
 ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>

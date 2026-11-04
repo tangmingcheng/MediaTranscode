@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaMpegTsOutputTimingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+#include "internal/graph/planner/realtime/MediaRealtimeDatagramPayloadPlanner.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -38,14 +39,14 @@ std::string rtpUrl(const std::string& host, std::size_t port)
 }
 
 std::optional<int> resolvedAudioBitrateKbps(
-    const MediaRealtimeRtpTranscodePlanningDraft& plan)
+    const MediaAudioPipelinePlan* audio)
 {
-    if (!plan.audioPlan || !plan.audioPlan->resolvedOutput ||
-        !plan.audioPlan->resolvedOutput->bitrateKbps() ||
-        *plan.audioPlan->resolvedOutput->bitrateKbps() <= 0) {
+    if (!audio || !audio->resolvedOutput ||
+        !audio->resolvedOutput->bitrateKbps() ||
+        *audio->resolvedOutput->bitrateKbps() <= 0) {
         return std::nullopt;
     }
-    return *plan.audioPlan->resolvedOutput->bitrateKbps();
+    return *audio->resolvedOutput->bitrateKbps();
 }
 
 ::media::Result<MediaRtpRemoteEndpointPair> rtpTransport(
@@ -153,19 +154,25 @@ std::optional<int> resolvedAudioBitrateKbps(
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Realtime output policy requires the validated deployment envelope"));
     }
-    const auto& deployment = plan.deployment->encode();
-    constexpr std::uint64_t Ipv4HeaderBytes = 20;
-    constexpr std::uint64_t Ipv6HeaderBytes = 40;
-    constexpr std::uint64_t UdpHeaderBytes = 8;
-    const auto ipHeaderBytes =
-        deployment.mtu.addressFamily == MediaIpAddressFamily::Ipv4
-            ? Ipv4HeaderBytes
-            : Ipv6HeaderBytes;
-    const std::uint64_t maximumDatagram = (std::min)(
-        deployment.mtu.senderMaximumPayloadBytes,
-        deployment.mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes);
+    return applyOutput(request, urls, plan.videoParameters,
+        static_cast<const MediaVideoOutputPlan&>(plan.videoPlan.selected),
+        plan.audioPlan ? &*plan.audioPlan : nullptr, *plan.deployment, output);
+}
+
+::media::Status MediaRealtimeOutputPolicyPlanner::applyOutput(
+    const MediaRealtimeRtpTranscodeRequest& request, const MediaRealtimeOutputUrls& urls,
+    MediaVideoTranscodeParameters& videoParameters, const MediaVideoOutputPlan& video,
+    const MediaAudioPipelinePlan* audio, const MediaRealtimeDeploymentEnvelope& environment,
+    MediaRealtimeOutputPlanningDraft& output)
+{
+    const auto& deployment = environment.encode();
+    auto maximumDatagram = MediaRealtimeDatagramPayloadPlanner::maximumPayloadBytes(
+        deployment.mtu);
+    if (!maximumDatagram) {
+        return ::media::Status::failure(maximumDatagram.error());
+    }
     auto packetSize = checkedSocketInteger(
-        maximumDatagram, "planned maximum Datagram payload");
+        maximumDatagram.value(), "planned maximum Datagram payload");
     if (!packetSize) {
         return ::media::Status::failure(packetSize.error());
     }
@@ -179,19 +186,19 @@ std::optional<int> resolvedAudioBitrateKbps(
         }
         output.muxedOutput.transportDecodeLead =
             deployment.transportTiming.senderTransportLead;
-        if (!plan.videoParameters.frameRate.complete() ||
-            !plan.videoParameters.frameRate.numerator ||
-            !plan.videoParameters.frameRate.denominator) {
+        if (!videoParameters.frameRate.complete() ||
+            !videoParameters.frameRate.numerator ||
+            !videoParameters.frameRate.denominator) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS transport timing requires prepared video cadence"));
         }
         std::optional<MediaRunningTime> audioCadence;
-        if (plan.audioPlan && plan.audioPlan->preparedEmission) {
-            const auto& audio = *plan.audioPlan->preparedEmission;
-            if (audio.accessUnitsPerSecondNumerator >
+        if (audio && audio->preparedEmission) {
+            const auto& audioEmission = *audio->preparedEmission;
+            if (audioEmission.accessUnitsPerSecondNumerator >
                     static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
-                audio.accessUnitsPerSecondDenominator >
+                audioEmission.accessUnitsPerSecondDenominator >
                     static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
@@ -199,21 +206,21 @@ std::optional<int> resolvedAudioBitrateKbps(
             }
             auto cadence = MediaRunningTime::checkedFromTicks(
                 1,
-                static_cast<int>(audio.accessUnitsPerSecondDenominator),
-                static_cast<int>(audio.accessUnitsPerSecondNumerator));
+                static_cast<int>(audioEmission.accessUnitsPerSecondDenominator),
+                static_cast<int>(audioEmission.accessUnitsPerSecondNumerator));
             if (!cadence) return ::media::Status::failure(cadence.error());
             audioCadence = cadence.value();
         }
         auto timing = MediaMpegTsOutputTimingPlanner::planVariableBitrate(
             deployment.latency.maximumReleaseJitter,
             deployment.latency.releaseJitterAuthority,
-            MediaRational{*plan.videoParameters.frameRate.numerator,
-                          *plan.videoParameters.frameRate.denominator});
+            MediaRational{*videoParameters.frameRate.numerator,
+                          *videoParameters.frameRate.denominator});
         if (!timing) return ::media::Status::failure(timing.error());
         auto preroll = MediaMpegTsOutputTimingPlanner::startupEmissionPreroll(
             deployment.transportTiming.senderTransportLead,
-            MediaRational{*plan.videoParameters.frameRate.numerator,
-                          *plan.videoParameters.frameRate.denominator},
+            MediaRational{*videoParameters.frameRate.numerator,
+                          *videoParameters.frameRate.denominator},
             audioCadence, timing.value());
         if (!preroll) return ::media::Status::failure(preroll.error());
         output.muxedOutput.startupEmissionPreroll = preroll.value();
@@ -238,7 +245,7 @@ std::optional<int> resolvedAudioBitrateKbps(
         return ::media::Status::success();
     }
 
-    if (!plan.videoParameters.bitrateKbps) {
+    if (!videoParameters.bitrateKbps) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("Realtime output policy requires resolved video bitrate and packet size"));
     }
@@ -248,8 +255,8 @@ std::optional<int> resolvedAudioBitrateKbps(
             ::media::ErrorInfo::invalidArgument(
                 "deployment MTU cannot carry an RTP payload"));
     }
-    const std::string codec = canonicalCodecName(plan.videoPlan.outputCodecName);
-    if (codec == "h264" || codec == "avc" || codec == "avc1") plan.videoParameters.globalHeader = true;
+    const std::string codec = canonicalCodecName(video.encoder.codecName);
+    if (codec == "h264" || codec == "avc" || codec == "avc1") videoParameters.globalHeader = true;
 
     output.videoOutput.url = urls.video;
     output.videoOutput.packetSize = packetSize.value();
@@ -262,7 +269,7 @@ std::optional<int> resolvedAudioBitrateKbps(
     output.videoOutput.scheduledTransport =
         std::move(videoTransport).value();
     if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        const auto audioBitrate = resolvedAudioBitrateKbps(plan);
+        const auto audioBitrate = resolvedAudioBitrateKbps(audio);
         if (!audioBitrate) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(

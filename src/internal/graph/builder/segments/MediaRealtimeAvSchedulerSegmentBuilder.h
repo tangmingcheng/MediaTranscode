@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/builder/segments/MediaOutputSegmentBindings.h"
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
@@ -23,6 +24,7 @@ struct MediaRealtimeAvSchedulerSegmentResult final {
     MediaEndpoint serialized;
     MediaNodeId scheduler;
     std::vector<MediaNodeId> outputMembers;
+    MediaOutputSegmentBindings bindings;
 };
 
 class MediaRealtimeAvSchedulerSegmentBuilder final {

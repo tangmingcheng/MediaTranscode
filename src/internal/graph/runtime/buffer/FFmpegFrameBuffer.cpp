@@ -28,9 +28,16 @@ const AVFrame* FFmpegFrameBuffer::frame() const noexcept
     return m_frame.get();
 }
 
-::media::ffmpeg::FramePtr FFmpegFrameBuffer::takeFrame() noexcept
+MediaOwnedVideoFrame FFmpegFrameBuffer::takeFrame() noexcept
 {
-    return std::move(m_frame);
+    return {std::move(m_frame), std::exchange(m_readiness, std::nullopt)};
 }
 
+::media::Status FFmpegFrameBuffer::setReadiness(MediaVideoFrameReadiness readiness)
+{
+    if (!m_frame || m_readiness)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Frame readiness is absent or already bound"));
+    m_readiness.emplace(std::move(readiness));
+    return ::media::Status::success();
+}
 } // namespace media::ffmpeg::graph

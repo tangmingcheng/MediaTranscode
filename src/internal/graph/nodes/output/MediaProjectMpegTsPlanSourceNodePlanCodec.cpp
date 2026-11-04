@@ -17,6 +17,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+constexpr const char* SeriesBoundsKey = "project_mpeg_ts_plan.series_bounds";
 constexpr const char* Owner =
     "MediaProjectMpegTsPlanSourceNodePlanCodec";
 constexpr const char* SessionKey = "project_mpeg_ts_plan.session";
@@ -71,7 +72,7 @@ constexpr const char* RtcpBandwidthAuthorityKey =
 constexpr std::size_t VideoOnlyMuxFieldCount = 27;
 constexpr std::size_t AudioVideoMuxFieldCount = 35;
 
-constexpr std::array<const char*, 21> UdpKeys{
+constexpr std::array<const char*, 22> UdpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -88,9 +89,9 @@ constexpr std::array<const char*, 21> UdpKeys{
     PcrIntervalAuthorityKey, PcrIntervalSourceKey,
     PcrGapAuthorityKey, PcrGapSourceKey,
     PsiAuthorityKey, PsiSourceKey,
-    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey};
+    ReleaseJitterAuthorityKey, ReleaseJitterSourceKey, SeriesBoundsKey};
 
-constexpr std::array<const char*, 46> RtpKeys{
+constexpr std::array<const char*, 47> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -128,7 +129,7 @@ constexpr std::array<const char*, 46> RtpKeys{
     RtcpInitialIntervalKey, RtcpAdmissionIntervalKey,
     RtcpMembersKey, RtcpSendersKey, RtcpBandwidthKey,
     RtcpCompoundBytesKey, RtcpMembershipAuthorityKey,
-    RtcpBandwidthAuthorityKey};
+    RtcpBandwidthAuthorityKey, SeriesBoundsKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -162,6 +163,44 @@ template <typename Value>
                 key));
     }
     return narrow<Value>(value);
+}
+
+std::string encodeSeries(const MediaTsProtocolSeriesBounds& bounds)
+{
+    std::ostringstream text;
+    text << bounds.video.maximumFramedPayloadBytes << ' ' << bounds.video.maximumPackets << ' '
+         << bounds.video.maximumDatagrams << ' ';
+    if (bounds.audio) text << bounds.audio->maximumFramedPayloadBytes << ' '
+        << bounds.audio->maximumPackets << ' ' << bounds.audio->maximumDatagrams << ' ';
+    else text << "0 0 0 ";
+    text << bounds.maximumPatPackets << ' ' << bounds.maximumPmtPackets << ' ' << bounds.maximumPcrPackets;
+    return text.str();
+}
+::media::Result<MediaTsProtocolSeriesBounds> decodeSeries(
+    const MediaNodeOptions& options, const MediaTsMuxPlan& mux)
+{
+    using Result = ::media::Result<MediaTsProtocolSeriesBounds>;
+    auto text = requiredNodeOption(&options, Owner, SeriesBoundsKey);
+    if (!text) return Result::failure(text.error());
+    std::istringstream input(text.value());
+    std::array<std::size_t, 9> values{};
+    std::string token;
+    for (auto& value : values) {
+        if (!(input >> token)) return Result::failure(::media::ErrorInfo::invalidArgument("TS series fields are missing"));
+        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
+            return Result::failure(::media::ErrorInfo::invalidArgument("TS series field is not representable"));
+    }
+    if (input >> token) return Result::failure(::media::ErrorInfo::invalidArgument("TS series contains extra fields"));
+    const bool audio = mux.audioVideoProgram() != nullptr;
+    if (!values[0] || !values[1] || !values[2] || !values[6] || !values[7] || !values[8] ||
+        (audio ? (!values[3] || !values[4] || !values[5]) : (values[3] || values[4] || values[5])))
+        return Result::failure(::media::ErrorInfo::invalidArgument("TS series presence differs from program"));
+    std::optional<MediaTsMediaSeriesBound> audioBound;
+    if (audio) audioBound = MediaTsMediaSeriesBound{values[3], values[4], values[5]};
+    MediaTsProtocolSeriesBounds bounds{{values[0], values[1], values[2]}, audioBound, values[6], values[7], values[8]};
+    auto valid = MediaTsProtocolSeriesBoundsPlanner::validate(mux, bounds);
+    return valid ? Result::success(bounds) : Result::failure(valid.error());
 }
 
 ::media::Result<MediaTsDatagramEmissionPlan> decodeEmission(
@@ -580,6 +619,7 @@ bool sameProtocol(
     return setOptions(graph, nodeId, {
         {SessionKey, sessionKey.value()},
         {PlanKey, encodeMux(output.protocol.muxPlan())},
+        {SeriesBoundsKey, encodeSeries(output.seriesBounds)},
         {VariantKey, "udp"},
         {UdpKeys[3], udp.url},
         {UdpKeys[4], "byte_sink"},
@@ -651,6 +691,7 @@ bool sameProtocol(
     return setOptions(graph, nodeId, {
         {SessionKey, sessionKey.value()},
         {PlanKey, encodeMux(output.protocol.muxPlan())},
+        {SeriesBoundsKey, encodeSeries(output.seriesBounds)},
         {VariantKey, "rtp"},
         {RtpKeys[3], familyName(sender.addressFamily())},
         {RtpKeys[4], remoteRtp.numericAddress()},
@@ -749,6 +790,8 @@ bool sameProtocol(
             scheduledBatchMaximumBytes.error());
     }
     auto endpoint = parseRtpUdpUrlEndpoint(url.value());
+    auto series = decodeSeries(node.options, protocol.muxPlan());
+    if (!series) return Result::failure(series.error());
     auto emission = decodeEmission(node.options, protocol.muxPlan());
     if (!endpoint || endpoint.value().scheme != "udp" ||
         !emission ||
@@ -762,6 +805,7 @@ bool sameProtocol(
         std::move(protocol),
         MediaMuxSessionKind::ProjectMpegTs,
         std::move(emission).value(),
+        std::move(series).value(),
         0,
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsUdpOutputPlan>,
@@ -904,6 +948,8 @@ bool sameProtocol(
         originUsername.value(), std::move(reporting).value());
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
+    auto series = decodeSeries(node.options, protocol.muxPlan());
+    if (!series) return Result::failure(series.error());
     auto emission = decodeEmission(node.options, protocol.muxPlan());
     auto scheduledBatchMaximumBytes = parseUnsignedOption<std::uint64_t>(
         node.options, ScheduledBatchMaximumBytesKey, false);
@@ -938,6 +984,7 @@ bool sameProtocol(
         std::move(protocol),
         MediaMuxSessionKind::ProjectMpegTs,
         std::move(emission).value(),
+        std::move(series).value(),
         scheduledBatchMaximumBytes.value(),
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsRtpOutputPlan>,
@@ -953,6 +1000,8 @@ bool sameProtocol(
     MediaTranscodeStreamSet streamSet,
     const MediaProjectMpegTsRuntimeOutputPlan& outputPlan)
 {
+    auto seriesValid = MediaTsProtocolSeriesBoundsPlanner::validate(outputPlan.protocol.muxPlan(), outputPlan.seriesBounds);
+    if (!seriesValid) return seriesValid;
     const MediaNode* node = graph.findNode(nodeId);
     auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
     const bool typedVideoOnly =

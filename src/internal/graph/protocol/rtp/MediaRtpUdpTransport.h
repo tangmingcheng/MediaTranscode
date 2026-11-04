@@ -3,13 +3,16 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpChannel.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransportPhaseController.h"
 #include "internal/graph/runtime/network/MediaUdpSocket.h"
+#include "internal/graph/runtime/storage/MediaOwnedByteStorage.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 
@@ -26,7 +29,14 @@ struct MediaRtpUdpTransportConfig final {
 
 struct MediaRtpUdpDatagram final {
     MediaRtpUdpChannel channel;
-    std::vector<uint8_t> bytes;
+    MediaOwnedByteStorage bytes;
+
+    MediaRtpUdpDatagram(MediaRtpUdpChannel value, MediaOwnedByteStorage payload)
+        : channel(value), bytes(std::move(payload)) {}
+    MediaRtpUdpDatagram(const MediaRtpUdpDatagram&) = delete;
+    MediaRtpUdpDatagram& operator=(const MediaRtpUdpDatagram&) = delete;
+    MediaRtpUdpDatagram(MediaRtpUdpDatagram&&) noexcept = default;
+    MediaRtpUdpDatagram& operator=(MediaRtpUdpDatagram&&) = default;
 };
 
 class MediaRtpUdpIngressReceiveLease final {
@@ -95,10 +105,12 @@ public:
     MediaRtpUdpTransport(const MediaRtpUdpTransport&) = delete;
     MediaRtpUdpTransport& operator=(const MediaRtpUdpTransport&) = delete;
 
-    static ::media::Result<MediaRtpUdpTransport> open(const MediaRtpUdpTransportConfig& config);
+    static ::media::Result<MediaRtpUdpTransport> open(
+        const MediaRtpUdpTransportConfig& config, std::pmr::memory_resource& storage);
 
     ::media::Result<MediaRtpUdpDatagram> receive();
     ::media::Result<MediaRtpUdpDatagram> receive(int timeoutOverrideMs);
+    ::media::Status releaseReceiveStorage();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     ::media::Status reset() noexcept;

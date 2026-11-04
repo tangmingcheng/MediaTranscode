@@ -17,6 +17,11 @@ struct MediaVideoCanvasRetentionPlan final {
 
 class MediaVideoCanvasRetentionPlanner final {
 public:
+    // The direct output route is planned before source admission. The graph
+    // overload validates the actual route and consumes this same calculation.
+    static ::media::Result<MediaVideoCanvasRetentionPlan> plan(
+        const MediaEdgePolicy& outputPolicy,
+        const MediaPreparedEncoderEmissionEnvelope& encoder);
     static ::media::Result<MediaVideoCanvasRetentionPlan> plan(
         const MediaGraph& graph, MediaNodeId aggregate,
         const MediaPreparedEncoderEmissionEnvelope& encoder);

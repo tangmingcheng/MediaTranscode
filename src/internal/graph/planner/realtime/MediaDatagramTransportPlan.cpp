@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramPacingRatePlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/planner/realtime/MediaRealtimeNetworkResourceLedgerPlanner.h"
+#include "internal/graph/nodes/output/MediaRtpWireCommitState.h"
 
 #include <algorithm>
 #include <limits>
@@ -112,12 +113,23 @@ MediaDatagramTransportPlanTemplate::create(
         return Result::failure(
             ::media::ErrorInfo::invalidArgument(out.str()));
     }
+    auto topology = mediaDatagramProtocolTopology(facts.resources.protocolLayout);
+    if (!topology) return Result::failure(topology.error());
+    if (remoteEndpoints.size() != topology.value().endpointRoles.size()) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Transport endpoints do not match the planned protocol topology"));
+    }
     try {
         std::unordered_set<std::uint64_t> endpointIds;
         std::unordered_set<std::uint8_t> endpointRoles;
         endpointIds.reserve(remoteEndpoints.size());
         endpointRoles.reserve(remoteEndpoints.size());
         for (const auto& endpoint : remoteEndpoints) {
+            const auto roles = topology.value().endpointRoles;
+            if (std::find(roles.begin(), roles.end(), endpoint.role) == roles.end()) {
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "Transport endpoint role is outside the planned protocol topology"));
+            }
             if (endpoint.endpointId == 0 || endpoint.port == 0 ||
                 endpoint.role == MediaDatagramProtocolEndpointRole::Unknown ||
                 endpoint.addressFamily != facts.localPorts.addressFamily ||
@@ -162,13 +174,12 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Datagram activated wire pacing demand exceeds its provisioned service capacity"));
         }
-        const auto endpointCount = static_cast<std::uint64_t>(
-            m_encoding.remoteEndpoints.size());
         auto resourceLedger =
             MediaRealtimeNetworkResourceLedgerPlanner::plan(
                 deployment.latency, deployment.observation,
                 m_encoding.wireTraffic,
-                deployment.localPorts.addressFamily, endpointCount);
+                deployment.localPorts.addressFamily, deployment.resources.protocolLayout,
+                deployment.resources.rawRtpProducers, deployment.resources.mpegTsProducer);
         if (!resourceLedger) {
             return Result::failure(resourceLedger.error());
         }
@@ -252,7 +263,7 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
                 resources.maximumBacklogDatagrams,
                 resources.maximumBacklogBytes,
                 deployment.latency.maximumResidence,
-                true}, // The userspace sender owns one active batch at a time.
+                resources.commitBeforeNextReservation},
             MediaDatagramBatchPlan{
                 resources.maximumBatchDatagrams,
                 resources.maximumBatchBytes},
@@ -263,9 +274,23 @@ MediaDatagramTransportPlanTemplate::activate(std::uint64_t generation) const
             std::move(evidence)};
         auto decoded = MediaDatagramShapingPlan::decode(std::move(shaping));
         if (!decoded) return Result::failure(decoded.error());
+        auto topology = mediaDatagramProtocolTopology(deployment.resources.protocolLayout);
+        if (!topology) return Result::failure(topology.error());
+        std::vector<MediaRtpProtocolStoragePlan> instances;
+        instances.reserve(topology.value().rtpInstances.size());
+        for (const auto& roles : topology.value().rtpInstances) {
+            auto rtp = endpointId(roles.rtp);
+            auto rtcp = endpointId(roles.rtcp);
+            if (!rtp || !rtcp) return Result::failure(!rtp ? rtp.error() : rtcp.error());
+            auto storage = MediaRtpWireProtocolState::reservationStorageGeometry(
+                resources.maximumBacklogDatagrams);
+            if (!storage) return Result::failure(storage.error());
+            instances.push_back({rtp.value(), rtcp.value(),
+                resources.maximumBacklogDatagrams, storage.value()});
+        }
         return Result::success(MediaDatagramTransportPlan{
             std::move(decoded).value(),
-            std::move(localEndpoints)});
+            std::move(localEndpoints), std::move(instances), resources.commitStorage, resources.rawRtpStorage});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "activated Datagram transport plan"));

@@ -5,8 +5,8 @@
 
 namespace media::ffmpeg::graph {
 
-MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config)
-    : m_config(std::move(config))
+MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation)
+    : MediaRtpDepacketizer(std::move(allocation)), m_config(std::move(config))
 {
 }
 
@@ -14,7 +14,7 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
 {
     if (packet.payloadType != m_config.payloadType) return ::media::Result<MediaRtpDepacketizerResult>::failure(
         ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC RTP payload type changed"));
-    auto headerPlan = MediaAacRtpAuHeaderPlanner::plan(packet.payload);
+    auto headerPlan = MediaAacRtpAuHeaderPlanner::plan(packet.payload, allocation());
     if (!headerPlan) return ::media::Result<MediaRtpDepacketizerResult>::failure(headerPlan.error());
     const auto& headers = headerPlan.value().accessUnits;
     const std::size_t payloadOffset = headerPlan.value().payloadOffset;
@@ -51,7 +51,7 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
                     ::media::ErrorInfo::invalidArgument(
                         "AAC MPEG4-GENERIC fragmented AU ended before its planned size"));
             }
-            return ::media::Result<MediaRtpDepacketizerResult>::success({});
+            return ::media::Result<MediaRtpDepacketizerResult>::success(MediaRtpDepacketizerResult{allocation()});
         }
         if (!packet.marker) {
             m_fragmentedAccessUnit.reset();
@@ -70,7 +70,7 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
             return ::media::Result<
                 MediaRtpDepacketizerResult>::failure(unit.error());
         }
-        MediaRtpDepacketizerResult result;
+        MediaRtpDepacketizerResult result{allocation()};
         result.accessUnits.push_back(std::move(unit).value());
         return ::media::Result<MediaRtpDepacketizerResult>::success(
             std::move(result));
@@ -92,14 +92,14 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
             std::vector<std::uint8_t>(
                 packet.payload.begin() + payloadOffset,
                 packet.payload.end())});
-        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        return ::media::Result<MediaRtpDepacketizerResult>::success(MediaRtpDepacketizerResult{allocation()});
     }
     if (totalAuBytes != payloadBytes) {
         return ::media::Result<MediaRtpDepacketizerResult>::failure(
             ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC aggregate AU sizes do not partition payload"));
     }
 
-    MediaRtpDepacketizerResult result;
+    MediaRtpDepacketizerResult result{allocation()};
     result.accessUnits.reserve(headers.size());
     std::size_t offset = payloadOffset;
     const uint64_t firstIndex = headers.front().index;

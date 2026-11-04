@@ -24,11 +24,12 @@ using MediaRtcpObservation = std::variant<MediaRtcpObservationAccepted, MediaRtp
 
 class MediaRtcpSenderReportTracker final {
 public:
-    explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config);
+    explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
+        MediaLineageAllocationScope allocation);
 
     void observeMedia(uint32_t ssrc, int64_t observedAtNs);
     void observeContinuityLoss() noexcept;
-    ::media::Result<MediaRtcpObservation> observe(const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs);
+    ::media::Result<MediaRtcpObservation> observe(const MediaRtcpPackets& packets, int64_t observedAtNs);
     ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;
     ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(
         int64_t observedAtNs);
@@ -38,13 +39,13 @@ public:
 private:
     struct PendingRtcpSource final {
         MediaRtcpSenderReport senderReport;
-        std::vector<uint8_t> cname;
+        MediaRtcpBytes cname;
         int64_t observedAtNs;
     };
 
     void invalidate() noexcept;
     ::media::Status observePendingSource(
-        const std::vector<MediaRtcpPacket>& packets,
+        const MediaRtcpPackets& packets,
         int64_t observedAtNs);
     ::media::Status observeSenderReport(const MediaRtcpSenderReport& report, int64_t observedAtNs);
     ::media::Status observeSdes(const MediaRtcpSdesChunk& chunk, int64_t observedAtNs);
@@ -54,7 +55,7 @@ private:
     std::optional<PendingRtcpSource> m_pendingSource;
     std::optional<MediaRtcpSenderReport> m_senderReport;
     std::optional<MediaRtcpNtpTimestamp> m_lastAcceptedNtp;
-    std::vector<uint8_t> m_cname;
+    MediaRtcpBytes m_cname;
     int64_t m_senderReportObservedAtNs;
     int64_t m_cnameObservedAtNs;
     uint64_t m_generation;

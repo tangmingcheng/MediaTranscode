@@ -47,9 +47,11 @@ bool highProfile(std::uint32_t profile) noexcept
 
 ::media::Result<MediaSize> MediaH264SpsCodedSizeParser::parse(
     std::span<const std::uint8_t> sps,
-    std::optional<MediaVideoColorRangeFact>* colorRange)
+    std::optional<MediaVideoColorRangeFact>* colorRange,
+    std::optional<MediaRational>* sampleAspectRatio)
 {
     if (colorRange) colorRange->reset();
+    if (sampleAspectRatio) sampleAspectRatio->reset();
     if (sps.size() < 4 || (sps[0] & 0x1f) != 7) return invalidSps();
     BitReader reader(sps.subspan(1));
     std::uint32_t profile = 0;
@@ -115,9 +117,14 @@ bool highProfile(std::uint32_t profile) noexcept
     if (croppedWidth >= codedWidth || croppedHeight >= codedHeight ||
         codedWidth > std::numeric_limits<int>::max() ||
         codedHeight > std::numeric_limits<int>::max()) return invalidSps();
-    if (colorRange && (sps[0] & 0x80U) == 0 && (sps[0] & 0x60U) != 0 &&
+    if ((colorRange || sampleAspectRatio) && (sps[0] & 0x80U) == 0 && (sps[0] & 0x60U) != 0 &&
         (highProfile(profile) || profile == 66 || profile == 77 || profile == 88 || profile == 183))
-        *colorRange = MediaSpsVuiParser::h264(reader);
+        {
+        if (const auto facts = MediaSpsVuiParser::h264(reader)) {
+            if (colorRange) *colorRange = facts->color;
+            if (sampleAspectRatio) *sampleAspectRatio = facts->sampleAspectRatio;
+        }
+    }
     return ::media::Result<MediaSize>::success(MediaSize{
         static_cast<int>(codedWidth - croppedWidth),
         static_cast<int>(codedHeight - croppedHeight)});

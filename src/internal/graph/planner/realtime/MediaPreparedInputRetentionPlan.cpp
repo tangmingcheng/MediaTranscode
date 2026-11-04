@@ -6,27 +6,23 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-bool valid(const MediaPreparedInputRetentionStream& stream)
+bool MediaPreparedInputRetentionStream::valid() const noexcept
 {
-    return stream.maximumUnits > 0 &&
-        stream.maximumUnits <= static_cast<std::size_t>((std::numeric_limits<int>::max)()) &&
-        stream.maximumUnitBytes > 0 &&
-        stream.maximumUnitBytes <= (std::numeric_limits<std::uint64_t>::max)() / stream.maximumUnits &&
-        stream.maximumBytes == stream.maximumUnitBytes * stream.maximumUnits &&
-        stream.maximumBytes >= stream.maximumUnitBytes &&
-        stream.maximumBytes <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) &&
-        !stream.authority.empty();
+    return maximumUnits > 0 &&
+        maximumUnits <= static_cast<std::size_t>((std::numeric_limits<int>::max)()) &&
+        maximumUnitBytes > 0 &&
+        maximumUnitBytes <= (std::numeric_limits<std::uint64_t>::max)() / maximumUnits &&
+        maximumBytes == maximumUnitBytes * maximumUnits &&
+        maximumBytes >= maximumUnitBytes &&
+        maximumBytes <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) &&
+        !authority.empty();
 }
-
-} // namespace
 
 ::media::Status MediaPreparedInputRetentionPlan::validate() const
 {
-    if (acquisitionWindow.nanoseconds() <= 0 || !valid(video) || !valid(audio)) {
+    if (acquisitionWindow.nanoseconds() <= 0 || !video.valid() || (audio && !audio->valid())) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "prepared input retention requires bounded audio/video acquisition products"));
+            "prepared input retention requires bounded acquisition products for every present stream"));
     }
     return ::media::Status::success();
 }
@@ -68,7 +64,7 @@ MediaPreparedInputRetentionPlanner::planStream(
         static_cast<std::size_t>(units.value()), bytes.value(),
         payload.maximumPayloadBytes,
         std::move(cadenceAuthority) + "+acquisition-window+sealed-replay+" + payload.authority};
-    if (!valid(result)) return Result::failure(::media::ErrorInfo::invalidArgument(
+    if (!result.valid()) return Result::failure(::media::ErrorInfo::invalidArgument(
         "input retention exceeds serialized payload capacity range"));
     return Result::success(std::move(result));
 }

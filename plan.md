@@ -1,8 +1,75 @@
 # 当前任务：固定实时视频合屏
 
+## 当前进度：2026-10-28 r367
+
+PreparedPush显式分配域与reservation常驻费用已贯通，均双独立源码PASS；Release91686 configure/build均0（755项），realtime6602752 bytes、18:58:39。r365完成三格→黑→重入左下恢复→黑四张VLC原生快照，四源exit0、CLI caller_stop0，payload224456匹配回零，errors/pressure/deadline_misses均0。外部CPU均值2.025%、WS峰269271040，内部raw_phase绝对最大13606ns；VLC错误/警告已保留，不能据此判完整目标通过或旧间歇故障修复。16项产物及六PID已清理，详docs/realtime-composition-r365-validation.md。
+
+authorize临时存储显式owner已完成双审及Release43515构建；后续reservation构图前几何封印已补齐23源码消费链，获两名独立审查源码PASS。2026-10-28全量重建24865失败：Preflight头把实际类型别名错误前置声明为class（C2371及继发C2440/C2672）。已改为包含真实类型头并重新冻结，双方复审明确PASS；第二次全量构建5545成功，configure/build均0（756项），realtime6613504 bytes、2026-10-28 17:59:41。r366实流FAIL：重入阶段发送预约期限错误导致CLI exit1；首帧interval miss亦再次出现。初始三格和全黑快照有效，第三张重入画面晚于失败不能证明持续输出，无第四阶段证据。四次源均3600帧/120秒exit0；payload134880匹配回零，errors2。最坏等待请求211140ns、API实际29761500ns；不判根因已确定。15项产物已清理、六PID不存在，详r366验证文档。
+
+完整G仍欠协议队列/AU动态成本、早期/最终共享holder事实与联合容量求值；已封印的reservation成本当前仅作footprint/溢出检查，不能代表总容量准入。noncadence门禁保持。完整Windows矩阵、内容级A/V、C API/旧ABI、周期维护及Windows之后RKMPP仍未完成，不新增外部FFmpeg修复范围。
+
+r366后续正在实施按代际首AU/解码/过滤/真实发布/aggregate关联诊断，不改状态机或期限。完整16源码已冻结，覆盖原子/直接/延后发布与实际中间节点；两名独立审查者全单元明确源码PASS；Release11274因诊断头缺少MediaNodeId直接定义失败；已补真实头文件并获双人复审PASS。第二次全量重建63158成功（757项，configure/build0），realtime6630400 bytes、18:34:29。r367四阶段VLC原生快照均核验CLI存活，caller_stop0、四源exit0、payload246709匹配零、errors0；16产物和六PID已清理。新证据表明首AU正确发布但其区间已落后aggregate cursor，不能仅凭首帧前interval_miss判为解码丢帧或违反恢复契约；完整连续性/内容AV仍未证明，r366发送等待问题也未判修复。详r367记录。另当前主图与动态worker均未消费High优先级，独立源码调查已确认，方案单独整理，尚无证据证明这是29ms等待的根因。
+
+统一预算与接线计划：docs/realtime-composition-full-storage-admission-plan.md；逐项实现记录：docs/realtime-composition-startup-storage-remaining.md。既往r363/r364结果见各自独立验证文档，不替代最新产物验收。
+
+## 历史阶段记录（当时状态，不替代上述当前进度）
+
+完整G贯通方案已集中到docs/realtime-composition-full-storage-admission-plan.md：固定/协议基项不重复扣B，AU/handoff动态成本与startup holder并计，audio Na独立于video cadence，decoded Nv与压缩AU容量分离，最后验证actual图/owner/容量一致。当前正在实施Session独立audioRetention→admission→prepared view→SourcePlanner/startup一致性链，尚未冻结或构建；noncadence门禁保持。
+
+
+cancel取消路径已复用预分配通道/锁数组，移除两次临时vector分配，双独立源码PASS；Release全量重建40916 exit0（755项），最新realtime6591488 bytes、17:54:57。此改动晚于r362，未新增实流验收；普通caller-stop不能证明持有预约的取消分支，覆盖缺口保留。完整G继续按early holder→成本峰→同预算容量反解→decoded消费者→最终图一致性推进。
+
+
+Extractor精确staging与shared对象封印工厂接线已双独立源码PASS，Release全量重建48554 exit0（755项），realtime6591488 bytes、17:42:50。r362同规格三源120秒+选中AV120秒重入完成，四张VLC原生快照三格→黑→左下恢复→黑，caller_stop0、四源exit0；payload220671匹配回零，无interval miss/deadline miss。本轮外部CPU均值2.048%、WS峰269651968，内部phase绝对最大13606ns；VLC错误/迟到警告保留。此cadence规格不替代Prepared/noncadence或完整G验收，不判旧间歇故障修复。16产物与六PID已清理，详docs/realtime-composition-r362-validation.md。下一项为reservation取消路径复用预分配锁数组及完整G剩余成本。
+
+
+Extractor staging实际backing已改为release同scope的精确容量存储，局部RAII构造完整后发布，背压保持/原清理时机不变；两名独立源码审查PASS。此修改晚于r361，尚未构建或运行，不能沿用r361结果宣称通过。prepared对象工厂成本与owner产品仍在实施，完整G未闭合。
+
+
+r360在普通执行环境下输入探测零包失败，未建立媒体链路；同二进制/参数以具备本机访问权限方式运行r361后正常输出。r361完整三源120秒及选中源120秒重入完成，四张VLC原生快照确认三格→黑→左下恢复→黑；caller_stop0、四源exit0，payload224514匹配且归零，最终无interval miss、deadline_misses0。VLC转换器/read错误与迟到警告保留，不判完整验收通过，也不判历史间歇故障已修复。内核ETW启动被OS以0x5拒绝，未采集。r360/r361临时文件均已清理，r361六PID无残留。详docs/realtime-composition-r360-validation.md与r361-validation.md。下一步继续完整G实际allocation成本接线；发送期限归因和完整Windows矩阵仍未完成。
+
+本轮继续：启动route描述已由SegmentBuilder实际建图与EventMediaPlanner共同消费；审查发现的assembly timing/startup readiness单向检查已改为构图前双向一致性门禁，两名独立审查者复审PASS。等待诊断追加实际Windows PID/TID与QPC频率供ETW关联，保持原错误/期限，同样双独立源码PASS。Release全量重建62105 exit0（754项），configure/build均0；realtime6581760 bytes、17:17:27，cache/ninja/两个CLI产物已核验，未执行local CLI。已核对本机xperf支持调度/timer事件和导出；未启动追踪，无新实流结果。当前不需要WER注册表配置。完整G与原Windows/RKMPP验收仍未闭合。
+
+r357/r358 interval miss已补固定诊断：同代firstcandidate/firstreal at_miss与final、epoch时刻、prepare丢弃及cursor最终提交；原策略与miss条件不变。两名非实现者独立源码PASS，Release全量重建30330 exit0，最新realtime6577152 bytes、16:53:34；r359已执行但发送期限FAIL退出1：Windows等待请求201740ns，API wall37827300ns；最终无interval miss记录但提前失败，不判旧问题修复。payload160209回零，第四VLC快照为停流旧画面，16产物已清理。详docs/realtime-composition-r359-validation.md。见docs/realtime-composition-interval-miss-observation-plan.md。
+
+GenerationState实际shared control几何和固定footprint已接入，Coordinator两路pending改为内嵌optional引用，消除仅持一项的deque backing。两项均双独立源码PASS，Release全量重建83379 exit0；最新realtime为6566400 bytes、16:34:17。r358原规格三源与完整120秒AV重入回归已执行：四张VLC原生快照观察三格→黑→左下恢复→黑，caller_stop0、payload224041预约=释放且归零，16产物已清理。最终summary再次记录source2 generation2 interval miss cursor4303，VLC转换器错误和迟到警告保留，不判连续性或完整验收通过。详见docs/realtime-composition-r358-validation.md。完整G、非cadence入口与最终验收仍未闭合。
+generation hash 的类型化容量与实际分配门禁已接线，保留既有去重和代际清理语义；冻结版本获两名独立审查者源码PASS，Release全量重建95771 exit0（753项），最新realtime为6567424 bytes、16:26:30。本单元未新增实流验证。源码复核另确认：shared control 的几何必须使用实际 allocator 类型，不能直接套用其他 allocator 的探测结果；Coordinator 两个 pending deque 在普通和 barrier 入口均仅允许一个待处理项，但其 backing 分配仍须计入完整存储成本。shared control与完整G仍为调查/待实施项，未通过完整存储或非cadence实流验收。
+
+后续准备存储实现：Store索引几何/四角色上限、探测临时head计费、Store与Coordinator本体PMR独占所有权已接线，相关单元均双独立源码PASS；最新Release全量重建40183 exit0。最新这些改动尚未实流验证，r357仅代表此前构建。generation hash、完整G及非cadence入口仍待完成，见docs/realtime-composition-presentation-capacity-plan.md。
+
+snapshot准备期scratch及IDs/selections精确容量已完成，两独立审查分别PASS、组合复审PASS，Release全量重建85439 exit0。r357同规格TS/UDP已观察三格→全黑→选中源重入→全黑，caller_stop0、payload223823预约=释放并归零，16产物已清理。但source2重入generation2出现first_interval_miss cursor4277（候选/channel均空），原因待定位；不判重入连续性或完整验收通过。详见docs/realtime-composition-r357-validation.md。
+
+释放批次引用数组已改为精确容量存储，必要reanchor接线完成，两独立审查PASS、Release全量重建37415 exit0。r356三源H264/AAC→HEVC CBR8000kbps 1280×720/30、AAC CBR192kbps TS/UDP的失源与完整120秒重入观察通过，caller_stop0、payload222831预约=释放且回零；四张VLC原生快照已实际查看，16项产物已清理。VLC迟到警告及sender最大迟到9527700ns保留，不替代完整门禁。详见docs/realtime-composition-r356-validation.md。
+
+滤镜成功接受输入后因输出背压重复提交的状态缺陷已修正；跨调用立即单输出计数、GPU引用及purge清理获两名独立审查PASS，Release全量重建成功。r353单源原规格持续120秒未复现原TS期限失败，但源BYE后进入重新获取并按既有策略ProgressTimeout退出1，整体FAIL记录保留，不改判SourceCompleted。
+
+r354最新三源H264/AAC→HEVC CBR8000kbps 1280×720/30、AAC CBR192kbps TS/RTP正常输出与全部失源黑屏观察通过，VLC原生快照已核验，caller_stop0、payload116929预约=释放并回零，产物清理完成。r355同一最新构建TS/UDP与选中AV源完整120秒重入观察通过，四张VLC原生快照确认三格→黑→左下重入→黑，caller_stop0、payload230773预约=释放并回零；2次硬边界WouldBlock计数保留，16产物已清理。详见对应验证文档。
+
+总目标仍未完成：周期维护忙期规划、完整存储预算、非cadence/四源HEVC重排、内容级AV/静音、直接C API与旧ABI、全Windows矩阵以及后续RKMPP均须保留门禁；单项真实链路观察不替代这些要求。当前仅本地开发验证，不推送、合并或部署。
+
+
+## 最新进度：r244
+
+RTP 协议预留账本已复用固定容量存储，两个独立审查者修订后限定 PASS；首构建语法错误已修正，Release 全量重建会话81373 exit0。完整网络存储准入及 TS 封装后 AU 上界仍未完成，已完成同规格三源失源/重入及caller-stop复验，四次VLC原生快照已检查、临时产物已清理；完整门禁仍未通过，详见 docs/realtime-composition-r244-validation.md。详见 docs/realtime-composition-r244-rtp-reservation-storage.md。
+
+### 2026-10-16 r239–r243：存储域接线与原规格复验，整体仍未通过
+
+保证准备额度、公共PMR/预算域、网络global账本及数组实际计费已实现；创建异常双重释放修复、固定容量存储及各实施切片已双独立限定审查和Release全量重建。网络全链计费及足额准入尚未证明，串行门控仍保留。
+
+[r243原规格记录](docs/realtime-composition-r243-validation.md)：三路120秒H264源→HEVC720p30 CBR8000kbps/AAC192kbps MPEGTS/RTP，重入源同规格120秒；VLC原生快照确认三格、全黑、左下重入及再次全黑，caller_stop退出0，最终媒体额度231309预约=释放且归零。17件临时产物和测试进程已清理。一次未复现不等于r239串行阻塞已修复，也不替代内容AV/静音、四源异构重排、C API矩阵及Windows后RKMPP门禁。
+
+下一步按[网络存储边界](docs/realtime-composition-r243-network-storage-domain.md)形成planner生产者身份与协议请求几何，覆盖完整存活分配后再评估多reservation；不采用endpoint数推断并发数或经验容量倍数，不新增外部FFmpeg修复范围。
+
+### 2026-10-16 r236–r238：CUDA隔离与关联诊断完成，完整门禁仍75/FAIL
+
+CUDA canvas私有nonblocking stream、只读黑底ready事实、默认stream host完成屏障与RAII已实现；r236约73秒物化超期，r237约21秒scheduler迟交，均完整归档且清理。reservation三谓词与单head缺流等待诊断经双独立审查、Release全量重建；r238运行约319秒无runtime错误，四次120秒源exit0，caller_stop0，payload230047预约=释放且归零。VLC原生快照覆盖三格、首次全黑与重入；播放器暂停来源不明，末次失源黑屏未证实，未记完整通过或根因修复。详见r236/r237/r238验证记录。
+
+独立质量复核维持75/100。C API已经实现（含已批准输入事实和音频目标码率），其完整矩阵及旧ABI回归尚未闭合，不再标作未实现。确定缺口仍为非cadence SourcePresentation入口、四源HEVC输入重排、内容级AV/静音、完整Windows与后续RKMPP。下一实施先做会话级可消费保证准备额度并接实际allocator，区分compressed AU、decoded metadata和runtime像素收费；不得用准备预算除逻辑像素、均分预算或删除门禁。发送期限问题保留，后续原规格验证同时采集同AU等待与播放状态。无外部FFmpeg改动、无推送合并部署。
+
+
 用户已批准分两阶段实施，详见 [合屏计划](docs/realtime-video-composition-plan.md) 与 [实施记录](docs/realtime-video-composition-progress.md)。以下保留此前计划和未完成事项，不因本轮任务覆盖历史状态。
 
-当前推进：同一最终拓扑现可推导独立输出池驻留数量，bind复算并复用实际encoder回读检查；数量不是准备预算。下一步接原deadline/cancellation下的有界资源准备和实际readback多源总账，再接公共多源事务。见[输出池驻留](docs/realtime-video-composition-pool-retention.md)。仅realtime原规格验证。
+当前推进：[完整生产纵向接线](docs/realtime-video-composition-production-wiring.md)：多源并发准备、source/output/aggregate规划、同图owner总准入和唯一输出资源闭环，共用realtime执行控制器。先实际AV+AV，再同链V；完整2～4源及恢复/双平台门禁保持。当前已完成多轮Windows多源真实运行；r148合屏C入口正常输出生命周期双审有限PASS，完整验收未通过。最新证据及未完成项以合屏计划顶部进度为准。
 
 # 可复用工业级 Datagram 发送控制与核心参数收口
 
@@ -664,3 +731,160 @@ r58逐节点账本证实VideoEncode abort释放4项，旧final在作用域RAII r
 ## 2026-09-29 无效终止窗口依赖清理
 
 删除从音频servo派生但没有运行时消费者的terminalDrainWindow，保留实际确认超时与终止状态机。源码双独立审查与Release全量重建通过；r60原规格realtime结果见[记录](docs/realtime-video-composition-transition-contract.md)。这是纯V接线的依赖清理，完整prepared/planner/builder、多源控制器与总准入、恢复和双平台门禁仍未完成；六维10/8/6/12/2/4=42/100，完整FAIL。
+
+
+## 2026-10-05 合屏显式停止入口（r100–r103）
+
+realtime CLI新增RAII系统信号适配器，Ctrl+C/Break转交既有controller.requestStop，POSIX仅bridge接收信号防止媒体poll被中断。四文件源码双独立PASS，Release全量重建exit0。Windows四源120秒H264/AAC→HEVC VBR8000/8000/12000kbps、1280×720/30、AAC CBR192kbps、MPEG-TS/RTP，全失活黑场后Ctrl+C得到CallerStop/exit0、worker0、payload0及预留释放平衡；双独立运行证据复核PASS。合屏准备取消得到Cancelled/exit1。r100宿主终止及r101超时保留失败证据。26件本轮临时产物和进程已清理。完整能力仍未通过，后续门禁与命令详见[当前合屏计划](docs/realtime-video-composition-plan.md)和[真实记录](docs/realtime-video-composition-wiring-runtime.md)；不推送、合并、部署。
+
+
+## 2026-10-05 r104–r106：发送窗口失败与恢复证据
+
+r104/r105原规格Windows四路RTP/RTCP→H264 CBR 8000kbps、1280×720/30＋AAC CBR192kbps→MPEG-TS/RTP失败。r105同一音频AU在emit前17.922139ms已到scheduler，却因缺video等待，mux接收时晚于dispatch133.956661ms；此前maintenance超过dispatch11.655693ms。当前合同没有缺流下一AU的权威DTS下界，不能猜测帧率或放宽窗口规避失败。
+
+r106仅增加成功提交时刻诊断，双独立源码PASS，Release全量684任务成功。四路完整120秒→全黑→选定AV完整120秒恢复右下格→全黑→Ctrl+C正常exit0；payload0B/0对象、203332预留=释放。接收324.185644秒录制支持画面恢复和失源静音，但VLC重新封装启动PTS有一次回退，原始线端连续性、选定音频内容与端到端同步仍待验证。r104/r105未修复，完整功能FAIL；保留独立75/100，不据单次未复现重评分。21件临时产物已逐项清理，命令、指标与证据边界见docs/realtime-video-composition-wiring-runtime.md。未运行local CLI/RKMPP，未提交、推送、合并或部署。
+## 2026-10-05 r109：NVENC输出缓冲契约已实现
+
+内部Immediate产品由planner选择，生产与所有prepared/probe路径共用官方delay=0/zerolatency=1应用及计划值回读；无新增外部参数、依赖修改或规格降低。修正主probe漏校验与FFmpeg只读查询const接口问题后双独立源码PASS，Release全量重建成功。原四路120秒及选定AV重入120秒均完成；CallerStop exit0，payload202418预留=释放、最终0B/0对象。
+
+原始线端180秒覆盖黑场→重入→黑场：94048 RTP包/drop0、无RTP序号及TS CC缺口，视频5400包步长3000、音频7751包步长2089/2090，PTS/DTS无回退。四个离线画面采样支持四格/黑场/右下恢复/黑场；不代表内容级A/V同步、首轮失源边界或长稳。r105未复现但根因未闭合；完整Windows矩阵、共享单路回归、音频内容同步、长稳、C API及RKMPP仍未完成。保留此前75/100及完整功能FAIL，不以局部修复重评分。详见docs/realtime-video-composition-wiring-runtime.md。
+
+## 2026-10-05 r110：HEVC CBR四源复验
+
+原120秒四路RTP/RTCP与选定AV重入120秒→HEVC CBR8Mbps 1280×720/30、AAC CBR192kbps→MPEG-TS/RTP；CallerStop exit0，payload203585预留=释放、末0B/0对象。原始182888包/drop0，RTP/TS连续，视频8935包PTS步3000、音频12826包步2089/2090；四格→黑场→右下恢复→黑场。双独立有限PASS，内容匹配重复多解，内容A/V为UNKNOWN；重入PID缺失。未关闭r105因果、完整矩阵/长稳/C API/RKMPP，完整FAIL及75/100保留。30件产物已按清单清理，原源保留；详见runtime记录。
+
+## 2026-10-05 r112：双路 H.264 VBR 与启动交接取证
+
+原120秒V左/AV右、选定index1，错开约11秒并让右源完整120秒重入；H264 VBR目标/最低8Mbps、最高12Mbps，1280×720/30与AAC CBR192kbps→MPEG-TS/RTP。172858包/drop0，RTP/TS/PTS/PCR连续；五帧支持双路、仅左、黑场、仅右恢复、黑场及DAR留边。CallerStop exit0，payload170757平衡归零。双独立有限PASS，27件产物已清理。
+
+完整音频门禁仍FAIL：额外启动静音0.085873–2.527324秒（原源同阈值无静音），对应输入video序号10048→13450、时钟失效和重新锁定。独立代码调查确认并行capture在非probe阶段预算耗尽可无错误停止drain，runtime先replay后live；未记录本轮预算命中/停止时刻且未抓input，不能据此认定丢包根因。下一步保持相同源规格及启动间隔，关联入站包、capture停止/预算、seal、replay排空及首live序号。禁止猜测扩容或调整规格。内容同步UNKNOWN、r105因果/剩余矩阵/长稳/C API/RKMPP仍待完成，保留75/100。r111共享单路完整结束仍ProgressTimeout/exit1。见runtime完整命令和结果。
+
+## 2026-10-05 r113：启动缺口已定位至本机接收覆盖
+
+单文件prepared capacity_stop/sealed诊断，修正快照竞态及Result访问后双独立PASS、Release全量重建成功。原双路H264 VBR8–12Mbps、720p30、AAC192，同原120秒源及约11秒错开启动，抓input/output304326包/drop0。实际prepared 5MB预算耗尽后停读8.534秒再seal；应用缺3557包在线端启动期对应序列全部存在，排除发送/抓包点缺失。停读尾后已覆盖约5MB，随后出现缺口，与有限socket耗尽高度相容；没有kernel计数，不唯一归因OS。主动purge晚于gap，非首次缺口原因。
+
+启动静音再现2.270998秒；诊断成立不等于修复。CallerStop exit0、payload92095平衡归零，19件产物清理，原源保留。下一项为有限探测与持续live接收阶段、pin/驻留共同预算、稳定退休身份及单owner交接合同；不能直接弹出probe借用deque或猜测扩容。完整功能FAIL/75分及其他门禁保持，未推送/合并/部署；详细命令和因果边界见runtime记录。
+
+## 2026-10-05 r114：持续接收与真实容量设计调查
+
+已形成[准备接收交接设计](docs/realtime-rtp-preparation-handoff.md)：全源共享设备/几何和全图准入阻止直接提前运行单源DAG；选择能力证据与live发布分离方向，继续复用原协议与startup节点。新确认MediaUdpSocket最大容量vector经resize后仍保留capacity，prepared仅size记账；r113的4173×65507=273356631B为元素容量下界，不是heap测量。Linux prepared旧接收还缺截断检测，runtime adapter保护不能替代。
+
+真实容量/租约预算、协议状态连续移交、首次live准入/接管三个具体决策尚未闭合，完整设计未PASS，不先写rolling策略或宣称修复。无新增公共参数/外部依赖，本轮尚无功能代码变更或新实流测试，r113证据和完整FAIL/75分保持。
+
+## 2026-10-05 r115：准备存储生命周期核验
+
+新增确认：初始视频信令 deque 在移交前未 retain；prepared 出队在调用方仍持有载荷时提前 release；runtime arena 创建与旧 prepared/pin 存储重叠。现有 ingress storage 是固定最大报文槽、整批 lease，不能直接替换长期 pin 队列。接口责任与调用点已记入 realtime-rtp-preparation-handoff.md；下一实现需以载荷 owner 携带唯一 RAII 预约，明确 descriptor 容量产品及交接峰值。仅改 size→capacity 不成立。本轮未改生产代码、未构建/实流复验，未完成合屏验收，既有失败与评分保持。
+
+## 2026-10-05 r116：准备内存实际分配预约组件
+
+新增 MediaPreparationMemoryResource 两文件，复用既有 RAII budget/lease，在 std::pmr 分配边界计入请求字节、header 和对齐 padding；每块保活 resource，实际释放后才归还预约。两个独立源码审查均 PASS，Release 全量重建 exit0，新 cpp 已编译；realtime 产物时间20:38:42、5615616B。未测试 local，未运行新实流，未推送。组件尚未接入 prepared 队列，不能标记容量或停读问题修复。下一步接入 payload/descriptor/scratch 的唯一分配 owner、明确 planner 总预算及交接峰值并删除旧队列级重复记账；完整合屏门禁保持未通过。详见准备交接文档 r116；本轮单件构建日志记录后清理。
+
+## 2026-10-08 r117：接收缓冲改动与失败复验归档
+
+共享 receiveInto(span)、单receiver复用scratch及共同交接前释放已实施；Linux拒绝截断，Windows保留原错误传播。两个独立源码审查PASS，Release全量重建exit0。原120秒双路RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP复验，实际首包错峰13.336秒。303315包/drop0、输入输出RTP序号与TS CC连续，4116视频包PTS步3000、5909音频包步2089/2090。
+
+仍FAIL：准备预算满后停读10.089秒，应用缺4867包在线端全部存在；启动静音0.817982秒。离线帧支持双格→仅左→黑场，VLC桌面截图失败，内容A/V同步UNKNOWN。会话恢复后发现CLI延续到22:36发生scheduled datagram deadline失败；未取得最后进程退出码，不能标正常停止/长稳PASS。最终payload1485487预留=释放，0B/0对象。PMR总预算与消费者租约尚未接入；完整矩阵、恢复、可信终止、C API、Windows→RKMPP门禁保持未完成。既有75/100不重评分。
+
+实际命令、PID、指标及证据局限已写入docs/realtime-video-composition-wiring-runtime.md的r117节。23件临时产物已按清单清除，原120秒源保留，五个PID均无残留；没有推送/合并/部署或外部FFmpeg修改。下一实现仍为统一准备存储owner/预算及持续live接收交接，不以晚期失败替换主任务。
+
+## 2026-10-08 r118：PMR 接线构建通过，容量语义 P1 未关闭
+
+prepared 队列/payload/scratch 已接入实际 allocation 预约，移除出队提前释放；Release 全量构建 exit0，realtime 5625856B（12:13:20）。两个独立审查结论不一致，其中一位明确 FAIL：同值 wire/allocation 上限缩短探测窗口，不能以接线成功判定正确。尚未跑本轮实流，完整合屏仍未通过。下一步为收流前固定 descriptor 准备/readback、独立 wire/storage 产品及最终 ledger 每源一次的重叠计费；不得凭经验扩容。完整问题、边界与后续步骤见 docs/realtime-rtp-preparation-handoff.md 的 r118 节。构建日志记录后按单文件清理；无新增公共参数、外部 FFmpeg 修复或推送/部署。
+
+## 2026-10-08 r119/r120：容量语义 P1 源码关闭，真实合屏仍 FAIL
+
+新增内部 MediaRawRtpPreparationStoragePlan/Planner；wire 探测与实际 allocation 上限分离。MediaOwnedByteStorage 精确单次分配，footprint 与实际 allocator 共用布局；复用 MediaFixedCapacityStorage 和 std::remove_if，预分配描述符、原地筛选RTCP，消除deque增长/双队列并存猜测。空报文在transport拒绝，N≤wireBytes为保守数量事实；每流数组在收流前分配。覆盖共享wire载荷/header及每流scratch、一个未observe载荷；未新增公共参数。budget窗口仍用wire，未把约605MB allocation上限误传为探测/ingress payload上限。
+
+r119_storage_review_a/b 对冻结源码均PASS；Release clean-first/all-target exit0，realtime5627904B（13:28:20）。r119因调度导致第二源晚于30秒open而失败，原规格统一调度r120重跑。两源完整120秒exit0、VLC可见双路→左→黑、显式CallerStop exit0且payload102129预约=释放、0B/0对象。
+
+完整验收仍FAIL：准备停读7.633秒，缺2611包在线端全部存在；启动静音3.254467秒，内容A/V UNKNOWN。306351包/drop0，输出TS CC及PTS连续只证明局部时间线。进程188点覆盖准备期，private峰1072721920B、WS峰228687872B；固定描述符过于保守，不能称内存优化。原source124427809B保留，全部本轮进程/临时文件已清理；最终归档命令一度解析失败，清理后依据完整已返回输出立即补记，详见runtime记录。无push/merge/deploy/RKMPP。
+
+下一步仍须完成每源共享prepared allocation与runtime arena重叠的最终ledger、持续接收/稳定pin退休和协议交接，再以原规格复验。C API、完整矩阵、内容同步、恢复/可信停止及Windows→RKMPP门禁未完成；75/100保持。
+
+## 2026-10-08 r121 进度
+
+prepared allocation 已按实际共享身份进入 single/composition 最终 ledger，AV只计一次并与runtime arena相加，节点归属避免动态输出后缀重复计费。双独立源码复审PASS；补缺失<algorithm>后Release全量重建exit0。原120秒双路RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP已复验，CLI caller_stop exit0、payload93426预约=释放/0B/0对象。
+
+整体仍FAIL：准备停读7.705秒，缺2691包在线端全部存在，启动静音3.138231秒，内容A/V UNKNOWN；private峰1077166080B。输出RTP/TS CC/PTS连续仅为局部证据。完整矩阵、恢复、可信EOF、C API与Windows→RKMPP门禁未通过，75/100保持。详见runtime r121记录。22项临时文件已按清单清除（两项短暂占用后重试成功），全部本轮进程无残留，原源124427809B保留；无推送/合并/部署。
+
+## 2026-10-08 r122 进度
+
+稳定immutable entry、独占PMR snapshot及单调ingressFrontier已接入，replay时间独立保存；同allocator/type实际控制块分配回读进入planner容量，释放引用表先于归还probe pin。两个独立源码审查PASS，Release全量重建exit0（realtime5652480B/14:14:11）。原120秒双路RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP复验：caller_stop exit0，payload95082预约=释放/0B/0对象；private峰714657792B，较r121减少362508288B，但保守allocation cap增大。
+
+完整仍FAIL：停读7.689秒、2691缺包线端完整、启动静音3.115102秒、内容A/V UNKNOWN。稳定引用未实现rolling和持续接收；完整矩阵、恢复、可信EOF、C API与Windows→RKMPP门禁未通过，75分保持。详细命令/进程/时间线/边界见runtime r122。20项临时文件已按清单删除，进程无残留，原源124427809B保留；无push/merge/deploy。
+
+## 2026-10-08 r123 进度
+
+已提取可移动单owner MediaRtpInputClockSession，生产RawRtpInputNode复用同一RTCP parser/tracker/schedule；planner必填配置、generation/失效策略/事件顺序保持。双独立源码PASS，Release全量exit0（realtime5654528B/14:31:40）。原120秒双路RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP复验：caller_stop exit0、payload93415预约=释放/0B/0对象；private峰717029376B。
+
+整体仍FAIL：停读7.717秒、2710缺包线端完整、启动静音3.115941秒，内容A/V和VLC完整画面证据不足；完整矩阵、恢复、可信EOF、C API、Windows→RKMPP未通过，保持75分。下一步输入事实可按源提前规划，但需显式观察快照冻结、共享协议处理和AU归属及时间轴交接，不能提前运行未准入DAG或直接删sealed校验。详见准备交接设计与runtime r123。18项临时文件已清理，全部本轮进程无残留，原源124427809B保留，无push/merge/deploy。
+
+## 2026-10-08 r124/r125 进度
+
+每源事实已从应用层等价迁入planner，在各自探测完成后生成；跨源准入仍在汇合后。r124双独立源码PASS、Release全量成功，但实流首次时钟获取超时exit1、输出0，保持FAIL；停读7.709秒和2629线端完整缺口未解决。r125补充时钟组候选NTP/arrival和原拒绝错误诊断，双审复审PASS、全量成功，原规格复验中。没有修改阈值、启用未准入DAG或修复外部FFmpeg。后续需闭合原arrival与live时间轴、共享协议处理和AU归属；完整Windows门禁前不进入RKMPP。
+
+### r124/r125 最终进度（未完成合屏验收）
+
+每源facts提前规划及时钟拒绝诊断均经两名独立审查PASS、Release全量成功。r124首次时钟超时exit1/输出0；r125同规格完整120秒源结束后持续输出、caller_stop exit0且账本归零，但停读7.671秒/2692包线端完整缺口/启动静音3.161043秒仍FAIL，r124超时未复现未判修复。18项r125临时产物已按清单删除，全部本轮PID无残留，原源124427809B保留。详见runtime r124/r125。下一行为修复仍须连续协议会话与真实接收时间、AU归属和启动窗口交接；不扩大外部FFmpeg范围，Windows门禁通过前不进入RKMPP。
+
+### r126 进度
+
+共享MediaRtpInputProtocolSession已接入生产RawRtpInputNode，原pending/reorder/depacketizer/clock/recovery状态同owner；两阶段额度仍由node执行，先预约后组包。双独立源码PASS、Release全量exit0。原120秒真实双路链运行至caller_stop exit0、payload94764预约=释放/0B/0对象；停读7.645秒/2676线端完整缺口/启动静音3.114921秒仍FAIL。明确停止时encoded入出差1包，不记完全drain。18项临时文件已记录后删除，5PID无残留，原源保留。新获授权逐源等待预算开始接线，尚未宣称连续接管或Windows门禁通过。
+
+### r127 进度：逐源等待预算已接线并实测
+
+用户明确允许逐源input-latency-ms/input_latency_ms并要求可配置。CLI及内部typed契约已接入，合屏每源正值必填；同源AV共用，bootstrap/final/bind/validator保持声明值，旧有限probe模式不在失败后回退。旧C ABI无改，新合屏C载体其余字段仍受原提案确认边界约束。
+
+首次构建发现校验误插helper的编译错误，修复后双独立复审PASS、Release全量exit0。真实CLI缺值/0均立即exit2。原120秒双路RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP，节点确认100/200/200ms，caller_stop exit0、payload97545归零。停读7.668秒/2691线端完整缺口/启动静音3.115578秒仍FAIL，未判r124时钟超时修复。18项实流临时产物及4项负例日志均记录后删除，5媒体PID无残留，原源124427809B保留。详见runtime r127。
+
+下一步以稳定wait产品建立不中断接收的观察快照，再接共享protocol session、完成AU的ID/owner与现有coverage/window selector；尚未实施连续退休或会话交接，Windows完整门禁前不进入RKMPP。
+
+### 2026-10-08 r128 进度：输入容量候选与最终核验
+
+非破坏累计快照、逐流弱owner、固定wait容量候选已实接begin→seal，保留stop/join/budget seal；最终检查owner/frontier/五项累计观察不倒退及容量产品一致。初审发现音频晚到提前拒绝，修复为原deadline/cancel内仅对精确缺正时间跨度WouldBlock等待，修复后双独立PASS、Release全量exit0。共享AV预算跨流失败无即时notify仍是有界延迟风险，未宣称全局fail-fast。
+
+无音频补充负例不再立即拒绝，8.42秒因共享prepared容量耗尽/音频capture结束exit1；不记完整30秒等待或完整验收。原120秒双源RTP/RTCP→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP实流caller_stop exit0、payload96931预约=释放/0B/0对象。仍停读7.694秒、2691包线端完整缺口、启动静音3.107302秒，内容A/V UNKNOWN，完整仍FAIL。独立评分复核保持75/100。19项实流/构建临时文件及7项负例产物已记录后逐项删除，全部本轮PID无残留，原源124427809B保留，无外部依赖改动或push/merge/deploy。
+
+下一闭合实施范围：沿共享parser/reorder/depacketizer保留AU完整entry成员与额度，准备首帧probe消费同一session的有界AU产物，按序保存clock/invalidation/AU，再向runtime事务性交接真实arrival、处理ordinal、pending及未完成AU；复用现coverage/window选择退休。当前累计wire预算尚未成为resident预算，不能只放入session指针或按时间删raw包解除停读。完整Windows门禁前不进入RKMPP。详见runtime r128与准备交接文档。
+
+### 2026-10-08 r129 进度：共享时钟组状态核心
+
+生产节点已接入单所有者、可移动的 MediaRtpClockGroupSession，纯协议事件视图不依赖图运行时；保留原消费/快照发布边界。初审缺失mapper完整参数校验已通过复用原validateConfig修复，双独立复审PASS、Release全量exit0。
+
+原120秒双源RTP/RTCP H264/AAC→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP实流caller_stop exit0，payload132796预约=释放、0B/0对象。仍停读7.779秒、2749线端完整包缺口、启动静音2.998549秒，内容A/V UNKNOWN；完整门禁FAIL，独立评分75/100。双画面截图有效，全丢失截图237×39无完整画面覆盖，不计视觉通过。19项产物记录后按清单删除，5个媒体PID无残留，原源124427809B保留。详见runtime r129。未改外部FFmpeg、未push/merge/deploy，Windows完整门禁前不进入RKMPP。
+
+修正r128后续计划中“AU完整entry成员”的不必要要求：现parser payload、组装和最终AVPacket均独立拥有数据；原始entry在协议消费后可释放，不需要为生存期引入AU→raw成员索引。需保留实际pending/未完成AU占用及瞬时复制重叠额度、完成AU独立owner/序号、raw消费frontier。下一范围仍是准备期使用同一protocol/clock核心连续消费、独立有界AU保留、首帧probe复用产物、启动窗口选择与epoch发布分离，再事务性交给runtime；仅移动核心尚未解除停读。
+
+### 2026-10-09 r130：连续准备接收已实接，原规格启动静音回归通过
+
+准备与runtime复用同一协议/时钟会话、AU产物及原接收线程，实际连续预算进入最终ledger。首次双审五项FAIL已修复，第二轮两者PASS；首次编译缺头文件已修复并双复审PASS，随后Release全量699目标exit0。
+
+r130b双源原120秒H264/AAC→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP：两源3600帧exit0，逐源等待100/200ms仅为本次命令值。输入/输出RTP线端连续，TS计数及PTS步长正常，离线未再检测此前约3秒启动静音；双格与全黑完整VLC画面有效。caller_stop exit0，payload104992预约=释放且结束归零，encoded差1包不记完全drain。WS峰241356800B/private峰725454848B；内部漂移155..156ns不代表内容同步。
+
+线端无缺包不能单独证明应用消费全部包；本轮无恢复，完整矩阵、内容A/V、可信EOF、C API及Windows→RKMPP仍未闭合，整体门禁维持FAIL，不调整既有75分。实际命令、PID、失败尝试及数据见runtime r130b；未更改外部FFmpeg，未提交/推送/部署。
+
+### 2026-10-09 r131：所选AV源结束后重入，有限双审PASS
+
+原120秒双源RTP H264/AAC→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP；初始AV、纯视频及重入AV均完整120秒/3600帧exit0。双格→右黑左画面→全黑→仅右格恢复有完整VLC证据，generation2持续工作；27.395556秒失源静音后非静音恢复约118.453秒。输出同SSRC、RTP/TS与PTS连续，caller_stop exit0、payload162868预约=释放归零；encoded差1包及AAC关闭时残留2帧，不计完全drain。两名独立复核均限定PASS：匹配BYE及失活/purge后重入；未覆盖快速SSRC切换、内容A/V、完整矩阵、可信EOF、C API或RKMPP，整体75/FAIL不变。
+
+22项产物记录后逐项清理，六媒体PID无残留，原源124427809B保留。下一项为旧会话尚未失效时快速发送器替换的真实失败取证；不以本轮成功代替该边界，不盲删身份校验。命令和细项见runtime r131。无外部FFmpeg修复，无提交/推送/部署。
+
+### 2026-10-09 r132/r133：快速SSRC替换回归已修复并有限双审PASS
+
+r132原规格快速切换68.812ms复现准备期身份限制沿用runtime导致整图Unsupported/exit1；不是外部FFmpeg问题。3文件修复由planner下发既有生命周期模式，runtime仅允许授权SSRC代际恢复，准备期SSRC及全时PT/媒体契约保持严格；双独立源码PASS、Release全量exit0。
+
+r133原120秒源、双路RTP H264/AAC→H264 VBR8000–12000kbps、1280×720/30、AAC CBR192kbps→MPEG-TS/RTP：切换58.694ms更快，代2恢复，纯视频及新AV各完整120秒exit0，输出RTP/TS/PTS连续。切换静音5.007506秒后非静音114.493106秒；仅VLC录制60秒抽帧证明双格恢复，现场恢复截图未取得，不能记现场视觉门禁通过。caller_stop exit0、payload115446预约=释放归零；encoded差1包/AAC关闭残留2帧，非完全drain。两独立运行复核均限定PASS，不能称无缝恢复。
+
+r132失败13件、r133实际20件产物已记录后清理，各六PID无残留，原源124427809B保留。整体75/FAIL保持：内容A/V、现场恢复画面、完整矩阵、可信EOF、C API和Windows后RKMPP未闭合。下一项在既有完整矩阵验证中补现场恢复证据，继续优先Windows；未提交、推送、部署或修改外部FFmpeg。
+
+### 2026-10-09 r134：三源HEVC CBR门禁FAIL；C API获授权实施
+
+当前Release三源V/V/AV、原120秒、HEVC CBR8Mbps/720p30、AAC192kbps→MPEG-TS/RTP于输出scheduler约334ms晚到时报缺source coordinator，CLIexit1；三源均完整3600帧exit0，重入未执行、截图被遮挡。连续输出错误复用显示/源恢复策略，不能补source coordinator、调阈值或丢HEVC参考包规避。需typed encoded-AU调度合同复用现emit=dispatch-transportLead及下游真实deadline，查实际迟到来源后原规格复验。12项临时产物清理完成（两占用文件重试后成功），六PID无残留，原源保留。
+
+用户已明确批准独立C合屏入口与音频协议事实，以及后续最小audio_bitrate_bps目标字段（正值、精确kbps、无默认，不称CBR）。Beta接线实施中，旧ABI及全部原验收门禁保持。整体75/FAIL不变，Windows完整通过前不进入RKMPP；无外部FFmpeg改动、无提交/推送/部署。
+
+## 2026-10-23 当前续接点：r312 完成场景，整体仍未通过
+
+最新证据见 docs/realtime-composition-r312-validation.md：Release739项exit0，诊断切片双独立静态PASS；三路原120秒RTP H264/AAC→HEVC CBR8000kbps 1280×720/30、AAC CBR192kbps→MPEG-TS/UDP，三格→全黑→选定AV源完整120秒重入→再次全黑，均由VLC原生快照核验。四个源exit0，CLI caller_stop exit0，errors0，payload预约/释放261506一致且归零；16项临时产物清理完毕。没有线端到达及内容A/V测量，不能记完整验收通过，不能据单次未复现关闭r310/r311超期或旧崩溃。
+
+下一实现按 docs/realtime-composition-ts-storage-closure.md：将series backing、cursor/control、continuity和batch描述符纳入同generation预算，基于最终图边与真实节点持有槽位编译容量；整体准备成功后才提交协议状态。现有queue/prefix/退休边界不重复实现。随后双审及Windows原规格验证；完整矩阵、C API和RKMPP门禁仍保留。

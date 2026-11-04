@@ -1,11 +1,11 @@
 #pragma once
 
 #include "internal/graph/nodes/output/MediaRtpWireDatagramMaterializer.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <deque>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -29,14 +29,19 @@ class MediaRtpWireCommitTransaction;
 class MediaRtpWireProtocolState final {
 public:
     explicit MediaRtpWireProtocolState(
-        MediaRtpWireDatagramMaterializerConfig config) noexcept;
+        MediaRtpWireDatagramMaterializerConfig config,
+        MediaRtpProtocolStoragePermit storagePermit);
+    static ::media::Result<std::size_t> reservationStorageFootprint(std::uint64_t capacity);
+    static ::media::Result<MediaSharedAllocationGeometry> reservationStorageGeometry(std::uint64_t capacity);
 
 private:
     friend class MediaRtpWireDatagramMaterializer;
+    friend class MediaRtpWirePreparedTransaction;
     friend class MediaRtpWireCommitTransaction;
 
     bool canAdmitReservation(std::size_t datagrams) const noexcept;
 
+    MediaRtpProtocolStoragePermit storagePermit;
     mutable std::mutex mutex;
     std::uint64_t generation;
     std::uint64_t rtpEndpointId;
@@ -71,7 +76,8 @@ private:
         std::size_t actionCount;
         std::size_t committed;
     };
-    std::deque<ReservationRecord> reservations;
+    MediaFixedCapacityStorage<ReservationRecord> reservations;
+    bool preparationActive = false;
     bool terminalCommitted = false;
     bool projectedTerminal = false;
     bool poisoned = false;
@@ -79,11 +85,14 @@ private:
 
 class MediaRtpWireCommitTransaction final {
 public:
+    static constexpr MediaDatagramCommitStorageKind storageKind() noexcept
+    { return MediaDatagramCommitStorageKind::Rtp; }
+    static ::media::Result<MediaSharedAllocationGeometry> allocationGeometry();
     MediaRtpWireCommitTransaction(
         std::shared_ptr<MediaRtpWireProtocolState> state,
         std::uint64_t reservationIdentity,
         MediaWireGlobalSequenceReservation globalReservation,
-        std::vector<MediaRtpWireCommitAction> actions,
+        MediaFixedCapacityStorage<MediaRtpWireCommitAction> actions,
         std::optional<MediaProtocolDatagramCommitTransaction>
             protocolCommit) noexcept;
     MediaRtpWireCommitTransaction(
@@ -102,7 +111,7 @@ public:
     ::media::Status commitSubmittedPrefix(
         std::size_t begin,
         std::size_t count,
-        MediaRunningTime now) noexcept;
+        const MediaDatagramSubmittedService& submitted) noexcept;
 
 private:
     ::media::Status poison(::media::ErrorInfo error) noexcept;
@@ -111,7 +120,7 @@ private:
     std::shared_ptr<MediaRtpWireProtocolState> m_state;
     std::uint64_t m_reservationIdentity = 0;
     MediaWireGlobalSequenceReservation m_globalReservation;
-    std::vector<MediaRtpWireCommitAction> m_actions;
+    MediaFixedCapacityStorage<MediaRtpWireCommitAction> m_actions;
     std::optional<MediaProtocolDatagramCommitTransaction> m_protocolCommit;
     std::size_t m_nextAction = 0;
 };

@@ -61,13 +61,27 @@ MediaRealtimeDeploymentEnvelope::decode(
             mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes;
     const bool validService = !service.authority.empty() &&
         service.provisionedCapacityWireBytesPerSecond > 0;
-    const bool validResources = !resources.authority.empty() &&
+    const auto topology = mediaDatagramProtocolTopology(resources.protocolLayout);
+    const bool validResources = topology && !resources.authority.empty() &&
         resources.maximumNetworkMemoryBytes > 0;
+    auto mpegTsFacts = validateMpegTsProducerPlan(resources.protocolLayout, resources.mpegTsProducer);
+    if (!mpegTsFacts) return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(mpegTsFacts.error());
+    if (resources.mpegTsProducer && resources.mpegTsProducer->maximumDatagramBytes > mtu.senderMaximumPayloadBytes)
+        return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS producer exceeds deployment MTU"));
+    auto producerFacts = validateRawRtpProducerPlans(resources.protocolLayout, resources.rawRtpProducers);
+    if (!producerFacts) return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(producerFacts.error());
+    for (const auto& producer : resources.rawRtpProducers) {
+        if (producer.emission.maximumDatagramBytes() != mtu.senderMaximumPayloadBytes)
+            return ::media::Result<MediaRealtimeDeploymentEnvelope>::failure(
+                ::media::ErrorInfo::invalidArgument("Raw RTP producer MTU differs from deployment"));
+    }
     const auto localAddress = MediaNumericIpAddress::create(
         localPorts.addressFamily, localPorts.numericAddress);
     const bool validLocalPorts = localAddress &&
         localPorts.addressFamily == mtu.addressFamily &&
-        localPorts.portCount > 0 && !localPorts.authority.empty() &&
+        topology && localPorts.portCount >= topology.value().endpointRoles.size() &&
+        !localPorts.authority.empty() &&
         (localPorts.firstPort == 0 ||
          static_cast<std::uint32_t>(localPorts.firstPort) +
                 static_cast<std::uint32_t>(localPorts.portCount) - 1U <=

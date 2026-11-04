@@ -192,6 +192,44 @@ typedef struct mt_beta_realtime_config {
     mt_beta_realtime_deployment deployment;
 } mt_beta_realtime_config;
 
+/* Composition types are independent: existing single-input layouts are unchanged. */
+typedef struct mt_beta_rtp_audio_input {
+    const char* bind_address;
+    uint16_t port;
+    const char* codec_name;
+    uint8_t payload_type;
+    uint32_t clock_rate;
+    uint32_t channels;
+    const char* fmtp;
+} mt_beta_rtp_audio_input;
+
+typedef struct mt_beta_composition_input {
+    mt_beta_rtp_video_input video;
+    /* NULL means no audio; a non-NULL declaration must be complete. */
+    const mt_beta_rtp_audio_input* audio;
+    /* Required positive deployment allowance for late/reordered input, per source. */
+    uint32_t input_latency_ms;
+} mt_beta_composition_input;
+
+typedef enum mt_beta_composition_grid {
+    MT_BETA_COMPOSITION_GRID_FIXED = 1
+} mt_beta_composition_grid;
+
+typedef struct mt_beta_realtime_composition_config {
+    const char* media_id;
+    const mt_beta_composition_input* inputs;
+    size_t input_count;
+    mt_beta_composition_grid grid;
+    size_t audio_source;
+    /* Required positive target, exactly representable in integer kbps; not a CBR guarantee. */
+    uint64_t audio_bitrate_bps;
+    /* Required shared reservation limit for logical engine preparation storage.
+       Not process RSS or opaque device/driver memory; no implicit default. */
+    uint64_t preparation_storage_limit_bytes;
+    mt_beta_video_output output;
+    mt_beta_realtime_deployment deployment;
+} mt_beta_realtime_composition_config;
+
 typedef struct mt_beta_realtime_event mt_beta_realtime_event;
 typedef struct mt_beta_realtime_session mt_beta_realtime_session;
 
@@ -222,6 +260,7 @@ typedef struct mt_beta_realtime_snapshot {
     mt_beta_realtime_state state;
     mt_beta_completion_reason completion_reason;
     mt_beta_selected_backend selected_backend;
+    /* Composition: UNKNOWN until prepared, or when source codecs differ. */
     mt_beta_video_codec input_codec;
     uint64_t running_time_ms;
     uint64_t queued_buffers;
@@ -285,6 +324,15 @@ void mt_beta_output_snapshots_release(mt_beta_output_snapshots** snapshots);
 
 mt_beta_status mt_beta_realtime_start(
     const mt_beta_realtime_config* config,
+    const mt_beta_realtime_callbacks* callbacks,
+    mt_beta_realtime_session** session);
+/* 2--4 fixed-grid RTP/RTCP inputs and zero-based selected audio_source.
+ * Copies the input array and all strings before returning. user_data remains
+ * caller-owned. Uses the same session lifecycle and callback rules as start.
+ * Audio bitrate is explicit; remaining media/encoder facts are validated during
+ * preparation. Missing authoritative facts fail without implicit targets. */
+mt_beta_status mt_beta_realtime_start_composition(
+    const mt_beta_realtime_composition_config* config,
     const mt_beta_realtime_callbacks* callbacks,
     mt_beta_realtime_session** session);
 mt_beta_status mt_beta_realtime_request_stop(mt_beta_realtime_session* session);

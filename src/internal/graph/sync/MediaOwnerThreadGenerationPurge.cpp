@@ -79,7 +79,7 @@ std::stop_token MediaOwnerThreadGenerationPurge::waitStopToken() const
 
 void MediaOwnerThreadGenerationPurge::stop() noexcept
 {
-    std::stop_source cancellation;
+    std::stop_source cancellation(std::nostopstate);
     {
         std::lock_guard lock(m_mutex);
         m_stopped = true;

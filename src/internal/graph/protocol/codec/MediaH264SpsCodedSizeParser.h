@@ -14,7 +14,8 @@ class MediaH264SpsCodedSizeParser final {
 public:
     static ::media::Result<MediaSize> parse(
         std::span<const std::uint8_t> sps,
-        std::optional<MediaVideoColorRangeFact>* colorRange = nullptr);
+        std::optional<MediaVideoColorRangeFact>* colorRange = nullptr,
+        std::optional<MediaRational>* sampleAspectRatio = nullptr);
 
 private:
     MediaH264SpsCodedSizeParser() = delete;

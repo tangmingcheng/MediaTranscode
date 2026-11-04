@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/builder/segments/MediaOutputSegmentBindings.h"
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
@@ -22,6 +23,7 @@ struct MediaDatagramOutputExecutionSegmentOptions final {
 struct MediaDatagramOutputExecutionSegmentResult final {
     MediaNodeId transportPlanSource;
     MediaNodeId sender;
+    MediaOutputSegmentBindings bindings;
 };
 
 class MediaDatagramOutputExecutionSegmentBuilder final {
@@ -32,19 +34,6 @@ public:
     static ::media::Result<MediaDatagramOutputExecutionSegmentResult> build(
         MediaGraph& graph,
         const MediaDatagramOutputExecutionSegmentOptions& options);
-    static ::media::Status connectWireSource(
-        MediaGraph& graph,
-        const MediaDatagramOutputExecutionSegmentResult& execution,
-        MediaEndpoint wireSource,
-        const MediaEdgePolicy& policy,
-        const char* label);
-    static ::media::Status connectTransportConsumer(
-        MediaGraph& graph,
-        const MediaDatagramOutputExecutionSegmentResult& execution,
-        MediaNodeId consumer,
-        const char* port,
-        const MediaEdgePolicy& policy,
-        const char* label);
 
 private:
     MediaDatagramOutputExecutionSegmentBuilder() = delete;

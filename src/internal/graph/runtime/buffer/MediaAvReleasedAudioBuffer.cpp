@@ -36,7 +36,7 @@ MediaAvReleasedAudioBuffer::MediaAvReleasedAudioBuffer(
 {
     setStreamKind(MediaStreamKind::Audio);
     setPayloadKind(MediaPayloadKind::Packet);
-    setDiagnosticName("av_startup.released_audio");
+    setDiagnosticName(MediaDiagnosticLiteral{"av_startup.released_audio"});
 }
 
 MediaBufferType MediaAvReleasedAudioBuffer::type() const noexcept

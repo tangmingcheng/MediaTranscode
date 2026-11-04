@@ -12,11 +12,20 @@ struct MediaAvDemuxClockRegistration final {
     MediaNodeId audioBinder;
 };
 
+struct MediaAvRtpClockRegistration final {
+    MediaNodeId clockGroup;
+    MediaNodeId videoRaw;
+    MediaNodeId videoBinder;
+    std::optional<MediaNodeId> audioRaw;
+    std::optional<MediaNodeId> audioBinder;
+};
+
 struct MediaAvRuntimeInputRegistration final {
     MediaNodeId epochBinder;
     MediaNodeId activationSequencer;
     MediaNodeId releaseExtractor;
     std::optional<MediaAvDemuxClockRegistration> demuxClock;
+    std::optional<MediaAvRtpClockRegistration> rtpClock;
 };
 
 struct MediaAvRuntimeRegistrationPlan final {

@@ -11,6 +11,9 @@ public:
     static ::media::Result<MediaRealtimeDeploymentMtuFact> plan(
         const MediaDatagramRouteFact& route);
 
+    static ::media::Result<std::uint64_t> maximumPayloadBytes(
+        const MediaRealtimeDeploymentMtuFact& mtu);
+
 private:
     MediaRealtimeDatagramPayloadPlanner() = delete;
 };

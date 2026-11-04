@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/runtime/buffer/MediaBufferRef.h"
+
 #include "internal/graph/builder/codec/CodecResolverDecoderContextBuilder.h"
 #include "internal/graph/planner/realtime/MediaSourcePreparationStoragePlan.h"
 #include "internal/graph/planner/video/MediaVideoSourcePlan.h"
@@ -7,12 +9,18 @@
 #include "internal/graph/runtime/buffer/MediaRawRtpProbeLease.h"
 #include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
+#include "internal/graph/planner/video/MediaVideoDecoderPreparationStoragePlan.h"
+#include "internal/graph/runtime/resource/MediaPreparationControl.h"
+
+#include "internal/graph/planner/realtime/MediaRtpSourceIdentityProbe.h"
 
 #include <stop_token>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
 struct MediaRtpSourceFirstFrameProbePlan final {
+    MediaRtpSourceProbeGoal goal;
     const MediaDetectedRtpVideoSignaling& signaling;
     const AVCodecParameters& codecParameters;
     const MediaVideoSourcePlan& source;
@@ -25,6 +33,7 @@ struct MediaRtpSourceFirstFrameProbePlan final {
     MediaRational sampleAspectRatio;
     std::chrono::steady_clock::time_point deadline;
     std::stop_token cancellation;
+    MediaSourcePreparationInput input;
 };
 
 enum class MediaRtpSourceFirstFrameDisposition {
@@ -32,27 +41,44 @@ enum class MediaRtpSourceFirstFrameDisposition {
     NeedMoreEvidence
 };
 
+// Member order keeps the reservation alive until after codec destruction.
+// Moving this owner across retries never releases and reacquires its budget.
+struct MediaRtpSourceDecoderProbeOwner final {
+    MediaRtpSourceDecoderProbeOwner(MediaPreparationStorageLease reservation,
+        CodecResolverDecoderContextBuildResult codec)
+        : storage(std::move(reservation)), decoder(std::move(codec)) {}
+    MediaRtpSourceDecoderProbeOwner(MediaRtpSourceDecoderProbeOwner&&) noexcept = default;
+    MediaRtpSourceDecoderProbeOwner& operator=(MediaRtpSourceDecoderProbeOwner&&) = delete;
+    MediaPreparationStorageLease storage;
+    CodecResolverDecoderContextBuildResult decoder;
+};
+
 // Neither disposition publishes a source epoch or produces canonical lineage.
-// Decoder packets deliberately have no opaque token. Before any replay of an
-// already submitted prefix, the caller must release firstFrame and flush this
-// same context through MediaVideoDecoderCodecApi, then use original datagrams.
+// Identity probes attach tokens only to cloned packet headers. Before replay of an
+// already submitted prefix, discard the old codec through restartDecoder.
+// A fresh common-builder context owns no pending frames from the probe.
 // Negotiation/copy proof remains the caller's common capability-probe step.
 struct MediaRtpSourceFirstFrameEvidence final {
     MediaRtpSourceFirstFrameEvidence(MediaPreparationStorageLease reservation,
-        CodecResolverDecoderContextBuildResult owner, MediaHardwareDescriptor contract)
+        CodecResolverDecoderContextBuildResult owner, MediaHardwareDescriptor contract,
+        const MediaSourcePreparationStoragePlan& admitted)
         : storage(std::move(reservation)), decoder(std::move(owner)),
           disposition(MediaRtpSourceFirstFrameDisposition::NeedMoreEvidence),
-          frameContract(std::move(contract)) {}
+          frameContract(std::move(contract)), maximumAccessUnitBytes(admitted.maximumAccessUnitBytes),
+          decoderStorage{admitted.decoderPacketBytes, admitted.sourceOwnerBytes, admitted.softwareFrameBytes} {}
     MediaRtpSourceFirstFrameEvidence(MediaRtpSourceFirstFrameEvidence&&) noexcept = default;
     MediaRtpSourceFirstFrameEvidence& operator=(MediaRtpSourceFirstFrameEvidence&&) = delete;
     MediaRtpSourceFirstFrameEvidence(const MediaRtpSourceFirstFrameEvidence&) = delete;
     MediaRtpSourceFirstFrameEvidence& operator=(const MediaRtpSourceFirstFrameEvidence&) = delete;
 
     MediaPreparationStorageLease storage;
+    std::shared_ptr<MediaRtpSourceIdentityProbe> identityProbe;
     CodecResolverDecoderContextBuildResult decoder;
     ::media::ffmpeg::FramePtr firstFrame;
     MediaRtpSourceFirstFrameDisposition disposition;
     MediaHardwareDescriptor frameContract;
+    std::size_t maximumAccessUnitBytes;
+    MediaVideoDecoderPreparationStoragePlan decoderStorage;
     std::size_t inspectedDatagrams = 0;
     std::size_t submittedAccessUnits = 0;
     bool decoderMayHavePendingOutput = false;
@@ -62,17 +88,29 @@ struct MediaRtpSourceFirstFrameEvidence final {
 
 class MediaRtpSourceFirstFrameProbe final {
 public:
+    // The caller must first release all external probe frame references.
+    // The existing lease remains held across codec destruction and reopening.
+    static ::media::Status restartDecoder(MediaRtpSourceFirstFrameEvidence& evidence,
+        const FFmpegInputStreamSnapshot& source, const MediaVideoSourcePlan& plan,
+        const MediaPreparationControl& control);
     static ::media::Result<std::shared_ptr<MediaPreparedVideoDecoder>> prepareReplay(
         MediaRtpSourceFirstFrameEvidence evidence,
-        const FFmpegInputStreamSnapshot& source);
+        const FFmpegInputStreamSnapshot& source, const MediaVideoSourcePlan& plan,
+        const MediaPreparationControl& control);
 
-    // decoder is the unused common-builder result (or the same owner after
-    // an explicit caller-controlled flush), never a live production decoder.
+    // decoder is an unused common-builder result, never a live or previously
+    // submitted production decoder.
     static ::media::Result<MediaRtpSourceFirstFrameEvidence> probe(
         const MediaRawRtpProbeLease& lease,
         const MediaRtpSourceFirstFrameProbePlan& plan,
-        CodecResolverDecoderContextBuildResult decoder,
-        const std::shared_ptr<MediaPreparationStorageBudget>& budget);
+        MediaRtpSourceDecoderProbeOwner owner);
+
+    // References completed AUs admitted by the continuous protocol owner;
+    // decoding does not consume or modify the runtime prefix.
+    static ::media::Result<MediaRtpSourceFirstFrameEvidence> probe(
+        std::span<const MediaBufferRef> packets,
+        const MediaRtpSourceFirstFrameProbePlan& plan,
+        MediaRtpSourceDecoderProbeOwner owner);
 };
 
 } // namespace media::ffmpeg::graph

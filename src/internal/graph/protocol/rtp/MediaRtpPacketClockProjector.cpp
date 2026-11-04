@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpPacketClockProjector.h"
 
 #include <limits>
+#include "internal/graph/time/MediaSourceClockProjection.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -37,21 +38,14 @@ namespace {
         return ::media::Result<MediaPacketSourceTiming>::failure(
             invalid("RTP packet clock projection requires locked representable calibration"));
     }
-    const long double deltaTicks = static_cast<long double>(
-        static_cast<std::int64_t>(extendedRtpTimestamp) -
-        calibration.extendedRtpAnchor);
-    const long double sourceNanoseconds =
-        calibration.continuousSourceAnchor.nanoseconds() +
-        deltaTicks * calibration.rateNumeratorNs /
-            calibration.rateDenominatorTicks;
-    const long double normalized = sourceNanoseconds -
-        snapshot.locked->commonSourceEpoch.nanoseconds();
-    if (normalized < std::numeric_limits<std::int64_t>::min() ||
-        normalized > std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaPacketSourceTiming>::failure(
-            invalid("RTP packet clock projection is not representable"));
-    }
-    const auto nanoseconds = static_cast<std::int64_t>(normalized);
+    const MediaSourceClockProjection projection{
+        calibration.extendedRtpAnchor, calibration.continuousSourceAnchor,
+        calibration.rateNumeratorNs, calibration.rateDenominatorTicks,
+        snapshot.locked->commonSourceEpoch};
+    auto projected = projection.project(static_cast<std::int64_t>(extendedRtpTimestamp));
+    if (!projected)
+        return ::media::Result<MediaPacketSourceTiming>::failure(projected.error());
+    const auto nanoseconds = projected.value().nanoseconds();
     return ::media::Result<MediaPacketSourceTiming>::success(
         MediaPacketSourceTiming{
             nanoseconds,

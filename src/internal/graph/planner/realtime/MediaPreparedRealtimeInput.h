@@ -56,22 +56,24 @@ public:
     const MediaAvSyncStartupPolicy* genericStartup() const noexcept;
     ::media::Status startRawRtpPreflightCapture();
     ::media::Result<MediaRawRtpProbeLease> acquireRawRtpProbeLease() const;
-    ::media::Status waitForRawRtpProbeData(std::size_t previousDatagramCount,
+    ::media::Status waitForRawRtpProbeData(std::uint64_t previousIngressFrontier,
         std::chrono::steady_clock::time_point deadline,
         std::stop_token stopToken);
     ::media::Status rawRtpCaptureStatus();
     ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
+    ::media::Result<MediaPreparedRtpIngressSnapshot> rawRtpIngressSnapshot(
+        const std::optional<MediaRtpIngressSnapshotWait>& wait) const;
     ::media::Result<std::size_t> rawRtpPreparedByteCapacity() const;
+    ::media::Result<MediaPreparedRtpStorageReservation> rawRtpPreparationStorage() const;
     ::media::Result<std::uint64_t> rawRtpReplayAccessUnitBound() const;
     ::media::Result<std::size_t> rawRtpMaximumDatagramBytes() const;
-    ::media::Result<std::size_t>
-    rawRtpEffectiveSocketReceivePayloadBytes() const;
     ::media::Status configureRawRtpRuntimeIngress(
         const MediaRtpIngressPlan& plan);
     ::media::Status finishRawRtpPreflightCapture();
     ::media::Result<MediaBufferRef> releaseBuffer();
 
 private:
+    friend class MediaRtpSourcePreflight;
     explicit MediaPreparedRealtimeInput(std::unique_ptr<FFmpegFormatContextBuffer> buffer);
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaPreparedGenericInputBuffer> buffer);
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaTsPreparedInputBuffer> buffer);
@@ -81,7 +83,7 @@ private:
     std::unique_ptr<FFmpegFormatContextBuffer> m_genericBuffer;
     std::unique_ptr<MediaPreparedGenericInputBuffer> m_preparedGenericBuffer;
     std::unique_ptr<MediaTsPreparedInputBuffer> m_tsBuffer;
-    std::unique_ptr<MediaRawRtpPreparedInputBuffer> m_rawRtpBuffer;
+    std::shared_ptr<MediaRawRtpPreparedInputBuffer> m_rawRtpBuffer;
 };
 
 } // namespace media::ffmpeg::graph

@@ -144,20 +144,14 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
             : std::nullopt);
     if (!output) return ::media::Result<MediaAudioPipelinePlan>::failure(output.error());
 
-    plan.enabled = true;
-    plan.sourceStreamIndex = inputInfo.streamIndex;
-    plan.sourceCodecName = source.codecName;
-    plan.branchMode = output.value().branchMode();
-    plan.monotonicPacketTimestamps = plan.branchMode == MediaBranchMode::CopyPacket;
-    if (plan.branchMode == MediaBranchMode::CopyPacket) {
-        plan.maximumAccessUnitSamples = inputInfo.maximumAccessUnitSamples;
-    }
+    auto sourcePlan = planSourceForOutput(std::move(inputInfo), output.value());
+    if (!sourcePlan) return sourcePlan;
+    plan = std::move(sourcePlan).value();
     plan.reason = plan.branchMode == MediaBranchMode::CopyPacket
         ? "copy_source_matches_resolved_output"
         : (options.outputRequirement.requireFrameTranscode
                ? "transcode_required_by_output_frame_contract"
                : "transcode_source_differs_from_resolved_output");
-    plan.resolvedOutput = std::move(output).value();
     if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
         if (!encoder || !encoder->preparedEmission) {
             return ::media::Result<MediaAudioPipelinePlan>::failure(
@@ -166,18 +160,33 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
         }
         plan.preparedEmission = encoder->preparedEmission;
     }
-    if (plan.branchMode == MediaBranchMode::TranscodeFrame &&
-        inputInfo.selectedDecoder) {
+    return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
+}
+
+::media::Result<MediaAudioPipelinePlan> MediaAudioPipelinePlanner::planSourceForOutput(
+    MediaInputAudioStreamInfo inputInfo, const MediaResolvedAudioOutputPlan& output)
+{
+    using Result = ::media::Result<MediaAudioPipelinePlan>;
+    if (inputInfo.streamIndex < 0 || inputInfo.codecName.empty())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Audio source planning requires the actual input identity"));
+    MediaAudioPipelinePlan plan;
+    plan.enabled = true;
+    plan.sourceStreamIndex = inputInfo.streamIndex;
+    plan.sourceCodecName = canonicalCodecName(inputInfo.codecName);
+    plan.branchMode = output.branchMode();
+    plan.monotonicPacketTimestamps = plan.branchMode == MediaBranchMode::CopyPacket;
+    plan.resolvedOutput = output;
+    if (plan.branchMode == MediaBranchMode::CopyPacket)
+        plan.maximumAccessUnitSamples = inputInfo.maximumAccessUnitSamples;
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame && inputInfo.selectedDecoder) {
         plan.selectedDecoder = std::move(inputInfo.selectedDecoder);
         auto resampler = MediaAudioResamplerCapabilityProvider::verify(
-            *plan.selectedDecoder, *plan.resolvedOutput);
-        if (!resampler) {
-            return ::media::Result<MediaAudioPipelinePlan>::failure(
-                resampler.error());
-        }
+            *plan.selectedDecoder, output);
+        if (!resampler) return Result::failure(resampler.error());
         plan.selectedResampler = std::move(resampler).value();
     }
-    return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
+    return Result::success(std::move(plan));
 }
 
 } // namespace media::ffmpeg::graph

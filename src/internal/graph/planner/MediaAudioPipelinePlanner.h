@@ -73,6 +73,10 @@ public:
         MediaInputAudioStreamInfo inputInfo,
         const MediaAudioPipelinePlannerOptions& options);
 
+    static ::media::Result<MediaAudioPipelinePlan> planSourceForOutput(
+        MediaInputAudioStreamInfo inputInfo,
+        const MediaResolvedAudioOutputPlan& output);
+
 private:
     MediaAudioPipelinePlanner() = default;
 };

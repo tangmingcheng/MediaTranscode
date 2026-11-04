@@ -33,6 +33,11 @@ namespace {
         return invalid("prepared input ownership decision");
     }
     const auto& transport = *input.rtpTransport;
+    if (!transport.inputWait) return invalid("input waiting contract");
+    const auto plannedDelayNs = transport.ingress
+        ? transport.ingress->maximumReorderDelayNanoseconds()
+        : static_cast<std::int64_t>(transport.maximumReorderDelayMs) * 1'000'000;
+    if (auto status = transport.inputWait->validateFinalDelay(plannedDelayNs); !status) return status;
     if (*input.requiresPreparedInput && !transport.ingress) {
         return invalid("prepared input ingress product");
     }

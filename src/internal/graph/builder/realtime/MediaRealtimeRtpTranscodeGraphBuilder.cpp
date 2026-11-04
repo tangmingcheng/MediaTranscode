@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaTsFinalGraphStoragePlanner.h"
 #include "internal/graph/builder/realtime/MediaRealtimeGraphResourceBinding.h"
 #include "internal/graph/builder/realtime/MediaRealtimeInputGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
@@ -243,8 +244,8 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
         schedulerOptions.canonicalVideo = video.value().packet;
         schedulerOptions.canonicalAudio = audio->packet;
         const MediaRealtimeAvOutputSegmentPlan outputSegment{
-            avRuntime->groupKey, avRuntime->edgePolicies, avRuntime->audioPipeline.branchMode,
-            avRuntime->outputAdapter, avRuntime->protocolOutput, avRuntime->datagramTransport};
+            avRuntime->groupKey, avRuntime->outputEdgePolicies, avRuntime->audioPipeline.branchMode, avRuntime->canonicalAudioInputPolicy,
+            avRuntime->outputAdapter, avRuntime->scheduling, avRuntime->protocolOutput, avRuntime->datagramTransport};
         auto scheduled = MediaRealtimeAvSchedulerSegmentBuilder::build(
             graph, schedulerOptions, outputSegment);
         if (!scheduled) {
@@ -330,6 +331,8 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
             }
         }
     }
+    if (auto status = MediaTsFinalGraphStoragePlanner::apply(graph, {}); !status)
+        return ::media::Result<MediaGraph>::failure(status.error());
     auto finalLedger = MediaFinalGraphResourceLedgerCompiler::compile(
         graph, *plan.resourceLedger, {});
     if (!finalLedger) {
@@ -459,8 +462,13 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
         return Result::failure(status.error());
     std::vector<MediaNodeId> nodes;
     for (std::size_t index = previous; index < graph.nodeCount(); ++index) nodes.push_back(graph.nodes()[index].id);
+    if (auto status = MediaTsFinalGraphStoragePlanner::apply(graph, nodes); !status)
+        return Result::failure(status.error());
     auto storage = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, *plan.resourceLedger, nodes);
     if (!storage) return Result::failure(storage.error());
+    if (!graph.appendProtocolGenerationStorage(std::move(storage.value().protocolGenerationStorage)))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Protocol output generation storage has invalid or duplicate owners"));
     MediaNodeId producer;
     for (const auto& edge : graph.edges()) {
         if (edge.to.nodeId == encoded.packet.node && edge.payloadKind == MediaPayloadKind::Packet) producer = edge.from.nodeId;
@@ -629,15 +637,15 @@ MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& g
             std::move(runtimePlan->groupKey),
             std::move(runtimePlan->synchronization),
             MediaAvSharedSourceOutputDomainBinding{
-                std::move(runtimePlan->transition), std::move(*registration), nullptr}});
+                std::move(runtimePlan->transition), std::move(*registration), nullptr, std::move(runtimePlan->reservationStorage)}});
         runtimeBinding.emplace<MediaAvSyncRuntimeBinding>(
             MediaAvSyncRuntimeBinding{
             std::move(domains),
             outputGroupKey,
-            runtimePlan->edgePolicies,
+            runtimePlan->outputEdgePolicies,
             std::move(runtimePlan->datagramTransport),
             audioExecutionProduct,
-            std::move(outputProduct)});
+            std::move(outputProduct), runtimePlan->scheduling});
     } else {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
             ::media::ErrorInfo::invalidArgument(

@@ -6,6 +6,16 @@
 
 namespace media::ffmpeg::graph {
 
+MediaBlockingQueueStorage::PreparedPush& MediaBlockingQueueStorage::PreparedPush::operator=(
+    PreparedPush&& other) noexcept
+{
+    if (this != &other) {
+        m_buffers = std::move(other.m_buffers);
+        m_allocation = std::move(other.m_allocation);
+    }
+    return *this;
+}
+
 std::size_t MediaBlockingQueueStorage::PreparedPush::size() const noexcept
 {
     return m_buffers.size();
@@ -55,11 +65,11 @@ MediaBlockingQueueStorage::MediaBlockingQueueStorage(
     }
 }
 
-void MediaBlockingQueueStorage::reserveWithDefaultAllocator(
-    std::vector<MediaBufferRef>& buffers,
-    std::size_t capacity)
+void MediaBlockingQueueStorage::allocatePreparedStorage(
+    MediaFixedCapacityStorage<MediaBufferRef>& buffers,
+    std::size_t capacity, std::pmr::memory_resource& resource)
 {
-    buffers.reserve(capacity);
+    buffers = MediaFixedCapacityStorage<MediaBufferRef>(capacity, resource);
 }
 
 bool MediaBlockingQueueStorage::valid() const noexcept
@@ -152,16 +162,19 @@ void MediaBlockingQueueStorage::clear() noexcept
 
 ::media::Result<MediaBlockingQueueStorage::PreparedPush>
 MediaBlockingQueueStorage::prepare(
-    std::span<const MediaBufferRef> buffers) const
+    std::span<const MediaBufferRef> buffers, MediaLineageAllocationScope allocation) const
 {
-    if (!supportsPreparedPush()) {
+    if (!supportsPreparedPush() || buffers.size() > m_ring.size()) {
         return ::media::Result<PreparedPush>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Atomic output requires planner-configured prepared storage"));
     }
+    auto* resource = MediaLineageAllocator<MediaBufferRef>{allocation}.resource();
+    if (!resource) return ::media::Result<PreparedPush>::failure(
+        ::media::ErrorInfo::invalidArgument("Prepared output requires its explicit allocation owner"));
     try {
-        PreparedPush prepared;
-        m_preparationAllocator(prepared.m_buffers, buffers.size());
+        PreparedPush prepared(std::move(allocation));
+        m_preparationAllocator(prepared.m_buffers, buffers.size(), *resource);
         for (const auto& buffer : buffers) {
             if (!buffer) {
                 return ::media::Result<PreparedPush>::failure(
@@ -175,6 +188,9 @@ MediaBlockingQueueStorage::prepare(
         return ::media::Result<PreparedPush>::failure(
             ::media::ErrorInfo::internalError(
                 "Prepared output storage allocation failed"));
+    } catch (const std::length_error&) {
+        return ::media::Result<PreparedPush>::failure(
+            ::media::ErrorInfo::internalError("Prepared output storage size is not representable"));
     }
 }
 

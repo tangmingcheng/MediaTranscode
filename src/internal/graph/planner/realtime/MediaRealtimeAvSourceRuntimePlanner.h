@@ -7,6 +7,7 @@
 #include <string_view>
 
 namespace media::ffmpeg::graph {
+struct MediaAvSourceCapacityFacts;
 
 struct MediaRealtimeAvSourceRuntimeRequest final {
     MediaAvSyncGroupKey groupKey;
@@ -19,15 +20,20 @@ struct MediaRealtimeAvSourceRuntimeRequest final {
     MediaThreadingPolicy threadingPolicy;
     bool videoFilterActive;
     MediaRunningTime activationOutputLead;
+    bool selectedAudio;
+    const MediaAvSourceCapacityFacts* sourceCapacity;
 };
 
 class MediaRealtimeAvSourceRuntimePlanner final {
 public:
-    static ::media::Result<MediaRealtimeAvSourceRuntimePlan> plan(
+    static ::media::Result<MediaRealtimeAvSourcePlanningProducts> planFacts(
         const MediaRealtimeAvSourceRuntimeRequest& request,
         MediaAudioPipelinePlan audio,
         std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput,
         MediaAvSyncPlan synchronization);
+    static ::media::Result<MediaRealtimeAvSourceRuntimePlan> bind(
+        MediaRealtimeAvSourcePlanningProducts products,
+        MediaOutputReservationStoragePlan reservationStorage);
 private:
     MediaRealtimeAvSourceRuntimePlanner() = delete;
 };

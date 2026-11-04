@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/nodes/output/MediaRtpSdpPublisherNode.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 
@@ -391,9 +392,10 @@ void MediaRtpSdpPublisherNode::resetState() noexcept
 void MediaRtpSdpPublisherNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    auto failure = std::move(m_terminalFailure);
     resetState();
-    m_terminalFailure = ::media::ErrorInfo::cancelled(
-        "RTP SDP publisher was aborted");
+    m_terminalFailure = failure ? std::move(*failure)
+        : mediaCleanupError(::media::ErrorCode::Cancelled, "RTP SDP publisher was aborted", 0);
     m_generationPurge->stop();
     FFmpegNodeRuntime::abort(context);
 }

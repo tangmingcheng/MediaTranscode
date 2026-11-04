@@ -1,3 +1,5 @@
+#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
+#include "internal/graph/sync/lineage/MediaVideoDecodeLineageOption.h"
 #include "internal/graph/runtime/buffer/MediaPreparedVideoDecoder.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
@@ -115,7 +117,7 @@ MediaPreparedVideoDecoder::claim(const FFmpegInputStreamSnapshot& source,
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Prepared source publication requires planned decoder retention"));
     const auto& context = *m_decoder->context;
-    if (auto retained = CodecResolverDecoderContextBuilder::validateInputRetention(context, options); !retained)
+    if (auto retained = MediaDecoderInputRetentionOptionCodec::validateOpened(context, options); !retained)
         return Result::failure(retained.error());
     auto frameContract = MediaVideoFrameContractValidator::contractFromOptions(
         &options, "decoder.pipeline.output", "prepared decoder claim");
@@ -124,6 +126,8 @@ MediaPreparedVideoDecoder::claim(const FFmpegInputStreamSnapshot& source,
     auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
         &options, "video.lineage.decoder_copy_opaque");
     if (!copyOpaque) return Result::failure(copyOpaque.error());
+    auto lineageProduct = parseMediaVideoDecodeLineageOption(&options, copyOpaque.value());
+    if (!lineageProduct) return Result::failure(lineageProduct.error());
     bool contextCopiesOpaque = false;
 #if defined(AV_CODEC_FLAG_COPY_OPAQUE)
     contextCopiesOpaque = (context.flags & AV_CODEC_FLAG_COPY_OPAQUE) != 0;

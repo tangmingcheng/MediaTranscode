@@ -619,7 +619,7 @@ const MediaEdge* exactEdge(
                 decoded.value(), runtime.sessionKey,
                 MediaTranscodeStreamSet::VideoOnly, product);
         !exact) return exact;
-    if (source.inputPorts.size() != 1 || source.outputPorts.size() != 1 ||
+    if (source.inputPorts.size() != 2 || source.outputPorts.size() != 1 ||
         !MediaGraphShapeQuery::validPort(source.findInputPort("activation"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||

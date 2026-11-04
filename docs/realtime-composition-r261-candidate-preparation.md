@@ -1,0 +1,16 @@
+# r261：有界候选准备修复
+
+r260实际三源首次miss均为7个候选过期清空、通道仍有6项，证明当前先填满再清理的步骤可在尚未检查通道后续项时填黑；并不证明那6项都覆盖target。
+
+采用GStreamer gst_video_aggregator_fill_queues的“选择与聚合分离、未决返回NEED_DATA”状态划分：https://raw.githubusercontent.com/GStreamer/gstreamer/main/subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoaggregator.c 。仅复用状态分离，不复制其重复帧/超时策略。
+
+在现有owner线程、同一process内，按当前输出cursor与epoch清除过期CanonicalInterval，再按原maximumVideoCandidates读取上限补位；新读入但已过期的interval仍验证并计入输入结束观测，释放其引用。额度耗尽且无候选、非EOF、尚未确认非阻塞读为空时返回RetryProgress，保留cursor，下一process先服务purge再继续。覆盖/未来候选、真实空或EOF可完成本次准备。无新队列、无容量扩大、无跨process裸指针；参数和错误仍来自既有类型化契约。DisplayPoint保持原规则，既有pending输出不重新选帧。Windows/RKMPP共享此节点，最终须Windows先验证再RKMPP。
+
+本修复不解除serial，不调整等待/发送预算；r260物化deadline迟到另案处理。代码冻结后双审、Release全量构建、同规格120秒及重入复验。状态：实施中。
+## 实施与审查
+
+已实现CanonicalInterval预清理、同一批次补位、CandidatePreparation::RetryProgress与共享sourceInterval checked映射。两位独立审查者A/B2均明确局部PASS。旧first_interval_miss的before/expired现仅表示buildVideo选择阶段，不统计consumeInputs提前释放量；不能据此声称总淘汰为0。持续异常旧数据仍可能消耗多批，总准备时限未由本切片保证。Release全量构建会话37826进行中，尚未取得修复后实流结果。
+
+## 原规格运行证据
+
+Release全量构建37826成功。r261真实三源120秒及所选音视频源120秒重入均自然结束，CLI caller_stop退出0，四阶段VLC原生快照已检查，三源无first_interval_miss记录，错误/丢弃为0。详见realtime-composition-r261-validation.md。此为候选修复正向证据，不代表完整网络交付、serial超时根因或跨平台目标通过。临时产物已清理。

@@ -22,8 +22,7 @@ MediaAvSyncResult<MediaVideoSyncController> MediaVideoSyncController::create(
 {
     const auto planStatus = MediaAvSyncPlanValidator::validateRuntime(plan);
     if (!planStatus || generation == 0 ||
-        (plan.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
-         plan.domainRole != MediaAvSyncDomainRole::ContinuousOutput)) {
+        plan.domainRole != MediaAvSyncDomainRole::SharedSourceOutput) {
         return MediaAvSyncResult<MediaVideoSyncController>::failure(
             MediaAvSyncError(
                 MediaAvSyncErrorCode::InvalidVideoSyncPolicy,

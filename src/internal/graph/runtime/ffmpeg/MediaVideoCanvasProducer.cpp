@@ -1,4 +1,5 @@
 #include "internal/graph/planner/video/MediaVideoCanvasGeometryValidator.h"
+#include "internal/graph/planner/video/MediaVideoColorContractPlanner.h"
 #include "internal/graph/runtime/ffmpeg/MediaVideoCanvasProducer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
@@ -44,6 +45,19 @@ void releaseHeader(void* opaque, std::uint8_t*)
     const auto check = [&] { return control.check("Canvas preparation"); };
     if (auto status = check(); !status) return status;
     if (auto status = MediaVideoCanvasGeometryValidator::validate(plan.geometry); !status) return status;
+    if (!plan.geometry.effectiveColorRange.color)
+        return invalid("Canvas requires its complete prepared color contract");
+    const auto& color = *plan.geometry.effectiveColorRange.color;
+    if (auto status = MediaVideoColorContractPlanner::validate(color); !status) return status;
+    if (color.range != plan.geometry.effectiveColorRange.range)
+        return invalid("Canvas color contract contradicts its SPS range");
+    const auto applyColor = [&](AVFrame& frame) {
+        frame.color_range = color.range;
+        frame.color_primaries = color.primaries;
+        frame.color_trc = color.transfer;
+        frame.colorspace = color.matrix;
+        frame.sample_aspect_ratio = {plan.geometry.sampleAspectRatio.num, plan.geometry.sampleAspectRatio.den};
+    };
     if (!productionHwFrames || !productionHwFrames->data ||
         !plan.storage.surfaceCount || !plan.storage.maximumHeaderCount || !plan.storage.maximumSurfaceBytes ||
         !plan.storage.maximumStagingBytes || plan.storage.maximumStagingBytes > std::numeric_limits<int>::max())
@@ -70,7 +84,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
         if (allocation.value().surfaceBytes != plan.storage.maximumSurfaceBytes ||
             allocation.value().stagingBytes != plan.storage.maximumStagingBytes)
             return ::media::Result<FramePtr>::failure(::media::ErrorInfo::invalidArgument("canvas allocation differs from planner readback"));
-        frame->color_range = plan.geometry.effectiveColorRange.range;
+        applyColor(*frame);
         return ::media::Result<FramePtr>::success(std::move(frame));
     };
     auto black = allocate();
@@ -88,7 +102,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
     staging->format = plan.geometry.softwareFormat;
     staging->width = plan.geometry.width;
     staging->height = plan.geometry.height;
-    staging->color_range = plan.geometry.effectiveColorRange.range;
+    applyColor(*staging);
     staging->buf[0] = av_buffer_alloc(static_cast<std::size_t>(plan.storage.maximumStagingBytes));
     if (!staging->buf[0]) return ::media::Status::failure(::media::ErrorInfo::allocationFailed("black staging pixels"));
     int rc = av_image_fill_arrays(staging->data, staging->linesize, staging->buf[0]->data,
@@ -126,7 +140,7 @@ void releaseHeader(void* opaque, std::uint8_t*)
     status = created.value()->validate(*black.value(), *surfaces.front(), full);
     if (!status) return status;
     if (auto checked = check(); !checked) return checked;
-    status = created.value()->copy(*black.value(), *surfaces.front(), full);
+    status = created.value()->copyBatch({*black.value(), *surfaces.front(), full, {}, {}});
     if (!status) return status;
     if (auto checked = check(); !checked) return checked;
     frames_ = makeBufferRef(productionHwFrames);
@@ -170,32 +184,43 @@ void releaseHeader(void* opaque, std::uint8_t*)
     return publish(*black_);
 }
 
-::media::Result<FramePtr> MediaVideoCanvasProducer::compose(std::span<const AVFrame* const> tiles)
+::media::Result<FramePtr> MediaVideoCanvasProducer::compose(std::span<const MediaVideoCanvasTile> tiles)
 {
+    MediaCanvasComposeObservation::Scope observation(observation_);
+    using Stage = MediaCanvasComposeObservation::Stage;
     if (!black_) return ::media::Result<FramePtr>::failure(::media::ErrorInfo::notInitialized("canvas is not prepared"));
     if (tiles.size() != plan_.geometry.tiles.size())
         return ::media::Result<FramePtr>::failure(::media::ErrorInfo::invalidArgument("canvas tile count differs from plan"));
     bool any = false;
-    for (const auto* tile : tiles) any |= tile != nullptr;
-    if (!any) return cloneBlack();
+    for (const auto& tile : tiles) any |= tile.frame != nullptr;
+    if (!any) return MediaCanvasComposeObservation::measure(Stage::Publish, [&] { return cloneBlack(); });
     if (outstanding_->load() >= plan_.storage.maximumHeaderCount)
         return ::media::Result<FramePtr>::failure(::media::ErrorInfo::wouldBlock("canvas pending header bound reached"));
     AVFrame* target = nullptr;
-    for (auto& surface : surfaces_) if (av_frame_is_writable(surface.get())) { target = surface.get(); break; }
+    target = MediaCanvasComposeObservation::measure(Stage::Surface, [&]() -> AVFrame* {
+        for (auto& surface : surfaces_) if (av_frame_is_writable(surface.get())) return surface.get();
+        return nullptr;
+    });
     if (!target) return ::media::Result<FramePtr>::failure(::media::ErrorInfo::wouldBlock("canvas surface pool exhausted"));
     for (std::size_t index = 0; index < tiles.size(); ++index) {
-        if (!tiles[index]) continue;
-        auto status = adapter_->validate(*tiles[index], *target, plan_.geometry.tiles[index]);
+        if (!tiles[index].frame) continue;
+        const auto& tile = *tiles[index].frame;
+        const MediaVideoColorContract actual{tile.color_range, tile.color_primaries, tile.color_trc, tile.colorspace};
+        if (actual != *plan_.geometry.effectiveColorRange.color)
+            return ::media::Result<FramePtr>::failure(::media::ErrorInfo::invalidArgument(
+                "Runtime composition tile colorimetry differs from the frozen canvas contract"));
+        observation.tile(index);
+        auto status = MediaCanvasComposeObservation::measure(Stage::Validate, [&] {
+            return adapter_->validate(tile, *target, plan_.geometry.tiles[index]);
+        });
         if (!status) return ::media::Result<FramePtr>::failure(status.error());
     }
-    auto status = adapter_->copy(*black_, *target, {0, 0, plan_.geometry.width, plan_.geometry.height});
+    observation.tile(std::nullopt);
+    auto status = adapter_->copyBatch({*black_, *target,
+        {0, 0, plan_.geometry.width, plan_.geometry.height}, tiles, plan_.geometry.tiles});
     if (!status) return ::media::Result<FramePtr>::failure(status.error());
-    for (std::size_t index = 0; index < tiles.size(); ++index) {
-        if (!tiles[index]) continue;
-        status = adapter_->copy(*tiles[index], *target, plan_.geometry.tiles[index]);
-        if (!status) return ::media::Result<FramePtr>::failure(status.error());
-    }
-    return publish(*target);
+    observation.tile(std::nullopt);
+    return MediaCanvasComposeObservation::measure(Stage::Publish, [&] { return publish(*target); });
 }
 
 } // namespace media::ffmpeg::graph

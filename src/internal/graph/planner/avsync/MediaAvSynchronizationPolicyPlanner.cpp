@@ -18,13 +18,15 @@ void MediaAvSynchronizationPolicyPlanner::apply(MediaAvSyncPlan& plan)
     plan.canonicalTimeBaseNumerator = 1;
     plan.canonicalTimeBaseDenominator = 1'000'000'000;
 
-    plan.video.earlyHoldThresholdNs = runningTime(20 * Millisecond);
-    plan.video.lateDisplayThresholdNs = runningTime(40 * Millisecond);
-    plan.video.dropThresholdNs = runningTime(80 * Millisecond);
-    plan.video.allowRecoveryRepeat = true;
-    plan.video.maximumConsecutiveRecoveryActions = 5;
+    if (plan.domainRole != MediaAvSyncDomainRole::ContinuousOutput) {
+        plan.video.earlyHoldThresholdNs = runningTime(20 * Millisecond);
+        plan.video.lateDisplayThresholdNs = runningTime(40 * Millisecond);
+        plan.video.dropThresholdNs = runningTime(80 * Millisecond);
+        plan.video.allowRecoveryRepeat = true;
+        plan.video.maximumConsecutiveRecoveryActions = 5;
 
-    plan.recovery.hardDiscontinuityThresholdNs = runningTime(250 * Millisecond);
+        plan.recovery.hardDiscontinuityThresholdNs = runningTime(250 * Millisecond);
+    }
 
     plan.metrics.collectStateAndGeneration = true;
     plan.metrics.collectClockEvidence = true;

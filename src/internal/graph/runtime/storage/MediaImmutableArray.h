@@ -15,9 +15,25 @@ namespace media::ffmpeg::graph {
 template<class T>
 class MediaImmutableArray final {
 public:
+    template<class Allocator>
+    struct AllocationDeleter final {
+        std::size_t count;
+        Allocator allocator;
+        void operator()(const T* pointer) noexcept
+        {
+            auto* mutablePointer = const_cast<T*>(pointer);
+            std::destroy_n(mutablePointer, count);
+            allocator.deallocate(mutablePointer, count);
+        }
+    };
+
     MediaImmutableArray() noexcept = default;
 
     static ::media::Result<MediaImmutableArray> copy(std::span<const T> values)
+    { return copy(values, std::allocator<T>{}); }
+
+    template<class Allocator>
+    static ::media::Result<MediaImmutableArray> copy(std::span<const T> values, Allocator allocator)
     {
         if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(T))
             return ::media::Result<MediaImmutableArray>::failure(
@@ -25,7 +41,6 @@ public:
         if (values.empty())
             return ::media::Result<MediaImmutableArray>::success(MediaImmutableArray{});
         try {
-            std::allocator<T> allocator;
             T* data = allocator.allocate(values.size());
             try {
                 // uninitialized_copy destroys constructed elements on failure.
@@ -35,11 +50,8 @@ public:
                 throw;
             }
             // shared_ptr invokes this deleter even if its control allocation fails.
-            std::shared_ptr<const T[]> owner(data, [count = values.size()](const T* pointer) noexcept {
-                auto* mutablePointer = const_cast<T*>(pointer);
-                std::destroy_n(mutablePointer, count);
-                std::allocator<T>{}.deallocate(mutablePointer, count);
-            });
+            std::shared_ptr<const T[]> owner(data,
+                AllocationDeleter<Allocator>{values.size(), allocator}, allocator);
             return ::media::Result<MediaImmutableArray>::success(
                 MediaImmutableArray(std::move(owner), values.size()));
         } catch (const std::bad_alloc&) {

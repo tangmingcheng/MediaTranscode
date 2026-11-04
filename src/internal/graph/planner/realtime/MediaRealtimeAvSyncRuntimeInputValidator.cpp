@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeInputValidator.h"
+#include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
@@ -22,119 +23,90 @@ namespace {
     const MediaRealtimeAvSourceTimingFacts& facts,
     const MediaRealtimeAvSyncAssemblyPlan& assembly)
 {
-    if (request.inputType != RealtimeInputType::RtpPort ||
+    const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
+        &assembly.video.timing);
+    const bool decoded = std::holds_alternative<MediaDecodedVideoAssemblyTiming>(assembly.video.timing);
+    if (decoded ? synchronization.startup.videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan ||
+                      synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution
+                : !canonicalVideo || synchronization.startup.videoReadiness != MediaVideoStartupReadiness::IntervalCoverage)
+        return invalidInput("RTP video assembly and startup readiness");
+
+    const bool hasAudio = synchronization.members == MediaTranscodeStreamSet::AudioVideo;
+    const bool videoSource = synchronization.members == MediaTranscodeStreamSet::VideoOnly &&
+        synchronization.domainRole == MediaAvSyncDomainRole::SourceContribution;
+    if ((!hasAudio && !videoSource) || request.audio.enabled != hasAudio ||
+        assembly.audio.has_value() != hasAudio || (request.isolatedAudioInput != nullptr) != hasAudio ||
+        request.inputType != RealtimeInputType::RtpPort ||
         request.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
-        !synchronization.rtpInput ||
-        !synchronization.startup.allowDegradedClock ||
-        !request.input.rtpTransport || !request.isolatedAudioInput ||
-        !request.isolatedAudioInput->rtpTransport ||
-        !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
-            assembly.inputClock) ||
-        !std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(
-            assembly.video.duration) ||
-        !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration)) {
-        return invalidInput("RTP clock assembly");
-    }
+        !synchronization.rtpInput || !synchronization.startup.allowDegradedClock ||
+        !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(assembly.inputClock) ||
+        (!decoded && (!std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(canonicalVideo->duration) ||
+                      canonicalVideo->decodeOrder != MediaDecodeOrderMode::ReorderedRequiresDecodeTime)) ||
+        (hasAudio && !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(assembly.audio->duration)))
+        return invalidInput("RTP clock assembly and source members");
 
     const auto& input = *synchronization.rtpInput;
     const auto& policy = input.input;
     constexpr std::int64_t Millisecond = 1'000'000;
     const bool preserve = synchronization.sourceLifecycle &&
-        synchronization.sourceLifecycle->mode ==
-            MediaAvSourceLifecycleMode::PreserveActivatedOutput;
-    const bool transportPolicyMatches =
-        policy.requireSenderReports &&
-        policy.rtcpCompositionMode &&
-        policy.senderReportTimeoutNs &&
-        policy.maximumExtrapolationNs &&
-        policy.identityEvidenceTimeoutNs &&
-        policy.clockLossPolicy &&
-        policy.secondaryClockLossPolicy &&
-        input.videoInput.payloadType &&
-        input.videoInput.clockRate &&
-        input.audioInput.payloadType &&
-        input.audioInput.clockRate &&
-        policy.senderReportTimeoutNs->nanoseconds() % Millisecond == 0 &&
-        policy.maximumExtrapolationNs->nanoseconds() % Millisecond == 0 &&
-        policy.identityEvidenceTimeoutNs->nanoseconds() % Millisecond == 0 &&
-        request.input.rtpTransport->payloadType ==
-            *input.videoInput.payloadType &&
-        request.input.rtpTransport->clockRate ==
-            *input.videoInput.clockRate &&
-        request.isolatedAudioInput->rtpTransport->payloadType ==
-            *input.audioInput.payloadType &&
-        request.isolatedAudioInput->rtpTransport->clockRate ==
-            *input.audioInput.clockRate &&
-        request.input.rtpTransport->requireSenderReports ==
-            *policy.requireSenderReports &&
-        request.isolatedAudioInput->rtpTransport->requireSenderReports ==
-            *policy.requireSenderReports &&
-        !request.input.rtpTransport->requireCname &&
-        !request.isolatedAudioInput->rtpTransport->requireCname &&
-        request.input.rtpTransport->senderReportTimeoutMs ==
-            policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
-        request.isolatedAudioInput->rtpTransport->senderReportTimeoutMs ==
-            policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
-        request.input.rtpTransport->maximumExtrapolationMs ==
-            policy.maximumExtrapolationNs->nanoseconds() / Millisecond &&
-        request.isolatedAudioInput->rtpTransport->maximumExtrapolationMs ==
-            policy.maximumExtrapolationNs->nanoseconds() / Millisecond &&
-        request.input.rtpTransport->cnameTimeoutMs ==
-            policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
-        request.isolatedAudioInput->rtpTransport->cnameTimeoutMs ==
-            policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
-        request.input.rtpTransport->clockLossPolicy ==
-            *policy.clockLossPolicy &&
-        request.isolatedAudioInput->rtpTransport->clockLossPolicy ==
-            *policy.secondaryClockLossPolicy &&
-        *policy.clockLossPolicy ==
-            (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait :
-             *synchronization.startup.allowDegradedClock
-                 ? MediaRtpClockLossPolicy::FailOnExpired
-                 : MediaRtpClockLossPolicy::FailOnDegraded) &&
-        *policy.secondaryClockLossPolicy ==
-            (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait
-                      : MediaRtpClockLossPolicy::FailOnExpired) &&
-        request.input.rtpTransport->rtcpCompositionMode ==
-            policy.rtcpCompositionMode &&
-        request.isolatedAudioInput->rtpTransport->rtcpCompositionMode ==
-            policy.rtcpCompositionMode;
-    if (!transportPolicyMatches) {
+        synchronization.sourceLifecycle->mode == MediaAvSourceLifecycleMode::PreserveActivatedOutput;
+    if (!policy.requireSenderReports || !policy.rtcpCompositionMode ||
+        !policy.senderReportTimeoutNs || !policy.maximumExtrapolationNs ||
+        !policy.identityEvidenceTimeoutNs || !policy.clockLossPolicy || !policy.secondaryClockLossPolicy ||
+        policy.senderReportTimeoutNs->nanoseconds() % Millisecond != 0 ||
+        policy.maximumExtrapolationNs->nanoseconds() % Millisecond != 0 ||
+        policy.identityEvidenceTimeoutNs->nanoseconds() % Millisecond != 0 ||
+        *policy.clockLossPolicy != (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait :
+            *synchronization.startup.allowDegradedClock ? MediaRtpClockLossPolicy::FailOnExpired :
+                                                        MediaRtpClockLossPolicy::FailOnDegraded) ||
+        *policy.secondaryClockLossPolicy != (preserve ? MediaRtpClockLossPolicy::InvalidateAndWait :
+                                                        MediaRtpClockLossPolicy::FailOnExpired))
+        return invalidInput("RTP clock transport policy");
+    const auto transportMatches = [&](const MediaRealtimeRtpInputNodePlan& node,
+                                      const MediaAvSyncRtpInputStreamPlan& stream,
+                                      MediaRtpClockLossPolicy loss) {
+        if (!node.rtpTransport || !stream.payloadType || !stream.clockRate) return false;
+        const auto& transport = *node.rtpTransport;
+        return transport.payloadType == *stream.payloadType && transport.clockRate == *stream.clockRate &&
+            transport.requireSenderReports == *policy.requireSenderReports && !transport.requireCname &&
+            transport.senderReportTimeoutMs == policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
+            transport.maximumExtrapolationMs == policy.maximumExtrapolationNs->nanoseconds() / Millisecond &&
+            transport.cnameTimeoutMs == policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
+            transport.clockLossPolicy == loss && transport.rtcpCompositionMode == policy.rtcpCompositionMode;
+    };
+    if (!transportMatches(request.input, input.videoInput, *policy.clockLossPolicy) ||
+        (hasAudio && !transportMatches(*request.isolatedAudioInput, input.audioInput, *policy.secondaryClockLossPolicy)))
         return invalidInput("RTP transport and synchronization facts");
-    }
 
-    const auto& clock =
-        std::get<MediaRtpInputClockAssemblyPlan>(
-            assembly.inputClock);
-    const auto& videoDuration =
-        std::get<MediaRtpTimestampDeltaDurationPlan>(
-            assembly.video.duration);
-    const auto& audioDuration =
-        std::get<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration);
+    const auto& clock = std::get<MediaRtpInputClockAssemblyPlan>(assembly.inputClock);
     if (clock.commonEpochPolicy != policy.commonEpochPolicy ||
-        policy.commonEpochPolicy !=
-            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
-        !facts.inputVideoClockRate ||
-        videoDuration.clockRate <= 0 ||
-        videoDuration.clockRate !=
-            *facts.inputVideoClockRate ||
-        videoDuration.clockRate != *input.videoInput.clockRate ||
-        videoDuration.terminalPolicy !=
-            MediaTerminalDurationPolicy::RepeatLastObservedPositiveDelta ||
-        !facts.inputAudioSampleRate ||
-        audioDuration.sampleRate <= 0 ||
-        audioDuration.sampleRate !=
-            *facts.inputAudioSampleRate ||
-        audioDuration.sampleRate != *input.audioInput.clockRate ||
-        !facts.inputAudioSamplesPerAccessUnit ||
-        audioDuration.samplesPerAccessUnit == 0 ||
-        audioDuration.samplesPerAccessUnit !=
-            *facts.inputAudioSamplesPerAccessUnit ||
-        (request.videoCodecName != "h264" &&
-         request.videoCodecName != "hevc")) {
-        return invalidInput("RTP duration and planning facts");
+        policy.commonEpochPolicy != MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
+        !facts.inputVideoClockRate || *facts.inputVideoClockRate <= 0 ||
+        *facts.inputVideoClockRate != *input.videoInput.clockRate ||
+        !input.videoInput.identity || !synchronization.startup.videoIdentity ||
+        assembly.video.sourceIdentity.empty() ||
+        assembly.video.sourceIdentity != *input.videoInput.identity ||
+        assembly.video.sourceIdentity != *synchronization.startup.videoIdentity ||
+        facts.inputVideoIdentity != synchronization.startup.videoIdentity ||
+        (request.videoCodecName != "h264" && request.videoCodecName != "hevc"))
+        return invalidInput("RTP video clock, identity and planning facts");
+    if (canonicalVideo) {
+        const auto& duration = std::get<MediaRtpTimestampDeltaDurationPlan>(canonicalVideo->duration);
+        if (duration.clockRate != *facts.inputVideoClockRate ||
+            duration.terminalPolicy != MediaTerminalDurationPolicy::RepeatLastObservedPositiveDelta)
+            return invalidInput("RTP canonical duration authority");
+    }
+    if (hasAudio) {
+        const auto& audioDuration = std::get<MediaPlannedAudioSamplesDurationPlan>(assembly.audio->duration);
+        if (!facts.inputAudioSampleRate || !facts.inputAudioSamplesPerAccessUnit ||
+            audioDuration.sampleRate <= 0 || audioDuration.sampleRate != *facts.inputAudioSampleRate ||
+            audioDuration.sampleRate != *input.audioInput.clockRate || audioDuration.samplesPerAccessUnit == 0 ||
+            audioDuration.samplesPerAccessUnit != *facts.inputAudioSamplesPerAccessUnit)
+            return invalidInput("RTP audio duration and planning facts");
+    } else if (facts.inputAudioIdentity || facts.inputAudioSampleRate || facts.inputAudioSamplesPerAccessUnit ||
+               facts.inputAudioPacketDuration || input.audioInput.identity ||
+               input.audioInput.payloadType || input.audioInput.clockRate) {
+        return invalidInput("Video-only RTP contains audio timing facts");
     }
     return ::media::Status::success();
 }
@@ -145,6 +117,10 @@ namespace {
     const MediaRealtimeAvSourceTimingFacts& facts,
     const MediaRealtimeAvSyncAssemblyPlan& assembly)
 {
+    const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
+        &assembly.video.timing);
+    if (!canonicalVideo) return invalidInput("canonical packet input requires interval assembly");
+
     const bool transcodeInputMatches =
         request.audio.branchMode == MediaBranchMode::TranscodeFrame &&
         facts.inputAudioSampleRate &&
@@ -166,18 +142,18 @@ namespace {
             *facts.inputAudioSampleRate &&
         *request.audio.maximumAccessUnitSamples ==
             *facts.inputAudioSamplesPerAccessUnit;
-    if (request.inputType != RealtimeInputType::MpegTsUdp ||
+    if (!assembly.audio || request.inputType != RealtimeInputType::MpegTsUdp ||
         request.inputLayout !=
             RealtimeInputStreamLayout::MuxedTransportStream ||
         !synchronization.mpegTsInput ||
         !std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
             assembly.inputClock) ||
         !std::holds_alternative<MediaPacketDurationPlan>(
-            assembly.video.duration) ||
+            canonicalVideo->duration) ||
         !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration) ||
+            assembly.audio->duration) ||
         !std::get<MediaPacketDurationPlan>(
-            assembly.video.duration).requirePositiveDuration ||
+            canonicalVideo->duration).requirePositiveDuration ||
         facts.inputVideoClockRate ||
         !facts.inputAudioSampleRate ||
         *facts.inputAudioSampleRate <= 0 ||
@@ -189,7 +165,7 @@ namespace {
 
     const auto& audioDuration =
         std::get<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration);
+            assembly.audio->duration);
     const auto* selectedProgram = request.input.mpegTs
         ? std::get_if<MediaTsAudioVideoSelectedProgramPlan>(
               &request.input.mpegTs->selectedProgram)
@@ -225,6 +201,10 @@ namespace {
     const MediaRealtimeAvSourceTimingFacts& facts,
     const MediaRealtimeAvSyncAssemblyPlan& assembly)
 {
+    const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
+        &assembly.video.timing);
+    if (!canonicalVideo) return invalidInput("canonical packet input requires interval assembly");
+
     const bool transcodeInputMatches =
         request.audio.branchMode == MediaBranchMode::TranscodeFrame &&
         facts.inputAudioSampleRate &&
@@ -246,17 +226,17 @@ namespace {
             *facts.inputAudioSampleRate &&
         *request.audio.maximumAccessUnitSamples ==
             *facts.inputAudioSamplesPerAccessUnit;
-    if (request.inputType != RealtimeInputType::Url ||
+    if (!assembly.audio || request.inputType != RealtimeInputType::Url ||
         request.inputLayout != RealtimeInputStreamLayout::SessionDescribed ||
         !synchronization.demuxTimestampInput ||
         !std::holds_alternative<MediaDemuxTimestampInputClockAssemblyPlan>(
             assembly.inputClock) ||
         !std::holds_alternative<MediaPacketDurationPlan>(
-            assembly.video.duration) ||
+            canonicalVideo->duration) ||
         !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration) ||
+            assembly.audio->duration) ||
         !std::get<MediaPacketDurationPlan>(
-            assembly.video.duration).requirePositiveDuration ||
+            canonicalVideo->duration).requirePositiveDuration ||
         !facts.inputAudioSampleRate ||
         *facts.inputAudioSampleRate <= 0 ||
         !facts.inputAudioSamplesPerAccessUnit ||
@@ -266,7 +246,7 @@ namespace {
     }
     const auto& audioDuration =
         std::get<MediaPlannedAudioSamplesDurationPlan>(
-            assembly.audio.duration);
+            assembly.audio->duration);
     if (audioDuration.sampleRate !=
             *facts.inputAudioSampleRate ||
         audioDuration.samplesPerAccessUnit !=
@@ -292,7 +272,7 @@ namespace {
             *input.discontinuityThresholdNs ||
         selected.initialGeneration != *input.initialGeneration ||
         selected.videoSourceIdentity != assembly.video.sourceIdentity ||
-        selected.audioSourceIdentity != assembly.audio.sourceIdentity ||
+        selected.audioSourceIdentity != assembly.audio->sourceIdentity ||
         selected.canonicalTargetEpoch !=
             *input.canonicalTargetEpochNs ||
         selected.preparedInput != *input.preparedInput ||
@@ -317,6 +297,21 @@ namespace {
     const MediaRealtimeAvSourceTimingFacts& facts,
     const MediaRealtimeAvSyncAssemblyPlan& assembly)
 {
+    const bool decoded = synchronization.startup.videoReadiness ==
+        MediaVideoStartupReadiness::DecodedPresentationSpan;
+    if (decoded != (request.sourceCapacity != nullptr))
+        return invalidInput("source acquiring capacity domain");
+    if (const auto* capacity = request.sourceCapacity) {
+        if (assembly.audio.has_value() != capacity->audioAcquiringCapacity.has_value() ||
+            assembly.video.acquiringCapacity != capacity->videoAcquiringCapacity ||
+            (assembly.audio && assembly.audio->acquiringCapacity != *capacity->audioAcquiringCapacity))
+            return invalidInput("source acquiring capacity differs from pure facts");
+    }
+    if (synchronization.startup.videoReadiness != MediaVideoStartupReadiness::IntervalCoverage &&
+        (synchronization.startup.videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan ||
+         synchronization.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
+         synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution))
+        return invalidInput("decoded startup is limited to RTP source contribution assembly");
     if (!synchronization.sourceClockMode) {
         return invalidInput("source clock mode");
     }

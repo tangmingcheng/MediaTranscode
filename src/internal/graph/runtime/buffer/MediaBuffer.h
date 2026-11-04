@@ -5,7 +5,10 @@
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 #include "media_transcode/Result.h"
+
+#include "internal/graph/runtime/buffer/MediaDiagnosticName.h"
 
 #include <cstdint>
 #include <optional>
@@ -15,6 +18,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphPayloadCreditLease;
+
 
 enum class MediaBufferType {
     Unknown,
@@ -80,7 +84,7 @@ public:
     bool isKeyFrame() const noexcept;
     bool isHardwareBacked() const noexcept;
 
-    const std::string& diagnosticName() const noexcept;
+    const MediaDiagnosticName& diagnosticName() const noexcept;
 
     void setStreamKind(MediaStreamKind streamKind) noexcept;
     void setPayloadKind(MediaPayloadKind payloadKind) noexcept;
@@ -90,8 +94,12 @@ public:
     void setTimestamps(MediaTimeValue pts, MediaTimeValue dts, MediaDuration duration) noexcept;
     void setFlags(MediaBufferFlag flags) noexcept;
     void addFlags(MediaBufferFlag flags) noexcept;
-    void setDiagnosticName(std::string name);
+    void setDiagnosticName(MediaDiagnosticName name);
 
+    ::media::Status attachPreparationPayloadStorage(
+        std::shared_ptr<MediaPreparationStorageLease> storage) noexcept;
+    ::media::Status transferPayloadOwnershipTo(MediaBuffer& target) noexcept;
+    // A successful graph reservation replaces preparation ownership atomically.
     ::media::Status attachPayloadCredit(
         std::shared_ptr<MediaGraphPayloadCreditLease> credit) noexcept;
     const std::shared_ptr<MediaGraphPayloadCreditLease>& payloadCredit()
@@ -113,8 +121,9 @@ private:
     MediaTimeValue m_dts = invalidMediaTimeValue;
     MediaDuration m_duration = 0;
     MediaBufferFlag m_flags = MediaBufferFlag::None;
-    std::string m_diagnosticName;
+    MediaDiagnosticName m_diagnosticName;
     std::shared_ptr<MediaGraphPayloadCreditLease> m_payloadCredit;
+    std::shared_ptr<MediaPreparationStorageLease> m_preparationPayloadStorage;
 };
 
 } // namespace media::ffmpeg::graph

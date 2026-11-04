@@ -196,9 +196,15 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 
 void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexcept
 {
+    try {
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.begin");
+    } catch (...) {
+        // Diagnostics must not prevent cancellation or owner reclamation.
+    }
     runtime.m_context.cancelSessionPayloadWaiters();
-    if (runtime.m_state == MediaGraphRuntimeState::ThreadedRunning) runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
+    if (runtime.m_state == MediaGraphRuntimeState::ThreadedRunning ||
+        runtime.m_threadedExecutor.state() != MediaGraphThreadedExecutorState::Idle)
+        runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     else runtime.m_scheduler.abort(runtime.m_context);
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
@@ -208,7 +214,11 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     }
     runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
+    try {
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.done state=Aborted");
+    } catch (...) {
+        // Diagnostics must not prevent cancellation or owner reclamation.
+    }
 }
 
 void MediaGraphRuntimeLifecycleExecutor::reset(MediaGraphRuntime& runtime)

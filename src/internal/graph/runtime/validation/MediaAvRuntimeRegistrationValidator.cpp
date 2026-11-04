@@ -1,6 +1,8 @@
 #include "internal/graph/runtime/validation/MediaAvRuntimeRegistrationValidator.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 
 #include <algorithm>
@@ -72,14 +74,78 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         return invalid("A/V registration role conflicts with its exact node kind");
     if ((shared || output) && !matches(outputScheduler, MediaNodeKind::AvOutputScheduler))
         return invalid("Output registration requires its exact output scheduler");
-    if (output && (!output->aggregatePlan || !matches(output->registration.activationOwner, MediaNodeKind::AvContinuousAggregate)))
+    if (output && (!output->aggregatePlan || !matches(output->registration.activationOwner, MediaNodeKind::AvContinuousAggregate) ||
+        !matches(output->registration.audioAggregate, MediaNodeKind::ContinuousAudioAggregate)))
         return invalid("Continuous output registration requires its typed aggregate owner and plan");
+    if (input && binding.plan.startup.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan) {
+        const auto* extractor = graph.findNode(input->releaseExtractor);
+        const auto* frame = extractor->findOutputPort("video");
+        if (!MediaGraphShapeQuery::validPort(frame, MediaPortDirection::Output,
+                MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame))
+            return invalid("Decoded release requires a typed video frame output");
+        std::size_t count = 0;
+        for (const auto& edge : graph.edges()) {
+            if (edge.from.portId != frame->id) continue;
+            ++count;
+            const auto* target = graph.findNode(edge.to.nodeId);
+            const auto* port = graph.findPort(edge.to.portId);
+            if (!target || !sourceOwned(target->id) || target->kind != MediaNodeKind::HardwareTransfer ||
+                !port || port->name != "frame" ||
+                edge.policy != binding.edgePolicies.preparedVideoFrame ||
+                !MediaAtomicOutputPolicyContract::accepts(edge.policy))
+                return invalid("Decoded release requires its atomic source frame ingress");
+        }
+        if (count != 1) return invalid("Decoded release requires one frame processing consumer");
+    }
     const auto* owner = input ? graph.findNode(preparationOwner) : nullptr;
     if (input && (!owner || !members.contains(preparationOwner.value) ||
-        (owner->kind != MediaNodeKind::VideoFilter &&
-         owner->kind != MediaNodeKind::VideoFrameRate) ||
+        owner->kind != MediaNodeKind::VideoPreparation ||
         owner->options.value("video.startup_preparation.owner") != "1"))
         return invalid("A/V registration requires its explicit video preparation owner");
+    if (input) {
+        const auto readiness = binding.plan.startup.videoReadiness;
+        const auto product = owner->options.value("video.preparation.frame_product");
+        if (!readiness ||
+            (*readiness == MediaVideoStartupReadiness::IntervalCoverage ? product != "canonical_interval" :
+             *readiness == MediaVideoStartupReadiness::DecodedPresentationSpan ? product != "source_display_point" : true))
+            return invalid("Video preparation frame product differs from planned startup readiness");
+        const auto* frameIn = owner->findInputPort("frame");
+        const auto* frameOut = owner->findOutputPort("frame");
+        if (owner->inputPorts.size() != 1 || owner->outputPorts.size() != 1 ||
+            !MediaGraphShapeQuery::validPort(frameIn, MediaPortDirection::Input,
+                MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame) ||
+            !MediaGraphShapeQuery::validPort(frameOut, MediaPortDirection::Output,
+                MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame))
+            return invalid("Video preparation requires exact video frame ports");
+        auto filtered = requiredBoolNodeOption(&owner->options,
+            "VideoPreparationNode", "pipeline.filter_active");
+        if (!filtered) return ::media::Status::failure(filtered.error());
+        const auto* incoming = MediaGraphShapeQuery::singleIncomingEdge(graph, frameIn->id);
+        const auto* upstream = incoming ? graph.findNode(incoming->from.nodeId) : nullptr;
+        const auto* upstreamPort = incoming ? graph.findPort(incoming->from.portId) : nullptr;
+        const auto expectedKind = filtered.value() ? MediaNodeKind::VideoFilter :
+            *readiness == MediaVideoStartupReadiness::IntervalCoverage ? MediaNodeKind::VideoFrameRate :
+            MediaNodeKind::HardwareTransfer;
+        if (!upstream || !members.contains(upstream->id.value) || upstream->kind != expectedKind ||
+            !upstreamPort || upstreamPort->name != "frame" ||
+            incoming->policy != binding.edgePolicies.synchronizedVideoFrame)
+            return invalid("Video preparation input differs from its planned final frame stage");
+        std::size_t outputs = 0;
+        for (const auto& edge : graph.edges()) {
+            if (edge.from.portId != frameOut->id) continue;
+            ++outputs;
+            const auto* target = graph.findNode(edge.to.nodeId);
+            const auto* targetPort = graph.findPort(edge.to.portId);
+            if (!target || !targetPort || edge.policy != binding.edgePolicies.preparedVideoFrame ||
+                !MediaAtomicOutputPolicyContract::accepts(edge.policy) ||
+                (shared && (target->kind != MediaNodeKind::VideoEncode ||
+                    targetPort->name != "frame" || !members.contains(target->id.value))) ||
+                (!shared && target->kind != MediaNodeKind::AvContinuousAggregate) ||
+                MediaGraphShapeQuery::incomingEdgeCount(graph, targetPort->id) != 1)
+                return invalid("Video preparation publication must be the exact planned consumer edge");
+        }
+        if (outputs != 1) return invalid("Video preparation requires one final frame consumer");
+    }
     std::size_t ownerCount = 0;
     std::size_t demuxCount = 0;
     std::size_t publisherCount = 0;
@@ -91,7 +157,8 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         // Node roles constrain ownership within each explicitly registered domain.
         bool requiresSource = false;
         switch (node.kind) {
-        case MediaNodeKind::AvContinuousAggregate:
+        case MediaNodeKind::ContinuousAudioAggregate:
+    case MediaNodeKind::AvContinuousAggregate:
         case MediaNodeKind::VideoEncode:
         case MediaNodeKind::AudioEncode:
         case MediaNodeKind::EncodedAudioCanonicalizer:
@@ -120,6 +187,7 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         case MediaNodeKind::SourceClockStateFanout:
         case MediaNodeKind::LockedPacketGate:
         case MediaNodeKind::CanonicalInput:
+        case MediaNodeKind::DecodedVideoStartup:
         case MediaNodeKind::AvStartupCoordinator:
         case MediaNodeKind::AvStartupClock:
         case MediaNodeKind::PlaybackEpochBinder:
@@ -129,6 +197,7 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         case MediaNodeKind::VideoDecode:
         case MediaNodeKind::HardwareTransfer:
         case MediaNodeKind::VideoTimestamp:
+        case MediaNodeKind::VideoPreparation:
         case MediaNodeKind::VideoFrameRate:
         case MediaNodeKind::VideoFilter:
         case MediaNodeKind::PacketNormalize:
@@ -152,9 +221,10 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
             auto filtered = requiredBoolNodeOption(&node.options,
                 "MediaAvRuntimeRegistrationValidator", "pipeline.filter_active");
             if (!filtered) return ::media::Status::failure(filtered.error());
-            const auto expected = filtered.value()
-                ? MediaNodeKind::VideoFilter : MediaNodeKind::VideoFrameRate;
-            if (owner->kind != expected)
+            auto preparedFilter = requiredBoolNodeOption(&owner->options,
+                "VideoPreparationNode", "pipeline.filter_active");
+            if (!preparedFilter) return ::media::Status::failure(preparedFilter.error());
+            if (preparedFilter.value() != filtered.value())
                 return invalid("A/V preparation owner disagrees with the planned video pipeline");
         }
     }

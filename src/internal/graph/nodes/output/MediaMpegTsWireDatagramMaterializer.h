@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/nodes/output/MediaMpegTsUdpWirePreparedTransaction.h"
 
 #include "internal/graph/nodes/output/MediaRtpWireDatagramMaterializer.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
@@ -15,12 +16,6 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaMpegTsDatagramView final {
-    std::span<const std::uint8_t> completeTsPackets;
-    MediaRunningTime canonicalRelease;
-    MediaWireMediaBoundary mediaBoundary;
-};
-
 struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
     std::string sessionKey;
     std::string serviceScopeId;
@@ -36,31 +31,25 @@ struct MediaMpegTsUdpWireDatagramMaterializerConfig final {
 
 class MediaMpegTsUdpWireDatagramMaterializer final {
 public:
+    static ::media::Result<MediaSharedAllocationGeometry> transactionAllocationGeometry();
     static ::media::Result<MediaMpegTsUdpWireDatagramMaterializer> create(
         MediaMpegTsUdpWireDatagramMaterializerConfig config);
 
-    ::media::Result<MediaWireDatagramBatchCollection> materialize(
-        std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime canonicalRelease,
+    MediaMpegTsUdpWireDatagramMaterializer(const MediaMpegTsUdpWireDatagramMaterializer&) = delete;
+    MediaMpegTsUdpWireDatagramMaterializer& operator=(const MediaMpegTsUdpWireDatagramMaterializer&) = delete;
+    MediaMpegTsUdpWireDatagramMaterializer(MediaMpegTsUdpWireDatagramMaterializer&&) noexcept = default;
+    MediaMpegTsUdpWireDatagramMaterializer& operator=(MediaMpegTsUdpWireDatagramMaterializer&&) = delete;
+    ::media::Status prepareProtocolBatch(
+        std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer> protocolBatch,
         MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams,
-                     MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeProtocolBatch(
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
-        MediaRunningTime materializedAt);
+    ::media::Result<MediaWireDatagramBatchCollection> complete(MediaRunningTime now);
 
 private:
     explicit MediaMpegTsUdpWireDatagramMaterializer(
         MediaMpegTsUdpWireDatagramMaterializerConfig config) noexcept;
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatchReserved(
-        std::span<const MediaMpegTsDatagramView> datagrams,
-        MediaMpegTsProtocolDatagramBatchBuffer* protocolBatch,
-        MediaRunningTime materializedAt);
-
     MediaMpegTsUdpWireDatagramMaterializerConfig m_config;
+    std::optional<MediaMpegTsUdpWirePreparedTransaction> m_pending;
+    bool m_failed = false;
 };
 
 struct MediaMpegTsRtpWireDatagramMaterializerConfig final {
@@ -93,20 +82,14 @@ public:
     static ::media::Result<MediaMpegTsRtpWireDatagramMaterializer> create(
         MediaMpegTsRtpWireDatagramMaterializerConfig config);
 
-    ::media::Result<MediaWireDatagramBatchCollection> materialize(
-        std::span<const std::uint8_t> completeTsPackets,
-        MediaRunningTime canonicalRelease,
+    ::media::Result<MediaRtpWirePreparedTransaction> prepareProtocolBatch(
+        std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer> protocolBatch,
         MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeBatch(std::span<const MediaMpegTsDatagramView> datagrams,
-                     MediaRunningTime materializedAt);
-    ::media::Result<MediaWireDatagramBatchCollection>
-    materializeProtocolBatch(
-        MediaMpegTsProtocolDatagramBatchBuffer& protocolBatch,
-        MediaRunningTime materializedAt);
+    ::media::Result<MediaWireDatagramBatchCollection> complete(
+        MediaRtpWirePreparedTransaction& pending, MediaRunningTime now);
 
-    ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-    materializeTerminalReport(
+    ::media::Result<std::optional<MediaRtpWirePreparedTransaction>>
+    prepareTerminalReport(
         MediaRunningTime reportInstant,
         MediaRunningTime canonicalRelease,
         MediaRunningTime materializedAt);

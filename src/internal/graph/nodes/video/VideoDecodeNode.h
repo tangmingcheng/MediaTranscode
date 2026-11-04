@@ -6,6 +6,8 @@
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaVideoDecodeLineageProduct.h"
+#include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
 
 #include <set>
 #include <string_view>
@@ -32,7 +34,9 @@ public:
     MediaBufferRef flushBuffer;
     ::media::ffmpeg::PacketPtr pendingPacket;
     std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
-    std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    std::optional<MediaCodecLineage> pendingLineage;
+    std::optional<MediaSourceVideoObservationFacts> pendingObservation;
+    std::uint64_t nextDecodedSequence = 1;
     std::set<std::uint64_t> lineageGenerations;
     AVBufferRef* pendingSubmissionLineage = nullptr;
     std::deque<AVBufferRef*> submissionOrderLineage;
@@ -51,7 +55,7 @@ private:
     AVCodecContext* m_codecContext = nullptr;
 };
 
-class VideoDecodeNode final : public FFmpegCodecNodeRuntime {
+class VideoDecodeNode final : public FFmpegCodecNodeRuntime, public MediaSourceReferenceAllocation {
 public:
     explicit VideoDecodeNode(MediaNodeId nodeId);
     VideoDecodeNode(
@@ -91,6 +95,7 @@ private:
     bool m_firstFrameDiagnosticEmitted = false;
     std::optional<MediaHardwareDescriptor> m_outputContract;
     std::optional<bool> m_copyOpaqueLineage;
+    std::optional<MediaVideoDecodeLineageProduct> m_lineageProduct;
     std::optional<std::chrono::nanoseconds> m_receiveInterval;
     std::uint64_t m_drmPrimeFrames = 0;
     std::uint64_t m_softwareFrames = 0;

@@ -1,0 +1,21 @@
+# r272：最终输出与commit存储统一准入
+
+依据GStreamer allocation合同（https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html），复用明确分配器、固定区域及所有者生命周期；事务准入复用仓库既有reserveStorage/split/RAII，不设计新的媒体策略。r270/r271证明serial-only阻塞超期，不能用扩大deadline或独立分配掩盖。
+
+实施：同一分区游标遍历真实datagram事实，两遍分别计费和构造；一次reserve覆盖现有四块commit存储、每分区payload/最终descriptor/实际allocate_shared控制块，以及准备和发布集合。删除Entry中间复制和普通new+shared_ptr路径，绑定成功路径不再分配。planner分别探测transaction与batch真实geometry，跨层贯通并校验，原commit额度贡献不重复计费。
+
+同步迁移普通RTP、terminal RTCP、MPEGTS/UDP三处生产调用及集合消费者。所有权随实际对象释放，不能在wire prefix提交时提前归还存储。无新增线程、队列、外部参数或平台链路；MSVC geometry能力边界沿用现有审计门禁，Linux/RKMPP尚需对应能力审计，不能宣称跨平台完成。
+
+剩余整笔工作区（包括MPEGTS/RTP外层packetized payload、RTP timestamps/deadlines/global entries及临时views）必须随后纳入同笔准入或消除。此阶段仍保持serial，不将最终输出五类分配闭合冒充整个materialization预算闭合。多reservation取消/poison/顺序提交复审后才允许解除serial。
+
+验证：双独立冻结审查、Release clean-first all-target构建、原规格realtime实流；不运行local，不修改外部FFmpeg，测试产物按清单清理。
+
+## 已实施，等待审查与验证
+
+最终对象改OwnedByteStorage、FixedCapacityStorage及实际allocate_shared控制块；静态PartitionBuilder以同一visitPartitions分别完成计费、计数与构造，普通Entry中间数组和旧BatchBuilder已删除。Prepared与发布集合均接管同笔准入backing；CommitPreparation唯一reserve同时覆盖四块commit与最终输出。RTP普通/terminal及MP2T UDP已迁移，RTP仍先解锁再bind。
+
+planner新增batchGeometry并复核实际capability；原BatchContainer项改为最坏每datagram独立分区下的实际metadata/控制块/分配header贡献，payload沿用BacklogPayload。此为共享root贡献，不能推断实际存活batch数受未提交datagram计数约束；存活期与可执行容量仍需后续闭合审查。
+
+outputInputs普通视图vector、其他协议workspace和节点pending容器仍须后续统一预算，不能称整条路径已闭合。源码冻结，全量Release构建39415运行中；两个独立审查进行中。
+
+双独立局部静态PASS；Release全量重建39415成功，产物已核验。r272原规格三路首轮及所选源重入已实际运行，重入中serial-only阻塞仍导致超期4.005020ms，CLI错误退出1、payload归零、无访问违规。实流FAIL，全部16个临时产物及六个PID已清理。最终输出本切片已接线，普通workspace及生命周期容量证明仍未闭合，serial保持；详见realtime-composition-r272-validation.md。

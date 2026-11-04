@@ -36,6 +36,7 @@ struct MediaAudioBranchSegmentOptions {
     std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
     std::optional<std::uint64_t> correctionGeneration;
     std::optional<std::size_t> correctionLookaheadWindows;
+    std::optional<int> maximumResamplerOutputBlockSamples;
     std::optional<MediaAvSyncGroupKey> syncGroup;
 };
 

@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 
 #include "internal/graph/protocol/codec/MediaH264SpsCodedSizeParser.h"
+#include "internal/graph/protocol/codec/MediaVideoNalUnitScanner.h"
 #include "internal/graph/protocol/codec/MediaHevcSpsCodedSizeParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
@@ -10,6 +11,7 @@ extern "C" {
 #include <libavutil/mem.h>
 }
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <span>
@@ -17,6 +19,40 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
+
+struct ParameterBinding final {
+    const MediaRtpVideoSignalingFacts& expected;
+    bool parameterSetsOnly;
+    bool vps = false;
+    bool sps = false;
+    bool pps = false;
+    bool conflict = false;
+
+    static void visit(void* opaque, std::span<const std::uint8_t> nal)
+    {
+        auto& self = *static_cast<ParameterBinding*>(opaque);
+        while (!nal.empty() && nal.back() == 0) nal = nal.first(nal.size() - 1);
+        if (nal.empty()) { self.conflict = true; return; }
+        const std::vector<std::uint8_t>* expected = nullptr;
+        if (const auto* h264 = std::get_if<MediaH264SignalingFacts>(&self.expected)) {
+            switch (nal.front() & 0x1f) {
+            case 7: expected = &h264->sps; self.sps = true; break;
+            case 8: expected = &h264->pps; self.pps = true; break;
+            default: self.conflict = self.conflict || self.parameterSetsOnly; return;
+            }
+        } else {
+            const auto& hevc = std::get<MediaHevcSignalingFacts>(self.expected);
+            switch ((nal.front() >> 1) & 0x3f) {
+            case 32: expected = &hevc.vps; self.vps = true; break;
+            case 33: expected = &hevc.sps; self.sps = true; break;
+            case 34: expected = &hevc.pps; self.pps = true; break;
+            default: self.conflict = self.conflict || self.parameterSetsOnly; return;
+            }
+        }
+        self.conflict = self.conflict ||
+            !std::equal(nal.begin(), nal.end(), expected->begin(), expected->end());
+    }
+};
 
 struct CodecContextDeleter final {
     void operator()(AVCodecContext* context) const noexcept
@@ -72,6 +108,23 @@ void appendAnnexBNal(std::vector<std::uint8_t>& output,
 
 } // namespace
 
+::media::Status MediaRtpVideoParameterSetValidator::validateBinding(
+    std::span<const std::uint8_t> bytes, const MediaRtpVideoSignalingFacts& facts,
+    bool parameterSetsOnly)
+{
+    const bool h264 = std::holds_alternative<MediaH264SignalingFacts>(facts);
+    ParameterBinding binding{facts, parameterSetsOnly};
+    auto scanned = MediaVideoNalUnitScanner::visit(bytes,
+        h264 ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc,
+        MediaEncodedPacketLayout::startCodeDelimited(), &binding, ParameterBinding::visit);
+    if (!scanned) return scanned;
+    if (binding.conflict || (parameterSetsOnly &&
+        (!binding.sps || !binding.pps || (!h264 && !binding.vps))))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP parameter sets differ from the authoritative source signaling"));
+    return ::media::Status::success();
+}
+
 ::media::Result<MediaRtpVideoParameterSetInfo>
 MediaRtpVideoParameterSetValidator::inspect(
     const std::string& requestedCodecName,
@@ -123,24 +176,28 @@ MediaRtpVideoParameterSetValidator::inspect(
     }
     if (codecName == "h264") {
         const auto& h264 = std::get<MediaH264SignalingFacts>(facts);
-        auto codedSize = MediaH264SpsCodedSizeParser::parse(h264.sps);
+        std::optional<MediaRational> sampleAspectRatio;
+        auto codedSize = MediaH264SpsCodedSizeParser::parse(
+            h264.sps, nullptr, &sampleAspectRatio);
         if (!codedSize) {
             return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
                 codedSize.error());
         }
         return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
             MediaRtpVideoParameterSetInfo{codedSize.value(),
-                {context->sample_aspect_ratio.num, context->sample_aspect_ratio.den}});
+                sampleAspectRatio ? *sampleAspectRatio : MediaRational{}});
     }
     const auto& hevc = std::get<MediaHevcSignalingFacts>(facts);
-    auto codedSize = MediaHevcSpsCodedSizeParser::parse(hevc.sps);
+    std::optional<MediaRational> sampleAspectRatio;
+    auto codedSize = MediaHevcSpsCodedSizeParser::parse(
+        hevc.sps, nullptr, &sampleAspectRatio);
     if (!codedSize) {
         return ::media::Result<MediaRtpVideoParameterSetInfo>::failure(
             codedSize.error());
     }
     return ::media::Result<MediaRtpVideoParameterSetInfo>::success(
         MediaRtpVideoParameterSetInfo{codedSize.value(),
-            {context->sample_aspect_ratio.num, context->sample_aspect_ratio.den}});
+            sampleAspectRatio ? *sampleAspectRatio : MediaRational{}});
 }
 
 ::media::Status MediaRtpVideoParameterSetValidator::validate(

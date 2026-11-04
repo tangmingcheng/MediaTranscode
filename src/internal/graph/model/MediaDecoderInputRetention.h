@@ -11,6 +11,7 @@ struct MediaDecoderInputRetention final {
     std::uint64_t frameWorkerPackets;
     std::uint64_t serialPrivatePackets;
     std::string authority;
+    friend bool operator==(const MediaDecoderInputRetention&, const MediaDecoderInputRetention&) = default;
 
     std::uint64_t maximumInternalPackets() const noexcept
     {

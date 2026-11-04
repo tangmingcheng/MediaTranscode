@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -34,8 +35,10 @@ std::vector<MediaChannel*> channelsForPort(
 
 MediaPlaybackEpochBinderNode::MediaPlaybackEpochBinderNode(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey groupKey)
-    : m_nodeId(nodeId)
+    MediaAvSyncGroupKey groupKey,
+    MediaStartupSharedObjectPlan releaseStorage,
+    MediaStartupSharedObjectPlan controlStorage)
+    : m_releaseStorage(std::move(releaseStorage)), m_controlStorage(std::move(controlStorage)), m_nodeId(nodeId)
     , m_groupKey(std::move(groupKey))
 {
 }
@@ -95,8 +98,8 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
     }
     if (!m_pendingTransaction) {
         auto transaction = release
-            ? MediaStartupReleaseTransactionBuffer::create(m_pendingRelease)
-            : MediaStartupReleaseTransactionBuffer::createControl(m_pendingRelease);
+            ? MediaStartupReleaseTransactionBuffer::create(m_releaseStorage, m_pendingRelease)
+            : MediaStartupReleaseTransactionBuffer::createControl(m_controlStorage, m_pendingRelease);
         if (!transaction) return failTerminal(transaction.error());
         m_pendingTransaction = std::move(transaction).value();
     }
@@ -158,8 +161,8 @@ void MediaPlaybackEpochBinderNode::abort(
     m_pendingRelease.reset();
     m_pendingTransaction.reset();
     if (!m_terminalFailure) {
-        m_terminalFailure = ::media::ErrorInfo::cancelled(
-            "Playback epoch binder was aborted");
+        m_terminalFailure = mediaCleanupError(::media::ErrorCode::Cancelled,
+            "Playback epoch binder was aborted", 0);
     }
     MediaRuntimeNode::abort(context);
 }

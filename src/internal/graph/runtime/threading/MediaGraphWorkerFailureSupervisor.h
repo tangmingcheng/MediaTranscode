@@ -1,14 +1,19 @@
 #pragma once
 
 #include <atomic>
-#include <functional>
 #include <mutex>
 
 namespace media::ffmpeg::graph {
 
 class MediaGraphWorkerFailureSupervisor final {
 public:
-    using CoordinatedStop = std::function<void()>;
+    // Borrowed identities remain valid through join/disarm. Copying this exact
+    // descriptor during failure notification never allocates or calls user code.
+    struct CoordinatedStop final {
+        void* owner = nullptr;
+        void* context = nullptr;
+        void (*invoke)(void*, void*) noexcept = nullptr;
+    };
 
     void arm(CoordinatedStop coordinatedStop);
     void notifyPrimaryFailure();

@@ -8,7 +8,8 @@
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 
 #include <optional>
-#include <vector>
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 
 namespace media::ffmpeg::graph {
 
@@ -35,6 +36,7 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    std::size_t outputMemberCount() const noexcept;
     ::media::Result<MediaAvStartupReleaseDisposition> commit(
         MediaGraphExecutionContext& context,
         const MediaAvStartupReleaseBuffer& release);
@@ -53,9 +55,13 @@ private:
     void resetState() noexcept;
     MediaBufferRef m_pending;
     MediaBufferRef m_preparationTransaction;
-    std::vector<MediaBufferRef> m_stagedVideo;
-    std::vector<MediaBufferRef> m_stagedAudio;
-    bool m_releaseStaged = false;
+    struct StagedRelease final {
+        // Arrays are destroyed before the resource owner.
+        MediaLineageAllocationScope allocation;
+        MediaFixedCapacityStorage<MediaBufferRef> video;
+        MediaFixedCapacityStorage<MediaBufferRef> audio;
+    };
+    std::optional<StagedRelease> m_staged;
     bool m_prefixReservationPending = false;
     std::optional<MediaReservedOutputTransaction> m_initialOutputReservation;
     bool m_firstReleaseDiagnosticEmitted = false;

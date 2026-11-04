@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/startup/MediaAvStartupCoverageIndex.h"
+#include "internal/graph/sync/startup/MediaAvStartupReadinessIndex.h"
 
 namespace media::ffmpeg::graph {
 
@@ -13,8 +13,8 @@ struct MediaAvStartupWindow final {
 class MediaAvStartupWindowSelector final {
 public:
     static ::media::Result<std::optional<MediaAvStartupWindow>> select(
-        const MediaAvStartupCoverageIndex& video,
-        const MediaAvStartupCoverageIndex* audio,
+        const MediaAvStartupReadinessIndex& video,
+        const MediaAvStartupReadinessIndex* audio,
         const MediaAvStartupConfig& config,
         MediaAvStartupSelectionWork& work);
 };

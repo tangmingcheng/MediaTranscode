@@ -44,15 +44,6 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
                 "scheduled RTP mux requires a datagram sink"));
     }
     m_config.emplace(std::move(config));
-    try {
-        m_rewriteScratch.reserve(static_cast<std::size_t>(
-            m_config->avioConfig().maximumDatagramBytes()));
-    } catch (const std::bad_alloc&) {
-        m_config.reset();
-        return ::media::Status::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "scheduled RTP rewrite scratch"));
-    }
     m_state = State::Configured;
     return ::media::Status::success();
 }
@@ -154,12 +145,13 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
 
 ::media::Status ScheduledRtpMuxFfmpegSession::writeAccessUnit(
     const AVPacket& packet,
-    MediaRtpTimestamp timestamp)
+    MediaRtpTimestamp timestamp, std::span<std::uint8_t> scratch)
 {
     if (m_terminalFailure) {
         return ::media::Status::failure(*m_terminalFailure);
     }
     if (m_state != State::Open || !m_context || !m_avio ||
+        scratch.size() != m_config->emissionContract().maximumDatagramBytes() ||
         !packet.data || packet.size <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -205,7 +197,14 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     copy->duration = 0;
     m_activeTimestamp = timestamp;
     m_activeDatagrams = 0;
+    m_rewriteScratch = scratch;
+    struct BorrowScope final {
+        std::span<std::uint8_t>& scratch;
+        std::optional<MediaRtpTimestamp>& timestamp;
+        ~BorrowScope() { scratch = {}; timestamp.reset(); }
+    } borrow{m_rewriteScratch, m_activeTimestamp};
     const int written = av_write_frame(m_context, copy.get());
+    m_rewriteScratch = {};
     m_activeTimestamp.reset();
     if (auto callback = preserveCallbackFailure(); !callback) {
         return callback;
@@ -274,14 +273,14 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
         poison(error);
         return ::media::Status::failure(error);
     }
-    const MediaRtpDatagramRewriteParameters parameters(
-        m_config->identity(), *m_activeTimestamp);
-    auto rewritten = MediaRtpDatagramRewriter::rewrite(
-        datagram, parameters, m_rewriteScratch);
-    if (!rewritten) {
-        return ::media::Status::failure(rewritten.error());
-    }
-    auto emitted = m_sink(m_rewriteScratch, rewritten.value().payloadOctets());
+    auto plan = MediaRtpDatagramRewriter::prepare(datagram, m_config->identity());
+    if (!plan) return ::media::Status::failure(plan.error());
+    if (plan.value().bytes() > m_rewriteScratch.size()) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("RTP rewrite exceeds its borrowed scratch"));
+    auto output = m_rewriteScratch.first(plan.value().bytes());
+    auto written = MediaRtpDatagramRewriter::writeInto(plan.value(), *m_activeTimestamp, output);
+    if (!written) return written;
+    auto emitted = m_sink(output, plan.value().payloadOctets());
     if (emitted) ++m_activeDatagrams;
     return emitted;
 }

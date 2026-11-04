@@ -9,6 +9,8 @@ namespace media::ffmpeg::graph {
 class MediaVideoEncoderPlanOptionCodec final {
 public:
     static ::media::Result<MediaNodeOptions> encode(const MediaPipelineStagePlan& encoder);
+    static ::media::Result<MediaEncoderOutputBuffering> decodeOutputBuffering(
+        const MediaNodeOptions* options);
 private:
     MediaVideoEncoderPlanOptionCodec() = delete;
 };

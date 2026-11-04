@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/protocol/rtp/ingress/windows/MediaWindowsRtpIngressAdapter.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -458,7 +459,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
         !PostQueuedCompletionStatus(
             m_receiveState->completionPort, 0,
             kCancellationCompletionKey, nullptr) && status) {
-        status = ::media::Status::failure(::media::ErrorInfo::ioFailure(
+        status = ::media::Status::failure(mediaCleanupError(::media::ErrorCode::IoFailure,
             "Windows RTP ingress completion wake failed",
             static_cast<int>(GetLastError())));
     }
@@ -502,7 +503,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
                 const DWORD error = GetLastError();
                 if (error != ERROR_NOT_FOUND && first) {
                     first = ::media::Status::failure(
-                        ::media::ErrorInfo::ioFailure(
+                        mediaCleanupError(::media::ErrorCode::IoFailure,
                             "Windows RTP ingress cancellation failed",
                             static_cast<int>(error)));
                 }
@@ -520,7 +521,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
                     &removed, INFINITE, FALSE)) {
                 if (first) {
                     first = ::media::Status::failure(
-                        ::media::ErrorInfo::ioFailure(
+                        mediaCleanupError(::media::ErrorCode::IoFailure,
                             "Windows RTP ingress cancellation drain failed",
                             static_cast<int>(GetLastError())));
                 }
@@ -551,6 +552,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
 void MediaWindowsRtpIngressAdapter::logDiagnostics(
     const char* stage) noexcept
 {
+    try {
     if (!m_receiveState ||
         m_receiveState->diagnosticsLogged.exchange(
             true, std::memory_order_acq_rel)) {
@@ -586,6 +588,10 @@ void MediaWindowsRtpIngressAdapter::logDiagnostics(
             " pressure_failures=" + std::to_string(
                 m_receiveState->pressureFailures.load(std::memory_order_relaxed)) +
             " storage_reuse=preallocated post_start_allocation_path=none");
+
+    } catch (...) {
+        // Cleanup and protocol cancellation must finish when diagnostics cannot allocate.
+    }
 }
 
 } // namespace media::ffmpeg::graph

@@ -4,8 +4,8 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
 #include <memory>
-#include <deque>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -46,10 +46,10 @@ private:
 
     ::media::Result<bool> fillPendingMedia(MediaGraphExecutionContext& context,
                                            const char* portName,
-                                           std::deque<MediaBufferRef>& pending);
+                                           std::optional<MediaBufferRef>& pending);
     ::media::Result<bool> fillSnapshotBarrierMedia(MediaGraphExecutionContext& context,
                                                    const char* portName,
-                                                   std::deque<MediaBufferRef>& pending,
+                                                   std::optional<MediaBufferRef>& pending,
                                                    std::size_t& remaining);
     ::media::Result<bool> fillPendingClock(MediaGraphExecutionContext& context);
     ::media::Result<bool> fillTerminalBarrierClock(
@@ -70,15 +70,17 @@ private:
         MediaGraphExecutionContext& context,
         const MediaAvStartupDecision& decision,
         const MediaAvStartupEnvelopeBuffer& envelope);
-    void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
+    void erasePurged(const MediaAvStartupIds& purged) noexcept;
     void resetClockBarrier() noexcept;
     void clearTransientState() noexcept;
 
+    MediaLineageAllocationScope m_allocation;
+    MediaStartupSharedObjectPlan m_releaseStorage;
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
-    std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
+    MediaLineageUniquePtr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
-    std::deque<MediaBufferRef> m_pendingVideo;
-    std::deque<MediaBufferRef> m_pendingAudio;
+    std::optional<MediaBufferRef> m_pendingVideo;
+    std::optional<MediaBufferRef> m_pendingAudio;
     MediaBufferRef m_pendingClock;
     bool m_pendingClockIsDeadline = false;
     bool m_clockBarrierActive = false;

@@ -12,7 +12,7 @@ public:
     static ::media::Result<MediaPreparedInputRetentionPlan> plan(
         const MediaRealtimeRawInputPlan& input,
         const MediaPreparedRealtimeInput& video,
-        const MediaPreparedRealtimeInput& audio,
+        const MediaPreparedRealtimeInput* audio,
         MediaRunningTime acquisitionWindow);
 };
 

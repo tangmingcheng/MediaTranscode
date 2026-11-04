@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaProjectMpegTsMuxSegmentBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/realtime/MediaOutputSegmentPlanner.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 
 namespace media::ffmpeg::graph {
@@ -36,7 +37,7 @@ MediaProjectMpegTsMuxSegmentBuilder::build(
             sessionKind.error());
     }
     const MediaNodeId mux = graph.addNode(
-        MediaNodeKind::FileMux,
+        MediaOutputSegmentPlanner::nodeKind(MediaOutputSegmentRole::TsMux),
         options.prefix + ".mux",
         "Project MPEG-TS mux");
     if (!mux.isValid()) {

@@ -14,7 +14,8 @@ class MediaDatagramTransportPlanBuffer final : public MediaBuffer {
 public:
     static ::media::Result<MediaBufferRef> create(
         const MediaDatagramTransportPlanTemplate& planTemplate,
-        std::uint64_t generation);
+        std::uint64_t generation,
+        std::shared_ptr<const MediaStorageReleaseNotification> releaseNotification);
 
     MediaBufferType type() const noexcept override
     {

@@ -19,15 +19,17 @@ MediaRealtimeRuntimeCompletionOutcome MediaRealtimeRuntimeCompletion::complete(
     }
 
     const auto stopStatus = runtime.stop();
+    // Stopping cancels blocked producers and can create secondary worker
+    // failures. Preserve the error that caused us to stop after joining them.
+    if (!waitStatus) {
+        return { ::media::Status::failure(waitStatus.error()), true };
+    }
     if (const auto primaryFailure =
             runtime.threadedExecutor().primaryFailure()) {
         return {
             ::media::Status::failure(primaryFailure->error),
             true
         };
-    }
-    if (!waitStatus) {
-        return { ::media::Status::failure(waitStatus.error()), true };
     }
     if (!stopStatus) {
         return { ::media::Status::failure(stopStatus.error()), true };

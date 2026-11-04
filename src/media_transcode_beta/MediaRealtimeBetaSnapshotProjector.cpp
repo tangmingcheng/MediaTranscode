@@ -2,6 +2,7 @@
 
 #include "media_transcode_beta/MediaRealtimeBetaOwnedConfig.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -56,16 +57,31 @@ mt_beta_realtime_snapshot MediaRealtimeBetaSnapshotProjector::initial(
     snapshot.completion_reason = MT_BETA_COMPLETION_NONE;
     snapshot.selected_backend = MT_BETA_BACKEND_UNKNOWN;
     const auto& codec = config.request().input.videoRtp.codecName;
-    snapshot.input_codec = codec == "h264" ? MT_BETA_VIDEO_CODEC_H264
+    snapshot.input_codec = config.request().composition ? MT_BETA_VIDEO_CODEC_UNKNOWN
+        : codec == "h264" ? MT_BETA_VIDEO_CODEC_H264
         : codec == "hevc" ? MT_BETA_VIDEO_CODEC_HEVC : MT_BETA_VIDEO_CODEC_UNKNOWN;
     return snapshot;
 }
 
 ::media::Status MediaRealtimeBetaSnapshotProjector::projectPrepared(
     mt_beta_realtime_snapshot& snapshot,
-    const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report)
+    const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report,
+    const MediaRealtimeBetaOwnedConfig& config)
 {
     snapshot.selected_backend = selectedBackend(report.hardwareDeviceKind);
+    if (const auto& composition = config.request().composition) {
+        // Called only after every source's real RTP signaling and decoder
+        // contract passed preparation. Before this point the snapshot is UNKNOWN.
+        snapshot.input_codec = MT_BETA_VIDEO_CODEC_UNKNOWN;
+        if (!composition->inputs.empty()) {
+            const auto& codec = composition->inputs.front().videoRtp.codecName;
+            if (std::all_of(composition->inputs.begin(), composition->inputs.end(), [&](const auto& source) {
+                    return source.videoRtp.codecName == codec;
+                }))
+                snapshot.input_codec = codec == "h264" ? MT_BETA_VIDEO_CODEC_H264
+                    : codec == "hevc" ? MT_BETA_VIDEO_CODEC_HEVC : MT_BETA_VIDEO_CODEC_UNKNOWN;
+        }
+    }
     return ::media::Status::success();
 }
 

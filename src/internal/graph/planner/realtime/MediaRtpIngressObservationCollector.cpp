@@ -53,19 +53,26 @@ namespace media::ffmpeg::graph {
 ::media::Result<MediaRtpIngressObservation>
 MediaRtpIngressObservationCollector::seal()
 {
-    if (!m_firstObservedAtNanoseconds || !m_lastObservedAtNanoseconds) {
+    auto product = snapshot();
+    if (product) m_sealed = true;
+    return product;
+}
+
+::media::Result<MediaRtpIngressObservation>
+MediaRtpIngressObservationCollector::snapshot() const
+{
+    if (!m_firstObservedAtNanoseconds || !m_lastObservedAtNanoseconds ||
+        *m_lastObservedAtNanoseconds == *m_firstObservedAtNanoseconds) {
         return ::media::Result<MediaRtpIngressObservation>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "RTP ingress observation has no source evidence"));
+            ::media::ErrorInfo::wouldBlock(
+                "RTP ingress observation awaits a positive source observation span"));
     }
-    auto product = MediaRtpIngressObservation::create({
+    return MediaRtpIngressObservation::create({
         m_maximumDatagramBytes,
         m_maximumSequenceDisplacementPackets,
         m_maximumInterarrivalNanoseconds,
         m_observedDatagrams,
         *m_lastObservedAtNanoseconds - *m_firstObservedAtNanoseconds});
-    if (product) m_sealed = true;
-    return product;
 }
 
 void MediaRtpIngressObservationCollector::reset() noexcept

@@ -1,4 +1,6 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
+#include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaStartupSharedObjectPlanner.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
@@ -80,15 +82,17 @@ bool validEventPort(const MediaPort* port, MediaPortDirection direction) noexcep
 } // namespace
 
 MediaAvStartupCoordinatorNodePreparation::MediaAvStartupCoordinatorNodePreparation(
-    std::unique_ptr<MediaAvStartupCoordinator> coordinator,
+    MediaLineageAllocationScope allocation,
+    MediaStartupSharedObjectPlan releaseStorage,
+    MediaLineageUniquePtr<MediaAvStartupCoordinator> coordinator,
     std::shared_ptr<MediaAvStartupGenerationState> generationState)
-    : m_coordinator(std::move(coordinator))
+    : m_allocation(std::move(allocation)), m_releaseStorage(std::move(releaseStorage)), m_coordinator(std::move(coordinator))
     , m_generationState(std::move(generationState))
 {
 }
 
 ::media::Result<MediaAvStartupCoordinatorNodePreparation>
-prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
+prepareMediaAvStartupCoordinatorNode(const MediaNode& node, MediaLineageAllocationScope allocation)
 {
     if (node.kind != MediaNodeKind::AvStartupCoordinator) {
         return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
@@ -118,6 +122,11 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
                     ::media::ErrorInfo::invalidArgument("Video startup rejects unplanned audio options"));
         }
     }
+    auto readinessOption = requiredNodeOption(options, "MediaAvStartupCoordinatorNode",
+        "av_startup.video_readiness");
+    if (!readinessOption) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(readinessOption.error());
+    auto readiness = decodeMediaVideoStartupReadiness(readinessOption.value());
+    if (!readiness) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(readiness.error());
     auto requireKey = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
                                              "av_startup.require_video_key_frame");
     auto allowDegraded = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
@@ -177,8 +186,28 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode requires a valid planned sync group"));
     }
+    auto releaseStorage = MediaStartupSharedObjectPlanner::plan(MediaStartupSharedObjectRole::Release, allocation);
+    if (!releaseStorage) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(releaseStorage.error());
+    auto videoIndex = MediaAvStartupIndexStoragePlanner::plan(
+        videoCapacity.value(), readiness.value(), allocation);
+    if (!videoIndex) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoIndex.error());
+    std::optional<MediaAvStartupIndexStoragePlan> audioIndex;
+    if (audio) {
+        auto plannedAudio = MediaAvStartupIndexStoragePlanner::plan(audio->capacity,
+            MediaVideoStartupReadiness::IntervalCoverage, allocation);
+        if (!plannedAudio) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(plannedAudio.error());
+        audioIndex.emplace(std::move(plannedAudio).value());
+    }
+    auto generationStorage = MediaAvStartupIndexStoragePlanner::planGeneration(
+        videoCapacity.value(), audio ? audio->capacity : 0, allocation);
+    if (!generationStorage)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(generationStorage.error());
+    auto generationValid = MediaAvStartupIndexStoragePlanner::validateGeneration(
+        generationStorage.value(), videoCapacity.value(), audio ? audio->capacity : 0, allocation);
+    if (!generationValid)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(generationValid.error());
     auto created = MediaAvStartupCoordinator::create(MediaAvStartupConfig{
-        members.value(), requireKey.value(), allowDegraded.value(),
+        members.value(), readiness.value(), requireKey.value(), allowDegraded.value(),
         sourceClockModeValue.value(),
         MediaRunningTime::fromNanoseconds(wait.value()),
         MediaRunningTime::fromNanoseconds(preroll.value()),
@@ -188,15 +217,23 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
         videoCapacity.value(),
         static_cast<std::uint64_t>(videoBytes.value()),
         static_cast<std::uint64_t>(maximumVideoUnitBytes.value()),
-        std::move(videoIdentity).value(), std::move(audio)});
+        std::move(videoIdentity).value(), std::move(audio)}, allocation,
+        std::move(videoIndex).value(), std::move(audioIndex));
     if (!created) {
         return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
             created.error().toErrorInfo());
     }
+    auto generationState = std::allocate_shared<MediaAvStartupGenerationState>(
+        MediaAvStartupGenerationState::AllocationAllocator{allocation}, std::move(groupKey), allocation,
+        std::move(generationStorage).value());
+    auto storageReady = generationState->prepareStorage();
+    if (!storageReady)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(storageReady.error());
     return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::success(
         MediaAvStartupCoordinatorNodePreparation(
-            std::make_unique<MediaAvStartupCoordinator>(std::move(created).value()),
-            std::make_shared<MediaAvStartupGenerationState>(std::move(groupKey))));
+            allocation, std::move(releaseStorage).value(),
+            makeMediaLineageUnique<MediaAvStartupCoordinator>(allocation, std::move(created).value()),
+            std::move(generationState)));
 }
 
 } // namespace media::ffmpeg::graph

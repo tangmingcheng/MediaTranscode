@@ -11,8 +11,12 @@ namespace media::ffmpeg::graph {
 class MediaCanonicalIdentity final {
 public:
     static ::media::Result<MediaCanonicalIdentity> copy(std::string_view value)
+    { return copy(value, std::allocator<char>{}); }
+
+    template<class Allocator>
+    static ::media::Result<MediaCanonicalIdentity> copy(std::string_view value, Allocator allocator)
     {
-        auto storage = MediaImmutableArray<char>::copy({value.data(), value.size()});
+        auto storage = MediaImmutableArray<char>::copy({value.data(), value.size()}, std::move(allocator));
         if (!storage) return ::media::Result<MediaCanonicalIdentity>::failure(storage.error());
         MediaCanonicalIdentity identity;
         identity.m_storage = std::move(storage).value();

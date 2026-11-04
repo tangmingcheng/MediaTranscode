@@ -11,7 +11,7 @@ namespace media::ffmpeg::graph {
 class MediaHevcRtpDepacketizer final : public MediaRtpDepacketizer {
 public:
     MediaHevcRtpDepacketizer(MediaRtpDepacketizerConfig config,
-                               std::size_t maximumAccessUnitBytes);
+                               std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
 

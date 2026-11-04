@@ -21,12 +21,11 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
 {
     auto fragment = MediaAudioIntervalFragment::fromSource(std::move(lineage), interval);
     if (!fragment) return ::media::Result<MediaBufferRef>::failure(fragment.error());
-    return create(std::move(media), std::vector<MediaAudioIntervalFragment>{
-        std::move(fragment).value()});
+    return create(std::move(media), std::span<const MediaAudioIntervalFragment>(&fragment.value(), 1));
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalAudioSamplesBuffer::create(
-    MediaBufferRef media, std::vector<MediaAudioIntervalFragment> fragments)
+    MediaBufferRef media, std::span<const MediaAudioIntervalFragment> fragments)
 {
     if (!media || media->type() != MediaBufferType::Frame ||
         media->streamKind() != MediaStreamKind::Audio || fragments.empty()) {

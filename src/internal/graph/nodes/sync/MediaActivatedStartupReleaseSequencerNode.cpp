@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 
 #include "internal/graph/core/MediaGraph.h"
@@ -441,6 +442,11 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
         m_activatedEvent = eventForCommit;
     }
+    const auto* diagnosticTransaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(bound.get());
+    const auto* diagnosticRelease = diagnosticTransaction ? diagnosticTransaction->release() : nullptr;
+    if ((activateInitial || activateNext) && diagnosticRelease)
+        m_sourceVideoObservation.observeRelease(nodeId(), "ActivationReleaseSequencer", MediaSourceVideoObservationStage::Activation,
+            *diagnosticRelease, diagnosticTransaction->releaseIdentity());
     if (activateNext) {
         atomic.value()->commitReserved();
         activationReservation->completePublished();
@@ -450,6 +456,9 @@ MediaActivatedStartupReleaseSequencerNode::process(
     } else if (auto committed = atomic.value()->commit(); !committed) {
         return failTerminal(committed.error());
     }
+    if (diagnosticRelease)
+        m_sourceVideoObservation.observeRelease(nodeId(), "ActivationReleaseSequencer", MediaSourceVideoObservationStage::ReleasePublished,
+            *diagnosticRelease, diagnosticTransaction->releaseIdentity());
     m_pendingTransaction.reset();
     m_reanchoredTransaction.reset();
     return ::media::Result<MediaNodeProcessResult>::success(
@@ -468,6 +477,7 @@ MediaActivatedStartupReleaseSequencerNode::failTerminal(
 ::media::Status MediaActivatedStartupReleaseSequencerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_sourceVideoObservation.finish(nodeId(), "ActivationReleaseSequencer", "stop");
     if (m_preparationCapability) m_preparationCapability->cancel();
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
@@ -482,13 +492,14 @@ MediaActivatedStartupReleaseSequencerNode::failTerminal(
 void MediaActivatedStartupReleaseSequencerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_sourceVideoObservation.finish(nodeId(), "ActivationReleaseSequencer", "abort");
     if (m_preparationCapability) m_preparationCapability->cancel();
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
     m_reanchoredTransaction.reset();
     if (!m_terminalFailure) {
-        m_terminalFailure = ::media::ErrorInfo::cancelled(
-            "Activation release sequencer was aborted");
+        m_terminalFailure = mediaCleanupError(::media::ErrorCode::Cancelled,
+            "Activation release sequencer was aborted", 0);
     }
     MediaRuntimeNode::abort(context);
 }

@@ -6,8 +6,8 @@
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaAacRtpAuHeaderPlan>
-MediaAacRtpAuHeaderPlanner::plan(std::span<const std::uint8_t> payload)
-{
+MediaAacRtpAuHeaderPlanner::plan(std::span<const std::uint8_t> payload, MediaLineageAllocationScope allocation)
+try {
     using Result = ::media::Result<MediaAacRtpAuHeaderPlan>;
     if (payload.size() < 4) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -26,7 +26,7 @@ MediaAacRtpAuHeaderPlanner::plan(std::span<const std::uint8_t> payload)
             "AAC MPEG4-GENERIC AU header section is truncated"));
     }
 
-    MediaAacRtpAuHeaderPlan result;
+    MediaAacRtpAuHeaderPlan result(std::move(allocation));
     result.payloadOffset = 2 + headerBytes;
     result.payloadBytes = payload.size() - result.payloadOffset;
     try {
@@ -60,13 +60,16 @@ MediaAacRtpAuHeaderPlanner::plan(std::span<const std::uint8_t> payload)
                     "AAC MPEG4-GENERIC aggregate size overflows"));
             }
             result.totalAccessUnitBytes += auSize;
-            result.accessUnits.push_back({auSize, auIndex});
+            result.accessUnits.push_back(MediaAacRtpAuHeader{auSize, auIndex});
         }
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "AAC MPEG4-GENERIC AU header plan"));
     }
     return Result::success(std::move(result));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaAacRtpAuHeaderPlan>::failure(
+        ::media::ErrorInfo::allocationFailed("AAC header owner allocation failed"));
 }
 
 } // namespace media::ffmpeg::graph

@@ -1,10 +1,14 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaVideoFrameLineageProduct.h"
 #include <string>
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+enum class MediaVideoFilterInputConsumption { ImmediateSingleOutput };
 
 enum class MediaVideoFilterTimingAuthority { PreparedEncoderMetadata, SourceFrame };
 enum class MediaVideoFilterAspectPolicy { PreserveSourceAspect };
@@ -23,13 +27,20 @@ struct MediaVideoFilterIsolationEvidence final {
 
 struct MediaVideoFilterExecutionPlan final {
     MediaVideoFilterTimingAuthority timing;
+    MediaVideoFrameLineageProduct frameProduct;
     MediaVideoFilterAspectPolicy aspect;
     MediaVideoFilterIsolationEvidence output;
     MediaRational sourceFrameRate;
     MediaRational sourceSampleAspectRatio;
+    std::optional<MediaVideoFilterInputConsumption> inputConsumption;
 
     bool valid() const noexcept
     {
+        if (inputConsumption && *inputConsumption != MediaVideoFilterInputConsumption::ImmediateSingleOutput) return false;
+        if (frameProduct != MediaVideoFrameLineageProduct::CanonicalInterval &&
+            frameProduct != MediaVideoFrameLineageProduct::SourceDisplayPoint) return false;
+        if (frameProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint &&
+            timing != MediaVideoFilterTimingAuthority::PreparedEncoderMetadata) return false;
         if (output.filterDescription.empty() || aspect != MediaVideoFilterAspectPolicy::PreserveSourceAspect) return false;
         if (timing == MediaVideoFilterTimingAuthority::PreparedEncoderMetadata)
             return output.allocation == MediaVideoFilterAllocation::NegotiatedOutput &&

@@ -32,7 +32,7 @@ std::optional<std::uint64_t> packetTimestamp(std::int64_t value)
     MediaPacketSourceTiming timing,
     MediaRational plannedTimeBase)
 {
-    auto buffer = FFmpegBufferFactory::wrapPacket(
+    auto buffer = FFmpegBufferFactory::wrapPacket(*std::pmr::new_delete_resource(),
         std::move(packet), streamKind, std::move(timing));
     if (!buffer) return ::media::Result<MediaBufferRef>::failure(buffer.error());
     const auto* wrapped = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());

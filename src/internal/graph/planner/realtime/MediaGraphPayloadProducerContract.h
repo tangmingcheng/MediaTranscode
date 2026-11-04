@@ -19,6 +19,7 @@ inline std::optional<MediaGraphPayloadProducerOutput> mediaGraphPayloadProducerO
     case MediaNodeKind::Demux:
     case MediaNodeKind::MpegTsDemux:
     case MediaNodeKind::PacketNormalize:
+    case MediaNodeKind::RtpPacketClockBinder:
         return MediaGraphPayloadProducerOutput{MediaPayloadKind::Packet, std::nullopt};
     case MediaNodeKind::VideoDecode:
     case MediaNodeKind::HardwareTransfer:
@@ -32,8 +33,10 @@ inline std::optional<MediaGraphPayloadProducerOutput> mediaGraphPayloadProducerO
         return MediaGraphPayloadProducerOutput{MediaPayloadKind::Frame, MediaStreamKind::Audio};
     case MediaNodeKind::AudioEncode:
         return MediaGraphPayloadProducerOutput{MediaPayloadKind::Packet, MediaStreamKind::Audio};
+    case MediaNodeKind::ContinuousAudioAggregate:
+        return MediaGraphPayloadProducerOutput{MediaPayloadKind::Frame, MediaStreamKind::Audio};
     case MediaNodeKind::AvContinuousAggregate:
-        return MediaGraphPayloadProducerOutput{MediaPayloadKind::Frame, std::nullopt};
+        return MediaGraphPayloadProducerOutput{MediaPayloadKind::Frame, MediaStreamKind::Video};
     default:
         return std::nullopt;
     }

@@ -19,12 +19,11 @@ uint32_t readU32(std::span<const uint8_t> bytes, std::size_t offset)
            bytes[offset + 3];
 }
 
-using PacketResult = ::media::Result<MediaRtcpPacket>;
-using CompoundResult = ::media::Result<std::vector<MediaRtcpPacket>>;
+using CompoundResult = ::media::Result<MediaRtcpPackets>;
 
-PacketResult packetError(const char* message)
+::media::Status packetError(const char* message)
 {
-    return PacketResult::failure(::media::ErrorInfo::invalidArgument(message));
+    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(message));
 }
 
 CompoundResult compoundError(const char* message)
@@ -40,36 +39,24 @@ bool zeroBytes(std::span<const uint8_t> bytes, std::size_t begin, std::size_t en
     return true;
 }
 
-PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t packetType,
+::media::Status validatePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t packetType,
                          uint8_t paddingSize)
 {
     const std::size_t end = bytes.size() - paddingSize;
-    MediaRtcpPacket packet{MediaRtcpPacketKind::Unknown, packetType, count, paddingSize,
-                           std::nullopt, std::nullopt, {}, {}, {}};
     if (packetType == 200) {
         const std::size_t reportBytes = static_cast<std::size_t>(count) * 24;
         if (end != 28 + reportBytes) return packetError("RTCP sender report length is invalid");
-        packet.kind = MediaRtcpPacketKind::SenderReport;
-        packet.senderReport = MediaRtcpSenderReport{
-            readU32(bytes, 4),
-            MediaRtcpNtpTimestamp{readU32(bytes, 8), readU32(bytes, 12)},
-            readU32(bytes, 16), readU32(bytes, 20), readU32(bytes, 24)};
-        return PacketResult::success(std::move(packet));
+        return ::media::Status::success();
     }
     if (packetType == 201) {
         const std::size_t reportBytes = static_cast<std::size_t>(count) * 24;
         if (end != 8 + reportBytes) return packetError("RTCP receiver report length is invalid");
-        packet.kind = MediaRtcpPacketKind::ReceiverReport;
-        packet.receiverReportSsrc = readU32(bytes, 4);
-        return PacketResult::success(std::move(packet));
+        return ::media::Status::success();
     }
     if (packetType == 202) {
-        packet.kind = MediaRtcpPacketKind::SourceDescription;
         std::size_t offset = 4;
-        packet.sdesChunks.reserve(count);
         for (uint8_t chunkIndex = 0; chunkIndex < count; ++chunkIndex) {
             if (end - offset < 4) return packetError("RTCP SDES chunk SSRC is truncated");
-            MediaRtcpSdesChunk chunk{readU32(bytes, offset), {}};
             offset += 4;
             bool ended = false;
             while (offset < end) {
@@ -81,8 +68,6 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
                 if (offset >= end) return packetError("RTCP SDES item length is truncated");
                 const std::size_t itemSize = bytes[offset++];
                 if (itemSize > end - offset) return packetError("RTCP SDES item value is truncated");
-                chunk.items.push_back(MediaRtcpSdesItem{
-                    type, std::vector<uint8_t>(bytes.begin() + offset, bytes.begin() + offset + itemSize)});
                 offset += itemSize;
             }
             if (!ended) return packetError("RTCP SDES chunk has no end item");
@@ -91,48 +76,85 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
                 return packetError("RTCP SDES alignment padding is invalid");
             }
             offset = aligned;
-            packet.sdesChunks.push_back(std::move(chunk));
         }
         if (offset != end) return packetError("RTCP SDES contains trailing bytes");
-        return PacketResult::success(std::move(packet));
+        return ::media::Status::success();
     }
     if (packetType == 203) {
-        packet.kind = MediaRtcpPacketKind::Bye;
         std::size_t offset = 4;
         if (static_cast<std::size_t>(count) > (end - offset) / 4) {
             return packetError("RTCP BYE source list is truncated");
         }
-        packet.byeSources.reserve(count);
         for (uint8_t index = 0; index < count; ++index) {
-            packet.byeSources.push_back(readU32(bytes, offset));
             offset += 4;
         }
         if (offset < end) {
             const std::size_t reasonSize = bytes[offset++];
             if (reasonSize > end - offset) return packetError("RTCP BYE reason is truncated");
-            packet.byeReason.assign(bytes.begin() + offset, bytes.begin() + offset + reasonSize);
             offset += reasonSize;
             const std::size_t alignedEnd = (offset + 3) & ~std::size_t(3);
             if (alignedEnd != end || !zeroBytes(bytes, offset, end)) {
                 return packetError("RTCP BYE alignment padding is invalid");
             }
         }
-        return PacketResult::success(std::move(packet));
+        return ::media::Status::success();
     }
-    return PacketResult::success(std::move(packet));
+    return ::media::Status::success();
 }
 
 } // namespace
 
-::media::Result<std::vector<MediaRtcpPacket>> MediaRtcpCompoundParser::parse(
-    std::span<const uint8_t> datagram, const MediaRtcpCompoundPolicy& policy)
+MediaRtcpSdesItem MediaRtcpSdesItem::read(std::span<const uint8_t> bytes) noexcept
+{ return {bytes[0], bytes.subspan(2, bytes[1]), static_cast<std::size_t>(2 + bytes[1])}; }
+
+MediaRtcpSdesChunk MediaRtcpSdesChunk::read(std::span<const uint8_t> bytes) noexcept
+{
+    std::size_t offset = 4;
+    while (bytes[offset]) offset += 2 + bytes[offset + 1];
+    return {readU32(bytes, 0), MediaRtcpWireRange<MediaRtcpSdesItem>{bytes.subspan(4, offset - 4)},
+        (offset + 1 + 3) & ~std::size_t(3)};
+}
+
+MediaRtcpByeSource MediaRtcpByeSource::read(std::span<const uint8_t> bytes) noexcept
+{ return {readU32(bytes, 0), 4}; }
+
+MediaRtcpPacket MediaRtcpPacket::read(std::span<const uint8_t> bytes) noexcept
+{
+    const auto length = (static_cast<std::size_t>(readU16(bytes, 2)) + 1) * 4;
+    const auto count = static_cast<uint8_t>(bytes[0] & 0x1f);
+    const auto padding = static_cast<uint8_t>((bytes[0] & 0x20) ? bytes[length - 1] : 0);
+    const auto end = length - padding;
+    MediaRtcpPacket packet{MediaRtcpPacketKind::Unknown, bytes[1], count, padding,
+        std::nullopt, std::nullopt, MediaRtcpWireRange<MediaRtcpSdesChunk>{},
+        MediaRtcpWireRange<MediaRtcpByeSource>{}, {}, length};
+    if (bytes[1] == 200) {
+        packet.kind = MediaRtcpPacketKind::SenderReport;
+        packet.senderReport = MediaRtcpSenderReport{readU32(bytes, 4),
+            {readU32(bytes, 8), readU32(bytes, 12)}, readU32(bytes, 16), readU32(bytes, 20), readU32(bytes, 24)};
+    } else if (bytes[1] == 201) {
+        packet.kind = MediaRtcpPacketKind::ReceiverReport;
+        packet.receiverReportSsrc = readU32(bytes, 4);
+    } else if (bytes[1] == 202) {
+        packet.kind = MediaRtcpPacketKind::SourceDescription;
+        packet.sdesChunks = MediaRtcpWireRange<MediaRtcpSdesChunk>{bytes.subspan(4, end - 4)};
+    } else if (bytes[1] == 203) {
+        packet.kind = MediaRtcpPacketKind::Bye;
+        packet.byeSources = MediaRtcpWireRange<MediaRtcpByeSource>{bytes.subspan(4, count * 4)};
+        const auto reason = static_cast<std::size_t>(4 + count * 4);
+        if (reason < end) packet.byeReason = bytes.subspan(reason + 1, bytes[reason]);
+    }
+    return packet;
+}
+
+::media::Result<MediaRtcpPackets> MediaRtcpCompoundParser::parse(
+    std::span<const uint8_t> datagram, const MediaRtcpCompoundPolicy& policy) try
 {
     if (policy.mode != MediaRtcpCompositionMode::StrictCompoundRfc3550 &&
         policy.mode != MediaRtcpCompositionMode::ReducedSizeRfc5506) {
         return compoundError("Unsupported RTCP composition mode");
     }
     if (datagram.empty()) return compoundError("RTCP compound datagram is empty");
-    std::vector<MediaRtcpPacket> packets;
+    MediaRtcpPackets packets{datagram};
     std::size_t offset = 0;
     while (offset < datagram.size()) {
         if (datagram.size() - offset < 4) return compoundError("RTCP packet header is truncated");
@@ -157,10 +179,9 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
                 return compoundError("RTCP padding length is invalid");
             }
         }
-        auto packet = parsePacket(datagram.subspan(offset, packetSize), count,
+        auto packet = validatePacket(datagram.subspan(offset, packetSize), count,
                                   datagram[offset + 1], paddingSize);
         if (!packet) return CompoundResult::failure(packet.error());
-        packets.push_back(std::move(packet.value()));
         offset += packetSize;
     }
     const bool beginsWithReport =
@@ -190,6 +211,10 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
         if (!matchingCname) return compoundError("Strict RTCP compound packet requires matching non-empty CNAME");
     }
     return CompoundResult::success(std::move(packets));
+}
+catch (const std::bad_alloc&) {
+    return CompoundResult::failure(::media::ErrorInfo::allocationFailed(
+        "RTCP parser allocation failed"));
 }
 
 } // namespace media::ffmpeg::graph

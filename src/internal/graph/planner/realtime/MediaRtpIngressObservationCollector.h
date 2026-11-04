@@ -15,6 +15,7 @@ public:
         std::optional<std::uint16_t> rtpSequenceNumber,
         std::int64_t observedAtNanoseconds);
     ::media::Result<MediaRtpIngressObservation> seal();
+    ::media::Result<MediaRtpIngressObservation> snapshot() const;
     void reset() noexcept;
 
 private:

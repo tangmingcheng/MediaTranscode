@@ -1,5 +1,7 @@
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
+#include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
@@ -19,11 +21,12 @@ namespace {
 
 class ProductionAvSyncClockSource final : public MediaAvSyncClockSource {
 public:
+    explicit ProductionAvSyncClockSource(std::shared_ptr<MediaMasterClock> master)
+        : m_master(std::move(master)) {}
     ::media::Result<MediaAvSyncClockBundle> capture(
         bool requireSharedNtpEpoch) override
     {
-        auto masterClock = std::make_shared<MediaSteadyMasterClock>(
-            MediaRunningTime::fromNanoseconds(0));
+        auto masterClock = m_master;
         std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch;
         if (requireSharedNtpEpoch) {
             auto masterNow = masterClock->now();
@@ -47,6 +50,8 @@ public:
             MediaAvSyncClockBundle{std::move(masterClock),
                                    std::move(sharedNtpEpoch)});
     }
+private:
+    std::shared_ptr<MediaMasterClock> m_master;
 };
 
 } // namespace
@@ -170,7 +175,10 @@ public:
     if (const auto* avSyncBinding =
             std::get_if<MediaAvSyncRuntimeBinding>(
                 &executable.runtimeBinding)) {
-        ProductionAvSyncClockSource productionClockSource;
+        auto master = avSyncBinding->preparedMasterClock;
+        if (!master && !avSyncClockSource)
+            master = std::make_shared<MediaSteadyMasterClock>(MediaRunningTime::fromNanoseconds(0));
+        ProductionAvSyncClockSource productionClockSource(std::move(master));
         MediaAvSyncClockSource& clockSource = avSyncClockSource
             ? *avSyncClockSource
             : static_cast<MediaAvSyncClockSource&>(productionClockSource);
@@ -216,12 +224,28 @@ public:
             auto dependencies = MediaAvSyncRuntimeBootstrap::reacquisitionAssemblyDependencies(
                 activation, exactGroup);
             if (!dependencies) return ::media::Status::failure(dependencies.error());
+            std::optional<MediaLineageAllocationScope> preparationAllocation;
+            if (domain.plan.startup.videoReadiness == MediaVideoStartupReadiness::IntervalCoverage) {
+                preparationAllocation.emplace(MediaRuntimeLineageAllocation{});
+            } else if (domain.plan.startup.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan) {
+                if (!source || !source->preparedRtpSource || !source->preparedRtpSource->videoReferenceResource())
+                    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                        "Video preparation state requires its prepared source owner"));
+                preparationAllocation.emplace(MediaPreparedLineageAllocation{source->preparedRtpSource->videoReferenceResource()});
+            } else {
+                return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                    "Video preparation state requires planned source readiness"));
+            }
+            const auto& reservationStorage = shared ? shared->reservationStorage : source->reservationStorage;
+            if (auto valid = MediaOutputReservationStoragePlanner::validate(reservationStorage, *preparationAllocation); !valid)
+                return valid;
             auto preparation = shared ? shared->videoPreparationState : source->videoPreparationState;
             if (!preparation) {
-                auto created = MediaAvStartupVideoPreparationState::create(domain.groupKey);
+                auto created = MediaAvStartupVideoPreparationState::create(domain.groupKey, reservationStorage);
                 if (!created) return ::media::Status::failure(created.error());
                 preparation = std::move(created).value();
             }
+            if (auto valid = preparation->validateStorage(reservationStorage); !valid) return valid;
             if (preparation->snapshot().groupKey != domain.groupKey) {
                 return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "A/V domain preparation belongs to another group"));
@@ -236,7 +260,7 @@ public:
                     domain.groupKey, MediaAvSourceDomainRuntimeState{
                         source->registration, std::move(activation),
                         std::move(dependencies).value(), std::move(preparation),
-                        source->preparedVideoDecoder}});
+                        source->preparedVideoDecoder, source->preparedRtpSource}});
             }
         }
         if (!outputRegistered) {

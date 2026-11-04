@@ -99,7 +99,10 @@ enum class MediaNodeKind {
     DatagramTransportPlanSource = 73,
     VideoOutputFanout = 74,
     EncodedVideoOutputFanout = 75,
-    AvContinuousAggregate = 76
+    AvContinuousAggregate = 76,
+    ContinuousAudioAggregate = 77,
+    VideoPreparation = 78,
+    DecodedVideoStartup = 79
 };
 
 } // namespace media::ffmpeg::graph

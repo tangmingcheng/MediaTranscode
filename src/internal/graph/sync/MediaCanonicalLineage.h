@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 
 #include "internal/graph/sync/MediaCanonicalAccessUnitIdentity.h"
 #include "internal/graph/sync/MediaCanonicalVideoContribution.h"
@@ -8,7 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
-#include <vector>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -42,7 +43,7 @@ createMediaCanonicalLineage(
     std::string_view sourceIdentity,
     MediaSourceAccessUnitSequence sourceSequence,
     MediaTimeMappingConfidence mappingConfidence,
-    std::uint64_t generation);
+    std::uint64_t generation, const MediaLineageAllocationScope& allocation);
 
 ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>
 createMediaCanonicalOutputLineage(
@@ -55,7 +56,7 @@ createMediaCanonicalOutputLineage(
     MediaOutputAccessUnitSequence outputSequence,
     MediaTimeMappingConfidence mappingConfidence,
     std::uint64_t generation,
-    std::vector<MediaCanonicalVideoContribution> videoContributions);
+    std::span<const MediaCanonicalVideoContribution> videoContributions);
 
 ::media::Status validateMediaCanonicalLineage(
     const MediaCanonicalLineage& lineage) noexcept;

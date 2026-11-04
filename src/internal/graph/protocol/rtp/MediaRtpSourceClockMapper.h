@@ -27,7 +27,7 @@ struct MediaRtpSourceClockMapperConfig final {
 
 struct MediaRtpSourceClockCalibration final {
     std::uint32_t ssrc;
-    std::vector<std::uint8_t> cname;
+    MediaRtcpBytes cname{MediaLineageAllocator<std::uint8_t>{MediaRuntimeLineageAllocation{}}};
     std::uint64_t generation;
     std::uint32_t rtpAnchor;
     std::int64_t extendedRtpAnchor;
@@ -47,6 +47,7 @@ struct MediaRtpMappedSourceTime final {
 
 class MediaRtpSourceClockMapper final {
 public:
+    static ::media::Status validateConfig(const MediaRtpSourceClockMapperConfig& config);
     static ::media::Result<MediaRtpSourceClockMapper> create(
         MediaRtpSourceClockMapperConfig config,
         std::uint64_t generation);

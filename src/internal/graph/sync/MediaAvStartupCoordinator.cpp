@@ -1,17 +1,35 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
-#include "internal/graph/sync/startup/MediaAvStartupCoverageIndex.h"
+#include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/sync/startup/MediaAvStartupReadinessIndex.h"
 #include "internal/graph/sync/startup/MediaAvStartupStreamStore.h"
 #include "internal/graph/sync/startup/MediaAvStartupWindowSelector.h"
 
 #include <algorithm>
 #include <limits>
+#include <initializer_list>
+#include <new>
+#include <stdexcept>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
 constexpr MediaRunningTime Zero = MediaRunningTime::fromNanoseconds(0);
+
+std::size_t startupResultCapacity(std::initializer_list<std::size_t> counts)
+{
+    std::size_t total = 0;
+    for (const auto count : counts) {
+        auto added = MediaCheckedArithmetic::add(total, count, "Startup result capacity");
+        if (!added) throw std::length_error(added.error().message);
+        if (added.value() > (std::numeric_limits<std::size_t>::max)())
+            throw std::length_error("Startup result capacity exceeds addressable size");
+        total = static_cast<std::size_t>(added.value());
+    }
+    return total;
+}
 
 std::uint64_t nonNegativeSampleDistance(
     std::int64_t first,
@@ -108,12 +126,23 @@ std::size_t MediaAvStartupUnitIdHash::operator()(
 }
 
 MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
-    MediaAvStartupConfig config)
+    MediaAvStartupConfig config, MediaLineageAllocationScope allocation,
+    MediaAvStartupIndexStoragePlan videoIndex, std::optional<MediaAvStartupIndexStoragePlan> audioIndex)
 {
     const auto* audio = config.audio ? &*config.audio : nullptr;
-    if ((config.members != MediaTranscodeStreamSet::VideoOnly &&
+    const auto* prepared = std::get_if<MediaPreparedLineageAllocation>(&allocation);
+    auto indexStatus = MediaAvStartupIndexStoragePlanner::validate(
+        videoIndex, config.videoCapacity, config.videoReadiness, allocation);
+    if (indexStatus && audio && audioIndex)
+        indexStatus = MediaAvStartupIndexStoragePlanner::validate(*audioIndex, audio->capacity,
+            MediaVideoStartupReadiness::IntervalCoverage, allocation);
+    if (!indexStatus || config.audio.has_value() != audioIndex.has_value() ||
+        (config.members != MediaTranscodeStreamSet::VideoOnly &&
          config.members != MediaTranscodeStreamSet::AudioVideo) ||
         (config.members == MediaTranscodeStreamSet::AudioVideo) != config.audio.has_value() ||
+        !encodeMediaVideoStartupReadiness(config.videoReadiness) ||
+        (config.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan) != (prepared != nullptr) ||
+        (prepared && !prepared->resource) ||
         !config.requireVideoKeyFrame || config.allowDegradedClock ||
         config.maximumWait <= Zero || config.preroll <= Zero ||
         config.keyFrameWait <= Zero || config.maximumGap <= Zero ||
@@ -150,18 +179,38 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
             zero,
             0,
             config.maximumWait.nanoseconds(),
-            "MediaAvStartupCoordinator requires a complete ordered startup policy"));
+            !indexStatus ? indexStatus.error().message :
+                "MediaAvStartupCoordinator requires a complete ordered startup policy"));
     }
-    return MediaAvSyncResult<MediaAvStartupCoordinator>::success(
-        MediaAvStartupCoordinator(std::move(config)));
+    // Prepare scratch and index heads before accepting any media. Capture error
+    // context before the configuration is moved into the constructed owner.
+    auto storageFailure = MediaAvSyncError(MediaAvSyncErrorCode::StartupCapacityExceeded,
+        config.sourceClockMode, MediaAvSyncErrorState::Startup,
+        "create_startup_coordinator", config.videoIdentity,
+        audio ? audio->identity : std::string{}, std::nullopt, std::nullopt, std::nullopt,
+        Zero, Zero, 0, config.maximumWait.nanoseconds(),
+        "Startup coordinator storage allocation exceeds available storage");
+    try {
+        return MediaAvSyncResult<MediaAvStartupCoordinator>::success(
+            MediaAvStartupCoordinator(std::move(config), std::move(allocation),
+                std::move(videoIndex), std::move(audioIndex)));
+    } catch (const std::bad_alloc&) {
+        return MediaAvSyncResult<MediaAvStartupCoordinator>::failure(std::move(storageFailure));
+    } catch (const std::length_error&) {
+        return MediaAvSyncResult<MediaAvStartupCoordinator>::failure(std::move(storageFailure));
+    }
 }
 
-MediaAvStartupCoordinator::MediaAvStartupCoordinator(MediaAvStartupConfig config)
-    : m_config(std::move(config))
+MediaAvStartupCoordinator::MediaAvStartupCoordinator(MediaAvStartupConfig config, MediaLineageAllocationScope allocation,
+    MediaAvStartupIndexStoragePlan videoIndex, std::optional<MediaAvStartupIndexStoragePlan> audioIndex)
+    : m_allocation(allocation)
+    , m_config(std::move(config))
     , m_state(m_config.sourceClockMode)
-    , m_video(std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap))
+    , m_video(makeMediaLineageUnique<MediaAvStartupStreamStore>(allocation, m_config.maximumGap, std::move(videoIndex), allocation))
     , m_audio(m_config.audio
-          ? std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap) : nullptr)
+          ? makeMediaLineageUnique<MediaAvStartupStreamStore>(allocation, m_config.maximumGap, std::move(*audioIndex), allocation)
+          : MediaLineageUniquePtr<MediaAvStartupStreamStore>(nullptr,
+                MediaLineageObjectDeleter<MediaAvStartupStreamStore>{allocation}))
 {
 }
 
@@ -183,19 +232,23 @@ MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
     const auto maximumUnitBytes = unit.stream == MediaAvStartupStream::Video
         ? m_config.maximumVideoUnitBytes
         : m_config.audio->maximumUnitBytes;
+    const auto* duration = std::get_if<MediaRunningTime>(&unit.timing);
+    const bool point = unit.stream == MediaAvStartupStream::Video &&
+        m_config.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan;
     if (unit.sequence == 0 || unit.payloadBytes == 0 ||
-        unit.payloadBytes > maximumUnitBytes || unit.duration <= Zero) {
+        unit.payloadBytes > maximumUnitBytes ||
+        (point ? duration != nullptr : (!duration || *duration <= Zero))) {
         return MediaAvSyncStatus::failure(startupError(
             unit.payloadBytes > maximumUnitBytes
                 ? MediaAvSyncErrorCode::StartupCapacityExceeded
                 : MediaAvSyncErrorCode::InvalidDuration,
             "validate_startup_unit", &unit,
-            "startup unit requires bounded payload, positive sequence and duration"));
+            "startup unit requires bounded payload and its planned interval or display-point timing"));
     }
     const auto& expectedIdentity = unit.stream == MediaAvStartupStream::Video
         ? m_config.videoIdentity
         : m_config.audio->identity;
-    if (unit.identity != expectedIdentity) {
+    if (unit.identity.view() != expectedIdentity) {
         return MediaAvSyncStatus::failure(startupError(
             MediaAvSyncErrorCode::SourceIdentityMismatch,
             "validate_startup_unit", &unit, "stream identity mismatch"));
@@ -217,7 +270,7 @@ MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
             MediaAvSyncErrorCode::InvalidDuration, "validate_startup_unit", &unit,
             "audio startup sample span end is not representable"));
     } else if (auto status = validateMediaAvAudioSampleSpanDuration(
-                   *unit.audio, unit.duration); !status) {
+                   *unit.audio, *duration); !status) {
         return MediaAvSyncStatus::failure(startupError(
             MediaAvSyncErrorCode::InvalidDuration, "validate_startup_unit", &unit,
             status.error().message));
@@ -237,7 +290,7 @@ MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
     return MediaAvSyncStatus::success();
 }
 
-MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>
+MediaAvSyncResult<MediaAvStartupIds>
 MediaAvStartupCoordinator::advanceGeneration(
     std::uint64_t generation,
     MediaRunningTime observedAt)
@@ -246,19 +299,20 @@ MediaAvStartupCoordinator::advanceGeneration(
         ? m_state.transition(MediaAvSyncEvent::RequireReacquisition, generation)
         : m_state.transition(MediaAvSyncEvent::BeginAcquisition, generation);
     if (!status) {
-        return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::failure(status.error());
+        return MediaAvSyncResult<MediaAvStartupIds>::failure(status.error());
     }
-    auto purged = purge();
+    auto purged = purge({}, std::nullopt);
     m_lastVideoSequence.reset();
+    m_lastVideoPresentation.reset();
     m_lastAudioSequence.reset();
     m_acquisitionStartedAt = observedAt;
-    return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::success(std::move(purged));
+    return MediaAvSyncResult<MediaAvStartupIds>::success(std::move(purged));
 }
 
 MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
     MediaAvStartupAccessUnit unit,
     MediaRunningTime observedAt)
-{
+try {
     if (auto status = validateUnit(unit); !status) {
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(status.error());
     }
@@ -271,19 +325,24 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
                 : MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", &unit, "startup coordinator is not accepting media"));
     }
-    if (m_state.state() == MediaAvSyncState::WaitingForEvidence)
+    if (m_state.state() == MediaAvSyncState::WaitingForEvidence) {
+        MediaAvStartupIds dropped(1, *MediaLineageAllocator<MediaAvStartupUnitId>{m_allocation}.resource());
+        dropped.push_back(unitId(unit));
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::DroppedNotReady, std::nullopt, {unitId(unit)}});
+            {m_allocation, MediaAvStartupDisposition::DroppedNotReady, std::nullopt, std::move(dropped)});
+    }
     const MediaRunningTime effectiveNow = advanceWatermark(observedAt);
-    std::vector<MediaAvStartupUnitId> purged;
+    MediaAvStartupIds purged(0, *MediaLineageAllocator<MediaAvStartupUnitId>{m_allocation}.resource());
     if (!m_state.generation()) {
         auto advanced = advanceGeneration(unit.generation, effectiveNow);
         if (!advanced) return MediaAvSyncResult<MediaAvStartupDecision>::failure(advanced.error());
         purged = std::move(advanced).value();
     } else if (unit.generation < *m_state.generation()) {
+        MediaAvStartupIds dropped(1, *MediaLineageAllocator<MediaAvStartupUnitId>{m_allocation}.resource());
+        dropped.push_back(unitId(unit));
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::DroppedOldGeneration,
-             std::nullopt, {unitId(unit)}});
+            {m_allocation, MediaAvStartupDisposition::DroppedOldGeneration,
+             std::nullopt, std::move(dropped)});
     } else if (unit.generation > *m_state.generation()) {
         auto advanced = advanceGeneration(unit.generation, effectiveNow);
         if (!advanced) return MediaAvSyncResult<MediaAvStartupDecision>::failure(advanced.error());
@@ -301,12 +360,10 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
                 unit.generation); !status) {
             return MediaAvSyncResult<MediaAvStartupDecision>::failure(status.error());
         }
-        auto reacquired = purge();
-        purged.insert(purged.end(), reacquired.begin(), reacquired.end());
+        purged = purge(purged.view(), unitId(unit));
         if (!acquisitionAlreadyActive) m_acquisitionStartedAt = effectiveNow;
-        purged.push_back(unitId(unit));
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::DroppedNotReady, std::nullopt, std::move(purged)});
+            {m_allocation, MediaAvStartupDisposition::DroppedNotReady, std::nullopt, std::move(purged)});
     }
 
     const bool streamEnded = unit.stream == MediaAvStartupStream::Video
@@ -320,15 +377,25 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
     auto& lastSequence = unit.stream == MediaAvStartupStream::Video
         ? m_lastVideoSequence
         : m_lastAudioSequence;
+    const bool displayPoint = unit.stream == MediaAvStartupStream::Video &&
+        m_config.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan;
+    if (displayPoint &&
+        ((lastSequence && unit.sequence <= *lastSequence) ||
+         (m_lastVideoPresentation && *unit.presentationTime < *m_lastVideoPresentation))) {
+        return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
+            MediaAvSyncErrorCode::StartupInvalidTransition,
+            "submit", &unit, "decoded display order regressed within the current generation"));
+    }
     if (lastSequence && unit.sequence <= *lastSequence) {
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::DroppedDuplicateOrRegressed,
+            {m_allocation, MediaAvStartupDisposition::DroppedDuplicateOrRegressed,
              std::nullopt, std::move(purged)});
     }
     if (m_state.state() == MediaAvSyncState::Running) {
         lastSequence = unit.sequence;
+        if (displayPoint) m_lastVideoPresentation = unit.presentationTime;
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::PassThrough, std::nullopt, std::move(purged)});
+            {m_allocation, MediaAvStartupDisposition::PassThrough, std::nullopt, std::move(purged)});
     }
 
     if (unit.stream == MediaAvStartupStream::Video &&
@@ -354,11 +421,14 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
     }
     const auto payloadBytes = unit.payloadBytes;
     const auto sequence = unit.sequence;
+    const auto presentation = unit.presentationTime;
     if (unit.stream == MediaAvStartupStream::Video) m_videoLocked = true;
     else m_audioLocked = true;
     auto appended = store.append(std::move(unit));
     if (!appended) {
-        auto failed = markFailed(MediaAvSyncErrorCode::TimeOverflow,
+        auto failed = markFailed(appended.error().code == ::media::ErrorCode::AllocationFailed
+                                     ? MediaAvSyncErrorCode::StartupCapacityExceeded
+                                     : MediaAvSyncErrorCode::TimeOverflow,
                                  appended.error().message);
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(failed.error());
     }
@@ -368,6 +438,7 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             "submit", nullptr, "duplicate presentation identity"));
     }
     lastSequence = sequence;
+    if (displayPoint) m_lastVideoPresentation = presentation;
     bufferedBytes += payloadBytes;
     m_cumulativeSelectionWork.coverageOperations =
         m_video->cumulativeCoverageWork().coverageOperations +
@@ -383,29 +454,31 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             return MediaAvSyncResult<MediaAvStartupDecision>::failure(status.error());
         }
     }
-    auto decision = tryRelease(effectiveNow);
-    if (!decision) return MediaAvSyncResult<MediaAvStartupDecision>::failure(decision.error());
-    auto& releasePurged = decision.value().purged;
-    releasePurged.insert(releasePurged.begin(), purged.begin(), purged.end());
-    return decision;
+    return tryRelease(effectiveNow, std::move(purged));
+} catch (const std::bad_alloc&) {
+    auto failed = markFailed(MediaAvSyncErrorCode::StartupCapacityExceeded, "Startup result allocation failed");
+    return MediaAvSyncResult<MediaAvStartupDecision>::failure(failed.error());
+} catch (const std::length_error&) {
+    auto failed = markFailed(MediaAvSyncErrorCode::StartupCapacityExceeded, "Startup result capacity is not representable");
+    return MediaAvSyncResult<MediaAvStartupDecision>::failure(failed.error());
 }
 
 MediaAvSyncResult<MediaAvStartupDecision>
-MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
+MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt, MediaAvStartupIds prior)
 {
     if (m_state.state() != MediaAvSyncState::PrimingStreams) {
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
+            {m_allocation, MediaAvStartupDisposition::Buffered, std::nullopt, std::move(prior)});
     }
     if (m_audio && m_audio->empty()) {
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
+            {m_allocation, MediaAvStartupDisposition::Buffered, std::nullopt, std::move(prior)});
     }
     m_lastAttemptSelectionWork = {};
-    auto videoCoverage = MediaAvStartupCoverageIndex::build(
+    auto videoCoverage = MediaAvStartupReadinessIndex::build(
         m_video->presentationSnapshot(), m_lastAttemptSelectionWork);
-    std::optional<MediaAvStartupCoverageIndex> audioCoverage;
-    if (m_audio) audioCoverage = MediaAvStartupCoverageIndex::build(
+    std::optional<MediaAvStartupReadinessIndex> audioCoverage;
+    if (m_audio) audioCoverage = MediaAvStartupReadinessIndex::build(
         m_audio->presentationSnapshot(), m_lastAttemptSelectionWork);
     auto selected = MediaAvStartupWindowSelector::select(
         videoCoverage, audioCoverage ? &*audioCoverage : nullptr, m_config,
@@ -422,7 +495,7 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
     }
     if (!selected.value()) {
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
-            {MediaAvStartupDisposition::Buffered, std::nullopt, {}});
+            {m_allocation, MediaAvStartupDisposition::Buffered, std::nullopt, std::move(prior)});
     }
     const auto& window = *selected.value();
     std::uint32_t trimLeadingSamples = 0;
@@ -455,13 +528,22 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
             failed.error());
     }
 
+    auto videoPrefix = m_video->prefixCount(window.video, m_lastAttemptSelectionWork);
+    if (!videoPrefix) return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
+        MediaAvSyncErrorCode::StartupInvalidTransition, "release_partition", nullptr, videoPrefix.error().message));
+    auto audioPrefix = m_audio ? m_audio->prefixCount(window.audio, m_lastAttemptSelectionWork)
+        : ::media::Result<std::size_t>::success(0);
+    if (!audioPrefix) return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
+        MediaAvSyncErrorCode::StartupInvalidTransition, "release_partition", nullptr, audioPrefix.error().message));
+    auto* resource = MediaLineageAllocator<MediaAvStartupUnitId>{m_allocation}.resource();
     MediaAvStartupRelease batch{
-        MediaPlaybackEpoch{window.sourceStart, Zero, *m_state.generation()}, {}, {}};
-    auto purged = m_video->prefixBefore(window.video, m_lastAttemptSelectionWork);
-    if (m_audio) {
-        auto audioPurged = m_audio->prefixBefore(window.audio, m_lastAttemptSelectionWork);
-        purged.insert(purged.end(), audioPurged.begin(), audioPurged.end());
-    }
+        m_allocation, MediaPlaybackEpoch{window.sourceStart, Zero, *m_state.generation()},
+        MediaAvStartupSelections(m_video->size() - videoPrefix.value(), *resource),
+        MediaAvStartupSelections(m_audio ? m_audio->size() - audioPrefix.value() : 0, *resource)};
+    MediaAvStartupIds purged(startupResultCapacity({prior.size(), videoPrefix.value(), audioPrefix.value()}), *resource);
+    for (const auto& id : prior) purged.push_back(id);
+    m_video->appendPrefixIds(window.video, purged, m_lastAttemptSelectionWork);
+    if (m_audio) m_audio->appendPrefixIds(window.audio, purged, m_lastAttemptSelectionWork);
     m_video->appendSuffixSelections(window.video, 0, batch.video,
                                     m_lastAttemptSelectionWork);
     if (m_audio) m_audio->appendSuffixSelections(window.audio, trimLeadingSamples, batch.audio,
@@ -492,7 +574,7 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
     m_audioBytes = 0;
     m_epoch = batch.epoch;
     return MediaAvSyncResult<MediaAvStartupDecision>::success(
-        {MediaAvStartupDisposition::Buffered,
+        {m_allocation, MediaAvStartupDisposition::Buffered,
          std::optional<MediaAvStartupRelease>(std::move(batch)),
          std::move(purged)});
 }
@@ -529,7 +611,7 @@ MediaAvStartupCoordinator::deadlines() const
 
 MediaAvSyncResult<MediaAvStartupPollOutcome>
 MediaAvStartupCoordinator::poll(MediaRunningTime observedAt)
-{
+try {
     using Result = MediaAvSyncResult<MediaAvStartupPollOutcome>;
     auto pending = deadlines();
     if (!pending) return Result::failure(pending.error());
@@ -547,10 +629,16 @@ MediaAvStartupCoordinator::poll(MediaRunningTime observedAt)
             ? "startup timeout" : "video key frame wait timeout");
     auto waiting = m_state.transition(MediaAvSyncEvent::AttemptExpired, *m_state.generation());
     if (!waiting) return Result::failure(waiting.error());
-    auto purged = purge();
+    auto purged = purge({}, std::nullopt);
     m_acquisitionStartedAt.reset();
     return Result::success(MediaAvStartupAttemptExpired{
-        *m_state.generation(), std::move(error), std::move(purged)});
+        m_allocation, *m_state.generation(), std::move(error), std::move(purged)});
+} catch (const std::bad_alloc&) {
+    auto failed = markFailed(MediaAvSyncErrorCode::StartupCapacityExceeded, "Startup purge allocation failed");
+    return MediaAvSyncResult<MediaAvStartupPollOutcome>::failure(failed.error());
+} catch (const std::length_error&) {
+    auto failed = markFailed(MediaAvSyncErrorCode::StartupCapacityExceeded, "Startup purge capacity is not representable");
+    return MediaAvSyncResult<MediaAvStartupPollOutcome>::failure(failed.error());
 }
 
 MediaAvSyncStatus MediaAvStartupCoordinator::retireGeneration(const MediaAvGenerationPurge& transition)
@@ -562,9 +650,10 @@ MediaAvSyncStatus MediaAvStartupCoordinator::retireGeneration(const MediaAvGener
             "Startup retirement requires the exact published-to-pending generation interval"));
     auto retired = m_state.transition(MediaAvSyncEvent::RequireReacquisition, transition.nextGeneration);
     if (!retired) return retired;
-    (void)purge();
+    clearBufferedState();
     m_acquisitionStartedAt.reset();
     m_lastVideoSequence.reset();
+    m_lastVideoPresentation.reset();
     m_lastAudioSequence.reset();
     return MediaAvSyncStatus::success();
 }
@@ -614,7 +703,7 @@ void MediaAvStartupCoordinator::stop() noexcept
     }
     const auto generation = m_state.generation().value_or(0);
     (void)m_state.transition(MediaAvSyncEvent::Stop, generation);
-    purge();
+    clearBufferedState();
 }
 
 void MediaAvStartupCoordinator::abort() noexcept
@@ -624,17 +713,18 @@ void MediaAvStartupCoordinator::abort() noexcept
     }
     const auto generation = m_state.generation().value_or(0);
     (void)m_state.transition(MediaAvSyncEvent::Abort, generation);
-    purge();
+    clearBufferedState();
 }
 
 MediaAvSyncStatus MediaAvStartupCoordinator::reset() noexcept
 {
-    (void)purge();
+    clearBufferedState();
     m_state.reset();
     m_acquisitionStartedAt.reset();
     m_keyFrameWaitStartedAt.reset();
     m_processedWatermark.reset();
     m_lastVideoSequence.reset();
+    m_lastVideoPresentation.reset();
     m_lastAudioSequence.reset();
     return MediaAvSyncStatus::success();
 }
@@ -655,14 +745,22 @@ bool MediaAvStartupCoordinator::terminalEofReached() const noexcept
     return m_videoEof && (!m_audio || m_audioEof);
 }
 
-std::vector<MediaAvStartupUnitId> MediaAvStartupCoordinator::purge() noexcept
+MediaAvStartupIds MediaAvStartupCoordinator::purge(
+    std::span<const MediaAvStartupUnitId> prior, std::optional<MediaAvStartupUnitId> trailing)
 {
-    std::vector<MediaAvStartupUnitId> purged;
-    auto videoIds = m_video->ids();
-    auto audioIds = m_audio ? m_audio->ids() : std::vector<MediaAvStartupUnitId>{};
-    purged.reserve(videoIds.size() + audioIds.size());
-    purged.insert(purged.end(), videoIds.begin(), videoIds.end());
-    purged.insert(purged.end(), audioIds.begin(), audioIds.end());
+    const auto count = startupResultCapacity({prior.size(), m_video->size(),
+        m_audio ? m_audio->size() : 0, std::size_t(trailing.has_value())});
+    MediaAvStartupIds purged(count, *MediaLineageAllocator<MediaAvStartupUnitId>{m_allocation}.resource());
+    for (const auto& id : prior) purged.push_back(id);
+    m_video->appendIds(purged);
+    if (m_audio) m_audio->appendIds(purged);
+    if (trailing) purged.push_back(*trailing);
+    clearBufferedState();
+    return purged;
+}
+
+void MediaAvStartupCoordinator::clearBufferedState() noexcept
+{
     m_video->clear();
     if (m_audio) m_audio->clear();
     m_videoLocked = false;
@@ -675,7 +773,6 @@ std::vector<MediaAvStartupUnitId> MediaAvStartupCoordinator::purge() noexcept
     m_audioEof = false;
     m_lastAttemptSelectionWork = {};
     m_cumulativeSelectionWork = {};
-    return purged;
 }
 
 MediaRunningTime MediaAvStartupCoordinator::advanceWatermark(
@@ -706,7 +803,7 @@ MediaAvSyncError MediaAvStartupCoordinator::startupError(
         MediaAvSyncErrorState::Startup,
         std::move(operation),
         expectedIdentity,
-        unit ? unit->identity : std::string{},
+        unit ? std::string(unit->identity.view()) : std::string{},
         m_state.generation(),
         unit ? std::optional<std::uint64_t>(unit->generation) : std::nullopt,
         unit ? unit->presentationTime : std::nullopt,
@@ -725,7 +822,7 @@ MediaAvSyncStatus MediaAvStartupCoordinator::markFailed(MediaAvSyncErrorCode cod
         if (!begin) return begin;
     }
     auto failed = m_state.transition(MediaAvSyncEvent::Fail, *m_state.generation());
-    (void)purge();
+    clearBufferedState();
     return failed
         ? MediaAvSyncStatus::failure(
               startupError(code, "atomic_startup", nullptr, std::move(reason)))

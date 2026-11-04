@@ -1,28 +1,50 @@
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
 
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
+const MediaPreparedRtpDatagramAllocationFacts&
+MediaRawRtpPreparedByteBudget::entryAllocationFacts() const noexcept
+{
+    return m_plan.entryAllocation;
+}
+
 MediaRawRtpPreparedByteBudget::MediaRawRtpPreparedByteBudget(
-    std::size_t capacity) noexcept
-    : m_storage(capacity)
+    MediaRawRtpPreparationStoragePlan plan,
+    std::shared_ptr<MediaPreparationStorageBudget> storage,
+    std::shared_ptr<MediaPreparationMemoryResource> resource) noexcept
+    : m_plan(plan),
+      m_storage(std::move(storage)), m_resource(std::move(resource))
 {
 }
 
 ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>
-MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
+MediaRawRtpPreparedByteBudget::create(const MediaRawRtpPreparationStoragePlan& plan,
+    const MediaPreparationStorageScope& scope) try
 {
-    if (capacity == 0) {
+    if (!plan.maximumObservedWireBytes || !plan.maximumDatagramsPerStream ||
+        !plan.streamCount || !plan.entryAllocation.bytes || !plan.entryAllocation.alignment ||
+        plan.maximumAllocationBytes < plan.maximumObservedWireBytes) {
         return ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "raw RTP prepared byte capacity must be positive"));
     }
+    auto storage = MediaPreparationStorageBudget::create(plan.maximumAllocationBytes, scope, MediaStorageReleaseUnobserved{});
+    if (!storage) return ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>::failure(storage.error());
+    auto resource = MediaPreparationMemoryResource::create(storage.value());
+    if (!resource) return ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>::failure(resource.error());
     return ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>::success(
-        std::shared_ptr<MediaRawRtpPreparedByteBudget>(
-            new MediaRawRtpPreparedByteBudget(capacity)));
+        std::shared_ptr<MediaRawRtpPreparedByteBudget>(new MediaRawRtpPreparedByteBudget(
+            plan, std::move(storage).value(), std::move(resource).value())));
+}
+
+catch (const std::bad_alloc&) {
+    return ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>::failure(
+        ::media::ErrorInfo::allocationFailed("raw RTP prepared budget allocation failed"));
 }
 
 ::media::Status MediaRawRtpPreparedByteBudget::observe(std::size_t bytes)
@@ -31,29 +53,15 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     return observeLocked(bytes);
 }
 
-::media::Status MediaRawRtpPreparedByteBudget::retain(
-    std::size_t bytes, std::string_view stream)
+std::pmr::memory_resource& MediaRawRtpPreparedByteBudget::storageResource() const noexcept
 {
-    std::scoped_lock lock(m_mutex);
-    return retainLocked(bytes, stream);
+    return *m_resource;
 }
 
-::media::Status MediaRawRtpPreparedByteBudget::observeAndRetain(
-    std::size_t bytes, std::string_view stream)
+MediaPreparedRtpStorageReservation MediaRawRtpPreparedByteBudget::storageReservation() const
 {
-    std::scoped_lock lock(m_mutex);
-    if (auto status = observeLocked(bytes); !status) return status;
-    return retainLocked(bytes, stream);
-}
-
-::media::Status MediaRawRtpPreparedByteBudget::release(std::size_t bytes)
-{
-    std::scoped_lock lock(m_mutex);
-    if (!m_storage.release(bytes)) {
-        return failLocked(::media::ErrorInfo::invalidArgument(
-            "raw RTP prepared aggregate byte reservation underflow"));
-    }
-    return ::media::Status::success();
+    return {m_storage, m_plan.maximumAllocationBytes, m_plan.streamCount,
+        "prepared-raw-rtp-exact-allocation-capacity"};
 }
 
 ::media::Status MediaRawRtpPreparedByteBudget::fail(
@@ -63,24 +71,22 @@ MediaRawRtpPreparedByteBudget::create(std::size_t capacity)
     return failLocked(std::move(error));
 }
 
-::media::Status MediaRawRtpPreparedByteBudget::reserveProbe(std::size_t bytes)
+::media::Status MediaRawRtpPreparedByteBudget::acquireProbe()
 {
     std::scoped_lock lock(m_mutex);
     if (m_error) return ::media::Status::failure(*m_error);
-    if (m_runtimeActive || m_probeActive || bytes == 0) {
+    if (m_phase != MediaRawRtpPreparationPhase::Capture || m_probeActive) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP probe requires an unsealed budget without another probe lease"));
     }
-    if (auto status = retainLocked(bytes, "probe"); !status) return status;
     m_probeActive = true;
     return ::media::Status::success();
 }
 
-void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
+void MediaRawRtpPreparedByteBudget::releaseProbe() noexcept
 {
     std::scoped_lock lock(m_mutex);
-    // Only the move-only lease can release this reservation, exactly once.
-    (void)m_storage.release(bytes);
+    // Only the move-only lease can release this pin, exactly once.
     m_probeActive = false;
 }
 
@@ -88,7 +94,7 @@ void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
 {
     std::scoped_lock lock(m_mutex);
     if (m_error) return ::media::Status::failure(*m_error);
-    if (m_runtimeActive) {
+    if (m_phase != MediaRawRtpPreparationPhase::Capture) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP prepared byte budget was already sealed"));
     }
@@ -96,7 +102,7 @@ void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP preflight cannot seal while a probe snapshot is retained"));
     }
-    m_runtimeActive = true;
+    m_phase = MediaRawRtpPreparationPhase::Sealed;
     return ::media::Status::success();
 }
 
@@ -104,7 +110,7 @@ void MediaRawRtpPreparedByteBudget::releaseProbe(std::size_t bytes) noexcept
 {
     std::scoped_lock lock(m_mutex);
     if (m_error) return ::media::Status::failure(*m_error);
-    return m_runtimeActive
+    return m_phase != MediaRawRtpPreparationPhase::Capture
         ? ::media::Status::success()
         : ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "raw RTP prepared byte budget was not sealed by preflight"));
@@ -121,7 +127,8 @@ MediaRawRtpPreparedByteBudgetSnapshot
 MediaRawRtpPreparedByteBudget::snapshot() const noexcept
 {
     std::scoped_lock lock(m_mutex);
-    return {m_storage.capacity(), m_observedBytes, m_storage.retainedBytes(), m_runtimeActive,
+    const auto storage = m_storage->snapshot();
+    return {storage.capacity, m_plan.maximumObservedWireBytes, m_observedBytes, storage.retainedBytes, m_phase,
         m_probeActive};
 }
 
@@ -129,28 +136,14 @@ MediaRawRtpPreparedByteBudget::snapshot() const noexcept
     std::size_t bytes)
 {
     if (m_error) return ::media::Status::failure(*m_error);
-    if (m_runtimeActive) return ::media::Status::success();
-    if (bytes > m_storage.capacity() - m_observedBytes) {
+    if (m_phase == MediaRawRtpPreparationPhase::Sealed) return ::media::Status::success();
+    if (bytes > m_plan.maximumObservedWireBytes - m_observedBytes) {
         return failLocked(::media::ErrorInfo::allocationFailed(
             "raw RTP probe exceeded total byte capacity: observed_bytes=" +
             std::to_string(m_observedBytes) + " capacity=" +
-            std::to_string(m_storage.capacity())));
+            std::to_string(m_plan.maximumObservedWireBytes)));
     }
     m_observedBytes += bytes;
-    return ::media::Status::success();
-}
-
-::media::Status MediaRawRtpPreparedByteBudget::retainLocked(
-    std::size_t bytes, std::string_view stream)
-{
-    if (m_error) return ::media::Status::failure(*m_error);
-    if (!m_storage.retain(bytes)) {
-        return failLocked(::media::ErrorInfo::allocationFailed(
-            "raw RTP prepared A/V capture exceeded aggregate byte capacity: stream=" +
-            std::string(stream) + " retained_bytes=" +
-            std::to_string(m_storage.retainedBytes()) + " capacity=" +
-            std::to_string(m_storage.capacity())));
-    }
     return ::media::Status::success();
 }
 

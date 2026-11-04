@@ -1,4 +1,7 @@
 #pragma once
+#include "internal/graph/model/MediaOutputReservationStoragePlan.h"
+
+#include "internal/graph/planner/realtime/MediaEncodedAccessUnitSchedulingPlan.h"
 
 #include "internal/graph/model/MediaMuxSessionKind.h"
 #include "internal/graph/model/MediaOutputResourceKind.h"
@@ -36,7 +39,7 @@ struct MediaAudioCorrectionReachabilityPlan final {
                            const MediaAudioCorrectionReachabilityPlan&) = default;
 };
 
-struct MediaRealtimeAvSourceRuntimePlan {
+struct MediaRealtimeAvSourcePlanningProducts {
     MediaAudioPipelinePlan audioPipeline;
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
     MediaAvSyncGroupKey groupKey;
@@ -52,10 +55,17 @@ struct MediaRealtimeAvSourceRuntimePlan {
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
 };
 
+struct MediaRealtimeAvSourceRuntimePlan : MediaRealtimeAvSourcePlanningProducts {
+    MediaOutputReservationStoragePlan reservationStorage;
+};
+
 struct MediaRealtimeAvSyncRuntimePlan final : MediaRealtimeAvSourceRuntimePlan {
     MediaRealtimeAvSyncComponentBounds componentBounds;
     MediaRealtimeAvSyncPlanningFacts planningFacts;
+    MediaRealtimeEdgePolicySet outputEdgePolicies;
+    MediaEdgePolicy canonicalAudioInputPolicy;
     MediaAvSyncOutputAdapterKind outputAdapter;
+    MediaEncodedAccessUnitSchedulingPlan scheduling;
     std::variant<MediaSeparateRtpOutputRuntimePlan,
                  MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
     MediaDatagramTransportPlanTemplate datagramTransport;

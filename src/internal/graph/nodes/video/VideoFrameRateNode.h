@@ -4,7 +4,6 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
-#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 
 #include <cstdint>
 #include <memory>
@@ -26,8 +25,7 @@ public:
     explicit VideoFrameRateNode(MediaNodeId nodeId);
     VideoFrameRateNode(
         MediaNodeId nodeId,
-        std::shared_ptr<MediaVideoFrameRateState> state,
-        std::optional<MediaAvStartupVideoPreparationCapability> preparation = std::nullopt);
+        std::shared_ptr<MediaVideoFrameRateState> state);
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -47,7 +45,6 @@ private:
     ::media::Status initializeFromFirstFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status sendFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status drainPending(MediaGraphExecutionContext& context);
-    ::media::Result<bool> preparePendingOutput(MediaGraphExecutionContext& context);
     ::media::Status queueFrameReference(
         const MediaBufferRef& sourceBuffer, int64_t outputPts,
         std::shared_ptr<const MediaCanonicalLineage> lineage);
@@ -66,8 +63,6 @@ private:
     bool m_exposesGenerationPurgeTarget = false;
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
-    std::optional<MediaAvStartupVideoPreparationCapability> m_preparationCapability;
-    std::optional<MediaReservedOutputTransaction> m_preparedReservation;
 };
 
 } // namespace media::ffmpeg::graph

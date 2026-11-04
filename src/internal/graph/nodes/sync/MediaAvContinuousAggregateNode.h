@@ -1,4 +1,6 @@
 #pragma once
+#include "internal/graph/diagnostics/MediaAudioStageObservation.h"
+#include "internal/graph/diagnostics/MediaAggregateExecutionObservation.h"
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
@@ -7,12 +9,12 @@
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 
-#include <deque>
+#include "internal/graph/runtime/storage/MediaAvAggregateStorage.h"
 
 namespace media::ffmpeg::graph {
 
-// One owner selects all source candidates and commits the independent output
-// sample/frame grids. Source purge is serviced before output backpressure.
+// Video owner selects source frames and commits the output frame grid.
+// Source purge is serviced before output backpressure; audio has its own owner.
 class MediaAvContinuousAggregateNode final : public FFmpegNodeRuntime {
 public:
     MediaAvContinuousAggregateNode(MediaNodeId node,
@@ -33,64 +35,33 @@ protected:
     ::media::Status cancelReservedOutput(const MediaBufferRef& buffer) override;
 
 private:
-    struct SourceState final {
-        std::deque<MediaBufferRef> video;
-        std::shared_ptr<MediaOwnerThreadGenerationPurge> purge;
-        std::uint64_t minimumGeneration = 0;
-        bool videoEnded = false;
-        bool epochEnded = false;
-        bool discardedAudioEnded = false;
-        bool prepared = false;
-        std::optional<MediaRunningTime> lastInputEnd;
-        std::uint64_t committedRealFrames = 0;
-        std::uint64_t committedBlackFrames = 0;
-        std::uint64_t committedGeneration = 0;
-    };
-    enum class PendingKind { Video, Audio, VideoEnd, AudioEnd };
-    struct Pending final {
-        PendingKind kind;
-        MediaBufferRef buffer;
-        std::vector<std::uint64_t> sourceGenerations;
-    };
+    using ExecutionStage = MediaAggregateExecutionObservation::Stage;
+    using SourceState = MediaAvAggregateSourceStorage;
+    using PendingKind = MediaAvAggregatePendingKind;
+    using Pending = MediaAvAggregatePendingStorage;
     const MediaAvContinuousAggregatePlan& plan() const noexcept;
     ::media::Status bindCodecs(MediaGraphExecutionContext& context);
     ::media::Status servicePurges(MediaGraphExecutionContext& context);
-    ::media::Status consumeInputs(MediaGraphExecutionContext& context);
+    enum class CandidatePreparation { Ready, RetryProgress };
+    ::media::Status consumeInputs(MediaGraphExecutionContext& context,
+                                  CandidatePreparation& preparation);
     ::media::Result<bool> activate(MediaGraphExecutionContext& context);
-    ::media::Result<MediaRunningTime> videoTime(std::int64_t frame) const;
-    ::media::Result<MediaRunningTime> audioTime(std::int64_t sample) const;
-    ::media::Result<MediaRunningTime> presentationMaster(MediaRunningTime presentation) const;
     ::media::Result<MediaBufferRef> buildVideo(MediaGraphExecutionContext& context);
-    ::media::Result<MediaBufferRef> buildAudio(MediaGraphExecutionContext& context);
-    ::media::Result<std::int64_t> audioOffset(const MediaAudioPlaybackOrigin& source) const;
-    bool allSourcesEnded() const noexcept;
-    ::media::Status observeInputEnd(std::size_t source, MediaRunningTime end);
-    ::media::Status validateMetadataBound() const;
     void clear() noexcept;
     void logSummary(const char* reason) noexcept;
 
     MediaAvAggregateRuntimeDependencies m_dependencies;
-    std::vector<SourceState> m_sources;
-    std::deque<std::shared_ptr<MediaBoundCanonicalAudioBuffer>> m_audio;
-    std::int64_t m_audioCandidateSamples = 0;
-    bool m_audioEnded = false;
+    MediaFixedCapacityStorage<SourceState> m_sources;
     MediaBufferRef m_videoCodec;
-    MediaBufferRef m_audioCodec;
     std::unique_ptr<MediaVideoCanvasProducer> m_canvas;
     bool m_canvasPrepared = false;
     std::optional<MediaPlaybackEpoch> m_epoch;
-    std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;
     std::int64_t m_nextVideoFrame = 0;
-    std::int64_t m_nextAudioSample = 0;
-    std::optional<MediaRunningTime> m_lastInputEnd;
     std::optional<Pending> m_pending;
     bool m_videoEndPublished = false;
-    bool m_audioEndPublished = false;
     mutable bool m_rejectedPending = false;
-    std::uint64_t m_committedAudioFrames = 0;
-    std::uint64_t m_committedRealSamples = 0;
-    std::uint64_t m_committedSilenceSamples = 0;
     bool m_summaryPublished = false;
+    MediaAggregateExecutionObservation m_executionObservation;
 };
 
 } // namespace media::ffmpeg::graph

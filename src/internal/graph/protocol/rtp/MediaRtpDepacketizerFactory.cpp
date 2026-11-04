@@ -67,7 +67,7 @@ namespace {
 } // namespace
 
 ::media::Result<std::unique_ptr<MediaRtpDepacketizer>> MediaRtpDepacketizerFactory::create(
-    const MediaRtpDepacketizerConfig& config, std::size_t maximumAccessUnitBytes)
+    const MediaRtpDepacketizerConfig& config, std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation)
 {
     if (maximumAccessUnitBytes == 0) {
         return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(
@@ -82,10 +82,10 @@ namespace {
             return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(capacity.error());
         }
     }
-    if (codec == "opus") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaOpusRtpDepacketizer>(config));
-    if (codec == "h264") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaH264RtpDepacketizer>(config, maximumAccessUnitBytes));
-    if (codec == "hevc") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaHevcRtpDepacketizer>(config, maximumAccessUnitBytes));
-    if (codec == "aac") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaAacRtpDepacketizer>(config));
+    if (codec == "opus") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaOpusRtpDepacketizer>(config, allocation));
+    if (codec == "h264") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaH264RtpDepacketizer>(config, maximumAccessUnitBytes, allocation));
+    if (codec == "hevc") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaHevcRtpDepacketizer>(config, maximumAccessUnitBytes, allocation));
+    if (codec == "aac") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaAacRtpDepacketizer>(config, allocation));
     return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(
         ::media::ErrorInfo::unsupported("RTP depacketizer codec is unsupported: " + codec));
 }

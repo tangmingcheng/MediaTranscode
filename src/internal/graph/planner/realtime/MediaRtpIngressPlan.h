@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRtpIngressCapability.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressObservation.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,7 +33,8 @@ public:
         const MediaRtpIngressCapability& capability,
         const MediaRtpIngressObservation& observation,
         std::size_t preparedInputByteBudget,
-        std::size_t maximumDatagramBytes);
+        std::size_t maximumDatagramBytes,
+        const MediaRtpInputWaitPlan& inputWait);
     static ::media::Result<MediaRtpIngressPlan> fromFacts(
         MediaRtpIngressPlanFacts facts);
 

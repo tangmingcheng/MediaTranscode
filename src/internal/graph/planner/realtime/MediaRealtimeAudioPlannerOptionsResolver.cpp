@@ -72,6 +72,7 @@ MediaRealtimeAudioPlannerOptionsResolver::resolve(
         options.outputRequirement.codecName = "aac";
         options.outputRequirement.profile = MediaAudioProfile::knownAacLow();
     }
+    options.outputRequirement.requireFrameTranscode = request.composition.has_value();
     options.diagnosticLogEnabled =
         request.parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaAudioPipelinePlannerOptions>::success(

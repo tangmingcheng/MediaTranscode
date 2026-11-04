@@ -20,6 +20,7 @@ namespace {
 bool isSynchronizedNode(MediaNodeKind kind) noexcept
 {
     switch (kind) {
+    case MediaNodeKind::ContinuousAudioAggregate:
     case MediaNodeKind::AvContinuousAggregate:
     case MediaNodeKind::SourceClockStateFanout:
     case MediaNodeKind::LockedPacketGate:
@@ -54,6 +55,30 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     };
     if (binding.domains.empty() || !binding.outputGroupKey.valid())
         return invalid("Synchronized graph requires typed domains and its explicit output group");
+    if (auto status = binding.scheduling.validate(binding.outputProduct,
+            binding.datagramTransport.encode().deployment.latency.targetResidence); !status) return status;
+    auto activation = binding.scheduling.activationLead(binding.outputProduct);
+    if (!activation) return ::media::Status::failure(activation.error());
+    std::size_t schedulerCount = 0;
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer &&
+            node.options.value("activated_startup_release_sequencer.sync_group") ==
+                binding.outputGroupKey.value() &&
+            node.options.value("activated_startup_release_sequencer.output_lead_ns") !=
+                std::to_string(activation.value().nanoseconds()))
+            return invalid("A/V activation differs from its encoded output scheduling contract");
+        if (node.kind != MediaNodeKind::AvOutputScheduler) continue;
+        ++schedulerCount;
+        if (node.options.value("av_scheduler.sync_group") != binding.outputGroupKey.value() ||
+            node.options.value("av_scheduler.submission") != "encoded_access_unit" ||
+            node.options.value("av_scheduler.transport_lead_ns") !=
+                std::to_string(binding.scheduling.transportLead.nanoseconds()) ||
+            node.options.value("av_scheduler.protocol_preparation_lead_ns") !=
+                std::to_string(binding.scheduling.protocolPreparationLead.nanoseconds()))
+            return invalid("A/V encoded scheduler differs from its typed output contract");
+    }
+    if (schedulerCount != 1)
+        return invalid("A/V output requires exactly one encoded scheduler");
     std::unordered_set<std::string> groups;
     std::unordered_map<std::uint64_t, std::size_t> owners;
     std::vector<std::vector<MediaNodeId>> members(binding.domains.size());
@@ -128,26 +153,35 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     }
     if (continuousOutput) {
         const auto& aggregate = *continuousOutput->aggregatePlan;
+        if (aggregate.preparationLead != activation.value())
+            return invalid("Aggregate activation differs from its encoded output scheduling contract");
         const auto aggregateId = continuousOutput->registration.activationOwner;
         const auto* aggregateNode = graph.findNode(aggregateId);
+        const auto audioId = continuousOutput->registration.audioAggregate;
+        const auto* audioNode = graph.findNode(audioId);
+        if (!audioNode) return invalid("Continuous output lacks its audio owner");
+        const auto audioIncoming = [&](const char* name) -> const MediaEdge* {
+            const auto* port = audioNode->findInputPort(name);
+            return port ? MediaGraphShapeQuery::singleIncomingEdge(graph, port->id) : nullptr;
+        };
         const auto incoming = [&](const char* name) -> const MediaEdge* {
             const auto* port = aggregateNode->findInputPort(name);
             return port ? MediaGraphShapeQuery::singleIncomingEdge(graph, port->id) : nullptr;
         };
         const auto discardedAudioCount = std::count_if(aggregate.sources.begin(), aggregate.sources.end(),
             [](const auto& source) { return source.discardedAudioPort.has_value(); });
-        if (aggregateNode->inputPorts.size() != 2u * aggregate.sources.size() + 3u + discardedAudioCount ||
-            aggregateNode->outputPorts.size() != 3u ||
+        if (aggregateNode->inputPorts.size() != 2u * aggregate.sources.size() + 1u + discardedAudioCount ||
+            aggregateNode->outputPorts.size() != 2u || audioNode->inputPorts.size() != 3u || audioNode->outputPorts.size() != 1u ||
             !MediaGraphShapeQuery::validPort(aggregateNode->findOutputPort("video"),
                 MediaPortDirection::Output, MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame) ||
-            !MediaGraphShapeQuery::validPort(aggregateNode->findOutputPort("audio"),
+            !MediaGraphShapeQuery::validPort(audioNode->findOutputPort("audio"),
                 MediaPortDirection::Output, MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame) ||
             !MediaGraphShapeQuery::validPort(aggregateNode->findOutputPort("activated"),
                 MediaPortDirection::Output, MediaStreamKind::Metadata, MediaEdgeKind::Event, MediaPayloadKind::GraphEvent))
             return invalid("Aggregate ports must match its source frames, epochs, audio and codec contracts");
         for (const auto& codec : {std::pair{"video_codec", MediaNodeKind::CodecResolver},
                                   std::pair{"audio_codec", MediaNodeKind::AudioCodecResolver}}) {
-            const auto* edge = incoming(codec.first);
+            const auto* edge = codec.second == MediaNodeKind::AudioCodecResolver ? audioIncoming(codec.first) : incoming(codec.first);
             if (!edge || !graph.findNode(edge->from.nodeId) || !graph.findPort(edge->from.portId) ||
                 !owners.contains(edge->from.nodeId.value) ||
                 graph.findNode(edge->from.nodeId)->kind != codec.second ||
@@ -159,8 +193,16 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
             const auto& inputPlan = aggregate.sources[index];
             const MediaAvSourceDomainBinding* source = nullptr;
             for (const auto& domain : binding.domains) {
-                if (domain.groupKey == inputPlan.groupKey)
+                if (domain.groupKey == inputPlan.groupKey) {
                     source = std::get_if<MediaAvSourceDomainBinding>(&domain.role);
+                    const bool hasAudio = domain.plan.members == MediaTranscodeStreamSet::AudioVideo;
+                    if (inputPlan.audioIdentity.has_value() != hasAudio ||
+                        inputPlan.audioIdentity != domain.plan.startup.audioIdentity ||
+                        domain.plan.startup.videoIdentity != inputPlan.videoIdentity ||
+                        (index == aggregate.audioSource && !hasAudio) ||
+                        inputPlan.discardedAudioPort.has_value() != (hasAudio && index != aggregate.audioSource))
+                        return invalid("Aggregate input identities and ports differ from source domain members");
+                }
             }
             const auto* video = incoming(inputPlan.videoPort.c_str());
             const auto epochPort = "source_epoch_" + std::to_string(index);
@@ -183,12 +225,17 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
                     return invalid("Discarded audio must bind its nonselected source resampler exactly");
             }
         }
-        const auto* audio = incoming(aggregate.audioPort.c_str());
+        const auto* audio = audioIncoming(aggregate.audioPort.c_str());
         if (!audio || !graph.findNode(audio->from.nodeId) || !graph.findPort(audio->from.portId) ||
             !owners.contains(audio->from.nodeId.value) || graph.findNode(audio->from.nodeId)->kind != MediaNodeKind::AudioResample ||
             graph.findPort(audio->from.portId)->name != "frame" ||
             binding.domains[owners.at(audio->from.nodeId.value)].groupKey != aggregate.sources[aggregate.audioSource].groupKey)
             return invalid("Aggregate audio must bind the planned source resampler");
+        const auto* audioActivation = audioIncoming("activated");
+        if (!audioActivation || audioActivation->from.nodeId != aggregateId ||
+            !graph.findPort(audioActivation->from.portId) ||
+            graph.findPort(audioActivation->from.portId)->name != "activated")
+            return invalid("Audio aggregate activation must come from the unique output authority");
         for (const auto& edge : graph.edges()) {
             if (!owners.contains(edge.from.nodeId.value) || !owners.contains(edge.to.nodeId.value))
                 return invalid("A/V edge refers to an unowned node");
@@ -202,7 +249,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
                 return invalid("A/V domain edge has invalid endpoints");
             if (to->kind == MediaNodeKind::VideoEncode || to->kind == MediaNodeKind::AudioEncode) {
                 if (toPort->name == "frame" &&
-                    (from->id != aggregateId || fromPort->name != (to->kind == MediaNodeKind::VideoEncode ? "video" : "audio")))
+                    (from->id != (to->kind == MediaNodeKind::VideoEncode ? aggregateId : audioId) || fromPort->name != (to->kind == MediaNodeKind::VideoEncode ? "video" : "audio")))
                     return invalid("Continuous encoder frames must come from the unique aggregate boundary");
             }
             if (fromOwner == toOwner) continue;
@@ -219,12 +266,13 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
                         from->id == source.registration.preparationOwner && fromPort->name == "frame") ||
                         (toPort->name == "source_epoch_" + std::to_string(index) &&
                          from->id == source.registration.input.activationSequencer && fromPort->name == "activated") ||
-                        (index == aggregate.audioSource && toPort->name == aggregate.audioPort &&
-                         from->kind == MediaNodeKind::AudioResample && fromPort->name == "frame") ||
                         (aggregate.sources[index].discardedAudioPort &&
                          toPort->name == *aggregate.sources[index].discardedAudioPort &&
                          from->kind == MediaNodeKind::AudioResample && fromPort->name == "frame");
                 }
+            } else if (to->id == audioId) {
+                allowed = binding.domains[fromOwner].groupKey == aggregate.sources[aggregate.audioSource].groupKey &&
+                    toPort->name == aggregate.audioPort && from->kind == MediaNodeKind::AudioResample && fromPort->name == "frame";
             } else if (fromOutput && fromPort->name == "encoder" && toPort->name == "codec") {
                 allowed = (from->kind == MediaNodeKind::CodecResolver && to->kind == MediaNodeKind::VideoFilter) ||
                     (from->kind == MediaNodeKind::AudioCodecResolver && to->kind == MediaNodeKind::AudioResample);
@@ -234,7 +282,8 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     }
     const MediaAvSyncGraphShape complete(graph);
     if (auto aggregateCount = complete.requireExact({
-            {MediaNodeKind::AvContinuousAggregate, continuousOutput ? 1u : 0u, "continuous aggregate"}},
+            {MediaNodeKind::AvContinuousAggregate, continuousOutput ? 1u : 0u, "continuous video aggregate"},
+            {MediaNodeKind::ContinuousAudioAggregate, continuousOutput ? 1u : 0u, "continuous audio aggregate"}},
             "A/V domain shape"); !aggregateCount) return aggregateCount;
     return ::media::Status::success();
 }

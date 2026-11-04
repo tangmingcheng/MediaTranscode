@@ -29,7 +29,7 @@ public:
         ~SubmitGuard();
         // Call immediately before entering the transport submission API.
         void submissionStarted() noexcept { m_submissionStarted = true; }
-        ::media::Status complete(std::uint64_t submittedWireBytes,
+        ::media::Result<std::optional<MediaRunningTime>> complete(std::uint64_t submittedWireBytes,
                                   MediaRunningTime completedAt) noexcept;
         void poison(::media::ErrorInfo error) noexcept;
     private:

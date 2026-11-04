@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaEncodedAccessUnitSchedulingPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvProtocolOutputPlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
@@ -105,7 +106,6 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
                 "A/V protocol output requires its group identity and prepared audio emission"));
     }
     MediaAvSyncOutputAdapterKind adapter;
-    std::optional<MediaRunningTime> activationOutputLead;
     std::optional<std::variant<MediaSeparateRtpOutputRuntimePlan,
                                MediaProjectMpegTsRuntimeOutputPlan>> protocolOutput;
     if (request.rtp) {
@@ -145,7 +145,6 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
                 sdp.error());
         }
         adapter = MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
-        activationOutputLead = *request.outputLead;
         protocolOutput.emplace(std::in_place_type<MediaSeparateRtpOutputRuntimePlan>,
             MediaSeparateRtpOutputRuntimePlan{
                 std::move(video).value(),
@@ -185,14 +184,6 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
             return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(
                 videoCadence ? audioCadence.error() : videoCadence.error());
         }
-        auto projectActivationLead =
-            accepted.value().muxPlan().transportDecodeLead().checkedAdd(
-                accepted.value().muxPlan().startupEmissionPreroll());
-        if (!projectActivationLead) {
-            return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(
-                projectActivationLead.error());
-        }
-        activationOutputLead = projectActivationLead.value();
         std::optional<std::variant<
             MediaMpegTsUdpOutputPlan,
             MediaMpegTsRtpOutputPlan>> transport;
@@ -284,11 +275,14 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
             return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(
                 emission.error());
         }
+        auto series = MediaTsProtocolSeriesBoundsPlanner::plan(accepted.value().muxPlan(), request.emission);
+        if (!series) return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(series.error());
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
                 std::move(accepted).value(),
                 MediaMuxSessionKind::ProjectMpegTs,
                 std::move(emission).value(),
+                std::move(series).value(),
                 request.transport == MediaOutputTransportKind::RtpAvp
                     ? request.maximumQueuedPacketBytes
                     : 0,
@@ -299,11 +293,13 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
                 "A/V runtime output authority is unsupported"));
     }
 
-    if (!activationOutputLead) {
-        return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V runtime output requires planner-owned activation lead"));
-    }
+    auto scheduling = MediaEncodedAccessUnitSchedulingPlan::derive(
+        *protocolOutput, request.deployment.encode().latency.targetResidence);
+    if (!scheduling)
+        return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(scheduling.error());
+    auto activationOutputLead = scheduling.value().activationLead(*protocolOutput);
+    if (!activationOutputLead)
+        return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::failure(activationOutputLead.error());
     auto datagramTransport = std::visit(
         [&](const auto& selectedOutput) {
             return MediaRealtimeDatagramTransportPlanner::plan(
@@ -315,7 +311,7 @@ MediaRealtimeAvProtocolOutputPlanner::plan(
             datagramTransport.error());
     }
     return ::media::Result<MediaRealtimeAvProtocolOutputPlan>::success({
-        adapter, *activationOutputLead, std::move(*protocolOutput),
+        adapter, activationOutputLead.value(), std::move(*protocolOutput),
         std::move(datagramTransport).value()});
 }
 

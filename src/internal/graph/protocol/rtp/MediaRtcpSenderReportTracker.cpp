@@ -19,8 +19,10 @@ bool ntpLess(const MediaRtcpNtpTimestamp& left, const MediaRtcpNtpTimestamp& rig
 
 } // namespace
 
-MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config)
+MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
+    MediaLineageAllocationScope allocation)
     : m_config(config)
+    , m_cname(MediaLineageAllocator<uint8_t>{std::move(allocation)})
     , m_senderReportObservedAtNs(0)
     , m_cnameObservedAtNs(0)
     , m_generation(0)
@@ -55,7 +57,7 @@ void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
 }
 
 ::media::Result<MediaRtcpObservation> MediaRtcpSenderReportTracker::observe(
-    const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs)
+    const MediaRtcpPackets& packets, int64_t observedAtNs)
 {
     using Result = ::media::Result<MediaRtcpObservation>;
     if (!m_mediaSsrc) {
@@ -161,20 +163,20 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
 }
 
 ::media::Status MediaRtcpSenderReportTracker::observePendingSource(
-    const std::vector<MediaRtcpPacket>& packets,
+    const MediaRtcpPackets& packets,
     int64_t observedAtNs)
 {
-    const MediaRtcpSenderReport* report = nullptr;
+    std::optional<MediaRtcpSenderReport> report;
     for (const MediaRtcpPacket& packet : packets) {
         if (packet.kind == MediaRtcpPacketKind::SenderReport &&
             packet.senderReport) {
-            report = &*packet.senderReport;
+            report = packet.senderReport;
             break;
         }
     }
     if (!report) return ::media::Status::success();
 
-    const std::vector<uint8_t>* cname = nullptr;
+    std::optional<std::span<const uint8_t>> cname;
     for (const MediaRtcpPacket& packet : packets) {
         if (packet.kind != MediaRtcpPacketKind::SourceDescription) continue;
         for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
@@ -183,11 +185,11 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
                 chunk.items.begin(), chunk.items.end(),
                 [](const MediaRtcpSdesItem& value) { return value.type == 1; });
             if (item == chunk.items.end()) continue;
-            if (item->value.empty()) {
+            if ((*item).value.empty()) {
                 invalidate();
                 return invalidEvidence("RTCP CNAME must not be empty");
             }
-            cname = &item->value;
+            cname = (*item).value;
             break;
         }
         if (cname) break;
@@ -206,7 +208,7 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
             "Pending RTCP sender report changed RTP timestamp at the same NTP instant");
     }
     m_pendingSource = PendingRtcpSource{
-        *report, cname ? *cname : std::vector<uint8_t>{}, observedAtNs};
+        *report, MediaRtcpBytes{cname.value_or(std::span<const uint8_t>{}), m_cname.get_allocator()}, observedAtNs};
     return ::media::Status::success();
 }
 
@@ -241,15 +243,15 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
     });
     if (cname == chunk.items.end()) return ::media::Status::success();
     if (!m_mediaSsrc || chunk.ssrc != *m_mediaSsrc) return ::media::Status::success();
-    if (cname->value.empty()) {
+    if ((*cname).value.empty()) {
         invalidate();
         return invalidEvidence("RTCP CNAME must not be empty");
     }
-    if (!m_cname.empty() && m_cname != cname->value) {
+    if (!m_cname.empty() && !m_cname.matches((*cname).value)) {
         invalidate();
         return invalidEvidence("RTCP CNAME changed for active source");
     }
-    m_cname = cname->value;
+    m_cname = MediaRtcpBytes{(*cname).value, m_cname.get_allocator()};
     m_cnameObservedAtNs = observedAtNs;
     m_evidenceUpdatePending = true;
     return ::media::Status::success();

@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -8,6 +9,19 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+::media::Result<MediaSharedAllocationGeometry> FFmpegBufferFactory::packetAllocationGeometry()
+{
+    return probeMediaSharedAllocationGeometry<FFmpegPacketBuffer>(
+        std::type_identity<std::pmr::polymorphic_allocator<FFmpegPacketBuffer>>{});
+}
+::media::Result<MediaSharedAllocationGeometry> FFmpegBufferFactory::frameAllocationGeometry(bool hardware)
+{
+    if (hardware) return probeMediaSharedAllocationGeometry<HardwareFrameBuffer>(
+        std::type_identity<MediaLineageAllocator<HardwareFrameBuffer>>{});
+    return probeMediaSharedAllocationGeometry<FFmpegFrameBuffer>(
+        std::type_identity<MediaLineageAllocator<FFmpegFrameBuffer>>{});
+}
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::makeEof(MediaStreamKind streamKind)
 {
@@ -133,18 +147,26 @@ namespace media::ffmpeg::graph {
     return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }
 
-::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(::media::ffmpeg::PacketPtr packet,
+::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(std::pmr::memory_resource& allocation, ::media::ffmpeg::PacketPtr packet,
                                                                  MediaStreamKind streamKind,
                                                                  std::optional<MediaPacketSourceTiming> sourceTiming,
-                                                                 std::optional<MediaDemuxPacketProvenance> provenance)
+                                                                 std::optional<MediaDemuxPacketProvenance> provenance,
+                                                                 std::optional<MediaRtpPacketProvenance> rtpProvenance)
 {
     if (!packet) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument("wrapPacket failed: packet is null"));
     }
 
-    auto buffer = makeMediaBufferRef<FFmpegPacketBuffer>(
-        std::move(packet), std::move(sourceTiming), std::move(provenance));
+    if (rtpProvenance && (sourceTiming || provenance ||
+            rtpProvenance->ingressSequence == 0)) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Raw RTP packet requires exclusive provenance with a nonzero ingress sequence"));
+    }
+    auto buffer = std::allocate_shared<FFmpegPacketBuffer>(
+        std::pmr::polymorphic_allocator<FFmpegPacketBuffer>{&allocation}, std::move(packet), std::move(sourceTiming), std::move(provenance),
+        std::move(rtpProvenance));
     buffer->setStreamKind(streamKind);
     buffer->setPayloadKind(MediaPayloadKind::Packet);
     if (const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get())) {
@@ -187,39 +209,45 @@ namespace media::ffmpeg::graph {
             FFmpegGraphError::fromCode(ret, "av_packet_copy_props"));
     }
 
-    return wrapPacket(std::move(cloned), streamKind, std::nullopt);
+    return wrapPacket(*std::pmr::new_delete_resource(), std::move(cloned), streamKind, std::nullopt);
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapFrame(::media::ffmpeg::FramePtr frame,
-                                                               MediaStreamKind streamKind)
+                                                               MediaStreamKind streamKind, MediaLineageAllocationScope allocation)
 {
     if (!frame) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument("wrapFrame failed: frame is null"));
     }
 
-    const bool hardware = frame->hw_frames_ctx != nullptr;
-    MediaBufferRef buffer;
+    if (const auto* prepared = std::get_if<MediaPreparedLineageAllocation>(&allocation); prepared && !prepared->resource)
+        return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::invalidArgument("Frame allocation resource missing"));
+    try {
+        const bool hardware = frame->hw_frames_ctx != nullptr;
+        MediaBufferRef buffer;
 
-    if (hardware) {
-        MediaHardwareDescriptor hw;
-        hw.frameKind = MediaHardwareFrameKind::Hardware;
-        hw.zeroCopyPreferred = true;
-        buffer = makeMediaBufferRef<HardwareFrameBuffer>(std::move(frame), std::move(hw));
-    } else {
-        buffer = makeMediaBufferRef<FFmpegFrameBuffer>(std::move(frame));
+        if (hardware) {
+            MediaHardwareDescriptor hw;
+            hw.frameKind = MediaHardwareFrameKind::Hardware;
+            hw.zeroCopyPreferred = true;
+            buffer = std::allocate_shared<HardwareFrameBuffer>(MediaLineageAllocator<HardwareFrameBuffer>(allocation), std::move(frame), std::move(hw));
+        } else {
+            buffer = std::allocate_shared<FFmpegFrameBuffer>(MediaLineageAllocator<FFmpegFrameBuffer>(allocation), std::move(frame));
+        }
+
+        const auto* frameBuffer = dynamic_cast<const FFmpegFrameBuffer*>(buffer.get());
+        const AVFrame* avFrame = frameBuffer ? frameBuffer->frame() : nullptr;
+        if (avFrame) {
+            buffer->setStreamKind(streamKind);
+            buffer->setPayloadKind(MediaPayloadKind::Frame);
+            buffer->setTimestamps(avFrame->pts, avFrame->pkt_dts, avFrame->duration);
+            buffer->setFormatDescriptor(FFmpegDescriptorMapper::fromFrame(avFrame, streamKind));
+        }
+
+        return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::allocationFailed("Frame wrapper metadata budget exhausted"));
     }
-
-    const auto* frameBuffer = dynamic_cast<const FFmpegFrameBuffer*>(buffer.get());
-    const AVFrame* avFrame = frameBuffer ? frameBuffer->frame() : nullptr;
-    if (avFrame) {
-        buffer->setStreamKind(streamKind);
-        buffer->setPayloadKind(MediaPayloadKind::Frame);
-        buffer->setTimestamps(avFrame->pts, avFrame->pkt_dts, avFrame->duration);
-        buffer->setFormatDescriptor(FFmpegDescriptorMapper::fromFrame(avFrame, streamKind));
-    }
-
-    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneFrame(
@@ -243,8 +271,22 @@ namespace media::ffmpeg::graph {
             FFmpegGraphError::fromCode(ret, "av_frame_ref"));
     }
 
-    auto wrapped = wrapFrame(std::move(cloned), streamKind);
+    const auto* sourceReadiness = FFmpegFrameView::readiness(source);
+    auto sourceResource = sourceReadiness ? sourceReadiness->resource() : nullptr;
+    if (sourceReadiness && sourceReadiness->kind() == MediaVideoFrameReadiness::Kind::CudaEvent && !sourceResource)
+        return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::notInitialized("CUDA readiness allocation resource missing"));
+    MediaLineageAllocationScope allocation = sourceResource
+        ? MediaLineageAllocationScope(MediaPreparedLineageAllocation{std::move(sourceResource)})
+        : MediaLineageAllocationScope(MediaRuntimeLineageAllocation{});
+    auto wrapped = wrapFrame(std::move(cloned), streamKind, std::move(allocation));
     if (!wrapped) return wrapped;
+    if (const auto* readiness = FFmpegFrameView::readiness(source)) {
+        auto* target = dynamic_cast<FFmpegFrameBuffer*>(wrapped.value().get());
+        if (!target) return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::internalError("Cloned frame wrapper lacks readiness binding"));
+        auto bound = target->setReadiness(*readiness);
+        if (!bound) return ::media::Result<MediaBufferRef>::failure(bound.error());
+    }
     const auto& payloadCredit = FFmpegFrameView::payloadCredit(source);
     if (payloadCredit) {
         if (auto status = wrapped.value()->attachPayloadCredit(payloadCredit);

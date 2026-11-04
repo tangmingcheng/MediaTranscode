@@ -240,7 +240,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 "AudioDecodeNode input packet lacks payload credit ownership"));
     }
     if (inputPayloadCredit) {
-        auto retained = retainMediaFfmpegPayload(*pendingPacket, inputPayloadCredit);
+        auto retained = retainMediaFfmpegPayload(*pendingPacket, {inputPayloadCredit, nullptr, MediaRuntimeLineageAllocation{}});
         if (!retained) return ::media::Result<MediaNodeProcessResult>::failure(retained.error());
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
@@ -254,10 +254,12 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::notInitialized(
                     "Synchronized AudioDecodeNode requires planned lineage state"));
         }
-        if (auto status = m_lineageState->validateObservation(
-                synchronized.origin.generation); !status) {
-            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
-        }
+        auto disposition = m_lineageState->classifyObservation(
+            synchronized.origin.generation);
+        if (!disposition)
+            return ::media::Result<MediaNodeProcessResult>::failure(disposition.error());
+        if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale)
+            return processProgress();
         if (m_lineageState->discardPaddingProof) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -410,7 +412,7 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                 ::media::ErrorInfo::invalidArgument(
                     "AudioDecodeNode decoded sample rate changed from its source codec"));
         }
-        auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio);
+        auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }

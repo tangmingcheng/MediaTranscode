@@ -17,6 +17,7 @@ struct MediaVideoEncoderProbeInput final {
     AVBufferRef* hardwareFrames;
     std::string backend;
     std::optional<AVPixelFormat> advertisedEquivalentSoftwareSurface;
+    std::optional<MediaVideoColorContract> color;
 };
 
 // Opens and consumes a disposable encoder using caller-owned frame resources.

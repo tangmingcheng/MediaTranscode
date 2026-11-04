@@ -32,8 +32,10 @@ namespace {
         output->setFlags(output->flags() | MediaBufferFlag::KeyFrame);
     }
     if (!lineage) return Result::success(std::move(output));
+    const auto* canonical = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(source.get());
     return MediaCanonicalAccessUnitBuffer::create(
-        std::move(output), std::move(lineage), std::nullopt, {});
+        MediaRuntimeLineageAllocation{}, std::move(output), std::move(lineage), std::nullopt, {},
+        canonical ? canonical->codecReceiveObservation() : std::nullopt);
 }
 } // namespace
 

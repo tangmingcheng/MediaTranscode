@@ -36,6 +36,7 @@ struct MediaAudioEncodeBranchOptions {
     std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
     std::optional<std::uint64_t> correctionGeneration;
     std::optional<std::size_t> correctionLookaheadWindows;
+    std::optional<int> maximumResamplerOutputBlockSamples;
     std::optional<MediaAvSyncGroupKey> syncGroup;
 };
 
@@ -55,7 +56,7 @@ public:
         MediaGraph& graph,
         const MediaAudioEncodeBranchOptions& options);
 
-    static ::media::Result<MediaSourceBranchEndpoints> buildSource(
+    static ::media::Result<MediaAudioSourceBranchEndpoints> buildSource(
         MediaGraph& graph, const MediaAudioEncodeBranchOptions& options,
         MediaEndpoint outputEncoderCodec);
     static ::media::Result<MediaOutputEncoderEndpoints> buildOutputEncoder(

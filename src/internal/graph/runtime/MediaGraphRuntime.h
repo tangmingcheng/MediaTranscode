@@ -108,6 +108,7 @@ public:
 
 private:
     friend class MediaGraphRuntimeLifecycleExecutor;
+    friend class MediaContinuousOutputDrain;
     ::media::Status compileTransaction(MediaRealtimeExecutableGraph executable);
 
     MediaGraph m_graph;

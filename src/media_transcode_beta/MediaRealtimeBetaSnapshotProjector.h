@@ -18,7 +18,8 @@ public:
         const MediaRealtimeBetaOwnedConfig& config) noexcept;
     static ::media::Status projectPrepared(
         mt_beta_realtime_snapshot& snapshot,
-        const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report);
+        const ffmpeg::graph::MediaRealtimeVideoPreparedReport& report,
+        const MediaRealtimeBetaOwnedConfig& config);
     static ::media::Status projectRuntime(
         mt_beta_realtime_snapshot& snapshot,
         const ffmpeg::graph::MediaGraphRuntimeReport& report,

@@ -109,7 +109,7 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     }
     auto source = MediaRealtimeAvSourceClockPlanner::plan(
         {plan.inputType, plan.inputLayout, plan.input, plan.videoPlan.sourceStreamIndex,
-         plan.videoPlan.inputCodecName, audio, isolatedAudioInput}, synchronization);
+         plan.videoPlan.inputCodecName, audio, isolatedAudioInput, nullptr}, synchronization);
     if (!source) return ::media::Result<MediaRealtimeAvSyncResolvedFacts>::failure(source.error());
     static_cast<MediaRealtimeAvSourceTimingFacts&>(facts) = source.value().timing;
 

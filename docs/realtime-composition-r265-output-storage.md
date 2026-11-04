@@ -1,0 +1,97 @@
+# r265：完整输出存储准备
+
+目标仍为一次materialize至返回所有wire batches的完整存储准入，不以局部容器替换作为完成。
+
+依据：GStreamer allocation/bufferpool设计（https://gstreamer.freedesktop.org/documentation/additional/design/bufferpool.html）将大小、数量、对齐及metadata作为上游分配合同，有限容量产生背压，最后引用释放后回收。这里只复用其明确分配合同与所有权原则；本项目可变长度datagram和协议事务不能直接套用固定尺寸pool，也不引入新依赖。
+
+第一项提取现有partition规则为纯布局计算：deadline改变、数量达到planner上限、增加当前字节会超过planner上限时开始新分区。统计遍和实际构造必须使用同一计算；不新增策略、默认值、线程或队列。布局仅包含当前count/bytes/deadline，成功计算不分配；调用方在实际append成功后才提交布局状态。输入不合法时返回现有错误。现有builder的序列校验、slice与失败语义保留。
+
+随后需同时覆盖外层MP2T、RTP重写、RTCP、元数据、四块事务、partition集合、最终payload/descriptor与batch对象控制块；身份字符串和MediaBuffer诊断名也不得漏计。最终对象当前new加shared_ptr为两笔分配，不能将其错误当成既有allocate_shared单笔geometry。必须先建立匹配的准备/接管接口，再将全部分配放到投影前并共享一次准入。保留的payload副本按同时存活计费，serial在完整闭合前保持。
+
+验证顺序：双独立静态审查、Release全量重建、原规格Windows realtime失源/重入，完整Windows门禁后RKMPP。当前本项尚未完成，不新增公共参数或外部FFmpeg修改。
+
+## 当前进度
+
+共享分区布局及builder迁移已实现，两名未参与实现的独立审查者均明确局部PASS：原deadline/数量/字节边界等价，算术受上限约束，成功append后才提交cursor。Release全量重建会话41120已启动，尚未取得最终结果；本轮未开始实流复验。后续统计遍和完整准备存储仍待接通。
+
+Release全量重建41120已成功，configure/build退出0，四项产物齐全；realtime新产物6188032字节，13:44:37。r265原规格实流复验已启动，未取得完整结果。
+
+进一步审查确认batch构造noexcept内setDiagnosticName会构造std::string，分配失败可能terminate而绕过外层catch。后续必须将诊断名与identity纳入发布前准备，最终对象和shared控制块按实际工厂geometry计费。PreparedBatch独占未发布对象，投影后只绑定真实slice；不得创建可公开的无效占位slice。该问题目前为代码证据，未作运行时故障注入。
+
+## 局部复验结束
+
+原规格三路120秒及所选音视频完整120秒重入已完成，VLC原生快照确认失源与重入；源退出0，CLI caller_stop退出0。最终错误/丢帧0、payload存储归零。最大提交迟到16.527264ms，delivery_evidence仍not_proven，不作完整验收通过声明。详见realtime-composition-r265-validation.md；本轮18个临时产物及6个PID已清理核验。下一步仍须完成最终batch准备/绑定与统一预算接线。
+
+## 构造异常合同修正
+
+依据C++ Core Guidelines F.6（https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rf-noexcept）：仅在不应抛出时声明noexcept。本项目现有create明确将bad_alloc转换为AllocationFailed，故带字符串分配的私有构造函数必须允许异常到达该catch。删除该构造的noexcept，不新增恢复、重试或fallback。构造失败时已构造成员和new存储由语言RAII清理，commitSlice沿既有abandon语义清理；不改变线程、队列、参数及成功链路。此修正不声称诊断名已预算化，也不声称所有OOM错误文本均无分配。
+
+上述构造异常合同修正已获双独立静态PASS；Release全量重建95443进行中。此前r265实流发生在此修正之前，不能作为该修正后的实流证据。尚无分配失败故障注入证据。
+
+## 最终batch准备接口的审查约束
+
+独立审查认可allocate_shared加不可伪造passkey、move-only Prepared与一次性bind方向。passkey必须私有显式构造，不能留聚合初始化旁路。geometry必须探测生产同类型同allocator，删除旧create旁路。Prepared不暴露shared_ptr/raw getter；optional slice只存在于未发布对象内部。
+
+实际global sequence投影前尚不可得，不得伪造：先准备身份、payload和descriptor存储，bind取得真实slice后补齐sequence并验证generation/count/range。发送端349/553/612处直接slice访问必须同步改为已绑定检查。partition集合、payload、descriptor、identity和基类诊断名仍需同时计费，allocate_shared仅覆盖对象和控制块。若准备仍发生在reservation投影之后，或bind成功路径仍分配，则判定该目标未完成。
+
+构造异常合同修正后的Release全量重建95443成功：configure/build退出0，所需四项产物齐全，未运行local CLI。修正后实流及分配失败注入仍未完成；后续接口接线后统一复验，不能引用旧r265结果替代。
+
+## 字节存储接管基础
+
+MediaOwnedByteStorage新增fromAllocation，复用已实现的MediaOwnedMemoryAllocation和FixedCapacityStorage同类接管规则。检查非空与原uint8对齐后转移指针、尺寸和resource；不分配、不reserve，失败由入参RAII释放。双独立静态审查均PASS。当前尚无生产payload调用，未构建验证，不代表预算接线完成；需在最终batch准备入口消费同笔准入切分的payload backing。
+
+## 未发布对象生命周期接线
+
+旧BatchBuffer::create已删除，唯一builder调用迁移至prepare返回move-only Prepared，再bind真实slice发布。Prepared不提供指针getter，bind先消费句柄，校验失败销毁对象并由slice取消原事务；optional slice仅存在于内部未发布阶段。发送端三处访问增加已绑定检查。绑定成功路径只校验和移动，不分配。
+
+此阶段仍使用原vector和new+shared两分配，prepare仍在协议投影之后；仅建立生命周期边界，不能宣称投影前准备、完整预算或消除复制。下一步必须前移准备、接入已准入backing及真实对象geometry，并消除投影前不可得sequence依赖。
+
+该生命周期迁移已获双独立静态PASS。源码冻结，Release全量重建98129进行中；尚无迁移后实流证据。
+
+98129全量重建已成功，configure/build退出0，四项产物齐全；未运行local。当前生命周期迁移仍待实际流验证。
+
+## 去除准备阶段的序号依赖
+
+先将现有descriptor事实拆为MediaWireDatagramLayout（generation、endpoint、offset/size、release/deadline、mediaBoundary）与派生的带globalSequence descriptor。布局校验完整复用原payload覆盖、时间顺序和generation检查；序号校验由descriptor validator单独执行后调用布局校验，避免复制算法。此步骤不改变现有完整描述符的验收条件，后续准备只保存布局，bind从真实slice填入序号。依据仍为前述GStreamer分配/metadata合同与已审查的一次性发布原则；不新增媒体策略、线程或队列。
+
+准备对象已改为只保存layout与未填充的optional序号，bind从真实slice的首序号按索引填入，先检查范围溢出，再复用完整descriptor validator。partition仍保留调用方sequence与transaction一致性检查，builder不再接收序号。尚未前移partition构造或完成存储准入，未发布对象禁止读取序号；实际发布仅在全部校验及slice绑定成功之后。
+
+序号依赖分离已获双独立静态PASS，检查包括原校验等价、未绑定对象不可见、slice失败取消、序号溢出及调用点迁移。Release全量重建18651进行中，尚无本切片实流证据。新增optional导致实际尺寸变化，后续geometry和预算必须取当前真实sizeof，不复用旧数值。
+
+## Partition准备前移的锁顺序
+
+独立只读审查确认：持原RTP协议锁准备所有不带slice的partition和预留发布集合，再global.reserve；WouldBlock释放未发布对象且不推进投影。成功取得嵌套transaction并完成原投影后，构造RTP commit transaction立即解锁，锁外Model bind及PreparedCollection bind。RTP transaction析构会重锁protocol mutex，故不能把可能失败的slice绑定移入锁内。
+
+PreparedCollection须move-only、无getter，bind一次性消费；投影前预留输出集合容量，绑定不再增长；校验总datagram数并在失败时RAII取消已绑定及剩余transaction。移除旧带transaction的构造入口。前移普通vector不等于预算闭合，global WouldBlock与其他等待者的通知仍是独立域。
+
+序号依赖分离后的Release全量重建18651成功，configure/build退出0，四项产物齐全，realtime6188032字节（15:18:10）。本次未运行local，也尚未完成此切片实流门禁。下一实施项为上述PreparedCollection及三个materializer前移接线。
+
+## Partition前移实现
+
+PartitionBuilder已删除transaction/sequence构造依赖，finish准备每partition句柄和计数，并预先创建输出集合槽位；Prepared::bind一次性消费、核验generation/总数、按顺序分slice并填槽位。RTP普通、终止RTCP、MP2T/UDP三处在global.reserve前完成准备，RTP绑定仍在protocol mutex解锁后。绑定成功路径无容器增长，错误路径仍可分配诊断文本。普通堆存储尚未统一计费，serial保持。
+
+前移实现已获双独立静态PASS，源码冻结；Release全量重建52994进行中。尚无该实现实流证据，旧r265不得替代；r266证据不完整仍保留原结论。
+
+前移实现Release全量重建52994成功（configure/build退出0，四项产物齐全，未运行local）。实流仍待复验。尺寸核对确认Prepared的Partition数组与最终shared_ptr输出数组同时存活；后续必须按实际分区数分别计入，不能只使用backlog中的一份指针数组。身份字符串可研究复用已存在globalSequence不可变身份所有者，不能借用无保活string_view；诊断名存储仍是明确缺口。
+
+## 身份存储复用
+
+依据已引用GStreamer buffer保活其分配owner的所有权原则，复用现有MediaWireGlobalSequenceState不可变sessionKey/serviceScopeId，builder与batch持有const共享owner，不复制两份字符串、不创建独立控制块、不借用裸引用。现有state不持batch，reservation记录为值、wakeup为weak，需复审新增引用无环；state可能保活到最后batch释放，这是身份引用有效性的必要生命周期。generation须与owner一致。该变更不涉及协议决策、线程或队列，也不解决诊断名分配及其余预算。
+
+身份复用实现及三处materializer迁移已获双独立静态PASS：无反向强引用环，identity晚于slice/payload释放，成功创建不再复制字符串或新建控制块。最后batch可能延长global固定状态生命周期，必须在最终保有存储核算中体现。Release全量重建60861进行中，尚无新实流结果。
+
+身份复用后的 Release 全量重建60861已成功：configure/build退出0；CMakeCache、build.ninja及两个CLI产物均存在，realtime为6192128字节（2026-10-19 15:32:09）。未运行local，尚无此版本实流结果。当前继续核对静态诊断名与batch对象控制块的完整存储准备方案，不以此构建替代验收。
+
+## 诊断名所有权方案
+
+依据 LLVM StringRef/StringLiteral（https://llvm.org/docs/ProgrammersManual.html#the-stringref-class；https://www.llvm.org/docs/doxygen/classllvm_1_1StringLiteral.html）：非拥有视图可免堆分配，但持有时必须证明底层存储存活。本项目用consteval字面量包装限制静态地址，动态字符串继续拥有；统一名称值类型以variant区分，不缓存指向自身string的视图。clone复制值类型以保持原所有权。先迁移wire batch的固定名称，其余调用保持拥有语义；不引入LLVM依赖，不改变线程、队列、失败策略或公共API。此项仅消除该诊断名分配，不能代表全预算完成。
+
+诊断名值类型已实现并获双独立局部静态PASS：consteval限制静态存储引用，动态名称继续拥有，clone保持复制语义；wire batch固定名称无string分配。variant可能增大MediaBuffer及派生类型，后续预算必须取新构建真实sizeof和geometry。Release全量重建83698已启动，尚未取得结果；仍无该版本实流证据。
+
+诊断名切片Release全量重建83698成功，产物已核验。r267真实复验失败：重入期间音频等待视频头152.7538ms后超过发送窗口，CLI退出1；payload归零。完整证据及清理见realtime-composition-r267-validation.md。当前优先沿真实失败链追踪上游延迟，输出预算闭合仍是未完成主项，不放宽原验收约束。
+
+## r270/r271后的实施优先级
+
+r270与r271均确认serial-only WouldBlock（count/bytes容量未耗尽）最终超期；r271最长canvas23.6106ms，不能归因于r267的170ms现象。独立审查未证明漏唤醒：worker在process前采样sequence，global通知与串行整笔完成谓词一致。下一完整切片必须覆盖batch payload、descriptor、对象控制块、partition与发布数组，并处理MPEGTS/RTP外层已提前分配的workspace；不得只改三个内部prepare调用便宣称整笔闭合。完成统一准入与多reservation失败复审前保留serial。
+
+r270清理崩溃暴露snapshot未保活hw_frames_ctx缺口，r271已补齐并双审PASS、Release重建成功；同规格首轮源实流仍因serial失败，但CLI正常错误退出1且payload归零。未完成重入，调试器附加影响时序，不能记为验收通过。细节见realtime-composition-r271-frame-context.md及realtime-composition-r271-validation.md。

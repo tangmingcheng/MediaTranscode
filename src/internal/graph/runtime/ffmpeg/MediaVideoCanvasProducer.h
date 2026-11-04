@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/diagnostics/MediaCanvasComposeObservation.h"
 
 #include "internal/graph/runtime/ffmpeg/MediaVideoCanvasAdapter.h"
 #include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
@@ -16,7 +17,7 @@ class MediaVideoCanvasProducer final {
 public:
     ::media::Result<FramePtr> cloneBlack();
     // One entry per planned tile; null means black for this output deadline.
-    ::media::Result<FramePtr> compose(std::span<const AVFrame* const> tiles);
+    ::media::Result<FramePtr> compose(std::span<const MediaVideoCanvasTile> tiles);
 private:
     friend class MediaPreparedVideoCanvas;
     ::media::Status prepare(const MediaVideoCanvasPlan& plan, AVBufferRef* productionHwFrames,
@@ -25,6 +26,7 @@ private:
     ::media::Result<FramePtr> publish(const AVFrame& frame);
     // Last released; output HeaderLease objects also retain this ownership.
     std::shared_ptr<const MediaPreparationStorageLease> payloadStorage_;
+    MediaCanvasComposeObservation observation_;
     MediaVideoCanvasPlan plan_{};
     BufferRefPtr frames_;
     std::unique_ptr<MediaVideoCanvasAdapter> adapter_;

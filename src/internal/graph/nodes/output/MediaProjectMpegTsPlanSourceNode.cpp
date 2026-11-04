@@ -1,7 +1,10 @@
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 
 #include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/protocol/MediaProtocolPurgeInput.h"
+#include <array>
 
 namespace media::ffmpeg::graph {
 
@@ -40,15 +43,19 @@ MediaNodeKind MediaProjectMpegTsPlanSourceNode::staticKind() noexcept
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
 {
-    return m_generationState;
+    return m_generationPurge;
 }
 
 ::media::Status MediaProjectMpegTsPlanSourceNode::start(
     MediaGraphExecutionContext& context)
 {
     resetState();
+    m_completedPurge.reset();
+    auto started = m_generationPurge->start(context.sharedNodeWakeup(nodeId()));
+    if (!started) return started;
     auto* activation = context.findInputChannel(nodeId(), "activation");
     auto* plan = context.findOutputChannel(nodeId(), "plan");
+    auto* transport = context.findInputChannel(nodeId(), "transport_plan");
     const MediaGraph* graph = context.graph();
     const MediaNode* node = graph ? graph->findNode(nodeId()) : nullptr;
     const auto outputs = context.outputChannels(nodeId());
@@ -61,113 +68,129 @@ MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
     if (!m_sessionKey.valid() || !m_authority ||
         m_authority->sessionKey() != m_sessionKey ||
         m_authority->streamSet() != m_streamSet ||
-        context.inputChannels(nodeId()).size() != 1 ||
+        context.inputChannels(nodeId()).size() != 2 ||
         !node || node->outputPorts.size() != 1 ||
-        node->outputPorts.front().name != "plan" || !activation || !plan ||
+        node->outputPorts.front().name != "plan" || !activation || !plan || !transport ||
+        transport->binding().payloadKind != MediaPayloadKind::DatagramTransportPlan ||
         !blockingPlanOutputs) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Project MPEG-TS plan source requires exact activation and plan ports"));
+            "Project MPEG-TS plan source requires exact activation, transport and plan ports"));
     }
     return FFmpegNodeRuntime::start(context);
+}
+
+::media::Result<MediaNodeProcessResult>
+MediaProjectMpegTsPlanSourceNode::process(MediaGraphExecutionContext& context)
+{
+    if (auto purge = m_generationPurge->pending()) {
+        auto activation = m_authority->currentActivation();
+        if (!activation || activation.value().generation != purge->publishedGeneration ||
+            purge->oldGeneration < purge->publishedGeneration) {
+            auto status = ::media::Status::failure(activation
+                ? ::media::ErrorInfo::invalidArgument("MPEG-TS plan purge differs from revoked authority")
+                : activation.error());
+            auto completed = m_generationPurge->complete(*purge, status);
+            return processProgress(completed ? status : completed);
+        }
+        auto status = ::media::Status::success();
+        if (m_generationSession->transportPlan)
+            status = authorizeProtocolPurgeInput(m_generationSession->transportPlan,
+                m_sessionKey, *purge, m_completedPurge);
+        for (const auto* port : std::array{"activation", "transport_plan"}) {
+            while (status) {
+                auto input = tryPopInputOptional(context, port);
+                if (!input) { status = ::media::Status::failure(input.error()); break; }
+                if (!input.value()) break;
+                status = authorizeProtocolPurgeInput(*input.value(), m_sessionKey, *purge, m_completedPurge);
+            }
+            if (!status) break;
+        }
+        if (status) {
+            cancelPendingOutputTransfer();
+            status = m_generationState->purge(*purge);
+        }
+        if (status) m_completedPurge = *purge;
+        auto completed = m_generationPurge->complete(*purge, status);
+        return processProgress(completed ? status : completed);
+    }
+    return FFmpegNodeRuntime::process(context);
 }
 
 ::media::Result<MediaNodeProcessResult>
 MediaProjectMpegTsPlanSourceNode::onProcess(
     MediaGraphExecutionContext& context)
 {
-    MediaBufferRef activationInput;
+    using Result = ::media::Result<MediaNodeProcessResult>;
+    MediaBufferRef pending;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        pending = m_pendingPlan;
+    }
+    if (pending) return processProgress(emitOutput(context, "plan", pending));
+
+    auto activationInput = tryPopInputOptional(context, "activation");
+    if (!activationInput) return Result::failure(activationInput.error());
+    auto transportInput = tryPopInputOptional(context, "transport_plan");
+    if (!transportInput) return Result::failure(transportInput.error());
+    std::optional<MediaProtocolOutputActivation> activation;
+    if (activationInput.value()) {
+        auto validated = m_authority->validateActivation(*activationInput.value());
+        if (!validated) return Result::failure(validated.error());
+        activation = validated.value();
+    }
+    if (transportInput.value()) {
+        const auto* transport = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(
+            transportInput.value()->get());
+        if (!transport || transport->plan().shaping.sessionKey() != m_sessionKey.value() ||
+            !transport->globalSequence() ||
+            transport->globalSequence()->sessionKey() != m_sessionKey.value() ||
+            transport->globalSequence()->generation() != transport->plan().shaping.generation())
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "MPEG-TS runtime plan requires its exact typed transport session"));
+    }
+    MediaBufferRef transportBuffer;
     bool published = false;
     {
         auto mutation = m_generationState->reserveSessionMutation();
+        if ((activation && m_generationSession->activation) ||
+            (transportInput.value() && m_generationSession->transportPlan))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "MPEG-TS runtime plan rejects duplicate generation bindings"));
+        if (activation) m_generationSession->activation = activation;
+        if (transportInput.value()) m_generationSession->transportPlan = *transportInput.value();
+        activation = m_generationSession->activation;
+        transportBuffer = m_generationSession->transportPlan;
         published = m_published;
     }
+    const auto* activationChannel = context.findInputChannel(nodeId(), "activation");
+    const auto* transportChannel = context.findInputChannel(nodeId(), "transport_plan");
     if (published) {
-        auto duplicate = tryPopInputOptional(context, "activation");
-        if (!duplicate) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                duplicate.error());
-        }
-        if (!duplicate.value()) {
-            const MediaChannel* activation =
-                context.findInputChannel(nodeId(), "activation");
-            return activation && activation->closed()
-                ? processFinished()
-                : processWaiting();
-        }
-        activationInput = std::move(*duplicate.value());
-        auto activated = m_authority->validateActivation(activationInput);
-        if (!activated) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                activated.error());
-        }
-        bool duplicateGeneration = false;
-        {
-            auto mutation = m_generationState->reserveSessionMutation();
-            duplicateGeneration =
-                m_publishedGeneration &&
-                *m_publishedGeneration == activated.value().generation;
-            if (!duplicateGeneration) m_published = false;
-        }
-        if (duplicateGeneration) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Project MPEG-TS plan source rejects duplicate activation"));
-        }
+        return activationChannel->closed() && transportChannel->closed()
+            ? processFinished() : processWaiting();
     }
-    bool hasPendingPlan = false;
-    {
-        auto mutation = m_generationState->reserveSessionMutation();
-        hasPendingPlan = static_cast<bool>(m_pendingPlan);
-    }
-    if (!hasPendingPlan) {
-        if (!activationInput) {
-            auto input = tryPopInputOptional(context, "activation");
-            if (!input) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    input.error());
-            }
-            if (!input.value()) return processWaiting();
-            activationInput = std::move(*input.value());
-        }
-        auto activated = m_authority->validateActivation(activationInput);
-        if (!activated) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                activated.error());
-        }
-        auto created = MediaProjectMpegTsRuntimePlanBuffer::create(
-            m_outputPlan, m_sessionKey, m_streamSet,
-            activated.value());
-        if (!created) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                created.error());
-        }
-        {
-            auto permitted =
-                m_generationState->permitActivatedGeneration(
-                    *m_authority,
-                    activated.value().generation,
-                    activated.value().completedTransitionSequence);
-            if (!permitted) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    permitted.error());
-            }
-            m_pendingPlan = std::move(created).value();
-            m_publishedGeneration = activated.value().generation;
-        }
-    }
-    MediaBufferRef pendingPlan;
-    std::optional<std::uint64_t> publishedGeneration;
-    {
-        auto mutation = m_generationState->reserveSessionMutation();
-        pendingPlan = m_pendingPlan;
-        publishedGeneration = m_publishedGeneration;
-    }
-    if (!pendingPlan || !publishedGeneration) {
+    if (!activation || !transportBuffer) {
+        if ((!activation && activationChannel->closed()) ||
+            (!transportBuffer && transportChannel->closed()))
+            return Result::failure(::media::ErrorInfo::notInitialized(
+                "MPEG-TS runtime plan input closed before its required binding"));
         return processWaiting();
     }
-    auto committed = emitOutput(context, "plan", pendingPlan);
-    return committed ? processProgress()
-                     : processProgress(std::move(committed));
+    const auto* transport = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(transportBuffer.get());
+    auto created = MediaProjectMpegTsRuntimePlanBuffer::create(
+        m_outputPlan, m_sessionKey, m_streamSet, *activation, *transport);
+    if (!created) return Result::failure(created.error());
+    {
+        auto permitted = m_generationState->permitActivatedGeneration(
+            *m_authority, activation->generation, activation->completedTransitionSequence);
+        if (!permitted) return Result::failure(
+            permitted.error().code == ::media::ErrorCode::Cancelled
+                ? ::media::ErrorInfo::wouldBlock("MPEG-TS runtime plan activation awaits generation purge")
+                : permitted.error());
+        m_pendingPlan = std::move(created).value();
+        m_publishedGeneration = activation->generation;
+        pending = m_pendingPlan;
+    }
+    return processProgress(emitOutput(context, "plan", pending));
 }
 
 ::media::Result<MediaOutputCommitReservation>
@@ -214,6 +237,7 @@ MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
 ::media::Status MediaProjectMpegTsPlanSourceNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_generationPurge->stop();
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -221,6 +245,7 @@ MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
 void MediaProjectMpegTsPlanSourceNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_generationPurge->stop();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }

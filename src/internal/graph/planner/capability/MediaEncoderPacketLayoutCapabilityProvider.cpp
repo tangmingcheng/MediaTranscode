@@ -154,6 +154,11 @@ LayoutResult encodeProbeFrame(AVCodecContext& context,
         return LayoutResult::failure(FFmpegGraphError::statusFromCode(
             allocated, "allocate encoder packet-layout probe frame").error());
     }
+    frame->sample_aspect_ratio = context.sample_aspect_ratio;
+    frame->color_range = context.color_range;
+    frame->color_primaries = context.color_primaries;
+    frame->color_trc = context.color_trc;
+    frame->colorspace = context.colorspace;
     int code = avcodec_send_frame(&context, frame.get());
     if (code < 0) {
         return LayoutResult::failure(FFmpegGraphError::statusFromCode(

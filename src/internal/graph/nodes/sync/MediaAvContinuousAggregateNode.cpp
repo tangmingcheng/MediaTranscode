@@ -1,12 +1,16 @@
+#include "internal/graph/sync/MediaAvAggregateCoordination.h"
+#include "internal/graph/runtime/storage/MediaAvAggregateMetadataBudget.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlanValidator.h"
 #include "internal/graph/nodes/sync/MediaAvContinuousAggregateNode.h"
+#include "internal/graph/sync/MediaAvAggregateTimeline.h"
 
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/runtime/ffmpeg/MediaPreparedVideoCanvas.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
@@ -22,6 +26,36 @@ namespace {
 {
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(text));
 }
+void appendObservedFrame(std::ostream& out, const std::string& prefix,
+    const std::optional<MediaAggregateFrameObservation>& frame)
+{
+    out << ' ' << prefix << "source_sequence="
+        << (frame ? std::to_string(frame->sourceSequence) : "unavailable")
+        << ' ' << prefix << "presentation_ns="
+        << (frame ? std::to_string(frame->presentationNs) : "unavailable")
+        << ' ' << prefix << "duration_ns="
+        << (frame && frame->durationNs ? std::to_string(*frame->durationNs) : "unavailable")
+        << ' ' << prefix << "decoded_sequence="
+        << (frame && frame->decodedSequence ? std::to_string(*frame->decodedSequence) : "unavailable");
+}
+void logFirstSourceFrame(MediaNodeId node, const std::string& identity,
+    std::uint64_t generation, const char* stage, std::int64_t steady,
+    const std::optional<MediaAggregateFrameObservation>& frame) noexcept
+{
+    if (!frame) return;
+    try {
+        std::ostringstream out;
+        out << "source_video_trace node_id=" << node.value
+            << " node=MediaAvContinuousAggregateNode stage=" << stage
+            << " source_identity=" << identity << " generation=" << generation
+            << " steady_ns=" << steady;
+        appendObservedFrame(out, "", frame);
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode, out.str());
+    } catch (...) {
+        // Observation must not alter contribution selection or publication.
+    }
+}
 }
 
 MediaAvContinuousAggregateNode::MediaAvContinuousAggregateNode(
@@ -31,8 +65,10 @@ MediaAvContinuousAggregateNode::MediaAvContinuousAggregateNode(
 {
     if (m_dependencies.aggregatePlan) {
         m_sources.resize(plan().sources.size());
-        for (auto& source : m_sources)
-            source.purge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+        for (std::size_t i = 0; i < m_sources.size(); ++i) {
+            m_sources[i].purge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+            m_sources[i].video = MediaFixedCapacityStorage<MediaBufferRef>(plan().sources[i].maximumVideoCandidates);
+        }
     }
 }
 
@@ -51,17 +87,20 @@ MediaAvContinuousAggregateNode::sourcePurgeTarget(const MediaAvSyncGroupKey& gro
 
 ::media::Status MediaAvContinuousAggregateNode::start(MediaGraphExecutionContext& context)
 {
-    if (!m_dependencies.aggregatePlan || !m_dependencies.output || !m_dependencies.preparedCanvas ||
+    if (!m_dependencies.aggregatePlan || !m_dependencies.output || !m_dependencies.preparedCanvas || !m_dependencies.coordination ||
         m_dependencies.output->key() != plan().outputGroupKey ||
         m_sources.size() != plan().sources.size() || m_sources.size() != m_dependencies.sources.size())
         return invalid("Continuous aggregate requires its runtime dependencies");
     if (auto status = MediaAvContinuousAggregatePlanValidator::validate(plan()); !status) return status;
-    m_nextAudioSample = plan().initialAudioSample;
     m_summaryPublished = false;
+    m_executionObservation = {};
     for (std::size_t i = 0; i < m_sources.size(); ++i) {
         if (!m_dependencies.sources[i].group ||
             m_dependencies.sources[i].group->key() != plan().sources[i].groupKey ||
-            m_dependencies.sources[i].group->clock() != m_dependencies.output->clock())
+            m_dependencies.sources[i].group->clock() != m_dependencies.output->clock() ||
+            m_dependencies.sources[i].group->plan().startup.videoReadiness !=
+                (plan().sources[i].videoProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint
+                    ? MediaVideoStartupReadiness::DecodedPresentationSpan : MediaVideoStartupReadiness::IntervalCoverage))
             return invalid("Continuous aggregate source clock differs from its plan");
     }
     for (auto& source : m_sources) {
@@ -70,6 +109,8 @@ MediaAvContinuousAggregateNode::sourcePurgeTarget(const MediaAvSyncGroupKey& gro
             return status;
         }
     }
+    if (auto status = m_dependencies.coordination->bindWakeup(MediaStreamKind::Video,
+        context.sharedNodeWakeup(nodeId())); !status) { clear(); return status; }
     auto status = FFmpegNodeRuntime::start(context);
     if (!status) clear();
     return status;
@@ -77,37 +118,33 @@ MediaAvContinuousAggregateNode::sourcePurgeTarget(const MediaAvSyncGroupKey& gro
 
 void MediaAvContinuousAggregateNode::clear() noexcept
 {
+    if (m_dependencies.coordination) m_dependencies.coordination->stop();
     for (auto& source : m_sources) {
         source.purge->stop();
         source.video.clear();
+        source.displaySealed = false;
+        source.lastDisplaySequence = 0;
+        source.lastDisplayPresentation.reset();
+        source.lastDisplayCommit.reset();
         source.minimumGeneration = 0;
         source.committedRealFrames = 0;
         source.committedBlackFrames = 0;
         source.committedGeneration = 0;
+        source.firstIntervalMiss.reset();
+        source.generationObservation = {};
         source.videoEnded = false;
         source.epochEnded = false;
         source.discardedAudioEnded = false;
         source.prepared = false;
         source.lastInputEnd.reset();
     }
-    m_audio.clear();
     m_pending.reset();
     m_videoCodec.reset();
-    m_audioCodec.reset();
     m_canvas.reset();
     m_canvasPrepared = false;
-    m_audioCandidateSamples = 0;
-    m_committedAudioFrames = 0;
-    m_committedRealSamples = 0;
-    m_committedSilenceSamples = 0;
-    m_audioEnded = false;
     m_epoch.reset();
-    m_audioOrigin.reset();
-    m_lastInputEnd.reset();
     m_nextVideoFrame = 0;
-    m_nextAudioSample = 0;
     m_videoEndPublished = false;
-    m_audioEndPublished = false;
     m_rejectedPending = false;
 }
 
@@ -138,13 +175,19 @@ void MediaAvContinuousAggregateNode::abort(MediaGraphExecutionContext& context) 
             m_pending.reset();
         }
         source.video.clear();
+        source.displaySealed = false;
+        source.lastDisplaySequence = 0;
+        source.lastDisplayPresentation.reset();
+        source.lastDisplayCommit.reset();
         source.minimumGeneration = request->nextGeneration;
+        source.generationObservation = {};
+        source.generationObservation.enter(request->nextGeneration);
+        if (plan().sources[i].videoProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint) {
+            // An unsealed EOF belongs to the purged generation, not its successor.
+            source.videoEnded = false;
+        }
         source.prepared = false;
         source.lastInputEnd.reset();
-        if (i == plan().audioSource) {
-            m_audio.clear();
-            m_audioCandidateSamples = 0;
-        }
         // No new generation can publish before this source barrier acknowledges.
         auto* video = context.findInputChannel(nodeId(), plan().sources[i].videoPort);
         if (!video) return invalid("Aggregate purge lost its source input");
@@ -154,33 +197,32 @@ void MediaAvContinuousAggregateNode::abort(MediaGraphExecutionContext& context) 
             if (!discarded) return invalid("Aggregate purge lost its discarded audio input");
             discarded->clear();
         }
-        if (i == plan().audioSource) {
-            auto* audio = context.findInputChannel(nodeId(), plan().audioPort);
-            if (!audio) return invalid("Aggregate purge lost its audio input");
-            audio->clear();
-        }
+        if (auto status = m_dependencies.coordination->purgeInput(i, MediaStreamKind::Video,
+            request->oldGeneration, request->nextGeneration); !status) return status;
+        if (plan().sources[i].discardedAudioPort)
+            if (auto status = m_dependencies.coordination->purgeInput(i, MediaStreamKind::Audio,
+                request->oldGeneration, request->nextGeneration); !status) return status;
         if (auto status = source.purge->complete(*request, ::media::Status::success()); !status)
             return status;
     }
-    m_lastInputEnd.reset();
-    for (const auto& source : m_sources)
-        if (source.lastInputEnd && (!m_lastInputEnd || *source.lastInputEnd > *m_lastInputEnd))
-            m_lastInputEnd = source.lastInputEnd;
     return ::media::Status::success();
 }
 
 ::media::Result<MediaNodeProcessResult>
 MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
 {
-    if (auto status = servicePurges(context); !status)
-        return ::media::Result<MediaNodeProcessResult>::failure(status.error());
-    return FFmpegNodeRuntime::process(context);
+    return m_executionObservation.process({m_nextVideoFrame, std::nullopt},
+        pendingOutputBufferCount() != 0, [&] {
+            auto status = m_executionObservation.measure(ExecutionStage::Purge,
+                {m_nextVideoFrame, std::nullopt}, [&] { return servicePurges(context); });
+            if (!status) return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+            return FFmpegNodeRuntime::process(context);
+        });
 }
 
 ::media::Status MediaAvContinuousAggregateNode::bindCodecs(MediaGraphExecutionContext& context)
 {
-    for (auto [port, retained] : {std::pair{"video_codec", &m_videoCodec},
-                                 std::pair{"audio_codec", &m_audioCodec}}) {
+    for (auto [port, retained] : {std::pair{"video_codec", &m_videoCodec}}) {
         if (*retained) continue;
         auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), port), name(), port);
         if (!input) return ::media::Status::failure(input.error());
@@ -192,7 +234,11 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
     if (m_videoCodec && !m_canvasPrepared) {
         const auto* codec = static_cast<const FFmpegCodecContextBuffer*>(m_videoCodec.get())->context();
         const auto& range = plan().canvas.effectiveColorRange;
-        if (!range.encoderInput || codec->width != plan().canvas.width ||
+        if (!range.encoderInput || !range.color ||
+            codec->color_primaries != range.color->primaries || codec->color_trc != range.color->transfer ||
+            codec->colorspace != range.color->matrix ||
+            codec->sample_aspect_ratio.num != plan().canvas.sampleAspectRatio.num ||
+            codec->sample_aspect_ratio.den != plan().canvas.sampleAspectRatio.den || codec->width != plan().canvas.width ||
             codec->height != plan().canvas.height || !codec->hw_frames_ctx ||
             codec->color_range != range.encoderInput->colorRange ||
             codec->pix_fmt != range.encoderInput->pixelFormat ||
@@ -205,19 +251,21 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
         m_canvas = std::move(canvas.value());
         m_canvasPrepared = true;
     }
-    if (m_audioCodec) {
-        const auto* codec = static_cast<const FFmpegCodecContextBuffer*>(m_audioCodec.get())->context();
-        if (codec->sample_rate != plan().audio.sampleRate() ||
-            codec->frame_size != plan().audio.codecFrameSamples() ||
-            codec->ch_layout.nb_channels != plan().audio.channels() ||
-            codec->sample_fmt != av_get_sample_fmt(plan().audio.sampleFormat().c_str()))
-            return invalid("Aggregate audio differs from the prepared encoder sample grid");
-    }
     return ::media::Status::success();
 }
 
-::media::Status MediaAvContinuousAggregateNode::consumeInputs(MediaGraphExecutionContext& context)
+::media::Status MediaAvContinuousAggregateNode::consumeInputs(
+    MediaGraphExecutionContext& context, CandidatePreparation& preparation)
 {
+    preparation = CandidatePreparation::Ready;
+    std::optional<MediaRunningTime> target;
+    if (m_epoch && !m_pending) {
+        auto presentation = MediaAvAggregateTimeline::videoPresentation(plan(), m_nextVideoFrame);
+        if (!presentation) return ::media::Status::failure(presentation.error());
+        auto mapped = MediaAvAggregateTimeline::presentationMaster(*m_epoch, presentation.value());
+        if (!mapped) return ::media::Status::failure(mapped.error());
+        target = mapped.value();
+    }
     for (std::size_t i = 0; i < m_sources.size(); ++i) {
         auto& source = m_sources[i];
         const auto epochPort = "source_epoch_" + std::to_string(i);
@@ -239,29 +287,111 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
                     name(), *plan().sources[i].discardedAudioPort);
                 if (!input) return ::media::Status::failure(input.error());
                 if (!input.value()) break;
-                if ((*input.value())->isEof()) { source.discardedAudioEnded = true; break; }
+                if ((*input.value())->isEof()) { source.discardedAudioEnded = true;
+                    if (auto status = m_dependencies.coordination->sealInput(i, MediaStreamKind::Audio); !status) return status;
+                    break; }
                 if ((*input.value())->isFlush()) continue;
                 const auto* audio = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(input.value()->get());
                 if (!audio || !audio->media() || !audio->media()->lineage() ||
                     !std::holds_alternative<MediaSourceAccessUnitIdentity>(audio->media()->lineage()->identity))
                     return invalid("Aggregate discarded audio requires bound source samples");
+                const auto& origin = audio->audioOrigin();
+                const auto endSample = audio->media()->interval().end;
+                if (endSample < origin.epochOutputSampleIndex)
+                    return invalid("Discarded audio end precedes its source epoch");
+                auto relative = MediaRunningTime::checkedFromTicks(endSample - origin.epochOutputSampleIndex,
+                    1, origin.outputSampleRate);
+                if (!relative) return ::media::Status::failure(relative.error());
+                auto end = origin.masterRelease.checkedAdd(relative.value());
+                if (!end) return ::media::Status::failure(end.error());
+                if (auto status = m_dependencies.coordination->observeInputEnd(i, MediaStreamKind::Audio,
+                    origin.generation, end.value()); !status) return status;
                 // This declared non-selected stream has no output contribution.
                 // Releasing its sample lease still drives its source A/V owner.
             }
         }
+        const bool displayProduct = plan().sources[i].videoProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint;
+        if (!displayProduct && target) {
+            const auto snapshot = m_dependencies.sources[i].group->epochTransitionSnapshot();
+            if (const auto epoch = snapshot.playbackEpoch(); snapshot.outputPermitted && epoch) {
+                source.generationObservation.enter(epoch->generation);
+                while (!source.video.empty()) {
+                    const auto lineage = FFmpegFrameView::canonicalLineage(source.video.front());
+                    if (lineage->generation != epoch->generation) {
+                        if (lineage->generation < epoch->generation)
+                            source.generationObservation.count(source.generationObservation.prepareOldGeneration);
+                        source.video.pop_front();
+                        continue;
+                    }
+                    auto interval = MediaAvAggregateTimeline::sourceInterval(
+                        *epoch, lineage->presentation, lineage->duration);
+                    if (!interval) return ::media::Status::failure(interval.error());
+                    source.generationObservation.lastPrepareBeginNs = interval.value().begin.nanoseconds();
+                    source.generationObservation.lastPrepareEndNs = interval.value().end.nanoseconds();
+                    if (interval.value().end > *target) break;
+                    source.generationObservation.count(source.generationObservation.prepareExpired);
+                    source.video.pop_front();
+                }
+            }
+        }
+        bool observedEmpty = false;
+        std::size_t consumed = 0;
         const auto capacity = plan().sources[i].maximumVideoCandidates;
-        for (std::size_t consumed = 0; consumed < capacity && !source.videoEnded && source.video.size() < capacity; ++consumed) {
+        for (; consumed < capacity && !source.videoEnded && source.video.size() < capacity; ++consumed) {
             auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), plan().sources[i].videoPort),
                 name(), plan().sources[i].videoPort);
             if (!input) return ::media::Status::failure(input.error());
-            if (!input.value()) break;
-            if ((*input.value())->isEof()) { source.videoEnded = true; break; }
+            if (!input.value()) { observedEmpty = true; break; }
+            if ((*input.value())->isEof()) { source.videoEnded = true;
+                if (!displayProduct)
+                    if (auto status = m_dependencies.coordination->sealInput(i, MediaStreamKind::Video); !status) return status;
+                break; }
             if ((*input.value())->isFlush()) continue;
+            if (displayProduct) {
+                const auto* decoded = dynamic_cast<const MediaVideoDecodeBuffer*>(input.value()->get());
+                const auto display = decoded ? decoded->displayLineage() : nullptr;
+                if (!display || !display->accessUnit || !FFmpegFrameView::frame(*input.value()) ||
+                    display->accessUnit->identity.sourceIdentity.view() != plan().sources[i].videoIdentity ||
+                    !display->decodedSequence || display->accessUnit->mappingConfidence != MediaTimeMappingConfidence::Locked)
+                    return invalid("Aggregate requires a real decoded display point for its planned source");
+                const auto generation = display->accessUnit->generation;
+                if (generation < source.minimumGeneration) continue;
+                auto epoch = m_dependencies.sources[i].group->playbackEpoch();
+                if (!epoch) return ::media::Status::failure(epoch.error());
+                if (generation != epoch.value().generation) continue;
+                if (display->decodedSequence <= source.lastDisplaySequence ||
+                    (source.lastDisplayPresentation && display->presentation < *source.lastDisplayPresentation))
+                    return invalid("Aggregate display points must advance decoded sequence in presentation order");
+                source.lastDisplaySequence = display->decodedSequence;
+                source.lastDisplayPresentation = display->presentation;
+                source.video.push_back(std::move(*input.value()));
+                if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+                    source.generationObservation.enter(generation);
+                    if (!source.generationObservation.firstCandidateSteadyNs) {
+                        source.generationObservation.firstCandidateSteadyNs = mediaSteadyClockNowNs();
+                        source.generationObservation.firstCandidateFrame = MediaAggregateFrameObservation{
+                            display->accessUnit->identity.sourceSequence.value(), display->presentation.nanoseconds(),
+                            std::nullopt, display->decodedSequence};
+                        logFirstSourceFrame(nodeId(), plan().sources[i].videoIdentity, generation,
+                            "aggregate_candidate", *source.generationObservation.firstCandidateSteadyNs,
+                            source.generationObservation.firstCandidateFrame);
+                    }
+                }
+                source.prepared = true;
+                continue;
+            }
             auto lineage = FFmpegFrameView::canonicalLineage(*input.value());
             if (!lineage || !std::holds_alternative<MediaSourceAccessUnitIdentity>(lineage->identity) ||
                 !FFmpegFrameView::frame(*input.value()) || lineage->duration.nanoseconds() <= 0)
                 return invalid("Aggregate requires source video lineage with an explicit interval");
-            if (lineage->generation < source.minimumGeneration) continue;
+            if (std::get<MediaSourceAccessUnitIdentity>(lineage->identity).sourceIdentity.view() !=
+                    plan().sources[i].videoIdentity || !lineage->videoContributions.empty())
+                return invalid("Aggregate source video metadata differs from prepared identity");
+            if (lineage->generation < source.minimumGeneration) {
+                source.generationObservation.enter(source.minimumGeneration);
+                source.generationObservation.count(source.generationObservation.prepareOldGeneration);
+                continue;
+            }
             if (auto valid = validateMediaCanonicalLineage(*lineage); !valid) return valid;
             if (!source.video.empty()) {
                 const auto previous = FFmpegFrameView::canonicalLineage(source.video.back());
@@ -270,70 +400,89 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
             }
             auto epoch = m_dependencies.sources[i].group->playbackEpoch();
             if (!epoch) return ::media::Status::failure(epoch.error());
-            if (epoch.value().generation != lineage->generation) continue;
-            auto relative = lineage->presentation.checkedSubtract(epoch.value().sourceStart);
-            if (!relative) return ::media::Status::failure(relative.error());
-            auto begin = epoch.value().masterRelease.checkedAdd(relative.value());
-            if (!begin) return ::media::Status::failure(begin.error());
-            auto end = begin.value().checkedAdd(lineage->duration);
-            if (!end) return ::media::Status::failure(end.error());
-            observeInputEnd(i, end.value());
+            source.generationObservation.enter(epoch.value().generation);
+            if (epoch.value().generation != lineage->generation) {
+                if (lineage->generation < epoch.value().generation)
+                    source.generationObservation.count(source.generationObservation.prepareOldGeneration);
+                continue;
+            }
+            auto interval = MediaAvAggregateTimeline::sourceInterval(
+                epoch.value(), lineage->presentation, lineage->duration);
+            if (!interval) return ::media::Status::failure(interval.error());
+            if (auto status = m_dependencies.coordination->observeInputEnd(i, MediaStreamKind::Video,
+                lineage->generation, interval.value().end); !status) return status;
+            source.generationObservation.lastPrepareBeginNs = interval.value().begin.nanoseconds();
+            source.generationObservation.lastPrepareEndNs = interval.value().end.nanoseconds();
+            if (target && interval.value().end <= *target) {
+                source.generationObservation.count(source.generationObservation.prepareExpired);
+                continue;
+            }
             source.video.push_back(std::move(*input.value()));
+            if (!source.generationObservation.firstCandidateSteadyNs &&
+                mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+                source.generationObservation.firstCandidateSteadyNs = mediaSteadyClockNowNs();
+                source.generationObservation.firstCandidateBeginNs = interval.value().begin.nanoseconds();
+                source.generationObservation.firstCandidateEndNs = interval.value().end.nanoseconds();
+                source.generationObservation.firstCandidateFrame = MediaAggregateFrameObservation{
+                    std::get<MediaSourceAccessUnitIdentity>(lineage->identity).sourceSequence.value(),
+                    lineage->presentation.nanoseconds(), lineage->duration.nanoseconds(), std::nullopt};
+                logFirstSourceFrame(nodeId(), plan().sources[i].videoIdentity, lineage->generation,
+                    "aggregate_candidate", *source.generationObservation.firstCandidateSteadyNs,
+                    source.generationObservation.firstCandidateFrame);
+                if (source.firstIntervalMiss && source.firstIntervalMiss->generation == lineage->generation &&
+                    !source.firstIntervalMiss->firstCandidateSteadyNs) {
+                    source.firstIntervalMiss->firstCandidateSteadyNs = source.generationObservation.firstCandidateSteadyNs;
+                    source.firstIntervalMiss->firstCandidateBeginNs = source.generationObservation.firstCandidateBeginNs;
+                    source.firstIntervalMiss->firstCandidateEndNs = source.generationObservation.firstCandidateEndNs;
+                    source.firstIntervalMiss->firstCandidateFrame = source.generationObservation.firstCandidateFrame;
+                }
+            }
             source.prepared = true;
         }
+        if (!displayProduct && target && source.video.empty() && !source.videoEnded &&
+            !observedEmpty && consumed == capacity)
+            preparation = CandidatePreparation::RetryProgress;
+        if (displayProduct && source.videoEnded && !source.displaySealed) {
+            if (source.video.size() == 1 && source.lastDisplayCommit) {
+                const auto* last = dynamic_cast<const MediaVideoDecodeBuffer*>(source.video.front().get());
+                if (last && last->decodedSequence() == source.lastDisplayCommit->decodedSequence)
+                    source.video.pop_front();
+            }
+            if (source.video.empty()) {
+                auto epoch = m_dependencies.sources[i].group->playbackEpoch();
+                if (!epoch) return ::media::Status::failure(epoch.error());
+                if (auto status = m_dependencies.coordination->sealDisplayInput(i, epoch.value().generation,
+                        source.lastDisplayCommit); !status) return status;
+                source.displaySealed = true;
+            }
+        }
     }
-    for (std::size_t consumed = 0; consumed < plan().maximumAudioCandidates && !m_audioEnded &&
-        m_audio.size() < plan().maximumAudioCandidates; ++consumed) {
-        auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), plan().audioPort), name(), plan().audioPort);
-        if (!input) return ::media::Status::failure(input.error());
-        if (!input.value()) break;
-        if ((*input.value())->isEof()) { m_audioEnded = true; break; }
-        if ((*input.value())->isFlush()) continue;
-        auto audio = std::dynamic_pointer_cast<MediaBoundCanonicalAudioBuffer>(*input.value());
-        if (!audio || audio->audioOrigin().outputSampleRate != plan().audio.sampleRate())
-            return invalid("Aggregate requires normalized bound audio samples");
-        if (audio->audioOrigin().generation < m_sources[plan().audioSource].minimumGeneration) continue;
-        const auto count = audio->media()->interval().sampleCount();
-        if (!count || *count > plan().maximumAudioCandidateSamples - m_audioCandidateSamples)
-            return invalid("Aggregate audio candidates exceed their planner sample bound");
-        const auto& origin = audio->audioOrigin();
-        const auto interval = audio->media()->interval();
-        if (interval.begin < origin.epochOutputSampleIndex ||
-            interval.end < origin.epochOutputSampleIndex)
-            return invalid("Aggregate audio precedes its released source epoch");
-        if (!m_audio.empty() && m_audio.back()->audioOrigin().generation == origin.generation &&
-            m_audio.back()->media()->interval().end > interval.begin)
-            return invalid("Aggregate audio source candidates overlap or run backwards");
-        auto relativeEnd = MediaRunningTime::checkedFromTicks(
-            interval.end - origin.epochOutputSampleIndex, 1, origin.outputSampleRate);
-        if (!relativeEnd) return ::media::Status::failure(relativeEnd.error());
-        auto masterEnd = origin.masterRelease.checkedAdd(relativeEnd.value());
-        if (!masterEnd) return ::media::Status::failure(masterEnd.error());
-        observeInputEnd(plan().audioSource, masterEnd.value());
-        m_audioCandidateSamples += *count;
-        m_audio.push_back(std::move(audio));
-    }
-    return validateMetadataBound();
+    return MediaAvAggregateMetadataBudget::validate(plan(), m_sources.view(), {}, m_pending ? m_pending->buffer : MediaBufferRef{});
 }
 
 ::media::Result<bool> MediaAvContinuousAggregateNode::activate(MediaGraphExecutionContext& context)
 {
-    if (allSourcesEnded() && (!m_lastInputEnd || m_audio.empty() ||
+    const auto preparation = m_dependencies.coordination->snapshot();
+    if (preparation.allInputsSealed && (!preparation.finalOutputEnd || !preparation.audioReady ||
         std::any_of(m_sources.begin(), m_sources.end(), [](const auto& source) { return !source.prepared; })))
         return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
             "Composition sources ended before mandatory preparation completed"));
-    if (!m_canvasPrepared || !m_audioCodec || m_audio.empty())
+    if (!m_canvasPrepared || !preparation.audioReady)
         return ::media::Result<bool>::success(false);
     auto now = m_dependencies.output->clock()->now();
     if (!now) return ::media::Result<bool>::failure(now.error());
     auto release = now.value().checkedAdd(plan().preparationLead);
     if (!release) return ::media::Result<bool>::failure(release.error());
+    MediaFixedCapacityStorage<std::uint64_t> generations(m_sources.size());
     for (std::size_t i = 0; i < m_sources.size(); ++i) {
         if (!m_sources[i].prepared || m_sources[i].video.empty() ||
             m_dependencies.sources[i].group->lifecycleState() != MediaAvSyncGroupRuntime::LifecycleState::Active)
             return ::media::Result<bool>::success(false);
         auto epoch = m_dependencies.sources[i].group->playbackEpoch();
         if (!epoch) return ::media::Result<bool>::failure(epoch.error());
+        if (i == plan().audioSource && preparation.audioReady->origin.generation != epoch.value().generation)
+            return ::media::Result<bool>::success(false);
+        generations.push_back(epoch.value().generation);
         if (epoch.value().masterRelease > release.value()) release =
             ::media::Result<MediaRunningTime>::success(epoch.value().masterRelease);
     }
@@ -356,6 +505,15 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
         if (channel && channel->binding().from.portId == port->id)
             batches.push_back({channel, std::span(&event.value(), 1)});
     if (batches.empty()) return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument("Aggregate activation has no consumers"));
+    MediaFixedCapacityStorage<MediaAvOutputPermitCommitReservation> sourcePermits(m_sources.size());
+    for (std::size_t i = 0; i < m_sources.size(); ++i) {
+        auto permit = m_dependencies.sources[i].group->reserveOutputCommit(generations[i]);
+        if (!permit) {
+            if (permit.error().code == ::media::ErrorCode::Cancelled) return ::media::Result<bool>::success(false);
+            return ::media::Result<bool>::failure(permit.error());
+        }
+        sourcePermits.push_back(std::move(permit).value());
+    }
     auto publication = MediaAtomicOutputTransaction::acquire("Continuous output activation", batches);
     if (!publication) return ::media::Result<bool>::failure(publication.error());
     if (!publication.value()) return ::media::Result<bool>::success(false);
@@ -363,44 +521,14 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
         return ::media::Result<bool>::failure(status.error());
     publication.value()->commitReserved();
     m_epoch = epoch;
-    m_audioOrigin = origin;
     return ::media::Result<bool>::success(true);
-}
-
-::media::Result<MediaRunningTime> MediaAvContinuousAggregateNode::videoTime(std::int64_t frame) const
-{
-    return MediaRunningTime::checkedFromTicks(frame, plan().videoFrameRate.den, plan().videoFrameRate.num);
-}
-
-::media::Result<MediaRunningTime> MediaAvContinuousAggregateNode::audioTime(std::int64_t sample) const
-{
-    if (sample < std::numeric_limits<std::int64_t>::min() + plan().initialAudioSample)
-        return ::media::Result<MediaRunningTime>::failure(::media::ErrorInfo::invalidArgument(
-            "Aggregate output sample offset is not representable"));
-    return MediaRunningTime::checkedFromTicks(sample - plan().initialAudioSample, 1, plan().audio.sampleRate());
-}
-
-::media::Result<MediaRunningTime> MediaAvContinuousAggregateNode::presentationMaster(MediaRunningTime presentation) const
-{
-    return m_epoch->masterRelease.checkedAdd(presentation);
-}
-
-bool MediaAvContinuousAggregateNode::allSourcesEnded() const noexcept
-{
-    if (!m_audioEnded) return false;
-    for (std::size_t i = 0; i < m_sources.size(); ++i) {
-        if (!m_sources[i].videoEnded ||
-            (plan().sources[i].discardedAudioPort && !m_sources[i].discardedAudioEnded)) return false;
-    }
-    return true;
 }
 
 ::media::Result<MediaOutputCommitReservation>
 MediaAvContinuousAggregateNode::reserveOutputCommit(const MediaBufferRef&) const
 {
-    std::vector<MediaAvOutputPermitCommitReservation> permits;
+    MediaFixedCapacityStorage<MediaAvOutputPermitCommitReservation> permits(m_sources.size() + 1);
     if (m_pending) {
-        permits.reserve(m_sources.size() + 1);
         for (std::size_t i = 0; i < m_sources.size(); ++i) {
             if (m_pending->sourceGenerations[i] == 0) continue;
             auto sourcePermit = m_dependencies.sources[i].group->reserveOutputCommit(
@@ -423,29 +551,59 @@ MediaAvContinuousAggregateNode::reserveOutputCommit(const MediaBufferRef&) const
 {
     if (!m_pending || m_pending->buffer != buffer) return invalid("Aggregate output commit has no matching transaction");
     switch (m_pending->kind) {
-    case PendingKind::Video:
+    case PendingKind::Video: {
+        const auto lineage = FFmpegFrameView::canonicalLineage(buffer);
+        if (!lineage || !m_epoch || lineage->videoContributions.size() != m_sources.size())
+            return invalid("Aggregate commit requires its output contribution evidence");
+        auto relativeEnd = lineage->presentation.checkedAdd(lineage->duration);
+        if (!relativeEnd) return ::media::Status::failure(relativeEnd.error());
+        auto outputEnd = MediaAvAggregateTimeline::presentationMaster(*m_epoch, relativeEnd.value());
+        if (!outputEnd) return ::media::Status::failure(outputEnd.error());
         for (std::size_t i = 0; i < m_sources.size(); ++i) {
             auto& source = m_sources[i];
+            if (const auto* display = std::get_if<MediaVideoDisplaySourceStamp>(&lineage->videoContributions[i].origin))
+                source.lastDisplayCommit = MediaAvAggregateDisplayCommit{display->decodedSequence, outputEnd.value()};
             source.committedGeneration = m_pending->sourceGenerations[i];
             if (source.committedGeneration != 0) ++source.committedRealFrames;
             else ++source.committedBlackFrames;
+            if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+                if (source.committedGeneration) {
+                    source.generationObservation.enter(source.committedGeneration);
+                    if (!source.generationObservation.firstRealCursor) {
+                        source.generationObservation.firstRealCursor = m_nextVideoFrame;
+                        source.generationObservation.firstRealSteadyNs = mediaSteadyClockNowNs();
+                        const auto& origin = lineage->videoContributions[i].origin;
+                        if (const auto* canonical = std::get_if<MediaCanonicalSourceStamp>(&origin))
+                            source.generationObservation.firstRealFrame = MediaAggregateFrameObservation{
+                                canonical->identity.sourceSequence.value(), canonical->presentation.nanoseconds(),
+                                canonical->duration.nanoseconds(), std::nullopt};
+                        else if (const auto* display = std::get_if<MediaVideoDisplaySourceStamp>(&origin))
+                            source.generationObservation.firstRealFrame = MediaAggregateFrameObservation{
+                                display->identity.sourceSequence.value(), display->presentation.nanoseconds(),
+                                std::nullopt, display->decodedSequence};
+                        logFirstSourceFrame(nodeId(), plan().sources[i].videoIdentity, source.committedGeneration,
+                            "aggregate_contribution", *source.generationObservation.firstRealSteadyNs,
+                            source.generationObservation.firstRealFrame);
+                    }
+                    if (source.firstIntervalMiss && source.firstIntervalMiss->generation == source.committedGeneration &&
+                        !source.firstIntervalMiss->firstRealCursor) {
+                        source.firstIntervalMiss->firstRealCursor = source.generationObservation.firstRealCursor;
+                        source.firstIntervalMiss->firstRealSteadyNs = source.generationObservation.firstRealSteadyNs;
+                        source.firstIntervalMiss->firstRealFrame = source.generationObservation.firstRealFrame;
+                    }
+                }
+                if (source.firstIntervalMiss && source.firstIntervalMiss->cursor == m_nextVideoFrame &&
+                    !source.firstIntervalMiss->committedGeneration) {
+                    source.firstIntervalMiss->committedGeneration = source.committedGeneration;
+                    source.firstIntervalMiss->committedSteadyNs = mediaSteadyClockNowNs();
+                }
+            }
         }
         ++m_nextVideoFrame;
         break;
-    case PendingKind::Audio: {
-        const auto* audio = static_cast<const MediaBoundCanonicalAudioBuffer*>(buffer.get());
-        for (const auto& fragment : audio->media()->fragments()) {
-            const auto samples = static_cast<std::uint64_t>(*fragment.interval.sampleCount());
-            if (std::holds_alternative<MediaCanonicalAudioRealSource>(fragment.contribution.origin))
-                m_committedRealSamples += samples;
-            else m_committedSilenceSamples += samples;
-        }
-        ++m_committedAudioFrames;
-        m_nextAudioSample += plan().audio.codecFrameSamples();
-        break;
     }
     case PendingKind::VideoEnd: m_videoEndPublished = true; break;
-    case PendingKind::AudioEnd: m_audioEndPublished = true; break;
+    default: return invalid("Video aggregate has a non-video pending output");
     }
     m_pending.reset();
     return ::media::Status::success();
@@ -455,22 +613,63 @@ void MediaAvContinuousAggregateNode::logSummary(const char* reason) noexcept
 {
     if (m_summaryPublished || !m_dependencies.aggregatePlan) return;
     m_summaryPublished = true;
+    m_executionObservation.log(nodeId().value, plan().initialGeneration);
     // Diagnostics must not throw out of the runtime's noexcept abort path.
     try {
         std::ostringstream out;
         out << "continuous_aggregate.summary reason=" << reason
             << " output_group=" << plan().outputGroupKey.value()
             << " output_generation=" << plan().initialGeneration
-            << " video_commits=" << m_nextVideoFrame
-            << " audio_commits=" << m_committedAudioFrames
-            << " real_samples=" << m_committedRealSamples
-            << " silence_samples=" << m_committedSilenceSamples;
+            << " video_commits=" << m_nextVideoFrame;
         for (std::size_t i = 0; i < m_sources.size(); ++i) {
             const auto& source = m_sources[i];
             out << " source[" << i << "].group=" << plan().sources[i].groupKey.value()
+                << " source[" << i << "].identity=" << plan().sources[i].videoIdentity
                 << " source[" << i << "].real_frames=" << source.committedRealFrames
                 << " source[" << i << "].black_frames=" << source.committedBlackFrames
                 << " source[" << i << "].contribution_generation=" << source.committedGeneration;
+            if (source.firstIntervalMiss) {
+                const auto& miss = *source.firstIntervalMiss;
+                const std::string prefix = " source[" + std::to_string(i) + "].first_interval_miss_";
+                const auto appendFrame = [&](const char* stage,
+                    const std::optional<MediaAggregateFrameObservation>& frame) {
+                    appendObservedFrame(out, prefix + stage + "_", frame);
+                };
+                appendFrame("first_candidate_at_miss", miss.generationAtMiss.firstCandidateFrame);
+                appendFrame("first_real_at_miss", miss.generationAtMiss.firstRealFrame);
+                appendFrame("first_candidate_final", miss.firstCandidateFrame);
+                appendFrame("first_real_final", miss.firstRealFrame);
+                out << prefix << "cursor=" << miss.cursor
+                    << prefix << "target_ns=" << miss.targetNs
+                    << prefix << "steady_ns=" << miss.steadyNs
+                    << prefix << "generation=" << miss.generation
+                    << prefix << "capacity=" << plan().sources[i].maximumVideoCandidates
+                    << prefix << "before=" << miss.candidatesBefore
+                    << prefix << "after=" << miss.candidatesAfter
+                    << prefix << "expired=" << miss.expiredCandidates
+                    << prefix << "channel_depth=" << (miss.channelDepth ? std::to_string(*miss.channelDepth) : "unavailable")
+                    << prefix << "examined_begin_ns=" << (miss.lastExaminedBeginNs ? std::to_string(*miss.lastExaminedBeginNs) : "unavailable")
+                    << prefix << "examined_end_ns=" << (miss.lastExaminedEndNs ? std::to_string(*miss.lastExaminedEndNs) : "unavailable")
+                    << prefix << "epoch_source_start_ns=" << miss.epochSourceStartNs
+                    << prefix << "epoch_master_release_ns=" << miss.epochMasterReleaseNs
+                    << prefix << "prepare_expired=" << miss.generationAtMiss.prepareExpired
+                    << prefix << "prepare_old_generation=" << miss.generationAtMiss.prepareOldGeneration
+                    << prefix << "prepare_incomplete=" << miss.generationAtMiss.incomplete;
+                out << prefix << "first_real_cursor_at_miss=" << (miss.generationAtMiss.firstRealCursor ? std::to_string(*miss.generationAtMiss.firstRealCursor) : "unavailable");
+                out << prefix << "first_real_steady_ns_at_miss=" << (miss.generationAtMiss.firstRealSteadyNs ? std::to_string(*miss.generationAtMiss.firstRealSteadyNs) : "unavailable");
+                out << prefix << "first_candidate_steady_ns_at_miss=" << (miss.generationAtMiss.firstCandidateSteadyNs ? std::to_string(*miss.generationAtMiss.firstCandidateSteadyNs) : "unavailable");
+                out << prefix << "first_candidate_begin_ns_at_miss=" << (miss.generationAtMiss.firstCandidateBeginNs ? std::to_string(*miss.generationAtMiss.firstCandidateBeginNs) : "unavailable");
+                out << prefix << "first_candidate_end_ns_at_miss=" << (miss.generationAtMiss.firstCandidateEndNs ? std::to_string(*miss.generationAtMiss.firstCandidateEndNs) : "unavailable");
+                out << prefix << "prepare_last_begin_ns=" << (miss.generationAtMiss.lastPrepareBeginNs ? std::to_string(*miss.generationAtMiss.lastPrepareBeginNs) : "unavailable");
+                out << prefix << "prepare_last_end_ns=" << (miss.generationAtMiss.lastPrepareEndNs ? std::to_string(*miss.generationAtMiss.lastPrepareEndNs) : "unavailable");
+                out << prefix << "first_candidate_steady_ns_final=" << (miss.firstCandidateSteadyNs ? std::to_string(*miss.firstCandidateSteadyNs) : "unavailable");
+                out << prefix << "first_candidate_begin_ns_final=" << (miss.firstCandidateBeginNs ? std::to_string(*miss.firstCandidateBeginNs) : "unavailable");
+                out << prefix << "first_candidate_end_ns_final=" << (miss.firstCandidateEndNs ? std::to_string(*miss.firstCandidateEndNs) : "unavailable");
+                out << prefix << "first_real_cursor=" << (miss.firstRealCursor ? std::to_string(*miss.firstRealCursor) : "unavailable");
+                out << prefix << "first_real_steady_ns=" << (miss.firstRealSteadyNs ? std::to_string(*miss.firstRealSteadyNs) : "unavailable");
+                out << prefix << "cursor_committed_generation=" << (miss.committedGeneration ? std::to_string(*miss.committedGeneration) : "unavailable");
+                out << prefix << "cursor_committed_steady_ns=" << (miss.committedSteadyNs ? std::to_string(*miss.committedSteadyNs) : "unavailable");
+            }
         }
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode, out.str());
@@ -490,116 +689,72 @@ void MediaAvContinuousAggregateNode::logSummary(const char* reason) noexcept
     return ::media::Status::success();
 }
 
-::media::Status MediaAvContinuousAggregateNode::observeInputEnd(std::size_t source, MediaRunningTime end)
-{
-    auto& sourceEnd = m_sources[source].lastInputEnd;
-    if (!sourceEnd || end > *sourceEnd) sourceEnd = end;
-    if (!m_lastInputEnd || end > *m_lastInputEnd) m_lastInputEnd = end;
-    return ::media::Status::success();
-}
-
-::media::Status MediaAvContinuousAggregateNode::validateMetadataBound() const
-{
-    std::uint64_t remaining = plan().maximumMetadataBytes;
-    const auto consume = [&](std::uint64_t bytes) {
-        if (bytes > remaining) return false;
-        remaining -= bytes;
-        return true;
-    };
-    const auto lineageBytes = [&](const MediaCanonicalLineage& lineage) {
-        if (!consume(sizeof(lineage))) return false;
-        const auto& identity = lineage.identity;
-        const auto stringBytes = std::holds_alternative<MediaSourceAccessUnitIdentity>(identity)
-            ? std::get<MediaSourceAccessUnitIdentity>(identity).sourceIdentity.storageBytes()
-            : std::get<MediaOutputAccessUnitIdentity>(identity).outputIdentity.storageBytes();
-        if (!consume(stringBytes)) return false;
-        if (!consume(lineage.videoContributions.storageBytes())) return false;
-        for (const auto& contribution : lineage.videoContributions) {
-            if (const auto* source = std::get_if<MediaCanonicalSourceStamp>(&contribution.origin))
-                if (!consume(source->identity.sourceIdentity.storageBytes())) return false;
-        }
-        return true;
-    };
-    const auto audioBytes = [&](const MediaBoundCanonicalAudioBuffer& audio) {
-        if (!consume(sizeof(audio)) || !consume(sizeof(MediaCanonicalAudioSamplesBuffer))) return false;
-        if (!consume(audio.media()->fragments().size_bytes())) return false;
-        for (const auto& fragment : audio.media()->fragments()) {
-            // Counting a shared lineage for every fragment is conservative and
-            // keeps the charge independent of allocator/address identities.
-            if (!lineageBytes(*fragment.lineage)) return false;
-            if (const auto* real = std::get_if<MediaCanonicalAudioRealSource>(&fragment.contribution.origin))
-                if (!consume(real->source.identity.sourceIdentity.storageBytes())) return false;
-        }
-        return true;
-    };
-    bool valid = consume(sizeof(*this));
-    const auto unusedSources = m_sources.capacity() - m_sources.size();
-    valid = valid && unusedSources <= remaining / sizeof(SourceState) && consume(unusedSources * sizeof(SourceState));
-    for (const auto& source : m_sources) {
-        valid = valid && consume(sizeof(source));
-        for (const auto& video : source.video)
-            valid = valid && consume(sizeof(MediaBufferRef)) && consume(sizeof(MediaCanonicalVideoFrameBuffer)) &&
-                lineageBytes(*FFmpegFrameView::canonicalLineage(video));
-    }
-    for (const auto& audio : m_audio)
-        valid = valid && consume(sizeof(audio)) && audioBytes(*audio);
-    if (m_pending) {
-        valid = valid && consume(sizeof(Pending));
-        for (const auto generation : m_pending->sourceGenerations)
-            valid = valid && consume(sizeof(generation));
-        if (const auto video = FFmpegFrameView::canonicalLineage(m_pending->buffer))
-            valid = valid && consume(sizeof(MediaCanonicalVideoFrameBuffer)) && lineageBytes(*video);
-        if (const auto* audio = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(m_pending->buffer.get()))
-            valid = valid && audioBytes(*audio);
-    }
-    return valid ? ::media::Status::success() : invalid(
-        "Aggregate retained metadata exceeds its planner bound");
-}
-
 ::media::Result<MediaNodeProcessResult> MediaAvContinuousAggregateNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (auto status = bindCodecs(context); !status) return processProgress(status);
-    if (auto status = consumeInputs(context); !status) return processProgress(status);
-    if (!m_epoch) {
-        auto activated = activate(context);
-        if (!activated) return ::media::Result<MediaNodeProcessResult>::failure(activated.error());
-        return activated.value() ? processProgress() : processWaiting();
+    const auto drain = m_dependencies.coordination->drainSnapshot();
+    if (drain.requested && m_videoEndPublished) {
+        if (!drain.videoClosed) {
+            // onProcess runs only after deferred publication has committed and
+            // its channel/permit reservations have been released.
+            closeOutputChannels(context);
+            if (auto status = m_dependencies.coordination->publishOutputClosed(MediaStreamKind::Video); !status)
+                return processProgress(status);
+        }
+        return processWaiting(); // Keep servicing source purge on this owner.
     }
-    if (m_pending) {
-        const auto output = m_pending->buffer;
-        const auto port = m_pending->kind == PendingKind::Video || m_pending->kind == PendingKind::VideoEnd ? "video" : "audio";
-        return processProgress(emitOutput(context, port, output));
+    if (drain.requested && !m_epoch)
+        return processProgress(invalid("Aggregate drain requires an activated output"));
+    if (!drain.requested) {
+        m_executionObservation.enteredOnProcess();
+        if (auto status = m_executionObservation.measure(ExecutionStage::Bind,
+            {m_nextVideoFrame, std::nullopt}, [&] { return bindCodecs(context); }); !status)
+            return processProgress(status);
+        CandidatePreparation preparation;
+        if (auto status = m_executionObservation.measure(ExecutionStage::Consume,
+            {m_nextVideoFrame, std::nullopt}, [&] { return consumeInputs(context, preparation); }); !status)
+            return processProgress(status);
+        if (preparation == CandidatePreparation::RetryProgress) return processProgress();
+        if (!m_epoch) {
+            auto activated = m_executionObservation.measure(ExecutionStage::Activate,
+                {m_nextVideoFrame, std::nullopt}, [&] { return activate(context); });
+            if (!activated) return ::media::Result<MediaNodeProcessResult>::failure(activated.error());
+            return activated.value() ? processProgress() : processWaiting();
+        }
     }
-    if (m_videoEndPublished && m_audioEndPublished) return processFinished();
-    if (m_nextVideoFrame == std::numeric_limits<std::int64_t>::max() ||
-        m_nextAudioSample > std::numeric_limits<std::int64_t>::max() - plan().audio.codecFrameSamples())
-        return processProgress(invalid("Aggregate output sample or frame counter exhausted"));
-    auto video = videoTime(m_nextVideoFrame);
-    auto audio = audioTime(m_nextAudioSample);
-    if (!video || !audio) return ::media::Result<MediaNodeProcessResult>::failure(!video ? video.error() : audio.error());
-    const bool chooseVideo = !m_videoEndPublished && (m_audioEndPublished || video.value() <= audio.value());
-    auto target = presentationMaster(chooseVideo ? video.value() : audio.value());
-    if (!target) return ::media::Result<MediaNodeProcessResult>::failure(target.error());
-    auto deadline = target.value().checkedSubtract(plan().preparationLead);
-    if (!deadline) return ::media::Result<MediaNodeProcessResult>::failure(deadline.error());
-    auto now = m_dependencies.output->clock()->now();
-    if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
-    if (now.value() < deadline.value()) return ::media::Result<MediaNodeProcessResult>::success(
-        MediaNodeProcessResult::waitingUntilInputOrDeadline(plan().outputGroupKey, deadline.value()));
-    if (allSourcesEnded() && (!m_lastInputEnd || target.value() >= *m_lastInputEnd)) {
-        if (m_videoEndPublished && m_audioEndPublished) return processFinished();
-        auto eof = FFmpegBufferFactory::makeEof(chooseVideo ? MediaStreamKind::Video : MediaStreamKind::Audio);
-        if (!eof) return ::media::Result<MediaNodeProcessResult>::failure(eof.error());
-        m_pending = Pending{chooseVideo ? PendingKind::VideoEnd : PendingKind::AudioEnd,
-            std::move(eof).value(), std::vector<std::uint64_t>(m_sources.size())};
+    if (m_pending) return processProgress(emitOutput(context, "video", m_pending->buffer));
+    if (m_videoEndPublished) return processFinished();
+    bool endOfOutput = drain.requested;
+    if (!endOfOutput) {
+        if (m_nextVideoFrame == std::numeric_limits<std::int64_t>::max())
+            return processProgress(invalid("Aggregate output frame counter exhausted"));
+        auto presentation = MediaAvAggregateTimeline::videoPresentation(plan(), m_nextVideoFrame);
+        if (!presentation) return ::media::Result<MediaNodeProcessResult>::failure(presentation.error());
+        auto target = MediaAvAggregateTimeline::presentationMaster(*m_epoch, presentation.value());
+        if (!target) return ::media::Result<MediaNodeProcessResult>::failure(target.error());
+        auto deadline = target.value().checkedSubtract(plan().preparationLead);
+        auto now = m_dependencies.output->clock()->now();
+        if (!deadline || !now) return ::media::Result<MediaNodeProcessResult>::failure(!deadline ? deadline.error() : now.error());
+        if (now.value() < deadline.value()) return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(plan().outputGroupKey, deadline.value()));
+        const auto completion = m_dependencies.coordination->snapshot();
+        endOfOutput = completion.allInputsSealed &&
+            (!completion.finalOutputEnd || target.value() >= *completion.finalOutputEnd);
+    }
+    if (endOfOutput) {
+        auto eof = makeMediaBufferRef<MediaControlBuffer>(
+            MediaControlBufferKind::Eof, m_epoch->generation);
+        eof->setStreamKind(MediaStreamKind::Video);
+        MediaFixedCapacityStorage<std::uint64_t> generations;
+        generations.resize(m_sources.size());
+        m_pending = Pending{PendingKind::VideoEnd, std::move(eof), std::move(generations)};
     } else {
-        auto buffer = chooseVideo ? buildVideo(context) : buildAudio(context);
+        auto buffer = m_executionObservation.measure(ExecutionStage::Video,
+            {m_nextVideoFrame, std::nullopt}, [&] { return buildVideo(context); });
         if (!buffer) return processProgress(::media::Status::failure(buffer.error()));
-        // Builders set the pending contribution generations before publication.
         m_pending->buffer = std::move(buffer).value();
     }
-    const auto output = m_pending->buffer;
-    return processProgress(emitOutput(context, chooseVideo ? "video" : "audio", output));
+    return processProgress(m_executionObservation.measure(ExecutionStage::Emit,
+        {m_nextVideoFrame, std::nullopt}, [&] { return emitOutput(context, "video", m_pending->buffer); }));
 }
 
 } // namespace media::ffmpeg::graph

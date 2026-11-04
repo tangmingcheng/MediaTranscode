@@ -5,6 +5,7 @@
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -18,7 +19,7 @@ struct VideoFilterGraphBuildRequest {
     const MediaNodeOptions* options = nullptr;
     const AVFrame* firstFrame = nullptr;
     AVRational inputTimeBase { 0, 1 };
-    AVRational inputFrameRate { 0, 1 };
+    std::optional<AVRational> inputFrameRate;
     AVRational sampleAspectRatio { 0, 1 };
 };
 

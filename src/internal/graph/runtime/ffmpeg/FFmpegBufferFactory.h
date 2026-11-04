@@ -10,6 +10,8 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/resource/MediaSharedAllocationGeometry.h"
+#include <memory_resource>
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -21,6 +23,8 @@ namespace media::ffmpeg::graph {
 
 class FFmpegBufferFactory final {
 public:
+    static ::media::Result<MediaSharedAllocationGeometry> packetAllocationGeometry();
+    static ::media::Result<MediaSharedAllocationGeometry> frameAllocationGeometry(bool hardware);
     static ::media::Result<MediaBufferRef> makeEof(MediaStreamKind streamKind = MediaStreamKind::Control);
     static ::media::Result<MediaBufferRef> makeFlush(MediaStreamKind streamKind = MediaStreamKind::Control);
 
@@ -33,15 +37,17 @@ public:
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const AVStream* stream);
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const FFmpegInputStreamSnapshot& stream);
 
-    static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
+    static ::media::Result<MediaBufferRef> wrapPacket(std::pmr::memory_resource& allocation, ::media::ffmpeg::PacketPtr packet,
                                                        MediaStreamKind streamKind,
                                                        std::optional<MediaPacketSourceTiming> sourceTiming,
-                                                       std::optional<MediaDemuxPacketProvenance> provenance = std::nullopt);
+                                                       std::optional<MediaDemuxPacketProvenance> provenance = std::nullopt,
+                                                       std::optional<MediaRtpPacketProvenance> rtpProvenance = std::nullopt);
     static ::media::Result<MediaBufferRef> clonePacket(const AVPacket* packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);
 
     static ::media::Result<MediaBufferRef> wrapFrame(::media::ffmpeg::FramePtr frame,
-                                                      MediaStreamKind streamKind = MediaStreamKind::Unknown);
+                                                      MediaStreamKind streamKind,
+                                                      MediaLineageAllocationScope allocation);
     static ::media::Result<MediaBufferRef> cloneFrame(const MediaBufferRef& source,
                                                       MediaStreamKind streamKind = MediaStreamKind::Unknown);
 

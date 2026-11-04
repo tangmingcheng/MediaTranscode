@@ -1,6 +1,10 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaMpegTsProducerPlan.h"
 
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
+#include "internal/graph/planner/realtime/MediaDatagramProtocolTopology.h"
+#include "internal/graph/planner/realtime/MediaRawRtpProducerPlan.h"
+#include <vector>
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
@@ -21,7 +25,10 @@ struct MediaRealtimeDeploymentServiceScope final {
 
 struct MediaRealtimeDeploymentResourceBudget final {
     std::uint64_t maximumNetworkMemoryBytes = 0;
+    MediaDatagramProtocolLayout protocolLayout = MediaDatagramProtocolLayout::Unknown;
     std::string authority;
+    std::vector<MediaRawRtpProducerPlan> rawRtpProducers;
+    std::optional<MediaMpegTsProducerPlan> mpegTsProducer;
     friend bool operator==(const MediaRealtimeDeploymentResourceBudget&,
                            const MediaRealtimeDeploymentResourceBudget&) = default;
 };

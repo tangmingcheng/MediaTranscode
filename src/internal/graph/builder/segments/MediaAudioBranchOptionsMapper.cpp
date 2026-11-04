@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include <limits>
 
 namespace media::ffmpeg::graph {
 
@@ -37,6 +38,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     encodeOptions.encoderFifoRetention = options.encoderFifoRetention;
     encodeOptions.correctionGeneration = options.correctionGeneration;
     encodeOptions.correctionLookaheadWindows = options.correctionLookaheadWindows;
+    encodeOptions.maximumResamplerOutputBlockSamples = options.maximumResamplerOutputBlockSamples;
     encodeOptions.syncGroup = options.syncGroup;
     return encodeOptions;
 }
@@ -47,7 +49,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
 {
     if (options.correctionMode || options.lineageMode ||
         options.lineageCapacity || options.encoderFifoRetention || options.correctionGeneration ||
-        options.correctionLookaheadWindows || options.syncGroup) {
+        options.correctionLookaheadWindows || options.maximumResamplerOutputBlockSamples || options.syncGroup) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "synchronized audio branch mapping requires empty execution options"));
     }
@@ -65,6 +67,8 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
 
     if (runtime.audioPipeline.branchMode != MediaBranchMode::TranscodeFrame ||
         !runtime.audioCorrection || runtime.queues.frame == 0 ||
+        runtime.audioCorrection->maximumResamplerOutputBlockSamples <= 0 ||
+        runtime.audioCorrection->maximumResamplerOutputBlockSamples > std::numeric_limits<int>::max() ||
         !runtime.synchronization.audioServo.correctionLookaheadWindows) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "synchronized frame-transcode bounds are incomplete"));
@@ -77,6 +81,8 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     options.correctionGeneration = MediaFirstLockedSourceGeneration;
     options.correctionLookaheadWindows =
         runtime.synchronization.audioServo.correctionLookaheadWindows;
+    options.maximumResamplerOutputBlockSamples =
+        static_cast<int>(runtime.audioCorrection->maximumResamplerOutputBlockSamples);
     options.syncGroup = runtime.groupKey;
     return ::media::Status::success();
 }

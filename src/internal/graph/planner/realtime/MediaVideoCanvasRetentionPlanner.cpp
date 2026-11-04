@@ -39,13 +39,29 @@ namespace media::ffmpeg::graph {
             edge.id != output->id)
             return invalid("Canvas encoder cannot have another frame producer");
     }
+    return plan(output->policy, encoder);
+}
+
+::media::Result<MediaVideoCanvasRetentionPlan> MediaVideoCanvasRetentionPlanner::plan(
+    const MediaEdgePolicy& outputPolicy,
+    const MediaPreparedEncoderEmissionEnvelope& encoder)
+{
+    using Result = ::media::Result<MediaVideoCanvasRetentionPlan>;
+    const auto invalid = [](const char* message) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(message));
+    };
+    if (!MediaAtomicOutputPolicyContract::accepts(outputPolicy) ||
+        encoder.authority.empty() || encoder.backend.empty() ||
+        !encoder.accessUnitsPerSecondNumerator || !encoder.accessUnitsPerSecondDenominator ||
+        !encoder.maximumAccessUnitPayloadBytes)
+        return invalid("Canvas retention requires its planned atomic output edge and prepared encoder facts");
     // These are physical member cardinalities, not latency-derived spare slots:
     // aggregate::m_pending, VideoEncodeNode::pendingFrame, canvas::black_.
     constexpr std::uint64_t aggregatePending = 1;
     constexpr std::uint64_t encoderPending = 1;
     constexpr std::uint64_t fixedBlackSurface = 1;
     auto pool = MediaEncoderHardwareFramesPoolPlanner::plan({
-        static_cast<std::uint64_t>(output->policy.queuePolicy.capacity),
+        static_cast<std::uint64_t>(outputPolicy.queuePolicy.capacity),
         aggregatePending + encoderPending, encoder.maximumEncoderRetainedFrames,
         fixedBlackSurface, "final-direct-canvas-edge+aggregate-pending+encoder-pending+" +
             encoder.authority + "+fixed-black-surface"});

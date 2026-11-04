@@ -7,6 +7,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 #include "internal/graph/planner/realtime/MediaRawRtpBootstrapPlan.h"
+#include "internal/graph/planner/realtime/MediaRawRtpPreparationStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
@@ -243,8 +244,11 @@ openMpegTsRuntimeSession(
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             identityEvidenceTimeout.error());
     }
-    if (avSync->rtpInput->input.streamAssociationMode !=
-        MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair) {
+    const bool paired = avSync->members == MediaTranscodeStreamSet::AudioVideo &&
+        avSync->rtpInput->input.streamAssociationMode == MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair;
+    const bool single = avSync->members == MediaTranscodeStreamSet::VideoOnly &&
+        avSync->rtpInput->input.streamAssociationMode == MediaAvSyncRtpStreamAssociationMode::PlannedSingleStream;
+    if (!paired && !single) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Raw RTP A/V sync stream association mode is missing"));
@@ -538,7 +542,7 @@ MediaRealtimeRtpTransportPlan transportPlan(
         clockPolicy.maximumExtrapolationMs,
         clockPolicy.identityEvidenceTimeoutMs,
         lossPolicy,
-        clockPolicy.rtcpCompositionMode
+        clockPolicy.rtcpCompositionMode, std::nullopt, bootstrap.inputWait()
     };
 }
 
@@ -571,6 +575,8 @@ void fillNodePlan(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaAvSyncPlan* avSync)
 {
+    if (auto status = MediaRtpInputWaitPlan::validateInput(request.input); !status)
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
     if (!request.input.readTimeoutMs || *request.input.readTimeoutMs <= 0 ||
         !request.input.probeSizeBytes || *request.input.probeSizeBytes <= 0 ||
         !request.input.analyzeDurationUs ||
@@ -597,10 +603,13 @@ void fillNodePlan(
     const MediaIpAddressFamily videoAddressFamily =
         videoEndpoint.value().host.find(':') != std::string::npos
         ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4;
+    auto inputWait = MediaRtpInputWaitPlan::plan(
+        request.input.inputLatencyMs, *request.input.analyzeDurationUs);
+    if (!inputWait) return ::media::Result<MediaRealtimeRawInputPlan>::failure(inputWait.error());
     auto videoBootstrap = MediaRawRtpBootstrapPlan::create(
         videoAddressFamily,
         static_cast<std::size_t>(*request.input.probeSizeBytes),
-        *request.input.analyzeDurationUs);
+        inputWait.value());
     if (!videoBootstrap) {
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(
             videoBootstrap.error());
@@ -653,7 +662,7 @@ void fillNodePlan(
         auto audioBootstrap = MediaRawRtpBootstrapPlan::create(
             audioAddressFamily,
             static_cast<std::size_t>(*request.input.probeSizeBytes),
-            *request.input.analyzeDurationUs);
+            inputWait.value());
         if (!audioBootstrap) {
             return ::media::Result<MediaRealtimeRawInputPlan>::failure(
                 audioBootstrap.error());
@@ -767,6 +776,8 @@ void MediaRealtimeInputPlanner::applyNodePlans(
     const MediaPipelinePlannerOptions& options,
     const MediaRealtimePreflightIo* io)
 {
+    if (auto status = MediaRtpInputWaitPlan::validateInput(request.input); !status)
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(status.error());
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) {
         if (io && !io->openMpegTs) {
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
@@ -793,8 +804,11 @@ void MediaRealtimeInputPlanner::applyNodePlans(
 ::media::Result<MediaPreparedRawRtpProbe>
 MediaRealtimeInputPlanner::prepareRawRtpVideo(
     const MediaRealtimeInputConfig& input,
-    MediaTranscodeStreamSet streamSet)
+    MediaTranscodeStreamSet streamSet, std::stop_token cancellation,
+    const MediaPreparationStorageScope& scope, MediaRtpVideoPreparationIntent timingIntent)
 {
+    if (auto status = MediaRtpInputWaitPlan::validateInput(input); !status)
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(status.error());
     const auto& metadata = input.videoRtp;
     if (!metadata.payloadType || !metadata.clockRate ||
         !input.openTimeoutMs || !input.readTimeoutMs ||
@@ -812,15 +826,17 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         std::string::npos;
     const MediaIpAddressFamily videoAddressFamily =
         ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4;
+    auto inputWait = MediaRtpInputWaitPlan::plan(input.inputLatencyMs, *input.analyzeDurationUs);
+    if (!inputWait) return ::media::Result<MediaPreparedRawRtpProbe>::failure(inputWait.error());
     auto videoBootstrap = MediaRawRtpBootstrapPlan::create(
         videoAddressFamily,
         static_cast<std::size_t>(*input.probeSizeBytes),
-        *input.analyzeDurationUs);
+        inputWait.value());
     if (!videoBootstrap) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             videoBootstrap.error());
     }
-    MediaRawRtpProbePlan plan;
+    MediaRawRtpProbePlan plan(timingIntent);
     MediaRawRtpPreparedStreamPlan videoProbeStream{
         MediaRtpUdpTransportConfig{
             videoAddressFamily,
@@ -856,7 +872,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         auto audioBootstrap = MediaRawRtpBootstrapPlan::create(
             audioAddressFamily,
             static_cast<std::size_t>(*input.probeSizeBytes),
-            *input.analyzeDurationUs);
+            inputWait.value());
         if (!audioBootstrap) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 audioBootstrap.error());
@@ -888,8 +904,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         static_cast<std::size_t>(*input.probeSizeBytes);
     plan.reorderWindowPackets =
         videoBootstrap.value().reorderWindowPackets();
-    plan.maximumReorderDelayMs =
-        videoBootstrap.value().maximumReorderDelayMilliseconds();
+    plan.inputWait = videoBootstrap.value().inputWait();
     const std::string codec = canonicalCodecName(metadata.codecName);
     if (metadata.fmtp) {
         auto signaling = parseRtpVideoSignalingFacts(
@@ -914,7 +929,14 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
     }
     plan.rtcpPolicy = MediaRtcpCompoundPolicy{
         MediaRtcpCompositionMode::ReducedSizeRfc5506, false};
-    return MediaRawRtpInputPreparer::prepare(plan);
+    auto storage = std::visit([&](const auto& streams) {
+        std::vector<std::size_t> bounds{streams.video.transport.maximumDatagramBytes};
+        if constexpr (requires { streams.audio; }) bounds.push_back(streams.audio.transport.maximumDatagramBytes);
+        return MediaRawRtpPreparationStoragePlanner::plan(plan.maximumBufferedBytes, bounds);
+    }, plan.streams);
+    if (!storage) return ::media::Result<MediaPreparedRawRtpProbe>::failure(storage.error());
+    plan.storage = std::move(storage).value();
+    return MediaRawRtpInputPreparer::prepare(plan, cancellation, scope);
 }
 
 } // namespace media::ffmpeg::graph

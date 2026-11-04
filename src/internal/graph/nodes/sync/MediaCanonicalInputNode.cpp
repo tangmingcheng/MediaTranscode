@@ -19,8 +19,9 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-MediaCanonicalInputNode::MediaCanonicalInputNode(MediaNodeId nodeId)
-    : FFmpegNodeRuntime(nodeId, staticKind(), "MediaCanonicalInputNode") {}
+MediaCanonicalInputNode::MediaCanonicalInputNode(MediaNodeId nodeId, MediaStartupSharedObjectPlan envelopeStorage)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "MediaCanonicalInputNode"),
+      m_envelopeStorage(std::move(envelopeStorage)) {}
 
 MediaNodeKind MediaCanonicalInputNode::staticKind() noexcept
 {
@@ -84,12 +85,12 @@ void MediaCanonicalInputNode::resetState() noexcept
 
 ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
 MediaCanonicalInputNode::canonicalize(
-    MediaBufferRef encodedAccessUnit,
+    const MediaLineageAllocationScope& allocation, MediaBufferRef encodedAccessUnit,
     const MediaPacketSourceTiming& protocolTiming,
     MediaRunningTime duration,
     MediaScheduledStream stream,
     MediaDecodeOrderMode decodeOrder,
-    std::string sourceIdentity,
+    std::string_view sourceIdentity,
     MediaSourceAccessUnitSequence sourceSequence,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
 {
@@ -110,14 +111,14 @@ MediaCanonicalInputNode::canonicalize(
                   *protocolTiming.decodeNs))
             : std::nullopt,
         duration, decodeOrder, std::move(sourceIdentity), sourceSequence,
-        MediaTimeMappingConfidence::Locked, protocolTiming.generation);
+        MediaTimeMappingConfidence::Locked, protocolTiming.generation, allocation);
     if (!lineage) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             lineage.error());
     }
     auto created = MediaCanonicalAccessUnitBuffer::create(
-        std::move(encodedAccessUnit), std::move(lineage).value(),
-        std::move(audioInterval), {});
+        allocation, std::move(encodedAccessUnit), std::move(lineage).value(),
+        std::move(audioInterval), {}, std::nullopt);
     if (!created) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             created.error());
@@ -478,15 +479,23 @@ MediaCanonicalInputNode::audioSampleCountFor(
         audioInterval
         ? std::optional<std::int64_t>(audioInterval->begin)
         : std::nullopt;
-    auto canonical = canonicalize(*input.value(), timing, duration.value(),
+    auto canonical = canonicalize(m_envelopeStorage.allocation(), *input.value(), timing, duration.value(),
                                   *m_stream, *m_decodeOrder, m_sourceIdentity,
                                   sequence, std::move(audioInterval));
     if (!canonical)
         return ::media::Result<MediaNodeProcessResult>::failure(canonical.error());
+    const auto& lineage = canonical.value()->lineage();
+    const auto* source = lineage
+        ? std::get_if<MediaSourceAccessUnitIdentity>(&lineage->identity) : nullptr;
+    if (!source || source->sourceIdentity.view() != m_sourceIdentity) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Canonical startup requires the original source identity"));
+    }
     MediaAvStartupAccessUnit unit{
         *m_stream == MediaScheduledStream::Video ? MediaAvStartupStream::Video
                                                  : MediaAvStartupStream::Audio,
-        m_sourceIdentity, m_nextSequence, 0, canonical.value()->canonicalPresentation(),
+        source->sourceIdentity, m_nextSequence, 0, canonical.value()->canonicalPresentation(),
         canonical.value()->canonicalDuration(), MediaSourceClockReadiness::Locked,
         timing.generation,
         *m_stream == MediaScheduledStream::Video &&
@@ -518,7 +527,7 @@ MediaCanonicalInputNode::audioSampleCountFor(
             observedAt.error());
     }
     auto envelope = MediaAvStartupEnvelopeBuffer::create(
-        canonical.value(), std::move(unit), observedAt.value());
+        m_envelopeStorage, canonical.value(), std::move(unit), observedAt.value());
     if (!envelope)
         return ::media::Result<MediaNodeProcessResult>::failure(envelope.error());
     ++m_nextSequence;

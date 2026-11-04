@@ -7,17 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
-struct MediaVideoRtpPayloadPacket final {
-    std::vector<std::uint8_t> payload;
-    bool marker = false;
-};
-
 class MediaDeterministicVideoRtpPacketizer final {
 public:
+    // The payload aliases workspace only during this synchronous callback.
+    using Sink = ::media::Status (*)(void*, std::span<const std::uint8_t>, bool);
     static ::media::Result<std::uint64_t> maximumDatagramsForPayloadWindow(
         std::uint64_t maximumPayloadBytes,
         std::uint64_t accessUnitCount,
@@ -29,11 +25,12 @@ public:
         MediaAnnexBCodec codec,
         std::size_t maximumRtpPayloadBytes);
 
-    static ::media::Result<std::vector<MediaVideoRtpPayloadPacket>> packetize(
+    static ::media::Status packetize(
         std::span<const std::uint8_t> accessUnit,
         MediaAnnexBCodec codec,
         const MediaEncodedPacketLayout& layout,
-        std::size_t maximumRtpPayloadBytes);
+        std::span<std::uint8_t> workspace,
+        void* state, Sink sink);
 
 private:
     MediaDeterministicVideoRtpPacketizer() = delete;

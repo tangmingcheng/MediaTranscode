@@ -74,43 +74,45 @@ namespace media::ffmpeg::graph {
         return invalid("selected planning facts");
     }
     const auto& assembly = runtime.assembly;
-    if (assembly.generationPolicy !=
+    const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
+        &assembly.video.timing);
+    if (!canonicalVideo || !assembly.audio || assembly.generationPolicy !=
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
         assembly.initialGeneration != MediaFirstLockedSourceGeneration ||
         assembly.evidencePolicy !=
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire ||
         assembly.video.sourceIdentity.empty() ||
-        assembly.audio.sourceIdentity.empty() ||
+        assembly.audio->sourceIdentity.empty() ||
         !runtime.synchronization.startup.videoIdentity ||
         !runtime.synchronization.startup.audioIdentity ||
         assembly.video.sourceIdentity !=
             *runtime.synchronization.startup.videoIdentity ||
-        assembly.audio.sourceIdentity !=
+        assembly.audio->sourceIdentity !=
             *runtime.synchronization.startup.audioIdentity ||
         runtime.planningFacts.inputVideoIdentity !=
             runtime.synchronization.startup.videoIdentity ||
         runtime.planningFacts.inputAudioIdentity !=
             runtime.synchronization.startup.audioIdentity ||
-        assembly.video.decodeOrder !=
+        canonicalVideo->decodeOrder !=
             MediaDecodeOrderMode::ReorderedRequiresDecodeTime ||
-        assembly.audio.decodeOrder !=
+        assembly.audio->decodeOrder !=
             MediaDecodeOrderMode::PresentationOrderNoReorder ||
         !runtime.synchronization.startup.videoCapacity ||
         !runtime.synchronization.startup.audioCapacity ||
         assembly.video.acquiringCapacity == 0 ||
-        assembly.audio.acquiringCapacity == 0 ||
+        assembly.audio->acquiringCapacity == 0 ||
         assembly.video.acquiringCapacity !=
             *runtime.synchronization.startup.videoCapacity ||
-        assembly.audio.acquiringCapacity !=
+        assembly.audio->acquiringCapacity !=
             *runtime.synchronization.startup.audioCapacity ||
         !runtime.synchronization.startup.maximumWaitNs ||
         assembly.video.acquiringTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
-        assembly.audio.acquiringTimeout <=
+        assembly.audio->acquiringTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
         assembly.video.acquiringTimeout !=
             *runtime.synchronization.startup.maximumWaitNs ||
-        assembly.audio.acquiringTimeout !=
+        assembly.audio->acquiringTimeout !=
             *runtime.synchronization.startup.maximumWaitNs) {
         return invalid("production assembly common contract");
     }
@@ -245,7 +247,7 @@ namespace media::ffmpeg::graph {
             MediaRealtimeAvSyncRuntimeInputValidator::validate(
                 {outer.inputType, outer.inputLayout, outer.input, outer.videoPlan.sourceStreamIndex,
                  outer.videoPlan.inputCodecName, runtime.audioPipeline,
-                 runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr},
+                 runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr, nullptr},
                 runtime.synchronization, runtime.planningFacts, runtime.assembly);
         !inputStatus) {
         return inputStatus;

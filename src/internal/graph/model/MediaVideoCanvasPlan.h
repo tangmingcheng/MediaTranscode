@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaVideoColorRangeFact.h"
+#include "internal/graph/model/MediaGraphTypes.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -27,6 +28,7 @@ struct MediaVideoCanvasGeometry final {
     int height;
     MediaVideoColorRangeFact effectiveColorRange;
     std::vector<MediaVideoCanvasRectangle> tiles;
+    MediaRational sampleAspectRatio;
 };
 
 struct MediaVideoCanvasStorage final {

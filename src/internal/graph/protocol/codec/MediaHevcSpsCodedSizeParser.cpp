@@ -39,9 +39,11 @@ bool skipProfileTierLevel(BitReader& reader,
 
 ::media::Result<MediaSize> MediaHevcSpsCodedSizeParser::parse(
     std::span<const std::uint8_t> sps,
-    std::optional<MediaVideoColorRangeFact>* colorRange)
+    std::optional<MediaVideoColorRangeFact>* colorRange,
+    std::optional<MediaRational>* sampleAspectRatio)
 {
     if (colorRange) colorRange->reset();
+    if (sampleAspectRatio) sampleAspectRatio->reset();
     if (sps.size() < 5 || ((sps[0] >> 1) & 0x3f) != 33) return invalidSps();
     BitReader reader(sps.subspan(2));
     std::uint32_t ignored = 0;
@@ -78,8 +80,13 @@ bool skipProfileTierLevel(BitReader& reader,
         height > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         return invalidSps();
     }
-    if (colorRange && (sps[0] & 0x81U) == 0 && (sps[1] & 0xf8U) == 0 && (sps[1] & 7U) == 1)
-        *colorRange = MediaSpsVuiParser::hevc(reader, maximumSubLayersMinusOne);
+    if ((colorRange || sampleAspectRatio) && (sps[0] & 0x81U) == 0 && (sps[1] & 0xf8U) == 0 && (sps[1] & 7U) == 1)
+        {
+        if (const auto facts = MediaSpsVuiParser::hevc(reader, maximumSubLayersMinusOne)) {
+            if (colorRange) *colorRange = facts->color;
+            if (sampleAspectRatio) *sampleAspectRatio = facts->sampleAspectRatio;
+        }
+    }
     return ::media::Result<MediaSize>::success(MediaSize{
         static_cast<int>(width - croppedWidth),
         static_cast<int>(height - croppedHeight)});

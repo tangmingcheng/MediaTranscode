@@ -5,6 +5,7 @@
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/sync/MediaRtpIngressFrontiers.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
@@ -35,6 +36,10 @@ public:
     const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch() const noexcept
     {
         return m_sharedNtpEpoch;
+    }
+    MediaRtpIngressFrontiers* rtpIngressFrontiers() noexcept
+    {
+        return m_rtpIngressFrontiers ? &*m_rtpIngressFrontiers : nullptr;
     }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
@@ -92,6 +97,7 @@ private:
     std::shared_ptr<MediaMasterClock> m_clock;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
+    std::optional<MediaRtpIngressFrontiers> m_rtpIngressFrontiers;
     mutable std::mutex m_epochMutex;
     std::shared_ptr<MediaAvReacquisitionCoordinator>
         m_reacquisitionCoordinator;

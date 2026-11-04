@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaPreparedInputPayloadEnvelope.h"
 #include "internal/graph/planner/realtime/MediaPreparedInputRetentionPlan.h"
@@ -56,6 +57,7 @@ struct MediaRealtimeGraphResourceLedgerPlan final {
     std::optional<MediaPreparedInputPayloadEnvelope> preparedInputPayload;
     std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
     std::optional<MediaPreparedInputRetentionPlan> inputRetention;
+    std::optional<MediaPreparedRtpStorageReservation> rawRtpPreparationStorage;
 };
 
 struct MediaRealtimeVideoSurfaceFootprintFact final {

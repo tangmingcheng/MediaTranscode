@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/diagnostics/MediaAudioStageObservation.h"
 
 #include "internal/graph/nodes/audio/AudioEncoderCodecApi.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
@@ -68,6 +69,7 @@ public:
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept override;
+    ::media::Status commitReservedOutput(const MediaBufferRef& buffer) override;
 
 private:
     ::media::Result<bool> receivePackets(MediaGraphExecutionContext& context);
@@ -75,12 +77,17 @@ private:
                                                               bool allowPartial);
     ::media::Result<MediaNodeProcessResult> continueFlush(MediaGraphExecutionContext& context);
     void resetRuntimeState() noexcept;
+    void logStageObservations() const noexcept;
 
 private:
     bool m_queuedFrameBeforeCodecTraced = false;
     bool m_codecBoundTraced = false;
     bool m_firstFrameTraced = false;
     bool m_firstPacketTraced = false;
+    MediaAudioStageObservation m_inputObservation;
+    MediaAudioStageObservation m_submitObservation;
+    MediaAudioStageObservation m_packetObservation;
+    MediaAudioStageObservation m_commitObservation;
     std::shared_ptr<AudioEncodeLineageState> m_lineageState;
     bool& m_receivePending;
     bool& m_flushPending;

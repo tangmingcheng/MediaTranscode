@@ -1,6 +1,11 @@
 #pragma once
+#include "internal/graph/planner/video/MediaVideoFrameOwnershipStoragePlanner.h"
+#include "internal/graph/model/MediaVideoFilterExecutionPlan.h"
 
 #include "internal/graph/planner/video/MediaPipelineStagePlan.h"
+#include "internal/graph/model/MediaVideoSourceTiming.h"
+#include "internal/graph/model/MediaVideoFrameReadinessPlan.h"
+#include "internal/graph/planner/capability/MediaDecoderOutputAllocationAdapter.h"
 
 namespace media::ffmpeg::graph {
 
@@ -8,7 +13,7 @@ namespace media::ffmpeg::graph {
 struct MediaVideoSourcePlanningOptions {
     MediaSize sourceSize;
     std::optional<MediaSize> targetSize;
-    MediaRational sourceFrameRate;
+    MediaVideoSourceTiming timing;
     bool lowLatency;
 };
 
@@ -29,6 +34,12 @@ struct MediaVideoSourcePlan {
         MediaVideoFilterImplementation::Unknown;
     std::optional<MediaRunningTime> decoderReceiveInterval;
     std::string reason;
+    std::optional<MediaDecoderOutputAllocation> decoderOutputAllocation;
+    std::optional<MediaCudaFrameProducerFacts> decoderReadiness;
+    std::optional<MediaCudaFrameProducerFacts> filterReadiness;
+    std::optional<MediaVideoFilterInputConsumption> filterInputConsumption;
+    std::optional<MediaVideoFrameOwnershipStoragePlan> decoderOwnershipStorage;
+    std::optional<MediaVideoFrameOwnershipStoragePlan> filterOwnershipStorage;
 };
 
 } // namespace media::ffmpeg::graph

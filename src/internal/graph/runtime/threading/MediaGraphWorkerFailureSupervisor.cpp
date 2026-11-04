@@ -7,7 +7,7 @@ namespace media::ffmpeg::graph {
 void MediaGraphWorkerFailureSupervisor::arm(CoordinatedStop coordinatedStop)
 {
     std::lock_guard lock(m_mutex);
-    m_coordinatedStop = std::move(coordinatedStop);
+    m_coordinatedStop = coordinatedStop;
     m_notified.store(false, std::memory_order_release);
 }
 
@@ -22,8 +22,8 @@ void MediaGraphWorkerFailureSupervisor::notifyPrimaryFailure()
         std::lock_guard lock(m_mutex);
         coordinatedStop = m_coordinatedStop;
     }
-    if (coordinatedStop) {
-        coordinatedStop();
+    if (coordinatedStop.invoke) {
+        coordinatedStop.invoke(coordinatedStop.owner, coordinatedStop.context);
     }
 }
 

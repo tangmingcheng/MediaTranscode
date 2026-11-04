@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/sync/MediaLockedPacketGateClassification.h"
+#include "internal/graph/sync/MediaAvInitialClockAdmission.h"
 
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
@@ -57,12 +58,10 @@ classifyLockedPacketGateGeneration(
         !epoch.activation &&
         !epoch.outputPermitted &&
         !epoch.completedTransitionSequence) {
-        return generation == plannedInitialGeneration
-            ? ::media::Result<MediaLockedPacketGateDisposition>::success(
-                  MediaLockedPacketGateDisposition::
-                      PassToInitialAcquisition)
-            : invalidClassification(
-                  "Locked packet gate rejects generation outside the planned initial acquisition");
+        auto admitted = validateMediaInitialClockGeneration(generation, plannedInitialGeneration);
+        return admitted ? ::media::Result<MediaLockedPacketGateDisposition>::success(
+            MediaLockedPacketGateDisposition::PassToInitialAcquisition)
+            : ::media::Result<MediaLockedPacketGateDisposition>::failure(admitted.error());
     }
     if (epoch.poisoned ||
         epoch.readiness != MediaAvGenerationReadiness::Locked ||

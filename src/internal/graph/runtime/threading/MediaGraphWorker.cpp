@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/diagnostics/MediaCurrentThreadCpuClock.h"
+#include "internal/graph/runtime/threading/MediaWorkerThreadRegistration.h"
 
 #include <algorithm>
 #include <chrono>
@@ -17,25 +18,21 @@
 namespace media::ffmpeg::graph {
 
 MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
-                                   MediaGraphExecutionContext& context)
-    : m_node(node)
-    , m_context(context)
-    , m_wakeup(context.nodeWakeup(node.nodeId()))
-    , m_exitToken(context.nodeExitToken(node.nodeId()))
-    , m_failureRecorder(&m_localFailureRecorder)
-{
-}
-
-MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
                                    MediaGraphExecutionContext& context,
                                    MediaGraphWorkerFailureRecorder& failureRecorder,
-                                   MediaGraphWorkerFailureSupervisor& failureSupervisor)
+                                   MediaGraphWorkerFailureSupervisor& failureSupervisor,
+                                   MediaWorkerExecutionPlan execution, MediaWorkerStartupGate& startup)
     : m_node(node)
     , m_context(context)
     , m_wakeup(context.nodeWakeup(node.nodeId()))
     , m_exitToken(context.nodeExitToken(node.nodeId()))
     , m_failureRecorder(&failureRecorder)
     , m_failureSupervisor(&failureSupervisor)
+    , m_execution(execution)
+    , m_exceptionFailure{node.nodeId(), MediaNodeKind::Unknown, {},
+        ::media::ErrorInfo{::media::ErrorCode::InternalError, 0, {}},
+        MediaGraphWorkerFailurePhase::Preparation}
+    , m_startup(startup)
 {
 }
 
@@ -50,11 +47,11 @@ MediaGraphWorker::~MediaGraphWorker()
 
 ::media::Status MediaGraphWorker::start()
 {
-    if (!m_exitToken) {
+    if (!m_exitToken || m_execution.node != nodeId()) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "MediaGraphWorker requires a compiled exit token"));
     }
-    if (m_running) {
+    if (m_started) {
         return ::media::Status::success();
     }
     if (m_stopRequested || m_aborted) {
@@ -79,21 +76,23 @@ MediaGraphWorker::~MediaGraphWorker()
 
 void MediaGraphWorker::requestStop() noexcept
 {
+    m_startup.cancel();
     m_stopRequested = true;
     m_wakeup.interrupt();
 }
 
 void MediaGraphWorker::interrupt() noexcept
 {
-    m_node.interrupt(m_context);
+    if (m_started.load(std::memory_order_acquire)) m_node.interrupt(m_context);
 }
 
 void MediaGraphWorker::abort() noexcept
 {
+    m_startup.cancel();
     m_aborted = true;
     m_stopRequested = true;
     m_wakeup.interrupt();
-    m_node.interrupt(m_context);
+    interrupt();
 }
 
 void MediaGraphWorker::join()
@@ -166,44 +165,37 @@ void MediaGraphWorker::recordThreadCpu(
 }
 
 MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
-    ::media::ErrorInfo error, std::optional<MediaGraphWorkerFailurePhase> phase)
+    const ::media::ErrorInfo& error, std::optional<MediaGraphWorkerFailurePhase> phase) noexcept
 {
-    const MediaGraph* graph = m_context.graph();
-    const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
-    const MediaNodeKind nodeKind = node ? node->kind : MediaNodeKind::Unknown;
-    const std::string nodeName = node
-        ? (!node->diagnosticName.empty() ? node->diagnosticName : node->name)
-        : std::string{};
-    const ::media::ErrorInfo diagnosticError = error;
-    const bool primary = m_failureRecorder->recordFirst(
-        MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error),
-            phase.value_or(m_failureRecorder->phase()) });
-    if (!primary) {
-        if (diagnosticError.code == ::media::ErrorCode::Cancelled &&
-            (stopRequested() || aborted())) {
-            return FailureDisposition::CoordinatedCancellation;
-        }
-        mediaGraphDiagnosticLog(
-            MediaGraphDiagnosticLevel::State,
+    bool primary = false;
+    try {
+        const MediaGraph* graph = m_context.graph();
+        const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
+        primary = m_failureRecorder->recordFirst({m_node.nodeId(),
+            node ? node->kind : MediaNodeKind::Unknown,
+            node ? (!node->diagnosticName.empty() ? node->diagnosticName : node->name) : std::string{},
+            error, phase.value_or(m_failureRecorder->phase())});
+    } catch (...) {
+        // Constructed before thread creation. Moving this record cannot allocate;
+        // preserve the native error even when copying its text exhausted memory.
+        m_exceptionFailure.error.code = error.code;
+        m_exceptionFailure.error.nativeCode = error.nativeCode;
+        m_exceptionFailure.phase = phase.value_or(m_failureRecorder->phase());
+        primary = m_failureRecorder->recordFirst(std::move(m_exceptionFailure));
+    }
+    if (!primary && error.code == ::media::ErrorCode::Cancelled &&
+        (stopRequested() || aborted())) return FailureDisposition::CoordinatedCancellation;
+    try {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
-            "worker.secondary_failure node=" +
-                std::to_string(m_node.nodeId().value) +
-                " kind=" + mediaGraphDiagnosticNodeKindName(nodeKind) +
-                " name=" + nodeName +
-                " error=" + diagnosticError.describe());
-        return FailureDisposition::Secondary;
+            std::string(primary ? "worker.failed node=" : "worker.secondary_failure node=") +
+                std::to_string(m_node.nodeId().value) + " error=" + error.describe());
+    } catch (...) {
+        // The authoritative first-error record is already published. Diagnostic
+        // allocation must not suppress coordinated stop or owner cleanup.
     }
-    mediaGraphDiagnosticLog(
-        MediaGraphDiagnosticLevel::State,
-        MediaGraphDiagnosticPhase::RuntimeNode,
-        "worker.failed node=" + std::to_string(m_node.nodeId().value) +
-            " kind=" + mediaGraphDiagnosticNodeKindName(nodeKind) +
-            " name=" + nodeName +
-            " error=" + diagnosticError.describe());
-    if (m_failureSupervisor) {
-        m_failureSupervisor->notifyPrimaryFailure();
-    }
-    return FailureDisposition::Primary;
+    if (primary && m_failureSupervisor) m_failureSupervisor->notifyPrimaryFailure();
+    return primary ? FailureDisposition::Primary : FailureDisposition::Secondary;
 }
 
 void MediaGraphWorker::recordWaitOutcome(MediaNodeWakeup::WaitOutcome outcome)
@@ -230,20 +222,51 @@ void MediaGraphWorker::recordWaitOutcome(MediaNodeWakeup::WaitOutcome outcome)
 void MediaGraphWorker::run()
 {
     struct ExitPublication {
-        MediaGraphWorker& worker;
         std::atomic_bool& exited;
         std::atomic_bool& tokenExited;
         ~ExitPublication() {
+            exited.store(true, std::memory_order_release);
+            tokenExited.store(true, std::memory_order_release);
+        }
+    } exitPublication{m_exited, m_exitToken->m_exited};
+    MediaWorkerThreadRegistration registration;
+    struct OwnerRelease {
+        MediaGraphWorker& worker;
+        MediaWorkerThreadRegistration& registration;
+        ~OwnerRelease() {
             auto completed = worker.m_node.finishExecution(worker.m_context);
             if (!completed && !(completed.error().code == ::media::ErrorCode::Cancelled &&
                                 (worker.stopRequested() || worker.aborted()))) {
                 if (worker.recordFailure(completed.error(), MediaGraphWorkerFailurePhase::Release) !=
                     FailureDisposition::CoordinatedCancellation) ++worker.m_metrics.errors;
             }
-            exited.store(true, std::memory_order_release);
-            tokenExited.store(true, std::memory_order_release);
+            try {
+                auto released = registration.leave();
+                if (!released && worker.recordFailure(released.error(), MediaGraphWorkerFailurePhase::Release) !=
+                    FailureDisposition::CoordinatedCancellation) ++worker.m_metrics.errors;
+            } catch (...) {
+                worker.recordFailure(MediaWorkerStartupGate::currentException(), MediaGraphWorkerFailurePhase::Release);
+                ++worker.m_metrics.errors;
+            }
         }
-    } exitPublication{*this, m_exited, m_exitToken->m_exited};
+    } ownerRelease{*this, registration};
+    try {
+        auto prepared = registration.enter(m_execution);
+        if (!prepared) {
+            recordFailure(prepared.error(), MediaGraphWorkerFailurePhase::Preparation);
+            ++m_metrics.errors;
+            m_startup.cancel();
+            return;
+        }
+        m_startup.ready();
+        if (!m_startup.awaitCommit() || m_stopRequested || m_aborted) return;
+    } catch (...) {
+        m_startup.cancel();
+        recordFailure(MediaWorkerStartupGate::currentException(), MediaGraphWorkerFailurePhase::Preparation);
+        ++m_metrics.errors;
+        return;
+    }
+    try {
     const auto threadCpuStartedAt =
         MediaCurrentThreadCpuClock::nowNanoseconds();
 #if defined(__linux__)
@@ -296,7 +319,7 @@ void MediaGraphWorker::run()
                               steady->deadline - now)
                         : std::chrono::nanoseconds{0};
                     const auto waited = m_wakeup.wait(
-                        observedSequence, deadlineWait.wakePolicy, timeout);
+                        observedSequence, deadlineWait.wakePolicy, timeout, nullptr);
                     if (!waited) {
                         if (recordFailure(waited.error()) !=
                             FailureDisposition::CoordinatedCancellation) {
@@ -338,7 +361,7 @@ void MediaGraphWorker::run()
                 const auto timeout = std::chrono::nanoseconds(
                     std::max<std::int64_t>(0, remaining.value().nanoseconds()));
                 const auto waited = m_wakeup.wait(
-                    observedSequence, deadlineWait.wakePolicy, timeout);
+                    observedSequence, deadlineWait.wakePolicy, timeout, nullptr);
                 if (!waited) {
                     if (recordFailure(waited.error()) !=
                         FailureDisposition::CoordinatedCancellation) {
@@ -351,7 +374,7 @@ void MediaGraphWorker::run()
             } else {
                 const auto waited = m_wakeup.wait(
                     observedSequence,
-                    MediaNodeDeadlineWakePolicy::InputOrDeadline);
+                    MediaNodeDeadlineWakePolicy::InputOrDeadline, std::nullopt, nullptr);
                 if (!waited) {
                     if (recordFailure(waited.error()) !=
                         FailureDisposition::CoordinatedCancellation) {
@@ -378,6 +401,12 @@ void MediaGraphWorker::run()
 
     m_running = false;
     recordThreadCpu(threadCpuStartedAt);
+    } catch (...) {
+        m_running = false;
+        m_aborted = true;
+        recordFailure(MediaWorkerStartupGate::currentException());
+        ++m_metrics.errors;
+    }
 }
 
 } // namespace media::ffmpeg::graph

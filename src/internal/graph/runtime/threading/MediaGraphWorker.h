@@ -5,6 +5,8 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/threading/MediaGraphWorkerFailure.h"
 #include "internal/graph/runtime/threading/MediaGraphWorkerFailureSupervisor.h"
+#include "internal/graph/runtime/threading/MediaWorkerStartupGate.h"
+#include "internal/graph/model/MediaWorkerExecutionPlan.h"
 #include "media_transcode/Result.h"
 
 #include <atomic>
@@ -27,11 +29,10 @@ struct MediaGraphWorkerMetrics {
 class MediaGraphWorker final {
 public:
     MediaGraphWorker(MediaRuntimeNode& node,
-                     MediaGraphExecutionContext& context);
-    MediaGraphWorker(MediaRuntimeNode& node,
                      MediaGraphExecutionContext& context,
                      MediaGraphWorkerFailureRecorder& failureRecorder,
-                     MediaGraphWorkerFailureSupervisor& failureSupervisor);
+                     MediaGraphWorkerFailureSupervisor& failureSupervisor,
+                     MediaWorkerExecutionPlan execution, MediaWorkerStartupGate& startup);
     ~MediaGraphWorker();
 
     MediaGraphWorker(const MediaGraphWorker&) = delete;
@@ -59,8 +60,8 @@ private:
         Secondary
     };
 
-    FailureDisposition recordFailure(::media::ErrorInfo error,
-        std::optional<MediaGraphWorkerFailurePhase> phase = std::nullopt);
+    FailureDisposition recordFailure(const ::media::ErrorInfo& error,
+        std::optional<MediaGraphWorkerFailurePhase> phase = std::nullopt) noexcept;
     void recordThreadCpu(
         const ::media::Result<std::uint64_t>& startedAt) noexcept;
     void run();
@@ -71,11 +72,13 @@ private:
     MediaGraphExecutionContext& m_context;
     MediaNodeWakeup& m_wakeup;
     std::shared_ptr<MediaGraphWorkerExitToken> m_exitToken;
-    MediaGraphWorkerFailureRecorder m_localFailureRecorder;
     MediaGraphWorkerFailureRecorder* m_failureRecorder = nullptr;
     MediaGraphWorkerFailureSupervisor* m_failureSupervisor = nullptr;
+    MediaWorkerExecutionPlan m_execution;
+    MediaGraphWorkerFailure m_exceptionFailure;
+    MediaWorkerStartupGate& m_startup;
     std::thread m_thread;
-    bool m_started = false;
+    std::atomic_bool m_started{ false };
     std::atomic_bool m_running{ false };
     std::atomic_bool m_finished{ false };
     std::atomic_bool m_exited{ true };

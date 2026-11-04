@@ -5,12 +5,12 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
-#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 #include "internal/graph/runtime/resource/MediaGraphPayloadReservation.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
 #include "internal/graph/model/MediaVideoFilterExecutionPlan.h"
+#include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
 
 #include <cstdint>
 #include <optional>
@@ -49,8 +49,13 @@ public:
     bool flushed = false;
     bool filterEof = false;
     ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<const MediaFfmpegPayloadReferences> pendingInputAllocations;
+    std::optional<std::size_t> acceptedInputOutputCount;
     std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
-    std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    std::optional<MediaCodecLineage> pendingLineage;
+    std::optional<MediaSourceVideoObservationFacts> pendingObservation;
+    std::optional<std::uint64_t> lastDisplaySequence;
+    std::optional<MediaRunningTime> lastDisplayPresentation;
     MediaInputTerminalTracker terminals { { "frame" } };
     bool eofEmitted = false;
     MediaBufferRef terminalBuffer;
@@ -66,16 +71,12 @@ private:
     void clearLineageStorage() noexcept;
 };
 
-class VideoFilterNode final : public FFmpegNodeRuntime {
+class VideoFilterNode final : public FFmpegNodeRuntime, public MediaSourceReferenceAllocation {
 public:
     explicit VideoFilterNode(MediaNodeId nodeId);
     VideoFilterNode(
         MediaNodeId nodeId,
         std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry);
-    VideoFilterNode(
-        MediaNodeId nodeId,
-        std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry,
-        MediaAvStartupVideoPreparationCapability preparationCapability);
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -104,25 +105,11 @@ private:
         MediaGraphPayloadReservation reservation);
     ::media::Result<MediaNodeProcessResult> continueTerminal(MediaGraphExecutionContext& context);
     ::media::Status rescaleAndValidateFrame(AVFrame* frame) noexcept;
-    ::media::Status retainPreparedOutput(
-        MediaBufferRef output,
-        std::uint64_t generation,
-        std::uint64_t releaseIdentity);
-    ::media::Status markPreparedReadyOutsideLineageLock(
-        MediaGraphExecutionContext& context);
     void resetRuntimeState() noexcept;
 
 private:
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<VideoFilterLineageState> m_lineageState;
-    std::optional<MediaAvStartupVideoPreparationCapability>
-        m_preparationCapability;
-    MediaBufferRef m_preparedOutput;
-    std::optional<MediaReservedOutputTransaction> m_preparedReservation;
-    std::uint64_t m_preparedGeneration = 0;
-    std::uint64_t m_preparedReleaseIdentity = 0;
-    bool m_preparedNeedsReady = false;
-    bool m_preparationFeedArmed = false;
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
     std::optional<MediaVideoFilterExecutionPlan> m_executionPlan;

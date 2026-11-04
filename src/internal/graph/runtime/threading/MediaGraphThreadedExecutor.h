@@ -15,11 +15,16 @@ namespace media::ffmpeg::graph {
 
 enum class MediaGraphThreadedExecutorState {
     Idle,
-    Starting,
     Running,
     Stopping,
     Stopped,
-    Aborted
+    Aborted,
+    Starting
+};
+
+struct MediaGraphNodeCompletion final {
+    bool finished;
+    bool exited;
 };
 
 class MediaGraphThreadedExecutor final {
@@ -49,16 +54,20 @@ public:
     bool failed() const noexcept;
     std::optional<MediaGraphWorkerFailure> primaryFailure() const;
     MediaGraphRuntimeMetrics metrics() const noexcept;
+    ::media::Result<MediaGraphNodeCompletion> nodeCompletion(MediaNodeId node) const;
 
 private:
     void refreshMetrics() const noexcept;
 
 private:
     MediaThreadingPolicy m_policy;
-    MediaGraphThreadedExecutorState m_state = MediaGraphThreadedExecutorState::Idle;
+    std::atomic<MediaGraphThreadedExecutorState> m_state{MediaGraphThreadedExecutorState::Idle};
+    mutable std::recursive_mutex m_lifecycleMutex;
+    mutable std::mutex m_workersMutex;
+    MediaWorkerStartupGate m_startup;
     MediaGraphWorkerFailureRecorder m_failureRecorder;
     MediaGraphWorkerFailureSupervisor m_failureSupervisor;
-    std::vector<std::unique_ptr<MediaGraphWorker>> m_workers;
+    MediaFixedCapacityStorage<std::unique_ptr<MediaGraphWorker>> m_workers;
     mutable MediaGraphRuntimeMetrics m_metrics;
     mutable std::mutex m_metricsMutex;
 };

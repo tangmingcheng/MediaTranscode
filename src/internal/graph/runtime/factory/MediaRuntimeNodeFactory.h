@@ -9,6 +9,8 @@
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
+#include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
@@ -18,7 +20,10 @@ namespace media::ffmpeg::graph {
 
 class MediaDemuxTimestampClockMapper;
 class MediaDatagramServiceScopeArbiter;
+
 struct MediaDecodedDemuxPacketClockBinderNodePlan;
+struct MediaNetworkStorageWakeupPlan;
+struct MediaProtocolGenerationStorageInstance;
 
 struct MediaRuntimeGenerationPurgeRegistration final {
     MediaAvGenerationParticipant participant;
@@ -43,7 +48,25 @@ public:
             videoPreparationState,
         const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
             protocolOutputAuthority,
-        const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter);
+        const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter,
+        const MediaNetworkStorageWakeupPlan* storageWakeups,
+        const MediaProtocolGenerationStorageInstance* generationStorage);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createDecodedVideoStartup(
+        const MediaNode& node, std::shared_ptr<MediaAvSyncGroupRuntime> group,
+        std::shared_ptr<MediaPreparationMemoryResource> allocation);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>> createCanonicalInput(
+        const MediaNode& node, MediaLineageAllocationScope allocation);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>> createStartupBinder(
+        const MediaNode& node, MediaLineageAllocationScope allocation);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>> createStartupCoordinator(
+        const MediaNode& node, MediaLineageAllocationScope allocation);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createVideoPreparation(
+        const MediaNode& node,
+        std::shared_ptr<MediaAvSyncGroupRuntime> group,
+        const std::shared_ptr<MediaAvStartupVideoPreparationState>& preparation,
+        MediaLineageAllocationScope allocation);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createContinuousAggregateNode(
         const MediaNode& node,

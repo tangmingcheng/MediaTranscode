@@ -87,7 +87,7 @@ void MediaRealtimeVideoRunControl::completeOutputChange() noexcept
 }
 
 void MediaRealtimeVideoRunControl::publishOutputSnapshot(
-    MediaRealtimeOutputSnapshot snapshot)
+    const MediaRealtimeOutputSnapshot& snapshot)
 {
     std::lock_guard lock(m_waitMutex);
     const auto output = std::find_if(
@@ -101,7 +101,7 @@ void MediaRealtimeVideoRunControl::publishOutputSnapshot(
     if (snapshot.state == MediaRealtimeOutputState::Retired) {
         m_outputSnapshots.erase(output);
     } else {
-        *output = std::move(snapshot);
+        *output = snapshot;
     }
 }
 

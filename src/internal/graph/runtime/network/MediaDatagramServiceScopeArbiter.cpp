@@ -120,10 +120,11 @@ MediaDatagramServiceScopeArbiter::SubmitGuard::~SubmitGuard()
     owner.notifyWaitersLocked();
 }
 
-::media::Status MediaDatagramServiceScopeArbiter::SubmitGuard::complete(
+::media::Result<std::optional<MediaRunningTime>> MediaDatagramServiceScopeArbiter::SubmitGuard::complete(
     std::uint64_t submittedWireBytes, MediaRunningTime completedAt) noexcept
 {
-    if (!m_member) return ::media::Status::failure(::media::ErrorInfo::invalidArgument("shared datagram permit already completed"));
+    using Result = ::media::Result<std::optional<MediaRunningTime>>;
+    if (!m_member) return Result::failure(::media::ErrorInfo::invalidArgument("shared datagram permit already completed"));
     auto member = std::move(m_member);
     auto& owner = *member->m_owner;
     std::lock_guard lock(owner.m_mutex);
@@ -149,7 +150,8 @@ MediaDatagramServiceScopeArbiter::SubmitGuard::~SubmitGuard()
     if (!status && !owner.m_failure) owner.m_failure = status.error();
     owner.m_active = nullptr;
     owner.notifyWaitersLocked();
-    return status;
+    if (!status) return Result::failure(status.error());
+    return Result::success(submittedWireBytes ? owner.m_theoreticalArrival : std::nullopt);
 }
 
 void MediaDatagramServiceScopeArbiter::SubmitGuard::poison(::media::ErrorInfo error) noexcept

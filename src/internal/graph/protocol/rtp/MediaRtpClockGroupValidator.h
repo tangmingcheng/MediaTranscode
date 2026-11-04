@@ -37,7 +37,7 @@ struct MediaRtpClockGroupValidatorConfig final {
 
 struct MediaRtpLockedClockGroup final {
     MediaRunningTime commonSourceEpoch;
-    std::vector<std::uint8_t> cname;
+    MediaRtcpBytes cname{MediaLineageAllocator<std::uint8_t>{MediaRuntimeLineageAllocation{}}};
     MediaRtpSourceClockCalibration video;
     std::optional<MediaRtpSourceClockCalibration> audio;
 };

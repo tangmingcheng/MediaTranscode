@@ -18,6 +18,9 @@ struct GroupOptionContract final {
 
 constexpr std::array GroupContracts{
     GroupOptionContract{
+        MediaNodeKind::RawRtpInput,
+        "rtp.sync_group"},
+    GroupOptionContract{
         MediaNodeKind::AvOutputScheduler,
         "av_scheduler.sync_group"},
     GroupOptionContract{
@@ -166,8 +169,8 @@ const GroupOptionContract* findContract(
             ::media::ErrorInfo::invalidArgument(
                 "A/V release extractor audio branch mode is invalid"));
     }
-    const auto expected =
-        binding.audioExecutionProduct ==
+    const auto expected = binding.plan.members == MediaTranscodeStreamSet::VideoOnly
+        ? MediaBranchMode::Drop : binding.audioExecutionProduct ==
                 MediaSynchronizedAudioExecutionProduct::PacketCopy
             ? MediaBranchMode::CopyPacket
             : MediaBranchMode::TranscodeFrame;
@@ -188,6 +191,15 @@ const GroupOptionContract* findContract(
     const MediaAvSyncGraphShape shape(graph, binding.members);
     const bool sourceDomain = std::holds_alternative<MediaAvSourceDomainBinding>(binding.role);
     const bool outputDomain = std::holds_alternative<MediaAvOutputDomainBinding>(binding.role);
+    const bool hasAudio = binding.plan.members == MediaTranscodeStreamSet::AudioVideo;
+    if (!hasAudio && (!sourceDomain || binding.plan.members != MediaTranscodeStreamSet::VideoOnly))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Single-member synchronization requires a video source domain"));
+    if (!outputDomain && !binding.plan.startup.videoReadiness)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Source domain requires explicit video startup readiness"));
+    const bool canonicalSource = !outputDomain && binding.plan.startup.videoReadiness ==
+        MediaVideoStartupReadiness::IntervalCoverage;
     const std::size_t sourceCount = outputDomain ? 0u : 1u;
     const std::size_t outputCount = sourceDomain ? 0u : 1u;
     bool filterActive = false;
@@ -195,8 +207,11 @@ const GroupOptionContract* findContract(
         const auto* owner = graph.findNode(std::get<MediaAvSourceDomainBinding>(binding.role).registration.preparationOwner);
         if (!owner) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Source domain requires its planned preparation owner"));
-        filterActive = owner->kind == MediaNodeKind::VideoFilter;
-    } else {
+        auto required = requiredBoolNodeOption(&owner->options,
+            "VideoPreparationNode", "pipeline.filter_active");
+        if (!required) return ::media::Status::failure(required.error());
+        filterActive = required.value();
+    } else if (!outputDomain) {
         const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
         if (encoders.size() != 1) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Output domain requires exactly one video encoder"));
@@ -205,13 +220,14 @@ const GroupOptionContract* findContract(
         if (!required) return ::media::Status::failure(required.error());
         filterActive = required.value();
     }
-    const bool audioTranscode = binding.audioExecutionProduct ==
+    const bool audioTranscode = hasAudio && binding.audioExecutionProduct ==
         MediaSynchronizedAudioExecutionProduct::FrameTranscode;
     auto cardinality = shape.requireExact({
         {MediaNodeKind::SourceClockStateFanout, sourceCount,
          "source-clock state fanout"},
-        {MediaNodeKind::LockedPacketGate, 2u * sourceCount, "locked packet gate"},
-        {MediaNodeKind::CanonicalInput, 2u * sourceCount, "canonical input"},
+        {MediaNodeKind::LockedPacketGate, (hasAudio ? 2u : 1u) * sourceCount, "locked packet gate"},
+        {MediaNodeKind::CanonicalInput, ((hasAudio ? 1u : 0u) + (canonicalSource ? 1u : 0u)) * sourceCount, "canonical input"},
+        {MediaNodeKind::DecodedVideoStartup, !outputDomain && !canonicalSource ? sourceCount : 0u, "decoded video startup"},
         {MediaNodeKind::AvStartupCoordinator, sourceCount, "startup coordinator"},
         {MediaNodeKind::AvStartupClock, sourceCount, "startup clock"},
         {MediaNodeKind::PlaybackEpochBinder, sourceCount, "playback epoch binder"},
@@ -227,11 +243,12 @@ const GroupOptionContract* findContract(
         {MediaNodeKind::CodecResolver, 1, "video codec resolver"},
         {MediaNodeKind::VideoDecode, sourceCount, "video decoder"},
         {MediaNodeKind::HardwareTransfer, sourceCount, "hardware transfer"},
-        {MediaNodeKind::VideoFrameRate, sourceCount, "video frame-rate controller"},
+        {MediaNodeKind::VideoPreparation, sourceCount, "video preparation publication"},
+        {MediaNodeKind::VideoFrameRate, canonicalSource ? sourceCount : 0u, "video frame-rate controller"},
         {MediaNodeKind::VideoFilter, filterActive ? sourceCount : 0u,
          "planner-selected video filter"},
         {MediaNodeKind::VideoEncode, outputCount, "video encoder"},
-        {MediaNodeKind::PacketSourceConfig, audioTranscode ? 0u : 1u,
+        {MediaNodeKind::PacketSourceConfig, hasAudio && !audioTranscode ? 1u : 0u,
          "audio packet-copy source config"},
         {MediaNodeKind::AudioCodecResolver, audioTranscode ? 1u : 0u,
          "audio codec resolver"},

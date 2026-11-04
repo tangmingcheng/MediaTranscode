@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/MediaProtocolPurgeInput.h"
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
 #include "internal/graph/runtime/buffer/MediaMpegTsProtocolDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
@@ -28,6 +29,10 @@ namespace media::ffmpeg::graph {
         sessionMatches = activation->groupKey().value() == session.value();
     } else if (const auto* batch = dynamic_cast<const MediaMpegTsProtocolDatagramBatchBuffer*>(buffer.get())) {
         generation = batch->generation();
+    } else if (const auto* accessUnit = dynamic_cast<const MediaTsAccessUnitBuffer*>(buffer.get())) {
+        auto view = accessUnit->view();
+        if (!view) return ::media::Status::failure(view.error());
+        generation = view.value().generation;
     } else if (const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(buffer.get())) {
         generation = scheduled->generation();
     } else if (const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get())) {

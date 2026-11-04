@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
+#include "internal/graph/model/MediaVideoStartupReadiness.h"
 
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "internal/graph/planner/avsync/MediaAvSourceLifecyclePlan.h"
@@ -26,6 +27,7 @@ enum class MediaAvSyncMasterClockMode : std::uint8_t {
 };
 
 struct MediaAvSyncStartupPolicy {
+    std::optional<MediaVideoStartupReadiness> videoReadiness;
     std::optional<bool> requireVideoKeyFrame;
     std::optional<bool> trimAudioToCommonStart;
     std::optional<MediaRunningTime> maximumWaitNs;
@@ -101,7 +103,8 @@ struct MediaAvSyncRtpInputStreamPlan {
 
 enum class MediaAvSyncRtpStreamAssociationMode : std::uint8_t {
     Unknown = 0,
-    PlannedStreamPair = 1
+    PlannedStreamPair = 1,
+    PlannedSingleStream = 2
 };
 
 struct MediaAvSyncRtpInputPolicy {

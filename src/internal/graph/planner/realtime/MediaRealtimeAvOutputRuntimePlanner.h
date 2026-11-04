@@ -10,12 +10,13 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeOutputPlanningDraft;
+struct MediaRealtimeGraphResourceLedgerPlan;
 
 struct MediaRealtimeAvOutputRuntimeRequest final {
     const MediaAvSyncGroupKey& groupKey;
     const MediaResolvedAudioOutputPlan& audio;
-    const MediaGraphQueueParameters& queues;
-    const MediaRealtimeEdgePolicySet& edgePolicies;
+    const MediaRealtimeGraphResourceLedgerPlan& outputResources;
+    std::optional<MediaEdgePolicy> sourceAudioRelease;
     const MediaRealtimeAvOutputTimingFacts& timing;
     std::optional<std::int64_t> maximumInputAudioSamples;
     RealtimeOutputStreamLayout layout;

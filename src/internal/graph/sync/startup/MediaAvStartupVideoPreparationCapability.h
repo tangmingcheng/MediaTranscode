@@ -36,6 +36,8 @@ public:
         const MediaAvStartupVideoPreparationCapability&) = delete;
 
     const void* stateIdentity() const noexcept { return m_state.get(); }
+    const MediaOutputReservationStoragePlan& reservationStorage() const noexcept
+    { return m_state->reservationStorage(); }
     MediaAvStartupVideoPreparationSnapshot snapshot() const
     {
         return m_state->snapshot();

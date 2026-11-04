@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
@@ -910,8 +911,8 @@ void MediaAvReacquisitionCoordinator::abort() noexcept
     auto activationLock = acquireActivationArbitration();
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_firstError) {
-        m_firstError = ::media::ErrorInfo::cancelled(
-            "A/V reacquisition coordinator was aborted");
+        m_firstError = mediaCleanupError(::media::ErrorCode::Cancelled,
+            "A/V reacquisition coordinator was aborted", 0);
     }
     m_transitionService->abort();
     m_phase = MediaAvReacquisitionPhase::Aborted;

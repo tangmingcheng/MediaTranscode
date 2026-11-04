@@ -146,6 +146,9 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::SourceClockStateFanout: return "SourceClockStateFanout";
     case MediaNodeKind::AudioDriftController: return "AudioDriftController";
     case MediaNodeKind::EncodedAudioCanonicalizer: return "EncodedAudioCanonicalizer";
+    case MediaNodeKind::ContinuousAudioAggregate: return "ContinuousAudioAggregate";
+    case MediaNodeKind::VideoPreparation: return "VideoPreparation";
+    case MediaNodeKind::DecodedVideoStartup: return "DecodedVideoStartup";
     case MediaNodeKind::AvContinuousAggregate: return "AvContinuousAggregate";
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";

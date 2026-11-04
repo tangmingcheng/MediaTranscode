@@ -1,0 +1,574 @@
+# RTP重排视频输入时序调查与实施边界
+
+
+### r183最终复验结果（2026-10-13）
+
+最终Release成功、双独立源码PASS。相同2GiB额度已建图并输出，共享预约graph_bound高水位881967494B；真实链路于09:28:18.086发生datagram materialization超deadline4.891855ms，CLI exit1，完整验收FAIL。原三源和AV重入均120秒exit0；runtime资源归零仅为失败清理，AAC尾帧未排空。155283输出RTP连续、DTS递增、已捕获片段完整解码成功不能覆盖尾部。双独立运行审查FAIL，保持75/FAIL。用户要求后仅采用VLC原生视频快照；本次实际取得的是录制回放快照，不冒充实时图。32件临时产物及9个相关进程已复核无残留；指定源124427809B保留。后续沿绝对发送期限首次失败调用链调查，不能放宽期限；完整准备硬界、四源HEVC、内容AV和RKMPP仍待完成。详见realtime-composition-output-drain.md。
+
+## 实际失败
+
+r173四源混合H264/HEVC，新增HEVC来自指定120秒连续源，经hevc_nvenc p4、720p30、12Mbps CBR。CUDA source2建图失败：RTP video binder requires positive representable timestamp delta；后续QSV拒绝packet retention，最终摘要不能代表首个候选根因。实际命令、原错及清理见realtime-composition-output-drain.md。
+
+抓包marker AU序号/时间戳：3074/2324468117、3414/2324480117、3425/2324474117、3432/2324471117、3438/2324477117。呈现顺序与传输顺序不一致；不能要求调用方关闭B帧作为修复。
+
+## 权威依据与当前差异
+
+RFC7798 4.1要求RTP timestamp为显示采样时间（90kHz），接收端使用它进行显示；序号用于传输顺序，不能由此假设PTS严格递增：https://www.rfc-editor.org/rfc/rfc7798.html#section-4.1 。成熟实现参考FFmpeg libavformat/rtpdec.c及GStreamer rtph265depay：保留AU解码顺序与呈现时间，不能按PTS排序压缩包再交解码器。
+
+当前共享缺口：
+
+- MediaRtpDepacketizer制造DTS=RTP timestamp；MediaRtpPacketClockSession::timedPacket再次DTS=PTS。
+- bindPacket以相邻传输AU正时间差计算duration；finishPacketInput复用最后正差。
+- MediaCanonicalInputNode与startup在解码前要求正packet duration；VideoDecodeNode传播packet lineage，未在显示序输出后重建帧区间。
+- MediaRtpVideoFrameRateObserver以uint32相邻marker差估帧率；倒退变巨大差，跳跃12000不能代表30fps源的帧间隔。不能将它用作重排源权威规划事实。
+- TimestampAligner按SR锚点有符号模差处理，本身不应改为强制单调。
+
+## 后续设计必须闭合的合同
+
+1. 协议AU拥有generation/source sequence、RTP显示时间和解码顺序事实，未知DTS保持未知；不得合成DTS=PTS或abs(duration)。明确packet-copy路径是否另需权威解码时间事实，不给所有链路默认值。
+2. 解码前启动筛选保留随机访问/依赖/协议代际，不能以伪造呈现区间替代可解码性。显示区间在解码后按真实frame时间/权威codec timing建立，再进入共同canonical贡献链。
+3. planner从SPS/VUI、prepared decoder readback及有界解码探测验证帧率与最大重排/保留，不从乱序相邻包单次差猜帧率；缺失事实建图前明确失败。
+4. 复用现decoder、payload ledger、prepared protocol session、generation purge与EOF；若需要显示帧lookahead，容量由prepared retention合同计入，不引入无界缓存或新公共参数。
+5. 共享Windows/RKMPP源路径同时受影响；硬件decoder adapter能力需分别权威确认，禁止另建HEVC专用媒体链。先Windows原规格H264/HEVC重排、非重排、失源重入与停止，后RKMPP。
+6. 保留候选错误链，避免最终候选错误覆盖诊断；这不授权外部FFmpeg修改。
+
+状态：调查已证实合同缺口，尚未实施时序重构。实施前需两个独立设计审查补齐准备期探测、canonical归属及队列硬边界。原间歇deadline、内容AV和完整矩阵仍开放，整体75/FAIL。
+
+## 2026-10-12 调用链补全与设计审查结论
+
+两个独立调查均否决直接局部修补。准备入口另有循环：MediaPreparedRtpSourceSession先bindPacket才加入probe prefix，continuous FirstFrameProbe又要求sourceTiming；尚未取得时长就要求绑定正时长。首帧probe仅验证图像/设备/SAR/color，submit拒opaque，不能当作生产重排身份传递证明。
+
+CFR较小方案仅在码流及帧结构权威证明每图固定间隔时成立，可省去显示帧lookahead；单一framerate字段或两个PTS样本不足。即使时长已知，现MediaDecodeOrderMode只有PresentationOrderNoReorder/ReorderedRequiresDecodeTime，后者强制DTS，仍不能表达RTP可解码但DTS未知的AU。不得冒用NoReorder。
+
+VideoDecodeNode在copyOpaque=false时以提交FIFO配输出lineage；重排帧下不能使用。必须由prepared capability证明精确opaque关联，或权威平台关联机制；不能用重复PTS猜身份。
+
+### 实施分解（尚未达到设计PASS，不直接修改核心）
+
+1. **准备AU边界**：在session既有commitPacket独立AVPacket/provenance/PreparationPayloadStorage所有权处提供有界只读probe snapshot，保持原接收owner和唯一depacketizer。probe只克隆必要包头，共享payload，不修改生产前缀；先验证codec/timebase/generation/ingress sequence，去掉必须已绑定时长的循环。
+2. **准备时序证据**：首帧设备验证保持；额外单独产品承载码流时序/显示PTS/真实duration、帧结构、decoder身份关联能力，有限标量记录且受原deadline/cancellation约束。probe后复用prepareReplay释放首帧和flush同decoder。readAfterOpen retention只证明压缩包持有槽，不冒充DPB/surface上限。
+3. **输入合同**：区分可解码AU与可调度packet-copy AU；前者保留显示时间、解码提交序和未知DTS，后者仍要求权威调度时间。不能放宽音频或输出lineage。CFR时长与需要显示帧区间两种事实由planner明确选择，不由节点fallback。
+4. **启动边界**：MediaCanonicalInputNode目前在packet层durationFor→canonicalize→MediaAvStartupAccessUnit；coordinator validateUnit强制duration>0。需逐项分离随机访问/依赖准入与显示覆盖窗口，保持压缩AU传输/解码顺序、purge和音频共同激活。此项完整筛选调用链尚未证明，继续调查后才能冻结接口。
+5. **帧区间与资源**：解码输出保留AU身份/generation，并形成显示序frame lineage。若只保留上一帧标量不增加应用持帧；如需要两个同时持有AVFrame，现仅预算一个公共frame的MediaSourcePreparationStoragePlan必须显式扩展相应帧及surface合同。registry/startup/prefix/decoder内部保留分别计费，不合并为经验上限。
+6. **验收**：当前保留重排的四源HEVC/H264原规格首先通过；再验证无重排旧H264、所选音频、失源重入、尾部排空、完整线端与内容AV。共享Windows先于RKMPP；QSV retention缺事实单列，不替代CUDA根因。
+
+当前具体待决为第4项启动筛选与显示区间的分界，以及decoder平台身份回传/帧结构事实。此为设计未完成，不是用户授权阻塞；继续源码调查和能力验证，不请求降低范围。
+
+## 启动边界定向复核：保留现有排序机制
+
+本轮实读并经独立复核确认：MediaAvStartupStreamStore::presentationSnapshot按呈现时间索引形成coverage；prefixBefore/appendSuffixSelections按m_arrival选取和发布，Coordinator只要求source sequence递增。Extractor保留视频release顺序，LockedGate普通packet路径不按PTS裁剪或排序。因此权威duration存在、协议传输序等于解码提交序时，不必把整个startup移到解码后。此前第4项的分离要求应限定为事实类型和依赖证据，不预设节点搬迁。
+
+精简后必须实现的边界：
+
+- 新的内部输入时序合同表达可解码AU、已知呈现时刻、解码提交序、DTS未知；packet-copy调度仍不能借此绕过DTS要求。
+- duration产品须包含帧结构/重复显示事实；不能只从AVCodecContext.framerate反推。已只读核验本机FFmpeg libavcodec/hevc/parser.c：framerate取VPS/VUI num_units_in_tick/time_scale比值，repeat_pict由picture timing的frame doubling/tripling分别设1/2。
+- 现MediaSpsVuiParser已读取但丢弃HEVC buffering/reorder、timing字段；应复用现完整SPS校验路径发布类型化原始事实，不能再写第二套解析器或在节点填默认值。仅有tick比率仍不证明所有AU恒定时长。
+- 首帧probe必须证明重排输出opaque身份关联；copyOpaque=false的FIFO不能匹配重排帧。无对应后端能力时在建图前准确拒绝。
+- 选定随机访问包之后PTS早于sourceStart的AU仍按依赖顺序送解码器，不能在gate按PTS提前删压缩包。需调查并证明IDR/CRA与RASL/RADL随机访问规则；aggregate丢弃过期显示帧不能替代该证明。
+
+审查结论：复用startup排序机制PASS；完整实施合同尚缺随机访问依赖与权威duration/身份能力产品，不能把本轮源码调查写成运行修复。下一步优先闭合这三项而非重写已正确的startup状态机。
+
+## r174实际码流排除固定时长捷径
+
+2026-10-12真实四源重跑，仅HEVC源增加FFmpeg trace_headers。同一CUDA source2绑定失败再次出现。VUI num_units_in_tick=1/time_scale=30，但poc_proportional_to_timing=0，HRD fixed_pic_rate_general与within_cvs均0；SPS/VPS最大重排图像2，field_seq与frame_field_info_present均0。故此前“先证明CFR再保留包层正duration”的路线不适用于当前源，不能将30当作固定时长权威事实。完整命令、退出与清理见output-drain文档r174。
+
+独立源码复核：本机FFmpeg native HEVC init/flush设eos=1，转last_eos后CRA设no_rasl_output_flag，RASL被抑制；COPY_OPAQUE经frame props、按POC选帧、FIFO引用保留到输出，NVDEC复用该机制。这是本机源码能力证据，尚不是部署二进制运行证明。首帧probe不能假定每AU有输出，也不能以提交FIFO配重排帧。
+
+另有探测生命周期边界：本机hevc_decode_flush未显式清私有output_fifo，通用flush也未发现相应清理。扩展多帧probe时，不能凭“释放首帧后flush”断言生产重放没有旧帧；需证明已排空或用明确预算和所有权的独立探测decoder。外部依赖仍不修改。
+
+下一实施设计必须支持解码前AU时长未知、解码后真实显示区间，并保持startup依赖准入、音频共同激活、generation、EOF和有界资源合同。已确认startup的呈现索引与到达发布顺序可复用，但其正duration入参仍需调整；此前该局部机制PASS不等于整体设计PASS。当前生产核心未新增时序修复，四源验收仍FAIL。
+
+独立审查B已直接复核r174原始trace：事实PASS，固定duration路线FAIL。显示帧lookahead须以后一真实PTS闭合前帧区间；EOF无后继PTS时，尾帧必须保留未完成区间语义或取得权威终点，不能复用上一duration，也不能以失活deadline代替媒体终点。完整设计仍未PASS。
+
+## r175：身份合同第一切片已实施
+
+新增MediaVideoDecodeLineage表达源AU身份、呈现时刻、可未知DTS/duration、映射可信度和generation；与MediaCanonicalLineage是不同类型，无隐式转换。MediaCodecLineage使用不可变shared_ptr的variant，复用原registry容量、token/opaque、引用退休、锁和purge。typed resolve要求消费者显式指定产品，类型不匹配返回原生错误；现decode/filter/encode全部显式要求canonical产品，新源AU路线尚未启用。canonical validator未放宽。
+
+两名未参与实现的独立审查均对这8文件源码切片PASS；Release clean-first/all-target成功，704项构建流程exit0。无新公共API/CLI参数，无测试基础设施。现registry容量仍由planner给定对象数；variant增加固定元数据，不新增媒体拷贝或另一个登记表。后续前置decode/startup帧存储需重新规划字节和surface预算，本切片不能证明已完成。既存create/emplace分配异常封闭问题保留为风险。
+
+后续固定方向：协议代际gate→共享decoder→显示区间闭合→既有canonical/startup索引→sharedDecode后续视频处理。拒绝用SPS重排数排序全部AU代替decoder：GStreamer h265timestamper重建DTS，不证明每AU显示duration；FFmpeg依pic_output_flag/recovery/POC选择真正显示图像。尾帧权威终点、prepared probe生命周期及前置decoder generation/purge尚未闭合，整体设计和四源运行门禁仍未PASS。
+### 未知尾帧的成熟策略边界（下一设计切片）
+
+独立调查确认另一种可用模型：FFmpeg framesync按输出时刻选择最近源PTS，并把EOF重复策略单列；GStreamer videoaggregator同样区分未知duration与重复策略。因此可以由planner显式选择presentation-point的sample-and-hold，而不伪造源区间。每个输出tick仍有真实输出duration，贡献需独立标注所选源显示点，不能把输出duration写进旧MediaCanonicalSourceStamp。现origin只有源区间/黑格，尚不能直接接入。
+
+权威代码：https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavfilter/framesync.c 、https://raw.githubusercontent.com/GStreamer/gstreamer/main/subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoaggregator.c 。不照搬FFmpeg有限EOF的pts+1外推，也不将GStreamer未知duration分支的终点FIXME当作媒体事实。EOF与尚未呈现队列的先后、失活/purge提交边界、retained frame硬预算必须先明确。该方向审查PASS不等于完整合同PASS；尚未据此改变运行策略。
+## r176：共享解码节点产品支持（实现完成，最终验证待完成）
+
+MediaVideoDecodeBuffer严格包装原始video packet/frame；packet保留权威原始PTS/timebase及AU身份，frame保留decoder实际PTS/duration并有独立每代decodedSequence，不能把AU序号当作显示序，也不作1包1帧断言。两个FFmpegView递归提取原媒体/credit；canonical查询不会返回源AU产品。没有新增媒体复制或另一个decoder执行链。
+
+内部typed decoder_product通过codec option统一传递，当前已接线builder明确选择canonical。source产品必须有registry、正capacity和COPY_OPAQUE；context创建、prepared claim、节点绑定均校验，source禁止FIFO。输入packet时间基与prepared pkt_timebase在send前校验正值和精确有理等价，不重标、不fallback。此检查由独立审查B发现遗漏后补齐，修复前的构建成功不作最终版本证明。
+
+同一VideoDecodeNode复用send/receive/背压/flush；pending variant、generation观察、pending output freshness与purge/reset贯通。零输出AU由decoder引用释放自然退休；缺opaque或缺输出PTS明确失败。源frame实际时间与AU映射时间仍为两套事实，后续显示时序组件负责权威解释，不在decoder内制造canonical duration。
+
+新wrapper/lineage有固定metadata成本，无额外frame持有槽；完整source拓扑尚未启用，其预算、probe身份实证、startup重排、尾帧和贡献point仍待接线。第一轮两审一PASS一FAIL（输入时间基遗漏）；修复后要求两者重新PASS及最终全量Release/真实旧路径回归，不能据此声称HEVC重排已修复。
+最终时间基修复后两位独立审查均明确PASS；Release clean-first/all-target最终重建706项、exit0。r176三源原规格真实回归正在执行，新source产品尚未用于生产拓扑。
+
+下一切片调查：由同一planner选择CanonicalInterval或SourcePresentation视频时间产品，准备session、runtime binder及交接校验必须携带同一产品。SourcePresentation保留clock rate、SR映射和PTS，同时令原始及映射DTS/duration未知，立即发布，不进入lookahead或末包时长重复路径。沿用现prefix/freeze/移动交接，不增加raw snapshot队列；只有前置decode、显示语义及帧startup合同全部闭合后才能启用。独立设计审查方向PASS，尚未实施。
+
+r176最终旧canonical路径三源及选源重入均120秒，现场三格/黑屏/恢复、排空254ms、资源归零及wire序号/DTS/完整AV解码有限双审PASS；11条VLC迟到与颜色警告保留。24件临时产物已清理。此结果不是新source产品运行证明。
+
+身份接线补充：FFmpegBufferFactory明确禁止raw RTP provenance与sourceTiming共存；现binder重新wrap会剥离raw身份。可复用MediaSourceAccessUnitIdentity类型，但现CanonicalInputNode在时长闭合后才分配序号，不能直接用于前置decode。下一设计需在剥离点以planner sourceIdentity、既有ingress sequence及映射generation形成typed源AU身份，保持decodedSequence独立，不放宽raw/timed互斥合同。
+
+## r177：RTP源呈现点产品与AU身份（实施中）
+
+沿用RFC7798的呈现时间语义和FFmpeg未知DTS/duration合同，在共享clock session中显式区分CanonicalInterval/SourcePresentation。后者保留SR映射PTS，原始与映射DTS/duration均未知；在raw身份剥离前以planner sourceIdentity、既有ingress sequence及映射generation建立typed源AU产品，通过MediaVideoDecodeBuffer进入共享decoder，不另建媒体队列。准备/runtime handoff核对clock rate、产品与identity；当前planner仍显式选择canonical，前置decode/probe/startup/资源产品完成前不启用。
+
+首次独立审查A发现prepared转runtime信用仍附着外层wrapper、与decoder内层读取不一致，判FAIL；修复必须在同一原始媒体owner检查并附着额度，完整wrapper仅作为pending引用，避免漏计/双计。最终构建和复审待完成，不能宣称新源链路运行通过。
+
+信用修复后两名独立审查者均明确源码PASS。emitPacket在raw packet owner统一检查、预约、附着额度，pending保留完整wrapper，decoder读取同一lease；purge仍释放所有owner。初次706项build0不覆盖此修正，最终构建正在执行。
+
+### 下一生产接线：探测身份与重放隔离
+
+当前continuous probe直接cast FFmpegPacketBuffer，且submit拒绝opaque、首帧即返回；不能仅增加wrapper解包后宣称COPY_OPAQUE已证明。需复用registry/token和同一codec adapter，对probe专用packet引用附加token、验证实际frame身份；原prefix不能被改写。零/多输出合法，首帧成功不代表实际重排已覆盖。clone/token/registry及surface必须纳入准备planner预算。
+
+prepareReplay当前flush同一decoder；本机HEVC私有output FIFO缺少flush清理证据。拟将probe decoder及首帧引用先释放，再通过同一builder与不可变参数重开生产decoder，重新核对设备、格式、retention、COPY_OPAQUE；生产从原AU prefix开始且首输出再核对合同。先销毁后重开避免两个decoder隐含峰值。该生命周期改造尚待完整设计/实现，不能用一个receive或当前canonical回归代替source证明。
+
+### 准备容量的依赖环（源码调查）
+
+PreparedRtpSourceSessionPlan当前按raw.video.frameRate计算窗口AU数量，再建立供decoder probe读取的prefix；B序下marker相邻PTS观察并非权威到达率，不能沿用该值证明窗口容量。input_latency是期限而非速率，最大AU尺寸也不决定每秒AU数量；当前signaling未发布typed最大AU到达率。
+
+成熟队列按bytes/objects/time分别限制并显式失败或背压，可在未知fps时保证有界；但UDP阻塞不是无损背压。后续需确认独立于fps的实际准备budget来源，再将资源准入与限时证据收集分开；容量或deadline先耗尽须保留失败。不能把budget除最大AU字节数叫作所需帧数，也不能将decoder framerate或VUI时钟比称为到达上界。参考GStreamer queue：https://gstreamer.freedesktop.org/documentation/coreelements/queue.html 。该设计方向经独立源码审查PASS，资源产品尚未实现。
+
+r177最终信用修复版本全量Release706项exit0；原规格三源120秒＋AV重入120秒，正常排空260ms、资源归零及wire序号/DTS/双流解码有限双审PASS。首轮三格截图缺失、13条VLC迟到与颜色警告保留，25件临时产物清理。新source模式未被planner启用，不能把本轮canonical证据用于证明HEVC重排修复。
+
+## r178：探测与生产decoder重放隔离（实施中）
+
+不依赖本机HEVC私有FIFO的flush清理，按FFmpeg codec owner销毁/创建边界，先释放探测frame与旧context，再用同一builder、source snapshot、typed decoder计划和设备引用重开。重新核对decoder名称、线程、packet timebase、COPY_OPAQUE、设备身份与输入retention；首次真实输出继续走现frame合同检查。来源：https://www.ffmpeg.org/doxygen/trunk/avcodec_8h.html 。不修改FFmpeg依赖。
+
+提取共享decoder准备费用planner，原计算复用，增加重开短暂保留的一个AVBufferRef头预算；对重开packet/owner/software frame费用逐项验证不超原准入。NeedMoreEvidence及最终production replay使用同一重开方法、原deadline/cancellation。
+
+首次两独立审查均发现NeedMoreEvidence等待前lease提前释放，判FAIL。修复合同：decoder与必需lease形成单一RAII owner，跨wait和下一probe移动同一准入，禁止重复reserve或先释放再预约。最终构建及复审待完成。
+
+修正后两独立源码审查均PASS：MediaRtpSourceDecoderProbeOwner必需持有lease与decoder，禁止移动赋值，析构先关闭decoder后归还lease。首次预约一次，probe仅核验需求不超原准入；重试将两者一起移回owner覆盖整个等待期。最终Release正在构建，前版708项build0不覆盖该修正。
+
+准备资源调查进一步确认：probeSizeBytes是已有调用方探测wire上限，raw实际存储planner已据非空datagram至少1字节推导descriptor数。可以作为独立于fps的累计准入来源，但不能直接等同AU容量；还需按depay变换、单push输出、padding/header及source wrapper成本分别预算。socket接收容量不能冒充应用队列预算。
+
+后续wire准入接线已定位：RawRtpPreparedByteBudget::observe有原累计wire账本，但RawRtpPreparedInputBuffer的continuous consume分支绕过它，PreparedRtpSourceSession没有wire counter。应转移或共享同一AV累计owner，bootstrap不重复计费，live准备不漏计，freeze在mutex内publish后切换且保留旧prefix lease。非空datagram数D≤wire上限B，每包最多U个AU可推N≤D×U及N×(A+padding)的保守容量；其元数据、raw/AU共存、assembly、snapshot引用、控制事件、decoder/surface分别核算。该上界可能很保守，不是窗口覆盖保证；不能给AV两路各自重新发一份B而宣称遵守原总预算。尚待实施。
+
+r178最终owner修复版本Release708项exit0，双源码审查PASS；原规格三源120秒＋AV重入120秒，日志确认三次真实生产decoder重开，drain254ms、runtime payload归零、wire连续/DTS/AV解码有限双审PASS。NeedMoreEvidence重试仅源码覆盖，11条VLC迟到、局部块状模糊及颜色警告保留。25件产物清理；四源重排仍未修复完成。
+
+## r179：累计wire准入生命周期（源码完成，待复审与真实验证）
+
+源码证明旧sealPreflight在continuous安装时已设置runtimeActive，observe随后直接成功；仅补consume调用不能修复漏计。现显式Capture→ContinuousPreparation→Runtime，旧有限capture仍Capture→Runtime。安装校验原共享AV owner，bootstrap沿用已观察累计值、不重复收费；live在session锁内、协议处理前计费，freeze先publish再终止累计并发布m_frozen。额度耗尽保留首错并唤醒等待者，不清零、不因prefix释放或重试退还wire额度。storage lease仍独立按实际owner退休。诊断记录bootstrap、continuous、total和capacity。
+
+行业依据为GStreamer queue独立bytes/buffers/time限制（https://gstreamer.freedesktop.org/documentation/coreelements/queue.html）；本项目UDP不能照搬阻塞为无损背压，准备额度耗尽明确失败。本次不替换fps retention，也不宣称原probeSize能保证覆盖整个准备期限。
+
+独立调查否定直接以D×U×最大AU尺寸替换内存规划：video/Opus合法RTP包最少12字节，AAC每AU至少2字节header及1字节payload，可收紧对象界；但当前video reservation在完成后仍保留整个最大AU费用，不能把实际压缩字节膨胀界直接用于该账本。下一步必须让字节、对象独立准入与实际lease收费一致，同时覆盖snapshot引用、raw/AU共存和freeze后旧prefix；不能通过改一个公式制造容量保证。两审设计方向PASS，r179实现复审/Release/真实链路尚未完成。
+r179七文件源码冻结后，两独立审查均PASS。freeze的线性化边界是session锁内consume准入，不是socket收包时间或整个batch时间；安装前开始、安装后处理的单包重查continuous owner后只计一次。最终Release与实际运行待完成。
+
+后续容量产品须与旧MediaPreparedInputRetentionPlan分离：后者乘积校验及cadence/window语义被runtime startup直接消费，不能只放宽等式。准备prefix当前仅有限units与共享总storage，没有逐流byte counter；如保留最大AU预约，新byte admission必须按预约金额收费，并为snapshot、控制和assembly保留共存空间。可以明确容量耗尽失败，不能把此产品宣称为窗口覆盖保证或直接用于尚未具备事实的runtime startup。该依赖链经独立源码复核。
+### r179真实失败后的合同更正：FAIL
+
+Release708项exit0，原规格三源CLI约5秒exit1：CUDA源0 observed4999975/cap5000000后下一包失败，QSV次错不得替代首错；未建DAG。源码计数/锁序双PASS不代表合同成立。独立复审确认probeSize由原raw流信息探测扩大到decoder/clock/canvas/freeze全阶段累计流量，缺少公共语义和阶段事实依据，方案FAIL。FFmpeg将probesize定义为获取stream information的分析数据量，另列rtbufsize约束实时frame内存（https://ffmpeg.org/ffmpeg-formats.html）；本项目旧continuous同样有独立deadline/retention/storage，不能直接混为同一产品。
+
+抓包下一个61031 SR比容量失败晚约311ms；首SR是否被接收未证明。源码mapper第一个合法SR即可Locked，不要求两个SR；raw probe具备先缓存RTCP再按RTP SSRC过滤机制，不能据此虚构缺陷。当前r179代码是未验收WIP，下一步必须修正typed阶段与容量合同，不能提升验收probeSize、清零累计或只恢复漏计以声称修好。14件产物和6PID清理完成，原120秒源保留；全过程命令与失败诊断见output-drain文档。
+## r180：纠正探测作用域，独立准备容量由部署显式配置
+
+r179错误收费已删除。raw账本显式Capture/Sealed，不再将sealed叫runtime；seal只结束流信息探测，保留首错、probe pin和独立storage所有权。continuous session恢复独立storage/retention/deadline和freeze，不跨阶段借用probeSize。共享AV原owner校验保留。两独立源码纠正审查PASS，最终Release及同规格真实回归待完成，不能视为HEVC修复。
+
+两份独立调查均确认现有最大AU、每push数量、reorder工作集、decoder retention及已抓取prefix数量，只能约束局部同时持有量，不能给出等待clock/canvas/freeze期间全部replay的总容量。当前代码没有独立resident部署上限；不得再用probeSize、input_latency或socket容量替代。用户已委托选择本机验收额度：全部输入共享2048 MiB（2147483648字节），为显式可配置部署值，不设产品默认值；依据本机约31.4 GiB物理内存及当时约15.2 GiB可用内存选择，不宣称保证任意源均能完成准备。该配置只约束可计量引擎存储，不冒充进程RSS或GPU显存；planner需先计各源必需固定成本，再共享可变容量，不按经验均分，不要求调用方推导队列长度。期限独立，资源不足明确失败；准备数据退休后归还持有费用。
+### source身份probe的下一实施合同（尚未实现）
+
+复用现first-frame probe的submit/receive循环、FFmpegPacketView、MediaCodecLineageRegistry和opaque helper；仅克隆packet header附token，原prefix不可修改，禁止FIFO。首帧的图像/设备证明与实际重排关联证明分开：同规格HEVC必须观察提交PTS回退及输出AU身份顺序改变，逐frame验证source token/generation，记录独立显示序号、frame实际PTS/timebase和关联AU原始时间。允许0/N输出，不要求逐包都有frame，不将frame PTS强制等同关联packet PTS。EAGAIN保留同一clone/token，继续receive至EAGAIN；无实际重排只能记证据不足。
+
+registry条目、token/opaque/AVBufferRef、pending packet header和decoder持有引用均需计费；保留首帧并继续收帧需覆盖两个同时存活AVFrame/surface，不能沿用单frame预算。r178先销毁探测context再重开生产context的隔离保留，旧token引用必须退休。该设计方向经独立调查PASS，不等于实现或实际重排证据PASS。
+
+最终Release708项exit0，双独立源码复审PASS。r180实际三源及重入的现存抓包片段解码成功，但执行会话中断，正常drain/退出码/最终资源归零未取得，完整验收FAIL。记录见realtime-composition-output-drain.md；29件临时产物已清理。共享准备预算尚未实现，不把部署额度选择记为资源合同完成。
+
+### 共享准备存储的实施顺序（独立只读设计审查）
+
+方向PASS；仅替换五个独立budget创建点的方案FAIL。部署额度已有事实，不再等待用户数值。实施仍需以下顺序：
+
+1. 完成AU在发布前按独立AVBufferRef.size结算持有费用，保留depay前最大AU＋padding预约；实际超过预约即失败，不事后追加。依据本机只读FFmpeg packet.c的av_new_packet分配路径，以及仓库makeRtpAccessUnit。头、控制块和引用另计，不能使用packet.size冒充backing allocation。
+2. 全输入共享根＋局部子预算，保留现有局部容量合同；实际reserve同时计入根且失败不改变账本，退休归还。raw、continuous、decoder、output、canvas五个入口均接线；禁止创建子预算时预扣全部最大值后又重复计lease。
+3. 修正先分配后收费：session/group固定owner先准入；decoder open/readback前明确有限capability probe准入；核实canvas readback瞬时frame是否已由output额度覆盖。复用raw PMR分配前收费、释放后归还模式。
+4. 固定费用和可变prefix分开，避免从全额度推maximumUnits再全量预扣其metadata的循环。容器增长同时计旧新capacity；准备产品不直接替换runtime cadence/window合同。
+5. freeze不清账，保留r178跨retry/reopen的同一decoder lease；准备payload转runtime有明确交接，snapshot引用单独计费。根耗尽保留首错；最终以原规格真实realtime链路复验，Windows通过后才进入RKMPP。
+
+以上为实施清单，尚未完成代码接线，不计为资源门禁通过。工业依据仍为GStreamer bytes/buffers/time独立限制（https://gstreamer.freedesktop.org/documentation/coreelements/queue.html）及FFmpeg AVBufferRef持有数据范围（https://ffmpeg.org/doxygen/trunk/structAVBufferRef.html）；这些资料不替代本项目逐owner费用审计。
+## r181：AU持有费用结算与共享预算寿命审计
+
+已实现发布前独占lease从最大AU＋padding缩减到fresh av_new_packet的AVBufferRef.size；补公开AVBufferRef头费用。拒收AU先销毁packet再退费，异常路径保守持有到清理。修正后两独立源码PASS，最终全量Release708项exit0；原规格三源120秒＋AV重入120秒，CallerStop259ms、runtime归零、线端172458包连续/DTS递增/完整AV解码有限双审PASS。27件临时产物已清理；VLC6迟到及颜色警告保留，不代表共享根已完成。
+
+共享根接线前的独立寿命审计新增必修项：Session的m_workingSet当前先于被覆盖group/stream/plan析构；snapshot的referenceStorage先于packets vector析构；clock/binder移出后仍依赖原Session费用，节点成员顺序可能先退原owner。须按覆盖对象的实际寿命重排或聚合RAII，不能依赖其他节点通常持有引用。takePacket仅移packet不移准备lease，需核对实际调用路径。
+
+应保留的现有合同：r178 decoder/frame owner及codec deleter先释放实际context后退准备lease；raw PMR先释放block；FFmpegPacketBuffer先销毁派生packet。attachPayloadCredit先取得runtime credit再退准备payload费用，不重复计同一payload；decoder/encoder/canvas费用仍随实际owner跨runtime保留，freeze不清账。
+## r182：共享预约根接线（2026-10-13，实施中）
+
+五个准备预算入口已传递同一根；根与直接子预算共用互斥锁，reserve/release/shrink 同步计账，拒绝空根及嵌套子根。单源显式采用 standalone；根耗尽保留 AllocationFailed，不继续候选回退覆盖首错。CLI/C 配置无隐式额度，正值及可表示性由 planner 验证；本机部署值为 2147483648 字节。增加 graph_bound 根账本观测。
+
+已调整 Session、snapshot、clock/binder owner 的析构顺序；独立复审要求继续修正 Session 条件变量异常初始化边界。首次构建失败的两处旧 vector 接口访问已改为 preparation plan 的 inputs。修正版全量 Release 构建进行中，尚未启动 r182 媒体链路；不得沿用 r181 结果宣称本轮通过。
+
+仍未完成：decoder/output capability 探测分配前准入、容器同时持有容量计费、与 fps 解耦的准备 retention、HEVC 重排身份路线及完整矩阵。整体资源门禁仍 FAIL。
+
+### r183：按探测输入产品规划工作集
+
+r182 真实失败驱动：连续 Session 已预约协议owner，而 completed-AU probe 又套用 raw-datagram 工作集。双独立调用链审查确认重复预约，但尚不能证明这是2GiB失败唯一原因。依据 FFmpeg send/receive 引用输入规则（https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html）与 GStreamer buffer/memory分离（https://gstreamer.freedesktop.org/documentation/additional/design/buffer.html），新增仅内部的输入产品区分 RawDatagrams/CompletedAccessUnits，由 planner 选择实际工作集并在 probe 校验匹配。共用既有 decoder费用和 submit/receive，不新增线程或媒体链路，不改背压/输入事实。连续路径仅去掉未创建的 parser/reorder/assembly/signaling observer费用，保留实际配置解析、decoder、frame；Session 与snapshot原费用保留，lease跨reopen不变。原规格2GiB复验，禁止提高额度替代修正。
+## r185：准备快照实际分配准入（实施中）
+
+本轮沿HEVC重排主线处理准备持有费用前置项：连续Session的probeSnapshot原先预约N×sizeof(MediaBufferRef)，实际引用容器却使用普通allocator。现复用MediaPreparationMemoryResource与pmr::vector，在实际allocation请求前计入共享根，释放block后退费；snapshot持有resource并先销毁引用容器，planner补adapter header/alignment。保留原cadence retention与期限，不以此宣称已解除fps依赖。代码双审及Release验证待完成。
+
+依据C++ memory_resource的bytes/alignment分配合同（https://eel.is/c++draft/mem.res.public）和vector range构造合同（https://eel.is/c++draft/vector.cons）。当前resource对象与shared控制块本身仍未纳入此引用block费用；完整准备硬界仍FAIL。
+
+身份probe的下一依赖经本机FFmpeg调用链确认：COPY_OPAQUE会将opaque_ref保留到frame，不能用compressed packet retention推导token存活上界。本次不可变snapshot的AU数可限制注册总数，但registry的State/map/lease/token/opaque owner必须先有实际分配准入；FFmpeg内部av_buffer_ref复制的公开引用头需单独权威边界，不能用一个头费用冒充全部引用，也不能制造收费哨兵。拟复用同一registry并引入拥有resource的allocator，保证allocate_shared控制块在弱引用最后释放前仍有有效resource；尚未实施，不开启SourcePresentation生产planner。
+
+本轮三文件冻结后，两位独立审查均明确PASS（仅引用数组实际准入切片）。最终VS2026 Release clean-first all-target构建完成，configure/build exit0，708步构建计划，CLI为5899776字节、2026-10-13 10:02:45；必需构建产物齐全，git diff --check通过。本轮尚未运行真实媒体，不继承r184验收。下一步按已审设计实施拥有resource的registry allocator，再闭合身份probe费用和生产接线。构建日志已记录后按单文件清理，未产生抓包或截图。
+
+## r186：身份记录引擎分配合同（源码双审PASS，验证中）
+
+新增必填typed Runtime/Prepared allocation scope；同一registry通过拥有scope的allocator分配State/shared控制块、map节点和lease。allocator复制/rebind持有resource直到最后弱引用释放。submit将entry和lease分配纳入同一异常回滚，失败不消费identifier。opaque callback owner与serialized token合并一次分配，最后引用回调先保留allocator，再析构owner/token，最后释放存储；本机FFmpeg buffer.c确认av_buffer_create失败不调用callback，失败路径显式释放。线程/代际/token解释不变，未新增平台分支。
+
+行业依据：C++ allocate_shared分配与控制块合同（https://eel.is/c++draft/util.smartptr.shared.create）、FFmpeg AVBuffer引用/回调接口（https://ffmpeg.org/doxygen/trunk/group__lavu__buffer.html），并只读核对本机对应实现。两位未参与实现的独立审查均PASS。现生产caller显式Runtime，Prepared scope尚未接入probe；FFmpeg内部AVBuffer/克隆AVBufferRef、lineage所指对象与resource自身费用仍未闭合，不宣称完整准备存储或HEVC重排通过。Release全量重建与原规格共享链路复验待完成。
+
+下一实施顺序已收口（尚未实施）：
+1. 同一completed-AU probe增加显式首帧/重排身份目标，以不可变snapshot AU数N作为单次注册总数上界；Prepared registry实际收费，新增packet公开头/payload引用头、最多两个AVFrame及本次初始opaque引用头另预约。拒绝未规划side data，共享原payload。库内部复制头/DPB仍属于当前不透明库内存边界，不能把它冒充引擎费用已覆盖，也不能把原先排除的内部开销变成虚构阻塞。
+2. evidence聚合费用、registry、decoder、帧/待提交包，按实际owner顺序退休；EAGAIN只重试同一token/包头。固定大小证据分别记录首帧、提交PTS回退、输出AU身份回退、独立显示序号、frame实际PTS/timebase，允许0/N映射。probe首帧不等于重排证明。
+3. raw preparation引入内部typed intent和timing事实variant：CanonicalIntervals明确要求观测cadence；SourcePresentation只保留signaling/身份/ingress事实，不运行假定PTS递增的fps observer，不用0/0帧率冒充事实。保持同一准备与decoder入口。
+4. continuous preparation必须先换成与fps解耦的固定/可变准入产品；SourceFacts/candidate规划保留timing类型。runtime startup/display合同在缺事实时不得建DAG，不能把probe成功当生产接线完成。RKMPP轮询间隔若仍依赖cadence，缺权威替代事实时明确拒绝，不填默认间隔。Windows先完成真实链路再RKMPP。
+
+r186最终Release全量exit0、双独立有限实流回归PASS：三源及AV重入各120秒，CallerStop0/drain261ms/runtime归零，RTP连续/DTS递增/完整AV解码通过。五张VLC原生快照覆盖三格、全黑、单源恢复、末黑；25迟到及converter/色彩警告保留。27件临时产物与7媒体PID已清理核验。上述不证明Prepared scope已运行或HEVC重排完成，下一步按本节probe清单实施。
+
+## r187：同一解码probe的源身份与raw timing类型接线（实施中）
+
+本轮复核RFC7798的RTP时间戳/解码顺序规则（https://www.rfc-editor.org/rfc/rfc7798.html）及FFmpeg COPY_OPAQUE的M-to-N合同（https://ffmpeg.org/doxygen/trunk/group__lavc__core.html）。不按压缩包PTS排序，不制造未知DTS/duration，不把首帧成功当作实际重排证明。
+
+两段独立实施：raw preflight显式intent与事实variant，只有canonical模式运行原cadence observer；既有两个production caller仍显式canonical，消费端拒绝presentation事实进入旧正fps合同。同一first-frame probe新增显式重排身份目标，只接受已有MediaVideoDecodeBuffer/typed lineage，共享原payload而克隆头附token；按snapshot有限N准入registry及新建公开对象，固定大小记录输入PTS回退与输出身份回退，继续使用原send/receive和deadline。EAGAIN复用同token，零/多输出不按FIFO配对。
+
+准备owner须覆盖decoder及保留首帧，重开前销毁帧/context再退休registry/费用；不透明FFmpeg内部开销不伪装成已计量引擎存储。当前生产快照尚无source lineage，禁止由PTS临时合成身份。两段实现不直接启用生产SourcePresentation；fps无关continuous admission、source candidate及runtime display/startup仍是后续完整接线项。源码审查、构建及实际验证尚未完成。
+
+
+r187已完成源码双审、全量Release构建和既有canonical三源真实链路有限回归；详见output-drain文档。不能据此声称新identity路径已实际运行。
+
+## r188：与帧率解耦的连续准备及同一源候选接线（实施中）
+
+依据 RFC7798采样时间戳与解码顺序分离（https://www.rfc-editor.org/rfc/rfc7798.html）、GStreamer独立字节/对象/时间队列限制（https://gstreamer.freedesktop.org/documentation/coreelements/queue.html），准备容量从已批准的共享部署额度规划，不从未知帧率、即时空闲或最大AU字节反推保证时长。准备准入与canonical runtime retention分离；容器实际allocation、包/身份包装对象在分配前收费，释放后归还，旧新容量并存同计。沿用当前source串行回调、接收线程、原deadline与首错传播；不另起媒体链路、不增加公共参数。
+
+时序事实提升公共model variant，source facts及同一候选planner消费该类型。SourcePresentation不填假帧率；已知cadence继续验证匹配。RKMPP接收轮询仍依赖已知cadence，缺权威替代事实时明确拒绝，不臆造间隔。probe区分实际身份映射与重排见证，普通源无需制造回退。滤镜buffer未知输入帧率按API省略frame_rate，不能把输出cadence当输入事实。
+
+后续仍需打通decoded display区间、startup与runtime额度，完成后才启用生产SourcePresentation。现有runtime cadence门禁保持明确；本节不是整体完成或真实HEVC验收证明。
+
+
+r188账本范围核对：SourceSession的局部capacity可等于共享部署上限，但各child的实际reserve仍同时扣共享根。CompositionResourcePlanner与FinalGraphResourceLedgerCompiler累计局部上界只构建保守runtime账本，不分配或预约该最大值总和；不得把这项总和表述成可同时占用的准备内存。保持各实际child的allocationOwner身份，避免把所有child替成root造成重复owner或retaining-group错误。全局上界精确去重留待共享账本模型统一，不能用当前retained快照冒充后续容量。
+
+r188时序事实/候选/身份目标/可选filter帧率组已经双独立源码PASS；第二位亦审查typed runtime gate。连续准入组亦获双独立源码PASS；全量Release与canonical三源及重入有限实流回归完成，双独立运行审查PASS，详见realtime-composition-output-drain.md。未启用的presentation链路不在该结论范围内。
+
+## r189：解码显示点的不可变投影事实（实施中）
+
+调查依据：RFC3550 §6.4.1 的 SR 配对 RTP/NTP 时间（https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.1）；FFmpeg framesync 的 latest-lower-or-equal 选帧与独立 EOF 策略（https://ffmpeg.org/doxygen/trunk/framesync_8h.html）。源码核验发现当前 projector 使用 SR 校准斜率，不等于名义 packet timebase；因此禁止用 decodedPTS−packetPTS 的名义比例加已量化 AU 时间。两个独立审查者确认 decoder 前移方向合理，但 startup/aggregate 完整合同尚未通过。
+
+本切片保留每个 AU 实际使用的不可变锚点、校准斜率和共同 epoch；AU 与实际 decoded PTS 调用同一投影实现，保持现有投影截断语义并防止减法/转换溢出。probe 与 runtime 共用显示点计算，保留原身份、代号、实际帧序号和时间基，不产生 duration、不读取后续 SR。按值保存事实，无新线程、队列或公共参数；现有 PMR sizeof 实际收费覆盖增加的 lineage 大小。失败直接保留上游错误，不启用尚未规划完整的 SourcePresentation runtime。
+
+生命周期已核验：RTCP BYE→SenderLeft，时钟证据过期→ClockEvidenceExpired，均进入撤销发布和 purge；不是可信媒体 EOF。decoder purge 丢弃延迟帧，真实 EOF 的 null-packet drain 仍须保留。后续显示点采用当前有效代中 PTS≤输出时刻的最近帧；失效即停用并清 held/future，未知终点的有序 EOF 消费后停止贡献，不伪造尾帧时长、不保证尾帧必显示一次。音频真实样本覆盖、trim 和共同激活保持。完整垂直接线仍需显式 readiness/hold 合同、解码 surface 与重叠持有预算，完成后才启用生产路径。
+双审数值修订：先检查并在整数域计算 tick 差、sourceAnchor−commonEpoch，再进行相对 affine 投影，结果仍向零截断。修复旧 projector 在约4e18 ns绝对NTP值上的浮点相消；不再声称逐位保持旧结果。相对锚或tick差超int64明确失败，不以浮点抵消绕过。仍不宣称全int64范围纳秒精确有理运算。需最终冻结构建及共享RTP真实回归。
+
+### r189 后续垂直接线合同（待完整实施审查）
+
+保持已有正 preroll，不以首帧代替启动门禁。视频显示点用类型化“已缓冲显示跨度”，首端不晚于共同sourceStart，实际解码顺序frontier不早于sourceStart+preroll；这不是源连续interval coverage。frontier仅随当前代按显示顺序接收的真实帧推进，不能取曾见最大PTS掩盖后续回退。相同PTS按真实decodedSequence保留最后一帧，回退PTS为合同错误；所有时间运算检查溢出。音频保持真实sample coverage、trim、skew及同代共同epoch。
+
+同一VideoDecodeNode移到startup之前，成功解码的随机访问链作为证据；原startup release输出已解码帧，后续不重放压缩前缀或重建第二decoder。filter与aggregate保留原DAG节点组合。aggregate保留当前帧及有界未来队列，按输出时刻选最新不晚于目标的点；只要当前代许可有效才允许hold，不凭点间距宣称源duration。未来队列未清空不阻塞输出时钟。真实有序EOF经decoder drain后消费，终止该源贡献；没有权威终点时不承诺尾帧至少显示一次。
+
+容量须从真实surface格式、decoder保留及实际同时持有关系规划，不用未知fps乘等待时间。压缩AU、decoder内部引用、receive/current/first frame、startup store、release、filter及aggregate held/future的共存均纳入额度；等待激活不能阻止decoder获得输出重排帧所需输入。复用原worker、取消、deadline与首错传播，超限明确失败。purge同时覆盖上述所有owner和pending发布，完成统一ack后才激活新代，BYE与clock expiry始终按失源撤销处理。
+
+r189投影切片由 projection_review_a / projection_review_b 对最终相对投影代码双独立PASS。源码结论不替代最终Release与真实流验证；上述垂直接线尚未实施完成。
+r189最终冻结全量Release和共享canonical三源及重入回归均完成，双独立运行复核PASS，实际命令/指标见realtime-composition-output-drain.md。29件临时产物已清理，指定源保留。该结论不关闭后续显示点启动/聚合/资源合同和HEVC重排验收。
+
+## r190：显示点驻留与启动合同接线（实施中）
+
+先将source residence从强制cadence改为类型化产品：CadenceResidence继续现有速率×停留时间加准备留存；CountBoundResidence明确给出同时留存对象上限，来自实际拓扑、decoder/filter readback及当前/未来/pending/receive角色，不伪造fps或用input_latency推导数量。共同minimumProgress必须为正且不超过上限，缺少事实直接失败。此产品仅负责运行时引用/逻辑额度，不将共享准备2GiB改称运行时总预算。依据GStreamer独立buffers/bytes/time硬限与FFmpeg send/receive双向推进，沿用现有producer account及最终ledger。
+
+前置decoder使startup占用从压缩packet转为decoded surface；后续接纳帧时须保留原payload credit，并附同根MediaPreparationStorageLease计逻辑geometry字节、PMR计元数据。推进工作集先预留，缓存不能吞掉接收下一帧和音频激活所需额度。满额未达正preroll时明确失败；不等待自身占满的未来帧、不丢旧点冒充跨度。GPU实际内部分配保持现有observed-only风险，不新增全VRAM验收门槛。
+
+接线沿用generation gate→唯一decoder→显示点envelope→startup→epoch/preparation→extractor→transfer/filter→aggregate。Filter实际转换且预留输出后仍按既有两阶段流程markOutputReady；前置decoder不等待activation。音频sample coverage和共同epoch不变。完整SourcePresentation仍由门禁关闭，必须待以上数据、资源和生命周期接线完成后再启用。
+
+### r190 启动合同切片复审
+
+已补齐启动和Running直通阶段的同代显示顺序检查：decodedSequence必须递增、实际映射PTS不得回退；相同PTS允许不同decodedSequence。generation推进、退休和reset同步清除检查状态。Envelope要求真实MediaVideoDecodeBuffer中的AVFrame，并逐项核对显示序号、映射PTS、源身份、generation、Locked和帧关键帧标志，不接受空显示点标记替代解码证据。
+
+双独立审查r190_contract_review_a/b发现并修复构建前误配：当前MediaCanonicalVideoAssemblyPlan只能搭配IntervalCoverage；DecodedPresentationSpan需后续前置decoder装配合同。两者对修复后类型与启动原语切片明确PASS，不覆盖完整SourcePresentation或真实链路。依据FFmpeg send/receive实际帧语义与GStreamer queue独立buffers/bytes/time边界。
+
+审查确认待办：startup Store的list/map、Index临时vector及Envelope尚无实际准备元数据计费；原ledger只统计retainedRefs，本轮variant增大不会自动纳入预算。须接入共同准备根的PMR和surface租约后才可声明硬边界完成。禁止以本轮静态PASS替代该项、前置decoder/filter显示血缘、HEVC重排和Windows/RKMPP验收。
+
+r190修复后全量Release重建成功：configure/build退出0，710项构建计划完成，脚本验证两个CLI及CMake产物存在。realtime CLI字节数5937664，SHA256 7CE67C99F6D9953F23CCAE6FB1B930BCB07429BCB59AA65E2FBF1C5C9FCB9225。本轮未启动媒体测试，未产生抓包、快照或临时媒体；不新增真实流通过结论。
+
+## r191：Source-AU代际门接入
+
+已将LockedPacketGate的输入证据校验接入现有typed startup计划：视频DecodedPresentationSpan必须接收Source-AU包装，IntervalCoverage和音频仍须裸packet。包装中的raw packet必须Locked、非零generation且无discontinuity；另核对源身份、generation、映射PTS及Locked confidence，拒绝已含decodedSequence/decodedPresentation的帧。复用原generation仲裁、purge等待和publication reservation，不排序压缩PTS、不生成duration。依据RFC3550第5.1及6.4.1节的采样时间和SR映射；项目generation仲裁不是RFC定义。r190_contract_review_a/b均对该切片独立静态PASS。
+
+接线调查已落实到调用点：VideoDecodeNode的SourceAU路径本身不等待playback activation，无需新增绕过；ReleaseExtractor的视频staging/preparation已经按原MediaBufferRef转发。硬约束实际位于InputSegmentBuilder的packet端口、typed assembly和shape validators。现有buildSource总是创建resolver/decoder/transfer/fps/filter，且拒绝sharedDecode；后者是output-only路径，不能直接复用为前置decoder。
+
+下一步从现有source builder提取解码段和帧处理段，canonical模式组合两段，decoded模式在两段之间插入启动合同。必须同步拆分applySourcePlan中的decoder配置与frameRate依赖、connectTranscodePorts中的codec/packet与frame连线；保留唯一prepared decoder及source域purge注册。该调查不代表已接线。SourcePresentation仍未开放，准备元数据、surface租约、filter显示血缘、aggregate显示点以及完整HEVC链路继续待办。
+
+r191冻结后全量Release构建退出0（configure/build均0，710项计划，必需产物检查通过）；realtime CLI 5938688字节，SHA256 D548D5752E868EED87BA55F2646176D2F18DC2EDE14446CE9809ED3406F6BE66。未运行媒体测试，不能记为HEVC显示链路通过；未产生需清理的本轮抓包/快照/日志/媒体。
+
+## r192：解码与帧处理配置职责拆分
+
+删除混合的applySourcePlan，由applySourceDecoderPlan投射resolver/decoder、retention及receive polling，由applySourceFramePlan投射transfer/FPS/filter。共享stage和retention投射提取到同一helper，现有buildSource顺序调用两段并显式传入MediaObservedVideoCadence。decoder配置不再要求输入fps；帧处理使用既有MediaVideoSourceTiming，SourcePresentation明确禁止FPS节点和duplication gap，不生成默认节奏。当前canonical节点和连线保持原路径。
+
+r190_contract_review_a/b均对拆分后配置覆盖和typed timing约束独立静态PASS。此切片仅完成配置职责拆分；节点创建、ports和连接仍在原builder中，尚未形成可前移的独立解码段。后续必须复用这些配置入口完成同一decoder前置接线，并继续完成显示帧元数据/surface计费、filter显示血缘、aggregate显示点及真实验收。不得将本项记为完整合屏通过。
+
+r192冻结后全量Release重建成功，configure/build退出0，必需产物存在；realtime CLI 5940224字节，SHA256 4B9F5B0EC79321333A7BED0C02FEFF2E34096FF530B34737EEF9384554AA53FD。本轮未运行媒体测试，没有新增真实链路通过证据或临时媒体产物。
+
+## r193：source解码段与帧处理段拆分
+
+buildSource已改为组合buildSourceDecoder与buildSourceFrames。前者仅创建source resolver和唯一decoder，显式选择Canonical或SourceAccessUnit血缘；SourceAU强制COPY_OPAQUE。后者接收Video/RawFrame/Frame端点和Video/Metadata/CodecContext输出编码器端点，只创建transfer/FPS/可选filter并返回原preparation owner。端口、连接和lineage配置仍复用原helper；decoder-only保留format/codec/packet连接，frame-only不访问不存在的resolver。source processing成员合并保持原顺序与归属。
+
+双独立r190_contract_review_a/b最终静态PASS，包含新增端口精确类型检查。当前帧段仍是canonical cadence处理，不能直接承接SourcePresentation；显示帧filter/aggregate血缘和准备存储等前置条件继续待完成。完整功能尚未通过，随后针对本次共享装配变化做同规格canonical真实回归，不替代HEVC重排输入验收。
+
+## r194：解码显示身份贯穿帧变换（实施中）
+
+核对FFmpeg官方AVFrame文档（https://ffmpeg.org/doxygen/trunk/structAVFrame.html）和本机frame.c、scale_cuda/scale/pad：copy_props传播opaque_ref，但不能据此假设任意filter均保留。当前HardwareTransfer下载已copy_props却仅重包canonical，确实丢SourceAU显示身份。两个独立审查者均认可通过原registry传播独立显示产品的方案。
+
+新增MediaVideoDisplayLineage保存共享AU、实际decodedSequence、原decodedPTS/timebase和映射显示点；generation唯一来自AU，不产生显示duration。MediaCodecLineage增加第三种产品并验证原始投影；MediaVideoDecodeBuffer只在实际解码帧创建显示产品，转换后withDisplayLineage保留同一产品，不从转换后时基重新投影。HardwareTransfer下载重新包装原display身份，新像素继续使用新payload reservation，原canonical路径不变。
+
+r190_contract_review_a/b均对第一组静态PASS。实际PMR分配包含新增显示产品和控制块；MediaPreparationMemoryResource的allocation header会保留resource与lease直至deallocate。decoder/download当前runtime allocator仍未接入完整准备根，不能以此宣称准备存储闭合。本轮冻结Release全量重建完成，configure/build退出0，710项构建计划及必需产物检查通过；realtime CLI 5949952字节，SHA256 15BA78FB7B355791E820B2761FB6B6E688B3398BB519F7F62C678365AF5E0216。未运行本轮媒体测试，未产生抓包、快照或临时媒体，不新增真实链路通过结论。
+
+下一组必须同步处理filter的计划选择、pending/opaque/output产品、generation和preparation核对，以及sink真实时基与未知frame_rate；不得仅补最终wrapper后开放生产。SourcePresentation允许不同decodedSequence的相同PTS，不得沿用canonical的严格递增重标时间。仍保留真实filter输出reservation后markOutputReady两阶段门禁。后续startup元数据/surface预算、aggregate显示点、完整HEVC重排和Windows/RKMPP验收继续待办。
+
+## r195：filter显示身份与真实sink时基（实施中）
+
+复用r194已核对的FFmpeg copy_props/opaque传播与buffersrc未知frame_rate语义，在现有execution plan增加内部frameProduct，独立于allocation/timing authority。码本必须显式给出canonical_interval或source_display_point，planner统一forNegotiatedOutput入口；source applier从已有typed timing投射产品，不新增公共参数。SourceFrame独立池仍只允许canonical。
+
+VideoFilterNode显示路径已覆盖input/pending/opaque/output/freshness/preparation：按计划读取显示产品、保留原generation，输出原显示身份；inputFrameRate以现有optional缺失表达未知，不借用encoder FPS。仍消费prepared encoder metadata；显示输出使用真实sink timebase，不执行严格递增重标。核对filter后PTS与原decodedPTS等价、sequence递增、presentation不回退；相同显示点的不同sequence合法。purge重置顺序证据，旧代输出沿registry丢弃，缺token/错产品直接失败。准备阶段仍在真实frame与output reservation之后发布OutputReady。
+
+两位独立审查者r190_contract_review_a/b对最终源码均PASS。审查提出probe optional赋值显式AVRational与mathematics.h依赖，均已明确化；旧赋值此前构建成功，未复现编译失败，不记录成已确认故障。冻结后全量Release重建成功：configure/build退出0，710项构建计划及必需产物检查通过；realtime CLI 5953024字节，SHA256 C391B34F2F91E9CA13E87F72D9CBD41FAA847913819F67904BDC146B13377442。未运行本轮媒体测试，没有本轮抓包、快照、日志或媒体需清理，不新增媒体验收结论。
+
+适用边界：最终planner/capability必须限定保持显示身份的空间/格式filter并核对后端opaque能力；当前字符串本身不是时间保持证明，运行时序号/时间检查不能替代构建前能力事实。SourcePresentation生产门禁仍关闭。source frame builder仍固定FPS；无FPS时actual preparation owner、decoded startup装配、共同准备根费用与aggregate显示点需继续接线。
+
+## r196：统一帧准备发布边界（实施中）
+
+当前无FPS且无需filter时没有合法OutputReadiness owner；禁止伪造cadence或强制额外空间filter。比较两种方案后选择独立通用VideoPreparation节点，所有同步source统一在最终真实帧处理后进入该节点，删除FPS/filter内重复准备生命周期。较给HardwareTransfer增加第三套准备/代际逻辑，多一条边但职责清晰；新增edge、worker、pending/reservation引用及元数据必须实际计入planner，不能沿用旧容量结论。
+
+参考GStreamer GstBaseSink preroll（https://gstreamer.freedesktop.org/documentation/base/gstbasesink.html）：最后消费边界收到真实buffer后完成异步准备，等待激活后发布。项目不照搬GStreamer时钟/EOS策略，保留既有ExtractorFeed→实际处理frame→真实output reservation→OutputReady→anchor/reanchor/authorizeRelease→ReleaseCommitted协议。新节点不复制pixels、不重写PTS、不新增payload producer，使用已有canonical/display generation和原credit。
+
+线程模型沿现有DAG worker与wakeup。处理与purge必须串行，但purge不得阻塞正在进入共享preparation state的worker；复用purge WouldBlock语义与进度wakeup。任何reservation/共享preparation调用都不持有lineage锁，直接commit必须覆盖代际权限与purge仲裁。取消需释放pending、reservation与control后才能ack。EOF不能越过未完成activation。
+
+迁移清单：builder两条路径（composition source与普通同步realtime）、factory capability、owner注册/shape、processing/purge成员、最终ledger和source resource planner；不同步、本地及output-only不加门禁。保持既有节点枚举值，仅追加内部kind。SourcePresentation生产门禁仍关闭，不能将新节点源码视为完整接线完成。
+
+
+### r196 新节点基础实现与边界
+
+已新增VideoPreparationNode和末尾内部NodeKind=78；通用帧产品命名为MediaVideoFrameLineageProduct，无兼容别名。复用已存在的MediaOwnerThreadGenerationPurge单槽邮箱，由owner worker在普通处理前清理私有pending、reservation和基类待发布引用，再确认purge；没有另写并发清理算法。generation/control复用MediaVideoLineageState，opaque注册表不重复建立。prepared直接commit与普通emit都先持有原source输出许可，再进入reservation/channel锁；不持有lineage锁调用共享preparation接口。
+
+双审修复：servicePurge之后源许可仍可能撤销，directcommit对此Cancelled等待邮箱清理，不能转为worker错误；其他错误保留。控制路径复用MediaControlBuffer::flow与retained freshness，覆盖EOF/Flush/Abort及显式generation，拒绝未知/错型。未直接使用强制Control stream的classifier，因为现有FFmpegBufferFactory的EOF/Flush使用Video stream。两位r190_contract_review_a/b修复后均静态PASS。
+
+冻结Release全量重建成功：configure/build退出0，711项构建计划及必需产物检查通过；realtime CLI 5953024字节，SHA256 1BC7B5A7A39DE72DCC0160886F1EFAB497E7F42CE511344B9BC5FB37BB00C835。本轮未运行媒体测试、未产生抓包/快照/日志/媒体，无新的媒体验收结论。新节点尚未接factory、builder、purge注册及资源planner；旧FPS/filter准备状态仍在生产路径。这里是基础实现，不是双owner并行启用，也不是迁移完成或媒体验收通过。接线时必须一并删除旧准备状态，不能保留两套实现作为fallback。
+
+
+## r197：准备发布节点的源域运行时注入（生产迁移未完成）
+
+沿用r196的最终消费边界准备与授权发布设计，新增专用createVideoPreparation工厂。它要求明确frame product、唯一owner标记和同源preparation/groupKey，缺少依赖或未知产品直接失败；通用create不猜测同步组。registrar按注册源域的preparationOwner取原同步组，并保留多源归属拒绝；新增supported与CanonicalLineage purge注册。未新增公共参数或修改外部FFmpeg。
+
+两位独立审查者均发现preparationGroup首次声明位置错误：误加入SourceAssembly会造成初始化错位且节点循环缺少局部声明。已移到逐节点局部作用域，factory增加构造前groupKey一致性验证；两者复审均明确PASS，仅覆盖这三文件运行时接线基础。冻结后Release全量重建完成：configure/build退出0，711项构建计划与必需产物检查成功。realtime CLI 5967360字节，SHA256 0AC97DB3975A5308DC428F7BD80485D8C615DE41A92876B978F4B481F98AD5AF。本轮未运行媒体测试，未产生抓包、VLC快照或临时录制产物，不新增实流通过结论。
+
+生产builder尚未生成VideoPreparation，旧FPS/filter准备逻辑仍待整体迁移，不能据此声称新节点已参与实流。下一步同步修改普通同步realtime及composition的最终frame端点、注册owner、shape cardinality/明确filter计划事实、atomic输出边、固定引用与上游pixel credit驻留；删除旧owner准备状态后才开放路径。无FPS显示点路径、前置唯一decoder、decoded startup预算及aggregate显示点仍未完成。整体保持75/FAIL，Windows完整验证后才进入RKMPP。
+
+
+## r198：独立准备边界生产迁移（验证中）
+
+同步非output-only视频段已将最终处理帧接到VideoPreparation，再接encoder或aggregate；source endpoint、processing owner及准备注册随之迁移。普通非同步和output-only不增加门禁。FPS/filter中准备capability、reservation、ready状态及方法已删除，纯处理节点不再承担发布准备。沿用r196实际帧preroll、两阶段授权和源域purge语义。
+
+图校验按显式filter_active核对滤镜数量，要求唯一VideoPreparation。独立审查发现最初缺少产品/拓扑合同校验，已补readiness到frame_product映射、Video/RawFrame/Frame精确双端口、同源最终处理节点、同步输入policy、唯一atomic prepared输出和consumer单入边；shared限定encoder，composition限定aggregate并保留原source端口核对。两名审查者对修正后本轮源码均PASS。
+
+ledger移走filter准备输出surface与准备引用，在新节点记录一个真实帧持有位置；新增边沿用最终图遍历计队列及prepared/candidate引用，节点不声明像素producer，原credit随帧保留。新节点及mailbox、lineage、事务控制对象的固定元数据字节预算仍存在未闭合项，不能声称全部引擎存储硬上限已完成。完整构建与真实流结果待填写；SourcePresentation前置唯一decoder/startup/aggregate仍未启用。
+
+
+r198首次全量构建成功，但真实CLI在注册时退出1：Generation child registration must match one unregistered planned identity。根因是代际规划children遗漏video_preparation；补充共享source/shared-output计划后，两名审查者复审PASS，再次Release全量重建退出0。失败命令及监控已归档，13件临时产物清理，不改记通过。
+
+r199同规格三源H264720p30→HEVC720p30/8Mbps CBR＋AAC192kbps与完整120秒重入完成，双独立有限canonical回归PASS：四源exit0、CLI caller_stop0、drain264ms、最终队列/worker/payload/errors归零。五张VLC原生快照确认三格更新、首次全黑、左下重入和CLI运行中的末次全黑；RTP190538连续、两流DTS严格递增、完整AV解码exit0。pressure48899与VLC迟到/converter告警保留。详细命令指标见realtime-composition-output-drain.md；26件临时产物已逐项删除，七个媒体PID全部不存在，指定源保留。
+
+下一步仍是typed SourcePresentation去FPS、前置唯一decoder和decoded startup/aggregate的完整接线，以及固定元数据和surface预算。此处canonical回归不替代HEVC重排、内容AV、deadline或RKMPP验收，整体保持75/FAIL。
+
+
+## r200：按源时序装配可选FPS与代际成员（生产显示点入口仍关闭）
+
+沿用r189–r196已冻结的实际解码显示点与最终消费边界设计，源帧builder改用MediaVideoSourceTiming内部契约。cadence建立FPS并传真实rate；SourcePresentation不建立FPS，不传duplication gap，按实际存在的transfer/filter/preparation顺序接线。端口、选项、processing ownership均跳过不存在的节点，边策略继续来自planner。configure选择对应Canonical/SourceAccessUnit与frame product；旧buildSource组合入口显式拒绝presentation，避免绕过尚未接入的decoded startup。
+
+source contribution代际规划增加已存在的startup readiness内部输入，IntervalCoverage才声明video_frame_rate child；调用点经过既有policy校验或显式非空检查。common shape按同一readiness要求FPS数量。当前composition生产planner仍只接受已探测cadence，并显式传入builder；普通shared输出路径仍为canonical。未新增公共参数、未制造未知源duration或FPS。
+
+r190_contract_review_a/b对本轮静态切片均PASS；不代表decoded startup、aggregate、内存硬预算或HEVC重排运行通过。本轮Release全量构建configure/build退出0，711项构建计划及必需产物检查成功；realtime CLI 5963776字节，SHA256 2A6B3CE30730A4AA3AA7D54C4195C677F5F28EF3C209360EF911CDAD43795002。无新增实流通过结论，r199不能替代本轮实流验证。未产生媒体测试临时产物。
+
+
+## r201：输入装配时序契约区分区间与显示点（实现中）
+
+沿用已冻结的实际解码显示点方案，MediaVideoInputAssemblyPlan仅共享源身份、acquiring容量与等待；timing变为canonical{duration,decodeOrder}或decoded marker。显示点类型不再被迫携带压缩包duration/DTS策略。SourceClockPlanner仍明确构造canonical；现有RTP/MPEGTS/demux输入validator、共享runtime validator和canonical configurator先检查variant再取字段，拒绝错类型，不提供fallback。
+
+RTP binder configurator新增decoded分支，从协议videoInput取得clockRate，写source_presentation及源身份，不写terminal duration。要求DecodedPresentationSpan和RTP装配；独立审查发现初版仅检查identity非空，已补protocol/startup/assembly三者存在且一致。两名审查者对修正后静态切片均明确PASS。生产InputValidator仍拒绝decoded，尚不能宣称前置decoder/startup已接通；release extractor本身传递实际media引用，后续需改变输入装配和端口而非创建第二decoder。
+
+本轮Release全量重建configure/build退出0，711项构建计划及必需产物检查通过；realtime CLI 5965312字节，SHA256 BDE7C4D21B1DA8AD0CC6106033299EC099219EAC07D1715E917DF69733CC779B。未新增实流验收或测试临时产物。后续仍需decoded envelope生产节点及owner清理、真实解码surface与元数据预算、显示点aggregate和HEVC重排原规格实测，整体保持75/FAIL。
+
+
+## r202：真实解码显示点启动节点与运行时注入
+
+新增MediaDecodedVideoStartupNode，将真实MediaVideoDecodeBuffer及不可变display lineage包装为startup显示点；保留媒体引用与像素credit，不生成duration或重新解码。复用原owner线程purge及retained control freshness，先清pending输出与EOF状态再ack；旧代丢弃、未purge的未来代拒绝。准备数据在激活前发布，最终输出仍由既有两阶段准备控制。参照既有FFmpeg解码输出与GStreamer preroll职责划分。
+
+工厂要求精确source identity、initial generation和DecodedPresentationSpan同步组；registrar按source.members唯一归属注入，通用工厂拒绝缺少依赖。VideoPreparation复用抽取的轻量引用血缘状态，避免重复实现。两名未参与实现的独立审查者均明确静态PASS，覆盖生命周期、EOF背压、代际清理与准备发布，未发现本切片阻断项。
+
+Release全量重建configure/build退出0，712项构建计划及必需产物检查通过；realtime CLI为5976064字节，SHA256 6585D60F92E60171E6D7387B36315E78E4F265847FD17442FE920691D96A1AAF。git diff --check通过。本轮没有媒体测试或临时抓包、快照、录制产物。
+
+生产builder尚未生成新节点，不能声称重排链路已接通。下一步需将唯一decoder接在generation gate之后、startup之前，释放端口改为实际帧，并让composition复用buildSourceFrames；同时补代际成员、拓扑校验与surface/metadata硬预算。显示点aggregate、HEVC原规格实流、内容AV及deadline门禁仍未闭合，整体75/FAIL不变，Windows通过后才进入RKMPP。画面取证只用VLC原生RC snapshot。未修改外部FFmpeg，未提交、推送或部署。
+
+
+## r203：输入时钟规划与协议校验支持显示点装配
+
+重新核对[FFmpeg send/receive官方模型](https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html)：解码输入与输出解耦，一个压缩包可能产生零个或多个帧，故不从包时长推造显示帧区间。SourceClockPlanner按已验证readiness产生typed assembly；DecodedPresentationSpan仅允许RTP SourceContribution，不携带duration/decodeOrder。canonical路径保留真实原duration合同及decodeOrder，MPEG-TS/demux不接受decoded标记。
+
+InputValidator核对variant/readiness、协议clockRate、源身份与startup/事实一致；canonical额外校验原terminal duration与decodeOrder，音频仍用原样本覆盖合同。两名独立审查者均静态PASS，optional和variant访问受前置校验保护。生产composition入口仍拒绝非cadence，尚未接入真实流。Release全量重建configure/build退出0，712项构建计划及必需产物检查通过；realtime CLI 5976576字节，SHA256 86585AA556CFC3294ACDF48BFD4AC33491C6B3C40CDB07DE4511538913E8BB97。本轮没有媒体测试或临时抓包、快照、录制产物，不增加实流通过结论。
+
+后续接线已核对具体边界：InputGraph当前只返回videoPacket，InputSegment仍创建CanonicalInput并限定释放Packet；须向输入段提供既有typed decoder计划，在gate后复用buildSourceDecoder，DecodedVideoStartup前只解码一次，释放RawFrame后复用buildSourceFrames。需同步增加decoded_video_startup代际child、源ownership和readiness驱动的节点数量校验；固定metadata、真实surface驻留及aggregate显示点合同仍须完成，不以放宽校验替代。整体75/FAIL，Windows完整验证后再RKMPP。
+
+
+## r204：同步输入段前置唯一decoder与显示帧释放
+
+沿用FFmpeg send/receive输出真实帧、GStreamer准备先于激活的既有设计。同步输入段接受内部typed decodedVideo选项，仅允许与decoded assembly、RTP SourceContribution、显示点timing、流索引相符的计划。generation gate后调用现有buildSourceDecoder(SourceAccessUnit)，真实frame接DecodedVideoStartup，再进入原startup/epoch/activation/release机制；释放端口为RawFrame/Frame。不另建平台链路，不生成时长或二次解码。
+
+gate packet输出补流索引描述以满足现有decoder端点合同，并保持required=true。decoder/resolver随输入段进入sourceMembers；canonical保留原节点名及packet链路。原子输出检查按实际packet/frame产品选择，音频沿原路径。两名独立审查者首次及最终增量复审均PASS。Release全量重建configure/build退出0，712项构建计划及必需产物检查通过；realtime CLI 5980160字节，SHA256 549675E0750496E7F8C471A3E9E283DA1B5863CBC8188033F908A6CA2DBD0C64。未运行媒体测试，未产生抓包、快照或录制临时产物。
+
+外层InputGraph和composition尚未传入新选项，不能声称生产显示点链路已启用。下一步传递既有decoder计划与format端点、返回typed frame release，并在composition仅调用buildSourceFrames；补source ownership、decoded startup代际child、readiness驱动cardinality及metadata/surface计费后再开放入口。整体75/FAIL不变，完整Windows先于RKMPP；现场画面只用VLC原生snapshot。
+
+
+## r205：外层合屏前置解码接入及实际原子出边修复
+
+InputGraph按typed decoded assembly传递已有source decoder计划与format端点；返回互斥videoPacket/videoFrame。composition的显示点分支仅调用buildSourceFrames，前置decoder已在输入域，不再创建第二decoder。添加decoded_video_startup代际child、源ownership及readiness对应的canonical/decoded启动节点数量。生产SourcePlanner仍关闭非cadence入口，资源与aggregate尚未支持完整显示点链路。
+
+首轮双独立审查均FAIL：releaseExtractor→HardwareTransfer实际误用了普通synchronizedVideoFrame，虽输入段检查atomic产品存在，无法保证真实边满足释放器事务合同。已让buildSourceFrames显式接收首边策略，decoded调用传preparedVideoFrame；仅这条入口边使用该策略，内部stage和canonical沿原策略。注册校验补typed RawFrame、唯一同源HardwareTransfer消费者及真实边atomic策略精确一致。修复后两名独立复审均PASS，未把首轮失败隐藏为一次通过。
+
+Release全量重建configure/build退出0，712项构建计划及必需产物检查通过；realtime CLI 5985792字节，SHA256 118AF81EB428BC6AD0ED302A68A7B305244A677CE2E801941BB1549CD5697E05。本轮未运行媒体测试，未产生抓包、快照或录制临时产物。后续仍须去除resource/aggregate对所有源帧率的假设、闭合真实surface与metadata硬预算，再开放显示点入口并完成原规格HEVC重排、内容AV、deadline和Windows后RKMPP实流验证。整体75/FAIL，未修改外部FFmpeg，未提交推送部署。
+
+
+## r206：显示点贡献产品及选帧/EOF工业对照
+
+新增内部MediaVideoDisplaySourceStamp，记录真实AU身份、decodedSequence、generation、Locked映射与presentation，不包含duration。VideoContribution variant尾部追加，旧项顺序保持；lineage校验与identity元数据计费同步，planner现有sizeof贡献对象和storageBytes计费自动覆盖类型大小。两名独立静态审查均PASS。aggregate尚未生成此项，Release全量重建configure/build退出0，712项构建计划与必需产物检查通过；realtime CLI 5986816字节，SHA256 A3992772CEDF55E54746825EE0E4A235368BF8C2FC9845335822E13F87C04C50。未运行媒体测试，无抓包、快照、录制临时产物及新增实流结论。
+
+选帧依据：[FFmpeg framesync TS_DEFAULT](https://ffmpeg.org/doxygen/trunk/framesync_8h_source.html)明确选择时间戳小于等于目标的最近帧。[GStreamer videoaggregator源码](https://raw.githubusercontent.com/GStreamer/gstreamer/main/subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoaggregator.c)提供未知duration的保持/替换和不重复EOF尾帧状态机；其输出区间选择可接受晚于区间起点的帧，不能声称与严格点选择逐帧等价。这里使用FFmpeg的点选择边界，参考GStreamer的持有与EOS清理职责。
+
+独立设计审查指出实施前必须补的EOF合同：当前aggregate在选帧前依据finalInputEnd结束；显示点没有输入结束区间，不能拿末PTS冒充end。必须区分队列末点、已选择但pending输出、成功commit后的held；只有成功提交才能标记消费，背压重试不重复计数。未知尾EOF消费完成后清held，源失活仍由既有permit撤销/purge决定，不凭无下一帧延长代际。held必须持原buffer与credit，并与候选、pending共同计入硬预算。完整显示点runtime、资源预算、Windows原规格及RKMPP仍未完成，整体75/FAIL。
+
+
+## r207：显示点EOF与成功输出覆盖的协调合同
+
+AggregateSourcePlan增加显式videoProduct，由assembly variant生成并由validator检查。共享协调状态分开保存canonical输入end与display的最后提交证据（decodedSequence、实际outputEnd）；显示点禁止调用旧observeInputEnd/sealInput。新sealDisplayInput仅接受同代、未封口、正确产品及非零提交序号，EOF无任何显示帧可显式传空证据；它不生成输入duration。
+
+snapshot统一输出finalOutputEnd，取真实区间结束及最后显示输出覆盖的最大边界，仅在所有输入封口后暴露。音频和视频均读取该边界，purge清代内display证据；mutex保护更新，锁外唤醒，固定预算sizeof自动覆盖新增字段。两名独立静态审查均PASS。首次Release重建会话2451在等待中断后句柄消失；现场无CMake/Ninja/CL进程且realtime CLI产物缺失，不能记为成功。随后原规格全量重建会话80974完成，configure/build退出0，712项构建计划和必需产物检查通过。realtime CLI 5987328字节，SHA256 B10C75D39E150BB83B3CB7BB97093F22A7AAFAECA7617BF13CA9B052BE675762。本轮无媒体测试及抓包、快照、录制临时产物。
+
+重要未完成条件：接口不能自行证明lastCommit确实提交，必须由aggregate成功commit回调生成相同master时间域的输出end，EOF持有队列与pending排空后再调用。当前显示点选帧/commit/EOF接线尚未完成，生产入口仍关闭；不将协调基础通过当成完整预算或实流通过。继续按r206工业依据推进，整体75/FAIL不变。
+
+
+## r208：显示点aggregate接收、选择与提交后EOF
+
+按videoProduct接收真实MediaVideoDecodeBuffer，检查源身份、Locked、decodedSequence严格递增和presentation非递减。显示点队列front承担held，纳入原候选容量，不另设未计费帧；显示点至少需要held与后继两个槽位。按FFmpeg TS_DEFAULT选择已到达候选中最近的PTS<=target，保留future，不补duration。输出记录display contribution，原canonical半开区间逻辑保持。
+
+成功commit从实际输出lineage与输出epoch计算master outputEnd，记录decodedSequence；EOF只在末点已经commit后清队列并sealDisplayInput。没有把末PTS当输入end。purge和clear清候选、pending及显示序号/提交证据；display wrapper/AU/identity计费与planner sizeof同步。本切片不证明完整输入等待策略，也未闭合最终surface/root metadata预算。
+
+首轮审查一PASS一FAIL，整体不得记通过：FAIL发现收到EOF但未seal期间purge残留videoEnded，下一代会跳过读取并被空封口。已在display purge撤销旧代EOF标记，已seal的输入仍由coordination拒绝purge；两者复审均明确PASS，原先漏检方已复核该路径。修复前Release全量构建exit0，修复后Release全量重建configure/build退出0，712项构建计划及必需产物检查通过；realtime CLI 5992448字节，SHA256 0DE9C4129693449188DFEEE67A10919F9821D3D6BADD470A2753AF3E73CEA4D8。没有媒体测试及临时抓包、快照、录制产物。
+
+SourcePlanner仍拒绝非cadence，候选数量/资源仍需移除输入帧率假设再开放入口；不得以当前静态与构建证据宣称HEVC重排通过。原规格Windows、内容AV、deadline及之后RKMPP仍未完成，整体75/FAIL。
+
+
+## r209：聚合显示点容量消费去除源帧率
+
+AggregatePlanner的display分支直接消费runtime.queues.frame硬计数，要求至少两个槽位以容纳held和后继/EOF，不读取source.frameRate或推算缓冲时间。canonical保留原leadFrames公式；增加readiness与assembly配对检查。FinalGraphResourceLedgerCompiler纳入DecodedVideoStartup，复用单pending与相邻端口引用计数。两名独立静态审查均PASS。Release全量重建会话64978完成，configure/build退出0，712项构建计划及必需产物检查通过。现场复核realtime CLI为5992448字节，SHA256 9199C81C89A7E14979F39C0496F43423775C20A8C66CC8648ABBC7EA81657D7E。无实流测试或临时产物。
+
+这不证明上游queues的事实来源已闭合。独立调查找到可复用算法：MediaRealtimeInitialOutputResourcePartition.cpp的boundProducerResidence沿同stream/payload遍历可达节点/边，累计实际ledger对象界限，不在可能alias的下游producer处截断。后续应抽取共用，不复制算法；先生成独立于quota的保留事实，再计算producer计数，最后生成账户，避免循环依赖。
+
+必须补的边界：GraphEvent包装携带的原packet/frame仍需typed归属传播，aggregate专用fixed-storage候选/held要纳入且不重复；最低进展保留receive/pending/filter/decoder/atomic completion要求。准备字节上限不能冒充对象数或fps，packet decoder retention不能证明DPB/输出surface池空位，需实际adapter证据。入口仍关闭，资源预算、Windows原规格、内容AV、deadline及RKMPP未完成，整体75/FAIL。
+
+### r209后续容量核查
+
+当前代码进一步确认：CompositionResourcePlanner已把视频和音频aggregate共同列入固定存储retentionNodes；FinalGraphResourceLedgerCompiler按该组避免重复生成聚合节点引用项。旧boundProducerResidence只匹配node:/edge: owner，没有消费retentionNodes，因此不能直接作为共享组的完整归属算法。后续公共算法须优先消费类型化保留节点组，对同一存储条目只累计一次，并显式描述GraphEvent包装跨媒体类型时对原payload的保留。不得简单放开全部metadata边，否则会混入不持有该payload的控制通路。该核查是源码证据，不是运行验证；SourceResources仍使用cadence和startup packet保留推算，生产入口继续关闭。
+
+## r210：共用payload引用容量遍历
+
+复核GStreamer官方bufferpool设计（https://gstreamer.freedesktop.org/documentation/additional/design/bufferpool.html）：共享buffer最后引用释放才归池，分配协商明确min/max，有限池满会阻塞。这支持按实际保留所有者界定容量，而不以帧率推导未知显示点的数量；仓库仍用既有typed DAG和credit，不引入GStreamer依赖。
+
+从InitialOutputResourcePartition抽取MediaGraphPayloadResidencePlanner，原packet quota/decoder retention/账户汇总职责保留原模块。遍历同stream/payload可达节点，不在可能alias的producer截断；共享retentionNodes优先于字符串owner，条目命中任一可达成员只计一次，checked add与分配错误显式返回。纯planner构建期调用，不增加线程、运行时队列或fallback。修正上轮重复的文档段落。
+
+显示点包装仍未接入，独立源码调查确认需具名输入→输出传播：DecodedVideoStartup.frame→out、Coordinator.video→release、EpochBinder.release→transaction/preparation、Sequencer.transaction→bound_release、Extractor.preparation/bound_release→video；不得穿过clock/activated或串到audio。release/transaction事件持有批量媒体，边槽位必须结合已规划batch上界计算，不能把一个事件当一帧。本轮不实现未闭合的传播，生产入口仍关闭；两名独立审查者均明确静态PASS；Release全量重建会话98547完成，configure/build退出0，713项构建计划及必需产物检查通过。realtime CLI 5994496字节，SHA256 45F9E974EF12F48B60902F9D1BE5B51C9F2B2787C565CDA81AAB52B86BDFCC4F。本轮无实流测试或临时抓包、快照、录制产物，无实流结论。
+后续独立调查确认：MediaPreparedRtpSourceSessionPlan已按共享字节预算限制压缩AU引用，MediaVideoDecoderPreparationStoragePlan已有软件单帧逻辑footprint；二者不能直接替代decoded startup合同。应独立规划帧payload、wrapper/lineage、容器及增长重叠费用，扣除固定工作集后形成有界对象产品，各源实际分配继续受同一根lease约束，不能各自占用全部2GiB。容量上界不承诺未知未来preroll跨度；容量耗尽须明确失败。压缩continuousRetention与admitInputRetention不挪作帧合同；硬件沿用observed-only范围，不新增全VRAM门槛，但固定surface池是否会因held帧阻止下次输出仍需adapter进展证据。
+
+## r211：显示点startup envelope接入共享计费分配器
+
+核查实际持有链：CompositionPreparer的共享root预算进入PreparedRtpSourceSession，随SourceDomainBinding及runtime state到Registrar的SourceAssembly。session已有稳定video PMR，复用其类型化所有权接口，不把账本allocationOwner强转为分配器，不向时钟group添加内存职责。
+
+Registrar按唯一source.members把同源PMR注入DecodedVideoStartup factory/node，缺失session/resource明确失败。Envelope统一create要求显式allocator；decoded调用原session PMR，canonical明确沿用原new_delete_resource。allocate_shared计费对象和control block，构造key阻止绕过验证；bad_alloc转失败。复用既有MediaPreparationMemoryResource的分配头自持owner和lease，跨节点、purge及stop后残留引用继续计费，最后释放后归还；没有新增线程或全局账本重置。所有权原则沿用r210 GStreamer共享引用生命周期依据，费用机制沿用已有协议准备PMR。
+
+两名独立静态审查均PASS；Release全量重建会话53989完成，configure/build退出0，713项构建计划及必需产物检查通过。realtime CLI 5996544字节，SHA256 6444628CEAE1C5E4569E5FE66CB309B8D4EF0678EB7C883DE2B5C3F4DB51572D。本轮没有媒体测试或临时抓包、快照、录制产物。本轮只覆盖envelope对象/control block；unit.identity字符串、decoder输出包装和display lineage、startup store的list/map/嵌套pending及临时selection/snapshot、批量release和节点固定费用仍未闭合。当前VideoDecodeNode仍直接使用new_delete_resource，不能把本轮称为完整root预算实现；非cadence入口继续关闭。无新增实流结论，Windows原规格、内容AV、deadline及之后RKMPP仍未完成，整体75/FAIL。
+## r212：源解码显示点包装纳入原源PMR
+
+沿r211既有源session所有权通路，Registrar为唯一source.members内且已规划DecodedPresentationSpan的VideoDecodeNode注入videoReferenceResource；不以allocationOwner强转或新建独立预算。decoder拒绝空、重复及启动后的绑定，start要求SourceAccessUnit产品与资源存在严格对应，canonical/无lineage产品不得误带该资源。
+
+实际receiveFrames创建MediaVideoDisplayLineage和MediaVideoDecodeBuffer时复用注入PMR；分配头持原资源，帧跨节点或purge后残留引用继续保有对应lease。Buffer create及withDisplayLineage对bad_alloc明确转错误，不回退通用堆。未新增线程、媒体链路或公共参数，沿用r210共享引用生命周期依据及r211已审查PMR计费机制。原像素仍走已有payload credit，不宣称本轮覆盖硬件实际分配。
+
+两名未参与实现的独立审查者均明确PASS；Release全量重建会话47228完成，configure/build退出0，713项构建计划及必需产物检查通过。realtime CLI 5999616字节，SHA256 FE634968697ED35F0C6DA9451DE81C33796A802D1B039FF5925299B936084249。本轮无媒体测试或临时抓包、快照、录制产物。剩余：registry、filter/transfer重包装、identity字符串、startup store与批量release等费用，以及GraphEvent计数传播与surface进展。非cadence生产入口仍关闭，无新增实流结论，整体75/FAIL。
+## r213：共享源分配能力覆盖filter与transfer重包装
+
+独立设计核查否决把PMR owner加入MediaVideoDisplayLineage：时间/身份产品不承担运行时存储策略。采用共同MediaSourceReferenceAllocation能力组件，由Registrar单次唯一source.members查找向decoder、filter、transfer注入同源session PMR；不复制三套归属算法，不改变packet clock分配接口。共享组件拒绝null/重复/启动后绑定，start冻结，stop/restart保留原绑定；没有新增线程或下游策略选择。
+
+filter校验SourceDisplayPoint与资源存在严格对应，transfer发生display下载重包装时缺资源明确失败；二者调用既有withDisplayLineage，使用原源PMR而非通用堆。decoder迁入同一组件，像素仍使用原payload credit。复用r210/r211共享引用与自持分配头机制；不改变显示点时间、代际、滤镜或硬件路径。
+
+两名独立静态审查者均明确PASS。首次全量构建会话47327退出1（ninja subcommand failed），工具返回截断了具体编译错误，原因未确认，不能称已修复。未修改源码再次执行原规格Release全量重建，会话50095 configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6000128字节，SHA256 8127B6B657EDA12C49BBE0A6390AEAEA49E027248C005F72CAB4E8D01C92E66E。本轮没有媒体测试或临时抓包、快照、录制产物。剩余identity字符串、startup store/临时selection、批量release、registry范围核验、GraphEvent计数与surface进展等费用和合同；非cadence入口仍关闭，无新增实流结论，整体75/FAIL。
+## r214：启动持久索引实际分配与失败清理
+
+复用既有MediaLineageAllocationScope和PMR，不改变启动选择算法。Store持scope且声明在容器前，arrival list、presentation map、coverage map及每个CoverageState.pending均显式使用同一resource。Coordinator创建要求DecodedPresentationSpan严格对应非空Prepared scope，所选audio store共享该源额度；canonical显式Runtime。Registrar沿原源session注入，factory/prepare向下传递，不新增公共字段。临时vector、unit.identity字符串和对象本体费用仍未计入，本轮不称完整启动预算。
+
+append分配失败转AllocationFailed，submit按StartupCapacityExceeded进入失败态并保留诊断；Node处理与factory准备有bad_alloc错误边界。两位首次独立审查均FAIL：原purge noexcept收集IDs时还会分配，可能在低内存清理中terminate。已拆出无分配clearBufferedState供失败/stop/abort/reset/retire使用；需要IDs的正常purge先收集再清理，取消noexcept以允许异常传播。两位修复后复审均明确PASS。修复前Release全量重建会话17333 exit0不能代表最终修复验证；修复版Release全量重建会话82223完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6004224字节，SHA256 F47719D2A089271822B9E8E70583B403F186B53AC989E1B656D7D8BC2E74AEB4。本轮未运行媒体测试，未产生临时抓包、快照或录制产物。
+
+所有权和收费沿用r210/r211工业依据与已验证PMR机制，无新线程、回退或样例容量。GraphEvent批量引用、临时存储/身份/固定对象、surface进展和最终源队列容量仍未闭合，非cadence入口保持关闭；Windows原规格、内容AV、deadline及之后RKMPP未完成，整体75/FAIL。
+## r215：启动媒体所有权与待处理队列计费
+
+GenerationState的payload map和seen set使用同源PMR，scope先于容器声明；state本体和control block通过已有MediaLineageAllocator计费并保留owner。prepare沿r214已校验scope创建coordinator、generation state和node；node待处理video/audio deque及对应读取helper统一PMR。构造异常继续由factory接住，运行异常沿process失败边界传播，没有新线程或默认资源回退。
+
+store先登记seen再登记payload，第二步分配失败会回滚seen，完整成功后才更新generation和sample rate，避免部分登记状态。当前Node仅在启动缓存或初始release保留时调用store，Running透传不会逐帧增加seen。purge/clear归还容器元素；哈希bucket/deque自身保留的容量仍实际占用并继续收费，不宣称清空即释放全部容量。
+
+沿用已审查共享引用/PMR机制，不改变启动选择或时钟策略。两名独立审查者均明确静态PASS；Release全量重建会话13032完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6007808字节，SHA256 BAD9E65629CF8C963CB00D613DD6924E90B65BEB774539F2E440518F8917A537。本轮未运行媒体测试，未产生临时抓包、快照或录制产物。temporary vectors、身份字符串、release数组和其他固定对象等仍未覆盖，GraphEvent批量计数及surface进展未闭合，非cadence入口保持关闭，无新增实流结论，整体75/FAIL。
+## r216：启动选择快照计费并移除重复数组
+
+复核GStreamer官方bufferpool设计（https://gstreamer.freedesktop.org/documentation/additional/design/bufferpool.html），采用分配资源随持有者保留的生命周期原则；不宣称本项目等价实现完整buffer pool。沿既有MediaLineageAllocator，presentationSnapshot显式使用Store原scope，vector自身持有resource owner。ReadinessIndex直接移动该快照，删除原ReadyUnit数组和逐项复制；顺序、unit/readiness与indexedUnits计数不变，保留arrivalOrdinal不参与选择决策。
+
+两名独立静态审查者均明确PASS。实际audio optional从空对象移动构造，未发生跨资源已初始化vector移动赋值；借用的unit指针仅在Store仍存活的同步选择期间使用。分配异常沿现有Node边界处理。没有新增线程、公共参数或选择策略。Release全量重建会话17527完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6009344 字节，SHA256 D2AA09E5E7C3F10CC65685302335E84FEB66D9044974147499AE88510AA9347D。尚未运行本轮媒体测试，无临时抓包、快照、录制产物。
+
+剩余purged IDs、selection/release数组、身份字符串、固定对象、GraphEvent批量引用和surface进展仍待闭合。purge当前先创建video/audio IDs再复制到合并数组，后续应复用同源allocator并直接汇集到单个目标，保持先完整收集再清理的失败语义。非cadence入口仍关闭，Windows完整实流、内容AV、deadline及随后RKMPP尚未通过，整体75/FAIL。
+
+## r217：清理IDs与启动选择数组计费
+
+沿r216已核对的共享资源所有权原则，IDs/Selections统一使用持scope的MediaLineageAllocator。Coordinator持已验证scope，空结果、单项丢弃、代际清理、前缀与释放选择列表均显式使用同源资源；Node和GenerationState消费类型同步。purge直接向同一结果追加video/audio IDs，移除两个临时数组及复制，全部收集成功后才清空Store；分配失败不提前清理。无新增线程、公共输入或选择策略。
+
+两名独立静态审查均明确PASS；所有移动赋值发生于同一scope，返回值仍持resource owner，无隐式默认构造。Release全量重建会话26114完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6010368 字节，SHA256 1666B0844FE2855459D3620852C08DEA36293F5A7EE01B92A8B1405876A9A45B。未运行媒体测试，无本轮抓包、快照或录制产物。
+
+后续已核实：CoordinatorNode::prepareOutput仍用std::vector<MediaAvReleasedUnit>，ReleaseBuffer仍new对象；Transaction::reanchor还会复制release的媒体数组，应沿同源allocator传播并计费复制重叠，不允许默认堆回退。该部分、身份/固定对象、GraphEvent批量计数和surface进展未闭合，非cadence入口仍关闭，整体75/FAIL。
+
+## r218：批量媒体释放引用与对象计费
+
+Node创建的video/audio ReleasedUnits显式使用同源MediaLineageAllocator；ReleaseBuffer验证两者为同一非空资源，使用allocate_shared计费对象/control block，私有ConstructionKey阻止绕过factory。数组随事件跨节点移动仍保有resource owner，复用r216已核对的共享生命周期原则，不改变释放状态机、时间锚定或媒体选择。
+
+Transaction::reanchor复制数组时沿用原allocator，新旧数组同时存活期间分别计费；函数级bad_alloc边界覆盖进入ReleaseBuffer::create前的参数复制和新transaction分配，返回AllocationFailed。Node组装失败仍沿现有process边界终止，不发布部分release。transaction本体尚未接入计费，不能称完整预算闭合。
+
+两名独立静态审查均明确PASS；Release全量重建会话96675完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6012416 字节，SHA256 CB7F9CB28FB235150F01E5443731944544E0D7A436748F29F85D76147AA41378。未运行本轮媒体测试，无临时抓包、VLC快照或录制产物。身份字符串、transaction与其他固定对象、GraphEvent批量计数、surface进展和最终容量合同仍未闭合，非cadence入口保持关闭，Windows原规格及RKMPP验收未通过，整体75/FAIL。
+
+## r219：媒体释放事务对象计费
+
+create与reanchor统一使用allocateRelease，在移动release之前从已验证ReleaseBuffer复制allocator scope，通过allocate_shared计费transaction本体/control block，分配失败返回AllocationFailed。私有ConstructionKey限制绕过工厂构造；reanchor保留release identity及原epoch校验，初次create仍分配identity。沿r216共享资源生命周期依据，weak引用仍保有control block资源，不增加线程或改变状态机。
+
+两名独立静态审查均明确PASS；Release全量重建会话89944完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6014976 字节，SHA256 6911EF7D6DDCB3C510A5FBFA887C5562E565FCF20C0378A71264DEC08CC01A7B。control路径仍为原new分配，不宣称所有事件均已计费。未执行媒体测试，无本轮临时抓包、快照或录制产物。
+
+重新核查最终入口：CompositionSourceResourcesPlanner仍无条件要求正frameRate，video producer输出CadenceResidence，packet准备保留仍累计startup/acquiring；RealtimeGraphResourceLedgerPlanner仍要求surface.productionRate并按驻留时长推导数量。后续须接入decoded startup的有界对象合同及具名GraphEvent批量引用传播，不能仅放开frameRate检查或把包数量当成帧数量。控制/身份/固定存储和surface进展仍未闭合，非cadence入口保持关闭，整体75/FAIL。
+
+## r220：启动单元共享原不可变身份
+
+源码确认MediaCanonicalIdentity已有shared immutable storage，拷贝保留owner，view按长度比较并包含内嵌NUL。AccessUnit改用该类型，decoded startup共享原display accessUnit的sourceIdentity；canonical startup共享刚生成lineage的source variant并检查配置身份一致。Envelope与Coordinator保留身份内容校验；不使用借用字符串，不新增身份算法，不改变选择/代际/时间语义。消除envelope、submit及Store复制启动单元时的独立字符串分配；原lineage创建身份仍走既有分配，不能称身份费用完全闭合。
+
+第一轮A静态PASS、B发现诊断路径仍使用unit->identity与std::string的条件表达式并判FAIL。首次Release全量构建会话33944退出1，Coordinator.cpp:739 C2446及733 C2440确认该遗漏。修复为std::string(unit->identity.view())，只在错误诊断时复制，保留长度/NUL。A撤回首次PASS并复审，修复后两者均明确PASS。修复版Release全量重建会话68441完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6014976 字节，SHA256 951F739A03141890B11139D385D3BF73C3EF2100CEE41F0F3D71D197582E3800。
+
+本轮无媒体测试及临时抓包、快照或录制产物。控制/固定存储、身份最初分配、GraphEvent批量计数、surface进展和最终容量合同仍未闭合，非cadence入口保持关闭，Windows原规格及RKMPP验收未通过，整体75/FAIL。
+
+## r221：prepared源身份按实际共享寿命计费
+
+复核发现原StoragePlanner已固定预收费身份字符，但该lease随session结束，不能覆盖下游仍持有的身份引用。MediaImmutableArray新增显式allocator复制入口，字符区和shared_ptr控制块使用同一allocator，deleter保留allocator；原入口明确使用std::allocator并复用同一实现。MediaCanonicalIdentity转发相同能力，不增加身份处理算法。
+
+PreparedRtpSourceSession创建stream资源后、复制binder/Stream前，以MediaLineageAllocator<char>重新物化sourceIdentity并替换持有plan；实际调用方以move传入plan。原固定身份字符预收费移除，按实际分配计费，强/弱引用保留相同resource owner，释放后归还。不改变canonical的标准分配路径、不新增线程或公共输入。规划期临时事实与其他未覆盖存储不据此宣称闭合。
+
+两名独立静态审查均明确PASS，包含控制块分配失败的deleter回收、allocator重绑定及原身份长度/NUL语义。Release全量重建会话4255完成，configure/build退出0，714项构建计划及必需产物检查通过。realtime CLI 6018560 字节，SHA256 F490CAA258513CD92C0EE88916E10E788A443A76C13E6C825FFB4F4F2BEEE405。本轮没有媒体测试，无临时抓包、快照或录制产物。控制/固定节点存储、GraphEvent批量引用及surface进展、最终容量合同仍待完成，非cadence入口未开放，整体75/FAIL。
+
+## 当前入口缺口复核（r315后）
+
+独立只读审查并核对当前SourcePlanner：非cadence首先在MediaRealtimeCompositionSourcePlanner开头被拒绝，随后仍要求正frameRate并调用按productionRate推导surface数量的旧MediaRealtimeGraphResourceLedgerPlanner；后续又强制continuousRetention。MediaPreparedRtpSourceSessionPlan只为cadence生成retention，非cadence已有有限AU admission数量/字节，但未转成连续准入产品。不能只删除入口拒绝或伪造帧率。
+
+历史r219关于SourceResourcesPlanner仍无条件要求frameRate的描述已过时：当前该模块按实际producer、frame credit及holder计数，DecodedVideoAssemblyTiming的startup packet持有数已为0。下一步应复用这些产品，闭合上游SourcePlanner/连续retention与启动queue合同；不重写已完成display lineage。未进行非cadence实流，不代表功能已通过。

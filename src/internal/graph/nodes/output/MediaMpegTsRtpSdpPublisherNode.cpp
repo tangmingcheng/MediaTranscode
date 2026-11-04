@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 
 #include "internal/graph/protocol/sdp/MediaMpegTsRtpSdpDescription.h"
@@ -295,8 +296,8 @@ void MediaMpegTsRtpSdpPublisherNode::abort(
 {
     m_lastPublishedGeneration.reset();
     if (!m_terminalFailure) {
-        m_terminalFailure = ::media::ErrorInfo::cancelled(
-            "MP2T SDP publisher was aborted");
+        m_terminalFailure = mediaCleanupError(::media::ErrorCode::Cancelled,
+            "MP2T SDP publisher was aborted", 0);
     }
     m_generationPurge->stop();
     FFmpegNodeRuntime::abort(context);

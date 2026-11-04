@@ -1,20 +1,24 @@
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
+#include "internal/graph/diagnostics/MediaAccessUnitProcessingTrace.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 
 namespace media::ffmpeg::graph {
 
-MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
+MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(ConstructionKey,
     MediaBufferRef media, MediaScheduledStream stream,
     std::shared_ptr<const MediaCanonicalLineage> lineage,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
-    MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions)
+    MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions,
+    std::optional<MediaCodecReceiveObservation> codecReceiveObservation)
     : m_media(std::move(media))
     , m_stream(stream)
     , m_lineage(std::move(lineage))
     , m_audioInterval(std::move(audioInterval))
     , m_audioContributions(std::move(audioContributions))
+    , m_diagnosticCreatedSteadyNs(mediaAccessUnitObservationNow())
+    , m_codecReceiveObservation(codecReceiveObservation)
 {
     setPayloadKind(MediaPayloadKind::Packet);
     setStreamKind(stream == MediaScheduledStream::Video
@@ -22,11 +26,13 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalAccessUnitBuffer::create(
+    const MediaLineageAllocationScope& allocation,
     MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
-    std::vector<MediaCanonicalAudioContribution> audioContributions)
-{
-    if (!media || !lineage) {
+    std::vector<MediaCanonicalAudioContribution> audioContributions,
+    std::optional<MediaCodecReceiveObservation> codecReceiveObservation)
+try {
+    if (!media || !lineage || !AllocationAllocator{allocation}.resource()) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical access unit requires media and immutable lineage"));
@@ -88,12 +94,17 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
     }
     if (auto valid = validateMediaCanonicalLineage(*lineage); !valid)
         return ::media::Result<MediaBufferRef>::failure(valid.error());
-    auto storage = MediaImmutableArray<MediaCanonicalAudioContribution>::copy(audioContributions);
+    auto storage = MediaImmutableArray<MediaCanonicalAudioContribution>::copy(
+        audioContributions, MediaLineageAllocator<MediaCanonicalAudioContribution>{allocation});
     if (!storage) return ::media::Result<MediaBufferRef>::failure(storage.error());
     return ::media::Result<MediaBufferRef>::success(
-        MediaBufferRef(new MediaCanonicalAccessUnitBuffer(
+        std::allocate_shared<MediaCanonicalAccessUnitBuffer>(
+            AllocationAllocator{allocation}, ConstructionKey{},
             std::move(media), stream, std::move(lineage),
-            std::move(audioInterval), std::move(storage).value())));
+            std::move(audioInterval), std::move(storage).value(), codecReceiveObservation));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaBufferRef>::failure(
+        ::media::ErrorInfo::allocationFailed("Canonical access unit allocation failed"));
 }
 
 MediaBufferType MediaCanonicalAccessUnitBuffer::type() const noexcept

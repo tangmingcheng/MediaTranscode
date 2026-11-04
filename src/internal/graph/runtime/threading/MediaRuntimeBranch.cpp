@@ -1,5 +1,5 @@
 #include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
-#include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
+#include "internal/graph/runtime/diagnostics/MediaVideoOutputReadyCollector.h"
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/diagnostics/MediaRuntimeMetricsCollector.h"
@@ -107,7 +107,7 @@ void MediaRuntimeBranch::reclaim() noexcept
             }
         }
         if (m_reclamationOwner) m_reclamationOwner->markProgress();
-        m_workers.clear();
+        m_workers = {};
         m_scheduler.clear(&m_context);
         if (m_reclamationOwner) m_reclamationOwner->markProgress();
         m_inputs.clear();
@@ -126,43 +126,68 @@ void MediaRuntimeBranch::reclaim() noexcept
 
 ::media::Status MediaRuntimeBranch::start()
 {
-    std::lock_guard lock(m_publicationMutex);
+    std::unique_lock lock(m_publicationMutex);
     if (m_state != MediaRuntimeBranchState::Prepared) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "runtime branch can only start once"));
     }
-    m_failures.setPhase(MediaGraphWorkerFailurePhase::Preparation);
-    auto started = m_scheduler.start(m_context);
-    if (!started) {
-        m_failures.recordFirst(MediaGraphWorkerFailure{
-            {}, MediaNodeKind::Unknown, "output branch preparation", started.error(), MediaGraphWorkerFailurePhase::Preparation});
-        m_state = MediaRuntimeBranchState::Failed;
-        return started;
-    }
-    for (auto* node : m_scheduler.orderedRuntimeNodes(m_context)) {
-        m_workers.push_back(std::make_unique<MediaGraphWorker>(
-            *node, m_context, m_failures, m_supervisor));
-    }
-    m_supervisor.arm([this] { requestFailureStop(); });
-    m_failures.setPhase(MediaGraphWorkerFailurePhase::Runtime);
+    struct RollbackContext {
+        MediaRuntimeBranch& branch;
+        std::unique_lock<std::mutex>& publication;
+    } rollbackContext{*this, lock};
+    MediaWorkerStartupGate::Transaction transaction(&rollbackContext, [](void* opaque) noexcept {
+        auto& state = *static_cast<RollbackContext*>(opaque);
+        auto& branch = state.branch;
+        if (state.publication.owns_lock()) state.publication.unlock();
+        branch.m_startup.cancel();
+        // Starting retains the sole container/reclamation owner through the
+        // entire rollback, including exceptions before all threads exist.
+        for (auto& worker : branch.m_workers) worker->abort();
+        for (auto& worker : branch.m_workers) worker->join();
+        branch.m_supervisor.disarm();
+        branch.m_scheduler.abort(branch.m_context);
+        std::lock_guard publish(branch.m_publicationMutex);
+        branch.m_state = MediaRuntimeBranchState::Failed;
+        branch.m_starting.store(false, std::memory_order_release);
+    });
+    const auto failed = [&](const ::media::ErrorInfo& error) noexcept {
+        m_failures.recordScopeFailure(error, MediaGraphWorkerFailurePhase::Preparation);
+        transaction.rollback();
+        return m_failures.failureStatus();
+    };
     try {
-        for (auto& worker : m_workers) {
-            auto status = worker->start();
-            if (!status) {
-                m_failures.recordFirst(MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
-                    "output worker creation", status.error(), MediaGraphWorkerFailurePhase::Preparation});
-                requestFailureStop(); m_state = MediaRuntimeBranchState::Failed; return status;
-            }
+        m_startup.reset(m_context.executionOrder().size());
+        m_starting.store(true, std::memory_order_release);
+        m_state = MediaRuntimeBranchState::Starting;
+        m_failures.setPhase(MediaGraphWorkerFailurePhase::Preparation);
+        lock.unlock();
+        auto prepared = m_startup.prepare(m_context, m_scheduler, m_workers, m_failures, m_supervisor);
+        if (!prepared) return failed(prepared.error());
+        auto started = m_scheduler.start(m_context);
+        if (!started) return failed(started.error());
+        m_supervisor.arm({this, nullptr, [](void* owner, void*) noexcept {
+            static_cast<MediaRuntimeBranch*>(owner)->requestFailureStop();
+        }});
+        auto launched = m_startup.launch(m_workers.view());
+        if (!launched) return failed(launched.error());
+        lock.lock();
+        if (m_state != MediaRuntimeBranchState::Starting || m_failures.hasFailure())
+            return failed({::media::ErrorCode::Cancelled, 0, {}});
+        // The complete container is immutable now. Expose stop ownership before
+        // commit so even the first process failure can stop every running peer.
+        // Publication remains locked, so poll cannot reclaim during this change.
+        m_starting.store(false, std::memory_order_release);
+        m_failures.setPhase(MediaGraphWorkerFailurePhase::Runtime);
+        if (!m_startup.commit()) {
+            m_starting.store(true, std::memory_order_release);
+            return failed({::media::ErrorCode::Cancelled, 0, {}});
         }
-    } catch (const std::exception& error) {
-        m_failures.recordFirst(MediaGraphWorkerFailure{{}, MediaNodeKind::Unknown,
-            "output worker creation", ::media::ErrorInfo::internalError(error.what()), MediaGraphWorkerFailurePhase::Preparation});
-        requestFailureStop();
-        m_state = MediaRuntimeBranchState::Failed;
-        return ::media::Status::failure(::media::ErrorInfo::internalError(error.what()));
+        m_state = MediaRuntimeBranchState::Running;
+        transaction.commit();
+        return ::media::Status::success();
+    } catch (...) {
+        return failed(MediaWorkerStartupGate::currentException());
     }
-    m_state = MediaRuntimeBranchState::Running;
-    return ::media::Status::success();
 }
 
 MediaChannelPushResult MediaRuntimeBranch::tryPublish(MediaEdgeId edge, MediaBufferRef buffer)
@@ -209,6 +234,8 @@ MediaChannelPushResult MediaRuntimeBranch::tryPublish(MediaEdgeId edge, MediaBuf
 
 void MediaRuntimeBranch::requestFailureStop() noexcept
 {
+    m_startup.cancel();
+    if (m_starting.load(std::memory_order_acquire)) return;
     // Control callers hold m_publicationMutex through both passes, preventing
     // poll from handing these objects to the reclamation owner mid-request.
     // The supervisor runs on a worker: its exit publication follows this
@@ -238,6 +265,7 @@ void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
 {
     using Result = ::media::Result<bool>;
     std::unique_lock lock(m_publicationMutex);
+    if (m_starting.load(std::memory_order_acquire)) return Result::success(false);
     if (m_state == MediaRuntimeBranchState::Retired) return Result::success(true);
     if (m_state == MediaRuntimeBranchState::Retiring) {
         if (m_reclamationOwner->completed()) {
@@ -299,18 +327,13 @@ void MediaRuntimeBranch::fail(MediaGraphWorkerFailure failure)
 std::optional<MediaVideoOutputReadyEvidence>
 MediaRuntimeBranch::collectVideoReadyEvidence() const
 {
-    for (const auto* node : m_scheduler.orderedRuntimeNodes(m_context)) {
-        const auto* sender = dynamic_cast<const MediaScheduledDatagramSenderNode*>(node);
-        if (sender) {
-            if (auto evidence = sender->videoReadyEvidence()) return evidence;
-        }
-    }
-    return std::nullopt;
+    return collectVideoOutputReadyEvidence(m_scheduler, m_context);
 }
 
 std::optional<MediaVideoOutputReadyEvidence> MediaRuntimeBranch::videoReadyEvidence() const
 {
     std::lock_guard lock(m_publicationMutex);
+    if (m_starting.load(std::memory_order_acquire)) return std::nullopt;
     return m_state == MediaRuntimeBranchState::Retired || m_state == MediaRuntimeBranchState::Retiring
         ? m_finalVideoReadyEvidence : collectVideoReadyEvidence();
 }
@@ -328,7 +351,8 @@ std::uint64_t MediaRuntimeBranch::drainProgress() const
 
 MediaGraphRuntimeMetrics MediaRuntimeBranch::collectMetrics() const
 {
-    auto result = MediaRuntimeMetricsCollector::workers(m_workers);
+    if (m_starting.load(std::memory_order_acquire)) return {};
+    auto result = MediaRuntimeMetricsCollector::workers(m_workers.view());
     if (m_reclamationPlan) result.threadCount += m_reclamationPlan->ownerThreads;
     for (const auto* channel : m_context.channels().channels()) {
         if (m_inputsAccountedBySession &&

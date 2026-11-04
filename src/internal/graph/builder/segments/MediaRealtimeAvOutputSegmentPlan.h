@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/planner/realtime/MediaEncodedAccessUnitSchedulingPlan.h"
+
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
@@ -16,7 +18,9 @@ struct MediaRealtimeAvOutputSegmentPlan final {
     const MediaAvSyncGroupKey& groupKey;
     const MediaRealtimeEdgePolicySet& edgePolicies;
     MediaBranchMode audioBranchMode;
+    const MediaEdgePolicy& canonicalAudioInputPolicy;
     MediaAvSyncOutputAdapterKind outputAdapter;
+    const MediaEncodedAccessUnitSchedulingPlan& scheduling;
     const std::variant<MediaSeparateRtpOutputRuntimePlan,
                        MediaProjectMpegTsRuntimeOutputPlan>& protocolOutput;
     const MediaDatagramTransportPlanTemplate& datagramTransport;

@@ -42,7 +42,7 @@ private:
     friend struct MediaChannelAtomicOutputTestAccess;
 
     ::media::Result<PreparedPush> preparePush(
-        std::span<const MediaBufferRef> buffers) const;
+        std::span<const MediaBufferRef> buffers, MediaLineageAllocationScope allocation) const;
     void publishPreparedLocked(PreparedPush& prepared) noexcept;
     void notifyPreparedPublished() noexcept;
     bool fullLocked() const;

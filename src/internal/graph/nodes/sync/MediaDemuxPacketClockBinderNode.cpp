@@ -321,7 +321,7 @@ MediaDemuxPacketClockBinderNode::timedPacket(
 
     const MediaFormatDescriptor format = source->formatDescriptor();
     const MediaHardwareDescriptor hardware = source->hardwareDescriptor();
-    auto wrapped = FFmpegBufferFactory::wrapPacket(
+    auto wrapped = FFmpegBufferFactory::wrapPacket(*std::pmr::new_delete_resource(),
         source->takePacket(),
         m_streamKind,
         MediaPacketSourceTiming{

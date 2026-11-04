@@ -4,6 +4,9 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
+#include "internal/graph/planner/realtime/MediaRtpVideoPreparationTiming.h"
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 
 #include <cstddef>
 #include <chrono>
@@ -11,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <stop_token>
 
 namespace media::ffmpeg::graph {
 
@@ -20,6 +24,9 @@ struct MediaRawRtpPreparedStreamPlan final {
 };
 
 struct MediaRawRtpProbePlan final {
+    explicit MediaRawRtpProbePlan(MediaRtpVideoPreparationIntent selectedIntent)
+        : timingIntent(selectedIntent) {}
+    MediaRtpVideoPreparationIntent timingIntent;
     struct VideoOnly final {
         MediaRawRtpPreparedStreamPlan video;
     };
@@ -33,8 +40,9 @@ struct MediaRawRtpProbePlan final {
     int openTimeoutMs = 0;
     int analyzeDurationUs = 0;
     std::size_t maximumBufferedBytes = 0;
+    std::optional<MediaRawRtpPreparationStoragePlan> storage;
     std::size_t reorderWindowPackets = 0;
-    int maximumReorderDelayMs = 0;
+    std::optional<MediaRtpInputWaitPlan> inputWait;
     std::optional<MediaRtpVideoSignalingFacts>
         authoritativeVideoSignaling;
     std::optional<MediaRtpVideoPacketizationPolicy> packetizationPolicy;
@@ -43,19 +51,21 @@ struct MediaRawRtpProbePlan final {
 
 struct MediaPreparedRawRtpVideoOnlyProbe final {
     MediaDetectedRtpVideoSignaling signaling;
-    MediaRational sourceFrameRate;
+    MediaVideoSourceTiming timing;
     MediaPreparedRealtimeInput video;
     std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
     std::chrono::steady_clock::time_point preparationDeadline;
+    MediaRtpInputWaitPlan inputWait;
 };
 
 struct MediaPreparedRawRtpAudioVideoProbe final {
     MediaDetectedRtpVideoSignaling signaling;
-    MediaRational sourceFrameRate;
+    MediaVideoSourceTiming timing;
     MediaPreparedRealtimeInput video;
     MediaPreparedRealtimeInput audio;
     std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
     std::chrono::steady_clock::time_point preparationDeadline;
+    MediaRtpInputWaitPlan inputWait;
 };
 
 using MediaPreparedRawRtpProbe = std::variant<
@@ -65,7 +75,8 @@ using MediaPreparedRawRtpProbe = std::variant<
 class MediaRawRtpInputPreparer final {
 public:
     static ::media::Result<MediaPreparedRawRtpProbe> prepare(
-        const MediaRawRtpProbePlan& plan);
+        const MediaRawRtpProbePlan& plan, std::stop_token cancellation,
+        const MediaPreparationStorageScope& scope);
     static ::media::Status sealPreflight(MediaPreparedRawRtpProbe& probe);
 
 private:

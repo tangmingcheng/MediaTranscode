@@ -5,6 +5,7 @@
 #include "internal/graph/planner/avsync/MediaAvSynchronizationPolicyPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+#include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 
 #include <cstdint>
 #include <string>
@@ -20,7 +21,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     return MediaRunningTime::fromNanoseconds(nanoseconds);
 }
 
-void planSourceNonStartupPolicy(MediaAvSyncPlan& plan)
+void planSourceAudioServo(MediaAvSyncPlan& plan)
 {
     plan.audioServo.deadbandNs = runningTime(Millisecond);
     plan.audioServo.phaseFilterTimeConstantNs = runningTime(250 * Millisecond);
@@ -44,19 +45,24 @@ void planSourceNonStartupPolicy(MediaAvSyncPlan& plan)
     plan.audioServo.recoveryExitHoldNs = runningTime(500 * Millisecond);
     plan.audioServo.correctionLookaheadWindows = 2;
 
-    plan.recovery.suspectThresholdNs = runningTime(100 * Millisecond);
-    plan.recovery.reacquisitionTimeoutNs = runningTime(10 * Second);
 }
 
 ::media::Result<MediaAvSyncRtpInputPlan> planRtpInput(
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaAvSourceLifecycleMode lifecycleMode)
 {
-    if (!request.input.videoRtp.payloadType || !request.input.videoRtp.clockRate ||
-        !request.input.audioRtp.payloadType || !request.input.audioRtp.clockRate) {
+    const bool hasAudio = request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
+    const bool videoSource = request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly &&
+        lifecycleMode == MediaAvSourceLifecycleMode::PreserveActivatedOutput;
+    const auto& audio = request.input.audioRtp;
+    if ((!hasAudio && !videoSource) ||
+        !request.input.videoRtp.payloadType || !request.input.videoRtp.clockRate ||
+        (hasAudio && (!audio.payloadType || !audio.clockRate)) ||
+        (!hasAudio && (!audio.url.empty() || !audio.codecName.empty() ||
+                      audio.payloadType || audio.clockRate || audio.channels || audio.fmtp))) {
         return ::media::Result<MediaAvSyncRtpInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Synchronized separate RTP requires explicit audio/video payload types and clock rates"));
+                "Synchronized RTP requires payload types and clock rates matching the planned source members"));
     }
 
     MediaAvSyncRtpInputPlan input;
@@ -65,11 +71,14 @@ void planSourceNonStartupPolicy(MediaAvSyncPlan& plan)
     input.videoInput.identity = groupIdentity + ".input.video";
     input.videoInput.payloadType = *request.input.videoRtp.payloadType;
     input.videoInput.clockRate = *request.input.videoRtp.clockRate;
-    input.audioInput.identity = groupIdentity + ".input.audio";
-    input.audioInput.payloadType = *request.input.audioRtp.payloadType;
-    input.audioInput.clockRate = *request.input.audioRtp.clockRate;
-    input.input.streamAssociationMode =
-        MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair;
+    if (hasAudio) {
+        input.audioInput.identity = groupIdentity + ".input.audio";
+        input.audioInput.payloadType = *audio.payloadType;
+        input.audioInput.clockRate = *audio.clockRate;
+    }
+    input.input.streamAssociationMode = hasAudio
+        ? MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair
+        : MediaAvSyncRtpStreamAssociationMode::PlannedSingleStream;
     input.input.rtcpCompositionMode =
         MediaRtcpCompositionMode::ReducedSizeRfc5506;
     input.input.identityEvidenceTimeoutNs = runningTime(
@@ -146,34 +155,44 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     MediaAvSynchronizationDomain domain,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
-    const MediaRealtimeGraphResourceLedgerPlan& resourceLedger,
+    MediaAvSyncCapacityFacts capacity,
     const MediaRealtimeDeploymentEnvelope& deployment,
     MediaBranchMode audioBranchMode,
-    int resolvedOutputAudioSampleRate)
+    std::optional<int> resolvedOutputAudioSampleRate)
 {
     if (request.mediaId.empty()) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V synchronization requires an explicit media identity"));
     }
-    if (request.parameters.execution.streamSet != MediaTranscodeStreamSet::AudioVideo) {
+    const bool sourceContribution =
+        std::holds_alternative<MediaAvSourceContributionDomain>(domain);
+    const auto* ledger = std::get_if<std::reference_wrapper<const MediaRealtimeGraphResourceLedgerPlan>>(&capacity);
+    if (!ledger && (!sourceContribution || preparedDemuxFacts))
+        return ::media::Result<MediaAvSyncPlan>::failure(::media::ErrorInfo::invalidArgument(
+            "Prepared storage capacity belongs only to an RTP source contribution"));
+    const bool hasAudio = request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
+    const bool videoSource = sourceContribution &&
+        request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly &&
+        MediaRealtimeRequestClassifier::rawRtpInput(request);
+    if (!hasAudio && !videoSource) {
         return ::media::Result<MediaAvSyncPlan>::failure(
-            ::media::ErrorInfo::unsupported("A/V synchronization requires both audio and video"));
+            ::media::ErrorInfo::unsupported("Synchronization requires A/V or a video-only RTP contribution"));
     }
-    if (resolvedOutputAudioSampleRate <= 0) {
+    if (hasAudio != resolvedOutputAudioSampleRate.has_value() ||
+        (resolvedOutputAudioSampleRate && *resolvedOutputAudioSampleRate <= 0)) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V synchronization requires a resolved output audio sample rate"));
     }
-    if (audioBranchMode != MediaBranchMode::CopyPacket &&
-        audioBranchMode != MediaBranchMode::TranscodeFrame) {
+    if ((hasAudio && audioBranchMode != MediaBranchMode::CopyPacket &&
+                    audioBranchMode != MediaBranchMode::TranscodeFrame) ||
+        (!hasAudio && audioBranchMode != MediaBranchMode::Drop)) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V synchronization requires a planned audio execution branch"));
     }
-    const bool sourceContribution =
-        std::holds_alternative<MediaAvSourceContributionDomain>(domain);
-    if (sourceContribution && audioBranchMode != MediaBranchMode::TranscodeFrame) {
+    if (sourceContribution && hasAudio && audioBranchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported("Source contribution requires frame audio processing"));
     }
@@ -181,10 +200,9 @@ void planTsInput(MediaAvSyncPlan& plan,
         ? MediaAvSourceLifecycleMode::PreserveActivatedOutput
         : MediaAvSourceLifecycleMode::FailSessionOnSourceLoss;
     MediaAvSyncPlan plan;
-    plan.members = MediaTranscodeStreamSet::AudioVideo;
+    plan.members = request.parameters.execution.streamSet;
     if (sourceContribution) {
         plan.domainRole = MediaAvSyncDomainRole::SourceContribution;
-        MediaAvSynchronizationPolicyPlanner::apply(plan);
     } else {
         auto& outputSynchronization = std::get<MediaAvSyncPlan>(domain);
         if (auto status = MediaAvSyncPlanValidator::validateDomain(
@@ -194,18 +212,20 @@ void planTsInput(MediaAvSyncPlan& plan,
         plan = std::move(outputSynchronization);
         plan.domainRole = MediaAvSyncDomainRole::SharedSourceOutput;
     }
+    MediaAvSynchronizationPolicyPlanner::apply(plan);
     plan.sourceLifecycle = MediaAvSourceLifecyclePlan{lifecycleMode};
     if (preparedDemuxFacts) {
         auto finalized = MediaAvSyncStartupPolicyPlanner::finalizePrepared(
-            preparedDemuxFacts->startup, resourceLedger, deployment);
+            preparedDemuxFacts->startup, ledger->get(), deployment);
         if (!finalized) {
             return ::media::Result<MediaAvSyncPlan>::failure(
                 finalized.error());
         }
         plan.startup = std::move(finalized).value();
     } else {
-        auto startup = MediaAvSyncStartupPolicyPlanner::plan(
-            request, resourceLedger, deployment);
+        auto startup = std::visit([&](const auto& facts) {
+            return MediaAvSyncStartupPolicyPlanner::plan(request, facts.get(), deployment);
+        }, capacity);
         if (!startup) {
             return ::media::Result<MediaAvSyncPlan>::failure(startup.error());
         }
@@ -213,8 +233,12 @@ void planTsInput(MediaAvSyncPlan& plan,
     }
     plan.startup.trimAudioToCommonStart =
         audioBranchMode == MediaBranchMode::TranscodeFrame;
-    planSourceNonStartupPolicy(plan);
-    plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
+    plan.recovery.suspectThresholdNs = runningTime(100 * Millisecond);
+    plan.recovery.reacquisitionTimeoutNs = runningTime(10 * Second);
+    if (hasAudio) {
+        planSourceAudioServo(plan);
+        plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
+    }
 
     if (MediaRealtimeRequestClassifier::rawRtpInput(request)) {
         auto rtpInput = planRtpInput(request, lifecycleMode);

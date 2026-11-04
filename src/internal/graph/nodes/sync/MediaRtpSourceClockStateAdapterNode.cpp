@@ -70,46 +70,14 @@ MediaRtpSourceClockStateAdapterNode::onProcess(
                 "RTP source clock adapter requires a locked-group snapshot"));
     }
     const auto& snapshot = clock->snapshot();
-    if (auto status = snapshot.validateMembers(*m_members); !status)
-        return ::media::Result<MediaNodeProcessResult>::failure(status.error());
-    MediaSourceClockReadiness readiness;
-    std::uint64_t projectedGeneration = snapshot.groupGeneration;
-    bool discontinuity = false;
-    switch (snapshot.state) {
-    case MediaRtpClockGroupState::Acquiring:
-        readiness = MediaSourceClockReadiness::Acquiring;
-        break;
-    case MediaRtpClockGroupState::Locked:
-        if (snapshot.groupGeneration == 0 || !snapshot.locked) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Locked RTP clock snapshot is incomplete"));
-        }
-        readiness = MediaSourceClockReadiness::Locked;
-        break;
-    case MediaRtpClockGroupState::Degraded:
-        readiness = MediaSourceClockReadiness::Degraded;
-        break;
-    case MediaRtpClockGroupState::ReacquireRequired:
-        if (!snapshot.invalidatedGeneration ||
-            *snapshot.invalidatedGeneration == 0 ||
-            snapshot.groupGeneration <= *snapshot.invalidatedGeneration) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "RTP clock invalidation requires its previous active generation"));
-        }
-        readiness = MediaSourceClockReadiness::ReacquireRequired;
-        projectedGeneration = *snapshot.invalidatedGeneration;
-        discontinuity = true;
-        break;
-    }
-    const Projection projection{
-        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision};
+    auto projected = projectMediaRtpSourceClockState(snapshot, *m_members);
+    if (!projected) return processProgress(::media::Status::failure(projected.error()));
+    const auto& projection = projected.value();
     if (m_lastEmittedProjection == projection) return processProgress();
 
     m_pendingProjection = projection;
     m_pendingState = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        readiness, projectedGeneration, discontinuity, snapshot.evidenceRevision);
+        projection.readiness, projection.generation, projection.discontinuity, projection.evidenceRevision);
     return emitPendingState(context);
 }
 

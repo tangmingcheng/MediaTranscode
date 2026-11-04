@@ -5,8 +5,9 @@
 
 namespace media::beta {
 
-::media::Result<MediaRealtimeBetaOwnedConfig> MediaRealtimeBetaOwnedConfig::create(
-    const mt_beta_realtime_config* config,
+template<class Config>
+::media::Result<MediaRealtimeBetaOwnedConfig> MediaRealtimeBetaOwnedConfig::copy(
+    const Config* config,
     const mt_beta_realtime_callbacks* callbacks,
     mt_beta_realtime_session** session)
 {
@@ -22,6 +23,20 @@ namespace media::beta {
     owned.m_eventCallback = callbacks->on_event;
     owned.m_eventUserData = callbacks->user_data;
     return Result::success(std::move(owned));
+}
+
+::media::Result<MediaRealtimeBetaOwnedConfig> MediaRealtimeBetaOwnedConfig::create(
+    const mt_beta_realtime_config* config, const mt_beta_realtime_callbacks* callbacks,
+    mt_beta_realtime_session** session)
+{
+    return copy(config, callbacks, session);
+}
+
+::media::Result<MediaRealtimeBetaOwnedConfig> MediaRealtimeBetaOwnedConfig::create(
+    const mt_beta_realtime_composition_config* config, const mt_beta_realtime_callbacks* callbacks,
+    mt_beta_realtime_session** session)
+{
+    return copy(config, callbacks, session);
 }
 
 const ffmpeg::graph::MediaRealtimeRtpTranscodeRequest&

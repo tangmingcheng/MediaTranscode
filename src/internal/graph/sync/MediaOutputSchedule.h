@@ -10,6 +10,9 @@ struct MediaOutputSchedule final {
     MediaRunningTime dispatch;
     MediaRunningTime emit;
 
+    static ::media::Result<MediaRunningTime> releaseTime(
+        MediaRunningTime emit, MediaRunningTime protocolPreparationLead);
+
     static ::media::Result<MediaOutputSchedule> create(
         MediaRunningTime presentation,
         MediaRunningTime dispatch,

@@ -3,11 +3,11 @@
 #include "internal/graph/runtime/network/MediaSocketRuntime.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -42,7 +42,7 @@ public:
 private:
     struct Impl;
     explicit MediaUdpSocket(std::unique_ptr<Impl> impl) noexcept;
-    ::media::Result<std::vector<uint8_t>> receive(std::size_t maximumDatagramBytes);
+    ::media::Result<std::size_t> receiveInto(std::span<uint8_t> bytes);
     intptr_t waitHandle() const noexcept;
     ::media::Status consumeNetworkEvent() noexcept;
 

@@ -31,7 +31,8 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
 }
 
 ::media::Result<std::unique_ptr<MediaMuxSession>> ExplicitMediaMuxSessionFactory::create(
-    const MediaNodeOptions& options) const
+    const MediaNodeOptions& options,
+    std::shared_ptr<MediaNodeWakeup> producerWakeup) const
 {
     auto kind = requiredKind(options);
     if (!kind) {
@@ -58,10 +59,10 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
             std::make_unique<FFmpegFileMuxSession>(video.value(), audio.value()));
     }
     case MediaMuxSessionKind::ProjectMpegTs: {
-        if (!m_generationState || !m_outputAuthority) {
+        if (!m_generationState || !m_outputAuthority || !producerWakeup) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "project MPEG-TS mux session requires its injected generation authority"));
+                    "project MPEG-TS mux session requires its generation authority and producer wakeup"));
         }
         auto video = requiredBoolNodeOption(
             &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectVideo);
@@ -98,7 +99,7 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
         }
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
             std::make_unique<ProjectMpegTsMuxSessionAdapter>(
-                std::move(authority).value()));
+                std::move(authority).value(), std::move(producerWakeup)));
     }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(

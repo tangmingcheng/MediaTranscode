@@ -19,9 +19,9 @@ bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBuff
 
 ::media::Result<MediaBlockingQueue::PreparedPush>
 MediaBlockingQueue::preparePush(
-    std::span<const MediaBufferRef> buffers) const
+    std::span<const MediaBufferRef> buffers, MediaLineageAllocationScope allocation) const
 {
-    return m_storage.prepare(buffers);
+    return m_storage.prepare(buffers, std::move(allocation));
 }
 
 void MediaBlockingQueue::publishPreparedLocked(
@@ -40,7 +40,7 @@ void MediaBlockingQueue::notifyPreparedPublished() noexcept
 
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))
-    , m_storage(m_policy, MediaBlockingQueueStorage::reserveWithDefaultAllocator)
+    , m_storage(m_policy, MediaBlockingQueueStorage::allocatePreparedStorage)
 {
 }
 

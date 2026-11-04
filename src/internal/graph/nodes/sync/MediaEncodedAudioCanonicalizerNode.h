@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/diagnostics/MediaAudioStageObservation.h"
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
@@ -37,6 +38,8 @@ private:
     void resetState() noexcept;
     std::shared_ptr<MediaEncodedAudioCanonicalizerState> m_state;
     MediaAvSyncGroupKey m_outputGroup;
+    MediaAudioStageObservation m_inputObservation;
+    MediaAudioStageObservation m_commitObservation;
 };
 
 } // namespace media::ffmpeg::graph

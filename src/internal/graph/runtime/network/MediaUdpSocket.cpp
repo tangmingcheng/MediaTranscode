@@ -299,39 +299,38 @@ int MediaUdpSocket::effectiveReceiveBufferBytes() const noexcept
     return m_impl ? m_impl->effectiveReceiveBufferBytes : 0;
 }
 
-::media::Result<std::vector<uint8_t>> MediaUdpSocket::receive(std::size_t maximumDatagramBytes)
+::media::Result<std::size_t> MediaUdpSocket::receiveInto(std::span<uint8_t> bytes)
 {
-    if (!isOpen() || maximumDatagramBytes == 0 ||
-        maximumDatagramBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        return ::media::Result<std::vector<uint8_t>>::failure(
+    if (!isOpen() || bytes.empty() ||
+        bytes.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::invalidArgument("UDP receive requires open socket and bounded datagram size"));
     }
 #ifdef _WIN32
-    std::vector<uint8_t> bytes(maximumDatagramBytes);
     const int received = recvfrom(m_impl->socket, reinterpret_cast<char*>(bytes.data()),
                                   static_cast<int>(bytes.size()), 0, nullptr, nullptr);
     if (received == SOCKET_ERROR) {
         const int error = WSAGetLastError();
-        return ::media::Result<std::vector<uint8_t>>::failure(
+        return ::media::Result<std::size_t>::failure(
             error == WSAEWOULDBLOCK
                 ? ::media::ErrorInfo::wouldBlock("UDP socket has no datagram after event")
                 : ::media::ErrorInfo::ioFailure("UDP receive failed", error));
     }
-    bytes.resize(static_cast<std::size_t>(received));
-    return ::media::Result<std::vector<uint8_t>>::success(std::move(bytes));
 #else
-    std::vector<uint8_t> bytes(maximumDatagramBytes);
-    const ssize_t received = recvfrom(m_impl->socket, bytes.data(), bytes.size(), 0, nullptr, nullptr);
+    const ssize_t received = recvfrom(m_impl->socket, bytes.data(), bytes.size(), MSG_TRUNC, nullptr, nullptr);
     if (received < 0) {
         const int error = errno;
-        return ::media::Result<std::vector<uint8_t>>::failure(
+        return ::media::Result<std::size_t>::failure(
             error == EAGAIN || error == EWOULDBLOCK
                 ? ::media::ErrorInfo::wouldBlock("UDP socket has no datagram after poll")
                 : ::media::ErrorInfo::ioFailure("UDP receive failed", error));
     }
-    bytes.resize(static_cast<std::size_t>(received));
-    return ::media::Result<std::vector<uint8_t>>::success(std::move(bytes));
+    if (static_cast<std::size_t>(received) > bytes.size()) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::ioFailure("UDP datagram was truncated", EMSGSIZE));
+    }
 #endif
+    return ::media::Result<std::size_t>::success(static_cast<std::size_t>(received));
 }
 
 intptr_t MediaUdpSocket::waitHandle() const noexcept

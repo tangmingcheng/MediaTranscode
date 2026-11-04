@@ -12,6 +12,7 @@ namespace media::ffmpeg::graph {
 struct MediaRealtimeRtpInputNodePlan;
 struct MediaAudioPipelinePlan;
 struct MediaAvSyncPlan;
+struct MediaAvSourceCapacityFacts;
 
 struct MediaRealtimeAvSourceClockRequest final {
     RealtimeInputType inputType;
@@ -21,6 +22,7 @@ struct MediaRealtimeAvSourceClockRequest final {
     std::string_view videoCodecName;
     const MediaAudioPipelinePlan& audio;
     const MediaRealtimeRtpInputNodePlan* isolatedAudioInput;
+    const MediaAvSourceCapacityFacts* sourceCapacity;
 };
 
 struct MediaRealtimeAvSourceClockPlan final {

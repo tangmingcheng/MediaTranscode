@@ -1,16 +1,18 @@
 #pragma once
+#include "internal/graph/nodes/output/MediaRtpWirePreparedTransaction.h"
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationData.h"
 #include "internal/graph/nodes/output/MediaMpegTsWireDatagramMaterializer.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
+#include "internal/graph/diagnostics/MediaProtocolBatchMaterializationObservation.h"
+#include "internal/graph/nodes/output/MediaPendingWireDatagrams.h"
 
 #include <memory>
 #include <cstdint>
 #include <optional>
 #include <variant>
-#include <deque>
 
 namespace media::ffmpeg::graph {
 
@@ -21,8 +23,10 @@ struct MediaMpegTsMaterializerGenerationData final {
     MediaBufferRef terminal;
     bool terminalReportPrepared = false;
     MediaBufferRef pendingProtocolBatch;
-    std::deque<MediaBufferRef> pendingOutputs;
+    MediaPendingWireDatagrams pendingOutputs;
+    std::optional<MediaRtpWirePreparedTransaction> pendingPreparation;
     std::optional<Materializer> materializer;
+    MediaProtocolBatchMaterializationObservation observation;
 };
 
 using MediaMpegTsMaterializerGenerationSession = MediaProtocolOutputGenerationData<MediaMpegTsMaterializerGenerationData>;
@@ -32,7 +36,8 @@ public:
     static ::media::Result<
         std::unique_ptr<MediaMpegTsDatagramMaterializerNode>>
     create(MediaNodeId nodeId,
-           std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+           std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+        std::shared_ptr<MediaMpegTsMaterializerGenerationSession> generationSession);
     static MediaNodeKind staticKind() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept { return m_generationPurge; }
     ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
@@ -52,7 +57,8 @@ protected:
 private:
     MediaMpegTsDatagramMaterializerNode(
         MediaNodeId nodeId,
-        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+        std::shared_ptr<MediaMpegTsMaterializerGenerationSession> generationSession);
     ::media::Status validatePorts(
         MediaGraphExecutionContext& context) const;
     ::media::Status tryCreateMaterializer(
@@ -64,7 +70,7 @@ private:
     ::media::Result<MediaNodeProcessResult> finishProtocol(
         MediaGraphExecutionContext& context);
     void resetState() noexcept;
-    std::shared_ptr<MediaMpegTsMaterializerGenerationSession> m_generationSession = std::make_shared<MediaMpegTsMaterializerGenerationSession>();
+    std::shared_ptr<MediaMpegTsMaterializerGenerationSession> m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>();
     std::optional<MediaAvGenerationPurge> m_completedPurge;

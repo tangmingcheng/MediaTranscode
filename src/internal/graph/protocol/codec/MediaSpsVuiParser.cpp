@@ -6,16 +6,38 @@ namespace media::ffmpeg::graph {
 namespace {
 using Reader = MediaRbspBitReader;
 
-bool signal(Reader& r, MediaVideoColorRangeFact& fact)
+bool signal(Reader& r, MediaSpsVuiFacts& facts)
 {
+    auto& fact = facts.color;
     std::uint32_t flag = 0, value = 0;
     if (!r.bit(flag)) return false;
-    if (flag && (!r.bits(8, value) || (value == 255 && !r.skip(32)))) return false;
+    if (flag) {
+        if (!r.bits(8, value)) return false;
+        // H.264 table E-1 / H.265 table E.1, also ff_h2645_pixel_aspect.
+        constexpr std::array<MediaRational, 17> ratios{{
+            {0, 1}, {1, 1}, {12, 11}, {10, 11}, {16, 11}, {40, 33},
+            {24, 11}, {20, 11}, {32, 11}, {80, 33}, {18, 11}, {15, 11},
+            {64, 33}, {160, 99}, {4, 3}, {3, 2}, {2, 1}}};
+        if (value == 255) {
+            std::uint32_t width = 0, height = 0;
+            if (!r.bits(16, width) || !r.bits(16, height)) return false;
+            if (width && height) facts.sampleAspectRatio = MediaRational{
+                static_cast<int>(width), static_cast<int>(height)};
+        } else if (value < ratios.size() && ratios[value].num > 0) {
+            facts.sampleAspectRatio = ratios[value];
+        }
+    }
     if (!r.bit(flag) || (flag && !r.skip(1)) || !r.bit(flag)) return false;
     if (flag) {
         if (!r.skip(3) || !r.bit(value)) return false;
         fact = {value ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG, true};
-        if (!r.bit(flag) || (flag && !r.skip(24))) return false;
+        if (!r.bit(flag)) return false;
+        if (flag) {
+            std::uint32_t primaries = 0, transfer = 0, matrix = 0;
+            if (!r.bits(8, primaries) || !r.bits(8, transfer) || !r.bits(8, matrix)) return false;
+            fact.color = MediaVideoColorContract{fact.range, static_cast<AVColorPrimaries>(primaries),
+                static_cast<AVColorTransferCharacteristic>(transfer), static_cast<AVColorSpace>(matrix)};
+        }
     }
     if (!r.bit(flag)) return false;
     return !flag || (r.ue(value, 5) && r.ue(value, 5));
@@ -117,7 +139,7 @@ bool hevcShortTermSets(Reader& r, std::uint32_t count)
     return true;
 }
 
-bool hevcVui(Reader& r, std::uint32_t subLayers, MediaVideoColorRangeFact& fact)
+bool hevcVui(Reader& r, std::uint32_t subLayers, MediaSpsVuiFacts& fact)
 {
     std::uint32_t flag = 0, value = 0;
     if (!signal(r, fact) || !r.skip(3) || !r.bit(flag)) return false;
@@ -137,13 +159,14 @@ bool hevcVui(Reader& r, std::uint32_t subLayers, MediaVideoColorRangeFact& fact)
 }
 } // namespace
 
-std::optional<MediaVideoColorRangeFact> MediaSpsVuiParser::h264(Reader& r)
+std::optional<MediaSpsVuiFacts> MediaSpsVuiParser::h264(Reader& r)
 {
-    MediaVideoColorRangeFact fact{AVCOL_RANGE_MPEG, false};
+    MediaSpsVuiFacts facts{{AVCOL_RANGE_MPEG, false}, std::nullopt};
+    auto& fact = facts.color;
     std::uint32_t present = 0, value = 0;
     if (!r.bit(present)) return std::nullopt;
     if (present) {
-        if (!signal(r, fact) || !r.bit(present)) return std::nullopt;
+        if (!signal(r, facts) || !r.bit(present)) return std::nullopt;
         if (present && (!r.bits(32, value) || !value || !r.bits(32, value) || !value || !r.skip(1))) return std::nullopt;
         std::uint32_t nalHrd = 0, vclHrd = 0;
         if (!r.bit(nalHrd) || (nalHrd && !h264Hrd(r)) ||
@@ -154,10 +177,14 @@ std::optional<MediaVideoColorRangeFact> MediaSpsVuiParser::h264(Reader& r)
             for (unsigned i = 0; i < 6; ++i) if (!r.ue(value, 16)) return std::nullopt;
         }
     }
-    return r.trailingBits() ? std::optional(fact) : std::nullopt;
+    // H.264/H.265 VUI colour_description absent means unspecified (value 2),
+    // not a resolution-derived color space. Publish only after full SPS parsing.
+    if (!fact.color) fact.color = MediaVideoColorContract{fact.range,
+        AVCOL_PRI_UNSPECIFIED, AVCOL_TRC_UNSPECIFIED, AVCOL_SPC_UNSPECIFIED};
+    return r.trailingBits() ? std::optional(facts) : std::nullopt;
 }
 
-std::optional<MediaVideoColorRangeFact> MediaSpsVuiParser::hevc(Reader& r, std::uint32_t subLayers)
+std::optional<MediaSpsVuiFacts> MediaSpsVuiParser::hevc(Reader& r, std::uint32_t subLayers)
 {
     std::uint32_t lumaDepth = 0, chromaDepth = 0, poc = 0, flag = 0, value = 0;
     if (!r.ue(lumaDepth, 8) || !r.ue(chromaDepth, 8) || !r.ue(poc, 12) || !r.bit(flag)) return std::nullopt;
@@ -186,8 +213,9 @@ std::optional<MediaVideoColorRangeFact> MediaSpsVuiParser::hevc(Reader& r, std::
         if (!r.ue(count, 32)) return std::nullopt;
         for (std::uint32_t i = 0; i < count; ++i) if (!r.skip(poc + 5)) return std::nullopt;
     }
-    MediaVideoColorRangeFact fact{AVCOL_RANGE_MPEG, false};
-    if (!r.skip(2) || !r.bit(flag) || (flag && !hevcVui(r, subLayers, fact)) || !r.bit(flag)) return std::nullopt;
+    MediaSpsVuiFacts facts{{AVCOL_RANGE_MPEG, false}, std::nullopt};
+    auto& fact = facts.color;
+    if (!r.skip(2) || !r.bit(flag) || (flag && !hevcVui(r, subLayers, facts)) || !r.bit(flag)) return std::nullopt;
     if (flag) {
         std::uint32_t rangeExtension = 0;
         // Range extension has nine flags. Other extensions are deliberately
@@ -195,6 +223,10 @@ std::optional<MediaVideoColorRangeFact> MediaSpsVuiParser::hevc(Reader& r, std::
         if (!r.bit(rangeExtension) || !r.bits(7, value) || value != 0 ||
             (rangeExtension && !r.skip(9))) return std::nullopt;
     }
-    return r.trailingBits() ? std::optional(fact) : std::nullopt;
+    // H.264/H.265 VUI colour_description absent means unspecified (value 2),
+    // not a resolution-derived color space. Publish only after full SPS parsing.
+    if (!fact.color) fact.color = MediaVideoColorContract{fact.range,
+        AVCOL_PRI_UNSPECIFIED, AVCOL_TRC_UNSPECIFIED, AVCOL_SPC_UNSPECIFIED};
+    return r.trailingBits() ? std::optional(facts) : std::nullopt;
 }
 } // namespace media::ffmpeg::graph

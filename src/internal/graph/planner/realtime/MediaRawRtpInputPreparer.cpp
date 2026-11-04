@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <deque>
+#include <new>
 #include <limits>
 #include <memory>
 #include <string>
@@ -93,7 +94,8 @@ namespace {
 } // namespace
 
 ::media::Result<MediaPreparedRawRtpProbe> MediaRawRtpInputPreparer::prepare(
-    const MediaRawRtpProbePlan& plan)
+    const MediaRawRtpProbePlan& plan, std::stop_token cancellation,
+    const MediaPreparationStorageScope& scope) try
 {
     const auto& video = std::visit(
         [](const auto& streams) -> const MediaRawRtpPreparedStreamPlan& {
@@ -105,9 +107,11 @@ namespace {
     const MediaRawRtpPreparedStreamPlan* audio = audioVideo
         ? &audioVideo->audio
         : nullptr;
-    if (plan.openTimeoutMs <= 0 || plan.analyzeDurationUs <= 0 ||
+    if ((plan.timingIntent != MediaRtpVideoPreparationIntent::CanonicalIntervals &&
+         plan.timingIntent != MediaRtpVideoPreparationIntent::SourcePresentation) ||
+        plan.openTimeoutMs <= 0 || plan.analyzeDurationUs <= 0 ||
         plan.maximumBufferedBytes == 0 ||
-        plan.reorderWindowPackets == 0 || plan.maximumReorderDelayMs <= 0 ||
+        plan.reorderWindowPackets == 0 || !plan.inputWait ||
         !plan.packetizationPolicy || !plan.rtcpPolicy ||
         video.identity.streamKind != MediaStreamKind::Video ||
         video.identity.codecName.empty() ||
@@ -134,14 +138,17 @@ namespace {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             observer.error());
     }
-    auto frameRateObserver = MediaRtpVideoFrameRateObserver::create(
-        video.identity.clockRate);
-    if (!frameRateObserver) {
-        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-            frameRateObserver.error());
+    std::optional<MediaRtpVideoFrameRateObserver> frameRateObserver;
+    if (plan.timingIntent == MediaRtpVideoPreparationIntent::CanonicalIntervals) {
+        auto created = MediaRtpVideoFrameRateObserver::create(video.identity.clockRate);
+        if (!created) return ::media::Result<MediaPreparedRawRtpProbe>::failure(created.error());
+        frameRateObserver.emplace(std::move(created).value());
     }
-    auto byteBudget = MediaRawRtpPreparedByteBudget::create(
-        plan.maximumBufferedBytes);
+    if (!plan.storage || plan.storage->maximumObservedWireBytes != plan.maximumBufferedBytes ||
+        plan.storage->streamCount != (audio ? 2u : 1u))
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            ::media::ErrorInfo::invalidArgument("raw RTP probe requires its matching storage plan"));
+    auto byteBudget = MediaRawRtpPreparedByteBudget::create(*plan.storage, scope);
     if (!byteBudget) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             byteBudget.error());
@@ -150,17 +157,24 @@ namespace {
         std::make_shared<MediaRawRtpPreparedReplayClock>();
     auto videoIngressObservation =
         std::make_shared<MediaRtpIngressObservationCollector>();
+    MediaFixedCapacityStorage<MediaPreparedRtpDatagramOwner> buffered{
+        plan.storage->maximumDatagramsPerStream, byteBudget.value()->storageResource()};
+    std::optional<MediaFixedCapacityStorage<MediaPreparedRtpDatagramOwner>> audioBuffered;
+    if (audio) audioBuffered.emplace(plan.storage->maximumDatagramsPerStream,
+        byteBudget.value()->storageResource());
     std::optional<MediaRtpUdpTransport> audioTransport;
     std::optional<MediaPreparedRealtimeInput> preparedAudio;
     if (audio) {
-        auto openedAudio = MediaRtpUdpTransport::open(audio->transport);
+        auto openedAudio = MediaRtpUdpTransport::open(
+            audio->transport, byteBudget.value()->storageResource());
         if (!openedAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 openedAudio.error());
         }
         audioTransport.emplace(std::move(openedAudio).value());
     }
-    auto opened = MediaRtpUdpTransport::open(video.transport);
+    auto opened = MediaRtpUdpTransport::open(
+        video.transport, byteBudget.value()->storageResource());
     if (!opened) {
         return ::media::Result<MediaPreparedRawRtpProbe>::failure(
             opened.error());
@@ -168,8 +182,9 @@ namespace {
     MediaRtpUdpTransport transport = std::move(opened).value();
     if (audio) {
         auto createdAudio = MediaPreparedRealtimeInput::createRawRtp({
-            std::move(*audioTransport), {}, audio->identity,
-            std::nullopt, replayClock, byteBudget.value(),
+            byteBudget.value(), std::move(*audioTransport),
+            std::move(*audioBuffered),
+            audio->identity, std::nullopt, replayClock,
             std::make_shared<MediaRtpIngressObservationCollector>(),
             audio->transport.cancellableReadTimeoutMs});
         if (!createdAudio) {
@@ -186,11 +201,11 @@ namespace {
     MediaRtpReorderBuffer reorder(MediaRtpReorderConfig{
         plan.reorderWindowPackets,
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::milliseconds(plan.maximumReorderDelayMs)),
+            std::chrono::milliseconds(plan.inputWait->bootstrapMilliseconds())),
         video.identity.payloadType});
-    std::deque<MediaPreparedRawRtpDatagram> buffered;
     std::size_t bufferedBytes = 0;
     std::size_t packetCount = 0;
+    std::uint64_t ingressFrontier = 0;
     bool bufferedRtcpValidated = false;
 
     using Clock = std::chrono::steady_clock;
@@ -224,7 +239,7 @@ namespace {
             signalingComplete =
                 plan.authoritativeVideoSignaling.has_value() ||
                 signalingComplete || observation.value().complete;
-            if (auto status = frameRateObserver.value().observe(packet);
+            if (auto status = frameRateObserver ? frameRateObserver->observe(packet) : ::media::Status::success();
                 !status) {
                 return status;
             }
@@ -232,6 +247,10 @@ namespace {
         return ::media::Status::success();
     };
     while (true) {
+        if (cancellation.stop_requested()) {
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                ::media::ErrorInfo::cancelled("raw RTP source preparation cancelled"));
+        }
         if (preparedAudio) {
             if (auto status = preparedAudio->rawRtpCaptureStatus(); !status) {
                 return ::media::Result<MediaPreparedRawRtpProbe>::failure(
@@ -303,6 +322,7 @@ namespace {
                 return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                     status.error());
             }
+            ++ingressFrontier;
             const auto observedAt = Clock::now();
             const std::int64_t observedAtNs =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -337,27 +357,23 @@ namespace {
                 }
                 if (!bufferedRtcpValidated &&
                     observer.value().evidence().ssrc) {
-                    std::deque<MediaPreparedRawRtpDatagram> validated;
-                    for (auto& queued : buffered) {
-                        if (queued.datagram.channel !=
-                                MediaRtpUdpChannel::Rtcp) {
-                            validated.push_back(std::move(queued));
-                            continue;
-                        }
+                    std::optional<::media::ErrorInfo> filterError;
+                    buffered.eraseIf([&](const auto& queued) {
+                        if (queued->datagram.channel !=
+                                MediaRtpUdpChannel::Rtcp || filterError) return false;
                         auto belongs = rtcpBelongsToSsrc(
-                            queued.datagram.bytes, *plan.rtcpPolicy,
+                            queued->datagram.bytes, *plan.rtcpPolicy,
                             observer.value().evidence().ssrc);
                         if (!belongs) {
-                            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                                belongs.error());
+                            filterError = belongs.error();
+                            return false;
                         }
-                        if (belongs.value()) {
-                            validated.push_back(std::move(queued));
-                        } else {
-                            bufferedBytes -= queued.datagram.bytes.size();
+                        if (!belongs.value()) {
+                            bufferedBytes -= queued->datagram.bytes.size();
                         }
-                    }
-                    buffered = std::move(validated);
+                        return !belongs.value();
+                    });
+                    if (filterError) return ::media::Result<MediaPreparedRawRtpProbe>::failure(*filterError);
                     bufferedRtcpValidated = true;
                 }
             } else {
@@ -381,12 +397,16 @@ namespace {
             if (retainDatagram) {
                 bufferedBytes += datagram.bytes.size();
                 if (datagram.channel == MediaRtpUdpChannel::Rtp) ++packetCount;
-                buffered.push_back(MediaPreparedRawRtpDatagram{
-                    std::move(datagram), observedAtNs});
+                buffered.push_back(MediaPreparedRtpDatagramStorage::create(
+                    byteBudget.value()->storageResource(), plan.storage->entryAllocation,
+                    std::move(datagram), observedAtNs, ingressFrontier));
             }
         }
-        const auto sourceFrameRate = frameRateObserver.value().frameRate();
-        if (!signalingComplete || !sourceFrameRate || !firstMatchingPacketAt) continue;
+        const auto sourceFrameRate = frameRateObserver ? frameRateObserver->frameRate() : std::nullopt;
+        if (!signalingComplete || (frameRateObserver && !sourceFrameRate) || !firstMatchingPacketAt) continue;
+        MediaVideoSourceTiming timing = sourceFrameRate
+            ? MediaVideoSourceTiming{MediaObservedVideoCadence{*sourceFrameRate}}
+            : MediaVideoSourceTiming{MediaSourcePresentationTiming{}};
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             Clock::now() - startedAt).count();
@@ -414,10 +434,10 @@ namespace {
         }
         MediaDetectedRtpVideoSignaling signaling = detected.value();
         auto prepared = MediaPreparedRealtimeInput::createRawRtp({
-            std::move(transport), std::move(buffered), video.identity,
-            detected.value(), replayClock, byteBudget.value(),
+            byteBudget.value(), std::move(transport), std::move(buffered), video.identity,
+            detected.value(), replayClock,
             videoIngressObservation,
-            video.transport.cancellableReadTimeoutMs});
+            video.transport.cancellableReadTimeoutMs, ingressFrontier});
         if (!prepared) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 prepared.error());
@@ -433,15 +453,20 @@ namespace {
         if (preparedAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::success(
                 MediaPreparedRawRtpAudioVideoProbe{
-                    std::move(signaling), *sourceFrameRate,
+                    std::move(signaling), std::move(timing),
                     std::move(prepared).value(),
-                    std::move(*preparedAudio), byteBudget.value(), preparationDeadline});
+                    std::move(*preparedAudio), byteBudget.value(), preparationDeadline, *plan.inputWait});
         }
         return ::media::Result<MediaPreparedRawRtpProbe>::success(
             MediaPreparedRawRtpVideoOnlyProbe{
-                std::move(signaling), *sourceFrameRate,
-                std::move(prepared).value(), byteBudget.value(), preparationDeadline});
+                std::move(signaling), std::move(timing),
+                std::move(prepared).value(), byteBudget.value(), preparationDeadline, *plan.inputWait});
     }
+}
+
+catch (const std::bad_alloc&) {
+    return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+        ::media::ErrorInfo::allocationFailed("raw RTP preparation storage allocation failed"));
 }
 
 ::media::Status MediaRawRtpInputPreparer::sealPreflight(MediaPreparedRawRtpProbe& probe)

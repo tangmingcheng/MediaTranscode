@@ -40,6 +40,8 @@ try {
     plan.producerStrategyVersion = 1;
     plan.integration = MediaGraphPayloadCreditIntegration::Complete;
     plan.authority = "final-dag-producer-registry+prepared-emission+global-payload-budget";
+    plan.accounts.push_back({"shared-payload", availablePayloadBytes,
+        maximumPayloadObjects, "explicit-shared-graph-payload-budget"});
     for (std::size_t index = 0; index < facts.size(); ++index) {
         const auto& fact = facts[index];
         const auto* node = graph.findNode(fact.nodeId);
@@ -56,7 +58,7 @@ try {
         if (!acceptsMediaGraphPayloadProducerOutput(node->kind, fact.streamKind, fact.payloadKind))
             return invalid("payload producer output conflicts with its runtime contract");
         if (fact.payloadKind == MediaPayloadKind::Frame) {
-            auto expected = MediaGraphFrameCreditContractPlanner::plan(*node, fact.maximumLogicalBytes);
+            auto expected = MediaGraphFrameCreditContractPlanner::plan(*node, fact.streamKind, fact.maximumLogicalBytes);
             if (!expected) return Result::failure(expected.error());
             if (!fact.frameCredit || fact.frameCredit->allocationScope != expected.value().allocationScope ||
                 fact.frameCredit->maximumLogicalBytes != expected.value().maximumLogicalBytes ||
@@ -70,7 +72,7 @@ try {
             fact.nodeId, fact.streamKind, fact.payloadKind,
             device ? MediaGraphPayloadAllocationAccounting::ObservedOnlyExternalBytesAndEngineManagedObject
                    : MediaGraphPayloadAllocationAccounting::EngineManagedBytesAndObject,
-            fact.frameCredit, fact.maximumLogicalBytes, true, fact.authority};
+            fact.frameCredit, fact.maximumLogicalBytes, true, fact.authority, "shared-payload"};
         if (!strategy.valid() || (fact.streamKind != MediaStreamKind::Audio && fact.streamKind != MediaStreamKind::Video))
             return invalid("payload producer fact lacks a valid logical bound and frame contract");
         if (!device && fact.maximumLogicalBytes > availablePayloadBytes)

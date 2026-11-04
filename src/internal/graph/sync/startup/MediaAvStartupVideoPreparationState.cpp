@@ -1,30 +1,44 @@
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
 
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 
 #include <array>
 
 namespace media::ffmpeg::graph {
 
 ::media::Result<std::shared_ptr<MediaAvStartupVideoPreparationState>>
-MediaAvStartupVideoPreparationState::create(MediaAvSyncGroupKey groupKey)
+MediaAvStartupVideoPreparationState::create(MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage)
 {
-    if (!groupKey.valid()) {
+    if (!groupKey.valid() || !MediaLineageAllocator<std::byte>{storage.allocation()}.resource()) {
         return ::media::Result<std::shared_ptr<
             MediaAvStartupVideoPreparationState>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Video preparation state requires a valid sync group"));
+                "Video preparation state requires a valid sync group and allocation owner"));
     }
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(storage, storage.allocation()); !valid)
+        return ::media::Result<std::shared_ptr<MediaAvStartupVideoPreparationState>>::failure(valid.error());
     return ::media::Result<std::shared_ptr<
         MediaAvStartupVideoPreparationState>>::success(
         std::shared_ptr<MediaAvStartupVideoPreparationState>(
-            new MediaAvStartupVideoPreparationState(std::move(groupKey))));
+            new MediaAvStartupVideoPreparationState(std::move(groupKey), std::move(storage))));
 }
 
 MediaAvStartupVideoPreparationState::MediaAvStartupVideoPreparationState(
-    MediaAvSyncGroupKey groupKey)
-    : m_groupKey(std::move(groupKey))
+    MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage)
+    : m_storage(std::move(storage)), m_groupKey(std::move(groupKey))
 {
+}
+
+::media::Status MediaAvStartupVideoPreparationState::validateStorage(
+    const MediaOutputReservationStoragePlan& storage) const
+{
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(m_storage, storage.allocation()); !valid)
+        return valid;
+    if (m_storage.prepared() != storage.prepared())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video preparation state differs from its planned reservation layout"));
+    return ::media::Status::success();
 }
 
 ::media::Status MediaAvStartupVideoPreparationState::failureLocked(
@@ -232,7 +246,7 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         const std::array<MediaOutputCapacityReservationHandle, 2> handles{
         m_outputReservation, m_extractorOutputsReservation};
         if (auto authorized = MediaReservedOutputTransaction::authorize(
-                handles, activation); !authorized) {
+                handles, activation, m_storage); !authorized) {
             return authorized;
         }
         m_phase = MediaAvStartupVideoPreparationPhase::ReleaseCommitted;

@@ -50,7 +50,8 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
     const MediaRtpIngressCapability& capability,
     const MediaRtpIngressObservation& observation,
     std::size_t preparedInputByteBudget,
-    std::size_t maximumDatagramBytes)
+    std::size_t maximumDatagramBytes,
+    const MediaRtpInputWaitPlan& inputWait)
 {
     if (auto status = capability.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
@@ -85,6 +86,8 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
             ::media::ErrorInfo::invalidArgument(
                 "RTP ingress reorder observation exceeds the receive descriptor budget"));
     }
+    auto delay = inputWait.finalNanoseconds(observation.maximumInterarrivalNanoseconds());
+    if (!delay) return ::media::Result<MediaRtpIngressPlan>::failure(delay.error());
     MediaRtpIngressPlan product(
         capability,
         maximumDatagramBytes,
@@ -93,7 +96,7 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
         // Observed disorder is a minimum requirement, not a future network bound.
         // Reordering shares the receive product's explicit descriptor capacity.
         descriptorCapacity,
-        observation.maximumInterarrivalNanoseconds());
+        delay.value());
     if (auto status = product.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
     }

@@ -7,6 +7,8 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersSnapshot.h"
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -14,6 +16,8 @@ extern "C" {
 }
 
 #include <utility>
+#include <memory>
+#include <new>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -51,6 +55,9 @@ namespace {
     probeContext->sw_pix_fmt = surfaceFormat;
     probeContext->sample_aspect_ratio = hardwareContext.sample_aspect_ratio;
     probeContext->color_range = hardwareContext.color_range;
+    probeContext->color_primaries = hardwareContext.color_primaries;
+    probeContext->color_trc = hardwareContext.color_trc;
+    probeContext->colorspace = hardwareContext.colorspace;
     auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(
         *probeContext, *encoder.encoderOpenContract);
     if (!applied) return applied;
@@ -110,6 +117,13 @@ namespace {
     context->sample_aspect_ratio = {
         input.sampleAspectRatio.num, input.sampleAspectRatio.den};
     if (input.colorRange) context->color_range = *input.colorRange;
+    if (input.color) {
+        if (!input.colorRange || *input.colorRange != input.color->range)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Encoder color probe range differs"));
+        context->color_primaries = input.color->primaries;
+        context->color_trc = input.color->transfer;
+        context->colorspace = input.color->matrix;
+    }
     if (auto applied = MediaEncoderOpenContractAdapter::applyBeforeOpen(*context, open);
         !applied) return applied;
     if (input.hardwareDevice) {
@@ -125,6 +139,12 @@ namespace {
     const int opened = avcodec_open2(context.get(), codec, nullptr);
     if (opened < 0) return FFmpegGraphError::statusFromCode(
         opened, "avcodec_open2(encoder " + encoder.ffmpegName + ")");
+    if (auto status = MediaEncoderOpenContractAdapter::verifyOutputBuffering(
+            *context, open.outputBuffering); !status) return status;
+    if (input.color && (context->color_range != input.color->range ||
+        context->color_primaries != input.color->primaries || context->color_trc != input.color->transfer ||
+        context->colorspace != input.color->matrix))
+        return ::media::Status::failure(::media::ErrorInfo::unsupported("Opened encoder changed composition colorimetry"));
     auto layout = publishPacketLayout(encoder, *context);
     if (!layout && input.advertisedEquivalentSoftwareSurface) {
         layout = probeEquivalentSoftwareSurface(
@@ -135,6 +155,17 @@ namespace {
         *context, *encoder.encoderRateControl, open.frameRate, *encoder.encodedPacketLayout,
         "opened-encoder-context:" + encoder.ffmpegName, input.backend);
     if (!emission) return ::media::Status::failure(emission.error());
+    auto parameters = FFmpegCodecParametersMaterializer::fromContext(*context);
+    if (!parameters) return ::media::Status::failure(parameters.error());
+    auto snapshot = FFmpegCodecParametersSnapshot::takeOwnership(std::move(parameters).value());
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
+    try {
+        encoder.preparedCodecParameters = std::make_shared<const FFmpegCodecParametersSnapshot>(
+            std::move(snapshot).value());
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "opened encoder codec parameter snapshot"));
+    }
     encoder.preparedEmission = std::move(emission).value();
     return ::media::Status::success();
 }

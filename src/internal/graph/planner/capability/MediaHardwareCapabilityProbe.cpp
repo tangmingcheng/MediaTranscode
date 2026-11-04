@@ -2,12 +2,14 @@
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/planner/capability/MediaVideoEncoderCapabilityProbe.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
+#include "internal/graph/planner/capability/MediaDecoderOutputAllocationAdapter.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/MediaHardwareFramesAllocation.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -88,36 +90,6 @@ bool decoderSupportsDevice(const AVCodec& decoder,
             return true;
         }
     }
-}
-
-::media::ffmpeg::BufferRefPtr createFramesContext(
-    AVBufferRef* device,
-    AVPixelFormat hardwareFormat,
-    AVPixelFormat softwareFormat,
-    int width,
-    int height,
-    int initialPoolSize,
-    std::string& failure)
-{
-    AVBufferRef* rawFrames = av_hwframe_ctx_alloc(device);
-    ::media::ffmpeg::BufferRefPtr frames(rawFrames);
-    if (!frames) {
-        failure = "av_hwframe_ctx_alloc returned null";
-        return {};
-    }
-
-    auto* context = reinterpret_cast<AVHWFramesContext*>(frames->data);
-    context->format = hardwareFormat;
-    context->sw_format = softwareFormat;
-    context->width = width;
-    context->height = height;
-    context->initial_pool_size = initialPoolSize;
-    const int result = av_hwframe_ctx_init(frames.get());
-    if (result < 0) {
-        failure = "av_hwframe_ctx_init failed: " + FFmpegGraphError::describe(result);
-        return {};
-    }
-    return frames;
 }
 
 ::media::ffmpeg::BufferRefPtr createRkmppProbeDevice(
@@ -220,18 +192,14 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
                 "planned RKMPP RGA device probe failed: " +
                 rkmppDeviceFailure);
         }
-        std::string framesFailure;
-        auto probeFrames = runningFrames
-            ? ::media::ffmpeg::BufferRefPtr(av_buffer_ref(runningFrames))
-            : createFramesContext(
-            rkmppDevice.get(), decoderFormat, encoderSurfaceFormat,
-            chain.filter.inputFrame->size.width,
-            chain.filter.inputFrame->size.height,
-            4, framesFailure);
-        if (!probeFrames) {
-            return unavailable(
-                "planned RKMPP RGA frames probe failed: " + framesFailure);
-        }
+        auto allocatedFrames = runningFrames
+            ? ::media::Result<::media::ffmpeg::BufferRefPtr>::success(
+                  ::media::ffmpeg::BufferRefPtr(av_buffer_ref(runningFrames)))
+            : allocateHardwareFramesContext(rkmppDevice.get(), decoderFormat, encoderSurfaceFormat,
+                  chain.filter.inputFrame->size.width, chain.filter.inputFrame->size.height, 4);
+        if (!allocatedFrames) return unavailable(allocatedFrames.error().message);
+        auto probeFrames = std::move(allocatedFrames).value();
+        if (!probeFrames) return unavailable("RKMPP running frames reference allocation failed");
         probeFrame->format = decoderFormat;
         probeFrame->width = chain.filter.inputFrame->size.width;
         probeFrame->height = chain.filter.inputFrame->size.height;
@@ -366,26 +334,22 @@ MediaHardwareCapability validateCompleteChain(
             return unavailable(
                 "hardware chain requires planned hardware and surface pixel formats");
         }
-        std::string framesFailure;
-        sourceFrames = runningFrames
-            ? ::media::ffmpeg::BufferRefPtr(av_buffer_ref(runningFrames))
-            : createFramesContext(
-            device.get(), hardwareFormat, surfaceFormat,
-            options.probeWidth, options.probeHeight, 4, framesFailure);
-        if (!sourceFrames) {
-            return unavailable("decoder/filter frame negotiation " + framesFailure);
-        }
+        auto allocatedFrames = runningFrames
+            ? ::media::Result<::media::ffmpeg::BufferRefPtr>::success(
+                  ::media::ffmpeg::BufferRefPtr(av_buffer_ref(runningFrames)))
+            : allocateHardwareFramesContext(device.get(), hardwareFormat, surfaceFormat,
+                  options.probeWidth, options.probeHeight, 4);
+        if (!allocatedFrames) return unavailable(allocatedFrames.error().message);
+        sourceFrames = std::move(allocatedFrames).value();
+        if (!sourceFrames) return unavailable("running frames reference allocation failed");
     }
 
     ::media::ffmpeg::BufferRefPtr encoderFrames;
     if (device) {
-        std::string framesFailure;
-        encoderFrames = createFramesContext(
-            device.get(), hardwareFormat, surfaceFormat,
-            outputWidth, outputHeight, 4, framesFailure);
-        if (!encoderFrames) {
-            return unavailable("filter/encoder frame negotiation " + framesFailure);
-        }
+        auto allocatedFrames = allocateHardwareFramesContext(device.get(), hardwareFormat, surfaceFormat,
+            outputWidth, outputHeight, 4);
+        if (!allocatedFrames) return unavailable(allocatedFrames.error().message);
+        encoderFrames = std::move(allocatedFrames).value();
     }
 
     if (chain.filterActive) {
@@ -442,7 +406,7 @@ negotiateSourceFilterDescription(
     request.options = &filterOptions;
     request.firstFrame = &firstFrame;
     request.inputTimeBase = {inputTimeBase.num, inputTimeBase.den};
-    request.inputFrameRate = {inputFrameRate.num, inputFrameRate.den};
+    request.inputFrameRate = AVRational{inputFrameRate.num, inputFrameRate.den};
     request.sampleAspectRatio = {sampleAspectRatio.num, sampleAspectRatio.den};
     auto graph = VideoFilterGraphBuilder::build(request);
     if (!graph) return Result::failure(graph.error());
@@ -522,14 +486,10 @@ MediaHardwareCapability MediaHardwareCapabilityProbe::validateOutputBranch(
         return unavailable("shared source allocation differs from its filter execution evidence");
     const auto& expected = *chain.decoder.outputFrame;
     if (expected.isHardwareBacked()) {
-        // cuvid_output_frame always copies into independently allocated CUDA
-        // storage. NVDEC's nvdec_retrieve_data makes the frame writable before
-        // publishing it unless the opened decoder explicitly requests UNSAFE_OUTPUT.
-        // Both paths release the mapped fixed decoder surface before downstream use.
+        auto allocation = MediaDecoderOutputAllocationAdapter::inspect(decoderFacts, runningFrames, expected);
+        if (!allocation) return unavailable(allocation.error().describe());
         const bool independentCudaOutput = sourceAllocation.allocation == MediaVideoSourceAllocation::DecoderOutput &&
-            expected.deviceKind == MediaHardwareDeviceKind::CUDA &&
-            (decoderFacts.decoderName.ends_with("_cuvid") ||
-             (decoderFacts.hardwareAccelerationFlags & AV_HWACCEL_FLAG_UNSAFE_OUTPUT) == 0);
+            allocation.value().has_value();
         if (!independentCudaOutput && !independentFilterOutput) {
             return unavailable(
                 "dynamic hardware output lacks authoritative independent decoder-output allocation or fixed-pool headroom evidence");

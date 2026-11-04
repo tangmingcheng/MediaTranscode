@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
@@ -42,6 +43,7 @@ public:
     std::shared_ptr<MediaAvGenerationPurgeTarget>
     generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -62,6 +64,8 @@ private:
     std::shared_ptr<MediaScheduledTsAdapterGenerationState>
         m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+    std::optional<MediaAvGenerationPurge> m_completedPurge;
     std::optional<MediaProtocolOutputActivation>& m_activation;
     std::optional<MediaRunningTime>& m_transportLead;
     std::optional<std::uint64_t>& m_pendingCommitGeneration;

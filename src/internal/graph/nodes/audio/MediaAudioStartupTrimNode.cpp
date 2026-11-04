@@ -238,7 +238,7 @@ void MediaAudioStartupTrimNode::abort(
     }
     const int retainedSamples = output->nb_samples;
     auto wrapped = FFmpegBufferFactory::wrapFrame(
-        std::move(output), MediaStreamKind::Audio);
+        std::move(output), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
     if (!wrapped) return wrapped;
     const AVFrame* trimmedFrame = FFmpegFrameView::frame(wrapped.value());
     auto footprint = trimmedFrame
@@ -290,6 +290,11 @@ void MediaAudioStartupTrimNode::abort(
             ::media::ErrorInfo::invalidArgument(
                 "Audio startup trim requires an exact decoded origin envelope"));
     }
+    auto disposition = m_lineageState->classifyObservation(decoded->audioOrigin().generation);
+    if (!disposition)
+        return ::media::Result<MediaBufferRef>::failure(disposition.error());
+    if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale)
+        return ::media::Result<MediaBufferRef>::success(MediaBufferRef{});
     if (!m_lineageState->origin) {
         m_lineageState->origin = decoded->audioOrigin();
     }

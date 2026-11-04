@@ -5,16 +5,24 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
 struct MediaAvSyncStartupPolicy;
+struct MediaRealtimeGraphResourceLedgerPlan;
 
 class MediaRealtimeEdgePolicyPlanner final {
 public:
+    static ::media::Result<MediaEdgePolicy> planCanonicalAudioInput(
+        MediaBranchMode mode, const MediaEdgePolicy& outputPacket,
+        const std::optional<MediaEdgePolicy>& sourceRelease);
+    static ::media::Result<MediaRealtimeEdgePolicySet> planSynchronizedOutput(
+        const MediaRealtimeGraphResourceLedgerPlan& resources);
     static ::media::Result<MediaRealtimeEdgePolicySet> planSynchronizedSource(
         const MediaGraphQueueParameters& queues,
-        const MediaAvSyncStartupPolicy& startup);
+        const MediaAvSyncStartupPolicy& startup,
+        MediaTranscodeStreamSet members);
     static MediaRealtimeEdgePolicySet plan(
         const MediaGraphQueueParameters& queues);
     static ::media::Result<MediaRealtimeEdgePolicySet>

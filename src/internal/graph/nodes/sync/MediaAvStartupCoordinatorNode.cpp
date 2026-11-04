@@ -8,15 +8,16 @@
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-bool hasTerminalHead(const std::deque<MediaBufferRef>& pending) noexcept
+bool hasTerminalHead(const std::optional<MediaBufferRef>& pending) noexcept
 {
-    return !pending.empty() &&
-           dynamic_cast<const MediaControlBuffer*>(pending.front().get()) != nullptr;
+    return pending &&
+           dynamic_cast<const MediaControlBuffer*>(pending->get()) != nullptr;
 }
 
 } // namespace
@@ -25,6 +26,8 @@ MediaAvStartupCoordinatorNode::MediaAvStartupCoordinatorNode(
     MediaNodeId nodeId,
     MediaAvStartupCoordinatorNodePreparation preparation)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvStartupCoordinatorNode")
+    , m_allocation(std::move(preparation.m_allocation))
+    , m_releaseStorage(std::move(preparation.m_releaseStorage))
     , m_ownerPurge(std::make_shared<MediaOwnerThreadGenerationPurge>())
     , m_coordinator(std::move(preparation.m_coordinator))
     , m_generationState(std::move(preparation.m_generationState))
@@ -49,6 +52,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 
 ::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::process(
     MediaGraphExecutionContext& context)
+try
 {
     if (const auto purge = m_ownerPurge->pending()) {
         cancelPendingOutputTransfer();
@@ -64,6 +68,9 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         return processProgress(status);
     }
     return FFmpegNodeRuntime::process(context);
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaNodeProcessResult>::failure(
+        ::media::ErrorInfo::allocationFailed("Startup coordinator runtime allocation failed"));
 }
 
 ::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::onProcess(
@@ -165,13 +172,13 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 ::media::Result<bool> MediaAvStartupCoordinatorNode::fillPendingMedia(
     MediaGraphExecutionContext& context,
     const char* portName,
-    std::deque<MediaBufferRef>& pending)
+    std::optional<MediaBufferRef>& pending)
 {
-    if (!pending.empty()) return ::media::Result<bool>::success(false);
+    if (pending) return ::media::Result<bool>::success(false);
     auto input = tryPopInputOptional(context, portName);
     if (!input) return ::media::Result<bool>::failure(input.error());
     if (!input.value()) return ::media::Result<bool>::success(false);
-    pending.push_back(std::move(*input.value()));
+    pending = std::move(*input.value());
     return ::media::Result<bool>::success(true);
 }
 
@@ -209,10 +216,10 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 ::media::Result<bool> MediaAvStartupCoordinatorNode::fillSnapshotBarrierMedia(
     MediaGraphExecutionContext& context,
     const char* portName,
-    std::deque<MediaBufferRef>& pending,
+    std::optional<MediaBufferRef>& pending,
     std::size_t& remaining)
 {
-    if (!pending.empty() || remaining == 0) {
+    if (pending || remaining == 0) {
         return ::media::Result<bool>::success(false);
     }
     auto input = tryPopInputOptional(context, portName);
@@ -223,7 +230,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
                 "MediaAvStartupCoordinatorNode lost a snapshot-barrier input"));
     }
     --remaining;
-    pending.push_back(std::move(*input.value()));
+    pending = std::move(*input.value());
     return ::media::Result<bool>::success(true);
 }
 
@@ -309,26 +316,26 @@ MediaAvStartupCoordinatorNode::selectPending() const
             selectedTime = eventTime;
         }
     };
-    if (!m_pendingAudio.empty() && !hasTerminalHead(m_pendingAudio)) {
+    if (m_pendingAudio && !hasTerminalHead(m_pendingAudio)) {
         const auto* envelope = dynamic_cast<const MediaAvStartupEnvelopeBuffer*>(
-            m_pendingAudio.front().get());
+            m_pendingAudio->get());
         if (!envelope) return ::media::Result<std::optional<PendingInput>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode audio input requires a common canonical envelope"));
-        consider(PendingInput::Audio, m_pendingAudio.front(), envelope->observedAt());
+        consider(PendingInput::Audio, *m_pendingAudio, envelope->observedAt());
     }
-    if (!m_pendingVideo.empty() && !hasTerminalHead(m_pendingVideo)) {
+    if (m_pendingVideo && !hasTerminalHead(m_pendingVideo)) {
         const auto* envelope = dynamic_cast<const MediaAvStartupEnvelopeBuffer*>(
-            m_pendingVideo.front().get());
+            m_pendingVideo->get());
         if (!envelope) return ::media::Result<std::optional<PendingInput>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode video input requires a common canonical envelope"));
-        consider(PendingInput::Video, m_pendingVideo.front(), envelope->observedAt());
+        consider(PendingInput::Video, *m_pendingVideo, envelope->observedAt());
     }
     const bool clockBarrierMediaDrained =
         !m_clockBarrierActive ||
         (m_clockBarrierSnapshotSealed &&
-         m_pendingVideo.empty() && m_pendingAudio.empty() &&
+         !m_pendingVideo && !m_pendingAudio &&
          m_videoClockBarrierRemaining == 0 &&
          m_audioClockBarrierRemaining == 0);
     if (m_pendingClock && clockBarrierMediaDrained) {
@@ -372,8 +379,8 @@ MediaAvStartupCoordinatorNode::selectPending() const
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("Expired source attempt lost its clock evidence"));
     m_retiredClockEvidenceRevision = evidence->revision;
-    m_pendingVideo.clear();
-    m_pendingAudio.clear();
+    m_pendingVideo.reset();
+    m_pendingAudio.reset();
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
         "av_source_attempt state=waiting_for_evidence generation=" +
@@ -387,11 +394,11 @@ MediaAvStartupCoordinatorNode::selectPending() const
 {
     auto& pending = input == PendingInput::Video ? m_pendingVideo : m_pendingAudio;
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
-            pending.front().get())) {
+            pending->get())) {
         return processControl(context, input, *control);
     }
     const auto* envelope = dynamic_cast<const MediaAvStartupEnvelopeBuffer*>(
-        pending.front().get());
+        pending->get());
     if (!envelope || !envelope->media()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -430,7 +437,7 @@ MediaAvStartupCoordinatorNode::selectPending() const
         if (!m_retiredClockEvidenceRevision || !evidence ||
             evidence->revision <= *m_retiredClockEvidenceRevision ||
             evidence->generation != unit.generation || envelope->observedAt() < evidence->acceptedAt) {
-            pending.pop_front();
+            pending.reset();
             return processProgress();
         }
         auto resumed = m_coordinator->resumeAfterEvidence(envelope->observedAt());
@@ -458,7 +465,7 @@ MediaAvStartupCoordinatorNode::selectPending() const
     erasePurged(decision.value().purged);
     auto output = prepareOutput(context, decision.value(), *envelope);
     if (!output) return ::media::Result<MediaNodeProcessResult>::failure(output.error());
-    pending.pop_front();
+    pending.reset();
     if (output.value()) {
         auto status = emitOutput(context, "release", *output.value());
         if (!status) return processProgress(status);
@@ -471,9 +478,17 @@ MediaAvStartupCoordinatorNode::prepareOutput(
     MediaGraphExecutionContext& context,
     const MediaAvStartupDecision& decision,
     const MediaAvStartupEnvelopeBuffer& envelope)
-{
-    std::vector<MediaAvReleasedUnit> video;
-    std::vector<MediaAvReleasedUnit> audio;
+try {
+    const bool passThrough = decision.disposition == MediaAvStartupDisposition::PassThrough;
+    const auto videoCount = decision.release ? decision.release->video.size()
+        : std::size_t(passThrough && envelope.unit().stream == MediaAvStartupStream::Video);
+    const auto audioCount = decision.release ? decision.release->audio.size()
+        : std::size_t(passThrough && envelope.unit().stream == MediaAvStartupStream::Audio);
+    auto* resource = MediaLineageAllocator<MediaAvReleasedUnit>{m_allocation}.resource();
+    if (!resource) return ::media::Result<std::optional<MediaBufferRef>>::failure(
+        ::media::ErrorInfo::invalidArgument("Startup release requires an owned allocation resource"));
+    MediaAvReleasedUnits video(videoCount, *resource);
+    MediaAvReleasedUnits audio(audioCount, *resource);
     std::optional<MediaPlaybackEpoch> epoch;
     MediaAvStartupReleaseKind releaseKind =
         MediaAvStartupReleaseKind::ActiveEpochPassThrough;
@@ -543,7 +558,7 @@ MediaAvStartupCoordinatorNode::prepareOutput(
         m_coordinator->members(), *epoch, std::move(audioOrigin));
     if (!activation) return ::media::Result<std::optional<MediaBufferRef>>::failure(activation.error());
     auto release = MediaAvStartupReleaseBuffer::create(
-        m_generationState->groupKey(), releaseKind, std::move(activation).value(),
+        m_releaseStorage, m_generationState->groupKey(), releaseKind, std::move(activation).value(),
         std::move(video), std::move(audio),
         completedTransitionSequence);
     if (!release) {
@@ -570,10 +585,16 @@ MediaAvStartupCoordinatorNode::prepareOutput(
     }
     return ::media::Result<std::optional<MediaBufferRef>>::success(
         std::move(release).value());
+} catch (const std::bad_alloc&) {
+    return ::media::Result<std::optional<MediaBufferRef>>::failure(
+        ::media::ErrorInfo::allocationFailed("Startup release backing allocation failed"));
+} catch (const std::length_error&) {
+    return ::media::Result<std::optional<MediaBufferRef>>::failure(
+        ::media::ErrorInfo::allocationFailed("Startup release backing size is not representable"));
 }
 
 void MediaAvStartupCoordinatorNode::erasePurged(
-    const std::vector<MediaAvStartupUnitId>& purged) noexcept
+    const MediaAvStartupIds& purged) noexcept
 {
     if (m_generationState) m_generationState->erase(purged);
 }
@@ -588,7 +609,7 @@ MediaAvStartupCoordinatorNode::processControl(
     const auto stream = input == PendingInput::Video
         ? MediaAvStartupStream::Video
         : MediaAvStartupStream::Audio;
-    MediaBufferRef output = pending.front();
+    MediaBufferRef output = *pending;
     MediaAvSyncStatus terminalStatus = MediaAvSyncStatus::success();
     bool publishTerminal = false;
     if (control.controlKind() == MediaControlBufferKind::Eof) {
@@ -601,7 +622,7 @@ MediaAvStartupCoordinatorNode::processControl(
                 : "upstream flush/discontinuity");
         publishTerminal = true;
     }
-    pending.pop_front();
+    pending.reset();
     m_terminalBarrierActive = false;
     m_videoTerminalBarrierRemaining = 0;
     m_audioTerminalBarrierRemaining = 0;
@@ -681,8 +702,8 @@ void MediaAvStartupCoordinatorNode::resetClockBarrier() noexcept
 
 void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
 {
-    m_pendingVideo.clear();
-    m_pendingAudio.clear();
+    m_pendingVideo.reset();
+    m_pendingAudio.reset();
     resetClockBarrier();
     m_terminalBarrierActive = false;
     m_videoTerminalBarrierRemaining = 0;

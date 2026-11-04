@@ -8,6 +8,8 @@
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
 
+#include "internal/graph/diagnostics/MediaVideoEncoderExecutionObservation.h"
+
 #include <set>
 #include <string_view>
 #include <optional>
@@ -88,6 +90,7 @@ private:
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstPacketDiagnosticEmitted = false;
     bool m_firstPacketFootprintDiagnosticEmitted = false;
+    MediaVideoEncoderExecutionObservation m_executionObservation;
     std::optional<bool> m_sendWouldBlock;
     std::optional<bool> m_forceGenerationStartKeyFrame;
     std::optional<bool> m_copyOpaqueLineage;
