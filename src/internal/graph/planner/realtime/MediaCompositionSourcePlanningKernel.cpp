@@ -1,7 +1,6 @@
 #include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
 
 #include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
-#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 #include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
@@ -36,7 +35,9 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     const auto* ledgerReference = std::get_if<std::reference_wrapper<const MediaRealtimeGraphResourceLedgerPlan>>(&request.capacity);
     if (static_cast<bool>(cadence) != static_cast<bool>(ledgerReference) || (!cadence && !sourceCapacity))
         return Result::failure(::media::ErrorInfo::invalidArgument("Source timing differs from capacity facts domain"));
-    if (!request.video.decoderReadiness || (request.video.filterActive && (!request.video.filterReadiness || !request.video.filterInputConsumption)) ||
+    if (!request.video.decoderReadiness || (request.video.filterActive && (!request.video.filterReadiness ||
+        !request.video.filterExecution || !request.video.filterExecution->valid() ||
+        !request.video.filterExecution->inputConsumption)) ||
         request.video.transferDirection != MediaHardwareTransferDirection::None)
         return Result::failure(::media::ErrorInfo::notInitialized("Composition source producer readiness contract missing"));
     if (request.video.decoderOutputAllocation &&
@@ -134,11 +135,13 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     if (!holders.video.maximumAtomicInputCompletion || (holders.audio && !holders.audio->maximumAtomicInputCompletion))
         return Result::failure(::media::ErrorInfo::invalidArgument("Source producer holders require finite atomic completion bounds"));
     if (request.video.filterActive) {
-        auto execution = MediaVideoFilterExecutionPlanner::forNegotiatedOutput(
-            request.video.filter.filterName, cadence ? MediaVideoFrameLineageProduct::CanonicalInterval
-                : MediaVideoFrameLineageProduct::SourceDisplayPoint);
-        if (!execution) return Result::failure(execution.error());
-        holders.filterRetainedInputFrames = execution.value().output.maximumRetainedInputFrames;
+        const auto& execution = *request.video.filterExecution;
+        if (execution.output.filterDescription != request.video.filter.filterName ||
+            execution.frameProduct != (cadence ? MediaVideoFrameLineageProduct::CanonicalInterval
+                : MediaVideoFrameLineageProduct::SourceDisplayPoint))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Source filter retention differs from its planned execution"));
+        holders.filterRetainedInputFrames = execution.output.maximumRetainedInputFrames;
     }
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;

@@ -41,6 +41,10 @@ struct PreparedTile final {
             return Result::failure(valid.error());
         return Result::success({std::move(frame), inputReadiness});
     }
+    if (!plan.filterExecution || !plan.filterExecution->valid() ||
+        plan.filterExecution->output.filterDescription != plan.filter.filterName)
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "Prepared tile requires its planned filter execution contract"));
     MediaNodeOptions options;
     options.set("filter.pipeline.filter", plan.filter.filterName);
     std::optional<AVRational> frameRate;
@@ -74,7 +78,7 @@ struct PreparedTile final {
         return Result::failure(valid.error());
     if (auto waited = inputReadiness.enqueueCudaWait(producer.value().context, producer.value().stream); !waited)
         return Result::failure(waited.error());
-    plan.filterInputConsumption = MediaVideoFilterInputConsumption::ImmediateSingleOutput;
+    plan.filterExecution->inputConsumption = MediaVideoFilterInputConsumption::ImmediateSingleOutput;
     auto inputAllocations = MediaFfmpegPayloadReferences::capture(firstFrame, resource);
     if (!inputAllocations) return Result::failure(inputAllocations.error());
     auto tile = ::media::ffmpeg::makeFrame();

@@ -4,7 +4,6 @@
 #include "internal/graph/builder/codec/MediaEncoderRateControlOptionAdapter.h"
 #include "internal/graph/builder/codec/MediaVideoDecoderPlanOptionCodec.h"
 #include "internal/graph/builder/codec/MediaVideoEncoderPlanOptionCodec.h"
-#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
 #include "internal/graph/nodes/video/MediaVideoFilterExecutionPlanCodec.h"
 #include "internal/graph/nodes/video/MediaVideoFrameReadinessPlanCodec.h"
 
@@ -214,10 +213,12 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
                 ::media::ErrorInfo::invalidArgument(
                     "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
         }
-        auto execution = MediaVideoFilterExecutionPlanner::forNegotiatedOutput(source.filter.filterName, frameProduct);
-        if (!execution) return ::media::Result<void>::failure(execution.error());
-        execution.value().inputConsumption = source.filterInputConsumption;
-        if (auto status = MediaVideoPlanOptionApplier::applyFilterExecutionPlan(graph, nodes.videoFilter, execution.value()); !status) return status;
+        if (!source.filterExecution || !source.filterExecution->valid() ||
+            source.filterExecution->frameProduct != frameProduct ||
+            source.filterExecution->output.filterDescription != source.filter.filterName)
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                "Source filter execution differs from its planner contract"));
+        if (auto status = MediaVideoPlanOptionApplier::applyFilterExecutionPlan(graph, nodes.videoFilter, *source.filterExecution); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, source.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.name", source.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", source.filter.hwaccelName); !status) return status;

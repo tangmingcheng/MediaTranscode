@@ -22,3 +22,9 @@
 补充：registry 产品层 Release 全量构建会话 37353 已退出0，配置与构建均成功。两次构建均为 clean-first/all-target，未运行 local CLI 测试。历史归档存在行尾空格及混合换行告警，本检查点保留原证据内容，不把 diff whitespace 检查记为通过。
 
 用户最新调整：先推进 RKMPP 构建、平台能力及基本合屏功能，再集中做两端更细致的可靠性验收；Windows r385 缺陷继续保持未关闭，不再作为启动 RKMPP 工作的前置阻塞。
+
+## 滤镜执行契约贯通（2026-11-04）
+
+源 planner 保存完整 filterExecution 产品，准备阶段、builder 和合屏资源计费复用同一产品，并校验滤镜描述及帧语义一致；不再由下游重建执行契约。两名独立审查者明确 PASS；Windows Release 全量构建会话 27862 退出 0，realtime CLI 产物时间为 14:55:30。该修改尚未提供 RKMPP Completed/独立输出池证明，rk386 预检失败仍未关闭，不记为实流验收通过。
+
+按用户最新要求，后续 RKMPP 使用 all-target、8 核增量构建，不执行 clean-first；Windows 构建要求不变。

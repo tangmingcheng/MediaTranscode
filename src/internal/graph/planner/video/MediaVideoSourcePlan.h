@@ -37,7 +37,7 @@ struct MediaVideoSourcePlan {
     std::optional<MediaDecoderOutputAllocation> decoderOutputAllocation;
     std::optional<MediaCudaFrameProducerFacts> decoderReadiness;
     std::optional<MediaCudaFrameProducerFacts> filterReadiness;
-    std::optional<MediaVideoFilterInputConsumption> filterInputConsumption;
+    std::optional<MediaVideoFilterExecutionPlan> filterExecution;
     std::optional<MediaVideoFrameOwnershipStoragePlan> decoderOwnershipStorage;
     std::optional<MediaVideoFrameOwnershipStoragePlan> filterOwnershipStorage;
 };

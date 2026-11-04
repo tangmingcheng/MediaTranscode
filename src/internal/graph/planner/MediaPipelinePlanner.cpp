@@ -9,6 +9,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include "internal/graph/planner/MediaVideoFilterExecutionPlanner.h"
 #include <algorithm>
 #include <limits>
 #include <sstream>
@@ -348,6 +349,16 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     source.filterImplementation = !source.filterActive ? MediaVideoFilterImplementation::None
         : source.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoFilterImplementation::Rga : MediaVideoFilterImplementation::Generic;
+    source.filterExecution.reset();
+    if (source.filterActive) {
+        auto execution = MediaVideoFilterExecutionPlanner::forNegotiatedOutput(
+            source.filter.filterName,
+            std::holds_alternative<MediaObservedVideoCadence>(timing)
+                ? MediaVideoFrameLineageProduct::CanonicalInterval
+                : MediaVideoFrameLineageProduct::SourceDisplayPoint);
+        if (!execution) return ::media::Status::failure(execution.error());
+        source.filterExecution = std::move(execution).value();
+    }
     source.decoderReceiveInterval.reset();
     if (source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
         const auto* cadence = std::get_if<MediaObservedVideoCadence>(&timing);
