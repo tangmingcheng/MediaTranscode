@@ -84,10 +84,12 @@ public:
         MediaOwnedMemoryAllocation allocation)
     {
         using Result = ::media::Result<Prepared<Reservation>>;
-#if !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L
-        return Result::failure(::media::ErrorInfo::unsupported(
-            "Commit storage requires an audited standard-library capability"));
-#endif
+        auto geometry = probeMediaSharedAllocationGeometry<Model<Reservation>>(
+            std::type_identity<MediaSharedAllocationAllocator<Model<Reservation>>>{});
+        if (!geometry) return Result::failure(geometry.error());
+        if (storage.geometry != geometry.value())
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Commit storage differs from its actual allocator geometry"));
         if (!resource || storage.kind != Reservation::storageKind())
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Commit preparation requires matching planned storage and resource"));

@@ -55,14 +55,20 @@ template<class Object>
 #endif
 }
 
-// Capability of the audited non-array MSVC allocate_shared implementation.
+// Capability of the audited non-array allocate_shared implementation.
 // No real Reservation is created or consumed during discovery.
 template<class Object, class... Arguments>
 ::media::Result<MediaSharedAllocationGeometry> probeMediaSharedAllocationGeometry()
 {
     static_assert(!std::is_array_v<Object>);
     using Result = ::media::Result<MediaSharedAllocationGeometry>;
-#if !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L
+#if defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG)
+    // Use the very allocator instantiated by the production factories. Its
+    // rebound state is part of the control block, even when no probe runs.
+    return probeMediaSharedAllocationGeometry<Object>(
+        std::type_identity<MediaSharedAllocationAllocator<Object>>{});
+#elif !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L
     return Result::failure(::media::ErrorInfo::unsupported(
         "Shared allocation geometry requires an audited standard-library capability"));
 #else

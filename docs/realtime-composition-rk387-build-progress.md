@@ -25,3 +25,7 @@ rk386 的 SourcePreparer 失败仍存在。共享 producer facts 需要分别表
 网络分配修复不等于源码帧门禁通过，也不证明其他 startup 容器门禁已解除；Windows r385 及双平台完整实流验收仍未完成。
 
 依赖恢复现场复核：生成的 rules.ninja 已包含 -MD -MT $out -MF $DEP_FILE；已重编 MediaVideoPlanOptionApplier.cpp.o 的 ninja -t deps 返回 #deps 437（VALID）。因此依赖记录恢复已有直接证据，但整轮 792 个目标构建仍在进行。
+
+补充：本地与远端 rk387-source.tar 已按精确路径删除并核对不存在；用户提供的源媒体和既有产物保留。远端已观测 8 个 cc1plus 并行进程，可用内存约 4543 MiB，未发现内存耗尽。
+
+完成语义调整：Completed 表示受支持 FFmpeg API 成功交付可消费帧、无须引擎追加生产者等待，不表示底层所有驱动失败均被正确传播。独立审查 A 已明确认可该边界；MPP AVBuffer 借用与独立 RGA 输出仍须分别规划，不能提前释放。历史 MPP/deinterlace 错误传播风险保留，但不再把证明任意第三方无缺陷当作基础功能前置条件。
