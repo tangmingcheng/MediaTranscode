@@ -29,3 +29,9 @@ rk386 的 SourcePreparer 失败仍存在。共享 producer facts 需要分别表
 补充：本地与远端 rk387-source.tar 已按精确路径删除并核对不存在；用户提供的源媒体和既有产物保留。远端已观测 8 个 cc1plus 并行进程，可用内存约 4543 MiB，未发现内存耗尽。
 
 完成语义调整：Completed 表示受支持 FFmpeg API 成功交付可消费帧、无须引擎追加生产者等待，不表示底层所有驱动失败均被正确传播。独立审查 A 已明确认可该边界；MPP AVBuffer 借用与独立 RGA 输出仍须分别规划，不能提前释放。历史 MPP/deinterlace 错误传播风险保留，但不再把证明任意第三方无缺陷当作基础功能前置条件。
+
+## 最终构建结果
+
+RKMPP 第二次增量完成 792/792，RK387_DEPFILE_BUILD_EXIT=0。realtime CLI 大小 12150136 字节，修改时间 2026-11-04 15:26:53 +08:00。随后相同增量命令返回 ninja: no work to do，RK387_NOOP_EXIT=0。wire buffer 对象记录 #deps 337（VALID），明确包含本轮两个网络存储头文件；因此新代码已实际参与重编。Windows Release 会话 28129 同样退出 0，所需 cache/ninja/两个CLI产物均存在。没有执行 local CLI 测试，也未将构建结果记为合屏实流通过。
+
+两名独立审查者均认可正常同步 API 的 Completed 边界；具体实施顺序见 [RKMPP 生产者契约计划](realtime-composition-rkmpp-producer-plan.md)。已知依赖异常传播风险仍保留。
