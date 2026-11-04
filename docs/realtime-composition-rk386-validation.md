@@ -34,3 +34,11 @@
 本轮补充核验：远端复用120秒源与本机 SHA256 一致，includes.tar 的远端哈希也与表中一致。远端到本机192.168.96.122的路由经192.168.130.254/eth0；路由存在不等于UDP已成功接收。实际 Ninja PID1777165，参数 -j 8 all，构建仍在进行。
 
 只读源码调查进一步确认：远端 /home/tang/ffmpeg-rkmpp-close-ownership HEAD 为 ab1e61adaa21ff129caa8e01a1198156044567ed；rkmppdec.c 的 rkmpp_export_frame 将 MppFrame 和 DRM 描述分别封装为只读 AVBuffer，释放回调调用 mpp_frame_deinit，未在此路径生成独立像素副本。它与 CUDA safe-copy 的独立输出合同不同，不能在 adapter 中仅按设备名返回同一能力。当前合屏 source preparer 的 CUDA-only allocation/readiness 门禁可能早于网络几何失败；以首次实际CLI错误为准。尚未修改依赖或放宽门禁。
+
+## 构建结果
+
+8核全量构建完成，792/792，RK386_ALL_CORES_EXIT=0。realtime CLI 为12125384字节，core archive32700112字节、realtime application1813986字节、Beta304034字节，远端时间2026-11-04 14:43附近。未运行local CLI。
+
+ldd 核验 FFmpeg 来自 /home/tang/ffmpeg-ab1e61a/lib，RGA 为 /usr/local/lib/aarch64-linux-gnu/librga.so.2，MPP 为 /usr/local/lib/librockchip_mpp.so.1；未出现not found。ffmpeg枚举确认 hevc_rkmpp、AAC、scale_rkrga、vpp_rkrga 可见；枚举不替代生产链路功能验收。
+
+构建所需临时包已完成使用，按上表四个确切本机/远端文件路径清理；源码目录和构建产物保留供后续实流。媒体验收仍待进行，不能标记本轮合屏PASS。
