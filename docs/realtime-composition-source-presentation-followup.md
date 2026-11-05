@@ -305,3 +305,13 @@ SourceTopology 的初次 plan 与固定形状 rebind 共用 compileTopology。�
 Windows 全量 Release 62153 退出 0（801 任务计划），四项产物核验通过，realtime CLI 7122432 字节、14:45:05。完整图的共享输出/跨源绑定容量更新、全部费用工作区预算、具体 freeze solver 和原规格实流验收仍待完成。本轮没有新抓包、截图、日志、测试脚本或传输临时文件。
 
 RKMPP 单次 SSH 25660 增量构建 23/23、终态退出 0；两文件同步前后 hash 核验成功，使用 8 核，未执行 clean-first。无新媒体链路通过结论。
+
+## 2026-11-05 完整图容量更新
+
+完整 GraphTopology 的初次 plan 与固定目录 rebind 共用声明、attachment、binding、连接及 incident 遍历。更新核对节点 kind/source、role/position、owner/port、边全部非 policy 字段和目录数量，保持原顺序；自环关联容量只计一次。成功更新不增长容器、不构造字符串，失败候选整体作废。
+
+每源临时 positions vector 已消除，owned 位置由源起点加前序 owned 项数推导，external 仍通过 Aggregate boundary 显式解析。每次附加 alias 前重新取得 port 视图，构造模式先生成拥有字符串再 push，避免重分配使视图失效。两位独立审查者均局部 PASS；保持既有静态分配协商原则，没有新媒体算法。增加了映射/incident 扫描成本，不宣称性能提升。
+
+完整候选费用重算、预分配工作区预算及具体 freeze solver 尚未接通；本轮不是实流验收通过。没有产生抓包、截图、测试脚本或同步临时文件。
+
+Windows Release 全量构建 1353 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7121408 字节、14:54:30。RKMPP 单次 SSH 60191 核验两文件同步前后 hash，8 核增量 all-target 完成 22/22、终态退出 0，未执行 clean-first。无新媒体链路验收结论。

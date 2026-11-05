@@ -58,6 +58,10 @@ struct MediaCompositionGraphTopologyFacts final {
 };
 class MediaCompositionGraphTopologyPlanner final {
 public:
+    // Fixed declarations and identity; successful updates allocate nothing.
+    // A failed partially updated candidate must be discarded.
+    static ::media::Status rebind(const MediaCompositionGraphTopologyFacts& facts,
+        MediaCompositionGraphTopology& topology);
     static ::media::Result<MediaCompositionGraphTopology> plan(const MediaCompositionGraphTopologyFacts& facts);
 };
 }
