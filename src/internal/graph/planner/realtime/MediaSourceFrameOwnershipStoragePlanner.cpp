@@ -1,7 +1,47 @@
 #include "internal/graph/planner/realtime/MediaSourceFrameOwnershipStoragePlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/planner/realtime/MediaCompositionPayloadResidencePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 
 namespace media::ffmpeg::graph {
+::media::Result<MediaSourceFrameOwnershipStoragePlan> MediaSourceFrameOwnershipStoragePlanner::plan(
+    const MediaCompositionGraphTopology& topology,
+    const MediaCompositionReferenceResidencePlan& reference, std::size_t sourceIndex,
+    const MediaCompositionProducerHolderFacts& holders,
+    const MediaVideoFrameOwnershipStoragePlan& decoder,
+    const std::optional<MediaVideoFrameOwnershipStoragePlan>& filter)
+{
+    using Result = ::media::Result<MediaSourceFrameOwnershipStoragePlan>;
+    std::optional<std::uint64_t> decoderReferences, filterReferences;
+    for (std::size_t position = 0; position < topology.positions.size(); ++position) {
+        const auto& node = topology.positions[position];
+        if (node.source != sourceIndex ||
+            (node.kind != MediaNodeKind::VideoDecode && node.kind != MediaNodeKind::VideoFilter)) continue;
+        auto& target = node.kind == MediaNodeKind::VideoDecode ? decoderReferences : filterReferences;
+        if (target) return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Frame ownership topology has repeated source producers"));
+        auto reachable = MediaCompositionPayloadResidencePlanner::plan(
+            topology, reference, position, MediaStreamKind::Video, MediaPayloadKind::Frame);
+        if (!reachable) return Result::failure(reachable.error());
+        // Frame residence does not consume compressed acquisition/startup counts.
+        auto residence = MediaCompositionProducerResidencePlanner::plan(holders, node.kind,
+            MediaStreamKind::Video, MediaPayloadKind::Frame, {0, 0});
+        if (!residence) return Result::failure(residence.error());
+        auto total = MediaCheckedArithmetic::add(reachable.value().maximumRetainedObjects,
+            residence.value().additionalRetainedObjects, "source frame ownership residence");
+        if (!total) return Result::failure(total.error());
+        if (total.value() < residence.value().minimumProgressObjects)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Frame ownership residence cannot accommodate progress owners"));
+        target = total.value();
+    }
+    if (!decoderReferences || filterReferences.has_value() != filter.has_value() ||
+        filter.has_value() != holders.filterRetainedInputFrames.has_value())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Frame ownership topology differs from prepared producer membership"));
+    return plan(decoder, filter, *decoderReferences, filterReferences);
+}
+
 ::media::Result<MediaSourceFrameOwnershipStoragePlan> MediaSourceFrameOwnershipStoragePlanner::plan(
     const MediaVideoFrameOwnershipStoragePlan& decoder,
     const std::optional<MediaVideoFrameOwnershipStoragePlan>& filter,

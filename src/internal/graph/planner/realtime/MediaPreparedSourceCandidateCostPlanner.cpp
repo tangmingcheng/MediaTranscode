@@ -164,8 +164,16 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         facts.startupVideoUnits, facts.startupAudioUnits, facts.groupKeyCharacters,
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u});
     if (!startup) return R::failure(startup.error());
+    if (!facts.videoPlan.decoderOwnershipStorage ||
+        facts.videoPlan.filterActive != facts.videoPlan.filterOwnershipStorage.has_value())
+        return R::failure(::media::ErrorInfo::invalidArgument(
+            "Candidate frame ownership requires prepared producer geometry"));
+    auto ownership = MediaSourceFrameOwnershipStoragePlanner::plan(facts.topology, facts.residence,
+        facts.sourceIndex, facts.producerHolders, *facts.videoPlan.decoderOwnershipStorage,
+        facts.videoPlan.filterOwnershipStorage);
+    if (!ownership) return R::failure(ownership.error());
     return R::success({fixed.value(), std::move(video).value(), std::move(audioCosts),
         indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
-        std::move(startup).value()});
+        std::move(startup).value(), std::move(ownership).value()});
 }
 }

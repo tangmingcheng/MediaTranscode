@@ -205,6 +205,12 @@ try {
             auto ownership = MediaSourceFrameOwnershipStoragePlanner::plan(facts.decoderGeometry,
                 facts.filterGeometry, *decoderReferences, filterReferences);
             if (!ownership) return Result::failure(ownership.error());
+            auto projectedOwnership = MediaSourceFrameOwnershipStoragePlanner::plan(
+                projection, reference.value(), source.sourceIndex, *source.packetStorageHolders,
+                facts.decoderGeometry, facts.filterGeometry);
+            if (!projectedOwnership) return Result::failure(projectedOwnership.error());
+            if (projectedOwnership.value() != ownership.value())
+                return invalid("Source frame ownership differs from final producer residence");
             auto lineage = MediaSourceLineageStoragePlanner::plan(projection, reference.value(),
                 source.sourceIndex, *source.sourceLineageRegistryCapacity, source.preparedPacketContainers->video.prefixObjects,
                 *source.sourceTransferDirection);

@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
+#include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <array>
 #include <limits>
@@ -22,18 +23,18 @@ namespace media::ffmpeg::graph {
     if (!group) return R::failure(group.error());
     std::size_t audioWrappers = 0;
     if (audioUnits) {
-#if !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L
-        return R::failure(::media::ErrorInfo::unsupported("Released audio wrapper requires audited shared pointer geometry"));
-#else
-        // Actual create uses shared_ptr<MediaBuffer>(new Derived), so the
-        // ordinary object and _Ref_count<Derived> are separate allocations.
-        auto bytes = MediaCheckedArithmetic::multiply(*audioUnits,
-            sizeof(MediaAvReleasedAudioBuffer) + sizeof(std::_Ref_count<MediaAvReleasedAudioBuffer>),
+        auto control = probeMediaSeparateSharedControlGeometry<MediaAvReleasedAudioBuffer>();
+        if (!control) return R::failure(control.error());
+        // Ordinary object/control requests retain their original allocation
+        // domain; no preparation-resource header is added to either request.
+        auto unit = MediaCheckedArithmetic::add(sizeof(MediaAvReleasedAudioBuffer),
+            control.value().bytes, "Released audio wrapper and control");
+        if (!unit) return R::failure(unit.error());
+        auto bytes = MediaCheckedArithmetic::multiply(*audioUnits, unit.value(),
             "Released audio wrapper allocations");
         if (!bytes || bytes.value() > (std::numeric_limits<std::size_t>::max)())
             return R::failure(::media::ErrorInfo::allocationFailed("Released audio wrappers overflow"));
         audioWrappers = static_cast<std::size_t>(bytes.value());
-#endif
     }
     auto envelope = MediaStartupSharedObjectPlanner::prepared(MediaStartupSharedObjectRole::Envelope);
     auto release = MediaStartupSharedObjectPlanner::prepared(MediaStartupSharedObjectRole::Release);

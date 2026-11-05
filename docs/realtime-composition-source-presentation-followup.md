@@ -53,3 +53,11 @@
 本单元双独立审查均明确PASS；审查中已修正CRLF及clock分配域注释。修正版Release全量构建35021 configure/build均0，796目标，脚本核验产物完整；未运行local CLI，未新增媒体通过项或临时测试产物。下一步候选分项仍缺 frame ownership overlap、AU payload 和唯一 root 归属，freezeBatch 的空solver门禁保持，不称r394已修复。
 
 RKMPP费用适配的只读前置证据：本机MSVC memory:1612使用new _Ref_count<_Ux>保存裸指针；目标GCC12.4的 /opt/mt-tools/gcc-12.4-native/include/c++/12.4.0/bits/shared_ptr_base.h:917 使用new _Sp_counted_ptr<_Ptr,_Lp>，定义位于419起。ReleasedAudioBuffer实际工厂是MediaBufferRef(new Derived)，因此需要独立对象与该裸指针control的两个请求，不能使用allocate_shared的inplace几何；适配尚未实现，也未修改外部文件。
+
+帧所有权候选接线：MediaSourceFrameOwnershipStoragePlanner 新增纯 topology/reference/sourceIndex/holder 入口，按真实 decoder/filter 位置复用 payload residence、producer residence 与原所有权费用计算。CandidateCostPlanner 返回 frameOwnership 分项；最终 ResourcePlanner 将相同投影结果与实际 producer identity/readback 的原费用结果逐字段比较，不增加第二次费用或预约。重复/缺失生产者、filter成员不一致及不足最小进展均明确失败；没有另写快照保活算法。
+
+裸指针控制块适配已实施：SharedAllocationGeometryProbe 增加独立控制块几何，StartupBatchStoragePlanner 调用它；Windows费用保持原式，GCC12.4使用实际 Derived* 控制块。两次普通分配不增加PMR头，不承诺RSS；门禁沿已审MSVC145/202604与GCC12/20240620、C++20非debug，其他环境仍Unsupported。尚待本轮构建及后续RKMPP编译/运行证明，不把源代码适配记作RKMPP验收通过。
+
+本单元没有解除freeze空solver门禁；AU payload、根预算去重、候选搜索和封印后的最终对照仍未闭合。原r394失败保持，未重复无变化的起播失败测试。
+
+本轮七源码冻结后，两名独立审查均明确PASS；Windows Release全量构建50580 configure/build均0、796目标，脚本核验产物。RKMPP新分支尚未编译/运行，不以Windows编译证明GCC实现。无新增实流通过项、local执行或临时测试产物。下一单元须对照SourceSession::drain实际预约的payload+padding+AVPacket+AVBufferRef，租约控制块已由候选单列，不重复计费。

@@ -37,6 +37,28 @@ template<class Object, class ActualAllocator>
 #endif
 }
 
+// shared_ptr<Base>(new Object) allocates Object and a pointer control separately.
+// This describes only the control request, with the original derived pointer
+// type and default delete. Arrays, custom deleters and inplace owners differ.
+template<class Object>
+::media::Result<MediaSharedAllocationGeometry> probeMediaSeparateSharedControlGeometry()
+{
+    static_assert(std::is_object_v<Object> && !std::is_array_v<Object>);
+    using Result = ::media::Result<MediaSharedAllocationGeometry>;
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L
+    using Control = std::_Ref_count<Object>;
+    return Result::success({1, sizeof(Control), alignof(Control)});
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG)
+    // GCC 12.4 shared_ptr_base.h __shared_count(_Ptr): new _Sp_counted_ptr<_Ptr, _Lp>.
+    using Control = std::_Sp_counted_ptr<Object*, __gnu_cxx::__default_lock_policy>;
+    return Result::success({1, sizeof(Control), alignof(Control)});
+#else
+    return Result::failure(::media::ErrorInfo::unsupported(
+        "Separate shared control requires an audited standard-library capability"));
+#endif
+}
+
 // make_shared uses a different control type from allocate_shared on MSVC.
 template<class Object>
 ::media::Result<MediaSharedAllocationGeometry> probeMediaMakeSharedAllocationGeometry()
