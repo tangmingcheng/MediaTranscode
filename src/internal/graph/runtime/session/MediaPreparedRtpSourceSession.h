@@ -157,7 +157,7 @@ private:
     ::media::Status prepareFreezeLocked();
     MediaPreparedRtpStorageSnapshot storageSnapshotLocked() const;
     ::media::Status validateStorageAdmissionLocked(const MediaPreparedRtpStorageAdmission& product,
-        const MediaPreparedRtpStorageSnapshot& snapshot) const;
+        const MediaPreparedRtpStorageSnapshot& snapshot, std::size_t batchStorageBytes) const;
     void applyStorageAdmissionLocked(MediaPreparedRtpStorageAdmission product) noexcept;
     // Initialize fallible synchronization before transferring covered ownership.
     mutable std::mutex m_mutex;

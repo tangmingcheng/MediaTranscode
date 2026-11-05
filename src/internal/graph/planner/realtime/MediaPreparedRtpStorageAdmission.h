@@ -53,11 +53,21 @@ struct MediaPreparedRtpStorageSourceSnapshot final {
     const MediaPreparedRtpSourceSessionPlan* plan;
     MediaPreparedRtpStorageSnapshot snapshot;
 };
+struct MediaPreparedRtpBatchStoragePlan final {
+    std::size_t sourceCount;
+    std::shared_ptr<MediaPreparationMemoryResource> owner;
+    std::size_t scratchBytes;
+    std::size_t resultBytes;
+    std::size_t totalBytes;
+};
 class MediaPreparedRtpBatchAdmissionSolver {
 public:
     virtual ~MediaPreparedRtpBatchAdmissionSolver() = default;
     virtual ::media::Result<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> solve(
         std::span<const MediaPreparedRtpStorageSourceSnapshot> sources,
-        const MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>& partition) const = 0;
+        const MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>& partition,
+        // Source totals exclude this batch product. Return exactly sourceCount
+        // elements/capacity on owner; these arrays are charged to source zero.
+        const MediaPreparedRtpBatchStoragePlan& batchStorage) const = 0;
 };
 } // namespace media::ffmpeg::graph

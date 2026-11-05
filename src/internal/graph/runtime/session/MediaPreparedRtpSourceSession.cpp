@@ -1,5 +1,6 @@
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpBatchStoragePlanner.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
@@ -627,11 +628,13 @@ MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLo
 }
 
 ::media::Status MediaPreparedRtpSourceSession::validateStorageAdmissionLocked(
-    const MediaPreparedRtpStorageAdmission& product, const MediaPreparedRtpStorageSnapshot& snapshot) const
+    const MediaPreparedRtpStorageAdmission& product, const MediaPreparedRtpStorageSnapshot& snapshot,
+    std::size_t batchStorageBytes) const
 {
     if (product.sharedCapacityBytes != m_plan.storageBytes || product.owner != snapshot.owner ||
         !product.totalBytes || product.totalBytes > m_plan.storageBytes ||
-        product.totalBytes < snapshot.budget.retainedBytes ||
+        batchStorageBytes > snapshot.budget.retainedBytes ||
+        product.totalBytes < snapshot.budget.retainedBytes - batchStorageBytes ||
         product.fixedBytes > product.totalBytes ||
         product.protocolBytes > product.totalBytes - product.fixedBytes ||
         product.startupBytes != product.totalBytes - product.fixedBytes - product.protocolBytes ||
@@ -721,6 +724,12 @@ try {
     // Exact-size transient storage, charged before allocation to the same shared
     // preparation domain. Storage snapshots include these live reservations.
     auto resource = sources.front()->m_ownerResource;
+    std::optional<MediaPreparedRtpBatchStoragePlan> batchStorage;
+    if (solver) {
+        auto planned = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), resource);
+        if (!planned) return ::media::Status::failure(planned.error());
+        batchStorage.emplace(std::move(planned).value());
+    }
     MediaFixedCapacityStorage<MediaPreparedRtpSourceSession*> ordered(sources.size(), *resource);
     MediaFixedCapacityStorage<std::unique_lock<std::mutex>> locks(sources.size(), *resource);
     MediaFixedCapacityStorage<MediaPreparedRtpStorageSourceSnapshot> snapshots(sources.size(), *resource);
@@ -750,10 +759,12 @@ try {
         if (!partition) return ::media::Status::failure(partition.error());
         for (std::size_t i = 0; i < sources.size(); ++i)
             snapshots[i].snapshot.budget = budgetSnapshots[i];
-        auto solved = solver->solve(snapshots.view(), partition.value());
+        auto solved = solver->solve(snapshots.view(), partition.value(), *batchStorage);
         if (!solved) return ::media::Status::failure(solved.error());
-        if (solved.value().size() != sources.size())
-            return invalid("Batch admission changed the source membership");
+        if (solved.value().size() != batchStorage->sourceCount ||
+            solved.value().capacity() != batchStorage->sourceCount ||
+            solved.value().resource() != batchStorage->owner.get())
+            return invalid("Batch admission changed result membership, capacity or storage owner");
         admissions.emplace(std::move(solved).value());
         // Solver storage may have changed the ledger. Reobserve held credit;
         // neither observation reserves future unrelated-root allocations.
@@ -761,11 +772,17 @@ try {
         if (!partition) return ::media::Status::failure(partition.error());
         std::size_t total = partition.value().otherRetainedBytes;
         const auto capacity = partition.value().budget.capacity;
+        if (batchStorage->totalBytes > capacity - total)
+            return invalid("Batch scratch and result exceed shared deployment capacity");
+        total += batchStorage->totalBytes;
         for (std::size_t i = 0; i < sources.size(); ++i) {
             if (sources[i]->m_plan.storageBytes != capacity)
                 return invalid("Batch admission requires one shared deployment capacity");
             snapshots[i].snapshot.budget = budgetSnapshots[i];
-            if (auto status = sources[i]->validateStorageAdmissionLocked((*admissions)[i], snapshots[i].snapshot); !status)
+            // All batch arrays are alive here and charged to source zero's
+            // budget. Count them once in the batch, never in each source total.
+            if (auto status = sources[i]->validateStorageAdmissionLocked((*admissions)[i], snapshots[i].snapshot,
+                    i == 0 ? batchStorage->totalBytes : 0); !status)
                 return status;
             if ((*admissions)[i].totalBytes > capacity - total)
                 return invalid("Batch source storage exceeds shared deployment capacity");
