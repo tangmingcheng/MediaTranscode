@@ -5,38 +5,78 @@
 #include <new>
 
 namespace media::ffmpeg::graph {
+namespace {
+::media::Status validateResidenceTopology(const MediaPayloadResidenceTopology& topology,
+    std::size_t producerPosition)
+{
+    if (producerPosition >= topology.nodeCount)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Residence producer position is absent"));
+    for (const auto& edge : topology.connections)
+        if (edge.from >= topology.nodeCount || edge.to >= topology.nodeCount)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Residence connection position is absent"));
+    for (const auto& owner : topology.owners)
+        for (const auto position : owner.retainingPositions)
+            if (position >= topology.nodeCount)
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Residence owner position is absent"));
+    return ::media::Status::success();
+}
+}
+
+bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwner& owner) const noexcept
+{
+    return owner.maximumReferences && std::any_of(owner.retainingPositions.begin(),
+        owner.retainingPositions.end(), [&](std::size_t position) {
+            return std::find(reachablePositions.begin(), reachablePositions.end(), position) != reachablePositions.end();
+        });
+}
+
+::media::Result<MediaPayloadResidenceEvaluation> MediaGraphPayloadResidencePlanner::evaluate(
+    const MediaPayloadResidenceTopology& topology, std::size_t producerPosition,
+    std::span<std::size_t> workspace)
+{
+    using Result = ::media::Result<MediaPayloadResidenceEvaluation>;
+    if (auto status = validateResidenceTopology(topology, producerPosition); !status)
+        return Result::failure(status.error());
+    if (workspace.size() < topology.nodeCount)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Residence traversal workspace is too small"));
+    std::size_t count = 1;
+    workspace[0] = producerPosition;
+    const auto contains = [&](std::size_t position) {
+        const auto reachable = workspace.first(count);
+        return std::find(reachable.begin(), reachable.end(), position) != reachable.end();
+    };
+    // A downstream producer may alias input; it is not an ownership cut.
+    for (std::size_t i = 0; i < count; ++i)
+        for (const auto& edge : topology.connections)
+            if (edge.from == workspace[i] && !contains(edge.to))
+                workspace[count++] = edge.to;
+    MediaPayloadResidenceEvaluation result{workspace.first(count), 0};
+    for (const auto& owner : topology.owners) {
+        if (!result.retains(owner)) continue;
+        auto sum = MediaCheckedArithmetic::add(result.maximumRetainedObjects, owner.maximumReferences,
+            "producer reachable retention credits");
+        if (!sum) return Result::failure(sum.error());
+        result.maximumRetainedObjects = sum.value();
+    }
+    return Result::success(result);
+}
 
 ::media::Result<MediaPayloadResidenceProjection> MediaGraphPayloadResidencePlanner::plan(
     const MediaPayloadResidenceTopology& topology, std::size_t producerPosition)
 try {
     using Result = ::media::Result<MediaPayloadResidenceProjection>;
-    if (producerPosition >= topology.nodeCount)
-        return Result::failure(::media::ErrorInfo::invalidArgument("Residence producer position is absent"));
-    for (const auto& edge : topology.connections)
-        if (edge.from >= topology.nodeCount || edge.to >= topology.nodeCount)
-            return Result::failure(::media::ErrorInfo::invalidArgument("Residence connection position is absent"));
+    if (auto status = validateResidenceTopology(topology, producerPosition); !status)
+        return Result::failure(status.error());
+    MediaPayloadResidenceProjection result{{}, 0, {}};
+    if (topology.nodeCount > result.reachablePositions.max_size())
+        return Result::failure(::media::ErrorInfo::allocationFailed("Residence traversal exceeds addressable workspace"));
+    result.reachablePositions.resize(topology.nodeCount);
+    auto evaluated = evaluate(topology, producerPosition, result.reachablePositions);
+    if (!evaluated) return Result::failure(evaluated.error());
+    result.maximumRetainedObjects = evaluated.value().maximumRetainedObjects;
+    result.reachablePositions.resize(evaluated.value().reachablePositions.size());
     for (const auto& owner : topology.owners)
-        for (const auto position : owner.retainingPositions)
-            if (position >= topology.nodeCount)
-                return Result::failure(::media::ErrorInfo::invalidArgument("Residence owner position is absent"));
-    MediaPayloadResidenceProjection result{{producerPosition}, 0, {}};
-    const auto contains = [&](std::size_t position) {
-        return std::find(result.reachablePositions.begin(), result.reachablePositions.end(), position) != result.reachablePositions.end();
-    };
-    // A downstream producer may alias input; it is not an ownership cut.
-    for (std::size_t i = 0; i < result.reachablePositions.size(); ++i)
-        for (const auto& edge : topology.connections)
-            if (edge.from == result.reachablePositions[i] && !contains(edge.to))
-                result.reachablePositions.push_back(edge.to);
-    for (const auto& owner : topology.owners) {
-        if (!owner.maximumReferences) continue;
-        if (!std::any_of(owner.retainingPositions.begin(), owner.retainingPositions.end(), contains)) continue;
-        auto sum = MediaCheckedArithmetic::add(result.maximumRetainedObjects, owner.maximumReferences,
-            "producer reachable retention credits");
-        if (!sum) return Result::failure(sum.error());
-        result.maximumRetainedObjects = sum.value();
-        result.contributions.push_back(owner);
-    }
+        if (evaluated.value().retains(owner)) result.contributions.push_back(owner);
     return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaPayloadResidenceProjection>::failure(

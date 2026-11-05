@@ -182,3 +182,12 @@ RKMPP构建退出0，realtime二进制SHA256=f739913039e46e6f46e1fb01710f566edc3
 设计沿C++ Core Guidelines F.16对只读大对象使用const引用的原则：https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#f16-for-in-parameters-pass-cheaply-copied-types-by-value-and-others-by-reference-to-const 。不是新的媒体算法，不改线程、背压、节点行为、外部输入或平台adapter。此修改实际同时作用于候选费用与最终图费用消费者；仅消除一处深拷贝，不宣称整个候选链无分配。Windows Release全核构建9501进行中，双独立源码审查中。
 验证结果：presentation_plan_review和timing_path_review均对冻结2文件明确PASS。Windows Release clean-first/all全核构建9501终态退出0，800任务计划，configure/build均0；RKMPP同目录8核增量all完成6/6任务，两个源码文件覆盖前后哈希一致。未执行local或realtime媒体链路，未生成抓包/截图/临时同步文件，不能作为实流成功提交；完整solver及其余候选动态分配仍未完成。
 RKMPP退出0，realtime二进制SHA256=68f61b8ce7d481f0dea5d249b6a70f42358f610697dbbdbf318fec00907e00f0，ninja/cc1plus无残留。
+
+## 可达持有量的固定工作区求值（2026-11-05）
+
+MediaGraphPayloadResidencePlanner将原有广度遍历及checked持有量累加提取到evaluate；调用者显式提供至少nodeCount项的size_t工作区，成功求值不分配，返回借用的有效位置前缀与总量。原plan实际调用该实现，再按共用retains谓词物化原贡献列表，供现有composition与最终图消费者继续核对。工作区不得别名topology，返回视图有效期受调用方控制；失败可修改工作区。原索引校验先于拥有型工作区分配，超max_size明确失败，错误诊断仍可能分配字符串。
+
+行业对照为Boost Graph官方BFS文档：https://raw.githubusercontent.com/boostorg/graph/boost-1.85.0/doc/breadth_first_search.html 。沿用原FIFO发现次序、发现时去重，不改变媒体/所有权算法；共享owner有任一位置可达即仅收费一次。当前仍按边表及已发现位置线性扫描，未获得或宣称Boost邻接表实现的O(V+E)复杂度。成功路径工作区由调用者所有，无新增线程/队列/平台adapter/公共配置。
+
+presentation_plan_review和timing_path_review均对冻结2文件明确局部PASS，覆盖环、自环、重复边、共享owner、零值、溢出及span生命周期。Windows Release全核构建68306进行中。完整候选仍需连接身份/根结构预编译和共用数值消费，现有拥有型plan仍分配最终证据；不能据此声称整个CandidateCostPlanner已无分配或solver已接通。
+构建结果：Windows Release clean-first/all全核68306终态退出0、800任务计划，configure/build均0，realtime产物7117824字节；RKMPP原目录8核增量all完成20/20任务、退出0，realtime SHA256=1de0ab5492087df273bec1710192298df067d53c7124f4ec72db3028e8712b53。两源码文件同步前后哈希校验通过，远端ninja/cc1plus无残留。本轮没有实流测试或抓包/截图/临时同步文件；本次共享规划路径修改仍须随完整solver接通后的Windows→RKMPP同规格真实链路复验，不把构建当媒体验收。

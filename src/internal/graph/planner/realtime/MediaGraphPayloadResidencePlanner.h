@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -32,6 +33,14 @@ struct MediaPayloadResidenceProjection final {
     std::vector<MediaPayloadResidenceOwner> contributions;
 };
 
+// Borrows only the caller's traversal workspace, never the topology storage.
+// Keep that workspace alive and unchanged while inspecting this result.
+struct MediaPayloadResidenceEvaluation final {
+    std::span<const std::size_t> reachablePositions;
+    std::uint64_t maximumRetainedObjects;
+    bool retains(const MediaPayloadResidenceOwner& owner) const noexcept;
+};
+
 struct MediaGraphPayloadResidenceContribution final {
     std::vector<MediaNodeId> retainingNodes;
     std::uint64_t maximumReferences;
@@ -55,6 +64,12 @@ struct MediaGraphPayloadResidenceFacts final {
 // graph products; ordinary storage remains a conservative reference bound.
 class MediaGraphPayloadResidencePlanner final {
 public:
+    // Successful evaluation performs no allocations. Workspace must contain
+    // at least nodeCount entries and must not alias topology storage. All
+    // entries used are initialized here; failure may leave them modified.
+    static ::media::Result<MediaPayloadResidenceEvaluation> evaluate(
+        const MediaPayloadResidenceTopology& topology, std::size_t producerPosition,
+        std::span<std::size_t> workspace);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaPayloadResidenceTopology& topology, std::size_t producerPosition);
     static ::media::Result<MediaGraphPayloadResidence> plan(
