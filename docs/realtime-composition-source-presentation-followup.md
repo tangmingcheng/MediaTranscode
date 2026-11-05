@@ -174,3 +174,11 @@ RKMPP构建退出0，realtime二进制SHA256=f739913039e46e6f46e1fb01710f566edc3
 
 因此，上轮“拓扑数值更新”只是完整接线中的一部分，不能单独据此解除freeze门禁。本轮没有修改生产源码、启动已知必失败的媒体链路或运行无源码变化的构建；没有生成临时测试产物。
 独立审查presentation_plan_review确认上述传递分配缺口。补充约束：零references仅更新数值，不应删除预编译证据槽；无分配只约束成功候选求值路径，错误诊断字符串仍需保留明确失败边界。最终实现必须让CandidateCostPlanner及具体solver实际消费共用数值路径，不能只增加工作区类型。
+
+## 帧 wrapper 数值求值去重（2026-11-05）
+
+按上一节的传递分配审计，MediaPreparedFrameWrapperStoragePlanner不再将FrameWrapper family的roots及嵌套holder位置数组复制进返回产品，而是同步遍历输入lineage中的原证据；保留全部角色/来源/构造次数/溢出校验与费用算法，返回sourceIndex和两个费用数值，不存借用指针。CandidateCosts本身拥有完整lineage，最终账本的MediaSourceFrameOwnershipStorageEvidence同样保存lineageStorage，根证据并未丢失。全仓消费者核验未发现读取旧frameWrappers.roots的其他路径。
+
+设计沿C++ Core Guidelines F.16对只读大对象使用const引用的原则：https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#f16-for-in-parameters-pass-cheaply-copied-types-by-value-and-others-by-reference-to-const 。不是新的媒体算法，不改线程、背压、节点行为、外部输入或平台adapter。此修改实际同时作用于候选费用与最终图费用消费者；仅消除一处深拷贝，不宣称整个候选链无分配。Windows Release全核构建9501进行中，双独立源码审查中。
+验证结果：presentation_plan_review和timing_path_review均对冻结2文件明确PASS。Windows Release clean-first/all全核构建9501终态退出0，800任务计划，configure/build均0；RKMPP同目录8核增量all完成6/6任务，两个源码文件覆盖前后哈希一致。未执行local或realtime媒体链路，未生成抓包/截图/临时同步文件，不能作为实流成功提交；完整solver及其余候选动态分配仍未完成。
+RKMPP退出0，realtime二进制SHA256=68f61b8ce7d481f0dea5d249b6a70f42358f610697dbbdbf318fec00907e00f0，ninja/cc1plus无残留。

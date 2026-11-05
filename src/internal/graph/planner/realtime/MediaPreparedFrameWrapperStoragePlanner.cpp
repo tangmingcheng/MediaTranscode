@@ -22,9 +22,9 @@ try {
         frames = &allocation;
     }
     if (!frames || frames->roots.empty()) return invalid("Prepared frame wrappers lack creator roots");
-    MediaPreparedFrameWrapperStoragePlan result{lineage.sourceIndex, frames->roots, 0, 0};
+    MediaPreparedFrameWrapperStoragePlan result{lineage.sourceIndex, 0, 0};
     std::size_t decoderConstructions = 0, filterConstructions = 0;
-    for (const auto& root : result.roots) {
+    for (const auto& root : frames->roots) {
         if (root.creatorPosition >= topology.positions.size() || !root.maximumReferences)
             return invalid("Prepared frame wrapper root is outside its topology");
         const auto& creator = topology.positions[root.creatorPosition];

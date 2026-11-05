@@ -5,7 +5,8 @@
 namespace media::ffmpeg::graph {
 struct MediaPreparedFrameWrapperStoragePlan final {
     std::size_t sourceIndex;
-    std::vector<MediaSourceLineageAllocationRoot> roots;
+    // Root evidence is owned once by the same source's lineage FrameWrapper
+    // family. This numeric product retains no borrowed pointer into that plan.
     std::uint64_t maximumWrappers;
     std::uint64_t preparationBytes;
 };
