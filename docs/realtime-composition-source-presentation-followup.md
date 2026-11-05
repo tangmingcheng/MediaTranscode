@@ -329,3 +329,13 @@ Windows Release 全量构建 2252 终态退出 0（801 任务计划），四项�
 复审发现构建/更新验证不等价：更新绕过 lineage 首次规划的 passthrough transfer 门禁，presentation_plan_review 初次判 FAIL。已在共同 compute、更新根目录前补回 None 检查与原 unsupported 错误；此前 2252/90652 构建只覆盖修复前版本，需重新构建与双人复审。
 
 修复后 presentation_plan_review、timing_path_review 均重新明确局部 PASS。Windows Release 全量 30292 终态退出 0（801 任务计划），四项产物核验，realtime CLI 7121408 字节、15:11:40。RKMPP SSH 43829 核验补充源码前后 hash，8 核增量 4/4、退出 0。生产入口仍为 freezeBatch(rtpSources, nullptr)，候选费用规划器尚无生产调用方，明确不据此宣称求解器或合屏完成。
+
+## 2026-11-05 拓扑规划 kernel 更新调用链
+
+TopologyPlanningKernel 已串接 sourcePolicies→aggregate→每源 topology→完整 graph 的固定目录更新，初次构造与更新复用同一遍历。产品持有固定 output policy、video/audio branch 声明及 scheduler/protocol/execution 三段声明；rebind 不接受新 outputRuntime。调用前必须先刷新源 branch/input，失败后整个 products 作废。
+
+Aggregate 首次构造和更新共用边声明；epoch 端口通过按 size_t 十进制最大宽度确定的栈数组及 to_chars 形成，构造时复制、更新时即时比对。全部边身份核对完成后按目标 aggregate 节点与输入端口做 pairwise 冲突检查，保留原分节点集合语义，避免动态 unordered_set。端口/label 借用仅指向静态字面量，未保留栈视图。两位独立审查者对四文件均明确局部 PASS。
+
+沿用既有静态拓扑与分配协商模型，未增加媒体算法。更新成功路径不增长容器；新增保留的 sourcePolicies、输出连接及三段声明必须计入事前工作区预算，不能当作免费。源 branch/input 的上游刷新、合法容量基线、完整预算与 freeze solver 仍未接通，没有实流通过结论。本轮未生成抓包、截图、测试脚本或同步临时文件。
+
+Windows Release 全量 12757 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、15:18:34。RKMPP 单次 SSH 83928 核验四文件同步前后 hash，8 核增量 all-target 完成 24/24、终态退出 0。没有新的实流运行或完成声明。

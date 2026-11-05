@@ -35,6 +35,11 @@ struct MediaCompositionAggregateConnections final {
 };
 class MediaCompositionAggregateConnectionsPlanner final {
 public:
+    // Fixed connection identity; discard the candidate on failure.
+    static ::media::Status rebind(
+        std::span<const MediaAvAggregateSourcePlan> sources, std::size_t audioSource,
+        std::string_view audioPort, std::span<const MediaRealtimeEdgePolicySet> sourcePolicies,
+        const MediaRealtimeEdgePolicySet& outputPolicies, MediaCompositionAggregateConnections& connections);
     static std::optional<MediaNodeKind> nodeKind(MediaCompositionAggregateRole role) noexcept {
         for(const auto& node:MediaCompositionAggregateNodes)if(node.role==role)return node.kind;
         return std::nullopt;

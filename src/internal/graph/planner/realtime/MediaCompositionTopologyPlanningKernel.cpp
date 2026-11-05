@@ -3,35 +3,67 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+template<bool Updating> ::media::Status compileTopology(
+    std::span<const MediaCompositionTopologySourceFacts> sources,
+    const MediaAvContinuousAggregateTopology& aggregate,
+    MediaCompositionTopologyPlanningProducts& products)
+{
+    using Result = ::media::Status;
+    if (sources.empty() || sources.size() != aggregate.sources.size())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Composition topology source declarations differ from the aggregate"));
+    if constexpr (Updating) {
+        if (products.sourcePolicies.size() != sources.size() || products.sources.size() != sources.size())
+            return Result::failure(::media::ErrorInfo::invalidArgument("Composition topology source catalog changed"));
+        for (std::size_t i=0; i<sources.size(); ++i) products.sourcePolicies[i] = sources[i].policies;
+        if (auto status=MediaCompositionAggregateConnectionsPlanner::rebind(aggregate.sources,
+                aggregate.audioSource, aggregate.audioPort, products.sourcePolicies,
+                products.output.policies, products.aggregate); !status) return status;
+    } else {
+        for (const auto& source : sources) products.sourcePolicies.push_back(source.policies);
+        auto connections=MediaCompositionAggregateConnectionsPlanner::plan(aggregate.sources,
+            aggregate.audioSource, aggregate.audioPort, products.sourcePolicies, products.output.policies);
+        if (!connections) return Result::failure(connections.error());
+        products.aggregate=std::move(connections).value();
+    }
+    for (std::size_t i=0; i<sources.size(); ++i) {
+        const auto& source=sources[i];
+        const auto& sync=source.synchronization;
+        if (!sync.members || !sync.startup.videoReadiness || !sync.sourceClockMode)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Source topology requires declared RTP startup facts"));
+        const MediaCompositionSourceTopologyFacts facts{
+            *sync.members, *sync.startup.videoReadiness, *sync.sourceClockMode,
+            source.policies, source.branches, source.inputs, products.aggregate.sources[i]};
+        if constexpr (Updating) {
+            if (auto status=MediaCompositionSourceTopologyPlanner::rebind(facts, products.sources[i]); !status) return status;
+        } else {
+            auto projected=MediaCompositionSourceTopologyPlanner::plan(facts);
+            if (!projected) return Result::failure(projected.error());
+            products.sources.push_back(std::move(projected).value());
+        }
+    }
+    const auto& output=products.output;
+    const MediaCompositionGraphTopologyFacts facts{products.sources, products.aggregate,
+        output.videoShape, output.videoConnections, output.audioShape, output.audioConnections,
+        output.scheduler, output.protocol, output.execution};
+    if constexpr (Updating) {
+        return MediaCompositionGraphTopologyPlanner::rebind(facts, products.graph);
+    } else {
+        auto graph=MediaCompositionGraphTopologyPlanner::plan(facts);
+        if (!graph) return Result::failure(graph.error());
+        products.graph=std::move(graph).value();
+        return Result::success();
+    }
+}
+} // namespace
 ::media::Result<MediaCompositionTopologyPlanningProducts> MediaCompositionTopologyPlanningKernel::plan(
     std::span<const MediaCompositionTopologySourceFacts> sources,
     const MediaAvContinuousAggregateTopology& aggregate,
     const MediaRealtimeAvOutputRuntimePlan& outputRuntime)
 try {
     using Result = ::media::Result<MediaCompositionTopologyPlanningProducts>;
-    if (sources.empty() || sources.size() != aggregate.sources.size())
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Composition topology source declarations differ from the aggregate"));
-    std::vector<MediaRealtimeEdgePolicySet> sourcePolicies;
-    for (const auto& source : sources) sourcePolicies.push_back(source.policies);
-    auto aggregateConnections = MediaCompositionAggregateConnectionsPlanner::plan(
-        aggregate.sources, aggregate.audioSource, aggregate.audioPort, sourcePolicies, outputRuntime.edgePolicies);
-    if (!aggregateConnections) return Result::failure(aggregateConnections.error());
-    std::vector<MediaCompositionSourceTopology> sourceTopologies;
-    for (std::size_t i=0; i<sources.size(); ++i) {
-        const auto& source = sources[i];
-        const auto& sync = source.synchronization;
-        if (!sync.members || !sync.startup.videoReadiness || !sync.sourceClockMode)
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "Source topology requires declared RTP startup facts"));
-        const MediaCompositionSourceTopologyFacts facts{
-            *sync.members, *sync.startup.videoReadiness, *sync.sourceClockMode,
-            source.policies, source.branches, source.inputs,
-            aggregateConnections.value().sources[i]};
-        auto projected=MediaCompositionSourceTopologyPlanner::plan(facts);
-        if (!projected) return Result::failure(projected.error());
-        sourceTopologies.push_back(std::move(projected).value());
-    }
     const auto videoShape=MediaVideoBranchConnectionsPlanner::outputEncoder();
     const auto audioShape=MediaAudioBranchConnectionsPlanner::outputEncoder(true);
     const auto& policies=outputRuntime.edgePolicies;
@@ -55,14 +87,23 @@ try {
             MediaPayloadKind::CodecContext,policies);
     }();
     if(!protocolDeclaration)return Result::failure(protocolDeclaration.error());
-    auto graphTopology=MediaCompositionGraphTopologyPlanner::plan({sourceTopologies,aggregateConnections.value(),
-        videoShape,videoConnections.value(),audioShape,audioConnections.value(),schedulerDeclaration.value(),
-        protocolDeclaration.value(),executionDeclaration.value()});
-    if(!graphTopology)return Result::failure(graphTopology.error());
-    return Result::success({std::move(aggregateConnections).value(),
-        std::move(sourceTopologies), std::move(graphTopology).value()});
+    MediaCompositionTopologyPlanningProducts products{};
+    products.output={policies,videoShape,std::move(videoConnections).value(),
+        audioShape,std::move(audioConnections).value(),std::move(schedulerDeclaration).value(),
+        std::move(protocolDeclaration).value(),std::move(executionDeclaration).value()};
+    if (auto status=compileTopology<false>(sources,aggregate,products); !status)
+        return Result::failure(status.error());
+    return Result::success(std::move(products));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaCompositionTopologyPlanningProducts>::failure(
         ::media::ErrorInfo::allocationFailed("Composition topology planning products"));
 }
+::media::Status MediaCompositionTopologyPlanningKernel::rebind(
+    std::span<const MediaCompositionTopologySourceFacts> sources,
+    const MediaAvContinuousAggregateTopology& aggregate,
+    MediaCompositionTopologyPlanningProducts& products)
+{
+    return compileTopology<true>(sources,aggregate,products);
+}
+
 }
