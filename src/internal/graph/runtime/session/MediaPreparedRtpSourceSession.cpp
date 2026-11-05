@@ -740,16 +740,31 @@ try {
         snapshots.push_back({&source->m_plan, source->storageSnapshotLocked()});
     std::optional<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> admissions;
     if (solver) {
-        auto solved = solver->solve(snapshots.view());
+        MediaFixedCapacityStorage<std::shared_ptr<MediaPreparationStorageBudget>> budgets(sources.size(), *resource);
+        MediaFixedCapacityStorage<MediaPreparationStorageSnapshot> budgetSnapshots(sources.size(), *resource);
+        for (const auto& source : sources) {
+            budgets.push_back(source->m_budget);
+            budgetSnapshots.push_back({});
+        }
+        auto partition = MediaPreparationStorageBudget::snapshotPartition(budgets.view(), budgetSnapshots.view());
+        if (!partition) return ::media::Status::failure(partition.error());
+        for (std::size_t i = 0; i < sources.size(); ++i)
+            snapshots[i].snapshot.budget = budgetSnapshots[i];
+        auto solved = solver->solve(snapshots.view(), partition.value());
         if (!solved) return ::media::Status::failure(solved.error());
         if (solved.value().size() != sources.size())
             return invalid("Batch admission changed the source membership");
         admissions.emplace(std::move(solved).value());
-        std::size_t total = 0;
-        const auto capacity = sources.front()->m_plan.storageBytes;
+        // Solver storage may have changed the ledger. Reobserve held credit;
+        // neither observation reserves future unrelated-root allocations.
+        partition = MediaPreparationStorageBudget::snapshotPartition(budgets.view(), budgetSnapshots.view());
+        if (!partition) return ::media::Status::failure(partition.error());
+        std::size_t total = partition.value().otherRetainedBytes;
+        const auto capacity = partition.value().budget.capacity;
         for (std::size_t i = 0; i < sources.size(); ++i) {
             if (sources[i]->m_plan.storageBytes != capacity)
                 return invalid("Batch admission requires one shared deployment capacity");
+            snapshots[i].snapshot.budget = budgetSnapshots[i];
             if (auto status = sources[i]->validateStorageAdmissionLocked((*admissions)[i], snapshots[i].snapshot); !status)
                 return status;
             if ((*admissions)[i].totalBytes > capacity - total)

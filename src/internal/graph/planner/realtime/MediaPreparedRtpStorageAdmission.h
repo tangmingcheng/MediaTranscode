@@ -57,6 +57,7 @@ class MediaPreparedRtpBatchAdmissionSolver {
 public:
     virtual ~MediaPreparedRtpBatchAdmissionSolver() = default;
     virtual ::media::Result<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> solve(
-        std::span<const MediaPreparedRtpStorageSourceSnapshot> sources) const = 0;
+        std::span<const MediaPreparedRtpStorageSourceSnapshot> sources,
+        const MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>& partition) const = 0;
 };
 } // namespace media::ffmpeg::graph

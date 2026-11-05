@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <variant>
 
 namespace media::ffmpeg::graph {
@@ -67,6 +68,14 @@ struct MediaStorageSnapshot final {
     std::size_t highWaterBytes;
 };
 
+template <typename Domain>
+struct MediaStoragePartitionSnapshot final {
+    std::shared_ptr<const MediaStorageBudget<Domain>> root;
+    MediaStorageSnapshot<Domain> budget;
+    std::size_t selectedRetainedBytes;
+    std::size_t otherRetainedBytes;
+};
+
 // Domain separates independent admitted capacities at compile time.
 // Consumers must honor the typed size plan and retain leases with storage.
 template <typename Domain>
@@ -93,6 +102,11 @@ public:
         const MediaStorageReleaseObservation& observation);
     ::media::Result<MediaStorageLease<Domain>> reserve(std::size_t bytes, MediaStorageAdmission admission);
     MediaStorageSnapshot<Domain> snapshot() const noexcept;
+    // One ledger observation, not a reservation of future headroom. Caller
+    // supplies storage; no allocator or callback runs under the ledger lock.
+    static ::media::Result<MediaStoragePartitionSnapshot<Domain>> snapshotPartition(
+        std::span<const std::shared_ptr<MediaStorageBudget<Domain>>> children,
+        std::span<MediaStorageSnapshot<Domain>> snapshots);
 
 private:
     friend class MediaStorageLease<Domain>;
@@ -352,6 +366,47 @@ MediaStorageSnapshot<Domain> MediaStorageBudget<Domain>::snapshot() const noexce
 {
     std::scoped_lock lock(ledgerMutex());
     return {m_storage.capacity(), m_storage.retainedBytes(), m_highWaterBytes};
+}
+
+template <typename Domain>
+::media::Result<MediaStoragePartitionSnapshot<Domain>>
+MediaStorageBudget<Domain>::snapshotPartition(
+    std::span<const std::shared_ptr<MediaStorageBudget<Domain>>> children,
+    std::span<MediaStorageSnapshot<Domain>> snapshots)
+{
+    using Result = ::media::Result<MediaStoragePartitionSnapshot<Domain>>;
+    if (children.empty() || children.size() != snapshots.size() ||
+        !children.front() || !children.front()->m_parent)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Storage partition requires direct children and matching snapshot storage"));
+    const auto root = children.front()->m_parent;
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        if (!children[i] || children[i]->m_parent != root)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Storage partition requires one shared root owner"));
+        for (std::size_t j = 0; j < i; ++j)
+            if (children[i] == children[j])
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "Storage partition rejects duplicate children"));
+    }
+    MediaStoragePartitionSnapshot<Domain> partition{root, {}, 0, 0};
+    {
+        std::scoped_lock lock(root->m_mutex);
+        partition.budget = {root->m_storage.capacity(),
+            root->m_storage.retainedBytes(), root->m_highWaterBytes};
+        for (std::size_t i = 0; i < children.size(); ++i) {
+            const auto& child = *children[i];
+            snapshots[i] = {child.m_storage.capacity(),
+                child.m_storage.retainedBytes(), child.m_highWaterBytes};
+            // Direct-child charges are disjoint and already included in root.
+            assert(snapshots[i].retainedBytes <=
+                partition.budget.retainedBytes - partition.selectedRetainedBytes);
+            partition.selectedRetainedBytes += snapshots[i].retainedBytes;
+        }
+        partition.otherRetainedBytes = partition.budget.retainedBytes -
+            partition.selectedRetainedBytes;
+    }
+    return Result::success(std::move(partition));
 }
 
 } // namespace media::ffmpeg::graph

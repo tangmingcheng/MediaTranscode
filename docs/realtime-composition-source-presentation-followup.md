@@ -65,3 +65,7 @@ RKMPP费用适配的只读前置证据：本机MSVC memory:1612使用new _Ref_co
 AU费用单元已实现：MediaPreparedPacketStorage统一payload与已padding backing两种显式计费范围，SourceSession预约/结算和CandidateCostPlanner均调用；候选复用既有活跃租约根，返回最大同时预约数、每项预约上界和checked乘积。lease control、wrapper、协议assembly仍分项；snapshot别名不再收费，graph credit接替后的payload不归此准备租约域。Windows及固定RKMPP的packet.c:83–110均实读确认av_new_packet从空buf申请size+padding；只读核验未修改依赖。该上界不是FFmpeg私有内存或RSS承诺。
 
 五源码双独立静态审查PASS，Release89221全量构建通过，r395四路原规格已运行并记录于realtime-composition-r395-validation.md：四路decoder绑定后在原freeze门禁exit1，无新增预约错误；完整起播仍预期停在未实现的freeze solver，不将该失败视为成功验收。
+
+共享根预算观察已接线：复用[Linux cgroup v2 memory.current](https://docs.kernel.org/admin-guide/cgroup-v2.html)的父级包含子级归属原则，而非引入内核memory控制器。MediaStorageBudget在现有根/直接子共锁下取得一致快照，拒绝空、重复或异根子项，显式返回其他已持有额度；freezeBatch向solver传入该事实，并在solver返回后重读账本，以其他额度加各源完整候选费用核验容量。精确临时数组使用原准备resource，源锁→ledger锁顺序不变；canonical无solver路径不新增分配。观察不是未来headroom预约，未知其他root增长仍需最终完整费用合同闭合；输出/画布backing已经在root收费，不重复相加。尚待双审及本轮Release构建，完整solver与媒体门禁未通过。
+
+本单元验证：两名未参与实现的审查者对三源码均明确PASS；Windows Release全核心clean-first/all构建会话21623成功，configure/build均0、797任务计划，脚本核验产物。未重复执行缺solver的已知失败实流，未生成媒体测试临时产物；不记为合屏验收通过。下一步接完整候选总额与容量选择：startup.route已含batch并发展开，不能再次相加；不同分配域与root中既有输出/画布backing须保持归属。RKMPP继续按已批准8核增量all执行，当前未编译新修改。
