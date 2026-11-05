@@ -1,6 +1,6 @@
 # 合屏源显示时间修复：r393 后续实施边界
 
-状态：调查完成，尚未实现或验收。生产基线 ed1a22ae；目标仍为 Windows 后 RKMPP 的完整多路合屏，不降低 r393 的四路异构规格。
+状态：完整存储准入实现中，SourcePresentation 实流尚未通过；下文保留调查与各次修改证据。当前仍缺费用总额、容量求解及生产 solver 接线。目标为 Windows 后 RKMPP 的完整多路合屏，不降低 r393 的四路异构规格。
 
 ## 已核验的根因与复用位置
 
@@ -76,3 +76,7 @@ AU费用单元已实现：MediaPreparedPacketStorage统一payload与已padding b
 Ingress event下一费用边界已核验：SourceSession::event冻结后将原Prepared包装放入outputs；RawRtpInputNode::onProcess非packet直接emitOutput；MediaRtpClockGroupNode每stream持event/clock两个槽，processStream将其中一个move到局部selected，消费后销毁，不能把该move算成第三个长期槽。metadata evidence边容量沿MediaRtpClockRouteConnections；source构造期间与已发布旧对象可以并存。snapshot fanout持新group对象而非原ingress wrapper，应分域处理。此为待实现的持有边界，不是已计入总额。
 
 本单元验证完成：四源码冻结后两名独立审查均明确PASS；Windows Release全核心clean-first/all构建74414成功，configure/build均0，脚本核验产物。未运行local或重复已知缺solver实流，无新增媒体临时产物。GCC几何仅完成目标头文件只读核验，尚未RKMPP编译/运行；完整合屏仍未完成。
+
+Ingress event分项已实现：RtpClockRouteStoragePlanner从既有MediaRtpClockRouteConnections复用evidence边容量和每stream的raw待发送1、group event/clock槽2，显式返回maximumEvidenceObjects。零CNAME仍计算event上界。Candidate再加源outputObjects总和及源mutex串行构造1，按实际pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>的allocate_shared请求几何计费；CNAME背板单列，不重复计入wrapper。Raw的旧pending清空前不会再次调用onProcess，Group将selected从原槽move出去而非额外第三槽。沿既有GStreamer bufferpool引用保活及明确allocator元数据设计，复用现有route，未增加运行线程/媒体链/公共字段。待双审与本轮Release构建；完整总额、容量选择、生产solver接线和实流仍未闭合。
+
+本单元冻结验证：四源码获两名独立审查明确PASS；Windows Release全核心clean-first/all构建70798成功，configure/build均0，脚本核验产物。未启动媒体测试，当前CLI/FFmpeg/VLC无进程残留，未产生新的抓包/截图/媒体日志。未宣称实流或RKMPP通过，完整费用总额及solver接线仍待完成。

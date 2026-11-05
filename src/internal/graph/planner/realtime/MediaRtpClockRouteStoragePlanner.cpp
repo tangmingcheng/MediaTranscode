@@ -18,8 +18,9 @@ namespace media::ffmpeg::graph {
         return R::failure(::media::ErrorInfo::invalidArgument("CNAME route requires exact members and bounded metadata"));
     auto wire = MediaRtcpPreparationStoragePlanner::plan(datagrams, 0, MediaRtcpPreparationUse::ParseOnly);
     if (!wire) return R::failure(wire.error());
-    if (!wire.value().maximumCnameBytes) return R::success({});
-    auto allocation = MediaPreparationMemoryResource::allocationFootprint(wire.value().maximumCnameBytes, alignof(std::uint8_t));
+    auto allocation = wire.value().maximumCnameBytes
+        ? MediaPreparationMemoryResource::allocationFootprint(wire.value().maximumCnameBytes, alignof(std::uint8_t))
+        : ::media::Result<std::size_t>::success(0);
     if (!allocation) return R::failure(allocation.error());
     ::media::ErrorInfo failure;
     const auto add = [&](std::uint64_t a, std::uint64_t b) {
@@ -43,7 +44,9 @@ namespace media::ffmpeg::graph {
     const auto snapshotCnames = streams + 1;
     const auto evidenceQueue = mul(evidenceSlots, allocation.value());
     // One raw-node pending transfer and two Group StreamPending inputs per stream.
-    const auto evidenceInFlight = mul(streams * 3, allocation.value());
+    const auto evidenceInFlightObjects = streams * 3;
+    const auto evidenceObjects = add(evidenceSlots, evidenceInFlightObjects);
+    const auto evidenceInFlight = mul(evidenceInFlightObjects, allocation.value());
     const auto snapshotQueue = mul(mul(snapshotSlots, snapshotCnames), allocation.value());
     // Group publication, fanout current/pending (same buffer), each binder's
     // popped input and the state adapter's popped input. Scalar output has none.
@@ -52,10 +55,12 @@ namespace media::ffmpeg::graph {
     // Old locked snapshots belong to the existing source storage product.
     const auto replacements = mul(streams, allocation.value());
     const auto total = add(add(evidenceQueue, evidenceInFlight), add(add(snapshotQueue, snapshotInFlight), replacements));
-    if (failure || total > (std::numeric_limits<std::size_t>::max)())
+    if (failure || total > (std::numeric_limits<std::size_t>::max)() ||
+        evidenceObjects > (std::numeric_limits<std::size_t>::max)())
         return R::failure(failure ? failure : ::media::ErrorInfo::allocationFailed("CNAME route exceeds addressable storage"));
     return R::success({wire.value().maximumCnameBytes, static_cast<std::size_t>(evidenceQueue),
         static_cast<std::size_t>(evidenceInFlight), static_cast<std::size_t>(snapshotQueue),
-        static_cast<std::size_t>(snapshotInFlight), static_cast<std::size_t>(replacements), static_cast<std::size_t>(total)});
+        static_cast<std::size_t>(snapshotInFlight), static_cast<std::size_t>(replacements), static_cast<std::size_t>(total),
+        static_cast<std::size_t>(evidenceObjects)});
 }
 }

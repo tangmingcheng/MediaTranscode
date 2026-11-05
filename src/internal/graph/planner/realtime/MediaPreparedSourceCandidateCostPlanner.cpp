@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
+#include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
 #include "internal/graph/runtime/resource/MediaPmrContainerGeometry.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
@@ -186,6 +187,19 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         facts.startupVideoUnits, facts.startupAudioUnits, facts.groupKeyCharacters,
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u});
     if (!startup) return R::failure(startup.error());
+    auto events = add(queued.value(), startup.value().clock.maximumEvidenceObjects);
+    if (!events) return R::failure(events.error());
+    // One source-session callback constructs an event under the shared source
+    // mutex while old events may remain in outputs or the downstream route.
+    // Group moves its selected event out of an existing slot, not into a third
+    // retaining slot. No original ingress wrapper crosses snapshot fanout.
+    events = add(events.value(), 1);
+    if (!events) return R::failure(events.error());
+    auto eventGeometry = probeMediaSharedAllocationGeometry<MediaRtpIngressEventBuffer>(
+        std::type_identity<std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>>{});
+    if (!eventGeometry) return R::failure(eventGeometry.error());
+    auto eventBytes = copies(eventGeometry.value(), events.value());
+    if (!eventBytes) return R::failure(eventBytes.error());
     if (!facts.videoPlan.decoderOwnershipStorage ||
         facts.videoPlan.filterActive != facts.videoPlan.filterOwnershipStorage.has_value())
         return R::failure(::media::ErrorInfo::invalidArgument(
@@ -196,6 +210,7 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     if (!ownership) return R::failure(ownership.error());
     return R::success({fixed.value(), std::move(video).value(), std::move(audioCosts),
         indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
-        std::move(startup).value(), std::move(ownership).value(), std::move(sourceClock).value()});
+        std::move(startup).value(), std::move(ownership).value(), std::move(sourceClock).value(),
+        {events.value(), eventBytes.value()}});
 }
 }

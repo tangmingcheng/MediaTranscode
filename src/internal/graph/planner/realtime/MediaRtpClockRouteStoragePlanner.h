@@ -13,6 +13,9 @@ struct MediaRtpClockRouteStoragePlan final {
     std::size_t snapshotInFlightBytes;
     std::size_t binderReplacementBytes;
     std::size_t additionalCnameBytes;
+    // Original ingress event wrappers stop at Group; snapshot fanout retains
+    // newly created group objects. Includes evidence edges and in-flight slots.
+    std::size_t maximumEvidenceObjects;
 };
 // Additional runtime route ownership. Excludes source-owned tracker/mapper/
 // validator, source output queues and already counted locked binder snapshots.

@@ -48,6 +48,10 @@ struct MediaPreparedStreamCandidateCosts final {
         static_cast<std::size_t>(MediaPreparedPayloadLeaseRootKind::Count)> leaseControlRoots;
     MediaPreparedPayloadStoragePlan payload;
 };
+struct MediaPreparedIngressEventStoragePlan final {
+    std::size_t maximumLiveWrappers;
+    std::size_t bytes;
+};
 struct MediaPreparedSourceCandidateCosts final {
     std::size_t fixedBytes;
     MediaPreparedStreamCandidateCosts video;
@@ -61,6 +65,7 @@ struct MediaPreparedSourceCandidateCosts final {
     // Source tracker/mapper/binders and source output evidence, separate from
     // startup.clock's additional graph-route CNAME owners.
     MediaRtcpPreparationStoragePlan sourceClock;
+    MediaPreparedIngressEventStoragePlan ingressEvents;
     // Deliberately no total/admission: shared-root accounting and candidate
     // capacity selection still require the complete admission solver.
 };
