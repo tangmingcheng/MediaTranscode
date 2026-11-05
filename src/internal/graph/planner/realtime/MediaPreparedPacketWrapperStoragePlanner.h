@@ -22,6 +22,9 @@ struct MediaPreparedPacketWrapperStoragePlan final {
 // or the outer MediaVideoDecodeBuffer. Video uses source presentation timing.
 class MediaPreparedPacketWrapperStoragePlanner final {
 public:
+    // Reuses existing evidence. Successful evaluation allocates no storage;
+    // failure leaves the previous numeric costs unchanged.
+    static ::media::Status evaluate(MediaPreparedPacketWrapperStoragePlan& plan);
     static ::media::Result<MediaPreparedPacketWrapperStoragePlan> plan(
         const MediaCompositionGraphTopology& topology,
         const MediaCompositionReferenceResidencePlan& reference,

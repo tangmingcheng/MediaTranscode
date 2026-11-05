@@ -238,3 +238,12 @@ MediaSourceLineageStoragePlanner::evaluate复用已有roots/rootIndices，只重
 
 presentation_plan_review和timing_path_review均对冻结2源码明确局部PASS。Windows Release全核构建85561进行中，后续RKMPP按8核增量all。
 构建结果：Windows Release clean-first/all全核85561终态退出0，800任务计划、configure/build均0，realtime产物7117824字节。RKMPP原目录8核增量all完成8/8任务、退出0；两源码同步前后哈希通过，realtime SHA256=8a446a465aa1298eb77b2fa1bcedc7b6fdcb487afc45761b73d67b39c406ad0b，ninja/cc1plus无残留。本轮无实流测试、临时同步文件或测试产物，未运行local CLI。共享费用重构仍须随完整solver接通后的同规格Windows→RKMPP实流复验，不作为媒体验收通过。
+
+## Packet wrapper 数值重求值（2026-11-05）
+
+MediaPreparedPacketWrapperStoragePlanner::evaluate读取已存在roots，从零累计数量，并用原typed geometry、allocation footprint和checked乘法计算费用；全部成功后才替换maximumWrappers/preparationBytes，失败保留旧数值。新增stream及GraphHolder/holder数量一致性校验，原plan实际调用同一函数，因此Candidate与最终ResourcePlanner同步复用，无第二套公式。
+
+沿前述原持有者计费算法与供应商sizeof/alignof事实，成功求值不构造或复制根，不分配；错误诊断不承诺无分配/noexcept。不改线程、背压、媒体节点或外部参数。完整候选的容量更新和联合solver仍未接通。
+
+presentation_plan_review和timing_path_review均对冻结2源码明确局部PASS；Windows Release全核构建83477进行中，随后RKMPP按8核增量all。
+构建结果：Windows Release clean-first/all全核83477终态退出0，800任务计划、configure/build均0，realtime产物7117824字节。RKMPP原目录8核增量all完成6/6任务、退出0；两源码同步前后哈希通过，realtime SHA256=25d6f6ee21eadd3860aa4b206741da7d2082c47d5b16698abc0fbbb5e851b0e8，ninja/cc1plus无残留。本轮无实流测试、临时同步文件或测试产物，未运行local CLI；共享费用重构仍须随完整solver接通后的同规格Windows→RKMPP实流复验。

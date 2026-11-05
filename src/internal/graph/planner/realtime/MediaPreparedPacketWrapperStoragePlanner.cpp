@@ -50,25 +50,38 @@ try {
     result.roots.push_back({*raw, Kind::Acquiring, std::nullopt, containers.acquiringObjects});
     result.roots.push_back({*raw, Kind::Outputs, std::nullopt, containers.outputObjects});
     result.roots.push_back({*raw, Kind::AtomicCompletion, std::nullopt, maximumAtomicCompletion});
-    // Snapshot references alias this same monotonic prepared prefix. Graph
-    // contributions may overlap; their sum is a conservative allocation bound.
-    for (const auto& root : result.roots) {
-        auto sum = MediaCheckedArithmetic::add(result.maximumWrappers, root.maximumWrappers,
-            "prepared raw packet wrapper roots");
-        if (!sum) return R::failure(sum.error());
-        result.maximumWrappers = sum.value();
-    }
-    auto geometry = FFmpegBufferFactory::packetAllocationGeometry();
-    if (!geometry) return R::failure(geometry.error());
-    auto unit = MediaPreparationMemoryResource::allocationFootprint(geometry.value().bytes, geometry.value().alignment);
-    if (!unit) return R::failure(unit.error());
-    auto bytes = MediaCheckedArithmetic::multiply(unit.value(), result.maximumWrappers,
-        "prepared raw packet wrapper storage");
-    if (!bytes) return R::failure(bytes.error());
-    result.preparationBytes = bytes.value();
+    if (auto status = evaluate(result); !status) return R::failure(status.error());
     return R::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaPreparedPacketWrapperStoragePlan>::failure(
         ::media::ErrorInfo::allocationFailed("prepared packet wrapper storage planning"));
+}
+
+::media::Status MediaPreparedPacketWrapperStoragePlanner::evaluate(MediaPreparedPacketWrapperStoragePlan& plan)
+{
+    if (plan.stream != MediaStreamKind::Video && plan.stream != MediaStreamKind::Audio)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Prepared packet wrapper stream is invalid"));
+    // Snapshot references alias this same monotonic prepared prefix. Graph
+    // contributions may overlap; their sum is a conservative allocation bound.
+    std::uint64_t count = 0;
+    for (const auto& root : plan.roots) {
+        if ((root.kind == MediaPreparedPacketWrapperRootKind::GraphHolder) != root.holder.has_value() ||
+            (root.holder && root.holder->maximumReferences != root.maximumWrappers))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Prepared packet wrapper holder differs from its root"));
+        auto sum = MediaCheckedArithmetic::add(count, root.maximumWrappers,
+            "prepared raw packet wrapper roots");
+        if (!sum) return ::media::Status::failure(sum.error());
+        count = sum.value();
+    }
+    auto geometry = FFmpegBufferFactory::packetAllocationGeometry();
+    if (!geometry) return ::media::Status::failure(geometry.error());
+    auto unit = MediaPreparationMemoryResource::allocationFootprint(geometry.value().bytes, geometry.value().alignment);
+    if (!unit) return ::media::Status::failure(unit.error());
+    auto bytes = MediaCheckedArithmetic::multiply(unit.value(), count,
+        "prepared raw packet wrapper storage");
+    if (!bytes) return ::media::Status::failure(bytes.error());
+    plan.maximumWrappers = count;
+    plan.preparationBytes = bytes.value();
+    return ::media::Status::success();
 }
 }
