@@ -30,6 +30,13 @@ struct MediaSourceLineageStoragePlan final {
 };
 class MediaSourceLineageStoragePlanner final {
 public:
+    // Capacity-only rebinding of a catalog from the same fixed topology and
+    // projection domain. No successful-path allocations. On failure discard
+    // the candidate: some root counts may already have changed; do not resume
+    // a search from it. Structural identities and memberships are untouched.
+    static ::media::Status rebind(MediaSourceLineageStoragePlan& plan,
+        const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+        std::uint64_t registryCapacity, std::uint64_t preparedPrefixCapacity);
     // Reuses the existing root catalog and family memberships. Successful
     // reevaluation allocates no storage and replaces only numeric costs.
     // On failure the previously calculated costs remain unchanged.

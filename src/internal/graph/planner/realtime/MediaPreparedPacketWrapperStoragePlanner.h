@@ -22,6 +22,13 @@ struct MediaPreparedPacketWrapperStoragePlan final {
 // or the outer MediaVideoDecodeBuffer. Video uses source presentation timing.
 class MediaPreparedPacketWrapperStoragePlanner final {
 public:
+    // Capacity-only rebinding of a catalog from the same fixed topology and
+    // projection domain. No successful-path allocations. On failure discard
+    // the candidate: some root counts may already have changed; do not resume
+    // a search from it. Structural identities and memberships are untouched.
+    static ::media::Status rebind(MediaPreparedPacketWrapperStoragePlan& plan,
+        const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+        const MediaPreparedRtpContainerBounds& containers, std::uint64_t maximumAtomicCompletion);
     // Reuses existing evidence. Successful evaluation allocates no storage;
     // failure leaves the previous numeric costs unchanged.
     static ::media::Status evaluate(MediaPreparedPacketWrapperStoragePlan& plan);

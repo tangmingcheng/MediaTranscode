@@ -50,3 +50,11 @@ presentation_plan_review：上述共同增量目标条件 PASS，要求合法基
 当前双方均为设计条件 PASS：合法基线、独立/派生轴、全费用单调性、固定工作区预算、最终 sealed 复算必须在代码中落实。标准二分只用于已证明单调的合法区间。尚未有具体 solver 或对应实流 PASS。
 
 工作区实施方向：freeze 前编译固定身份和证据，freeze 内只更新容量、edge policy/incident capacities、residence 数量及 root 数量。既有数值 evaluate 可复用；仍缺稳定 root→owner 映射及完整更新入口。普通 vector/string 提前构造不等于免费，必须有构造前的峰值预算，或改用预算资源上的精确数组和借用字符串。禁止把预编译产品实测 capacity 当成事前硬界，也不能遗漏零数量 owner 后续变为非零的 catalog 成员。
+
+## 2026-11-05 固定引用目录数量更新已接入共同规划
+
+已实现显式 LiveOwners/ReachableOwners 选择：最终图 readback 保持 LiveOwners，lineage/packet 候选目录使用 ReachableOwners，保留可达的零数量 owner，并记录其原 view slot；不是过滤后贡献数组下标。BFS 与费用总额算法不变，零值与 domain 中不存在的 slot 继续区分。
+
+共同 rebind 按原 slot 核验 kind、完整 connection 索引和 retaining positions，随后更新数量并调用原 checked evaluate；实际 plan() 已消费这条路径。FrameWrapper 接受合法零 holder，Construction 仍严格等于 1；固定单槽证据异常直接失败，不通过重新赋 1 掩盖。成功路径不重新分配目录；失败允许部分数量已改，但整个候选必须作废，不能作为预算过大继续搜索。
+
+适用前提是同一固定拓扑、domain、producer 与 owner membership，可达性不在 rebind 中重新推导。尚不能把该 API 用于任意替换图。完整 solver 工作区必须保管这些不变身份；topology/residence 数量更新、完整工作区计费、候选费用总更新与 freeze 入口仍未完成。本项是引用身份到费用的实际接线，不是 solver 或实流验收通过。

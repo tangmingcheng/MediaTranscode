@@ -93,6 +93,23 @@ private:
     MediaPayloadKind m_payload;
     std::size_t m_owners;
 };
+::media::Result<CompositionResidenceView> residenceView(
+    const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+    MediaStreamKind stream, MediaPayloadKind payload)
+{
+    if(reference.nodeReferences.size()!=topology.positions.size() ||
+        (stream!=MediaStreamKind::Video && stream!=MediaStreamKind::Audio) ||
+        (payload!=MediaPayloadKind::Packet && payload!=MediaPayloadKind::Frame))
+        return ::media::Result<CompositionResidenceView>::failure(::media::ErrorInfo::invalidArgument("Composition residence domain is invalid"));
+    std::size_t owners = 1; // The already-planned shared aggregate owner.
+    for (const auto count : {topology.connections.size(), reference.nodeReferences.size(), reference.startupNodes.size()}) {
+        if (count > (std::numeric_limits<std::size_t>::max)() - owners)
+            return ::media::Result<CompositionResidenceView>::failure(::media::ErrorInfo::allocationFailed("Composition residence owner slots overflow"));
+        owners += count;
+    }
+    return ::media::Result<CompositionResidenceView>::success(
+        CompositionResidenceView(topology, reference, stream, payload, owners));
+}
 }
 ::media::Result<MediaCompositionReferenceResidencePlan> MediaCompositionPayloadResidencePlanner::compile(
     const MediaCompositionGraphTopology& topology,const MediaCompositionResidenceFacts& facts)
@@ -181,21 +198,35 @@ try {
     ::media::ErrorInfo::allocationFailed("composition pure reference residence"));}
 ::media::Result<MediaPayloadResidenceProjection> MediaCompositionPayloadResidencePlanner::plan(
     const MediaCompositionGraphTopology& topology,const MediaCompositionReferenceResidencePlan& reference,
-    std::size_t producerPosition,MediaStreamKind stream,MediaPayloadKind payload)
+    std::size_t producerPosition,MediaStreamKind stream,MediaPayloadKind payload,
+    MediaPayloadResidenceSelection selection)
 try {
     using Result=::media::Result<MediaPayloadResidenceProjection>;
-    if(reference.nodeReferences.size()!=topology.positions.size() ||
-        (stream!=MediaStreamKind::Video && stream!=MediaStreamKind::Audio) ||
-        (payload!=MediaPayloadKind::Packet && payload!=MediaPayloadKind::Frame))
-        return Result::failure(::media::ErrorInfo::invalidArgument("Composition residence domain is invalid"));
-    std::size_t owners = 1; // The already-planned shared aggregate owner.
-    for (const auto count : {topology.connections.size(), reference.nodeReferences.size(), reference.startupNodes.size()}) {
-        if (count > (std::numeric_limits<std::size_t>::max)() - owners)
-            return Result::failure(::media::ErrorInfo::allocationFailed("Composition residence owner slots overflow"));
-        owners += count;
-    }
-    const CompositionResidenceView view(topology, reference, stream, payload, owners);
-    return MediaGraphPayloadResidencePlanner::plan(view,producerPosition);
+    auto view = residenceView(topology, reference, stream, payload);
+    if (!view) return Result::failure(view.error());
+    return MediaGraphPayloadResidencePlanner::plan(view.value(),producerPosition,selection);
 }catch(const std::bad_alloc&){return ::media::Result<MediaPayloadResidenceProjection>::failure(
     ::media::ErrorInfo::allocationFailed("composition pure payload residence"));}
+
+::media::Status MediaCompositionPayloadResidencePlanner::rebindOwner(
+    const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+    MediaStreamKind stream, MediaPayloadKind payload, MediaPayloadResidenceOwner& owner)
+{
+    const auto invalid = [] { return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Composition residence owner differs from its fixed projection identity")); };
+    auto view = residenceView(topology, reference, stream, payload);
+    if (!view) return ::media::Status::failure(view.error());
+    if (!owner.projectionSlot || *owner.projectionSlot >= view.value().ownerSlots()) return invalid();
+    auto current = view.value().ownerAt(*owner.projectionSlot);
+    if (!current) return ::media::Status::failure(current.error());
+    if (!current.value()) return invalid();
+    const auto& value = *current.value();
+    if (value.kind != owner.kind || value.connection != owner.connection ||
+        value.positionCount() != owner.retainingPositions.size()) return invalid();
+    for (std::size_t i = 0; i < value.positionCount(); ++i)
+        if (value.positionAt(i) >= topology.positions.size() ||
+            value.positionAt(i) != owner.retainingPositions[i]) return invalid();
+    owner.maximumReferences = value.maximumReferences;
+    return ::media::Status::success();
+}
 }

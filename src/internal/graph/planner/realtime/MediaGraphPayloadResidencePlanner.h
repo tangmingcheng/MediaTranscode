@@ -16,12 +16,16 @@ struct MediaPayloadResidenceConnection final {
 enum class MediaPayloadResidenceOwnerKind {
     Node, Edge, StartupNode, StartupEdge, Shared
 };
+enum class MediaPayloadResidenceSelection { LiveOwners, ReachableOwners };
 struct MediaPayloadResidenceOwner final {
     std::vector<std::size_t> retainingPositions;
     std::uint64_t maximumReferences;
     MediaPayloadResidenceOwnerKind kind;
     // Index in the complete topology, not the filtered media connections.
     std::optional<std::size_t> connection;
+    // Set by projection: index in the original view, not contributions.
+    // Meaningful only with that fixed topology, stream/payload and producer.
+    std::optional<std::size_t> projectionSlot;
 };
 struct MediaPayloadResidenceTopology final {
     std::size_t nodeCount;
@@ -60,7 +64,8 @@ struct MediaPayloadResidenceProjection final {
 struct MediaPayloadResidenceEvaluation final {
     std::span<const std::size_t> reachablePositions;
     std::uint64_t maximumRetainedObjects;
-    bool retains(const MediaPayloadResidenceOwnerView& owner) const noexcept;
+    bool retains(const MediaPayloadResidenceOwnerView& owner,
+        MediaPayloadResidenceSelection selection) const noexcept;
 };
 
 struct MediaGraphPayloadResidenceContribution final {
@@ -93,7 +98,8 @@ public:
         const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
         std::span<std::size_t> workspace);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
-        const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition);
+        const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
+        MediaPayloadResidenceSelection selection);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaPayloadResidenceTopology& topology, std::size_t producerPosition);
     static ::media::Result<MediaGraphPayloadResidence> plan(

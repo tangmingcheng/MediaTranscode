@@ -28,7 +28,7 @@ try {
     for (const auto index : frames->rootIndices) {
         if (index >= lineage.roots.size()) return invalid("Prepared frame wrapper root index is absent");
         const auto& root = lineage.roots[index];
-        if (root.creatorPosition >= topology.positions.size() || !root.maximumReferences)
+        if (root.creatorPosition >= topology.positions.size())
             return invalid("Prepared frame wrapper root is outside its topology");
         const auto& creator = topology.positions[root.creatorPosition];
         if (creator.source != lineage.sourceIndex ||
@@ -41,7 +41,10 @@ try {
             if (creator.kind == MediaNodeKind::VideoDecode) ++decoderConstructions;
             else ++filterConstructions;
         } else {
-            if (!root.holder || root.holder->maximumReferences != root.maximumReferences ||
+            // A reachable zero-count holder is structural evidence for later
+            // capacity evaluation; serial construction remains exactly one.
+            if (!root.holder || !root.holder->projectionSlot ||
+                root.holder->maximumReferences != root.maximumReferences ||
                 (creator.kind == MediaNodeKind::VideoFilter && !result.filterReferences))
                 return invalid("Prepared frame wrapper holder differs from producer evidence");
             auto& references = creator.kind == MediaNodeKind::VideoDecode

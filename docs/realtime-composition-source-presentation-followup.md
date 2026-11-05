@@ -261,3 +261,15 @@ presentation_plan_review、timing_path_review 均对该单文件源码明确 PAS
 未运行新媒体测试，未创建抓包/截图/媒体/测试脚本；直接 SSH 同步未生成传输临时文件。源码与构建结果不证明 solver、正预缓冲或 RKMPP 合屏通过。容量策略分歧已按补充工业调查收敛为设计条件 PASS，当前准确接线约束见 realtime-composition-storage-solver-execution.md；具体 solver、工作区和原规格实流仍待完成。
 
 本次 Windows Release 全量构建 16947 已终态退出 0，800 任务计划，configure/build 均成功；CMakeCache、build.ninja 与两 CLI 产物已核验。未运行 local CLI。两位独立审查者对本轮单源码及两份文档整体修改明确 PASS；该结论仍不覆盖未实施的 solver 或媒体效果。
+
+## 2026-11-05 固定引用目录与重复求值接线
+
+本轮十个源码文件将 lineage/packet 目录构建接到 rebind→evaluate，保存原 projection slot 并保留可达零 owner；实际最终图回读仍显式 LiveOwners。每个零 frame holder 仍检查 creator/source/投影身份，Construction 保持 1；静态槽异常直接失败。成功更新只改数字，原目录、family 索引及持有位置不增删。失败后必须丢弃候选，不保证部分更新回滚；当前 plan 不发布失败结果。
+
+沿用已有基于拓扑的保守持有数量与 [Boost BFS](https://raw.githubusercontent.com/boostorg/graph/boost-1.85.0/doc/breadth_first_search.html) 的先遍历可达位置再收集贡献语义，没有改变网络、调度、线程或平台 adapter。固定拓扑/媒体域/producer/owner membership 是调用前提；当前接口不能证明任意替换图相容。
+
+presentation_plan_review 与 timing_path_review 已对十文件给出局部 PASS，完整 solver、固定工作区预算和实流门禁仍开放。Windows 全量 Release 构建 25629 及 RKMPP 8 核增量构建已启动，结果待终态补充。本轮未启动新媒体测试、未创建测试脚本/抓包/截图等产物；远程逐文件校验原始 SHA256、写入后十文件新 SHA256 全部匹配，未生成传输临时文件。
+
+Windows 全量构建 25629 已终态退出 0，800 任务计划，configure/build 均为 0；四项产物核验通过，realtime CLI 7121920 字节、14:03:00。首次 RKMPP 构建命令发出后 SSH 74693 被对端 reset，结果未取得，不记作成功。重新连接 51255 检查无 ninja/cc1plus/cmake 构建进程，产物仍为上一版 13:49:37；十文件新 hash 再核验一致后才重新启动增量构建。
+
+重连后的 RKMPP 8 核增量 all-target 构建完成 20/20，退出 0；realtime CLI SHA256=e01866efbe155b3451c6ff06b3a2d03ee59a2450775c184aef6a94c80cf78b80。首次连接中断记录保留。当前验证只覆盖双独立源码审查与两平台编译，没有新媒体运行或截图验收结论。

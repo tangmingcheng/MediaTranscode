@@ -41,10 +41,18 @@ struct MediaCompositionReferenceResidencePlan final {
 };
 class MediaCompositionPayloadResidencePlanner final {
 public:
+    // Rebind one catalog owner from the same fixed topology/domain. The caller
+    // must preserve topology shape, slot presence, and producer reachability;
+    // this checks the stored slot identity, not an arbitrary replacement graph.
+    // Success changes only the count and allocates no storage.
+    static ::media::Status rebindOwner(
+        const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+        MediaStreamKind stream, MediaPayloadKind payload, MediaPayloadResidenceOwner& owner);
     static ::media::Result<MediaCompositionReferenceResidencePlan> compile(
         const MediaCompositionGraphTopology& topology,const MediaCompositionResidenceFacts& facts);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaCompositionGraphTopology& topology,const MediaCompositionReferenceResidencePlan& reference,
-        std::size_t producerPosition,MediaStreamKind stream,MediaPayloadKind payload);
+        std::size_t producerPosition,MediaStreamKind stream,MediaPayloadKind payload,
+        MediaPayloadResidenceSelection selection);
 };
 }

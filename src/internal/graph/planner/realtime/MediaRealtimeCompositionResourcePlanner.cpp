@@ -145,7 +145,7 @@ try {
             if(actualPosition==identity.positions.end())return invalid("Composition producer has no verified topology position");
             const auto producerPosition=static_cast<std::size_t>(actualPosition-identity.positions.begin());
             auto reachable=MediaCompositionPayloadResidencePlanner::plan(projection,reference.value(),producerPosition,
-                producer.streamKind,producer.payloadKind);
+                producer.streamKind,producer.payloadKind,MediaPayloadResidenceSelection::LiveOwners);
             if(!reachable)return Result::failure(reachable.error());
             auto readback=MediaGraphPayloadResidencePlanner::plan(graph,residence->key,
                 {storage.value().entries,storage.value().startupEventMedia,storage.value().startupNodeMedia});

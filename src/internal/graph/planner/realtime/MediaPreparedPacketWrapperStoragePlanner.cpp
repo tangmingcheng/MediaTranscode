@@ -35,7 +35,7 @@ try {
     MediaPreparedPacketWrapperStoragePlan result{sourceIndex, stream, {}, 0, 0};
     for (const auto creator : {*raw, *clock}) {
         auto residence = MediaCompositionPayloadResidencePlanner::plan(topology, reference,
-            creator, stream, MediaPayloadKind::Packet);
+            creator, stream, MediaPayloadKind::Packet, MediaPayloadResidenceSelection::ReachableOwners);
         if (!residence) return R::failure(residence.error());
         for (auto& owner : residence.value().contributions) {
             const auto count = owner.maximumReferences;
@@ -50,11 +50,62 @@ try {
     result.roots.push_back({*raw, Kind::Acquiring, std::nullopt, containers.acquiringObjects});
     result.roots.push_back({*raw, Kind::Outputs, std::nullopt, containers.outputObjects});
     result.roots.push_back({*raw, Kind::AtomicCompletion, std::nullopt, maximumAtomicCompletion});
-    if (auto status = evaluate(result); !status) return R::failure(status.error());
+    if (auto status = rebind(result, topology, reference, containers, maximumAtomicCompletion); !status) return R::failure(status.error());
     return R::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaPreparedPacketWrapperStoragePlan>::failure(
         ::media::ErrorInfo::allocationFailed("prepared packet wrapper storage planning"));
+}
+
+::media::Status MediaPreparedPacketWrapperStoragePlanner::rebind(MediaPreparedPacketWrapperStoragePlan& plan,
+    const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+    const MediaPreparedRtpContainerBounds& containers, std::uint64_t maximumAtomicCompletion)
+{
+    using Kind = MediaPreparedPacketWrapperRootKind;
+    const auto invalid = [] { return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Prepared packet catalog differs from its fixed source creators")); };
+    if ((plan.stream != MediaStreamKind::Video && plan.stream != MediaStreamKind::Audio) ||
+        !containers.prefixObjects || !containers.acquiringObjects || !containers.outputObjects || !maximumAtomicCompletion)
+        return invalid();
+    for (auto& root : plan.roots) {
+        if (root.creatorPosition >= topology.positions.size()) return invalid();
+        const auto& creator = topology.positions[root.creatorPosition];
+        const bool raw = creator.kind == MediaNodeKind::RawRtpInput;
+        if (creator.source != plan.sourceIndex || (!raw && creator.kind != MediaNodeKind::RtpPacketClockBinder) ||
+            ((root.kind == Kind::GraphHolder) != root.holder.has_value())) return invalid();
+        switch (root.kind) {
+        case Kind::GraphHolder: {
+            auto status = MediaCompositionPayloadResidencePlanner::rebindOwner(topology, reference,
+                plan.stream, MediaPayloadKind::Packet, *root.holder);
+            if (!status) return status;
+            root.maximumWrappers = root.holder->maximumReferences;
+            break;
+        }
+        case Kind::Prefix:
+            if (raw) return invalid();
+            root.maximumWrappers = containers.prefixObjects;
+            break;
+        case Kind::Acquiring:
+            if (!raw) return invalid();
+            root.maximumWrappers = containers.acquiringObjects;
+            break;
+        case Kind::Outputs:
+            if (!raw) return invalid();
+            root.maximumWrappers = containers.outputObjects;
+            break;
+        case Kind::AtomicCompletion:
+            if (!raw) return invalid();
+            root.maximumWrappers = maximumAtomicCompletion;
+            break;
+        case Kind::CreditWait:
+        case Kind::Construction:
+            if (root.maximumWrappers != 1) return invalid();
+            break;
+        default:
+            return invalid();
+        }
+    }
+    return evaluate(plan);
 }
 
 ::media::Status MediaPreparedPacketWrapperStoragePlanner::evaluate(MediaPreparedPacketWrapperStoragePlan& plan)

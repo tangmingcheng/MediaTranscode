@@ -60,9 +60,11 @@ std::size_t MediaPayloadResidenceOwnerView::positionAt(std::size_t index) const 
     return positions ? (*positions)[index] : std::get<std::size_t>(retainingPositions);
 }
 
-bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwnerView& owner) const noexcept
+bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwnerView& owner,
+    MediaPayloadResidenceSelection selection) const noexcept
 {
-    if (!owner.maximumReferences) return false;
+    if (selection != MediaPayloadResidenceSelection::ReachableOwners &&
+        (selection != MediaPayloadResidenceSelection::LiveOwners || !owner.maximumReferences)) return false;
     for (std::size_t index = 0; index < owner.positionCount(); ++index)
         if (std::find(reachablePositions.begin(), reachablePositions.end(), owner.positionAt(index)) != reachablePositions.end())
             return true;
@@ -96,7 +98,7 @@ bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwnerVi
     for (std::size_t index = 0; index < topology.ownerSlots(); ++index) {
         auto owner = topology.ownerAt(index);
         if (!owner) return Result::failure(owner.error());
-        if (!owner.value() || !result.retains(*owner.value())) continue;
+        if (!owner.value() || !result.retains(*owner.value(), MediaPayloadResidenceSelection::LiveOwners)) continue;
         auto sum = MediaCheckedArithmetic::add(result.maximumRetainedObjects, owner.value()->maximumReferences,
             "producer reachable retention credits");
         if (!sum) return Result::failure(sum.error());
@@ -109,13 +111,17 @@ bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwnerVi
     const MediaPayloadResidenceTopology& topology, std::size_t producerPosition)
 {
     const OwnedResidenceView view(topology);
-    return plan(view, producerPosition);
+    return plan(view, producerPosition, MediaPayloadResidenceSelection::LiveOwners);
 }
 
 ::media::Result<MediaPayloadResidenceProjection> MediaGraphPayloadResidencePlanner::plan(
-    const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition)
+    const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
+    MediaPayloadResidenceSelection selection)
 try {
     using Result = ::media::Result<MediaPayloadResidenceProjection>;
+    if (selection != MediaPayloadResidenceSelection::LiveOwners &&
+        selection != MediaPayloadResidenceSelection::ReachableOwners)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Residence owner selection is invalid"));
     if (auto status = validateResidenceTopology(topology, producerPosition); !status)
         return Result::failure(status.error());
     MediaPayloadResidenceProjection result{{}, 0, {}};
@@ -129,9 +135,9 @@ try {
     for (std::size_t index = 0; index < topology.ownerSlots(); ++index) {
         auto owner = topology.ownerAt(index);
         if (!owner) return Result::failure(owner.error());
-        if (!owner.value() || !evaluated.value().retains(*owner.value())) continue;
+        if (!owner.value() || !evaluated.value().retains(*owner.value(), selection)) continue;
         const auto& borrowed = *owner.value();
-        MediaPayloadResidenceOwner materialized{{}, borrowed.maximumReferences, borrowed.kind, borrowed.connection};
+        MediaPayloadResidenceOwner materialized{{}, borrowed.maximumReferences, borrowed.kind, borrowed.connection, index};
         for (std::size_t position = 0; position < borrowed.positionCount(); ++position)
             materialized.retainingPositions.push_back(borrowed.positionAt(position));
         result.contributions.push_back(std::move(materialized));

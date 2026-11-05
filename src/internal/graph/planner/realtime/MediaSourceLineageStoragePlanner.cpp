@@ -71,7 +71,7 @@ try {
     const auto project = [&](std::size_t position, MediaPayloadKind payload,
                              MediaSourceLineageAllocationCost& target) -> ::media::Status {
         auto residence = MediaCompositionPayloadResidencePlanner::plan(topology, reference, position,
-            MediaStreamKind::Video, payload);
+            MediaStreamKind::Video, payload, MediaPayloadResidenceSelection::ReachableOwners);
         if (!residence) return ::media::Status::failure(residence.error());
         for (auto& owner : residence.value().contributions) {
             const auto count = owner.maximumReferences;
@@ -101,11 +101,59 @@ try {
     lineageRoots(accessUnit, *decoder);
     // display.accessUnit and the frame wrapper's direct AU are the same owner.
     accessUnit.rootIndices.insert(accessUnit.rootIndices.end(), display.rootIndices.begin(), display.rootIndices.end());
-    if (auto status = evaluate(result); !status) return R::failure(status.error());
+    if (auto status = rebind(result, topology, reference, registryCapacity, preparedPrefixCapacity); !status) return R::failure(status.error());
     return R::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaSourceLineageStoragePlan>::failure(
         ::media::ErrorInfo::allocationFailed("source lineage storage planning"));
+}
+
+::media::Status MediaSourceLineageStoragePlanner::rebind(MediaSourceLineageStoragePlan& plan,
+    const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
+    std::uint64_t registryCapacity, std::uint64_t preparedPrefixCapacity)
+{
+    using Role = MediaSourceLineageRootRole;
+    const auto invalid = [] { return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Source lineage catalog differs from its fixed source creators")); };
+    if (!registryCapacity || !preparedPrefixCapacity) return invalid();
+    for (auto& root : plan.roots) {
+        if (root.creatorPosition >= topology.positions.size()) return invalid();
+        const auto& creator = topology.positions[root.creatorPosition];
+        const bool binder = creator.kind == MediaNodeKind::RtpPacketClockBinder;
+        const bool frame = creator.kind == MediaNodeKind::VideoDecode || creator.kind == MediaNodeKind::VideoFilter;
+        if (creator.source != plan.sourceIndex || (!binder && !frame)) return invalid();
+        const bool holder = root.role == Role::PacketHolder || root.role == Role::FrameHolder;
+        if (holder != root.holder.has_value()) return invalid();
+        switch (root.role) {
+        case Role::PacketHolder:
+        case Role::FrameHolder: {
+            if ((root.role == Role::PacketHolder) != binder) return invalid();
+            auto status = MediaCompositionPayloadResidencePlanner::rebindOwner(topology, reference,
+                MediaStreamKind::Video, binder ? MediaPayloadKind::Packet : MediaPayloadKind::Frame, *root.holder);
+            if (!status) return status;
+            root.maximumReferences = root.holder->maximumReferences;
+            break;
+        }
+        case Role::PreparedPrefix:
+            if (!binder) return invalid();
+            root.maximumReferences = preparedPrefixCapacity;
+            break;
+        case Role::Registry:
+            if (!frame) return invalid();
+            root.maximumReferences = registryCapacity;
+            break;
+        case Role::PendingLineage:
+        case Role::ResolvedLineage:
+            if (!frame || root.maximumReferences != 1) return invalid();
+            break;
+        case Role::Construction:
+            if (root.maximumReferences != 1) return invalid();
+            break;
+        default:
+            return invalid();
+        }
+    }
+    return evaluate(plan);
 }
 
 ::media::Status MediaSourceLineageStoragePlanner::evaluate(MediaSourceLineageStoragePlan& plan)
