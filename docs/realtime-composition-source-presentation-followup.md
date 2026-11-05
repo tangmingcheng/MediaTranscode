@@ -146,3 +146,17 @@ RKMPP编译验证：源码c0d3e891233ddb1684a5b81f1634b9273d6f649d；同步前1,
 本轮临时同步文件为本机及远端项目out/rk-incremental-c0d3e891.json、out/rk-incremental-c0d3e891.tar，各2文件；结果已记录，随后按清单删除。
 
 清理复核：本机与远端本轮同步文件均剩余0；保留源码、构建缓存和指定120秒测试源。最终6源码双独立审查均PASS。
+
+## GCC 帧所有权 vector 存储适配（2026-11-05）
+
+本轮目标机核验：GCC 12、__GLIBCXX__=20240620、C++20、未启用_GLIBCXX_DEBUG。实际vector.tcc:65–100的空vector reserve(n)精确申请n个元素；stl_vector.h:1911的max_size还受PTRDIFF_MAX/sizeof(T)约束。官方对照：https://github.com/gcc-mirror/gcc/blob/releases/gcc-12.4.0/libstdc%2B%2B-v3/include/bits/vector.tcc 。生产MediaFfmpegPayloadOwnership的references和replacements均为空vector一次reserve，使用原LineageAllocator。
+
+MediaVideoFrameOwnershipStoragePlanner的reservedVector增加上述供应商限定分支，复用原request的资源头/对齐计费；空vector不计背板或MSVC proxy。Windows原分支不变，未知供应商继续unsupported。不改变线程、媒体状态机、背压、外部参数或依赖；不把逻辑准备存储解释为RSS/GPU上界。presentation_plan_review与timing_path_review均独立明确局部PASS；Windows Release构建会话25629进行中，随后RKMPP仅8核增量all，尚无本修改实流通过结论。
+
+## 完整接线与 RKMPP 身份方案复核
+
+当前freezeBatch仍传nullptr，完整联合solver尚未实现。独立审查确认不能仅缓存拥有型topology后套用候选成本：connections.policy、positions.incidentCapacities和residence数量随容量变化；SourcePlanningKernel仍复制拥有型vector/string。下一完整单元应同时交付预算内候选工作区、共用的容量数值填充、具体solver、真实freeze接线及最终readback，避免再增加无生产消费者的helper。预先分配也必须计费，不能藏入已有六数组费用或在root other中重复收费。
+
+RKMPP身份替代方案明确FAIL：固定FFmpeg会丢弃discard/errinfo frame而不导出对应身份；输入消费回调不能证明重排输出已结束，故逐AU表不能按首次输出或输入消费安全退休。无表64-bit PTS编码同样不足：MediaVideoDecodeLineage含独立AU sequence、扩展RTP时间及逐AU不可变clock projection，映射anchor/slope可变化。不能用当前时钟重建历史投影、截断位宽或假设AU=frame。保留现有身份门禁；不修改外部FFmpeg/MPP依赖，不宣称该缺口已解决。
+本修改验证：Windows Release clean-first/all全核构建25629终态退出0，800任务计划，configure/build均0；产物已核验。RKMPP在原目录使用8核增量all完成4/4任务，无clean-first，源码单文件同步前后哈希核验通过。没有媒体测试、抓包、截图或临时同步文件；合屏完整准入、RKMPP身份与GNU其他容器几何仍未完成。
+RKMPP构建退出0，realtime二进制SHA256=f739913039e46e6f46e1fb01710f566edc3258405c737a93f33e40924f1279cc；ninja/cc1plus无残留。

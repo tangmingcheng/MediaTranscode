@@ -48,10 +48,7 @@ Bytes reservedVector(const MediaSharedAllocationGeometry& element, std::size_t c
     // without geometric growth. In C++20 _Allocate_at_least_helper calls
     // LineageAllocator::allocate(count) exactly once. That allocator and its
     // debug-proxy rebind both charge the same PreparationMemoryResource.
-#if !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L || _HAS_CXX23
-    return Bytes::failure(::media::ErrorInfo::unsupported(
-        "Video ownership vector storage requires the audited C++20 standard library"));
-#else
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L && !_HAS_CXX23
     if (!element.bytes || count > (std::numeric_limits<std::size_t>::max)() / element.bytes ||
         count > static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)()))
         return Bytes::failure(::media::ErrorInfo::allocationFailed("Video ownership vector exceeds max_size"));
@@ -61,6 +58,19 @@ Bytes reservedVector(const MediaSharedAllocationGeometry& element, std::size_t c
     auto backing = request(element, count);
     if (!backing) return backing;
     return sum({proxy.value(), backing.value()});
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG)
+    // GCC 12.4 vector::reserve allocates exactly count elements; the empty
+    // vector owns no allocation or debug proxy. _S_max_size additionally
+    // limits the entire backing to PTRDIFF_MAX bytes.
+    if (!element.bytes || count > static_cast<std::size_t>(
+            (std::numeric_limits<std::ptrdiff_t>::max)()) / element.bytes)
+        return Bytes::failure(::media::ErrorInfo::allocationFailed("Video ownership vector exceeds max_size"));
+    if (!count) return Bytes::success(0);
+    return request(element, count);
+#else
+    return Bytes::failure(::media::ErrorInfo::unsupported(
+        "Video ownership vector storage requires the audited C++20 standard library"));
 #endif
 }
 } // namespace
