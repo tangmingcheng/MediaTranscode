@@ -42,3 +42,8 @@
 
 - 已修改合屏入口为 SourcePresentation，所有源统一处理；未新增时间戳算法、容量或公共参数。Windows Release 全量构建通过；两名独立审查只给进入实流诊断的阶段 PASS。
 - [r394 同规格实流](realtime-composition-r394-validation.md) FAIL：freezeBatch 收到 nullptr，触发完整存储准入门禁。进一步核验 BatchAdmissionSolver 仅有抽象接口、无具体实现；因此不能称 SourcePresentation 生产接线完整。先按既有 [完整存储准入计划](realtime-composition-full-storage-admission-plan.md) 补齐 F/U/G 联合容量求值，再复验 Windows；RKMPP 身份和调度调查继续，不能用 cadence 回退替代此缺项。
+- 冻结前事实复用：从 SourcePlanningKernel 提取 MediaCompositionProducerHolderPlanner，保留 opened decoder retention、协议原子完成上界、filter 执行与保留输入数的原校验；原 kernel 已消费新组件，删除旧构造块。组件不依赖封印容量、运行图或启动队列，返回独立持有的事实，后续 solver 可直接复用；当前尚未接入 freeze 前调用，不宣称消除 r394 错误。未新增算法、公共参数或容量常量。
+- 后续求值接线核验：MediaPreparedSourceCandidateCostPlanner 目前无生产调用者且没有总额；startup batch/route/clock 和 frame ownership 费用只在最终源/资源规划消费。下一步共享 startup 分项产品，再合并实际 AU、frame ownership、源与 root 的唯一计费及冻结临时存储，最终实现 solver 并对照封印与最终图，不能把当前 root retained 与完整源费用重复累加。
+- RKMPP 另有明确费用适配缺口：StartupBatchStoragePlanner 的 released audio wrapper 几何仅支持 MSVC 145/202604，有音频的其他平台会 Unsupported。须基于实际 GCC shared_ptr 构造几何适配；这不涉及修改外部 FFmpeg，也不能拿其他 registry 的 GCC 适配冒充该项已完成。
+
+本单元验证：两名独立审查 timing_path_review 与 presentation_plan_review 对修正版3源码均明确PASS。首次构建47154 exit0，但holder对象早于审查修正，不能作为最终产物；随后修正版Release全量构建95350 configure/build均0，795目标，脚本核验cache/build.ninja及两CLI产物。未运行local CLI，也未重复已知freeze空solver失败的媒体测试；本单元没有新增实流通过证据或测试临时产物。

@@ -1,6 +1,6 @@
 #include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
 
-#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
+#include "internal/graph/planner/realtime/MediaCompositionProducerHolderPlanner.h"
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 #include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
@@ -135,29 +135,12 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
         (hasAudio && (!runtime.value().audioPipeline.selectedDecoder->preparedInputRetention ||
             !runtime.value().isolatedAudioInput->rtpAccessUnitEnvelope)))
         return Result::failure(::media::ErrorInfo::notInitialized("Source producer holders require opened codecs and input completion facts"));
-    MediaCompositionProducerHolderFacts holders{
-        {*request.video.decoder.preparedInputRetention,
-         inputDraft.input.rtpAccessUnitEnvelope->asInputPayloadEnvelope().maximumPayloadsPerInputCompletion}, {}, {}};
-    if (hasAudio) holders.audio.emplace(MediaCompositionStreamHolderFacts{
-        *runtime.value().audioPipeline.selectedDecoder->preparedInputRetention,
-        runtime.value().isolatedAudioInput->rtpAccessUnitEnvelope->asInputPayloadEnvelope().maximumPayloadsPerInputCompletion});
-    if (auto valid = MediaDecoderInputRetentionOptionCodec::encode(holders.video.decoder); !valid)
-        return Result::failure(valid.error());
-    if (holders.audio) {
-        if (auto valid = MediaDecoderInputRetentionOptionCodec::encode(holders.audio->decoder); !valid)
-            return Result::failure(valid.error());
-    }
-    if (!holders.video.maximumAtomicInputCompletion || (holders.audio && !holders.audio->maximumAtomicInputCompletion))
-        return Result::failure(::media::ErrorInfo::invalidArgument("Source producer holders require finite atomic completion bounds"));
-    if (request.video.filterActive) {
-        const auto& execution = *request.video.filterExecution;
-        if (execution.output.filterDescription != request.video.filter.filterName ||
-            execution.frameProduct != (cadence ? MediaVideoFrameLineageProduct::CanonicalInterval
-                : MediaVideoFrameLineageProduct::SourceDisplayPoint))
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "Source filter retention differs from its planned execution"));
-        holders.filterRetainedInputFrames = execution.output.maximumRetainedInputFrames;
-    }
+    auto plannedHolders = MediaCompositionProducerHolderPlanner::plan(request.video, request.timing,
+        *inputDraft.input.rtpAccessUnitEnvelope,
+        hasAudio ? &*runtime.value().audioPipeline.selectedDecoder->preparedInputRetention : nullptr,
+        hasAudio ? &*runtime.value().isolatedAudioInput->rtpAccessUnitEnvelope : nullptr);
+    if (!plannedHolders) return Result::failure(plannedHolders.error());
+    auto holders = std::move(plannedHolders).value();
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
