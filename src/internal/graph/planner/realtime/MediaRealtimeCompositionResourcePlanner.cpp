@@ -205,12 +205,6 @@ try {
             auto ownership = MediaSourceFrameOwnershipStoragePlanner::plan(facts.decoderGeometry,
                 facts.filterGeometry, *decoderReferences, filterReferences);
             if (!ownership) return Result::failure(ownership.error());
-            auto projectedOwnership = MediaSourceFrameOwnershipStoragePlanner::plan(
-                projection, reference.value(), source.sourceIndex, *source.packetStorageHolders,
-                facts.decoderGeometry, facts.filterGeometry);
-            if (!projectedOwnership) return Result::failure(projectedOwnership.error());
-            if (projectedOwnership.value() != ownership.value())
-                return invalid("Source frame ownership differs from final producer residence");
             auto lineage = MediaSourceLineageStoragePlanner::plan(projection, reference.value(),
                 source.sourceIndex, *source.sourceLineageRegistryCapacity, source.preparedPacketContainers->video.prefixObjects,
                 *source.sourceTransferDirection);
@@ -218,6 +212,12 @@ try {
             auto frameWrappers = MediaPreparedFrameWrapperStoragePlanner::plan(projection, lineage.value(),
                 facts.decoderReadiness, facts.filterReadiness);
             if (!frameWrappers) return Result::failure(frameWrappers.error());
+            auto projectedOwnership = MediaSourceFrameOwnershipStoragePlanner::plan(
+                frameWrappers.value(), *source.packetStorageHolders,
+                facts.decoderGeometry, facts.filterGeometry);
+            if (!projectedOwnership) return Result::failure(projectedOwnership.error());
+            if (projectedOwnership.value() != ownership.value())
+                return invalid("Source frame ownership differs from final producer residence");
             std::vector<std::shared_ptr<const MediaPreparedPacketWrapperStoragePlan>> packetWrappers;
             std::uint64_t packetBytes = 0;
             const auto planPackets = [&](MediaStreamKind stream, const MediaPreparedRtpContainerBounds& containers,

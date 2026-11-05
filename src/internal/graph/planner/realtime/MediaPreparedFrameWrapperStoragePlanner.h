@@ -9,6 +9,9 @@ struct MediaPreparedFrameWrapperStoragePlan final {
     // family. This numeric product retains no borrowed pointer into that plan.
     std::uint64_t maximumWrappers;
     std::uint64_t preparationBytes;
+    // Reachable holders only; serial construction roots are excluded.
+    std::uint64_t decoderReferences;
+    std::optional<std::uint64_t> filterReferences;
 };
 class MediaPreparedFrameWrapperStoragePlanner final {
 public:

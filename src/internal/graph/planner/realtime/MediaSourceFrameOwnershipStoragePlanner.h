@@ -4,8 +4,7 @@
 #include <cstdint>
 
 namespace media::ffmpeg::graph {
-struct MediaCompositionGraphTopology;
-struct MediaCompositionReferenceResidencePlan;
+struct MediaPreparedFrameWrapperStoragePlan;
 struct MediaCompositionProducerHolderFacts;
 struct MediaSourceFrameOwnershipStoragePlan final {
     std::uint64_t decoderOperations;
@@ -19,8 +18,7 @@ struct MediaSourceFrameOwnershipStoragePlan final {
 class MediaSourceFrameOwnershipStoragePlanner final {
 public:
     static ::media::Result<MediaSourceFrameOwnershipStoragePlan> plan(
-        const MediaCompositionGraphTopology& topology,
-        const MediaCompositionReferenceResidencePlan& reference, std::size_t sourceIndex,
+        const MediaPreparedFrameWrapperStoragePlan& references,
         const MediaCompositionProducerHolderFacts& holders,
         const MediaVideoFrameOwnershipStoragePlan& decoder,
         const std::optional<MediaVideoFrameOwnershipStoragePlan>& filter);

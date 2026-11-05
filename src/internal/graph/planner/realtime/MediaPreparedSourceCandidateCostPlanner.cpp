@@ -210,8 +210,8 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         facts.videoPlan.filterActive != facts.videoPlan.filterOwnershipStorage.has_value())
         return R::failure(::media::ErrorInfo::invalidArgument(
             "Candidate frame ownership requires prepared producer geometry"));
-    auto ownership = MediaSourceFrameOwnershipStoragePlanner::plan(facts.topology, facts.residence,
-        facts.sourceIndex, facts.producerHolders, *facts.videoPlan.decoderOwnershipStorage,
+    auto ownership = MediaSourceFrameOwnershipStoragePlanner::plan(frames.value(),
+        facts.producerHolders, *facts.videoPlan.decoderOwnershipStorage,
         facts.videoPlan.filterOwnershipStorage);
     if (!ownership) return R::failure(ownership.error());
     MediaPreparedSourceCandidateCosts result{fixed.value(), std::move(video).value(), std::move(audioCosts),

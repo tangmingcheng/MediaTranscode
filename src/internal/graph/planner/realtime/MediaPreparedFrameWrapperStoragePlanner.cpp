@@ -22,7 +22,8 @@ try {
         frames = &allocation;
     }
     if (!frames || frames->roots.empty()) return invalid("Prepared frame wrappers lack creator roots");
-    MediaPreparedFrameWrapperStoragePlan result{lineage.sourceIndex, 0, 0};
+    MediaPreparedFrameWrapperStoragePlan result{lineage.sourceIndex, 0, 0, 0,
+        filter ? std::optional<std::uint64_t>{0} : std::nullopt};
     std::size_t decoderConstructions = 0, filterConstructions = 0;
     for (const auto& root : frames->roots) {
         if (root.creatorPosition >= topology.positions.size() || !root.maximumReferences)
@@ -37,6 +38,16 @@ try {
                 return invalid("Prepared frame wrapper construction must be serial");
             if (creator.kind == MediaNodeKind::VideoDecode) ++decoderConstructions;
             else ++filterConstructions;
+        } else {
+            if (!root.holder || root.holder->maximumReferences != root.maximumReferences ||
+                (creator.kind == MediaNodeKind::VideoFilter && !result.filterReferences))
+                return invalid("Prepared frame wrapper holder differs from producer evidence");
+            auto& references = creator.kind == MediaNodeKind::VideoDecode
+                ? result.decoderReferences : *result.filterReferences;
+            auto retained = MediaCheckedArithmetic::add(references, root.maximumReferences,
+                "prepared frame producer references");
+            if (!retained) return R::failure(retained.error());
+            references = retained.value();
         }
         auto total = MediaCheckedArithmetic::add(result.maximumWrappers, root.maximumReferences, "prepared frame wrapper roots");
         if (!total) return R::failure(total.error());
