@@ -29,6 +29,16 @@ public:
             "ordinary string terminator allocation");
         if (!characters) return ::media::Result<std::size_t>::failure(characters.error());
         return total(characters.value(), proxy.value());
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        // GCC basic_string::_M_is_local/capacity: the empty string exposes
+        // its inline capacity without allocating. Nonlocal storage retains
+        // exactly capacity + 1 chars, including the terminator.
+        if (value.capacity() <= std::string{}.capacity()) return proxy;
+        auto characters = MediaCheckedArithmetic::add(value.capacity(), 1,
+            "ordinary string terminator allocation");
+        if (!characters) return ::media::Result<std::size_t>::failure(characters.error());
+        return total(characters.value(), proxy.value());
 #else
         return proxy;
 #endif
@@ -51,6 +61,18 @@ public:
         const auto masked = count | Value::_Alloc_mask;
         const auto capacity = masked > maximum ? maximum : (std::max)(masked, small + small / 2);
         return total(capacity + 1, proxy.value());
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        // GCC basic_string::_M_construct(forward_iterator_tag) calls
+        // _M_create(count, 0); the fresh copy has no geometric growth.
+        const std::string empty;
+        if (count > empty.max_size()) return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::allocationFailed("String copy exceeds allocator max_size"));
+        if (count <= empty.capacity()) return proxy;
+        auto characters = MediaCheckedArithmetic::add(count, 1,
+            "ordinary string copy terminator allocation");
+        if (!characters) return ::media::Result<std::size_t>::failure(characters.error());
+        return total(characters.value(), proxy.value());
 #else
         return proxy;
 #endif
@@ -71,13 +93,20 @@ public:
 private:
     static ::media::Result<std::size_t> proxyBytes()
     {
-#if !defined(_MSVC_STL_VERSION) || _MSVC_STL_VERSION != 145 || _MSVC_STL_UPDATE != 202604L || _HAS_CXX23
-        return ::media::Result<std::size_t>::failure(::media::ErrorInfo::unsupported(
-            "Ordinary container readback requires an audited C++20 standard library"));
-#elif _ITERATOR_DEBUG_LEVEL == 0
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L && !_HAS_CXX23
+#if _ITERATOR_DEBUG_LEVEL == 0
         return ::media::Result<std::size_t>::success(0);
 #else
         return ::media::Result<std::size_t>::success(sizeof(std::_Container_proxy));
+#endif
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        // Non-debug libstdc++ string/vector have no separately allocated
+        // iterator proxy. Vector capacity is its sole retained T allocation.
+        return ::media::Result<std::size_t>::success(0);
+#else
+        return ::media::Result<std::size_t>::failure(::media::ErrorInfo::unsupported(
+            "Ordinary container readback requires an audited C++20 standard library"));
 #endif
     }
 

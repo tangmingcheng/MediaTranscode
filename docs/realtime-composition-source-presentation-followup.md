@@ -247,3 +247,17 @@ MediaPreparedPacketWrapperStoragePlanner::evaluate读取已存在roots，从零�
 
 presentation_plan_review和timing_path_review均对冻结2源码明确局部PASS；Windows Release全核构建83477进行中，随后RKMPP按8核增量all。
 构建结果：Windows Release clean-first/all全核83477终态退出0，800任务计划、configure/build均0，realtime产物7117824字节。RKMPP原目录8核增量all完成6/6任务、退出0；两源码同步前后哈希通过，realtime SHA256=25d6f6ee21eadd3860aa4b206741da7d2082c47d5b16698abc0fbbb5e851b0e8，ninja/cc1plus无残留。本轮无实流测试、临时同步文件或测试产物，未运行local CLI；共享费用重构仍须随完整solver接通后的同规格Windows→RKMPP实流复验。
+
+## 2026-11-05 GCC 普通容器存储回读
+
+已补齐 MediaStandardContainerStorageReadback 的目标 GCC 12.4 分支：普通 string 的 SSO 不产生独立 backing，长串按 retained capacity+1 计费；fresh copy/range 按 count+1，先校验实际 max_size；普通 vector 沿用 capacity×sizeof(T)，非 debug libstdc++ 无独立 iterator proxy。门禁限定 _GLIBCXX_RELEASE=12、__GLIBCXX__=20240620、C++20、新 ABI、非 debug；Windows 原 MSVC 145/202604 逻辑与拒绝范围保持等价。没有变更外部依赖。
+
+依据目标机实际 basic_string.h/tcc、vector.tcc，以及 [GCC 12.4 官方 basic_string.tcc](https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.4.0/libstdc++-v3/include/bits/basic_string.tcc) 的 forward 构造→_M_create(count,0) 与 [vector.tcc](https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.4.0/libstdc++-v3/include/bits/vector.tcc) 的实际 allocation。SSO 容量由空 string 读取，不引入媒体经验常量。费用只表示普通 allocator 请求，不包括 PMR header 或物理 heap 开销；不能用于推导候选构造峰值。
+
+真实消费者为 RTP 配置、源会话普通容器及 startup batch。此前这些调用在 GCC 会被 proxyBytes 的 MSVC-only 门禁拒绝。本次不是新的单独媒体链路，也未开放尚未审计的 PMR deque/vector 或 startup hash。
+
+presentation_plan_review、timing_path_review 均对该单文件源码明确 PASS。RKMPP 已按修改前 SHA256 校验后同步该文件，8 核增量 all-target 构建 6/6、退出 0；realtime CLI SHA256=94157a31e7ec5c15fae6446e63c6f7abb6028e2ecf3d55e1664470375e1d2caf。目标预处理重新确认 __cplusplus=202002L、__GLIBCXX__=20240620、release=12、ABI=1，未定义 debug。Windows Release 全量构建尚在等待终态，后续结果追加于本节。
+
+未运行新媒体测试，未创建抓包/截图/媒体/测试脚本；直接 SSH 同步未生成传输临时文件。源码与构建结果不证明 solver、正预缓冲或 RKMPP 合屏通过。容量策略分歧已按补充工业调查收敛为设计条件 PASS，当前准确接线约束见 realtime-composition-storage-solver-execution.md；具体 solver、工作区和原规格实流仍待完成。
+
+本次 Windows Release 全量构建 16947 已终态退出 0，800 任务计划，configure/build 均成功；CMakeCache、build.ninja 与两 CLI 产物已核验。未运行 local CLI。两位独立审查者对本轮单源码及两份文档整体修改明确 PASS；该结论仍不覆盖未实施的 solver 或媒体效果。
