@@ -57,12 +57,17 @@ try {
         topology.positions[*packet].source != sourceIndex ||
         topology.positions[*packet].kind != MediaNodeKind::RtpPacketClockBinder)
         return invalid("Source lineage requires exact source binder and decoder identities");
-    MediaSourceLineageStoragePlan result{sourceIndex, {{{Family::AccessUnit, {}, 0, 0},
+    MediaSourceLineageStoragePlan result{sourceIndex, {}, {{{Family::AccessUnit, {}, 0, 0},
         {Family::Display, {}, 0, 0}, {Family::PacketWrapper, {}, 0, 0}, {Family::FrameWrapper, {}, 0, 0}}}, 0};
     auto& accessUnit = result.allocations[0];
     auto& display = result.allocations[1];
     auto& packetWrappers = result.allocations[2];
     auto& frameWrappers = result.allocations[3];
+    const auto appendRoot = [&](MediaSourceLineageAllocationCost& target, MediaSourceLineageAllocationRoot root) {
+        const auto index = result.roots.size();
+        result.roots.push_back(std::move(root));
+        target.rootIndices.push_back(index);
+    };
     const auto project = [&](std::size_t position, MediaPayloadKind payload,
                              MediaSourceLineageAllocationCost& target) -> ::media::Status {
         auto residence = MediaCompositionPayloadResidencePlanner::plan(topology, reference, position,
@@ -70,39 +75,40 @@ try {
         if (!residence) return ::media::Status::failure(residence.error());
         for (auto& owner : residence.value().contributions) {
             const auto count = owner.maximumReferences;
-            target.roots.push_back({position, payload == MediaPayloadKind::Packet ? Role::PacketHolder : Role::FrameHolder,
+            appendRoot(target, {position, payload == MediaPayloadKind::Packet ? Role::PacketHolder : Role::FrameHolder,
                 std::move(owner), count});
         }
         // Each actual creator has one serial construction, not one per AU output.
-        target.roots.push_back({position, Role::Construction, std::nullopt, 1});
+        appendRoot(target, {position, Role::Construction, std::nullopt, 1});
         return ::media::Status::success();
     };
     if (auto status = project(*packet, MediaPayloadKind::Packet, packetWrappers); !status) return R::failure(status.error());
     // The entire bound packet prefix is moved into the runtime binder. Decoded
     // startup frame units and the acquisition queue cannot bound this owner.
-    packetWrappers.roots.push_back({*packet, Role::PreparedPrefix, std::nullopt, preparedPrefixCapacity});
+    appendRoot(packetWrappers, {*packet, Role::PreparedPrefix, std::nullopt, preparedPrefixCapacity});
     if (auto status = project(*decoder, MediaPayloadKind::Frame, frameWrappers); !status) return R::failure(status.error());
     if (filter) if (auto status = project(*filter, MediaPayloadKind::Frame, frameWrappers); !status) return R::failure(status.error());
     // A frame wrapper retains one display. Converted wrappers alias that display;
     // summing their roots is conservative, not a claim of distinct displays.
-    display.roots = frameWrappers.roots;
+    display.rootIndices = frameWrappers.rootIndices;
     const auto lineageRoots = [&](MediaSourceLineageAllocationCost& target, std::size_t position) {
-        target.roots.push_back({position, Role::Registry, std::nullopt, registryCapacity});
-        target.roots.push_back({position, Role::PendingLineage, std::nullopt, 1});
-        target.roots.push_back({position, Role::ResolvedLineage, std::nullopt, 1});
+        appendRoot(target, {position, Role::Registry, std::nullopt, registryCapacity});
+        appendRoot(target, {position, Role::PendingLineage, std::nullopt, 1});
+        appendRoot(target, {position, Role::ResolvedLineage, std::nullopt, 1});
     };
     if (filter) lineageRoots(display, *filter);
-    accessUnit.roots = packetWrappers.roots;
+    accessUnit.rootIndices = packetWrappers.rootIndices;
     lineageRoots(accessUnit, *decoder);
     // display.accessUnit and the frame wrapper's direct AU are the same owner.
-    accessUnit.roots.insert(accessUnit.roots.end(), display.roots.begin(), display.roots.end());
+    accessUnit.rootIndices.insert(accessUnit.rootIndices.end(), display.rootIndices.begin(), display.rootIndices.end());
     auto geometry = MediaVideoDecodeBuffer::allocationGeometry();
     if (!geometry) return R::failure(geometry.error());
     const std::array geometries{geometry.value().accessUnit, geometry.value().display,
         geometry.value().wrapper, geometry.value().wrapper};
     for (std::size_t i = 0; i < result.allocations.size(); ++i) {
         auto& allocation = result.allocations[i];
-        for (const auto& root : allocation.roots) {
+        for (const auto index : allocation.rootIndices) {
+            const auto& root = result.roots[index];
             auto sum = MediaCheckedArithmetic::add(allocation.maximumAllocations, root.maximumReferences,
                 "source lineage allocation roots");
             if (!sum) return R::failure(sum.error());

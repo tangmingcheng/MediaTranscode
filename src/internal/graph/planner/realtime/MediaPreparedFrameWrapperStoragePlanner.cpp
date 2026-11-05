@@ -21,11 +21,13 @@ try {
         if (frames) return invalid("Prepared frame wrappers have repeated lineage families");
         frames = &allocation;
     }
-    if (!frames || frames->roots.empty()) return invalid("Prepared frame wrappers lack creator roots");
+    if (!frames || frames->rootIndices.empty()) return invalid("Prepared frame wrappers lack creator roots");
     MediaPreparedFrameWrapperStoragePlan result{lineage.sourceIndex, 0, 0, 0,
         filter ? std::optional<std::uint64_t>{0} : std::nullopt};
     std::size_t decoderConstructions = 0, filterConstructions = 0;
-    for (const auto& root : frames->roots) {
+    for (const auto index : frames->rootIndices) {
+        if (index >= lineage.roots.size()) return invalid("Prepared frame wrapper root index is absent");
+        const auto& root = lineage.roots[index];
         if (root.creatorPosition >= topology.positions.size() || !root.maximumReferences)
             return invalid("Prepared frame wrapper root is outside its topology");
         const auto& creator = topology.positions[root.creatorPosition];

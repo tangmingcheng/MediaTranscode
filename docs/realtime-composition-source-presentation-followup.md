@@ -209,3 +209,13 @@ slot总数checked累加，节点索引校验、零值与缺失区分、startup�
 
 presentation_plan_review与timing_path_review均对冻结3源码明确局部PASS。Windows Release全核构建33748进行中；完整solver仍未接通，不能把借用视图视作完整候选工作区准入完成。
 构建结果：Windows Release clean-first/all全核33748终态退出0，800任务计划、configure/build均0，realtime产物7119360字节。RKMPP原目录8核增量all完成20/20任务、退出0，三源码同步前后哈希通过；realtime SHA256=cb0c3e09849469d63c6d099b76b63734fe063500a857039909f05fb7470b3138，ninja/cc1plus无残留。无本轮媒体测试、临时同步文件或测试产物，未运行local CLI。共享规划变更仍需随完整solver接线后进行同规格Windows→RKMPP实流验证，不作为媒体验收成功记录。
+
+## Lineage 根证据目录共享（2026-11-05）
+
+继续落实候选工作区审计中的一次保存结构证据：MediaSourceLineageStoragePlan拥有单一roots目录，各allocation family只保存rootIndices。原frame→display、packet→accessUnit、display→accessUnit关联改为复制索引；目录仅追加，不按名称或数值合并不同creator的根。每family仍按原成员顺序/次数分别使用其几何计费，共享证据不等于跨family去重费用。
+
+FrameWrapper消费者先检查索引再读取完整root；最终Candidate/账本仍拥有完整lineage。索引随完整产品copy/move保持自洽，目录扩容不会悬空，追加失败销毁局部未发布产品。沿前述只读事实复用与原BFS算法，不改线程、队列、媒体状态机或平台adapter；这不是新持有量算法。family索引数组和catalog仍有动态分配，尚不能据此声明scratch全额准入或完整solver通过。
+
+三源码冻结，presentation_plan_review已明确局部PASS，另一独立审查进行中；Windows Release全核构建88185进行中。
+构建结果：Windows Release clean-first/all全核88185终态退出0，800任务计划、configure/build均0，realtime产物7116288字节。RKMPP原目录8核增量all完成8/8任务、退出0；三源码同步前后哈希通过，realtime SHA256=506925b9edaa89e598331d767863c452f680965657bb3c12988c175f71df88d9，ninja/cc1plus无残留。无本轮媒体测试/临时同步文件/测试产物，未运行local CLI；共享规划变更仍须随完整solver接通后的原规格Windows→RKMPP实流复验。
+timing_path_review随后对相同冻结3源码明确局部PASS，双独立审查均通过；无修后源码变化。

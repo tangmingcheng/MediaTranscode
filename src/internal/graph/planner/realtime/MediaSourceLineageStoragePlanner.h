@@ -14,7 +14,7 @@ struct MediaSourceLineageAllocationRoot final {
 };
 struct MediaSourceLineageAllocationCost final {
     MediaSourceLineageAllocationFamily family;
-    std::vector<MediaSourceLineageAllocationRoot> roots;
+    std::vector<std::size_t> rootIndices;
     std::uint64_t maximumAllocations;
     std::uint64_t preparationBytes;
 };
@@ -22,6 +22,9 @@ struct MediaSourceLineageAllocationCost final {
 // Registry storage, raw media wrappers and FFmpeg private memory are excluded.
 struct MediaSourceLineageStoragePlan final {
     std::size_t sourceIndex;
+    // Family membership refers to this owned catalog. Indices remain valid
+    // across vector growth and copying/moving the complete planning product.
+    std::vector<MediaSourceLineageAllocationRoot> roots;
     std::array<MediaSourceLineageAllocationCost, 4> allocations;
     std::uint64_t preparationBytes;
 };
