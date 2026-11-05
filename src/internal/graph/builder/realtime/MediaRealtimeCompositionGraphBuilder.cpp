@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaCompositionTopologyPlanningKernel.h"
 #include "internal/graph/builder/realtime/MediaCompositionGraphBindings.h"
 #include "internal/graph/builder/realtime/MediaCompositionGraphTopologyValidator.h"
 #include "internal/graph/builder/realtime/MediaCompositionSourceInputValidator.h"
@@ -222,54 +223,17 @@ template<class Bind>
     if (auto status = validateOptions(options); !status) return Result::failure(status.error());
     const auto& aggregate = options.aggregate;
     auto& outputRuntime = options.outputRuntime;
-    std::vector<MediaRealtimeEdgePolicySet> sourcePolicies;
-    for (const auto& source : options.sources) sourcePolicies.push_back(source.runtime.edgePolicies);
-    auto aggregateConnections = MediaCompositionAggregateConnectionsPlanner::plan(
-        aggregate.sources, aggregate.audioSource, aggregate.audioPort, sourcePolicies, outputRuntime.edgePolicies);
-    if (!aggregateConnections) return Result::failure(aggregateConnections.error());
-    std::vector<MediaCompositionSourceTopology> sourceTopologies;
-    for (std::size_t i=0; i<options.sources.size(); ++i) {
-        const auto& source = options.sources[i];
-        const auto& sync = source.runtime.synchronization;
-        if (!sync.members || !sync.startup.videoReadiness || !sync.sourceClockMode)
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "Source topology requires declared RTP startup facts"));
-        const MediaCompositionSourceTopologyFacts facts{
-            *sync.members, *sync.startup.videoReadiness, *sync.sourceClockMode,
-            source.runtime.edgePolicies, source.branchConnections, source.inputConnections,
-            aggregateConnections.value().sources[i]};
-        auto projected=MediaCompositionSourceTopologyPlanner::plan(facts);
-        if (!projected) return Result::failure(projected.error());
-        sourceTopologies.push_back(std::move(projected).value());
-    }
-    const auto videoShape=MediaVideoBranchConnectionsPlanner::outputEncoder();
-    const auto audioShape=MediaAudioBranchConnectionsPlanner::outputEncoder(true);
-    const auto& policies=outputRuntime.edgePolicies;
-    auto videoConnections=MediaVideoBranchConnectionsPlanner::plan(videoShape,{policies.metadata,
-        policies.videoPacket,policies.videoFrame,policies.videoFrame,policies.preparedVideoFrame});
-    if(!videoConnections)return Result::failure(videoConnections.error());
-    auto audioConnections=MediaAudioBranchConnectionsPlanner::plan(audioShape,policies);
-    if(!audioConnections)return Result::failure(audioConnections.error());
-    auto schedulerDeclaration=MediaOutputSegmentPlanner::scheduler(policies,outputRuntime.canonicalAudioInputPolicy);
-    if(!schedulerDeclaration)return Result::failure(schedulerDeclaration.error());
-    auto executionDeclaration=MediaOutputSegmentPlanner::execution(policies);
-    if(!executionDeclaration)return Result::failure(executionDeclaration.error());
-    auto protocolDeclaration=[&]()->::media::Result<MediaOutputSegmentDeclaration>{
-        if(outputRuntime.outputAdapter==MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp)
-            return MediaOutputSegmentPlanner::rtp(true,MediaPayloadKind::CodecContext,policies);
-        const auto* mpegts=std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(&outputRuntime.protocolOutput);
-        if(outputRuntime.outputAdapter!=MediaAvSyncOutputAdapterKind::ProjectMpegTs || !mpegts)
-            return ::media::Result<MediaOutputSegmentDeclaration>::failure(::media::ErrorInfo::invalidArgument(
-                "Composition output has no declared protocol topology"));
-        return MediaOutputSegmentPlanner::mpegTs(true,std::holds_alternative<MediaMpegTsRtpOutputPlan>(mpegts->transport),
-            MediaPayloadKind::CodecContext,policies);
-    }();
-    if(!protocolDeclaration)return Result::failure(protocolDeclaration.error());
-    auto graphTopology=MediaCompositionGraphTopologyPlanner::plan({sourceTopologies,aggregateConnections.value(),
-        videoShape,videoConnections.value(),audioShape,audioConnections.value(),schedulerDeclaration.value(),
-        protocolDeclaration.value(),executionDeclaration.value()});
-    if(!graphTopology)return Result::failure(graphTopology.error());
-    MediaCompositionGraphBindings graphBindings(graphTopology.value());
+    std::vector<MediaCompositionTopologySourceFacts> sourceFacts;
+    sourceFacts.reserve(options.sources.size());
+    for (const auto& source : options.sources)
+        sourceFacts.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
+            source.branchConnections, source.inputConnections});
+    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(sourceFacts, aggregate, outputRuntime);
+    if (!plannedTopology) return Result::failure(plannedTopology.error());
+    auto& aggregateConnections = plannedTopology.value().aggregate;
+    auto& sourceTopologies = plannedTopology.value().sources;
+    auto& graphTopology = plannedTopology.value().graph;
+    MediaCompositionGraphBindings graphBindings(graphTopology);
     using GraphDomain=MediaCompositionGraphDomain;
     using OutputRole=MediaOutputSegmentRole;
     const auto attached=[&](GraphDomain domain,auto role){return graphBindings.attached(compositionOutputRole(domain,role));};
@@ -389,7 +353,7 @@ template<class Bind>
             default: return outputEndpoint(role);
             }
         };
-        if (auto status = connectAggregate(graph, aggregateConnections.value().sources[i], sourceEndpoint); !status)
+        if (auto status = connectAggregate(graph, aggregateConnections.sources[i], sourceEndpoint); !status)
             return Result::failure(status.error());
         auto members = inputs.value().sourceMembers;
         members.insert(members.end(), sourceVideo.value().processing.source.begin(), sourceVideo.value().processing.source.end());
@@ -425,7 +389,7 @@ template<class Bind>
             *sourceVideo.value().startupPreparationOwner, std::move(members)});
         sourceInputs.push_back(std::move(inputs).value());
     }
-    if (auto status = connectAggregate(graph, aggregateConnections.value().output, outputEndpoint); !status)
+    if (auto status = connectAggregate(graph, aggregateConnections.output, outputEndpoint); !status)
         return Result::failure(status.error());
     const MediaRealtimeAvOutputSegmentPlan outputSegment{
         outputRuntime.groupKey, outputRuntime.edgePolicies, outputRuntime.audioOutput.branchMode(), outputRuntime.canonicalAudioInputPolicy,
@@ -469,14 +433,14 @@ template<class Bind>
             return Result::failure(status.error());
         sourceMembers.push_back(targets[i].sourceMembers);
     }
-    auto identity=MediaCompositionGraphTopologyValidator::validate(graph,graphTopology.value(),
+    auto identity=MediaCompositionGraphTopologyValidator::validate(graph,graphTopology,
         graphBindings.endpoints(),sourceMembers,outputMembers);
     if(!identity)return Result::failure(identity.error());
     MediaAvOutputDomainRegistration outputRegistration{
         aggregateNode, audioAggregate, scheduled.value().scheduler, publisher, std::move(outputMembers)};
     MediaRealtimeCompositionTopology topology(std::move(graph), std::move(options),
         std::move(registrations), std::move(outputRegistration), std::move(targets),
-        std::move(graphTopology).value(),std::move(identity).value());
+        std::move(graphTopology),std::move(identity).value());
     if (auto sources = topology.planSourceResources(); !sources) return Result::failure(sources.error());
     if (auto retention = topology.planCanvasRetention(); !retention) return Result::failure(retention.error());
     return Result::success(std::move(topology));

@@ -1,11 +1,11 @@
 # 合屏源显示时间修复：r393 后续实施边界
 
-状态：完整存储准入实现中，SourcePresentation 实流尚未通过；下文保留调查与各次修改证据。当前仍缺费用总额、容量求解及生产 solver 接线。目标为 Windows 后 RKMPP 的完整多路合屏，不降低 r393 的四路异构规格。
+状态：完整存储准入实现中，SourcePresentation 实流尚未通过；下文保留调查与各次修改证据。源费用总额已实现；当前仍缺容量求解及生产 solver 接线。目标为 Windows 后 RKMPP 的完整多路合屏，不降低 r393 的四路异构规格。
 
 ## 已核验的根因与复用位置
 
 - r393 的 HEVC RTP 时间戳回退被 uint32 差值转换为超大正间隔，继而产生错误的准备容量。详见 [r393 实测](realtime-composition-r393-validation.md)。[RFC 3550 §5.1](https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1) 允许重排媒体的 RTP 时间戳不按发送次序单调增长；取绝对值或只收集正差仍不能证明固定帧间隔。
-- 合屏入口 `MediaRealtimeCompositionInputPreparer.cpp` 当前强制 CanonicalIntervals。统一目标是 SourcePresentation：保留 AU 身份和原始 PTS，解码后形成 SourceDisplayPoint，由已有 aggregate 的独立输出时钟选帧。不得按 H264/HEVC 建立两条处理链。
+- 合屏入口 `MediaRealtimeCompositionInputPreparer.cpp` 已切换 SourcePresentation，但完整准入门禁尚未通过。目标保持 SourcePresentation：保留 AU 身份和原始 PTS，解码后形成 SourceDisplayPoint，由已有 aggregate 的独立输出时钟选帧。不得按 H264/HEVC 建立两条处理链。
 - `MediaCompositionSourcePlanningKernel` 已有无 cadence 的准备容量、资源账本、所有权校验；`MediaAvContinuousAggregateVideo` 已有显示点选帧。优先复用，不能扩大经验容量规避错误。
 - 独立只读审查 timing_path_review 判定：方向可复用，但直接切换入口不能通过 RKMPP；Windows 也尚无本轮完整运行证据。
 
@@ -102,3 +102,11 @@ Freeze batch存储已规划并接线：独立BatchStoragePlanner按真实元素�
 平台剩余：除startup hash几何外，MediaVideoFrameOwnershipStoragePlanner::reservedVector仍有MSVC专属门禁，RKMPP需在真实GCC能力证据下适配，不能以Windows编译替代。下步须用候选总额实现实际容量选择与freeze接线，并在最终图对照同一成本与持有产品。
 
 候选总额验证：两源码冻结获双独立算术/归属PASS；Windows Release全核心clean-first/all构建94651成功，configure/build均0，脚本核验产物。未运行local或新增媒体测试，未产生新的测试临时文件。容量接线前再次核验SourceSession：admittedUnits只在非frozen阶段累计，冻结后prefix不新增；未来acquiring/output依旧是独立硬容量，不能由Nv或输出fps假定。当前仍无具体BatchAdmissionSolver，生产freeze传nullptr；本提交不是已恢复输出的成功验收。
+
+## 候选与实际建图共用拓扑规划
+
+将 GraphBuilder 内既有 aggregate/source/output/scheduler/protocol/execution 声明组合提取为 MediaCompositionTopologyPlanningKernel，真实 builder 已消费其 owned 产品并保持最终逐节点/边的 readback 校验。借用源 synchronization/policies/branches/inputs，不需要 sealed owner 或创建 MediaGraph；候选 solver 后续复用同一入口。此次不新增连接策略、线程或容量算法。依据仍为 [GStreamer allocation negotiation](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html) 的协商后激活分层；本项目具体拓扑与持有上界来自既有 DAG planner，不声称 GStreamer 提供本项目的容量分配算法。候选临时产品的存储费用仍须在 solver 内解决，不将普通 vector 自动归入 Prepared 域。待双审与 Release 构建；freezeBatch 仍无 solver，本节不是实流通过记录。
+
+容量接线定位：SourceSessionPlan.cpp 的 streamPlan 已按 descriptorCapacity+一次 expiry、maximumReorderedPackets、每包 discontinuity/evidence 及一次 clock expiry 推导输出事件界；这是有限批次容量，不承诺下一批会等待消费者。后续应抽取并复用该实际公式，不以 bootstrap 的 B/sizeof(MediaBufferRef) 当最终队列容量。源帧字节可复用 MediaVideoSurfaceFootprint::logicalBytes（SourceResourcesPlanner::videoBytes 已采用真实 stage frame contract），不得用 encoded AU 字节替代。Nv 与 acquiring/output 独立；Na 必须保持 session.audioRetention。producer.minimumProgress 含候选 acquiring，不能循环反推独立输入下界。双审已明确本拓扑提取单元 PASS，构建结果待写入。
+
+本单元验证：presentation_plan_review 与 timing_path_review 对冻结三源码均明确局部 PASS。Windows Release clean-first/all 全核重建会话60850完成，configure/build均0，800任务计划，脚本核验产物。未运行local CLI；未重复启动缺solver的已知失败媒体测试，没有本轮抓包、截图或媒体日志。RKMPP尚未同步本次源码，继续使用8核增量all；不得据此标记跨平台或完整合屏通过。
