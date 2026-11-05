@@ -219,3 +219,14 @@ FrameWrapper消费者先检查索引再读取完整root；最终Candidate/账本
 三源码冻结，presentation_plan_review已明确局部PASS，另一独立审查进行中；Windows Release全核构建88185进行中。
 构建结果：Windows Release clean-first/all全核88185终态退出0，800任务计划、configure/build均0，realtime产物7116288字节。RKMPP原目录8核增量all完成8/8任务、退出0；三源码同步前后哈希通过，realtime SHA256=506925b9edaa89e598331d767863c452f680965657bb3c12988c175f71df88d9，ninja/cc1plus无残留。无本轮媒体测试/临时同步文件/测试产物，未运行local CLI；共享规划变更仍须随完整solver接通后的原规格Windows→RKMPP实流复验。
 timing_path_review随后对相同冻结3源码明确局部PASS，双独立审查均通过；无修后源码变化。
+
+## 固定 MPP 的输入 metadata 传播边界（2026-11-05）
+
+为判断项目内hardware adapter能否在不修改依赖的情况下解决身份问题，timing_path_review独立SSH只读核验/root/mpp，提交c08762ebfadeb4e986d2fed993bc7a54862d3ebe。结论FAIL：现有公开H.264/HEVC路径未提供可证明的输入opaque传播及逐输入退休合同。
+
+- mpp/codec/mpp_dec_normal.c:1095–1100写入输出frame的KEY_INPUT_PACKET处于advanced thread；同文件1148–1159仅为MJPEG启用该线程。H.264/HEVC使用parser/hal线程，不能借MJPEG语义证明其能力。
+- mpp/base/mpp_packet.c:143–145复制packet时保留metadata引用，不代表parser将其传播给输出frame；未找到H.264/HEVC对应传播实现，KEY_USER_DATA存在也不足以建立合同。
+- mpp_dec_normal.c:375–381在parser prepare后释放已消费packet，实际parser parse在506；packet自身release callback只证明输入内存生命周期结束。decoder packet-release在115–117先deinit再回调，而mpp_packet.c:213已清空指针。
+- mpp/codec/mpp_dec.c:426–440的frame-ready发生于复制并发布frame后，缺少输入身份及每输入完成标志，不能与packet-release计数合并推导零输出/多输出/延迟输出的退休。
+
+决定：不实现依赖上述未经证明能力的项目内adapter，不以FIFO、PTS猜配或MJPEG分支放宽H.264/HEVC门禁，也不扩展用户拒绝的外部依赖修改。RKMPP身份部分仍未解决；Windows完整准入solver仍有独立可推进工作（当前CompositionPreparer:297仍传nullptr），因此总体目标保持未完成。此轮仅补充依赖能力证据，没有生产源码变更、构建或媒体验收；独立SSH已退出，无临时测试文件。
