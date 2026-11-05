@@ -47,41 +47,43 @@ namespace media::ffmpeg::graph {
     auto releaseSum = MediaCheckedArithmetic::add(releases, transactions, "startup route releases");
     if (!releaseSum) return Result::failure(releaseSum.error());
     releases = releaseSum.value();
-    MediaStartupRouteStoragePlan result{envelopes, releases, transactions, {}, 0};
-    const auto charge = [&](std::size_t bytes, std::uint64_t count, std::size_t& target) -> ::media::Status {
+    MediaStartupRouteStoragePlan result{envelopes, releases, transactions, {}, 0, 0};
+    const auto charge = [&](std::size_t bytes, std::uint64_t count,
+                            std::size_t& target, std::size_t& domainBytes) -> ::media::Status {
         auto multiplied = MediaCheckedArithmetic::multiply(bytes, count, "startup route allocation bound");
         if (!multiplied) return ::media::Status::failure(multiplied.error());
-        auto sum = MediaCheckedArithmetic::add(result.routeBytes, multiplied.value(), "startup route storage");
+        auto sum = MediaCheckedArithmetic::add(domainBytes, multiplied.value(), "startup route storage domain");
         if (!sum) return ::media::Status::failure(sum.error());
         if (sum.value() > (std::numeric_limits<std::size_t>::max)())
             return ::media::Status::failure(::media::ErrorInfo::allocationFailed("Startup route storage exceeds address space"));
         target = static_cast<std::size_t>(multiplied.value());
-        result.routeBytes = static_cast<std::size_t>(sum.value());
+        domainBytes = static_cast<std::size_t>(sum.value());
         return ::media::Status::success();
     };
     auto& costs = result.concurrent;
-    const auto add = [&](std::size_t MediaStartupBatchStorageCosts::* field, std::uint64_t count) {
-        return charge(batch.*field, count, costs.*field);
+    const auto add = [&](std::size_t MediaStartupBatchStorageCosts::* field,
+                         std::uint64_t count, std::size_t& domainBytes) {
+        return charge(batch.*field, count, costs.*field, domainBytes);
     };
     using Costs = MediaStartupBatchStorageCosts;
-    if (auto s = add(&Costs::envelopeWrapperBytes, envelopes); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::releaseWrapperBytes, releases); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::transactionWrapperBytes, transactions); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::releasedArraysBytes, releases); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::releaseGroupKeyBytes, releases); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::envelopeWrapperBytes, envelopes, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::releaseWrapperBytes, releases, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::transactionWrapperBytes, transactions, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::releasedArraysBytes, releases, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::releaseGroupKeyBytes, releases, result.ordinaryBytes); !s) return Result::failure(s.error());
     // stageRelease resets its previous arrays before constructing replacements.
     constexpr std::uint64_t stagedBatch = 1;
-    if (auto s = add(&Costs::stagedReferenceArraysBytes, stagedBatch); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::stagedReferenceArraysBytes, stagedBatch, result.preparationBytes); !s) return Result::failure(s.error());
     // The old reservation still owns old audio wrappers while stageRelease creates
     // new anchored wrappers, before replacePendingBatches replaces references.
     constexpr std::uint64_t reservedAudioBatch = 1;
-    if (auto s = add(&Costs::releasedAudioWrappersBytes, stagedBatch + reservedAudioBatch); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::releasedAudioWrappersBytes, stagedBatch + reservedAudioBatch, result.ordinaryBytes); !s) return Result::failure(s.error());
     constexpr std::uint64_t preparationReservation = 1;
     constexpr std::uint64_t extractorReservation = 1;
     constexpr std::uint64_t authorizationOperation = 1;
-    if (auto s = add(&Costs::preparationReservationBytes, preparationReservation); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::extractorReservationBytes, extractorReservation); !s) return Result::failure(s.error());
-    if (auto s = add(&Costs::authorizationScratchBytes, authorizationOperation); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::preparationReservationBytes, preparationReservation, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::extractorReservationBytes, extractorReservation, result.preparationBytes); !s) return Result::failure(s.error());
+    if (auto s = add(&Costs::authorizationScratchBytes, authorizationOperation, result.preparationBytes); !s) return Result::failure(s.error());
     return Result::success(std::move(result));
 }
 } // namespace media::ffmpeg::graph

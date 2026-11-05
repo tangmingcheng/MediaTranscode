@@ -10,7 +10,11 @@ struct MediaStartupRouteStoragePlan final {
     // releasedAudioWrappersBytes includes staging/reservation replacement only;
     // wrappers already published to the ordinary audio branch are additional.
     MediaStartupBatchStorageCosts concurrent;
-    std::size_t routeBytes;
+    // Actual source-resource requests only. Ordinary inner string/wrapper
+    // allocations retain their own domain even when an outer owner is Prepared.
+    std::size_t preparationBytes;
+    // Route-local ordinary requests, not the full downstream Runtime ledger.
+    std::size_t ordinaryBytes;
 };
 class MediaStartupRouteStoragePlanner final {
 public:

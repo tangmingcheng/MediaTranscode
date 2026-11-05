@@ -7,6 +7,7 @@
 #include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupBatchStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupRouteStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionStartupStoragePlanner.h"
 #include "internal/graph/planner/video/MediaVideoSourcePlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedInputRetentionPlan.h"
@@ -40,6 +41,7 @@ struct MediaCompositionSourcePlanningProducts final {
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
+    std::optional<MediaStartupStoreStoragePlan> startupStoreStorage;
     MediaCompositionSourceBranchPlan branchConnections;
     std::vector<MediaSourceInputConnection> inputConnections;
 };

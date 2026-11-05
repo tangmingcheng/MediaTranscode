@@ -144,6 +144,7 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
+    std::optional<MediaStartupStoreStoragePlan> startupStoreStorage;
     if (!cadence) {
         const int videoDatagram = inputDraft.input.rtpTransport->maximumDatagramBytes;
         const int audioDatagram = hasAudio ? runtime.value().isolatedAudioInput->rtpTransport->maximumDatagramBytes : 0;
@@ -158,6 +159,7 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
         startupBatchStorage = std::move(storage.value().batch);
         startupRouteStorage = std::move(storage.value().route);
         clockRouteStorage = std::move(storage.value().clock);
+        startupStoreStorage = storage.value().stores;
     }
     auto branchConnections = MediaCompositionSourceBranchPlanner::plan(
         request.timing, request.video.filterActive, hasAudio, runtime.value().edgePolicies);
@@ -172,7 +174,8 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
         raw.video.streamIndex, std::move(request.video), raw.video.frameRate,
         cadence ? std::optional{MediaRational{raw.video.frameRate.den, raw.video.frameRate.num}} : std::nullopt,
         std::move(runtime).value(), std::move(holders), std::move(startupBatchStorage),
-        std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(branchConnections).value(), std::move(inputConnections).value()});
+        std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupStoreStorage),
+        std::move(branchConnections).value(), std::move(inputConnections).value()});
 }
 
 } // namespace media::ffmpeg::graph

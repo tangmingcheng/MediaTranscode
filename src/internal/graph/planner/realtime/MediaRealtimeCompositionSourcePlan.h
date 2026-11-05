@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaCompositionSourceBranchPlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupBatchStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupRouteStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionStartupStoragePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
@@ -29,6 +30,7 @@ struct MediaRealtimeCompositionSourcePlan final {
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
+    std::optional<MediaStartupStoreStoragePlan> startupStoreStorage;
     MediaCompositionSourceBranchPlan branchConnections;
     std::vector<MediaSourceInputConnection> inputConnections;
     std::optional<MediaPreparedRtpSourceContainerBounds> preparedPacketContainers;

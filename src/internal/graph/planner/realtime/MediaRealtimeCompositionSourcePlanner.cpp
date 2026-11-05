@@ -167,7 +167,8 @@ MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanni
         std::move(products.video), products.frameRate, products.maximumFrameDuplicationGap,
         std::move(runtime).value(), {std::move(*storage.value().preparation), *request.prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),
-        std::move(products.clockRouteStorage), std::move(products.branchConnections), std::move(products.inputConnections),
+        std::move(products.clockRouteStorage), std::move(products.startupStoreStorage),
+        std::move(products.branchConnections), std::move(products.inputConnections),
         cadence ? std::nullopt : std::optional<MediaPreparedRtpSourceContainerBounds>{
             {sealed->video.bounds, sealed->audio ? std::optional{sealed->audio->bounds} : std::nullopt}}});
 }
