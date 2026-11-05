@@ -49,6 +49,9 @@ struct MediaCompositionSourceTopology final {
 };
 class MediaCompositionSourceTopologyPlanner final {
 public:
+    // Same fixed topology; success allocates nothing. Discard candidate on failure.
+    static ::media::Status rebind(const MediaCompositionSourceTopologyFacts& facts,
+        MediaCompositionSourceTopology& topology);
     static ::media::Result<MediaCompositionSourceTopology> plan(
         const MediaCompositionSourceTopologyFacts& facts);
 };

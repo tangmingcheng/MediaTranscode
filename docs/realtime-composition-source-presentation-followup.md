@@ -295,3 +295,13 @@ Windows Release 全量构建 79994 已终态退出 0（801 任务计划，config
 尚缺 topology policy/incident capacities 同步、完整工作区预算及具体 freeze solver；本轮不构成合屏实流通过。没有新媒体测试、抓包、截图、临时测试脚本或同步临时文件。RKMPP 使用现有目录、8 核增量 all-target 构建。
 
 RKMPP 单次 SSH 1343 已终态退出 0，增量构建完成 54/54；九个源码文件写入前逐项核对基线 hash，写入后核对目标 hash。未执行 clean-first。两平台编译通过仅覆盖本轮代码，不替代原规格 realtime 链路验收。
+
+## 2026-11-05 源拓扑策略与关联边容量更新
+
+SourceTopology 的初次 plan 与固定形状 rebind 共用 compileTopology。声明/alias 按游标检查 role、position、kind，查找限制于已声明前缀；连接按原顺序核对全部非 policy 字段后更新策略。节点关联边容量按原边顺序重算，自环计一次，外部位置维持 nullopt，核对完整数组数量和有界非空队列。成功更新不构造字符串、不扩容；失败候选整体作废。
+
+保持既有静态规划与 GStreamer 构建前分配协商边界，没有改变媒体运行时算法。为避免 freeze 中分配游标数组，逐位置扫描连接；端点查找仍是线性 binding 查找，因此计算成本高于原单次边遍历，不宣称 O(VE)。两个独立审查者对本轮两文件明确局部 PASS。
+
+Windows 全量 Release 62153 退出 0（801 任务计划），四项产物核验通过，realtime CLI 7122432 字节、14:45:05。完整图的共享输出/跨源绑定容量更新、全部费用工作区预算、具体 freeze solver 和原规格实流验收仍待完成。本轮没有新抓包、截图、日志、测试脚本或传输临时文件。
+
+RKMPP 单次 SSH 25660 增量构建 23/23、终态退出 0；两文件同步前后 hash 核验成功，使用 8 核，未执行 clean-first。无新媒体链路通过结论。
