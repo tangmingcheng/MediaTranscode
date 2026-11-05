@@ -66,8 +66,12 @@ struct MediaPreparedSourceCandidateCosts final {
     // startup.clock's additional graph-route CNAME owners.
     MediaRtcpPreparationStoragePlan sourceClock;
     MediaPreparedIngressEventStoragePlan ingressEvents;
-    // Deliberately no total/admission: shared-root accounting and candidate
-    // capacity selection still require the complete admission solver.
+    // Source-owned preparation charges only. Batch scratch and other root
+    // reservations are combined once by the batch solver, not by each source.
+    // Ordinary route requests and graph payload/registry domains are separate.
+    std::size_t protocolBytes;
+    std::size_t startupBytes;
+    std::size_t totalBytes;
 };
 class MediaPreparedSourceCandidateCostPlanner final {
 public:

@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/resource/MediaPmrContainerGeometry.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
 
 namespace media::ffmpeg::graph {
@@ -208,9 +209,39 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         facts.sourceIndex, facts.producerHolders, *facts.videoPlan.decoderOwnershipStorage,
         facts.videoPlan.filterOwnershipStorage);
     if (!ownership) return R::failure(ownership.error());
-    return R::success({fixed.value(), std::move(video).value(), std::move(audioCosts),
+    MediaPreparedSourceCandidateCosts result{fixed.value(), std::move(video).value(), std::move(audioCosts),
         indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
         std::move(startup).value(), std::move(ownership).value(), std::move(sourceClock).value(),
-        {events.value(), eventBytes.value()}});
+        {events.value(), eventBytes.value()}, 0, 0, 0};
+    const auto accumulate = [](std::size_t& target, std::initializer_list<std::uint64_t> components) -> ::media::Status {
+        for (const auto bytes : components) {
+            auto total = checked(MediaCheckedArithmetic::add(target, bytes, "Candidate preparation component total"));
+            if (!total) return ::media::Status::failure(total.error());
+            target = total.value();
+        }
+        return ::media::Status::success();
+    };
+    for (const auto* stream : {&result.video, result.audio ? &*result.audio : nullptr}) {
+        if (!stream) continue;
+        // containerBytes excludes the replaced pending-only lease control fee.
+        // Packet wrappers, payload reservation and lease controls are distinct.
+        if (auto status = accumulate(result.protocolBytes, {stream->containerBytes,
+                stream->leaseControlsBytes, stream->packetWrappers.preparationBytes,
+                stream->payload.bytes}); !status) return R::failure(status.error());
+    }
+    if (auto status = accumulate(result.protocolBytes, {result.sourceClock.cnamePeakBytes,
+            result.startup.clock.additionalCnameBytes, result.ingressEvents.bytes}); !status)
+        return R::failure(status.error());
+    // Route fees are already expanded for concurrent holders. Do not add batch
+    // costs again, or ordinary inner strings/audio wrappers to Prepared charges.
+    if (auto status = accumulate(result.startupBytes, {result.startupIndexBytes,
+            result.startupGenerationBytes, result.frameWrappers.preparationBytes,
+            result.lineage.preparationBytes, result.frameOwnership.bytes,
+            result.startup.route.preparationBytes, result.startup.coordinator.preparationBytes}); !status)
+        return R::failure(status.error());
+    if (auto status = accumulate(result.totalBytes,
+            {result.fixedBytes, result.protocolBytes, result.startupBytes}); !status)
+        return R::failure(status.error());
+    return R::success(std::move(result));
 }
 }
