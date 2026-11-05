@@ -138,3 +138,11 @@ Freeze batch存储已规划并接线：独立BatchStoragePlanner按真实元素�
 COPY_OPAQUE probe门禁、SourceAccessUnit传播校验及SubmissionOrder身份缺口均未放宽；此修改单独不能使RKMPP SourcePresentation可运行。源码冻结待双审和Windows Release构建；之后仅增量编译RKMPP，媒体验收仍须Windows先通过。
 
 Windows验证：Release clean-first/all全核重建会话38286成功，configure/build均0、800任务计划，脚本核验产物。两名独立审查者对6源码明确局部PASS；构建结束后只将probe旧source-cadence注释改成planned receive-check，无可执行代码变化。尚未执行媒体测试，不宣称RKMPP身份映射、输出deadline或合屏门禁通过。
+
+RKMPP编译验证：源码c0d3e891233ddb1684a5b81f1634b9273d6f649d；同步前1,937文件均匹配236b73d5基线，仅更新6文件，构建后1,937文件均匹配新提交。远端仍在/home/tang/MediaTranscode-composition-09093919，实际执行source /etc/profile.d/ffenv.sh && ffenv on && source /opt/mt-tools/mtenv.sh && mtenv on && cmake --build out/build/rk-release --target all --parallel 8，保留缓存，109/109任务完成、退出0。
+
+实际执行/home/tang/MediaTranscode-composition-09093919/out/build/rk-release/media_transcode_realtime_video_cli --help，退出0；仍有mpp[536116]: mpp_platform: client 12 driver is not ready!诊断，不当作媒体能力通过或全部硬件不可用。ldd六个FFmpeg库均位于/home/tang/ffmpeg-ab1e61a/lib，无not found；realtime产物SHA256为8711f9b0bfde3c0057850cfde4c546a8d18e295cc21c5213011f2b940ad6a381。pgrep无cmake --build/ninja/cc1plus/realtime CLI残留。未运行local CLI或任何媒体链路，不替代Windows先行实流门禁。
+
+本轮临时同步文件为本机及远端项目out/rk-incremental-c0d3e891.json、out/rk-incremental-c0d3e891.tar，各2文件；结果已记录，随后按清单删除。
+
+清理复核：本机与远端本轮同步文件均剩余0；保留源码、构建缓存和指定120秒测试源。最终6源码双独立审查均PASS。
