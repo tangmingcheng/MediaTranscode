@@ -5,8 +5,10 @@
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include <limits>
 #include <algorithm>
+#include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -202,6 +204,14 @@ namespace {
             videoPrefixAccessUnitBound, {MediaStreamKind::Video, raw.videoAccessUnitEnvelope.maximumAccessUnitBytes,
                 raw.videoAccessUnitEnvelope.sizeAuthority}, "prepared-source-cadence+max-open-remaining-and-startup-wait-finite-admission");
         if (!videoRetention) return Result::failure(videoRetention.error());
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::PlannerCapability,
+            "composition_prepared_video_admission media_id=" + request.mediaId +
+            " rate=" + std::to_string(cadence->rate.num) + "/" +
+            std::to_string(cadence->rate.den) + " window_ns=" +
+            std::to_string(window.nanoseconds()) + " replay_units=" +
+            std::to_string(videoPrefixAccessUnitBound) + " maximum_units=" +
+            std::to_string(videoRetention.value().maximumUnits));
         retention.emplace(MediaPreparedInputRetentionPlan{*startup.value().maximumWaitNs,
             std::move(videoRetention).value(), std::nullopt});
         retention->audio = audioRetention;

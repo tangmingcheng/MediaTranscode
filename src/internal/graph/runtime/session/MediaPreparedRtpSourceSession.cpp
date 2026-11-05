@@ -15,6 +15,7 @@
 #include <tuple>
 #include <type_traits>
 #include <system_error>
+#include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -361,8 +362,19 @@ try {
                     if (!s.protocol->admitAccessUnit((unit.packet->flags & AV_PKT_FLAG_KEY) != 0).accepted) continue;
                     const auto& retention = s.plan.depacketizer.streamKind == MediaStreamKind::Video
                         ? m_plan.admission.video : *m_plan.admission.audio;
-                    if (!m_frozen && s.admittedUnits >= retention.maximumUnits)
-                        return invalid("Prepared RTP AU prefix admission exhausted");
+                    if (!m_frozen && s.admittedUnits >= retention.maximumUnits) {
+                        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                            "Prepared RTP AU prefix admission exhausted: admitted=" +
+                            std::to_string(s.admittedUnits) + " maximum=" +
+                            std::to_string(retention.maximumUnits) + " prefix=" +
+                            std::to_string(s.prefix->packets.size()) + " acquiring=" +
+                            std::to_string(s.binder->m_acquiringPackets->size()) +
+                            " canonical_retention=" +
+                            std::to_string(m_plan.canonicalRuntimeRetention.has_value()) +
+                            " remaining_ns=" + std::to_string(
+                                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    m_plan.deadline - std::chrono::steady_clock::now()).count())));
+                    }
                     if (s.nextSequence == std::numeric_limits<std::uint64_t>::max())
                         return invalid("Prepared RTP ingress sequence exhausted");
                     auto buffer = FFmpegBufferFactory::wrapPacket(*s.resource, std::move(unit.packet), s.plan.depacketizer.streamKind,
