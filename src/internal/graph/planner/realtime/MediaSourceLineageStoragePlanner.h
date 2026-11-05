@@ -30,6 +30,10 @@ struct MediaSourceLineageStoragePlan final {
 };
 class MediaSourceLineageStoragePlanner final {
 public:
+    // Reuses the existing root catalog and family memberships. Successful
+    // reevaluation allocates no storage and replaces only numeric costs.
+    // On failure the previously calculated costs remain unchanged.
+    static ::media::Status evaluate(MediaSourceLineageStoragePlan& plan);
     static ::media::Result<MediaSourceLineageStoragePlan> plan(
         const MediaCompositionGraphTopology& topology,
         const MediaCompositionReferenceResidencePlan& reference,

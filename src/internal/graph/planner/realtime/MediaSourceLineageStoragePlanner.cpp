@@ -101,32 +101,53 @@ try {
     lineageRoots(accessUnit, *decoder);
     // display.accessUnit and the frame wrapper's direct AU are the same owner.
     accessUnit.rootIndices.insert(accessUnit.rootIndices.end(), display.rootIndices.begin(), display.rootIndices.end());
-    auto geometry = MediaVideoDecodeBuffer::allocationGeometry();
-    if (!geometry) return R::failure(geometry.error());
-    const std::array geometries{geometry.value().accessUnit, geometry.value().display,
-        geometry.value().wrapper, geometry.value().wrapper};
-    for (std::size_t i = 0; i < result.allocations.size(); ++i) {
-        auto& allocation = result.allocations[i];
-        for (const auto index : allocation.rootIndices) {
-            const auto& root = result.roots[index];
-            auto sum = MediaCheckedArithmetic::add(allocation.maximumAllocations, root.maximumReferences,
-                "source lineage allocation roots");
-            if (!sum) return R::failure(sum.error());
-            allocation.maximumAllocations = sum.value();
-        }
-        auto unit = MediaPreparationMemoryResource::allocationFootprint(geometries[i].bytes, geometries[i].alignment);
-        if (!unit) return R::failure(unit.error());
-        auto bytes = MediaCheckedArithmetic::multiply(unit.value(), allocation.maximumAllocations,
-            "source lineage preparation allocation bytes");
-        if (!bytes) return R::failure(bytes.error());
-        allocation.preparationBytes = bytes.value();
-        auto total = MediaCheckedArithmetic::add(result.preparationBytes, bytes.value(), "source lineage preparation storage");
-        if (!total) return R::failure(total.error());
-        result.preparationBytes = total.value();
-    }
+    if (auto status = evaluate(result); !status) return R::failure(status.error());
     return R::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaSourceLineageStoragePlan>::failure(
         ::media::ErrorInfo::allocationFailed("source lineage storage planning"));
+}
+
+::media::Status MediaSourceLineageStoragePlanner::evaluate(MediaSourceLineageStoragePlan& plan)
+{
+    using Family = MediaSourceLineageAllocationFamily;
+    auto geometry = MediaVideoDecodeBuffer::allocationGeometry();
+    if (!geometry) return ::media::Status::failure(geometry.error());
+    const std::array geometries{geometry.value().accessUnit, geometry.value().display,
+        geometry.value().wrapper, geometry.value().wrapper};
+    constexpr std::array families{Family::AccessUnit, Family::Display, Family::PacketWrapper, Family::FrameWrapper};
+    std::array<std::uint64_t, families.size()> counts{}, charges{};
+    std::uint64_t totalBytes = 0;
+    for (std::size_t i = 0; i < plan.allocations.size(); ++i) {
+        const auto& allocation = plan.allocations[i];
+        if (allocation.family != families[i])
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source lineage allocation family order is invalid"));
+        for (const auto index : allocation.rootIndices) {
+            if (index >= plan.roots.size())
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source lineage allocation root index is absent"));
+            const auto& root = plan.roots[index];
+            if (root.holder && root.holder->maximumReferences != root.maximumReferences)
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source lineage holder count differs from its root"));
+            auto sum = MediaCheckedArithmetic::add(counts[i], root.maximumReferences,
+                "source lineage allocation roots");
+            if (!sum) return ::media::Status::failure(sum.error());
+            counts[i] = sum.value();
+        }
+        auto unit = MediaPreparationMemoryResource::allocationFootprint(geometries[i].bytes, geometries[i].alignment);
+        if (!unit) return ::media::Status::failure(unit.error());
+        auto bytes = MediaCheckedArithmetic::multiply(unit.value(), counts[i],
+            "source lineage preparation allocation bytes");
+        if (!bytes) return ::media::Status::failure(bytes.error());
+        charges[i] = bytes.value();
+        auto total = MediaCheckedArithmetic::add(totalBytes, bytes.value(), "source lineage preparation storage");
+        if (!total) return ::media::Status::failure(total.error());
+        totalBytes = total.value();
+    }
+    for (std::size_t i = 0; i < plan.allocations.size(); ++i) {
+        plan.allocations[i].maximumAllocations = counts[i];
+        plan.allocations[i].preparationBytes = charges[i];
+    }
+    plan.preparationBytes = totalBytes;
+    return ::media::Status::success();
 }
 }

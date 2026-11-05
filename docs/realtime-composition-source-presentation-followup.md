@@ -230,3 +230,11 @@ timing_path_review随后对相同冻结3源码明确局部PASS，双独立审查
 - mpp/codec/mpp_dec.c:426–440的frame-ready发生于复制并发布frame后，缺少输入身份及每输入完成标志，不能与packet-release计数合并推导零输出/多输出/延迟输出的退休。
 
 决定：不实现依赖上述未经证明能力的项目内adapter，不以FIFO、PTS猜配或MJPEG分支放宽H.264/HEVC门禁，也不扩展用户拒绝的外部依赖修改。RKMPP身份部分仍未解决；Windows完整准入solver仍有独立可推进工作（当前CompositionPreparer:297仍传nullptr），因此总体目标保持未完成。此轮仅补充依赖能力证据，没有生产源码变更、构建或媒体验收；独立SSH已退出，无临时测试文件。
+## Lineage 数值重求值（2026-11-05）
+
+MediaSourceLineageStoragePlanner::evaluate复用已有roots/rootIndices，只重新计算四类数量、费用及总额。固定数组从零暂存，family顺序、索引范围、holder与root数量一致性和全部checked算术成功后才更新数值。原plan已消费该函数，不保留第二套公式；重复调用不叠加旧结果，失败不提交部分数值。
+
+沿既有供应商几何与checked计费算法，不改变根成员、所有权、媒体线程、队列或平台策略。实际geometry使用type_identity allocator重载的sizeof/alignof，并非无参的动态probe；成功路径不分配或重建根。错误诊断仍可能分配/抛出，evaluate并非noexcept，原plan保留bad_alloc捕获。完整候选的容量更新、其他组件重算及联合solver仍未完成。
+
+presentation_plan_review和timing_path_review均对冻结2源码明确局部PASS。Windows Release全核构建85561进行中，后续RKMPP按8核增量all。
+构建结果：Windows Release clean-first/all全核85561终态退出0，800任务计划、configure/build均0，realtime产物7117824字节。RKMPP原目录8核增量all完成8/8任务、退出0；两源码同步前后哈希通过，realtime SHA256=8a446a465aa1298eb77b2fa1bcedc7b6fdcb487afc45761b73d67b39c406ad0b，ninja/cc1plus无残留。本轮无实流测试、临时同步文件或测试产物，未运行local CLI。共享费用重构仍须随完整solver接通后的同规格Windows→RKMPP实流复验，不作为媒体验收通过。
