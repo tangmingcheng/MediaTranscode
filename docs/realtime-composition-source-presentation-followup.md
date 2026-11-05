@@ -120,3 +120,11 @@ Freeze batch存储已规划并接线：独立BatchStoragePlanner按真实元素�
 具体solver仍未实现。剩余设计风险已定位：多源独立容量扩展目标尚无现成策略；候选source/topology产品内部普通vector/string不能靠外层PMR收费。应贯通真实分配scope或复用提前拥有的不变声明，不能事后读capacity冒充申请前准入。此次不声称解决这些项。源码冻结待双审与Release构建，无媒体测试产物。
 
 本单元验证：timing_path_review与presentation_plan_review均对冻结4源码明确局部PASS；Windows Release clean-first/all全核重建会话85168完成，configure/build均0、800任务计划，脚本已核验产物。未运行local或重复缺solver的已知失败实流，无本轮抓包/截图/临时媒体。完整solver、Windows实流及RKMPP仍未通过；远端后续按8核增量all。
+
+## RKMPP 身份通道补充核验（2026-11-05）
+
+独立SSH审查固定MPP c08762ebfadeb4e986d2fed993bc7a54862d3ebe，无文件修改。已找到两个必须排除的反例：mpp_dec_normal.c:638将输入PTS入排序链，mpp_dec.c:351在sort_pts开启时用链头覆写当前frame PTS；mpp/vproc/mpp_dec_vproc.c:301、556用(prev_pts+curr_pts)/2生成去隔行帧PTS。因此不能直接启用递增token并宣称任意输入身份可逆。HEVC非split的h265d_api.c:139→h265d_dpb.c:130以及H264的h264d_api.c:557→h264d_parse.c:875/1048→h264d_init.c:466存在按画面传递路径，但field合并、输出倍增与错误路径仍须核验。FFmpeg未设置sort_pts不等于已证明实际值为0；当前config对象初始化路径还需封闭。后续仅在权威证明禁用排序、无PTS插值并具精确rescale边界后，才能实现有界身份映射adapter；不采用提交FIFO或近似PTS匹配。
+
+随后有限核验补齐初始化链：mpp.c:104→mpp_dec_cfg.c:98–101→kmpp_obj.c:1181–1185/1070/1116–1120→osal/mpp_mem_pool.c:239–269；用户态normal-pool的新建和复用对象均memset清零，default initializer不改sort_pts，故该固定路径初值为0。此结论未覆盖kernel-object分支或后续控制调用，尚无实际decoder config readback。FFmpeg rkmppdec.h:96有deint选项（默认1，可显式0），rkmppdec.c:291调用MPP_DEC_SET_ENABLE_DEINTERLACE且失败报错；MPP mpp_dec.c:1014–1016写enable_vproc，但mpp_dec.c:65/69允许进程环境enable_deinterlace覆盖。可继续沿既有decoder配置显式传deint=0并核验实际CLI环境，不得仅凭AVOption回读宣称vproc已关闭。独立SSH当前该环境变量未设置，这不是未来进程的证据。
+
+当前RKMPP构建进度：[236b73d5增量记录](realtime-composition-rk-incremental-236b73d5.md)。远端已同步该源码，8核增量all完成457任务、退出0；realtime --help与动态库路径检查通过，源码前后哈希一致，临时同步文件已清理。不是媒体验收；SourcePresentation联合solver、RKMPP身份/接收调度、GNU专属存储几何及Windows→RKMPP完整实流仍未闭合。
