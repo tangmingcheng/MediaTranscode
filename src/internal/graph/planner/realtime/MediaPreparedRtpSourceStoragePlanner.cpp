@@ -228,6 +228,21 @@ template<class T>
         perStream = add(perStream, request(sizeof(MediaPreparedRtpPrefix), alignof(MediaPreparedRtpPrefix)));
         perStream = add(perStream, request(sizeof(std::pmr::deque<MediaBufferRef>), alignof(std::pmr::deque<MediaBufferRef>)));
         owners = add(owners, mul(streams, perStream));
+        // SourceSession copies each installed identity once into this resource.
+        // Plan/binder/lineage copies then share that immutable array. Its custom
+        // deleter control is separate from the exact character backing.
+        using IdentityAllocator = MediaLineageAllocator<char>;
+        using IdentityDeleter = MediaImmutableArray<char>::AllocationDeleter<IdentityAllocator>;
+        auto identityControl = probeMediaAllocatedDeleterControlGeometry<
+            char*, IdentityDeleter, IdentityAllocator>();
+        if (!identityControl) return ::media::Status::failure(identityControl.error());
+        for (const auto* stream : {&p.video, p.audio ? &*p.audio : nullptr}) {
+            if (!stream || !stream->binder.videoTiming ||
+                !stream->binder.videoTiming->sourceIdentity ||
+                stream->binder.videoTiming->sourceIdentity->empty()) continue;
+            owners = add(owners, request(stream->binder.videoTiming->sourceIdentity->view().size(), alignof(char)));
+            owners = add(owners, request(identityControl.value().bytes, identityControl.value().alignment));
+        }
         if (failure || owners > (std::numeric_limits<std::size_t>::max)())
             return ::media::Status::failure(failure ? failure :
                 ::media::ErrorInfo::allocationFailed("Prepared fixed owner allocation overflow"));

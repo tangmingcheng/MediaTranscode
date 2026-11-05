@@ -59,6 +59,26 @@ template<class Object>
 #endif
 }
 
+// shared_ptr(pointer, deleter, allocator) stores both user deleter and allocator.
+// Pointer is the actual constructor argument type, not shared_ptr::element_type.
+template<class Pointer, class Deleter, class Allocator>
+::media::Result<MediaSharedAllocationGeometry> probeMediaAllocatedDeleterControlGeometry()
+{
+    static_assert(std::is_pointer_v<Pointer>);
+    using Result = ::media::Result<MediaSharedAllocationGeometry>;
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L
+    using Control = std::_Ref_count_resource_alloc<Pointer, Deleter, Allocator>;
+    return Result::success({1, sizeof(Control), alignof(Control)});
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG)
+    using Control = std::_Sp_counted_deleter<Pointer, Deleter, Allocator, __gnu_cxx::__default_lock_policy>;
+    return Result::success({1, sizeof(Control), alignof(Control)});
+#else
+    return Result::failure(::media::ErrorInfo::unsupported(
+        "Allocated deleter control requires an audited standard-library capability"));
+#endif
+}
+
 // make_shared uses a different control type from allocate_shared on MSVC.
 template<class Object>
 ::media::Result<MediaSharedAllocationGeometry> probeMediaMakeSharedAllocationGeometry()

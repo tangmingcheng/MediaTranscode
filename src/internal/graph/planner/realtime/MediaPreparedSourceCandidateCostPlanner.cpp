@@ -175,6 +175,13 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     if (!frames) return R::failure(frames.error());
     const std::array<std::size_t, 2> datagrams{session.video.workingSet.maximumDatagramBytes,
         audio ? session.audio->workingSet.maximumDatagramBytes : 0};
+    auto queued = add(facts.video.containers.outputObjects,
+        audio ? facts.audio->containers.outputObjects : 0);
+    if (!queued) return R::failure(queued.error());
+    auto sourceClock = MediaRtcpPreparationStoragePlanner::plan(
+        std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u},
+        queued.value(), MediaRtcpPreparationUse::SourceClock);
+    if (!sourceClock) return R::failure(sourceClock.error());
     auto startup = MediaCompositionStartupStoragePlanner::plan(facts.startupRoute,
         facts.startupVideoUnits, facts.startupAudioUnits, facts.groupKeyCharacters,
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u});
@@ -189,6 +196,6 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     if (!ownership) return R::failure(ownership.error());
     return R::success({fixed.value(), std::move(video).value(), std::move(audioCosts),
         indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
-        std::move(startup).value(), std::move(ownership).value()});
+        std::move(startup).value(), std::move(ownership).value(), std::move(sourceClock).value()});
 }
 }

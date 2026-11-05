@@ -58,6 +58,9 @@ struct MediaPreparedSourceCandidateCosts final {
     MediaSourceLineageStoragePlan lineage;
     MediaCompositionStartupStoragePlan startup;
     MediaSourceFrameOwnershipStoragePlan frameOwnership;
+    // Source tracker/mapper/binders and source output evidence, separate from
+    // startup.clock's additional graph-route CNAME owners.
+    MediaRtcpPreparationStoragePlan sourceClock;
     // Deliberately no total/admission: shared-root accounting and candidate
     // capacity selection still require the complete admission solver.
 };
