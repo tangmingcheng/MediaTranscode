@@ -75,6 +75,12 @@ struct MediaPreparedSourceCandidateCosts final {
 };
 class MediaPreparedSourceCandidateCostPlanner final {
 public:
+    // Reuses catalogs from the same topology, producer and projection domains.
+    // Failure invalidates the partially updated candidate.
+    static ::media::Status rebind(
+        const MediaPreparedRtpSourceSessionPlan& session,
+        const MediaPreparedRtpStorageSnapshot& held,
+        const MediaPreparedSourceCandidateCostFacts& facts, MediaPreparedSourceCandidateCosts& costs);
     static ::media::Result<MediaPreparedSourceCandidateCosts> plan(
         const MediaPreparedRtpSourceSessionPlan& session,
         const MediaPreparedRtpStorageSnapshot& held,

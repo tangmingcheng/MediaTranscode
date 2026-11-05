@@ -29,13 +29,14 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     if (!unit) return unit;
     return checked(MediaCheckedArithmetic::multiply(unit.value(), count, "Candidate shared owners"));
 }
-::media::Result<MediaPreparedStreamCandidateCosts> streamCosts(
+template<bool Updating> ::media::Status streamCosts(
     const MediaPreparedRtpSourceSessionStreamPlan& stream,
     const MediaPreparedRtpStreamStorageSnapshot& held,
     const MediaPreparedStreamCandidateCostFacts& facts, bool snapshot,
-    const MediaPreparedSourceCandidateCostFacts& source, MediaStreamKind streamKind)
+    const MediaPreparedSourceCandidateCostFacts& source, MediaStreamKind streamKind,
+    MediaPreparedStreamCandidateCosts& costs)
 {
-    using R = ::media::Result<MediaPreparedStreamCandidateCosts>;
+    using R = ::media::Status;
     if (auto valid = stream.envelope.validate(); !valid) return R::failure(valid.error());
     auto completion = MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(stream);
     if (!completion) return R::failure(completion.error());
@@ -112,10 +113,19 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         liveControls = total.value();
     }
     auto leases = copies(lease.value(), liveControls);
-    auto wrappers = MediaPreparedPacketWrapperStoragePlanner::plan(source.topology, source.residence,
-        source.sourceIndex, streamKind, facts.containers, stream.envelope.maximumAccessUnitsPerPush);
     if (!leases) return R::failure(leases.error());
-    if (!wrappers) return R::failure(wrappers.error());
+    if constexpr (Updating) {
+        if (costs.packetWrappers.sourceIndex != source.sourceIndex || costs.packetWrappers.stream != streamKind)
+            return R::failure(::media::ErrorInfo::invalidArgument("Candidate packet catalog changed source or stream"));
+        if (auto status = MediaPreparedPacketWrapperStoragePlanner::rebind(costs.packetWrappers,
+                source.topology, source.residence, facts.containers, stream.envelope.maximumAccessUnitsPerPush); !status)
+            return status;
+    } else {
+        auto wrappers = MediaPreparedPacketWrapperStoragePlanner::plan(source.topology, source.residence,
+            source.sourceIndex, streamKind, facts.containers, stream.envelope.maximumAccessUnitsPerPush);
+        if (!wrappers) return R::failure(wrappers.error());
+        costs.packetWrappers = std::move(wrappers).value();
+    }
     auto packet = preparedMediaPacketStorageBytes(stream.envelope.maximumAccessUnitBytes,
         MediaPacketStorageExtent::Payload);
     if (!packet) return R::failure(packet.error());
@@ -126,17 +136,19 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     // Fragment assembly is already in the ordinary protocol storage component.
     // Snapshot aliases do not create another payload; graph-credit attachment
     // ends the preparation lease, so graph-owned payload is a separate domain.
-    return R::success({result, result.peakBytes - result.pendingLeaseControlBytes,
-        leases.value(), std::move(wrappers).value(), roots,
-        {liveControls, packet.value(), payload.value()}});
-}
+    costs.containers = result;
+    costs.containerBytes = result.peakBytes - result.pendingLeaseControlBytes;
+    costs.leaseControlsBytes = leases.value();
+    costs.leaseControlRoots = roots;
+    costs.payload = {liveControls, packet.value(), payload.value()};
+    return R::success();
 }
 
-::media::Result<MediaPreparedSourceCandidateCosts> MediaPreparedSourceCandidateCostPlanner::plan(
+template<bool Updating> ::media::Status computeCosts(
     const MediaPreparedRtpSourceSessionPlan& session, const MediaPreparedRtpStorageSnapshot& held,
-    const MediaPreparedSourceCandidateCostFacts& facts)
+    const MediaPreparedSourceCandidateCostFacts& facts, MediaPreparedSourceCandidateCosts& result)
 {
-    using R = ::media::Result<MediaPreparedSourceCandidateCosts>;
+    using R = ::media::Status;
     const bool audio = session.audio.has_value();
     if (session.canonicalRuntimeRetention || !session.fixedOwnerAllocationBytes || !held.owner ||
         audio != held.audio.has_value() || audio != facts.audio.has_value() ||
@@ -149,13 +161,18 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     fixed = add(fixed.value(), session.video.unmigratedProtocolStorageBytes);
     if (!fixed) return R::failure(fixed.error());
     if (audio) { fixed = add(fixed.value(), session.audio->unmigratedProtocolStorageBytes); if (!fixed) return R::failure(fixed.error()); }
-    auto video = streamCosts(session.video, held.video, facts.video, true, facts, MediaStreamKind::Video);
-    if (!video) return R::failure(video.error());
-    std::optional<MediaPreparedStreamCandidateCosts> audioCosts;
+    if (facts.videoPlan.transferDirection != MediaHardwareTransferDirection::None)
+        return R::failure(::media::ErrorInfo::unsupported(
+            "Source lineage requires a proven passthrough transfer contract"));
+    if constexpr (Updating) {
+        if (result.audio.has_value() != audio || result.lineage.sourceIndex != facts.sourceIndex)
+            return R::failure(::media::ErrorInfo::invalidArgument("Candidate cost catalog membership changed"));
+    } else if (audio) result.audio.emplace();
+    if (auto status = streamCosts<Updating>(session.video, held.video, facts.video, true,
+            facts, MediaStreamKind::Video, result.video); !status) return status;
     if (audio) {
-        auto value = streamCosts(*session.audio, *held.audio, *facts.audio, false, facts, MediaStreamKind::Audio);
-        if (!value) return R::failure(value.error());
-        audioCosts = std::move(value).value();
+        if (auto status = streamCosts<Updating>(*session.audio, *held.audio, *facts.audio, false,
+                facts, MediaStreamKind::Audio, *result.audio); !status) return status;
     }
     auto index = MediaAvStartupIndexStoragePlanner::preparedIndex(facts.startupVideoUnits,
         MediaVideoStartupReadiness::DecodedPresentationSpan);
@@ -174,10 +191,16 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     }
     if (!facts.videoPlan.decoderReadiness || facts.videoPlan.filterActive != facts.videoPlan.filterReadiness.has_value())
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate frame wrapper readiness membership is incomplete"));
-    auto lineage = MediaSourceLineageStoragePlanner::plan(facts.topology, facts.residence,
-        facts.sourceIndex, facts.registryCapacity, facts.video.containers.prefixObjects, facts.videoPlan.transferDirection);
-    if (!lineage) return R::failure(lineage.error());
-    auto frames = MediaPreparedFrameWrapperStoragePlanner::plan(facts.topology, lineage.value(),
+    if constexpr (Updating) {
+        if (auto status = MediaSourceLineageStoragePlanner::rebind(result.lineage, facts.topology,
+                facts.residence, facts.registryCapacity, facts.video.containers.prefixObjects); !status) return status;
+    } else {
+        auto lineage = MediaSourceLineageStoragePlanner::plan(facts.topology, facts.residence,
+            facts.sourceIndex, facts.registryCapacity, facts.video.containers.prefixObjects, facts.videoPlan.transferDirection);
+        if (!lineage) return R::failure(lineage.error());
+        result.lineage = std::move(lineage).value();
+    }
+    auto frames = MediaPreparedFrameWrapperStoragePlanner::plan(facts.topology, result.lineage,
         *facts.videoPlan.decoderReadiness, facts.videoPlan.filterReadiness);
     if (!frames) return R::failure(frames.error());
     const std::array<std::size_t, 2> datagrams{session.video.workingSet.maximumDatagramBytes,
@@ -214,10 +237,15 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         facts.producerHolders, *facts.videoPlan.decoderOwnershipStorage,
         facts.videoPlan.filterOwnershipStorage);
     if (!ownership) return R::failure(ownership.error());
-    MediaPreparedSourceCandidateCosts result{fixed.value(), std::move(video).value(), std::move(audioCosts),
-        indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
-        std::move(startup).value(), std::move(ownership).value(), std::move(sourceClock).value(),
-        {events.value(), eventBytes.value()}, 0, 0, 0};
+    result.fixedBytes = fixed.value();
+    result.startupIndexBytes = indexBytes;
+    result.startupGenerationBytes = generation.value().allocationBytes;
+    result.frameWrappers = std::move(frames).value();
+    result.startup = std::move(startup).value();
+    result.frameOwnership = std::move(ownership).value();
+    result.sourceClock = std::move(sourceClock).value();
+    result.ingressEvents = {events.value(), eventBytes.value()};
+    result.protocolBytes = result.startupBytes = result.totalBytes = 0;
     const auto accumulate = [](std::size_t& target, std::initializer_list<std::uint64_t> components) -> ::media::Status {
         for (const auto bytes : components) {
             auto total = checked(MediaCheckedArithmetic::add(target, bytes, "Candidate preparation component total"));
@@ -247,6 +275,22 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     if (auto status = accumulate(result.totalBytes,
             {result.fixedBytes, result.protocolBytes, result.startupBytes}); !status)
         return R::failure(status.error());
+    return R::success();
+}
+} // namespace
+::media::Result<MediaPreparedSourceCandidateCosts> MediaPreparedSourceCandidateCostPlanner::plan(
+    const MediaPreparedRtpSourceSessionPlan& session, const MediaPreparedRtpStorageSnapshot& held,
+    const MediaPreparedSourceCandidateCostFacts& facts)
+{
+    using R = ::media::Result<MediaPreparedSourceCandidateCosts>;
+    MediaPreparedSourceCandidateCosts result{};
+    if (auto status = computeCosts<false>(session, held, facts, result); !status) return R::failure(status.error());
     return R::success(std::move(result));
+}
+::media::Status MediaPreparedSourceCandidateCostPlanner::rebind(
+    const MediaPreparedRtpSourceSessionPlan& session, const MediaPreparedRtpStorageSnapshot& held,
+    const MediaPreparedSourceCandidateCostFacts& facts, MediaPreparedSourceCandidateCosts& costs)
+{
+    return computeCosts<true>(session, held, facts, costs);
 }
 }

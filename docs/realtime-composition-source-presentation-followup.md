@@ -315,3 +315,17 @@ RKMPP 单次 SSH 25660 增量构建 23/23、终态退出 0；两文件同步前�
 完整候选费用重算、预分配工作区预算及具体 freeze solver 尚未接通；本轮不是实流验收通过。没有产生抓包、截图、测试脚本或同步临时文件。
 
 Windows Release 全量构建 1353 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7121408 字节、14:54:30。RKMPP 单次 SSH 60191 核验两文件同步前后 hash，8 核增量 all-target 完成 22/22、终态退出 0，未执行 clean-first。无新媒体链路验收结论。
+
+## 2026-11-05 候选费用原地重算
+
+CandidateCostPlanner 的首次 plan 与 rebind 共用 computeCosts/streamCosts。首次构造 packet/lineage 根目录，更新模式核对 source、stream 和 audio optional 后复用既有 rebind；其余 container/lease/payload/index/generation/frame/startup/clock/ownership 数字产品重新规划。保留原历史 backing 上界、当前持有者下界与 checked 算术，protocol/startup/total 每轮从零汇总。失败候选整体作废；固定 topology、producer、projection domain 和 transfer 模式仍是前置条件。
+
+成功路径分配审计确认：除预建根目录外，当前调用树只查询类型几何、执行 checked 计算和写入数值，没有实际运行容器分配。错误路径不作无分配保证。依据仍是既有静态费用与 GStreamer 启动前分配协商；没有改变媒体算法。完整工作区预算和具体 freeze solver 仍未接通。
+
+RKMPP 运行时能力缺口单独保留：MediaPmrContainerGeometry::proxyBytes、MediaAvStartupStreamStoreGeometry、MediaAvStartupGenerationStateGeometry 仍有 MSVC 专属门禁。GCC 编译通过不等于这些查询可用，也不等于实流通过；需要项目内供应商 geometry adapter，不能用预编译或 fallback 隐藏 unsupported。另有原记录的 RKMPP 源 AU 身份限制未解决。
+
+Windows Release 全量构建 2252 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7121408 字节、15:05:04。RKMPP 单次 SSH 90652 核验两文件同步前后 hash，8 核增量 all-target 完成 4/4、终态退出 0；无新媒体链路运行。
+
+复审发现构建/更新验证不等价：更新绕过 lineage 首次规划的 passthrough transfer 门禁，presentation_plan_review 初次判 FAIL。已在共同 compute、更新根目录前补回 None 检查与原 unsupported 错误；此前 2252/90652 构建只覆盖修复前版本，需重新构建与双人复审。
+
+修复后 presentation_plan_review、timing_path_review 均重新明确局部 PASS。Windows Release 全量 30292 终态退出 0（801 任务计划），四项产物核验，realtime CLI 7121408 字节、15:11:40。RKMPP SSH 43829 核验补充源码前后 hash，8 核增量 4/4、退出 0。生产入口仍为 freezeBatch(rtpSources, nullptr)，候选费用规划器尚无生产调用方，明确不据此宣称求解器或合屏完成。
