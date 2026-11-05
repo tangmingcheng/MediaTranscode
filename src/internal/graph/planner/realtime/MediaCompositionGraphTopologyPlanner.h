@@ -42,6 +42,7 @@ struct MediaCompositionGraphTopology final {
     std::vector<MediaCompositionGraphBinding> bindings;
     std::vector<MediaCompositionGraphAttachment> attachments;
     std::vector<MediaCompositionGraphConnection> connections;
+    std::optional<std::size_t> position(MediaCompositionGraphRole role) const noexcept;
     const MediaCompositionGraphAttachment* attachment(MediaCompositionGraphRole role) const noexcept;
 };
 struct MediaCompositionGraphTopologyFacts final {

@@ -58,3 +58,9 @@ presentation_plan_review：上述共同增量目标条件 PASS，要求合法基
 共同 rebind 按原 slot 核验 kind、完整 connection 索引和 retaining positions，随后更新数量并调用原 checked evaluate；实际 plan() 已消费这条路径。FrameWrapper 接受合法零 holder，Construction 仍严格等于 1；固定单槽证据异常直接失败，不通过重新赋 1 掩盖。成功路径不重新分配目录；失败允许部分数量已改，但整个候选必须作废，不能作为预算过大继续搜索。
 
 适用前提是同一固定拓扑、domain、producer 与 owner membership，可达性不在 rebind 中重新推导。尚不能把该 API 用于任意替换图。完整 solver 工作区必须保管这些不变身份；topology/residence 数量更新、完整工作区计费、候选费用总更新与 freeze 入口仍未完成。本项是引用身份到费用的实际接线，不是 solver 或实流验收通过。
+
+## 2026-11-05 持有数量编译复用
+
+ReferenceResidence 的首次 compile 与固定工作区 rebind 现在复用同一编译遍历；编译期 writer 分别执行构造写入或身份检查后的数量更新。typed startup node/event 保持顺序、position/connection/coordinator、payload/form 与 video/audio 可选成员；aggregate 保持原 Shared 身份及持有位置；ordinary 槽保持存在性，optional{0} 不当作缺席。原 route 端口/重复匹配/policy/stream 校验、节点持有数量及 encoder checked add 完整复用。更新路径不 append/resize，失败后候选整体作废。
+
+计算移到独立 Compiler.cpp；Topology::position 同时供原构图、投影与编译流程使用，未增加第二套角色查找算法。双独立源码审查通过。仍需完成 topology policy/incident 数量更新、容量基线与工作区分配计费、全部候选费用重算及具体 freeze solver；当前不得宣称完整候选入口已开放。

@@ -2,6 +2,10 @@
 #include <algorithm>
 #include <new>
 namespace media::ffmpeg::graph {
+std::optional<std::size_t> MediaCompositionGraphTopology::position(MediaCompositionGraphRole role) const noexcept {
+    for (const auto& binding : bindings) if (binding.role == role) return binding.position;
+    return std::nullopt;
+}
 const MediaCompositionGraphAttachment* MediaCompositionGraphTopology::attachment(MediaCompositionGraphRole role) const noexcept {
     const auto found=std::find_if(attachments.begin(),attachments.end(),[&](const auto& value){return value.role==role;});
     return found==attachments.end()?nullptr:&*found;
@@ -17,19 +21,15 @@ try {
     const auto invalid=[](const char* message){return Result::failure(::media::ErrorInfo::invalidArgument(message));};
     MediaCompositionGraphTopology result;
     const auto key=[](D domain,auto role){return compositionOutputRole(domain,role);};
-    const auto locate=[&](MediaCompositionGraphRole role)->std::optional<std::size_t>{
-        for(const auto& binding:result.bindings)if(binding.role==role)return binding.position;
-        return std::nullopt;
-    };
     const auto declare=[&](MediaCompositionGraphRole role,MediaNodeKind kind)->bool{
-        if(locate(role) || kind==MediaNodeKind::Unknown)return false;
+        if(result.position(role) || kind==MediaNodeKind::Unknown)return false;
         result.bindings.push_back({role,result.positions.size()});
         result.positions.push_back({kind,role.source,{}});
         return true;
     };
     const auto attach=[&](MediaCompositionGraphRole role,MediaCompositionGraphRole owner,std::string port)->bool{
-        const auto position=locate(owner);
-        if(!position || locate(role) || result.attachment(owner))return false;
+        const auto position=result.position(owner);
+        if(!position || result.position(role) || result.attachment(owner))return false;
         result.attachments.push_back({role,owner,std::move(port)});
         result.bindings.push_back({role,*position});
         return true;
@@ -64,7 +64,7 @@ try {
     // Every protocol external role is resolved explicitly. Equal role names in
     // different segments never imply equal nodes or equal ports.
     for(const auto& edge:facts.protocol.connections)for(const auto role:{edge.from,edge.to}) {
-        if(locate(key(D::Protocol,role)))continue;
+        if(result.position(key(D::Protocol,role)))continue;
         bool attached=false;
         switch(role){
         case O::Activation:attached=attach(key(D::Protocol,role),key(D::Aggregate,G::VideoAggregate),"activated");break;
@@ -93,7 +93,7 @@ try {
                 });
                 if(boundary==topology.bindings.end())return invalid("Composition source external position lacks aggregate attachment");
                 const auto target=key(D::Aggregate,static_cast<G>(boundary->role.role));
-                positions[position]=locate(target);
+                positions[position]=result.position(target);
                 if(!positions[position])return invalid("Composition source external position has no output owner");
                 const auto* attachment=result.attachment(target);
                 const auto owner=attachment?attachment->owner:target;
@@ -104,7 +104,7 @@ try {
         }
         for(const auto& binding:topology.bindings){
             const auto role=compositionSourceRole(source,binding.role);
-            if(binding.position>=positions.size() || !positions[binding.position] || locate(role))
+            if(binding.position>=positions.size() || !positions[binding.position] || result.position(role))
                 return invalid("Composition source binding is repeated or invalid");
             result.bindings.push_back({role,*positions[binding.position]});
         }
@@ -124,7 +124,7 @@ try {
     // Source->aggregate edges are already in source products. Do not deduplicate
     // by label or policy: an accidental duplicate is an invalid declaration.
     for(const auto& edge:result.connections){
-        const auto from=locate(edge.from),to=locate(edge.to);
+        const auto from=result.position(edge.from),to=result.position(edge.to);
         if(!from || !to || !edge.policy.queuePolicy.bounded || edge.policy.queuePolicy.capacity==0)
             return invalid("Composition graph edge lacks owned positions or bounded capacity");
         const auto capacity=static_cast<std::uint64_t>(edge.policy.queuePolicy.capacity);

@@ -273,3 +273,15 @@ presentation_plan_review 与 timing_path_review 已对十文件给出局部 PASS
 Windows 全量构建 25629 已终态退出 0，800 任务计划，configure/build 均为 0；四项产物核验通过，realtime CLI 7121920 字节、14:03:00。首次 RKMPP 构建命令发出后 SSH 74693 被对端 reset，结果未取得，不记作成功。重新连接 51255 检查无 ninja/cc1plus/cmake 构建进程，产物仍为上一版 13:49:37；十文件新 hash 再核验一致后才重新启动增量构建。
 
 重连后的 RKMPP 8 核增量 all-target 构建完成 20/20，退出 0；realtime CLI SHA256=e01866efbe155b3451c6ff06b3a2d03ee59a2450775c184aef6a94c80cf78b80。首次连接中断记录保留。当前验证只覆盖双独立源码审查与两平台编译，没有新媒体运行或截图验收结论。
+
+## 2026-11-05 持有数量编译与固定目录更新
+
+本轮五个源码文件（含新增 MediaCompositionPayloadResidenceCompiler.cpp）将原算法迁入 compileReference 的构造/更新两种编译期模式。两个入口共用 source 成员检查、typed startup 数量规划、精确 route/policy 校验、aggregate 身份和普通节点/encoder checked 费用；更新模式核对完整目录身份及最终游标，成功时不新增动态分配。失败可能部分更新，因此丢弃整个候选；同一固定 topology/role mapping 仍为前置条件。Topology::position 供原 graph builder、view、compiler 共同使用。
+
+依据仍为既有 typed ownership/保守持有数量模型及 GStreamer 构建前静态分配协商；未改变运行时线程、媒体队列策略或平台 adapter，没有新媒体算法。presentation_plan_review、timing_path_review 均对五文件明确局部 PASS；这不替代 solver、工作区或实流验收。
+
+Windows Release 全量构建 79994 已终态退出 0（801 任务计划，configure/build 均为 0），四项产物核验；realtime CLI 7119872 字节、14:16:38。RKMPP 交互 SSH 51255 在传输过程中再次 reset，未取得同步成功，未据此启动重复构建。单次 SSH 90157 检查四旧文件仍是基线、第五新文件不存在；随后 99117 以原 hash/目标路径校验完成五文件写入与新 hash 核验，再启动 8 核增量 all-target 构建，待终态记录。
+
+本轮没有新实流、抓包、截图或测试脚本，也未生成同步临时文件。完整 solver 尚未接到 freezeBatch，保持原门禁。
+
+单次 SSH 构建 99117 已终态退出 0，RKMPP 增量完成 22/22（包含新增 compiler 对象）；CMake 因新增源自动重新配置成功。此前交互连接中断记录保留，不算构建成功。没有执行新媒体链路。

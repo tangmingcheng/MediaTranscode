@@ -48,6 +48,12 @@ public:
     static ::media::Status rebindOwner(
         const MediaCompositionGraphTopology& topology, const MediaCompositionReferenceResidencePlan& reference,
         MediaStreamKind stream, MediaPayloadKind payload, MediaPayloadResidenceOwner& owner);
+    // Same fixed topology/role mapping as compile. Recomputes quantities using
+    // the same planners without allocating or resizing on success. Identity or
+    // optional-member changes fail; discard the entire candidate after failure.
+    static ::media::Status rebind(
+        const MediaCompositionGraphTopology& topology, const MediaCompositionResidenceFacts& facts,
+        MediaCompositionReferenceResidencePlan& reference);
     static ::media::Result<MediaCompositionReferenceResidencePlan> compile(
         const MediaCompositionGraphTopology& topology,const MediaCompositionResidenceFacts& facts);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
