@@ -110,3 +110,13 @@ Freeze batch存储已规划并接线：独立BatchStoragePlanner按真实元素�
 容量接线定位：SourceSessionPlan.cpp 的 streamPlan 已按 descriptorCapacity+一次 expiry、maximumReorderedPackets、每包 discontinuity/evidence 及一次 clock expiry 推导输出事件界；这是有限批次容量，不承诺下一批会等待消费者。后续应抽取并复用该实际公式，不以 bootstrap 的 B/sizeof(MediaBufferRef) 当最终队列容量。源帧字节可复用 MediaVideoSurfaceFootprint::logicalBytes（SourceResourcesPlanner::videoBytes 已采用真实 stage frame contract），不得用 encoded AU 字节替代。Nv 与 acquiring/output 独立；Na 必须保持 session.audioRetention。producer.minimumProgress 含候选 acquiring，不能循环反推独立输入下界。双审已明确本拓扑提取单元 PASS，构建结果待写入。
 
 本单元验证：presentation_plan_review 与 timing_path_review 对冻结三源码均明确局部 PASS。Windows Release clean-first/all 全核重建会话60850完成，configure/build均0，800任务计划，脚本核验产物。未运行local CLI；未重复启动缺solver的已知失败媒体测试，没有本轮抓包、截图或媒体日志。RKMPP尚未同步本次源码，继续使用8核增量all；不得据此标记跨平台或完整合屏通过。
+
+## 准入候选的单次协议完成容量门槛
+
+求解前核验发现：consume、tick和takeOutput共用源mutex，消费者不能在单次drain中途取走输出。protocol pending可含N个packet和N个discontinuity（不是总项数N），N=windowPackets+1；每packet至多A个AU和一次evidence，tick再有一次clock invalidation。因此以N*(A+2)+1作为保守单次输出增量上界，并由SourceStoragePlanner统一计算，核对workspace的N/A与实际reorder/envelope一致及全部加乘溢出。CandidateCostPlanner与freeze提交校验均消费该门槛；不改变接收算法、线程、原错误、旧canonical路径或外部参数。
+
+这是空队列可容纳一次保守完成结果的充分容量门槛，不是数学上不可缩小的必要最小值；既有占用和连续多批仍可能触发原有限容量失败。descriptor batch公式覆盖不同持有范围，不能当单次源锁边界。行业参考 [GStreamer queue](https://gstreamer.freedesktop.org/documentation/coreelements/queue.html) 的独立对象/字节/时间限制与背压；本项目差异是原UDP会话超限显式失败，不能在持有消费者同一mutex时等待排空，未引入阻塞或丢弃fallback。此上界来自实际协议状态机，不以输出fps、Nv或旧prefix推导输入密度。
+
+具体solver仍未实现。剩余设计风险已定位：多源独立容量扩展目标尚无现成策略；候选source/topology产品内部普通vector/string不能靠外层PMR收费。应贯通真实分配scope或复用提前拥有的不变声明，不能事后读capacity冒充申请前准入。此次不声称解决这些项。源码冻结待双审与Release构建，无媒体测试产物。
+
+本单元验证：timing_path_review与presentation_plan_review均对冻结4源码明确局部PASS；Windows Release clean-first/all全核重建会话85168完成，configure/build均0、800任务计划，脚本已核验产物。未运行local或重复缺solver的已知失败实流，无本轮抓包/截图/临时媒体。完整solver、Windows实流及RKMPP仍未通过；远端后续按8核增量all。

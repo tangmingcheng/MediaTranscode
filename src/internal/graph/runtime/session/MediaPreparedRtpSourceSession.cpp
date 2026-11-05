@@ -656,6 +656,18 @@ MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLo
     if (!valid(product.video, snapshot.video, m_plan.video) ||
         (m_audio && !valid(*product.audio, *snapshot.audio, *m_plan.audio)))
         return invalid("Storage admission cannot discard already owned protocol input");
+    const auto validateCompletion = [](const MediaPreparedRtpSourceSessionStreamPlan& stream,
+        const MediaPreparedRtpStreamStorageAdmission& admission) -> ::media::Status {
+        auto completion = MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(stream);
+        if (!completion) return ::media::Status::failure(completion.error());
+        if (admission.bounds.outputObjects < completion.value())
+            return invalid("Storage admission cannot contain its serialized protocol completion");
+        return ::media::Status::success();
+    };
+    if (auto status = validateCompletion(m_plan.video, product.video); !status) return status;
+    if (m_audio) {
+        if (auto status = validateCompletion(*m_plan.audio, *product.audio); !status) return status;
+    }
     if (product.startup.audioUnits.has_value() != static_cast<bool>(m_audio) ||
         product.startup.audioBytes.has_value() != static_cast<bool>(m_audio) ||
         product.startup.audioUnitBytes.has_value() != static_cast<bool>(m_audio) ||

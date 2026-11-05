@@ -42,6 +42,38 @@ template<class T>
 }
 }
 
+::media::Result<std::size_t> MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(
+    const MediaPreparedRtpSourceSessionStreamPlan& stream)
+{
+    using Result = ::media::Result<std::size_t>;
+    if (auto status = stream.envelope.validate(); !status) return Result::failure(status.error());
+    if (!stream.reorder.windowPackets ||
+        stream.workingSet.maximumAccessUnitsPerPush != stream.envelope.maximumAccessUnitsPerPush)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Prepared completion requires matching reorder and AU bounds"));
+    auto packets = MediaCheckedArithmetic::add(stream.reorder.windowPackets, 1,
+        "Prepared completion reorder insertion");
+    if (!packets) return Result::failure(packets.error());
+    if (packets.value() != stream.workingSet.maximumReorderedPackets)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Prepared completion differs from protocol working set"));
+    // Pending may contain N packets AND N discontinuities. Each packet can
+    // publish A access units plus one evidence event. tickLocked can then
+    // publish one clock invalidation. takeOutput uses the same source mutex.
+    auto perPacket = MediaCheckedArithmetic::add(stream.envelope.maximumAccessUnitsPerPush, 2,
+        "Prepared completion AU, evidence and discontinuity objects");
+    if (!perPacket) return Result::failure(perPacket.error());
+    auto objects = MediaCheckedArithmetic::multiply(packets.value(), perPacket.value(),
+        "Prepared serialized completion objects");
+    if (!objects) return Result::failure(objects.error());
+    objects = MediaCheckedArithmetic::add(objects.value(), 1, "Prepared completion clock expiry");
+    if (!objects) return Result::failure(objects.error());
+    if (objects.value() > (std::numeric_limits<std::size_t>::max)())
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "Prepared completion exceeds addressable object count"));
+    return Result::success(static_cast<std::size_t>(objects.value()));
+}
+
 ::media::Result<MediaPreparedRtpContainerStoragePlan> MediaPreparedRtpSourceStoragePlanner::containers(
     const MediaPreparedRtpSourceSessionStreamPlan& stream, MediaPreparedRtpContainerBounds bounds, bool snapshot)
 {

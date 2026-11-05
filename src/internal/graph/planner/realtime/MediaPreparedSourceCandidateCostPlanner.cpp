@@ -37,6 +37,11 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
 {
     using R = ::media::Result<MediaPreparedStreamCandidateCosts>;
     if (auto valid = stream.envelope.validate(); !valid) return R::failure(valid.error());
+    auto completion = MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(stream);
+    if (!completion) return R::failure(completion.error());
+    if (facts.containers.outputObjects < completion.value())
+        return R::failure(::media::ErrorInfo::invalidArgument(
+            "Candidate output capacity cannot contain its serialized protocol completion"));
     if (stream.envelope.streamKind != streamKind)
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate payload envelope has the wrong stream role"));
     if (held.pendingLeases > held.pendingCapacity ||
