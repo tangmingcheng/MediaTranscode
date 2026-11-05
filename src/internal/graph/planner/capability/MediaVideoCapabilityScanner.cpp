@@ -373,7 +373,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
         {options.probeWidth, options.probeHeight},
         options.targetWidth > 0 && options.targetHeight > 0
             ? std::optional(MediaSize{options.targetWidth, options.targetHeight}) : std::nullopt,
-        MediaObservedVideoCadence{options.sourceFrameRate}, options.lowLatency};
+        MediaObservedVideoCadence{options.sourceFrameRate}, options.lowLatency, std::nullopt};
     auto encoders = enumerateEncoderCandidates(outputCodecName,
         sourceOptions.targetSize.value_or(sourceOptions.sourceSize));
     std::vector<MediaPipelineChainPlan> chains;

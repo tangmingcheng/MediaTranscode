@@ -199,7 +199,8 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
 {
-    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(chain, MediaObservedVideoCadence{options.sourceFrameRate});
+    auto source = MediaPipelinePlanner::materializeSourceExecutionContract(
+        chain, MediaObservedVideoCadence{options.sourceFrameRate}, std::nullopt);
     if (!source) return source;
     return MediaVideoOutputPlanner::materializeExecutionContract(chain);
 }
@@ -342,8 +343,12 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 } // namespace
 
 ::media::Status MediaPipelinePlanner::materializeSourceExecutionContract(
-    MediaVideoSourcePlan& source, const MediaVideoSourceTiming& timing)
+    MediaVideoSourcePlan& source, const MediaVideoSourceTiming& timing,
+    std::optional<MediaRational> consumerFrameRate)
 {
+    if (consumerFrameRate && (consumerFrameRate->num <= 0 || consumerFrameRate->den <= 0))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Decoder completion checks require a positive declared consumer rate"));
     source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
         ? MediaVideoLineagePropagation::SubmissionOrder : MediaVideoLineagePropagation::CodecCopyOpaque;
     source.filterImplementation = !source.filterActive ? MediaVideoFilterImplementation::None
@@ -362,18 +367,24 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     source.decoderReceiveInterval.reset();
     if (source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
         const auto* cadence = std::get_if<MediaObservedVideoCadence>(&timing);
-        if (!cadence || cadence->rate.num <= 0 || cadence->rate.den <= 0)
+        if (!cadence && !consumerFrameRate)
             return ::media::Status::failure(::media::ErrorInfo::unsupported(
-                "RKMPP receive polling requires authoritative cadence; source presentation timing has no polling interval"));
-        const auto& sourceFrameRate = cadence->rate;
+                "RKMPP completion checks require observed cadence or a declared consumer rate"));
+        const auto checkRate = cadence ? cadence->rate : *consumerFrameRate;
+        if (checkRate.num <= 0 || checkRate.den <= 0)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "RKMPP completion check rate must be positive"));
         // This backend can complete a frame after receive returned EAGAIN.
-        // Bound the next receive by the probed source cadence, not new input.
+        // Canonical sources retain their observed-cadence check schedule.
+        // Source presentation uses downstream consumption only for scheduling;
+        // it says nothing about input density or decoded frame counts. This is
+        // a recheck interval, not phase synchronization or a completion SLA.
         auto interval = MediaRunningTime::checkedFromTicks(
-            1, sourceFrameRate.den, sourceFrameRate.num);
+            1, checkRate.den, checkRate.num);
         if (!interval) return ::media::Status::failure(interval.error());
         if (interval.value().nanoseconds() <= 0) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "RKMPP decoder receive requires a positive probed frame interval"));
+                "RKMPP decoder receive requires a positive completion check interval"));
         }
         source.decoderReceiveInterval = interval.value();
     }
@@ -397,7 +408,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     if (!candidates) return Result::failure(candidates.error());
     for (auto& source : candidates.value()) {
         source = MediaPipelineScorer::scoreSource(std::move(source), target);
-        auto execution = materializeSourceExecutionContract(source, options.timing);
+        auto execution = materializeSourceExecutionContract(source, options.timing, options.consumerFrameRate);
         if (!execution) return Result::failure(execution.error());
     }
     std::sort(candidates.value().begin(), candidates.value().end(), [](const auto& left, const auto& right) {

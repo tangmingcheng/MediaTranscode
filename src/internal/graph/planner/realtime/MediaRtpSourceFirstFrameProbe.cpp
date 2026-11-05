@@ -302,7 +302,7 @@ namespace {
                     return ::media::Result<ReceiveProgress>::failure(status.error());
             }
         };
-        const auto waitCadence = [&]() -> ::media::Status {
+        const auto waitReceiveCheck = [&]() -> ::media::Status {
             if (!plan.source.decoderReceiveInterval) return ::media::Status::failure(
                 ::media::ErrorInfo::internalError("RTP decoder returned EAGAIN on both API ends"));
             const auto now = Clock::now();
@@ -362,7 +362,7 @@ namespace {
                 if (!output) return Result::failure(output.error());
                 if (output.value().complete) return Result::success(false);
                 if (pending && !output.value().producedFrame) {
-                    if (auto waited = waitCadence(); !waited) return Result::failure(waited.error());
+                    if (auto waited = waitReceiveCheck(); !waited) return Result::failure(waited.error());
                 }
             }
             return Result::success(true);
@@ -420,9 +420,9 @@ namespace {
         if (!decoded) return EvidenceResult::failure(decoded.error());
         if (evidence.disposition == MediaRtpSourceFirstFrameDisposition::NeedMoreEvidence && !interrupted && evidence.submittedAccessUnits &&
             plan.source.decoderReceiveInterval) {
-            // One source-cadence completion opportunity, then explicit finite
+            // One planned receive-check opportunity, then explicit finite
             // evidence exhaustion; no null packet, drain, or hidden reacquire.
-            if (auto waited = waitCadence(); !waited) return EvidenceResult::failure(waited.error());
+            if (auto waited = waitReceiveCheck(); !waited) return EvidenceResult::failure(waited.error());
             auto output = receive();
             if (!output) return EvidenceResult::failure(output.error());
         }

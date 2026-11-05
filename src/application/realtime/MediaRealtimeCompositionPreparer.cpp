@@ -74,7 +74,7 @@ struct PreparedCandidate final {
         target.size = {geometry.value().geometry.tiles[i].width, geometry.value().geometry.tiles[i].height};
         auto ranked = MediaPipelinePlanner::planVideoSourceCandidates(facts[i].raw.video,
             {{facts[i].raw.video.width, facts[i].raw.video.height}, target.size,
-             facts[i].timing, true}, target);
+             facts[i].timing, true, cadence}, target);
         if (!ranked) return Result::failure(ranked.error());
         std::optional<::media::ErrorInfo> failure;
         bool prepared = false;

@@ -19,7 +19,7 @@
 | rkmppdec.h:84–90 | 中间时间基为 1/1000000，双向 av_rescale_q；后续身份方案必须证明精度、溢出、重复 PTS、跨 generation 的行为 |
 | rkmppdec.c:670；decode.c:1592、1563 | 输出调用 ff_decode_frame_props；公共 helper 从 last_pkt_props 复制 opaque，并非从该 MppFrame 的对应 AU 取回。不能仅打开 COPY_OPAQUE 就宣称解决重排身份 |
 | rkmppdec.c:1152 起 | 没有新输入时使用 MPP_TIMEOUT_NON_BLOCK；发送 EAGAIN 时内部才使用 100ms 接收；draining 使用阻塞接收。100ms 不是对外完成通知或有界完成 SLA，不能直接充当新的轮询常量 |
-| MediaPipelinePlanner.cpp:347、365 | RKMPP 目前规划 SubmissionOrder，并要求输入 cadence 规划 receive interval；这两项均与统一 SourcePresentation 尚不兼容 |
+| MediaPipelinePlanner::materializeSourceExecutionContract | RKMPP 仍规划 SubmissionOrder；SourcePresentation 轮询已改为消费显式输出周期，身份关联仍未完成 |
 | MediaRtpSourceFirstFrameProbe、MediaVideoDecodeLineageOption | 当前 SourceAccessUnit 仅允许 COPY_OPAQUE，探测和运行时需使用同一身份传播契约，不能只改 probe 放行 |
 
 上述固定版本父提交及补丁范围见 [既有依赖记录](../3rds/ffmpeg-rockchip/README.md)。Windows 本机 mabs 的 rkmppdec.c 与该依赖不同，不用它替代远程能力证明。
@@ -38,7 +38,7 @@
 
 ## 实施进度
 
-实施顺序调整：先统一入口并在 Windows 验证既有 SourcePresentation 产品，以真实运行暴露共享链路缺口；随后完成 RKMPP 身份及调度 adapter。原因是 Windows 的 COPY_OPAQUE 路径已存在，无需等待 RKMPP 能力调查才能获得共享链路证据。代价是本地开发中间态的 RKMPP 合屏会被现有无 cadence 校验拒绝；不得将此状态交付为跨平台完成，也不得回退到错误 cadence 路径掩盖缺口。
+实施顺序调整：先统一入口并在 Windows 验证既有 SourcePresentation 产品，以真实运行暴露共享链路缺口；随后完成 RKMPP 身份及调度 adapter。原因是 Windows 的 COPY_OPAQUE 路径已存在，无需等待 RKMPP 能力调查才能获得共享链路证据。代价是本地开发中间态的 RKMPP 合屏仍受身份与完整准入门禁阻挡；不得将此状态交付为跨平台完成，也不得回退到错误 cadence 路径掩盖缺口。
 
 - 已修改合屏入口为 SourcePresentation，所有源统一处理；未新增时间戳算法、容量或公共参数。Windows Release 全量构建通过；两名独立审查只给进入实流诊断的阶段 PASS。
 - [r394 同规格实流](realtime-composition-r394-validation.md) FAIL：freezeBatch 收到 nullptr，触发完整存储准入门禁。进一步核验 BatchAdmissionSolver 仅有抽象接口、无具体实现；因此不能称 SourcePresentation 生产接线完整。先按既有 [完整存储准入计划](realtime-composition-full-storage-admission-plan.md) 补齐 F/U/G 联合容量求值，再复验 Windows；RKMPP 身份和调度调查继续，不能用 cadence 回退替代此缺项。
@@ -128,3 +128,13 @@ Freeze batch存储已规划并接线：独立BatchStoragePlanner按真实元素�
 随后有限核验补齐初始化链：mpp.c:104→mpp_dec_cfg.c:98–101→kmpp_obj.c:1181–1185/1070/1116–1120→osal/mpp_mem_pool.c:239–269；用户态normal-pool的新建和复用对象均memset清零，default initializer不改sort_pts，故该固定路径初值为0。此结论未覆盖kernel-object分支或后续控制调用，尚无实际decoder config readback。FFmpeg rkmppdec.h:96有deint选项（默认1，可显式0），rkmppdec.c:291调用MPP_DEC_SET_ENABLE_DEINTERLACE且失败报错；MPP mpp_dec.c:1014–1016写enable_vproc，但mpp_dec.c:65/69允许进程环境enable_deinterlace覆盖。可继续沿既有decoder配置显式传deint=0并核验实际CLI环境，不得仅凭AVOption回读宣称vproc已关闭。独立SSH当前该环境变量未设置，这不是未来进程的证据。
 
 当前RKMPP构建进度：[236b73d5增量记录](realtime-composition-rk-incremental-236b73d5.md)。远端已同步该源码，8核增量all完成457任务、退出0；realtime --help与动态库路径检查通过，源码前后哈希一致，临时同步文件已清理。不是媒体验收；SourcePresentation联合solver、RKMPP身份/接收调度、GNU专属存储几何及Windows→RKMPP完整实流仍未闭合。
+
+## RKMPP 完成检查的显式消费周期
+
+沿现有decoderReceiveInterval→node option→VideoDecodeNode的接收循环和等待机制，内部MediaVideoSourcePlanningOptions新增consumerFrameRate事实，由CompositionPreparer传入已声明输出cadence。SourcePresentation的RKMPP完成检查按该周期安排；canonical源保留观察输入cadence，其他后端仍不轮询。缺少消费事实或非正值明确失败，无新增CLI/API/profile字段。probe的局部waitCadence重命名waitReceiveCheck，取消、原deadline及send/receive调用未改。
+
+调查依据：[GStreamer clocks](https://gstreamer.freedesktop.org/documentation/application-development/advanced/clocks.html)区分源时间戳、公共运行时钟和sink延迟；本项目复用已有deadline唤醒，不复制其完整latency协商。此周期仅为异步完成再次检查间隔，绝不参与Cv/Nv、输入密度或媒体PTS推导；不是实时完成SLA。VideoDecodeNode当前按now+interval重查，与aggregate的target-preparationLead没有相位同步，硬件send/drain阻塞、下游filter/credit等待也不受该周期约束。独立设计审查仅对有界重查用途PASS，对消费deadline保证FAIL；后者不是本次声称的能力，仍需实际链路证明。
+
+COPY_OPAQUE probe门禁、SourceAccessUnit传播校验及SubmissionOrder身份缺口均未放宽；此修改单独不能使RKMPP SourcePresentation可运行。源码冻结待双审和Windows Release构建；之后仅增量编译RKMPP，媒体验收仍须Windows先通过。
+
+Windows验证：Release clean-first/all全核重建会话38286成功，configure/build均0、800任务计划，脚本核验产物。两名独立审查者对6源码明确局部PASS；构建结束后只将probe旧source-cadence注释改成planned receive-check，无可执行代码变化。尚未执行媒体测试，不宣称RKMPP身份映射、输出deadline或合屏门禁通过。

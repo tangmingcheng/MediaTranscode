@@ -15,6 +15,9 @@ struct MediaVideoSourcePlanningOptions {
     std::optional<MediaSize> targetSize;
     MediaVideoSourceTiming timing;
     bool lowLatency;
+    // Downstream consumption fact, used only to schedule asynchronous decoder
+    // completion checks. Never an input density or storage-capacity bound.
+    std::optional<MediaRational> consumerFrameRate;
 };
 
 struct MediaVideoSourcePlan {
