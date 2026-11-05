@@ -200,3 +200,12 @@ CandidateCostPlanner和最终ResourcePlanner均已实际接入。最终仍独立
 
 Windows Release全核构建61344进行中。远端六文件基线先核验一致，随后SCP新连接被远端关闭（退出1），改用已存活SSH会话传输压缩内容并前后校验哈希，无临时同步文件、不修改外部依赖。
 构建完成：Windows Release clean-first/all全核61344终态退出0，800任务计划，configure/build均0。RKMPP原目录8核增量all完成29/29任务、退出0；六源码同步前后哈希通过。realtime SHA256=a66db74e8bc354524604e42d804c193944bea8fb7ca9611cb00f1592d95ef880，ninja/cc1plus无残留。本轮无媒体测试或临时测试文件，未运行local CLI；共享规划改变仍待完整solver接通后的同规格Windows→RKMPP实流验证。
+
+## Composition residence 直接借用原拓扑（2026-11-05）
+
+沿既有Boost BFS发现/去重语义，新增同步只读TopologyView，slot身份稳定，不属于当前媒体域的连接/owner返回空项。OwnerView对单位置内联保存，对共享位置借用原span，避免借用局部索引。通用evaluate消费view，原拥有型topology经栈adapter复用同一实现；composition按已有stream/payload、typed startup和ordinary/shared owner公式直接读取原事实，不再创建filtered connections、owners及每个owner的临时位置vector。
+
+slot总数checked累加，节点索引校验、零值与缺失区分、startup乘法溢出、shared owner计费一次和贡献顺序保留。plan仍物化独立拥有的最终贡献证据；成功view读取及evaluate不分配，不等于整个候选调用树无分配。lookup在BFS扫描中重复执行，可能增加CPU成本，尚无性能改善证据，后续可在收费结构编译阶段固定索引；不改变媒体线程、背压、失败门禁、平台adapter或公共输入。
+
+presentation_plan_review与timing_path_review均对冻结3源码明确局部PASS。Windows Release全核构建33748进行中；完整solver仍未接通，不能把借用视图视作完整候选工作区准入完成。
+构建结果：Windows Release clean-first/all全核33748终态退出0，800任务计划、configure/build均0，realtime产物7119360字节。RKMPP原目录8核增量all完成20/20任务、退出0，三源码同步前后哈希通过；realtime SHA256=cb0c3e09849469d63c6d099b76b63734fe063500a857039909f05fb7470b3138，ninja/cc1plus无残留。无本轮媒体测试、临时同步文件或测试产物，未运行local CLI。共享规划变更仍需随完整solver接线后进行同规格Windows→RKMPP实流验证，不作为媒体验收成功记录。

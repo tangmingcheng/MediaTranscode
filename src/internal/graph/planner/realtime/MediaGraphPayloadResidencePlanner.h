@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
 #include <span>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -27,6 +28,27 @@ struct MediaPayloadResidenceTopology final {
     std::vector<MediaPayloadResidenceConnection> connections;
     std::vector<MediaPayloadResidenceOwner> owners;
 };
+// A single position is stored inline; shared owners borrow their position set.
+struct MediaPayloadResidenceOwnerView final {
+    std::variant<std::size_t, std::span<const std::size_t>> retainingPositions;
+    std::uint64_t maximumReferences;
+    MediaPayloadResidenceOwnerKind kind;
+    std::optional<std::size_t> connection;
+    std::size_t positionCount() const noexcept;
+    std::size_t positionAt(std::size_t index) const noexcept;
+};
+// Synchronous read-only adapter. Slot identities remain stable even when a
+// stream/payload projection excludes a connection or owner. Implementations
+// must not allocate on successful reads or mutate during a planning call.
+class MediaPayloadResidenceTopologyView {
+public:
+    virtual ~MediaPayloadResidenceTopologyView() = default;
+    virtual std::size_t nodeCount() const noexcept = 0;
+    virtual std::size_t connectionSlots() const noexcept = 0;
+    virtual std::size_t ownerSlots() const noexcept = 0;
+    virtual ::media::Result<std::optional<MediaPayloadResidenceConnection>> connectionAt(std::size_t index) const = 0;
+    virtual ::media::Result<std::optional<MediaPayloadResidenceOwnerView>> ownerAt(std::size_t index) const = 0;
+};
 struct MediaPayloadResidenceProjection final {
     std::vector<std::size_t> reachablePositions;
     std::uint64_t maximumRetainedObjects;
@@ -38,7 +60,7 @@ struct MediaPayloadResidenceProjection final {
 struct MediaPayloadResidenceEvaluation final {
     std::span<const std::size_t> reachablePositions;
     std::uint64_t maximumRetainedObjects;
-    bool retains(const MediaPayloadResidenceOwner& owner) const noexcept;
+    bool retains(const MediaPayloadResidenceOwnerView& owner) const noexcept;
 };
 
 struct MediaGraphPayloadResidenceContribution final {
@@ -68,8 +90,10 @@ public:
     // at least nodeCount entries and must not alias topology storage. All
     // entries used are initialized here; failure may leave them modified.
     static ::media::Result<MediaPayloadResidenceEvaluation> evaluate(
-        const MediaPayloadResidenceTopology& topology, std::size_t producerPosition,
+        const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
         std::span<std::size_t> workspace);
+    static ::media::Result<MediaPayloadResidenceProjection> plan(
+        const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaPayloadResidenceTopology& topology, std::size_t producerPosition);
     static ::media::Result<MediaGraphPayloadResidence> plan(
