@@ -896,3 +896,7 @@ rk389 已解除 lineage admission 遮蔽异步 receive 的停滞；Windows Relea
 ## 2026-11-04：RKMPP 所选音视频源失源与重入
 
 rk391 原规格三路 RTP H.264/AAC→MPEG-TS/UDP HEVC CBR8000kbps、1280×720/30、AAC192kbps；源2匹配BYE后重入generation2。VLC录制离线原生快照证实三格→源2黑格→恢复→仅源2→全黑；-80dB/0.5秒检测支持34.966145秒近静音及随后约118.428208秒非静音恢复。发送端完整120秒/3600帧，CLI generation2发布3569帧；caller_stop exit0、payload253099预约/释放归零。DTS乱序警告保留，VLC重封装使其不能直接归因引擎；内容A/V与线端门禁未通过。证据边界双审PASS，临时媒体/日志/快照及精确PID均清理，见 docs/realtime-composition-rk391-validation.md。继续补齐2–4路异构输入及C API真实功能验证，再细化双平台可靠性；整体目标未完成。
+
+## 2026-11-05：四路异构准备门禁失败已定位
+
+Windows r392/r393原规格四路H264/H264/H264+AAC/HEVC→HEVC CBR8000kbps、1280×720/30、AAC192kbps准备失败。r393诊断Release全量exit0，双独立源码审查PASS；实流仍FAIL。源3 RTP marker实际有-3000/-6000 tick重排，共享MediaRtpVideoFrameRateObserver无符号差值产生11250/536870537fps，28秒未来窗口仅增1 AU，前缀60/60即耗尽。根因是cadence事实推导，不是部署2GiB不足；诊断提交ccde1aa4，不含功能修复。见docs/realtime-composition-r393-validation.md，全部临时抓包/日志清理。下一步基于真实码流/解码器权威事实修复节奏规划及重排lineage，原规格Windows后RKMPP；不得关闭B帧、扩经验容量或改外部依赖。此前RKMPP三路失源/重入有限证据仍成立，四路异构、C API与完整可靠性目标未完成。
