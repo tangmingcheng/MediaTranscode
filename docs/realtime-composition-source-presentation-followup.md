@@ -47,3 +47,9 @@
 - RKMPP 另有明确费用适配缺口：StartupBatchStoragePlanner 的 released audio wrapper 几何仅支持 MSVC 145/202604，有音频的其他平台会 Unsupported。须基于实际 GCC shared_ptr 构造几何适配；这不涉及修改外部 FFmpeg，也不能拿其他 registry 的 GCC 适配冒充该项已完成。
 
 本单元验证：两名独立审查 timing_path_review 与 presentation_plan_review 对修正版3源码均明确PASS。首次构建47154 exit0，但holder对象早于审查修正，不能作为最终产物；随后修正版Release全量构建95350 configure/build均0，795目标，脚本核验cache/build.ninja及两CLI产物。未运行local CLI，也未重复已知freeze空solver失败的媒体测试；本单元没有新增实流通过证据或测试临时产物。
+
+启动费用复用单元：新增 MediaCompositionStartupStoragePlanner，按同一 route、Nv/Na、group key 长度、数据报事实复用 batch/route/clock 三个既有计算器；最终 SourcePlanningKernel 已消费，CandidateCostPlanner 也调用同一入口并返回 startup 分项。没有把 batch 单件费用再叠加到 route 并发费用，没有生成 total/admission；released audio 为普通分配，clock backing 仍沿既有 resource 归属。route.metadata 与原 runtime.edgePolicies.metadata 由 RuntimePlanner 的一致性检查保证等价。候选费用入口本身仍无生产调用者，只有具体 solver 接线后才能称冻结前消费闭环。
+
+本单元双独立审查均明确PASS；审查中已修正CRLF及clock分配域注释。修正版Release全量构建35021 configure/build均0，796目标，脚本核验产物完整；未运行local CLI，未新增媒体通过项或临时测试产物。下一步候选分项仍缺 frame ownership overlap、AU payload 和唯一 root 归属，freezeBatch 的空solver门禁保持，不称r394已修复。
+
+RKMPP费用适配的只读前置证据：本机MSVC memory:1612使用new _Ref_count<_Ux>保存裸指针；目标GCC12.4的 /opt/mt-tools/gcc-12.4-native/include/c++/12.4.0/bits/shared_ptr_base.h:917 使用new _Sp_counted_ptr<_Ptr,_Lp>，定义位于419起。ReleasedAudioBuffer实际工厂是MediaBufferRef(new Derived)，因此需要独立对象与该裸指针control的两个请求，不能使用allocate_shared的inplace几何；适配尚未实现，也未修改外部文件。

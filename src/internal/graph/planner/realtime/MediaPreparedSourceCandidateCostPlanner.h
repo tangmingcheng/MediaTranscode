@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedPacketWrapperStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedFrameWrapperStoragePlanner.h"
 #include "internal/graph/planner/video/MediaVideoSourcePlan.h"
+#include "internal/graph/planner/realtime/MediaCompositionStartupStoragePlanner.h"
 
 namespace media::ffmpeg::graph {
 struct MediaPreparedStreamCandidateCostFacts final {
@@ -19,6 +20,8 @@ struct MediaPreparedSourceCandidateCostFacts final {
     const MediaCompositionReferenceResidencePlan& residence;
     std::size_t sourceIndex;
     std::uint64_t registryCapacity;
+    const MediaStartupRoutePlan& startupRoute;
+    std::size_t groupKeyCharacters;
 };
 enum class MediaPreparedPayloadLeaseRootKind {
     Prefix, Acquiring, Outputs, ProtocolPending, RawInputCreditWait, BinderCreditWait, Count
@@ -45,8 +48,9 @@ struct MediaPreparedSourceCandidateCosts final {
     std::size_t startupGenerationBytes;
     MediaPreparedFrameWrapperStoragePlan frameWrappers;
     MediaSourceLineageStoragePlan lineage;
-    // Deliberately no total/admission: payloads, route wrappers, reservations,
-    // frame ownership overlap and clock evidence remain separate products.
+    MediaCompositionStartupStoragePlan startup;
+    // Deliberately no total/admission: payloads, frame ownership overlap and
+    // shared-root accounting still require the complete admission solver.
 };
 class MediaPreparedSourceCandidateCostPlanner final {
 public:

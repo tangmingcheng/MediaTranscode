@@ -2,7 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaCompositionProducerHolderPlanner.h"
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
-#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionStartupStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeGraphResourceLedgerPlanner.h"
@@ -145,27 +145,19 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
     if (!cadence) {
-        auto reservationLayout = MediaOutputReservationStoragePlanner::layout();
-        if (!reservationLayout) return Result::failure(reservationLayout.error());
-        auto batchStorage = MediaStartupBatchStoragePlanner::plan(sourceCapacity->route,
-            sourceCapacity->startup.videoUnits, sourceCapacity->startup.audioUnits,
-            reservationLayout.value(), runtime.value().groupKey.value().size());
-        if (!batchStorage) return Result::failure(batchStorage.error());
-        startupBatchStorage = std::move(batchStorage).value();
-        auto routeCosts = MediaStartupRouteStoragePlanner::plan(sourceCapacity->route,
-            sourceCapacity->startup.videoUnits, sourceCapacity->startup.audioUnits, *startupBatchStorage);
-        if (!routeCosts) return Result::failure(routeCosts.error());
-        startupRouteStorage = std::move(routeCosts).value();
         const int videoDatagram = inputDraft.input.rtpTransport->maximumDatagramBytes;
         const int audioDatagram = hasAudio ? runtime.value().isolatedAudioInput->rtpTransport->maximumDatagramBytes : 0;
         if (videoDatagram <= 0 || (hasAudio && audioDatagram <= 0))
             return Result::failure(::media::ErrorInfo::invalidArgument("CNAME route requires positive datagram capacities"));
         const std::array<std::size_t, 2> datagrams{static_cast<std::size_t>(videoDatagram), static_cast<std::size_t>(audioDatagram)};
-        auto routeStorage = MediaRtpClockRouteStoragePlanner::plan(*members,
-            runtime.value().edgePolicies.metadata,
+        auto storage = MediaCompositionStartupStoragePlanner::plan(sourceCapacity->route,
+            sourceCapacity->startup.videoUnits, sourceCapacity->startup.audioUnits,
+            runtime.value().groupKey.value().size(),
             std::span<const std::size_t>{datagrams.data(), hasAudio ? 2u : 1u});
-        if (!routeStorage) return Result::failure(routeStorage.error());
-        clockRouteStorage = std::move(routeStorage).value();
+        if (!storage) return Result::failure(storage.error());
+        startupBatchStorage = std::move(storage.value().batch);
+        startupRouteStorage = std::move(storage.value().route);
+        clockRouteStorage = std::move(storage.value().clock);
     }
     auto branchConnections = MediaCompositionSourceBranchPlanner::plan(
         request.timing, request.video.filterActive, hasAudio, runtime.value().edgePolicies);

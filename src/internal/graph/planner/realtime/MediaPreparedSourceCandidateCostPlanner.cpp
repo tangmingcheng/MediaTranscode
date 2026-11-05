@@ -158,7 +158,14 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     auto frames = MediaPreparedFrameWrapperStoragePlanner::plan(facts.topology, lineage.value(),
         *facts.videoPlan.decoderReadiness, facts.videoPlan.filterReadiness);
     if (!frames) return R::failure(frames.error());
+    const std::array<std::size_t, 2> datagrams{session.video.workingSet.maximumDatagramBytes,
+        audio ? session.audio->workingSet.maximumDatagramBytes : 0};
+    auto startup = MediaCompositionStartupStoragePlanner::plan(facts.startupRoute,
+        facts.startupVideoUnits, facts.startupAudioUnits, facts.groupKeyCharacters,
+        std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u});
+    if (!startup) return R::failure(startup.error());
     return R::success({fixed.value(), std::move(video).value(), std::move(audioCosts),
-        indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value()});
+        indexBytes, generation.value().allocationBytes, std::move(frames).value(), std::move(lineage).value(),
+        std::move(startup).value()});
 }
 }
