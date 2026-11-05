@@ -8,6 +8,8 @@
 
 namespace media::ffmpeg::graph {
 struct MediaAvSourceCapacityFacts;
+struct MediaRealtimeAvSourceClockRequest;
+struct MediaRealtimeAvSourceTimingFacts;
 
 struct MediaRealtimeAvSourceRuntimeRequest final {
     MediaAvSyncGroupKey groupKey;
@@ -26,6 +28,13 @@ struct MediaRealtimeAvSourceRuntimeRequest final {
 
 class MediaRealtimeAvSourceRuntimePlanner final {
 public:
+    // Prepared input/timing and all non-capacity source facts remain fixed.
+    // The clock request borrows audio/isolated input from these products.
+    // Success allocates nothing; failure invalidates the entire candidate.
+    static ::media::Status rebindCapacity(
+        const MediaRealtimeAvSourceClockRequest& clockRequest,
+        const MediaRealtimeAvSourceTimingFacts& timing, const MediaAvSyncStartupPolicy& startup,
+        MediaRealtimeAvSourcePlanningProducts& products);
     static ::media::Result<MediaRealtimeAvSourcePlanningProducts> planFacts(
         const MediaRealtimeAvSourceRuntimeRequest& request,
         MediaAudioPipelinePlan audio,

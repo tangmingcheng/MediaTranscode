@@ -2,6 +2,8 @@
 
 #include "internal/graph/planner/realtime/MediaCompositionProducerHolderPlanner.h"
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
+#include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionStartupStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceRuntimePlanner.h"
@@ -12,6 +14,26 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+namespace {
+::media::Result<MediaCompositionStartupStoragePlan> sourceStartupStorage(
+    const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeRtpInputNodePlan& input,
+    const MediaRealtimeAvSourcePlanningProducts& runtime)
+{
+    using Result = ::media::Result<MediaCompositionStartupStoragePlan>;
+    const bool hasAudio = runtime.synchronization.members == MediaTranscodeStreamSet::AudioVideo;
+    if (!input.rtpTransport || (hasAudio && (!runtime.isolatedAudioInput || !runtime.isolatedAudioInput->rtpTransport)))
+        return Result::failure(::media::ErrorInfo::invalidArgument("CNAME route requires input transport facts"));
+    const int videoDatagram = input.rtpTransport->maximumDatagramBytes;
+    const int audioDatagram = hasAudio ? runtime.isolatedAudioInput->rtpTransport->maximumDatagramBytes : 0;
+    if (videoDatagram <= 0 || (hasAudio && audioDatagram <= 0))
+        return Result::failure(::media::ErrorInfo::invalidArgument("CNAME route requires positive datagram capacities"));
+    const std::array<std::size_t, 2> datagrams{static_cast<std::size_t>(videoDatagram), static_cast<std::size_t>(audioDatagram)};
+    return MediaCompositionStartupStoragePlanner::plan(capacity.route,
+        capacity.startup.videoUnits, capacity.startup.audioUnits, runtime.groupKey.value().size(),
+        std::span<const std::size_t>{datagrams.data(), hasAudio ? 2u : 1u});
+}
+} // namespace
 
 ::media::Result<MediaCompositionSourcePlanningProducts>
 MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest request)
@@ -146,15 +168,7 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
     std::optional<MediaStartupCoordinatorStoragePlan> startupCoordinatorStorage;
     if (!cadence) {
-        const int videoDatagram = inputDraft.input.rtpTransport->maximumDatagramBytes;
-        const int audioDatagram = hasAudio ? runtime.value().isolatedAudioInput->rtpTransport->maximumDatagramBytes : 0;
-        if (videoDatagram <= 0 || (hasAudio && audioDatagram <= 0))
-            return Result::failure(::media::ErrorInfo::invalidArgument("CNAME route requires positive datagram capacities"));
-        const std::array<std::size_t, 2> datagrams{static_cast<std::size_t>(videoDatagram), static_cast<std::size_t>(audioDatagram)};
-        auto storage = MediaCompositionStartupStoragePlanner::plan(sourceCapacity->route,
-            sourceCapacity->startup.videoUnits, sourceCapacity->startup.audioUnits,
-            runtime.value().groupKey.value().size(),
-            std::span<const std::size_t>{datagrams.data(), hasAudio ? 2u : 1u});
+        auto storage = sourceStartupStorage(*sourceCapacity, inputDraft.input, runtime.value());
         if (!storage) return Result::failure(storage.error());
         startupBatchStorage = std::move(storage.value().batch);
         startupRouteStorage = std::move(storage.value().route);
@@ -176,6 +190,48 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
         std::move(runtime).value(), std::move(holders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),
         std::move(branchConnections).value(), std::move(inputConnections).value()});
+}
+
+::media::Status MediaCompositionSourcePlanningKernel::rebindCapacity(
+    const MediaCompositionSourcePlanningRequest& prepared,
+    const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
+    MediaCompositionSourcePlanningProducts& products)
+{
+    const auto members = products.runtime.synchronization.members;
+    const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
+    if (!std::holds_alternative<MediaSourcePresentationTiming>(prepared.timing) ||
+        products.video.transferDirection != MediaHardwareTransferDirection::None ||
+        prepared.sourceRequest.parameters.execution.streamSet != members ||
+        hasAudio != (prepared.audioRetention != nullptr) ||
+        (hasAudio && (!prepared.audioRetention->valid() ||
+            capacity.startup.audioUnits != prepared.audioRetention->maximumUnits ||
+            capacity.startup.audioBytes != prepared.audioRetention->maximumBytes ||
+            capacity.startup.audioUnitBytes != prepared.audioRetention->maximumUnitBytes)) ||
+        !products.startupBatchStorage || !products.startupRouteStorage ||
+        !products.clockRouteStorage || !products.startupCoordinatorStorage)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Composition capacity refresh requires fixed prepared source facts"));
+    auto startup = MediaAvSyncStartupPolicyPlanner::plan(prepared.sourceRequest, capacity, prepared.deployment);
+    if (!startup) return ::media::Status::failure(startup.error());
+    const MediaRealtimeAvSourceClockRequest clockRequest{
+        products.inputType, RealtimeInputStreamLayout::SeparateStreams, products.input,
+        products.videoStreamIndex, prepared.raw.video.codecName, products.runtime.audioPipeline,
+        products.runtime.isolatedAudioInput ? &*products.runtime.isolatedAudioInput : nullptr, &capacity};
+    if (auto status = MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
+            clockRequest, clockTiming, startup.value(), products.runtime); !status) return status;
+    auto storage = sourceStartupStorage(capacity, products.input, products.runtime);
+    if (!storage) return ::media::Status::failure(storage.error());
+    products.startupBatchStorage = std::move(storage.value().batch);
+    products.startupRouteStorage = std::move(storage.value().route);
+    products.clockRouteStorage = std::move(storage.value().clock);
+    products.startupCoordinatorStorage = storage.value().coordinator;
+    const auto& sync = products.runtime.synchronization;
+    if (!sync.members || !sync.sourceClockMode || !sync.startup.videoReadiness)
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized("Source input connections lack clock/readiness facts"));
+    if (auto status = MediaCompositionSourceBranchPlanner::rebind(prepared.timing,
+            products.video.filterActive, hasAudio, products.runtime.edgePolicies, products.branchConnections); !status) return status;
+    return MediaSourceInputConnectionsPlanner::rebind(*sync.members, *sync.startup.videoReadiness,
+        *sync.sourceClockMode, products.runtime.edgePolicies, products.inputConnections);
 }
 
 } // namespace media::ffmpeg::graph

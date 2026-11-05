@@ -351,3 +351,13 @@ SourceClockPlanner 的 assembly 构造与更新共用 compileAssembly，保留�
 首次 Windows 全量 79262 退出 1，Ninja 报子命令失败（底层构建退出 2），未启动 RKMPP；终端中间输出截断，未引用未经保存的具体编译诊断。源码检查发现新增 assembly{} 要求无默认构造的 MediaRunningTime，已改构造模式使用 optional 延迟 emplace 完整产品，不引入占位时间；更新模式仍接受已有产品引用。重新进行双人复审和全量构建。
 
 修复后两位审查者重新给出局部 PASS。Windows Release 全量 20924 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126528 字节、15:30:20。RKMPP SSH 87977 核验两文件同步前后 hash，8 核增量 all-target 8/8、退出 0。首次失败保留，不以编译通过替代完整 runtime 更新或实流验收。
+
+## 2026-11-05 源容量刷新调用链
+
+SourcePlanningKernel::rebindCapacity 借用原 prepared request/timing，串接 StartupPolicy→SourceRuntime→startup storage→branch/input 更新。runtime 初次 plan 与更新共用 source 验证及 audio correction/edge/route 规划；更新 assembly、三个 derived servo 时间值、audioCorrection、queues 与 edges。startup 只允许六个容量/字节字段变化，其他 optional 字段逐项固定，identity 不提供替换时保留既有值、提供时必须相等。音频 startup 与原独立 retention units/unitBytes/bytes 核对。
+
+clockRequest 的 audio/isolated 指向 products 对应成员；不复制 owning audio/input/sync/groupKey。原 prepared input/timing、products 非容量事实必须由调用方保持不变，接口不修改 clock/recovery/filter/selectedAudio，因此原 transition 在此前提下保留。成功更新未发现动态分配；任意失败作废所有候选产品，不能继续预算搜索。
+
+调用方固定事实寿命、合法容量基线、全部工作区预算和具体 solver 仍未接通；本轮不是合屏实流通过。没有媒体测试、抓包、截图、测试脚本或同步临时文件。
+
+两位独立审查者对四文件均明确局部 PASS。Windows Release 全量 61446 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:39:52。RKMPP SSH 34033 核验四文件同步前后 hash，8 核增量 all-target 6/6、退出 0。未修改外部依赖，未运行新的媒体链路。

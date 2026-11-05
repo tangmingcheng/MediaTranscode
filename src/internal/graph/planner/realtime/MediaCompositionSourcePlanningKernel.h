@@ -13,6 +13,8 @@
 #include "internal/graph/planner/realtime/MediaPreparedInputRetentionPlan.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 namespace media::ffmpeg::graph {
+struct MediaAvSourceCapacityFacts;
+struct MediaRealtimeAvSourceTimingFacts;
 struct MediaCompositionSourcePlanningRequest final {
     const MediaRealtimeRtpTranscodeRequest& sourceRequest;
     const MediaRealtimeRawInputPlan& raw;
@@ -47,6 +49,12 @@ struct MediaCompositionSourcePlanningProducts final {
 };
 class MediaCompositionSourcePlanningKernel final {
 public:
+    // Uses the original immutable prepared request/timing; only capacity facts
+    // change. Success allocates nothing; failure invalidates all products.
+    static ::media::Status rebindCapacity(
+        const MediaCompositionSourcePlanningRequest& prepared,
+        const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
+        MediaCompositionSourcePlanningProducts& products);
     static ::media::Result<MediaCompositionSourcePlanningProducts> plan(MediaCompositionSourcePlanningRequest request);
 };
 }
