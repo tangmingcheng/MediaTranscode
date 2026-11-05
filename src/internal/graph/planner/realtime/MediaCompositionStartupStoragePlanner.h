@@ -2,14 +2,9 @@
 
 #include "internal/graph/planner/realtime/MediaStartupRouteStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpClockRouteStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaStartupCoordinatorStoragePlanner.h"
 
 namespace media::ffmpeg::graph {
-
-struct MediaStartupStoreStoragePlan final {
-    std::size_t objectBytes;
-    std::size_t snapshotBytes;
-    std::size_t preparationBytes;
-};
 
 // Components retain their allocation domains. Released audio wrappers use
 // ordinary allocations; clock backing follows its existing resource ownership.
@@ -18,7 +13,7 @@ struct MediaCompositionStartupStoragePlan final {
     MediaStartupBatchStorageCosts batch;
     MediaStartupRouteStoragePlan route;
     MediaRtpClockRouteStoragePlan clock;
-    MediaStartupStoreStoragePlan stores;
+    MediaStartupCoordinatorStoragePlan coordinator;
 };
 
 class MediaCompositionStartupStoragePlanner final {

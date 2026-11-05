@@ -30,7 +30,7 @@ struct MediaRealtimeCompositionSourcePlan final {
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;
     std::optional<MediaStartupRouteStoragePlan> startupRouteStorage;
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
-    std::optional<MediaStartupStoreStoragePlan> startupStoreStorage;
+    std::optional<MediaStartupCoordinatorStoragePlan> startupCoordinatorStorage;
     MediaCompositionSourceBranchPlan branchConnections;
     std::vector<MediaSourceInputConnection> inputConnections;
     std::optional<MediaPreparedRtpSourceContainerBounds> preparedPacketContainers;
