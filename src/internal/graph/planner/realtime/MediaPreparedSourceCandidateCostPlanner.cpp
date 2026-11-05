@@ -2,6 +2,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
 #include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
 #include "internal/graph/runtime/resource/MediaPmrContainerGeometry.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
@@ -33,6 +34,9 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     const MediaPreparedSourceCandidateCostFacts& source, MediaStreamKind streamKind)
 {
     using R = ::media::Result<MediaPreparedStreamCandidateCosts>;
+    if (auto valid = stream.envelope.validate(); !valid) return R::failure(valid.error());
+    if (stream.envelope.streamKind != streamKind)
+        return R::failure(::media::ErrorInfo::invalidArgument("Candidate payload envelope has the wrong stream role"));
     if (held.pendingLeases > held.pendingCapacity ||
         stream.envelope.maximumAccessUnitsPerPush < held.pendingLeases ||
         facts.containers.prefixObjects < held.prefixObjects ||
@@ -105,8 +109,19 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
         source.sourceIndex, streamKind, facts.containers, stream.envelope.maximumAccessUnitsPerPush);
     if (!leases) return R::failure(leases.error());
     if (!wrappers) return R::failure(wrappers.error());
+    auto packet = preparedMediaPacketStorageBytes(stream.envelope.maximumAccessUnitBytes,
+        MediaPacketStorageExtent::Payload);
+    if (!packet) return R::failure(packet.error());
+    auto payload = checked(MediaCheckedArithmetic::multiply(packet.value(), liveControls,
+        "Candidate live preparation payload reservations"));
+    if (!payload) return R::failure(payload.error());
+    // The same roots bound live leases and their retained payload reservation.
+    // Fragment assembly is already in the ordinary protocol storage component.
+    // Snapshot aliases do not create another payload; graph-credit attachment
+    // ends the preparation lease, so graph-owned payload is a separate domain.
     return R::success({result, result.peakBytes - result.pendingLeaseControlBytes,
-        leases.value(), std::move(wrappers).value(), roots});
+        leases.value(), std::move(wrappers).value(), roots,
+        {liveControls, packet.value(), payload.value()}});
 }
 }
 

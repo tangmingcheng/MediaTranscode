@@ -61,3 +61,7 @@ RKMPP费用适配的只读前置证据：本机MSVC memory:1612使用new _Ref_co
 本单元没有解除freeze空solver门禁；AU payload、根预算去重、候选搜索和封印后的最终对照仍未闭合。原r394失败保持，未重复无变化的起播失败测试。
 
 本轮七源码冻结后，两名独立审查均明确PASS；Windows Release全量构建50580 configure/build均0、796目标，脚本核验产物。RKMPP新分支尚未编译/运行，不以Windows编译证明GCC实现。无新增实流通过项、local执行或临时测试产物。下一单元须对照SourceSession::drain实际预约的payload+padding+AVPacket+AVBufferRef，租约控制块已由候选单列，不重复计费。
+
+AU费用单元已实现：MediaPreparedPacketStorage统一payload与已padding backing两种显式计费范围，SourceSession预约/结算和CandidateCostPlanner均调用；候选复用既有活跃租约根，返回最大同时预约数、每项预约上界和checked乘积。lease control、wrapper、协议assembly仍分项；snapshot别名不再收费，graph credit接替后的payload不归此准备租约域。Windows及固定RKMPP的packet.c:83–110均实读确认av_new_packet从空buf申请size+padding；只读核验未修改依赖。该上界不是FFmpeg私有内存或RSS承诺。
+
+五源码双独立静态审查PASS，Release89221全量构建通过，r395四路原规格已运行并记录于realtime-composition-r395-validation.md：四路decoder绑定后在原freeze门禁exit1，无新增预约错误；完整起播仍预期停在未实现的freeze solver，不将该失败视为成功验收。

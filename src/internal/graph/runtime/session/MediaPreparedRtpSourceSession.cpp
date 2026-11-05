@@ -11,6 +11,7 @@
 #include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
 #include <limits>
 #include <tuple>
 #include <type_traits>
@@ -328,9 +329,9 @@ try {
                     if (action.value().reserveBytes.size() > s.plan.containerStorage.maximumPendingLeases)
                         return invalid("Prepared protocol pending leases exceed planned container capacity");
                     for (auto bytes : action.value().reserveBytes) {
-                        if (bytes > std::numeric_limits<std::size_t>::max() - AV_INPUT_BUFFER_PADDING_SIZE - sizeof(AVPacket) - sizeof(AVBufferRef))
-                            return invalid("Prepared RTP AU allocation overflows size_t");
-                        auto lease = m_budget->reserve(static_cast<std::size_t>(bytes) + AV_INPUT_BUFFER_PADDING_SIZE + sizeof(AVPacket) + sizeof(AVBufferRef), MediaStorageAdmission::RequiredAllocation);
+                        auto storage = preparedMediaPacketStorageBytes(bytes, MediaPacketStorageExtent::Payload);
+                        if (!storage) return ::media::Status::failure(storage.error());
+                        auto lease = m_budget->reserve(storage.value(), MediaStorageAdmission::RequiredAllocation);
                         if (!lease) return ::media::Status::failure(lease.error());
                         s.pending.push_back(std::allocate_shared<MediaPreparationStorageLease>(
                             std::pmr::polymorphic_allocator<MediaPreparationStorageLease>{s.resource.get()}, std::move(lease).value()));
@@ -353,7 +354,9 @@ try {
                         return invalid("Prepared RTP AU lacks its independent padded allocation");
                     if (i >= s.pending.size() || !s.pending[i] || s.pending[i].use_count() != 1)
                         return invalid("Prepared RTP AU lacks its exclusive reservation");
-                    if (auto settled = s.pending[i]->shrinkTo(unit.packet->buf->size + sizeof(AVPacket) + sizeof(AVBufferRef)); !settled)
+                    auto storage = preparedMediaPacketStorageBytes(unit.packet->buf->size, MediaPacketStorageExtent::PaddedAllocation);
+                    if (!storage) return ::media::Status::failure(storage.error());
+                    if (auto settled = s.pending[i]->shrinkTo(storage.value()); !settled)
                         return settled;
                     if (s.plan.depacketizer.streamKind == MediaStreamKind::Video) {
                         if (auto status = MediaRtpVideoParameterSetValidator::validateBinding(

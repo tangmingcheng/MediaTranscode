@@ -32,6 +32,11 @@ struct MediaPreparedPayloadLeaseRoot final {
     MediaPreparedPayloadLeaseRootKind kind;
     std::size_t maximumControls;
 };
+struct MediaPreparedPayloadStoragePlan final {
+    std::size_t maximumLiveReservations;
+    std::size_t maximumReservationBytes;
+    std::size_t bytes;
+};
 struct MediaPreparedStreamCandidateCosts final {
     // Original control field remains available for freeze validation, but is
     // excluded from containerBytes and replaced by all-live leaseControlsBytes.
@@ -41,6 +46,7 @@ struct MediaPreparedStreamCandidateCosts final {
     MediaPreparedPacketWrapperStoragePlan packetWrappers;
     std::array<MediaPreparedPayloadLeaseRoot,
         static_cast<std::size_t>(MediaPreparedPayloadLeaseRootKind::Count)> leaseControlRoots;
+    MediaPreparedPayloadStoragePlan payload;
 };
 struct MediaPreparedSourceCandidateCosts final {
     std::size_t fixedBytes;
@@ -52,8 +58,8 @@ struct MediaPreparedSourceCandidateCosts final {
     MediaSourceLineageStoragePlan lineage;
     MediaCompositionStartupStoragePlan startup;
     MediaSourceFrameOwnershipStoragePlan frameOwnership;
-    // Deliberately no total/admission: payloads and
-    // shared-root accounting still require the complete admission solver.
+    // Deliberately no total/admission: shared-root accounting and candidate
+    // capacity selection still require the complete admission solver.
 };
 class MediaPreparedSourceCandidateCostPlanner final {
 public:
