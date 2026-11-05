@@ -361,3 +361,11 @@ clockRequest 的 audio/isolated 指向 products 对应成员；不复制 owning 
 调用方固定事实寿命、合法容量基线、全部工作区预算和具体 solver 仍未接通；本轮不是合屏实流通过。没有媒体测试、抓包、截图、测试脚本或同步临时文件。
 
 两位独立审查者对四文件均明确局部 PASS。Windows Release 全量 61446 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:39:52。RKMPP SSH 34033 核验四文件同步前后 hash，8 核增量 all-target 6/6、退出 0。未修改外部依赖，未运行新的媒体链路。
+
+## 2026-11-05 工作区核验与 packet 进展检查
+
+确认外层 fixed storage 不覆盖嵌套普通容器；采用借用不可变 prepared 事实、可变目录显式使用预算资源的方向。具体边界与依据见 realtime-composition-storage-solver-execution.md，本轮尚未实现 PMR 工作区。
+
+代码已在 CandidateCost 的 build/rebind 目录更新后补齐 raw/binder packet progress：按 creator/stream 只汇总 GraphHolder，核对 holder 数量并 checked 加法，复用原 ProducerResidence 公式。SourcePresentation 视频 startupPackets=0，音频为 Na；不混入 prefix/acquiring 等根。失败携带 source/creator/stream/total/required，不能作为预算过大继续搜索。两位独立审查者明确局部 PASS。仍须核对其他 producer 与原子端口；完整 solver 未接通，没有实流完成声明。
+
+本轮 Windows Release 全量 57466 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:51:00。RKMPP SSH 66559 核验单文件同步前后 hash，8 核增量 all-target 4/4、退出 0。双独立局部代码审查通过；没有新媒体测试或临时测试产物，完整 solver 和 workspace 仍未完成。

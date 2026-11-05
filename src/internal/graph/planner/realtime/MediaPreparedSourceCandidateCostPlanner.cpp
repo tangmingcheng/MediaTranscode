@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaPreparedSourceCandidateCostPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 #include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <limits>
+#include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -28,6 +30,59 @@ Bytes copies(const MediaSharedAllocationGeometry& geometry, std::size_t count)
     auto unit = MediaPreparationMemoryResource::allocationFootprint(geometry.bytes, geometry.alignment);
     if (!unit) return unit;
     return checked(MediaCheckedArithmetic::multiply(unit.value(), count, "Candidate shared owners"));
+}
+::media::Status validatePacketProgress(const MediaPreparedPacketWrapperStoragePlan& catalog,
+    const MediaPreparedSourceCandidateCostFacts& source, const MediaPreparedRtpContainerBounds& containers)
+{
+    using Kind = MediaPreparedPacketWrapperRootKind;
+    if (catalog.sourceIndex != source.sourceIndex ||
+        (catalog.stream != MediaStreamKind::Video && catalog.stream != MediaStreamKind::Audio) ||
+        (catalog.stream == MediaStreamKind::Audio && !source.startupAudioUnits))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Candidate packet progress has inconsistent source facts"));
+    bool rawSeen = false, binderSeen = false;
+    // Every catalog creator has one serial Construction root. It identifies
+    // the producer but is deliberately excluded from graph reachable retention.
+    for (const auto& marker : catalog.roots) {
+        if (marker.kind != Kind::Construction) continue;
+        if (marker.creatorPosition >= source.topology.positions.size())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Candidate packet progress has an invalid creator"));
+        const auto& producer = source.topology.positions[marker.creatorPosition];
+        auto* seen = producer.kind == MediaNodeKind::RawRtpInput ? &rawSeen
+            : producer.kind == MediaNodeKind::RtpPacketClockBinder ? &binderSeen : nullptr;
+        if (!seen || *seen || producer.source != source.sourceIndex)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Candidate packet progress creator is absent or repeated"));
+        *seen = true;
+        std::uint64_t reachable = 0;
+        for (const auto& root : catalog.roots) {
+            if (root.creatorPosition != marker.creatorPosition || root.kind != Kind::GraphHolder) continue;
+            if (!root.holder || root.maximumWrappers != root.holder->maximumReferences)
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Candidate packet progress holder count differs from its catalog"));
+            auto sum = MediaCheckedArithmetic::add(reachable, root.maximumWrappers, "Candidate packet graph residence");
+            if (!sum) return ::media::Status::failure(sum.error());
+            reachable = sum.value();
+        }
+        // Decoded video startup retains frames, not compressed packet slots.
+        // Audio continues to retain its separately planned startup packets.
+        const MediaCompositionPacketResidenceCapacity capacity{
+            catalog.stream == MediaStreamKind::Video ? 0 : *source.startupAudioUnits,
+            containers.acquiringObjects};
+        auto residence = MediaCompositionProducerResidencePlanner::plan(source.producerHolders,
+            producer.kind, catalog.stream, MediaPayloadKind::Packet, capacity);
+        if (!residence) return ::media::Status::failure(residence.error());
+        auto total = MediaCheckedArithmetic::add(reachable, residence.value().additionalRetainedObjects,
+            "Candidate packet complete residence");
+        if (!total) return ::media::Status::failure(total.error());
+        if (total.value() < residence.value().minimumProgressObjects)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Candidate packet progress deficit: source=" + std::to_string(source.sourceIndex) +
+                " creator=" + std::to_string(marker.creatorPosition) +
+                " stream=" + (catalog.stream == MediaStreamKind::Video ? "video" : "audio") +
+                " residence=" + std::to_string(total.value()) +
+                " required=" + std::to_string(residence.value().minimumProgressObjects)));
+    }
+    if (!rawSeen || !binderSeen)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Candidate packet progress lacks raw input or clock binder"));
+    return ::media::Status::success();
 }
 template<bool Updating> ::media::Status streamCosts(
     const MediaPreparedRtpSourceSessionStreamPlan& stream,
@@ -126,6 +181,7 @@ template<bool Updating> ::media::Status streamCosts(
         if (!wrappers) return R::failure(wrappers.error());
         costs.packetWrappers = std::move(wrappers).value();
     }
+    if (auto status = validatePacketProgress(costs.packetWrappers, source, facts.containers); !status) return status;
     auto packet = preparedMediaPacketStorageBytes(stream.envelope.maximumAccessUnitBytes,
         MediaPacketStorageExtent::Payload);
     if (!packet) return R::failure(packet.error());

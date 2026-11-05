@@ -1,6 +1,6 @@
 # 合屏联合存储 solver 实施决策
 
-状态：2026-11-05，基于 `92933062` 核验。尚未实现具体 solver；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
+状态：2026-11-05，基于 `d4237d73` 及本轮工作树核验。源、拓扑、residence 与费用的固定目录刷新已具备；尚未实现具体 solver；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
 
 ## 容量语义与依据
 
@@ -140,3 +140,17 @@ clockRequest 的 audio/isolated 指向 products 对应成员；不复制 owning 
 调用方固定事实寿命、合法容量基线、全部工作区预算和具体 solver 仍未接通；本轮不是合屏实流通过。没有媒体测试、抓包、截图、测试脚本或同步临时文件。
 
 两位独立审查者对四文件均明确局部 PASS。Windows Release 全量 61446 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:39:52。RKMPP SSH 34033 核验四文件同步前后 hash，8 核增量 all-target 6/6、退出 0。未修改外部依赖，未运行新的媒体链路。
+
+## 2026-11-05 工作区边界决策与 packet 进展门禁
+
+现有 FixedCapacityStorage 只约束外层元素背板，不能覆盖 SourcePlanningProducts、Topology、Reference、Cost 内的普通 vector/string。选择“借用不可变 prepared 事实＋显式预算 allocator 的可变目录”，不对完整 owning 产品做易遗漏的事前全峰值手算，也不以事后 capacity readback 替代准入。
+
+借用 input/video/audioPipeline/isolatedAudioInput/groupKey/threading/transition/prepared clock timing/固定输出声明；原 owner 必须跨 freeze 存活且地址稳定，原存储仍归既有预算域，不因借用而免费。自持 startup 六容量、derived servo/correction、assembly acquiring、queues/policies、数值费用，以及 branch/input、aggregate、source/full topology、reference、packet/lineage 目录。所有内层 rootIndices、retainingPositions、贡献目录和拥有字符串同样必须使用预算资源。现有 owning rebind 接口尚需借用视图适配；必须复用已审查的共同算法，不另建候选媒体链路。
+
+依据：[C++ polymorphic_allocator 工作草案](https://eel.is/c++draft/mem.poly.allocator.class) 将分配交给显式 memory_resource；默认构造会取默认资源，因此不能只把类型改名而漏传资源。[GStreamer 分配文档](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html) 支持构建前 allocator/pool 协商和复用。这里只采用显式归属与有界分配原则，不宣称两系统内部工作区完全等价。
+
+基线核验纠正：SourceResourcesPlanner 对 decoded video 的 startupPackets 实际传 0；音频才传 Na。原 ProducerResidence 的 packet 条件为 R+I >= S+U+I+1，RawInput 两端另加 A，均化简为 R>=S+U+1。禁止把视频 prefix 或 Nv 代入 S，制造虚假循环。frame 仍需原 decoder/filter progress 检查；通用 queue=1 只是单对象结构下界，尚须逐原子端口核对完整批次才能证明可执行。
+
+本轮 CandidateCost 首次计算和 rebind 均在目录更新后新增 raw/binder packet progress 校验。按 creatorPosition＋stream 只汇总 GraphHolder，核对 root/holder 数量，checked 求和后复用 ProducerResidence 原公式；不计 Construction/CreditWait/Prefix/Acquiring/Outputs/AtomicCompletion。GraphHolder 来自同一 payload residence 遍历，其 ReachableOwners 与最终 LiveOwners 仅差零数量项；此等价性是保守规划量，不是 wrapper 与 payload 真实寿命相同。缺口返回 source/creator/stream/现有与所需数量，属于非法基线，不得作为预算过大继续二分。只覆盖目录内 raw/binder，最终全图独立 readback 和其他实际 producer/原子端口检查仍须保留。
+
+本轮 Windows Release 全量 57466 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:51:00。RKMPP SSH 66559 核验单文件同步前后 hash，8 核增量 all-target 4/4、退出 0。双独立局部代码审查通过；没有新媒体测试或临时测试产物，完整 solver 和 workspace 仍未完成。
