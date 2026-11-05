@@ -32,6 +32,11 @@ struct MediaRealtimeAvSourceClockPlan final {
 
 class MediaRealtimeAvSourceClockPlanner final {
 public:
+    // Fixed prepared input/timing facts; refresh acquiring capacity/time only.
+    // Failure invalidates the candidate. Success does not allocate storage.
+    static ::media::Status rebindAssembly(
+        const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlan& synchronization,
+        const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyPlan& assembly);
     static ::media::Result<MediaRealtimeAvSourceClockPlan> plan(
         const MediaRealtimeAvSourceClockRequest& request,
         const MediaAvSyncPlan& synchronization);

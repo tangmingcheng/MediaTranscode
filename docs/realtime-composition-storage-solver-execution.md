@@ -118,3 +118,15 @@ Aggregate 首次构造和更新共用边声明；epoch 端口通过按 size_t �
 沿用既有静态拓扑与分配协商模型，未增加媒体算法。更新成功路径不增长容器；新增保留的 sourcePolicies、输出连接及三段声明必须计入事前工作区预算，不能当作免费。源 branch/input 的上游刷新、合法容量基线、完整预算与 freeze solver 仍未接通，没有实流通过结论。本轮未生成抓包、截图、测试脚本或同步临时文件。
 
 Windows Release 全量 12757 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、15:18:34。RKMPP 单次 SSH 83928 核验四文件同步前后 hash，8 核增量 all-target 完成 24/24、终态退出 0。没有新的实流运行或完成声明。
+
+## 2026-11-05 输入组装容量更新
+
+SourceClockPlanner 的 assembly 构造与更新共用 compileAssembly，保留原 startup/acquiring/route/member/time-window 交叉验证及 RTP、MPEG-TS、demux 时序选择。更新核对固定 clock、generation、identity、video timing、audio duration/member；demux 全字段比较已有 owning 产品，不复制字符串。全部检查通过后只写 acquiringCapacity/Timeout，成功路径未发现分配。
+
+两位独立审查者均给出 assembly 级局部 PASS。接口借用初次 prepared timing 和固定 input request，外层 duration facts、输入有效性与 bounded receive 校验仍是前置条件；不得拿此接口替代完整 runtime 校验。初次 plan 已消费共同流程。
+
+本轮调查确认上游刷新还必须包括 startup 容量、音频 commandLead/compensationWindow/frequencyFilterTimeConstant 与 audioCorrection、queues/edgePolicies、startup batch/route/clock/coordinator 费用及 branch/input。generation transition 所依赖事实需保持不变。原 planFacts 按值参数、groupKey 和 timing/assembly identity 拷贝仍需在接线时避免；不能只改 edges 或保留旧音频校正量。本轮不构成完整刷新链路或 solver 完成，没有新实流、截图、抓包、测试脚本或同步临时文件。
+
+首次 Windows 全量 79262 退出 1，Ninja 报子命令失败（底层构建退出 2），未启动 RKMPP；终端中间输出截断，未引用未经保存的具体编译诊断。源码检查发现新增 assembly{} 要求无默认构造的 MediaRunningTime，已改构造模式使用 optional 延迟 emplace 完整产品，不引入占位时间；更新模式仍接受已有产品引用。重新进行双人复审和全量构建。
+
+修复后两位审查者重新给出局部 PASS。Windows Release 全量 20924 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126528 字节、15:30:20。RKMPP SSH 87977 核验两文件同步前后 hash，8 核增量 all-target 8/8、退出 0。首次失败保留，不以编译通过替代完整 runtime 更新或实流验收。
