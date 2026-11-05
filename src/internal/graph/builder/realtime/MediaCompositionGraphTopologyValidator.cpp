@@ -28,7 +28,7 @@ try {
     for(const auto& attachment:topology.attachments){
         const auto* alias=endpoint(attachment.role);
         const auto* owner=endpoint(attachment.owner);
-        if(!alias || !owner || alias->node!=owner->node || alias->port!=attachment.port)
+        if(!alias || !owner || alias->node!=owner->node || std::string_view(alias->port)!=std::string_view(attachment.port))
             return invalid("Composition attachment differs from its exact declared endpoint");
     }
     std::size_t members=outputMembers.size();
@@ -42,8 +42,8 @@ try {
         const auto membership=declared.source?std::span<const MediaNodeId>(sourceMembers[*declared.source]):outputMembers;
         if(std::count(membership.begin(),membership.end(),positions[i])!=1)
             return invalid("Composition owned position differs from processing membership");
-        auto planned=declared.incidentCapacities;
-        std::vector<std::uint64_t> actual;
+        std::pmr::vector<std::uint64_t> planned(declared.incidentCapacities, topology.resource().get());
+        std::pmr::vector<std::uint64_t> actual(topology.resource().get());
         for(const auto& edge:graph.edges())if(edge.from.nodeId==positions[i] || edge.to.nodeId==positions[i])
             actual.push_back(static_cast<std::uint64_t>(edge.policy.queuePolicy.capacity));
         std::sort(planned.begin(),planned.end());std::sort(actual.begin(),actual.end());
@@ -53,8 +53,8 @@ try {
     for(const auto& expected:topology.connections){
         const auto* from=endpoint(expected.from),*to=endpoint(expected.to);
         if(!from || !to)return invalid("Composition connection role has no actual endpoint");
-        const auto* output=graph.findOutputPort(from->node,expected.output.empty()?from->port:expected.output);
-        const auto* input=graph.findInputPort(to->node,expected.input.empty()?to->port:expected.input);
+        const auto* output=graph.findOutputPort(from->node,expected.output.empty()?from->port:std::string(expected.output));
+        const auto* input=graph.findInputPort(to->node,expected.input.empty()?to->port:std::string(expected.input));
         if(!output || !input || output->streamKind!=expected.stream || output->payloadKind!=expected.payload || !input->accepts(*output))
             return invalid("Composition connection differs from actual port contract");
         const MediaEdge* found=nullptr;

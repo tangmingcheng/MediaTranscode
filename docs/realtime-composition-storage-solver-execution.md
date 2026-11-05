@@ -154,3 +154,21 @@ clockRequest 的 audio/isolated 指向 products 对应成员；不复制 owning 
 本轮 CandidateCost 首次计算和 rebind 均在目录更新后新增 raw/binder packet progress 校验。按 creatorPosition＋stream 只汇总 GraphHolder，核对 root/holder 数量，checked 求和后复用 ProducerResidence 原公式；不计 Construction/CreditWait/Prefix/Acquiring/Outputs/AtomicCompletion。GraphHolder 来自同一 payload residence 遍历，其 ReachableOwners 与最终 LiveOwners 仅差零数量项；此等价性是保守规划量，不是 wrapper 与 payload 真实寿命相同。缺口返回 source/creator/stream/现有与所需数量，属于非法基线，不得作为预算过大继续二分。只覆盖目录内 raw/binder，最终全图独立 readback 和其他实际 producer/原子端口检查仍须保留。
 
 本轮 Windows Release 全量 57466 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7128576 字节、15:51:00。RKMPP SSH 66559 核验单文件同步前后 hash，8 核增量 all-target 4/4、退出 0。双独立局部代码审查通过；没有新媒体测试或临时测试产物，完整 solver 和 workspace 仍未完成。
+
+## 2026-11-05 生产拓扑目录的预算分配接入
+
+Source/GraphTopology 的外层目录、incident 内层数组及拥有的端口字符串改用显式 preparation resource；首次构造与既有 rebind 仍复用同一拓扑声明。生产 preparer 从共享根预算创建资源，沿 builder/kernel 传入，最终 projection 自持 owner，保证离开 kernel 后仍有效。根预算上的实际存储属于 otherRetainedBytes，不挂到 source 0，也不重复加入 source total。保留分配头和 padding 的既有计费语义，不等于 RSS 或显存。
+
+依据 C++ polymorphic_allocator 的显式资源分配及不传播复制 allocator 规则（本文件前述标准链接）：禁止拓扑隐式复制，跨 owner 移动赋值整体替换产品；每个内层 string/vector 单独绑定资源，不能依靠外层 PMR 自动注入普通结构体。最终图验证排序用的 incident 临时数组同样显式计费。
+
+双独立首轮审查发现 kernel 总产品仍有隐式 move assignment，可能让 sources/sourcePolicies 留旧 allocator 而 graph 转入新 owner，均判局部 FAIL；须补齐总产品 owner 与移动约束后复审。Windows Release 构建 80468 正在运行，本记录不预判结果。
+
+本轮只接入实际生产拓扑目录，尚未覆盖 branch/input、aggregate、output declarations、reference、packet/lineage 及其首次 projection 临时目录；不能把此结果视为完整 workspace 预算或 solver。freezeBatch 仍未接入具体 solver，没有新的媒体验收结论。
+
+80468 已终态退出 0，完成 Windows Release 全量构建。该构建仍是审查修复前版本：随后 kernel 总产品新增先声明的 owner、禁 copy 与 move assignment，仅允许 noexcept move construction；修复后构建 64080 正在进行。首次追加本段时 Python 默认 GBK 读取中文文档失败，未改动文档内容，已改为显式 UTF-8；源码修改先于该错误完成。
+
+presentation_plan_review 与 timing_path_review 已对修正版完整 11 源码明确局部 PASS，确认 kernel owner 与移动约束关闭首轮缺口；保留首轮 FAIL，不把源码审查等同于实流验证。
+
+修复后 Windows Release 全量 64080 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、16:08:58。RKMPP 首次整包同步命令超过 Windows 命令长度上限，进程未创建；拆批后首次检查使用远端 Python 不支持的 Path.is_relative_to，写入前失败。改为父目录归属检查，三批 4＋4＋3 文件均前后 SHA256 核验成功；无同步临时文件，最终 SSH 21853 正进行 8 核增量 all-target 构建。
+
+RKMPP SSH 21853 已终态退出 0，8 核增量 all-target 完成 23/23。两平台本轮只验证构建，没有执行 local 或 realtime 媒体测试。没有新增测试产物待清理；用户指定复用源与既有未跟踪文件保持原状。下一项是沿同一资源迁移 aggregate/branch/reference/cost 目录并接具体 solver，仍保留 SourcePresentation 完整准入门禁。

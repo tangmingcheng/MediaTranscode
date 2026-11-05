@@ -116,7 +116,7 @@ template<bool Updating> ::media::Status compileTopology(
             if (edge.from != from || edge.to != to || edge.output != output || edge.input != port ||
                 edge.payload != payload || edge.stream != stream) { identityInvalid = true; return; }
             edge.policy = policy;
-        } else result.connections.push_back({from,to,std::string(output),std::string(port),payload,stream,policy});
+        } else result.connections.push_back({from,to,std::pmr::string(output,result.resource().get()),std::pmr::string(port,result.resource().get()),payload,stream,policy});
         ++edgeCursor;
     };
     for (const auto& edge : facts.inputs)
@@ -143,7 +143,7 @@ template<bool Updating> ::media::Status compileTopology(
             return invalid("Source topology incident position catalog changed");
     } else {
         for (const auto kind : result.positions)
-            result.incidentCapacities.push_back(kind ? std::optional{std::vector<std::uint64_t>{}} : std::nullopt);
+            result.incidentCapacities.push_back(kind ? std::optional{std::pmr::vector<std::uint64_t>{result.resource().get()}} : std::nullopt);
     }
     // Preserve declaration order at each position, without allocating a cursor array.
     for (std::size_t position = 0; position < result.positions.size(); ++position) {
@@ -171,9 +171,12 @@ template<bool Updating> ::media::Status compileTopology(
 }
 } // namespace
 ::media::Result<MediaCompositionSourceTopology> MediaCompositionSourceTopologyPlanner::plan(
-    const MediaCompositionSourceTopologyFacts& facts)
+    const MediaCompositionSourceTopologyFacts& facts,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
 try {
-    MediaCompositionSourceTopology result;
+    if (!resource) return ::media::Result<MediaCompositionSourceTopology>::failure(
+        ::media::ErrorInfo::invalidArgument("Composition topology requires a preparation resource"));
+    MediaCompositionSourceTopology result(std::move(resource));
     if (auto status = compileTopology<false>(facts, result); !status)
         return ::media::Result<MediaCompositionSourceTopology>::failure(status.error());
     return ::media::Result<MediaCompositionSourceTopology>::success(std::move(result));

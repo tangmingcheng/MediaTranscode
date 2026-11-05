@@ -25,10 +25,20 @@ struct MediaCompositionOutputTopologyDeclarations final {
     MediaOutputSegmentDeclaration execution;
 };
 struct MediaCompositionTopologyPlanningProducts final {
+private:
+    // Covers all outer catalogs even after the graph is moved to its final owner.
+    std::shared_ptr<MediaPreparationMemoryResource> m_resource;
+public:
+    explicit MediaCompositionTopologyPlanningProducts(std::shared_ptr<MediaPreparationMemoryResource> resource)
+        : m_resource(std::move(resource)), sources(m_resource.get()), graph(m_resource), sourcePolicies(m_resource.get()) {}
+    MediaCompositionTopologyPlanningProducts(const MediaCompositionTopologyPlanningProducts&) = delete;
+    MediaCompositionTopologyPlanningProducts& operator=(const MediaCompositionTopologyPlanningProducts&) = delete;
+    MediaCompositionTopologyPlanningProducts(MediaCompositionTopologyPlanningProducts&&) noexcept = default;
+    MediaCompositionTopologyPlanningProducts& operator=(MediaCompositionTopologyPlanningProducts&&) = delete;
     MediaCompositionAggregateConnections aggregate;
-    std::vector<MediaCompositionSourceTopology> sources;
+    std::pmr::vector<MediaCompositionSourceTopology> sources;
     MediaCompositionGraphTopology graph;
-    std::vector<MediaRealtimeEdgePolicySet> sourcePolicies;
+    std::pmr::vector<MediaRealtimeEdgePolicySet> sourcePolicies;
     MediaCompositionOutputTopologyDeclarations output;
 };
 class MediaCompositionTopologyPlanningKernel final {
@@ -42,6 +52,7 @@ public:
     static ::media::Result<MediaCompositionTopologyPlanningProducts> plan(
         std::span<const MediaCompositionTopologySourceFacts> sources,
         const MediaAvContinuousAggregateTopology& aggregate,
-        const MediaRealtimeAvOutputRuntimePlan& output);
+        const MediaRealtimeAvOutputRuntimePlan& output,
+        std::shared_ptr<MediaPreparationMemoryResource> resource);
 };
 }

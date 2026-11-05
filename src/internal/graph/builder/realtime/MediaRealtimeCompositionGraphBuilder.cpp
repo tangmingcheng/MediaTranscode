@@ -214,7 +214,8 @@ template<class Bind>
 } // namespace
 
 ::media::Result<MediaRealtimeCompositionTopology> MediaRealtimeCompositionGraphBuilder::buildTopology(
-    const std::string& prefix, MediaRealtimeCompositionGraphOptions options)
+    const std::string& prefix, MediaRealtimeCompositionGraphOptions options,
+    std::shared_ptr<MediaPreparationMemoryResource> planningResource)
 {
     using Result = ::media::Result<MediaRealtimeCompositionTopology>;
     MediaGraph graph;
@@ -228,7 +229,7 @@ template<class Bind>
     for (const auto& source : options.sources)
         sourceFacts.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
             source.branchConnections, source.inputConnections});
-    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(sourceFacts, aggregate, outputRuntime);
+    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(sourceFacts, aggregate, outputRuntime, std::move(planningResource));
     if (!plannedTopology) return Result::failure(plannedTopology.error());
     auto& aggregateConnections = plannedTopology.value().aggregate;
     auto& sourceTopologies = plannedTopology.value().sources;

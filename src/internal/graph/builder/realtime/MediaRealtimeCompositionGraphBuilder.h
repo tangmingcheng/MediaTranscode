@@ -89,7 +89,8 @@ struct MediaRealtimeCompositionPreparedResources final {
 class MediaRealtimeCompositionGraphBuilder final {
 public:
     static ::media::Result<MediaRealtimeCompositionTopology> buildTopology(
-        const std::string& prefix, MediaRealtimeCompositionGraphOptions options);
+        const std::string& prefix, MediaRealtimeCompositionGraphOptions options,
+        std::shared_ptr<MediaPreparationMemoryResource> planningResource);
     // Compiles final admission from this exact graph and validates real resources.
     // A topology is not a preparation budget or permission to allocate a pool.
     static ::media::Result<MediaRealtimeCompositionGraph> bind(

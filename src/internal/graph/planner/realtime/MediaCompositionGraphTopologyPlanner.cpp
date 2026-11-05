@@ -47,7 +47,7 @@ template<bool Updating> ::media::Status compileTopology(
         if constexpr(Updating){
             if(positionCursor>=result.positions.size() || result.positions[positionCursor].kind!=kind ||
                 result.positions[positionCursor].source!=source)return false;
-        }else result.positions.push_back({kind,source,{}});
+        }else result.positions.push_back({kind,source,std::pmr::vector<std::uint64_t>{result.resource().get()}});
         ++positionCursor;
         return true;
     };
@@ -56,7 +56,7 @@ template<bool Updating> ::media::Status compileTopology(
             if(attachmentCursor>=result.attachments.size())return false;
             const auto& old=result.attachments[attachmentCursor];
             if(old.role!=role || old.owner!=owner || old.port!=port)return false;
-        }else result.attachments.push_back({role,owner,std::string(port)});
+        }else result.attachments.push_back({role,owner,std::pmr::string(port,result.resource().get())});
         ++attachmentCursor;
         return true;
     };
@@ -171,7 +171,7 @@ template<bool Updating> ::media::Status compileTopology(
             if(edge.from!=from || edge.to!=to || edge.output!=output || edge.input!=input ||
                 edge.payload!=payload || edge.stream!=stream){edgeIdentityValid=false;return;}
             edge.policy=policy;
-        }else result.connections.push_back({from,to,std::string(output),std::string(input),payload,stream,policy});
+        }else result.connections.push_back({from,to,std::pmr::string(output,result.resource().get()),std::pmr::string(input,result.resource().get()),payload,stream,policy});
         ++edgeCursor;
     };
     for(std::size_t source=0;source<facts.sources.size();++source)
@@ -212,9 +212,12 @@ template<bool Updating> ::media::Status compileTopology(
     return Result::success();
 }
 } // namespace
-::media::Result<MediaCompositionGraphTopology> MediaCompositionGraphTopologyPlanner::plan(const MediaCompositionGraphTopologyFacts& facts)
+::media::Result<MediaCompositionGraphTopology> MediaCompositionGraphTopologyPlanner::plan(const MediaCompositionGraphTopologyFacts& facts,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
 try {
-    MediaCompositionGraphTopology result;
+    if (!resource) return ::media::Result<MediaCompositionGraphTopology>::failure(
+        ::media::ErrorInfo::invalidArgument("Composition topology requires a preparation resource"));
+    MediaCompositionGraphTopology result(std::move(resource));
     if(auto status=compileTopology<false>(facts,result);!status)
         return ::media::Result<MediaCompositionGraphTopology>::failure(status.error());
     return ::media::Result<MediaCompositionGraphTopology>::success(std::move(result));

@@ -31,7 +31,7 @@ public:
     MediaEndpoint attached(MediaCompositionGraphRole role) const {
         const auto* attachment=topology_.attachment(role);
         if(!attachment)return endpoint(role);
-        return {endpoint(attachment->owner).node,attachment->port};
+        return {endpoint(attachment->owner).node,std::string(attachment->port)};
     }
     std::span<const MediaEndpoint> endpoints() const noexcept { return endpoints_; }
 private:

@@ -39,7 +39,7 @@ template<bool Updating> ::media::Status compileTopology(
         if constexpr (Updating) {
             if (auto status=MediaCompositionSourceTopologyPlanner::rebind(facts, products.sources[i]); !status) return status;
         } else {
-            auto projected=MediaCompositionSourceTopologyPlanner::plan(facts);
+            auto projected=MediaCompositionSourceTopologyPlanner::plan(facts, products.graph.resource());
             if (!projected) return Result::failure(projected.error());
             products.sources.push_back(std::move(projected).value());
         }
@@ -51,7 +51,7 @@ template<bool Updating> ::media::Status compileTopology(
     if constexpr (Updating) {
         return MediaCompositionGraphTopologyPlanner::rebind(facts, products.graph);
     } else {
-        auto graph=MediaCompositionGraphTopologyPlanner::plan(facts);
+        auto graph=MediaCompositionGraphTopologyPlanner::plan(facts, products.graph.resource());
         if (!graph) return Result::failure(graph.error());
         products.graph=std::move(graph).value();
         return Result::success();
@@ -61,9 +61,11 @@ template<bool Updating> ::media::Status compileTopology(
 ::media::Result<MediaCompositionTopologyPlanningProducts> MediaCompositionTopologyPlanningKernel::plan(
     std::span<const MediaCompositionTopologySourceFacts> sources,
     const MediaAvContinuousAggregateTopology& aggregate,
-    const MediaRealtimeAvOutputRuntimePlan& outputRuntime)
+    const MediaRealtimeAvOutputRuntimePlan& outputRuntime,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
 try {
     using Result = ::media::Result<MediaCompositionTopologyPlanningProducts>;
+    if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument("Topology planning requires a preparation resource"));
     const auto videoShape=MediaVideoBranchConnectionsPlanner::outputEncoder();
     const auto audioShape=MediaAudioBranchConnectionsPlanner::outputEncoder(true);
     const auto& policies=outputRuntime.edgePolicies;
@@ -87,7 +89,7 @@ try {
             MediaPayloadKind::CodecContext,policies);
     }();
     if(!protocolDeclaration)return Result::failure(protocolDeclaration.error());
-    MediaCompositionTopologyPlanningProducts products{};
+    MediaCompositionTopologyPlanningProducts products(std::move(resource));
     products.output={policies,videoShape,std::move(videoConnections).value(),
         audioShape,std::move(audioConnections).value(),std::move(schedulerDeclaration).value(),
         std::move(protocolDeclaration).value(),std::move(executionDeclaration).value()};
