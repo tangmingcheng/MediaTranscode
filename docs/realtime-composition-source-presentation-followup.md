@@ -35,3 +35,10 @@
 7. 共享修复 Windows 通过后，RKMPP 使用现有目录增量全部目标、8 核编译，再完成相同链路。最后补两路、C API、持续 A/V 漂移、内存、出口与长时可靠性，双独立审查后才能声称完整完成。
 
 当前没有新增公共字段，没有降低源参数，没有依赖修复授权扩展。此文档不是测试通过记录；本轮仅只读调查，无媒体进程、抓包或截图产物。
+
+## 实施进度
+
+实施顺序调整：先统一入口并在 Windows 验证既有 SourcePresentation 产品，以真实运行暴露共享链路缺口；随后完成 RKMPP 身份及调度 adapter。原因是 Windows 的 COPY_OPAQUE 路径已存在，无需等待 RKMPP 能力调查才能获得共享链路证据。代价是本地开发中间态的 RKMPP 合屏会被现有无 cadence 校验拒绝；不得将此状态交付为跨平台完成，也不得回退到错误 cadence 路径掩盖缺口。
+
+- 已修改合屏入口为 SourcePresentation，所有源统一处理；未新增时间戳算法、容量或公共参数。Windows Release 全量构建通过；两名独立审查只给进入实流诊断的阶段 PASS。
+- [r394 同规格实流](realtime-composition-r394-validation.md) FAIL：freezeBatch 收到 nullptr，触发完整存储准入门禁。进一步核验 BatchAdmissionSolver 仅有抽象接口、无具体实现；因此不能称 SourcePresentation 生产接线完整。先按既有 [完整存储准入计划](realtime-composition-full-storage-admission-plan.md) 补齐 F/U/G 联合容量求值，再复验 Windows；RKMPP 身份和调度调查继续，不能用 cadence 回退替代此缺项。

@@ -51,7 +51,7 @@ MediaRealtimeCompositionInputPreparer::prepare(
                 try {
                     auto capture = MediaRtpSourcePreflight::begin(
                         source->input, source->members, deadline, stop.get_token(), storage,
-                        MediaRtpVideoPreparationIntent::CanonicalIntervals);
+                        MediaRtpVideoPreparationIntent::SourcePresentation);
                     if (!capture) {
                         stop.request_stop();
                         promise.set_value(SourceResult::failure(capture.error()));
