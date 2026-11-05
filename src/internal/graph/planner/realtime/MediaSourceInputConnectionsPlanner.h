@@ -6,6 +6,7 @@
 #include "media_transcode/Result.h"
 #include <string_view>
 #include <vector>
+#include <span>
 #include <optional>
 #include "internal/graph/model/MediaStartupRoutePlan.h"
 
@@ -38,6 +39,12 @@ struct MediaSourceInputConnection final {
 // products. This product describes the connections between those segments.
 class MediaSourceInputConnectionsPlanner final {
 public:
+    // Retains declaration identity including phase; failure invalidates the
+    // candidate. Successful rebinding performs no allocations.
+    static ::media::Status rebind(
+        MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
+        MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies,
+        std::span<MediaSourceInputConnection> connections);
     static ::media::Result<std::vector<MediaSourceInputConnection>> plan(
         MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
         MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies);

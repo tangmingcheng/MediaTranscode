@@ -1,4 +1,5 @@
 #include "internal/graph/planner/video/MediaVideoBranchConnectionsPlanner.h"
+#include "internal/graph/planner/MediaConnectionPlanWriter.h"
 #include <new>
 
 namespace media::ffmpeg::graph {
@@ -45,15 +46,19 @@ MediaVideoBranchShape MediaVideoBranchConnectionsPlanner::sourceDecoder() noexce
         shape.present[static_cast<std::size_t>(role)] = true;
     return shape;
 }
-::media::Result<std::vector<MediaVideoBranchConnection>> MediaVideoBranchConnectionsPlanner::plan(
-    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies)
-try {
-    using R = ::media::Result<std::vector<MediaVideoBranchConnection>>;
+namespace {
+template<bool Updating> ::media::Status compileConnections(
+    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies,
+    MediaConnectionPlanWriter<MediaVideoBranchConnection, Updating>& writer)
+{
     using Role = MediaVideoBranchRole;
-    std::vector<MediaVideoBranchConnection> result;
     const auto add = [&](Role from, std::string_view output, Role to, std::string_view input,
         MediaPayloadKind payload, const MediaEdgePolicy& policy, std::string_view label, MediaStreamKind stream) {
-        result.push_back({from, output, to, input, payload, stream, policy, label});
+        if (!shape.has(from) || !shape.has(to)) {
+            writer.reject(::media::ErrorInfo::invalidArgument("Branch connection references a missing role"));
+            return;
+        }
+        writer.append({from, output, to, input, payload, stream, policy, label});
     };
     const auto codec = [&](Role from, std::string_view output, Role to, std::string_view input, std::string_view label) {
         add(from, output, to, input, MediaPayloadKind::CodecContext, policies.metadata, label, MediaStreamKind::Video);
@@ -100,12 +105,25 @@ try {
         if (shape.has(Role::Preparation)) frameEdge(Role::Preparation, policies.frame, ".processed.frame -> preparation.frame");
         if (shape.has(Role::Encode)) frameEdge(Role::Encode, policies.encoderFrame, ".processed.frame -> encode.frame");
     }
-    for (const auto& edge : result)
-        if (!shape.has(edge.from) || !shape.has(edge.to))
-            return R::failure(::media::ErrorInfo::invalidArgument("Branch connection references a missing role"));
-    return R::success(std::move(result));
+    return writer.finish();
+}
+} // namespace
+::media::Result<std::vector<MediaVideoBranchConnection>> MediaVideoBranchConnectionsPlanner::plan(
+    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies)
+try {
+    using Result = ::media::Result<std::vector<MediaVideoBranchConnection>>;
+    std::vector<MediaVideoBranchConnection> result;
+    MediaConnectionPlanWriter<MediaVideoBranchConnection, false> writer(result);
+    if (auto status = compileConnections(shape, policies, writer); !status) return Result::failure(status.error());
+    return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<std::vector<MediaVideoBranchConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("video branch connection plan"));
+}
+::media::Status MediaVideoBranchConnectionsPlanner::rebind(
+    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies, std::span<MediaVideoBranchConnection> connections)
+{
+    MediaConnectionPlanWriter<MediaVideoBranchConnection, true> writer(connections);
+    return compileConnections(shape, policies, writer);
 }
 } // namespace media::ffmpeg::graph

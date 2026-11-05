@@ -64,3 +64,13 @@ presentation_plan_review：上述共同增量目标条件 PASS，要求合法基
 ReferenceResidence 的首次 compile 与固定工作区 rebind 现在复用同一编译遍历；编译期 writer 分别执行构造写入或身份检查后的数量更新。typed startup node/event 保持顺序、position/connection/coordinator、payload/form 与 video/audio 可选成员；aggregate 保持原 Shared 身份及持有位置；ordinary 槽保持存在性，optional{0} 不当作缺席。原 route 端口/重复匹配/policy/stream 校验、节点持有数量及 encoder checked add 完整复用。更新路径不 append/resize，失败后候选整体作废。
 
 计算移到独立 Compiler.cpp；Topology::position 同时供原构图、投影与编译流程使用，未增加第二套角色查找算法。双独立源码审查通过。仍需完成 topology policy/incident 数量更新、容量基线与工作区分配计费、全部候选费用重算及具体 freeze solver；当前不得宣称完整候选入口已开放。
+
+## 2026-11-05 固定连接策略更新
+
+输入、视频和音频连接声明采用共同构造/更新遍历；更新模式按顺序核对端点、端口、payload、stream、label 及适用的 phase，只替换 policy，不增长容器。源分支入口核对完整视频/音频 shape 与 externalCorrection；SourcePresentation 的 preparedVideoFrame 政策和原连接选择保持。失败保留首个错误并使整个候选作废。原 plan 已使用共同遍历，成功 rebind 不分配目录。
+
+本轮延续已记录的 GStreamer 静态分配协商设计，不增加媒体算法或平台 adapter。presentation_plan_review 与 timing_path_review 对九个源码文件均明确局部 PASS。Windows Release 全量构建 51374 退出 0（801 任务计划），四项产物核验通过，realtime CLI 7122944 字节、14:34:25。
+
+尚缺 topology policy/incident capacities 同步、完整工作区预算及具体 freeze solver；本轮不构成合屏实流通过。没有新媒体测试、抓包、截图、临时测试脚本或同步临时文件。RKMPP 使用现有目录、8 核增量 all-target 构建。
+
+RKMPP 单次 SSH 1343 已终态退出 0，增量构建完成 54/54；九个源码文件写入前逐项核对基线 hash，写入后核对目标 hash。未执行 clean-first。两平台编译通过仅覆盖本轮代码，不替代原规格 realtime 链路验收。

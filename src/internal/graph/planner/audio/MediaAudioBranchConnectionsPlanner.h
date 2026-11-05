@@ -6,6 +6,7 @@
 #include "internal/graph/model/MediaNodeKind.h"
 #include <string_view>
 #include <vector>
+#include <span>
 
 namespace media::ffmpeg::graph {
 enum class MediaAudioBranchRole : std::size_t {
@@ -31,6 +32,10 @@ struct MediaAudioBranchConnection final {
 };
 class MediaAudioBranchConnectionsPlanner final {
 public:
+    // Fixed declaration identity; only policies change. Failure invalidates
+    // the candidate. Successful rebinding performs no allocations.
+    static ::media::Status rebind(const MediaAudioBranchShape& shape,
+        const MediaRealtimeEdgePolicySet& policies, std::span<MediaAudioBranchConnection> connections);
     static MediaAudioBranchShape outputEncoder(bool synchronized) noexcept;
     static MediaAudioBranchShape source(bool normalizePackets, bool synchronized, bool externalCorrection) noexcept;
     static ::media::Result<std::vector<MediaAudioBranchConnection>> plan(

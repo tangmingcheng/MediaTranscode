@@ -285,3 +285,13 @@ Windows Release 全量构建 79994 已终态退出 0（801 任务计划，config
 本轮没有新实流、抓包、截图或测试脚本，也未生成同步临时文件。完整 solver 尚未接到 freezeBatch，保持原门禁。
 
 单次 SSH 构建 99117 已终态退出 0，RKMPP 增量完成 22/22（包含新增 compiler 对象）；CMake 因新增源自动重新配置成功。此前交互连接中断记录保留，不算构建成功。没有执行新媒体链路。
+
+## 2026-11-05 固定连接策略更新
+
+输入、视频和音频连接声明采用共同构造/更新遍历；更新模式按顺序核对端点、端口、payload、stream、label 及适用的 phase，只替换 policy，不增长容器。源分支入口核对完整视频/音频 shape 与 externalCorrection；SourcePresentation 的 preparedVideoFrame 政策和原连接选择保持。失败保留首个错误并使整个候选作废。原 plan 已使用共同遍历，成功 rebind 不分配目录。
+
+本轮延续已记录的 GStreamer 静态分配协商设计，不增加媒体算法或平台 adapter。presentation_plan_review 与 timing_path_review 对九个源码文件均明确局部 PASS。Windows Release 全量构建 51374 退出 0（801 任务计划），四项产物核验通过，realtime CLI 7122944 字节、14:34:25。
+
+尚缺 topology policy/incident capacities 同步、完整工作区预算及具体 freeze solver；本轮不构成合屏实流通过。没有新媒体测试、抓包、截图、临时测试脚本或同步临时文件。RKMPP 使用现有目录、8 核增量 all-target 构建。
+
+RKMPP 单次 SSH 1343 已终态退出 0，增量构建完成 54/54；九个源码文件写入前逐项核对基线 hash，写入后核对目标 hash。未执行 clean-first。两平台编译通过仅覆盖本轮代码，不替代原规格 realtime 链路验收。

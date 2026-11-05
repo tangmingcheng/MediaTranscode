@@ -7,6 +7,7 @@
 #include "internal/graph/model/MediaNodeKind.h"
 #include <string_view>
 #include <vector>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -42,6 +43,10 @@ struct MediaVideoBranchConnectionPolicies final {
 };
 class MediaVideoBranchConnectionsPlanner final {
 public:
+    // Fixed declaration identity; only policies change. Failure invalidates
+    // the candidate. Successful rebinding performs no allocations.
+    static ::media::Status rebind(const MediaVideoBranchShape& shape,
+        const MediaVideoBranchConnectionPolicies& policies, std::span<MediaVideoBranchConnection> connections);
     static MediaVideoBranchShape outputEncoder() noexcept;
     static MediaVideoBranchShape sourceFrames(bool canonicalCadence, bool filterActive) noexcept;
     static MediaVideoBranchShape sourceDecoder() noexcept;

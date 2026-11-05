@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
+#include "internal/graph/planner/MediaConnectionPlanWriter.h"
 #include <new>
 
 namespace media::ffmpeg::graph {
@@ -33,11 +34,12 @@ std::optional<MediaNodeKind> MediaSourceInputNodeShape::ownedKind(MediaSourceInp
     default: return std::nullopt;
     }
 }
-::media::Result<std::vector<MediaSourceInputConnection>> MediaSourceInputConnectionsPlanner::plan(
+namespace {
+template<bool Updating> ::media::Status compileConnections(
     MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
-    MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies)
-try {
-    using R = ::media::Result<std::vector<MediaSourceInputConnection>>;
+    MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies,
+    MediaConnectionPlanWriter<MediaSourceInputConnection, Updating>& writer)
+{
     using Role = MediaSourceInputRole;
     using Phase = MediaSourceInputConnectionPhase;
     const bool audio = members == MediaTranscodeStreamSet::AudioVideo;
@@ -47,12 +49,11 @@ try {
         (clock != MediaAvSyncSourceClockMode::RtpSenderReports &&
          clock != MediaAvSyncSourceClockMode::MpegTsPcr &&
          clock != MediaAvSyncSourceClockMode::DemuxTimestamps))
-        return R::failure(::media::ErrorInfo::invalidArgument("Source input connections require member, readiness and clock facts"));
-    std::vector<MediaSourceInputConnection> result;
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source input connections require member, readiness and clock facts"));
     const auto add = [&](Role from, std::string_view output, Role to, std::string_view input,
         MediaPayloadKind payload, MediaStreamKind stream, const MediaEdgePolicy& policy,
         std::string_view label, Phase phase = Phase::Shared) {
-        result.push_back({from, output, to, input, payload, stream, policy, label, phase});
+        writer.append({from, output, to, input, payload, stream, policy, label, phase});
     };
     if (clock == MediaAvSyncSourceClockMode::RtpSenderReports) {
         add(Role::RawVideo, "", Role::ProtocolVideo, "packet", MediaPayloadKind::Packet,
@@ -84,9 +85,29 @@ try {
         MediaStreamKind::Metadata, policies.metadata, "master clock tick -> startup coordinator");
     if (decoded) add(Role::DecoderFrame, "", Role::VideoStartup, "frame", MediaPayloadKind::Frame,
         MediaStreamKind::Video, policies.synchronizedVideoFrame, "decoded display -> startup input", Phase::DecodedFrame);
-    return R::success(std::move(result));
+    return writer.finish();
+}
+} // namespace
+::media::Result<std::vector<MediaSourceInputConnection>> MediaSourceInputConnectionsPlanner::plan(
+    MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
+    MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies)
+try {
+    using Result = ::media::Result<std::vector<MediaSourceInputConnection>>;
+    std::vector<MediaSourceInputConnection> result;
+    MediaConnectionPlanWriter<MediaSourceInputConnection, false> writer(result);
+    if (auto status = compileConnections(members, readiness, clock, policies, writer); !status)
+        return Result::failure(status.error());
+    return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<std::vector<MediaSourceInputConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("source input connection plan"));
+}
+::media::Status MediaSourceInputConnectionsPlanner::rebind(
+    MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
+    MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies,
+    std::span<MediaSourceInputConnection> connections)
+{
+    MediaConnectionPlanWriter<MediaSourceInputConnection, true> writer(connections);
+    return compileConnections(members, readiness, clock, policies, writer);
 }
 } // namespace media::ffmpeg::graph

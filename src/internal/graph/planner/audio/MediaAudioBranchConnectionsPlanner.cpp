@@ -1,4 +1,5 @@
 #include "internal/graph/planner/audio/MediaAudioBranchConnectionsPlanner.h"
+#include "internal/graph/planner/MediaConnectionPlanWriter.h"
 #include <new>
 
 namespace media::ffmpeg::graph {
@@ -36,15 +37,19 @@ MediaAudioBranchShape MediaAudioBranchConnectionsPlanner::source(bool normalizeP
     shape.present[static_cast<std::size_t>(Role::Drift)] = synchronized;
     return shape;
 }
-::media::Result<std::vector<MediaAudioBranchConnection>> MediaAudioBranchConnectionsPlanner::plan(
-    const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies)
-try {
-    using R = ::media::Result<std::vector<MediaAudioBranchConnection>>;
+namespace {
+template<bool Updating> ::media::Status compileConnections(
+    const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies,
+    MediaConnectionPlanWriter<MediaAudioBranchConnection, Updating>& writer)
+{
     using Role = MediaAudioBranchRole;
-    std::vector<MediaAudioBranchConnection> result;
     const auto add = [&](Role from, std::string_view output, Role to, std::string_view input,
         MediaPayloadKind payload, const MediaEdgePolicy& policy, std::string_view label, MediaStreamKind stream) {
-        result.push_back({from, output, to, input, payload, stream, policy, label});
+        if (!shape.has(from) || !shape.has(to)) {
+            writer.reject(::media::ErrorInfo::invalidArgument("Branch connection references a missing role"));
+            return;
+        }
+        writer.append({from, output, to, input, payload, stream, policy, label});
     };
     const auto& packet = shape.has(Role::Trim) ? policies.startupAudioRelease : policies.audioPacket;
     if (shape.has(Role::Decode)) {
@@ -87,12 +92,25 @@ try {
             add(Role::Encode, "packet", Role::Canonicalizer, "encoded", MediaPayloadKind::Packet,
                 policies.audioPacket, ".encode.packet -> canonicalizer.encoded", MediaStreamKind::Audio);
     }
-    for (const auto& edge : result)
-        if (!shape.has(edge.from) || !shape.has(edge.to))
-            return R::failure(::media::ErrorInfo::invalidArgument("Branch connection references a missing role"));
-    return R::success(std::move(result));
+    return writer.finish();
+}
+} // namespace
+::media::Result<std::vector<MediaAudioBranchConnection>> MediaAudioBranchConnectionsPlanner::plan(
+    const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies)
+try {
+    using Result = ::media::Result<std::vector<MediaAudioBranchConnection>>;
+    std::vector<MediaAudioBranchConnection> result;
+    MediaConnectionPlanWriter<MediaAudioBranchConnection, false> writer(result);
+    if (auto status = compileConnections(shape, policies, writer); !status) return Result::failure(status.error());
+    return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
     return ::media::Result<std::vector<MediaAudioBranchConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("audio branch connection plan"));
+}
+::media::Status MediaAudioBranchConnectionsPlanner::rebind(
+    const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies, std::span<MediaAudioBranchConnection> connections)
+{
+    MediaConnectionPlanWriter<MediaAudioBranchConnection, true> writer(connections);
+    return compileConnections(shape, policies, writer);
 }
 } // namespace media::ffmpeg::graph
