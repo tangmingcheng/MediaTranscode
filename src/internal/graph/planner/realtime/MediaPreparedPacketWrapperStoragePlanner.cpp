@@ -32,7 +32,7 @@ try {
         topology.positions[*raw].kind != MediaNodeKind::RawRtpInput ||
         topology.positions[*clock].kind != MediaNodeKind::RtpPacketClockBinder)
         return invalid("Prepared packet wrappers require their actual raw input and clock binder");
-    MediaPreparedPacketWrapperStoragePlan result{sourceIndex, stream, {}, 0, 0};
+    MediaPreparedPacketWrapperStoragePlan result(topology.resource(), sourceIndex, stream);
     for (const auto creator : {*raw, *clock}) {
         auto residence = MediaCompositionPayloadResidencePlanner::plan(topology, reference,
             creator, stream, MediaPayloadKind::Packet, MediaPayloadResidenceSelection::ReachableOwners);
@@ -67,6 +67,7 @@ try {
     if ((plan.stream != MediaStreamKind::Video && plan.stream != MediaStreamKind::Audio) ||
         !containers.prefixObjects || !containers.acquiringObjects || !containers.outputObjects || !maximumAtomicCompletion)
         return invalid();
+    if (plan.resource != topology.resource() || reference.resource != topology.resource()) return invalid();
     for (auto& root : plan.roots) {
         if (root.creatorPosition >= topology.positions.size()) return invalid();
         const auto& creator = topology.positions[root.creatorPosition];

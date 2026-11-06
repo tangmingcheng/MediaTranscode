@@ -11,7 +11,6 @@ namespace media::ffmpeg::graph {
     MediaHardwareTransferDirection transferDirection)
 try {
     using R = ::media::Result<MediaSourceLineageStoragePlan>;
-    using Family = MediaSourceLineageAllocationFamily;
     using Role = MediaSourceLineageRootRole;
     const auto invalid = [](const char* message) { return R::failure(::media::ErrorInfo::invalidArgument(message)); };
     if (!registryCapacity || !preparedPrefixCapacity)
@@ -57,8 +56,7 @@ try {
         topology.positions[*packet].source != sourceIndex ||
         topology.positions[*packet].kind != MediaNodeKind::RtpPacketClockBinder)
         return invalid("Source lineage requires exact source binder and decoder identities");
-    MediaSourceLineageStoragePlan result{sourceIndex, {}, {{{Family::AccessUnit, {}, 0, 0},
-        {Family::Display, {}, 0, 0}, {Family::PacketWrapper, {}, 0, 0}, {Family::FrameWrapper, {}, 0, 0}}}, 0};
+    MediaSourceLineageStoragePlan result(topology.resource(), sourceIndex);
     auto& accessUnit = result.allocations[0];
     auto& display = result.allocations[1];
     auto& packetWrappers = result.allocations[2];
@@ -90,14 +88,14 @@ try {
     if (filter) if (auto status = project(*filter, MediaPayloadKind::Frame, frameWrappers); !status) return R::failure(status.error());
     // A frame wrapper retains one display. Converted wrappers alias that display;
     // summing their roots is conservative, not a claim of distinct displays.
-    display.rootIndices = frameWrappers.rootIndices;
+    display.rootIndices.assign(frameWrappers.rootIndices.begin(), frameWrappers.rootIndices.end());
     const auto lineageRoots = [&](MediaSourceLineageAllocationCost& target, std::size_t position) {
         appendRoot(target, {position, Role::Registry, std::nullopt, registryCapacity});
         appendRoot(target, {position, Role::PendingLineage, std::nullopt, 1});
         appendRoot(target, {position, Role::ResolvedLineage, std::nullopt, 1});
     };
     if (filter) lineageRoots(display, *filter);
-    accessUnit.rootIndices = packetWrappers.rootIndices;
+    accessUnit.rootIndices.assign(packetWrappers.rootIndices.begin(), packetWrappers.rootIndices.end());
     lineageRoots(accessUnit, *decoder);
     // display.accessUnit and the frame wrapper's direct AU are the same owner.
     accessUnit.rootIndices.insert(accessUnit.rootIndices.end(), display.rootIndices.begin(), display.rootIndices.end());
@@ -116,6 +114,7 @@ try {
     const auto invalid = [] { return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "Source lineage catalog differs from its fixed source creators")); };
     if (!registryCapacity || !preparedPrefixCapacity) return invalid();
+    if (plan.resource != topology.resource() || reference.resource != topology.resource()) return invalid();
     for (auto& root : plan.roots) {
         if (root.creatorPosition >= topology.positions.size()) return invalid();
         const auto& creator = topology.positions[root.creatorPosition];

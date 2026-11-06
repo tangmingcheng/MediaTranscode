@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaPreparedSourceCandidateCostPlanner.h"
+#include <new>
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 #include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
@@ -170,18 +171,18 @@ template<bool Updating> ::media::Status streamCosts(
     auto leases = copies(lease.value(), liveControls);
     if (!leases) return R::failure(leases.error());
     if constexpr (Updating) {
-        if (costs.packetWrappers.sourceIndex != source.sourceIndex || costs.packetWrappers.stream != streamKind)
+        if (!costs.packetWrappers || costs.packetWrappers->sourceIndex != source.sourceIndex || costs.packetWrappers->stream != streamKind)
             return R::failure(::media::ErrorInfo::invalidArgument("Candidate packet catalog changed source or stream"));
-        if (auto status = MediaPreparedPacketWrapperStoragePlanner::rebind(costs.packetWrappers,
+        if (auto status = MediaPreparedPacketWrapperStoragePlanner::rebind(*costs.packetWrappers,
                 source.topology, source.residence, facts.containers, stream.envelope.maximumAccessUnitsPerPush); !status)
             return status;
     } else {
         auto wrappers = MediaPreparedPacketWrapperStoragePlanner::plan(source.topology, source.residence,
             source.sourceIndex, streamKind, facts.containers, stream.envelope.maximumAccessUnitsPerPush);
         if (!wrappers) return R::failure(wrappers.error());
-        costs.packetWrappers = std::move(wrappers).value();
+        costs.packetWrappers.emplace(std::move(wrappers).value());
     }
-    if (auto status = validatePacketProgress(costs.packetWrappers, source, facts.containers); !status) return status;
+    if (auto status = validatePacketProgress(*costs.packetWrappers, source, facts.containers); !status) return status;
     auto packet = preparedMediaPacketStorageBytes(stream.envelope.maximumAccessUnitBytes,
         MediaPacketStorageExtent::Payload);
     if (!packet) return R::failure(packet.error());
@@ -221,7 +222,7 @@ template<bool Updating> ::media::Status computeCosts(
         return R::failure(::media::ErrorInfo::unsupported(
             "Source lineage requires a proven passthrough transfer contract"));
     if constexpr (Updating) {
-        if (result.audio.has_value() != audio || result.lineage.sourceIndex != facts.sourceIndex)
+        if (result.audio.has_value() != audio || !result.lineage || result.lineage->sourceIndex != facts.sourceIndex)
             return R::failure(::media::ErrorInfo::invalidArgument("Candidate cost catalog membership changed"));
     } else if (audio) result.audio.emplace();
     if (auto status = streamCosts<Updating>(session.video, held.video, facts.video, true,
@@ -248,15 +249,15 @@ template<bool Updating> ::media::Status computeCosts(
     if (!facts.videoPlan.decoderReadiness || facts.videoPlan.filterActive != facts.videoPlan.filterReadiness.has_value())
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate frame wrapper readiness membership is incomplete"));
     if constexpr (Updating) {
-        if (auto status = MediaSourceLineageStoragePlanner::rebind(result.lineage, facts.topology,
+        if (auto status = MediaSourceLineageStoragePlanner::rebind(*result.lineage, facts.topology,
                 facts.residence, facts.registryCapacity, facts.video.containers.prefixObjects); !status) return status;
     } else {
         auto lineage = MediaSourceLineageStoragePlanner::plan(facts.topology, facts.residence,
             facts.sourceIndex, facts.registryCapacity, facts.video.containers.prefixObjects, facts.videoPlan.transferDirection);
         if (!lineage) return R::failure(lineage.error());
-        result.lineage = std::move(lineage).value();
+        result.lineage.emplace(std::move(lineage).value());
     }
-    auto frames = MediaPreparedFrameWrapperStoragePlanner::plan(facts.topology, result.lineage,
+    auto frames = MediaPreparedFrameWrapperStoragePlanner::plan(facts.topology, *result.lineage,
         *facts.videoPlan.decoderReadiness, facts.videoPlan.filterReadiness);
     if (!frames) return R::failure(frames.error());
     const std::array<std::size_t, 2> datagrams{session.video.workingSet.maximumDatagramBytes,
@@ -315,7 +316,7 @@ template<bool Updating> ::media::Status computeCosts(
         // containerBytes excludes the replaced pending-only lease control fee.
         // Packet wrappers, payload reservation and lease controls are distinct.
         if (auto status = accumulate(result.protocolBytes, {stream->containerBytes,
-                stream->leaseControlsBytes, stream->packetWrappers.preparationBytes,
+                stream->leaseControlsBytes, stream->packetWrappers->preparationBytes,
                 stream->payload.bytes}); !status) return R::failure(status.error());
     }
     if (auto status = accumulate(result.protocolBytes, {result.sourceClock.cnamePeakBytes,
@@ -325,7 +326,7 @@ template<bool Updating> ::media::Status computeCosts(
     // costs again, or ordinary inner strings/audio wrappers to Prepared charges.
     if (auto status = accumulate(result.startupBytes, {result.startupIndexBytes,
             result.startupGenerationBytes, result.frameWrappers.preparationBytes,
-            result.lineage.preparationBytes, result.frameOwnership.bytes,
+            result.lineage->preparationBytes, result.frameOwnership.bytes,
             result.startup.route.preparationBytes, result.startup.coordinator.preparationBytes}); !status)
         return R::failure(status.error());
     if (auto status = accumulate(result.totalBytes,
@@ -337,11 +338,14 @@ template<bool Updating> ::media::Status computeCosts(
 ::media::Result<MediaPreparedSourceCandidateCosts> MediaPreparedSourceCandidateCostPlanner::plan(
     const MediaPreparedRtpSourceSessionPlan& session, const MediaPreparedRtpStorageSnapshot& held,
     const MediaPreparedSourceCandidateCostFacts& facts)
-{
+try {
     using R = ::media::Result<MediaPreparedSourceCandidateCosts>;
     MediaPreparedSourceCandidateCosts result{};
     if (auto status = computeCosts<false>(session, held, facts, result); !status) return R::failure(status.error());
     return R::success(std::move(result));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaPreparedSourceCandidateCosts>::failure(
+        ::media::ErrorInfo::allocationFailed("source candidate cost catalogs"));
 }
 ::media::Status MediaPreparedSourceCandidateCostPlanner::rebind(
     const MediaPreparedRtpSourceSessionPlan& session, const MediaPreparedRtpStorageSnapshot& held,

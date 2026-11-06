@@ -12,9 +12,14 @@ struct MediaPreparedPacketWrapperRoot final {
     std::uint64_t maximumWrappers;
 };
 struct MediaPreparedPacketWrapperStoragePlan final {
+    const std::shared_ptr<MediaPreparationMemoryResource> resource;
+    MediaPreparedPacketWrapperStoragePlan(std::shared_ptr<MediaPreparationMemoryResource> owner,
+        std::size_t source, MediaStreamKind kind)
+        : resource(std::move(owner)), sourceIndex(source), stream(kind), roots(*resource),
+          maximumWrappers(0), preparationBytes(0) {}
     std::size_t sourceIndex;
     MediaStreamKind stream;
-    std::vector<MediaPreparedPacketWrapperRoot> roots;
+    MediaPlanningCatalog<MediaPreparedPacketWrapperRoot> roots;
     std::uint64_t maximumWrappers;
     std::uint64_t preparationBytes;
 };

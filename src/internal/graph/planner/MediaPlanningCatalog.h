@@ -34,6 +34,9 @@ public:
     void resize(std::size_t size) { m_values.resize(size); }
     void push_back(Entry&& value) { m_values.push_back(std::move(value)); }
     void push_back(const Entry& value) { m_values.push_back(value); }
+    template<class Iterator> void assign(Iterator first, Iterator last) { m_values.assign(first, last); }
+    template<class Iterator> auto insert(typename std::pmr::vector<Entry>::const_iterator position,
+        Iterator first, Iterator last) { return m_values.insert(position, first, last); }
     void assign(std::initializer_list<Entry> values) { m_values.assign(values); }
     auto insert(typename std::pmr::vector<Entry>::const_iterator position, const Entry& value)
     { return m_values.insert(position, value); }

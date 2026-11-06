@@ -43,7 +43,7 @@ struct MediaPreparedStreamCandidateCosts final {
     MediaPreparedRtpContainerStoragePlan containers;
     std::size_t containerBytes;
     std::size_t leaseControlsBytes;
-    MediaPreparedPacketWrapperStoragePlan packetWrappers;
+    std::optional<MediaPreparedPacketWrapperStoragePlan> packetWrappers;
     std::array<MediaPreparedPayloadLeaseRoot,
         static_cast<std::size_t>(MediaPreparedPayloadLeaseRootKind::Count)> leaseControlRoots;
     MediaPreparedPayloadStoragePlan payload;
@@ -59,7 +59,7 @@ struct MediaPreparedSourceCandidateCosts final {
     std::size_t startupIndexBytes;
     std::size_t startupGenerationBytes;
     MediaPreparedFrameWrapperStoragePlan frameWrappers;
-    MediaSourceLineageStoragePlan lineage;
+    std::optional<MediaSourceLineageStoragePlan> lineage;
     MediaCompositionStartupStoragePlan startup;
     MediaSourceFrameOwnershipStoragePlan frameOwnership;
     // Source tracker/mapper/binders and source output evidence, separate from

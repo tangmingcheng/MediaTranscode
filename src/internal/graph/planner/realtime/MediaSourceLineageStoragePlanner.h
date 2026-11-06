@@ -13,18 +13,27 @@ struct MediaSourceLineageAllocationRoot final {
     std::uint64_t maximumReferences;
 };
 struct MediaSourceLineageAllocationCost final {
+    MediaSourceLineageAllocationCost(std::pmr::memory_resource& resource, MediaSourceLineageAllocationFamily kind)
+        : family(kind), rootIndices(resource), maximumAllocations(0), preparationBytes(0) {}
     MediaSourceLineageAllocationFamily family;
-    std::vector<std::size_t> rootIndices;
+    MediaPlanningCatalog<std::size_t> rootIndices;
     std::uint64_t maximumAllocations;
     std::uint64_t preparationBytes;
 };
 // Only engine objects allocated through the source preparation resource.
 // Registry storage, raw media wrappers and FFmpeg private memory are excluded.
 struct MediaSourceLineageStoragePlan final {
+    const std::shared_ptr<MediaPreparationMemoryResource> resource;
+    MediaSourceLineageStoragePlan(std::shared_ptr<MediaPreparationMemoryResource> owner, std::size_t source)
+        : resource(std::move(owner)), sourceIndex(source), roots(*resource),
+          allocations{{{*resource, MediaSourceLineageAllocationFamily::AccessUnit},
+              {*resource, MediaSourceLineageAllocationFamily::Display},
+              {*resource, MediaSourceLineageAllocationFamily::PacketWrapper},
+              {*resource, MediaSourceLineageAllocationFamily::FrameWrapper}}}, preparationBytes(0) {}
     std::size_t sourceIndex;
     // Family membership refers to this owned catalog. Indices remain valid
-    // across vector growth and copying/moving the complete planning product.
-    std::vector<MediaSourceLineageAllocationRoot> roots;
+    // across vector growth and moving the complete planning product.
+    MediaPlanningCatalog<MediaSourceLineageAllocationRoot> roots;
     std::array<MediaSourceLineageAllocationCost, 4> allocations;
     std::uint64_t preparationBytes;
 };

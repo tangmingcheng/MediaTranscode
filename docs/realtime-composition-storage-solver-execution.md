@@ -1,6 +1,6 @@
 # 合屏联合存储 solver 实施决策
 
-状态：2026-11-05，基于 `d4237d73` 及本轮工作树核验。源、拓扑、residence 与费用的固定目录刷新已具备；尚未实现具体 solver；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
+状态：2026-11-06，基于 `e12d65ce` 及本轮工作树核验。源、拓扑、residence 与费用的固定目录刷新已具备，连接、拓扑、引用与费用目录已接入预算资源；借用固定源事实的候选工作区、合法容量基线及具体 solver 尚未完成；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
 
 ## 容量语义与依据
 
@@ -222,3 +222,13 @@ reference 的 node/startup/event 目录、projection 的遍历空间与 contribu
 Windows Release 全量 4848 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7147008 字节、2026-11-06 12:25:44。六源码同步前后 SHA256 均已核验；RKMPP SSH 42610 正执行 8 核增量 all-target。没有同步临时文件或新媒体测试产物。
 
 RKMPP SSH 42610 终态退出 0，8 核增量 all-target 完成 61/61。两平台构建通过，没有新实流测试或临时产物。下一批合并迁移 packet/lineage 外层根目录与四组 rootIndices，并把 CandidateCost 的计划接收改为延迟构造，避免不可赋值 Owner 经 PMR 容器整体赋值；随后继续具体 workspace 和 solver 接线。
+
+## 2026-11-06 packet/lineage 与候选费用目录预算接入
+
+packet/lineage 外层 roots 和 lineage 四组 rootIndices 直接使用显式 preparation resource；两个计划先保存 const shared_ptr，预算资源随最终共享账本存活。原两个数值索引复制改为目标资源上的范围 assign，族间追加仍使用范围 insert，算法与保守费用不变。CandidateCost 的两个计划使用 optional 延迟 emplace，避免不可赋值 Owner 进入 PMR vector 整体赋值；更新先核验产品存在，底层 rebind 在更新前核对 plan/reference/topology 的资源身份。首次构造及返回移动的 bad_alloc 由 plan 边界转换，成功更新路径不分配。
+
+沿用前述 C++ allocator 和 shared ownership 标准；residence_budget_audit 与 residence_budget_review_b 对冻结七源码均明确局部 PASS。Windows Release 全核心全量构建 97550 正在运行。此批关闭剩余引用与费用目录的预算接线，不代表具体 workspace、合法容量基线、freeze solver 或实流验收完成。
+
+Windows Release 全量 97550 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7150080 字节、2026-11-06 12:33:20。七源码分两批 4＋3 文件核验同步前后 SHA256；RKMPP SSH 6408 正执行 8 核增量 all-target。未生成同步临时文件或媒体测试产物。
+
+RKMPP SSH 6408 终态退出 0，8 核增量 all-target 完成 61/61。本轮两平台构建通过，无新媒体测试或临时产物。接线前核验发现：freeze 前尚无 source runtime/synchronization/assembly 的稳定 owner，当前在 seal 后才生成。下一步必须将固定事实编译前移并稳定保管，或由现有 prepared 事实适配共同编译器；不能只创建指向尚不存在 runtime 的借用视图，也不能每候选重复 owning plan。
