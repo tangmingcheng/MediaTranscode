@@ -37,6 +37,12 @@ public:
         const MediaRealtimeAvOutputRuntimePlan& output,
         MediaVideoCanvasGeometry canvas, MediaRational outputFrameRate,
         std::size_t audioSource);
+    // Same immutable prepared declarations as plan(); only queue/reachability
+    // capacities may change. Output/canvas/identity backing remains owned.
+    // Success allocates nothing. A failed refresh invalidates the workspace.
+    static ::media::Status rebindCapacity(
+        std::span<const MediaAvAggregateSourceFacts> sources,
+        MediaAvContinuousAggregateTopology& plan);
 private:
     MediaAvContinuousAggregatePlanner() = delete;
 };

@@ -434,3 +434,17 @@ Windows Release 42441 全量终态退出0（806任务计划），四项产物通
 七源码同步前后哈希全部核验，RKMPP SSH90320正在原目录以8核增量all-target构建。下一批仍需合法候选基线、聚合/拓扑工作区完整计费、具体solver和sealed独立费用复算；本批不是合屏完成。
 
 RKMPP SSH90320终态14/14、退出0，使用8核增量all-target。七源码双独立局部PASS，两平台构建完成；r396/r397失败记录完整，本轮测试文件残留为0、复用120秒源保留。未推送、合并、部署或修复外部依赖；不创建成功媒体验收提交。
+
+## 2026-11-06 聚合候选容量刷新
+
+当前真实入口仍在 freezeBatch(nullptr) 拒绝完整存储准入（r397），候选 solver 尚未接入。源码核验发现聚合 plan 是源/拓扑/驻留/费用候选链中尚无无分配刷新能力的一环。本批复用原 candidate 数量、audio sample、lineage 与 storage 算式，将首次身份构造与容量重算放在同一 compileAggregate 内核；生产 plan 调用同一内核，新增内部 rebindCapacity 只刷新数值。不是独立媒体链或新增公共参数。
+
+已重新读取 GStreamer 官方 allocation 文档：https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html 。沿用先协商有限数量/分配属性再激活的原则；其规则不能替代本项目实际费用证明。线程、背压、所有权、平台 adapter 与运行时算法不变。初次 sources 目录按实际数量 reserve；仅此不能证明新增聚合普通 backing 已事前计费，该预算仍须在候选工作区构造前完成。
+
+刷新借用同一不可变源声明，仅 queue/reachability 容量变化；输出、canvas、端口、字符串及目录保持原 owner。核对源数、group、媒体成员、identity、lineage product、generation、选中音频起点与 normalization，lead 不得超过已准备界；成功路径不创建容器或字符串。失败保留原错误，工作区整体失效，禁止发布或把非法事实当成预算不足缩小搜索。尚未接具体 solver、sealed 独立复算或完成原规格实流。仓库要求真实链路驱动并禁止 Windows 测试脚本，本批不新增测试框架或伪造媒体事实的单元测试；源码审查与构建不能替代实流验收。
+
+两名独立审查 residence_budget_audit、residence_budget_review_b 对两源码与本节均局部 PASS；固定声明不变及刷新失败丢弃仍是调用契约，不宣称有自动回滚。Windows Release 全量会话30563终态退出0（806任务计划），四项产物核验通过，realtime CLI7226368字节、2026-11-06 16:46:12。两源码同步前后哈希核验通过，RKMPP会话99659正在原目录进行8核增量all-target。本批没有媒体链路测试或临时测试产物，最新SourcePresentation实流证据仍为r397失败；未运行local测试。具体solver、聚合首次backing预算和sealed独立复算未完成。
+
+RKMPP会话99659终态6/6、退出0，保持8核增量all-target；本轮三文件UTF-8/CRLF及diff检查通过。无媒体测试临时产物，既有未跟踪文件保留。未推送、合并或部署，不创建成功媒体验收提交。
+
+下一步只读审查再次确认：现有 checker 可验证进展，却没有从 locked snapshot 反推合法 queues 的入口。须在数值基线 planner 中复用实际 input/branch/atomic 连接约束：视频 packet 的 startupPackets为0，音频为固定Na；reachableGraphHolders须覆盖startupPackets＋acquiring＋1。decoder frame下界含filter retained inputs，不能把需求随意均摊或统一队列设为1。还须定位prepared-frame videoUnitBytes、maximumGap、typed queue贡献与atomic发布批量的权威产品；没有这些事实不能调用候选费用checker试错扩容。

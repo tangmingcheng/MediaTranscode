@@ -22,6 +22,137 @@ public:
     }
     std::uint64_t value = 0;
 };
+// Only the first pass owns identity/container construction. Capacity refresh
+// runs on the same immutable source declarations and retains every backing.
+// Any failure invalidates the workspace; callers must not publish it.
+template<bool Updating> ::media::Status compileAggregate(
+    std::span<const MediaAvAggregateSourceFacts> sources, MediaAvContinuousAggregateTopology& plan)
+{
+    using Result = ::media::Status;
+    const auto fail = [](const char* message) { return Result::failure(::media::ErrorInfo::invalidArgument(message)); };
+    if (sources.empty() || plan.audioSource >= sources.size())
+        return fail("Aggregate capacity requires its prepared source catalog");
+    if constexpr (Updating) {
+        if (sources.size() != plan.sources.size())
+            return fail("Aggregate capacity refresh changed its source catalog");
+    }
+    const auto& selected = sources[plan.audioSource];
+    if (!selected.audioIdentity || !selected.audioCorrection ||
+        selected.audioCorrection->maximumResamplerOutputBlockSamples <= 0 ||
+        selected.audioCorrection->epochOutputSampleIndex != plan.initialAudioSample ||
+        selected.frameQueueCapacity == 0)
+        return fail("Aggregate selected audio requires prepared correction and queue facts");
+    for (const auto& source : sources) {
+        if (source.activationOutputLead.nanoseconds() <= 0 || source.activationOutputLead > plan.preparationLead)
+            return fail("Aggregate capacity refresh differs from its prepared lead");
+    }
+    plan.maximumAudioCandidates = selected.frameQueueCapacity;
+    Size samples;
+    if (!samples.add(plan.maximumAudioCandidates,
+            static_cast<std::uint64_t>(selected.audioCorrection->maximumResamplerOutputBlockSamples)) ||
+        samples.value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        return fail("Aggregate candidate audio sample bound overflow");
+    plan.maximumAudioCandidateSamples = static_cast<std::int64_t>(samples.value);
+    Size fixed, retained, objects;
+    if (!fixed.add(sizeof(MediaAvContinuousAggregateNode)) ||
+        !fixed.add(sizeof(MediaContinuousAudioAggregateNode) + sizeof(MediaOwnerThreadGenerationPurge)) ||
+        !fixed.add(sizeof(MediaAvAggregateCoordination)) ||
+        !fixed.add(sources.size(), sizeof(MediaAvAggregateSourceCompletion)) ||
+        !fixed.add(2, sizeof(MediaAvAggregateCoordinationSnapshot)) ||
+        !fixed.add(sources.size(), sizeof(std::uint64_t)) ||
+        !fixed.add(2, sizeof(MediaAvOutputPermitCommitReservation)) ||
+        !fixed.add(sources.size(), sizeof(MediaAvAggregateSourceStorage) + sizeof(MediaOwnerThreadGenerationPurge)) ||
+        !fixed.add(plan.maximumAudioCandidates, sizeof(std::shared_ptr<MediaBoundCanonicalAudioBuffer>)) ||
+        !fixed.add(sources.size(), sizeof(std::uint64_t)) ||
+        !fixed.add(sources.size(), sizeof(MediaAvOutputPermitCommitReservation)) ||
+        !fixed.add(sizeof(MediaAvOutputPermitCommitReservation)) ||
+        !fixed.add(sources.size(), sizeof(MediaVideoCanvasTile) + sizeof(MediaCanonicalVideoContribution)) ||
+        !fixed.add(plan.maximumAudioContributions, sizeof(MediaAudioIntervalFragment)) ||
+        !objects.add(plan.maximumAudioCandidates) || !objects.add(2))
+        return fail("Aggregate fixed backing storage overflow");
+    Size videoPending;
+    if (!videoPending.add(sizeof(MediaCanonicalVideoFrameBuffer) + sizeof(MediaCanonicalLineage)) ||
+        !videoPending.add(plan.outputGroupKey.value().size()) ||
+        !videoPending.add(sources.size(), sizeof(MediaCanonicalVideoContribution)))
+        return fail("Aggregate pending video metadata overflow");
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        const auto& source = sources[i];
+        const bool hasAudio = source.members == MediaTranscodeStreamSet::AudioVideo;
+        const bool display = source.sourceDisplayPoints;
+        if ((!hasAudio && source.members != MediaTranscodeStreamSet::VideoOnly) ||
+            source.audioIdentity.has_value() != hasAudio || source.audioEnabled != hasAudio ||
+            (source.audioCorrection != nullptr) != hasAudio ||
+            (source.audioOutput != nullptr) != hasAudio ||
+            (!display && (source.frameRate.num <= 0 || source.frameRate.den <= 0)) ||
+            source.frameQueueCapacity == 0 ||
+            (display && source.frameQueueCapacity < 2) ||
+            source.videoReadiness != (display
+                ? MediaVideoStartupReadiness::DecodedPresentationSpan : MediaVideoStartupReadiness::IntervalCoverage) ||
+            source.videoIdentity.empty() ||
+            source.initialGeneration != plan.initialGeneration ||
+            source.domainRole != MediaAvSyncDomainRole::SourceContribution)
+            return fail("Aggregate source normalization, identity or clock contract differs");
+        if (hasAudio && (source.audioIdentity->empty() ||
+            source.audioOutput->sampleRate() != plan.audio.sampleRate() ||
+            source.audioOutput->sampleFormat() != plan.audio.sampleFormat() ||
+            source.audioOutput->channelLayout() != plan.audio.channelLayout()))
+            return fail("Aggregate source audio normalization differs from its output contract");
+        // Display points use the admitted count bound. It does not promise a
+        // buffered time horizon; one slot retains the current frame, another
+        // allows the next point or EOF to make progress.
+        auto candidateCapacity = MediaAvContinuousAggregatePlanner::videoCandidateCapacity(source.frameQueueCapacity, display, source.frameRate, plan.preparationLead);
+        if (!candidateCapacity) return Result::failure(candidateCapacity.error());
+        const auto candidates = candidateCapacity.value();
+        const auto product = display ? MediaVideoFrameLineageProduct::SourceDisplayPoint
+                                     : MediaVideoFrameLineageProduct::CanonicalInterval;
+        if constexpr (Updating) {
+            auto& owned = plan.sources[i];
+            if (owned.groupKey != source.groupKey || owned.videoIdentity != source.videoIdentity ||
+                owned.audioIdentity.has_value() != hasAudio ||
+                (hasAudio && *owned.audioIdentity != *source.audioIdentity) || owned.videoProduct != product)
+                return fail("Aggregate capacity refresh changed its source identity or lineage product");
+            owned.maximumVideoCandidates = candidates;
+        } else {
+            plan.sources.push_back({source.groupKey, "source_video_" + std::to_string(i), candidates,
+                i == plan.audioSource || !hasAudio ? std::nullopt : std::optional<std::string>("source_audio_" + std::to_string(i)),
+                std::string(source.videoIdentity),
+                hasAudio ? std::optional<std::string>(std::string(*source.audioIdentity)) : std::nullopt,
+                display ? MediaVideoFrameLineageProduct::SourceDisplayPoint : MediaVideoFrameLineageProduct::CanonicalInterval});
+        }
+        Size lineage;
+        const auto lineageSize = plan.sources[i].videoProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint
+            ? sizeof(MediaVideoDecodeBuffer) + sizeof(MediaVideoDisplayLineage) + sizeof(MediaVideoDecodeLineage)
+            : sizeof(MediaCanonicalVideoFrameBuffer) + sizeof(MediaCanonicalLineage);
+        if (!lineage.add(lineageSize) ||
+            !lineage.add(source.videoIdentity.size()) ||
+            !retained.add(candidates, lineage.value) ||
+            !fixed.add(candidates, sizeof(MediaBufferRef)) || !objects.add(candidates) ||
+            !videoPending.add(source.videoIdentity.size()))
+            return fail("Aggregate source video retention overflow");
+    }
+    const auto audioIdentityBytes = selected.audioIdentity->size();
+    Size sourceFragment;
+    if (!sourceFragment.add(sizeof(MediaAudioIntervalFragment) + sizeof(MediaCanonicalLineage)) ||
+        !sourceFragment.add(audioIdentityBytes, 2) ||
+        !retained.add(plan.maximumAudioCandidates, sizeof(MediaBoundCanonicalAudioBuffer) + sizeof(MediaCanonicalAudioSamplesBuffer)) ||
+        !retained.add(samples.value, sourceFragment.value))
+        return fail("Aggregate source audio metadata overflow");
+    Size outputFragment, audioPending;
+    // Each positive, contiguous fragment contains at least one sample. Count
+    // shared lineage/identity per fragment conservatively, as the runtime guard.
+    if (!outputFragment.add(sizeof(MediaAudioIntervalFragment) + sizeof(MediaCanonicalLineage)) ||
+        !outputFragment.add(plan.outputGroupKey.value().size()) || !outputFragment.add(audioIdentityBytes) ||
+        !audioPending.add(sizeof(MediaBoundCanonicalAudioBuffer) + sizeof(MediaCanonicalAudioSamplesBuffer)) ||
+        !audioPending.add(plan.maximumAudioContributions, outputFragment.value) ||
+        !retained.add(videoPending.value) || !retained.add(audioPending.value))
+        return fail("Aggregate pending audio metadata overflow");
+    Size total;
+    if (!total.add(fixed.value) || !total.add(retained.value))
+        return fail("Aggregate metadata total overflow");
+    plan.storage = {fixed.value, retained.value, objects.value};
+    plan.maximumMetadataBytes = total.value;
+    return MediaAvContinuousAggregatePlanValidator::validate(plan);
+}
 }
 
 ::media::Result<std::size_t> MediaAvContinuousAggregatePlanner::videoCandidateCapacity(
@@ -71,101 +202,15 @@ public:
         std::move(canvas), outputFrameRate, output.audioOutput, lead,
         selected.initialGeneration, selected.audioCorrection->epochOutputSampleIndex,
         selected.frameQueueCapacity, 0, static_cast<std::size_t>(output.audioOutput.codecFrameSamples()), 0, {0, 0, 0}};
-    Size samples;
-    if (!samples.add(plan.maximumAudioCandidates,
-            static_cast<std::uint64_t>(selected.audioCorrection->maximumResamplerOutputBlockSamples)) ||
-        samples.value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-        return fail("Aggregate candidate audio sample bound overflow");
-    plan.maximumAudioCandidateSamples = static_cast<std::int64_t>(samples.value);
-    Size fixed, retained, objects;
-    if (!fixed.add(sizeof(MediaAvContinuousAggregateNode)) ||
-        !fixed.add(sizeof(MediaContinuousAudioAggregateNode) + sizeof(MediaOwnerThreadGenerationPurge)) ||
-        !fixed.add(sizeof(MediaAvAggregateCoordination)) ||
-        !fixed.add(sources.size(), sizeof(MediaAvAggregateSourceCompletion)) ||
-        !fixed.add(2, sizeof(MediaAvAggregateCoordinationSnapshot)) ||
-        !fixed.add(sources.size(), sizeof(std::uint64_t)) ||
-        !fixed.add(2, sizeof(MediaAvOutputPermitCommitReservation)) ||
-        !fixed.add(sources.size(), sizeof(MediaAvAggregateSourceStorage) + sizeof(MediaOwnerThreadGenerationPurge)) ||
-        !fixed.add(plan.maximumAudioCandidates, sizeof(std::shared_ptr<MediaBoundCanonicalAudioBuffer>)) ||
-        !fixed.add(sources.size(), sizeof(std::uint64_t)) ||
-        !fixed.add(sources.size(), sizeof(MediaAvOutputPermitCommitReservation)) ||
-        !fixed.add(sizeof(MediaAvOutputPermitCommitReservation)) ||
-        !fixed.add(sources.size(), sizeof(MediaVideoCanvasTile) + sizeof(MediaCanonicalVideoContribution)) ||
-        !fixed.add(plan.maximumAudioContributions, sizeof(MediaAudioIntervalFragment)) ||
-        !objects.add(plan.maximumAudioCandidates) || !objects.add(2))
-        return fail("Aggregate fixed backing storage overflow");
-    Size videoPending;
-    if (!videoPending.add(sizeof(MediaCanonicalVideoFrameBuffer) + sizeof(MediaCanonicalLineage)) ||
-        !videoPending.add(output.groupKey.value().size()) ||
-        !videoPending.add(sources.size(), sizeof(MediaCanonicalVideoContribution)))
-        return fail("Aggregate pending video metadata overflow");
-    for (std::size_t i = 0; i < sources.size(); ++i) {
-        const auto& source = sources[i];
-        const bool hasAudio = source.members == MediaTranscodeStreamSet::AudioVideo;
-        const bool display = source.sourceDisplayPoints;
-        if ((!hasAudio && source.members != MediaTranscodeStreamSet::VideoOnly) ||
-            source.audioIdentity.has_value() != hasAudio || source.audioEnabled != hasAudio ||
-            (source.audioCorrection != nullptr) != hasAudio ||
-            (source.audioOutput != nullptr) != hasAudio ||
-            (!display && (source.frameRate.num <= 0 || source.frameRate.den <= 0)) ||
-            source.frameQueueCapacity == 0 ||
-            (display && source.frameQueueCapacity < 2) ||
-            source.videoReadiness != (display
-                ? MediaVideoStartupReadiness::DecodedPresentationSpan : MediaVideoStartupReadiness::IntervalCoverage) ||
-            source.videoIdentity.empty() ||
-            source.initialGeneration != plan.initialGeneration ||
-            source.domainRole != MediaAvSyncDomainRole::SourceContribution)
-            return fail("Aggregate source normalization, identity or clock contract differs");
-        if (hasAudio && (source.audioIdentity->empty() ||
-            source.audioOutput->sampleRate() != plan.audio.sampleRate() ||
-            source.audioOutput->sampleFormat() != plan.audio.sampleFormat() ||
-            source.audioOutput->channelLayout() != plan.audio.channelLayout()))
-            return fail("Aggregate source audio normalization differs from its output contract");
-        // Display points use the admitted count bound. It does not promise a
-        // buffered time horizon; one slot retains the current frame, another
-        // allows the next point or EOF to make progress.
-        auto candidateCapacity = videoCandidateCapacity(source.frameQueueCapacity, display, source.frameRate, lead);
-        if (!candidateCapacity) return Result::failure(candidateCapacity.error());
-        const auto candidates = candidateCapacity.value();
-        plan.sources.push_back({source.groupKey, "source_video_" + std::to_string(i), candidates,
-            i == audioSource || !hasAudio ? std::nullopt : std::optional<std::string>("source_audio_" + std::to_string(i)),
-            std::string(source.videoIdentity),
-            hasAudio ? std::optional<std::string>(std::string(*source.audioIdentity)) : std::nullopt,
-            display ? MediaVideoFrameLineageProduct::SourceDisplayPoint : MediaVideoFrameLineageProduct::CanonicalInterval});
-        Size lineage;
-        const auto lineageSize = plan.sources.back().videoProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint
-            ? sizeof(MediaVideoDecodeBuffer) + sizeof(MediaVideoDisplayLineage) + sizeof(MediaVideoDecodeLineage)
-            : sizeof(MediaCanonicalVideoFrameBuffer) + sizeof(MediaCanonicalLineage);
-        if (!lineage.add(lineageSize) ||
-            !lineage.add(source.videoIdentity.size()) ||
-            !retained.add(candidates, lineage.value) ||
-            !fixed.add(candidates, sizeof(MediaBufferRef)) || !objects.add(candidates) ||
-            !videoPending.add(source.videoIdentity.size()))
-            return fail("Aggregate source video retention overflow");
-    }
-    const auto audioIdentityBytes = selected.audioIdentity->size();
-    Size sourceFragment;
-    if (!sourceFragment.add(sizeof(MediaAudioIntervalFragment) + sizeof(MediaCanonicalLineage)) ||
-        !sourceFragment.add(audioIdentityBytes, 2) ||
-        !retained.add(plan.maximumAudioCandidates, sizeof(MediaBoundCanonicalAudioBuffer) + sizeof(MediaCanonicalAudioSamplesBuffer)) ||
-        !retained.add(samples.value, sourceFragment.value))
-        return fail("Aggregate source audio metadata overflow");
-    Size outputFragment, audioPending;
-    // Each positive, contiguous fragment contains at least one sample. Count
-    // shared lineage/identity per fragment conservatively, as the runtime guard.
-    if (!outputFragment.add(sizeof(MediaAudioIntervalFragment) + sizeof(MediaCanonicalLineage)) ||
-        !outputFragment.add(output.groupKey.value().size()) || !outputFragment.add(audioIdentityBytes) ||
-        !audioPending.add(sizeof(MediaBoundCanonicalAudioBuffer) + sizeof(MediaCanonicalAudioSamplesBuffer)) ||
-        !audioPending.add(plan.maximumAudioContributions, outputFragment.value) ||
-        !retained.add(videoPending.value) || !retained.add(audioPending.value))
-        return fail("Aggregate pending audio metadata overflow");
-    Size total;
-    if (!total.add(fixed.value) || !total.add(retained.value))
-        return fail("Aggregate metadata total overflow");
-    plan.storage = {fixed.value, retained.value, objects.value};
-    plan.maximumMetadataBytes = total.value;
-    if (auto status = MediaAvContinuousAggregatePlanValidator::validate(plan); !status)
+    plan.sources.reserve(sources.size());
+    if (auto status = compileAggregate<false>(sources, plan); !status)
         return Result::failure(status.error());
     return Result::success(std::move(plan));
+}
+::media::Status MediaAvContinuousAggregatePlanner::rebindCapacity(
+    std::span<const MediaAvAggregateSourceFacts> sources, MediaAvContinuousAggregateTopology& plan)
+{
+    if (auto status = MediaAvContinuousAggregatePlanValidator::validate(plan); !status) return status;
+    return compileAggregate<true>(sources, plan);
 }
 } // namespace media::ffmpeg::graph
