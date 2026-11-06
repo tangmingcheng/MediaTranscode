@@ -240,18 +240,6 @@ try {
         ::media::ErrorInfo::allocationFailed("composition source planning catalogs"));
 }
 
-::media::Result<MediaCompositionSourcePlanningProducts>
-MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest request,
-    std::shared_ptr<MediaPreparationMemoryResource> resource)
-try {
-    auto fixed = prepareFixed(std::move(static_cast<MediaCompositionSourceFixedRequest&>(request)), std::move(resource));
-    if (!fixed) return ::media::Result<MediaCompositionSourcePlanningProducts>::failure(fixed.error());
-    return bind(std::move(fixed).value(), request.capacity);
-} catch (const std::bad_alloc&) {
-    return ::media::Result<MediaCompositionSourcePlanningProducts>::failure(
-        ::media::ErrorInfo::allocationFailed("composition source planning catalogs"));
-}
-
 ::media::Status MediaCompositionSourcePlanningKernel::rebindCapacity(
     const MediaCompositionSourceFixedRequest& prepared,
     const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,

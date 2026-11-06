@@ -291,6 +291,17 @@ MediaRtpSourcePreflight::installContinuousSession(
     }, *m_probe);
 }
 
+::media::Result<MediaContinuousRtpIngressView> MediaRtpSourcePreflight::continuousIngress() const
+{
+    using Result = ::media::Result<MediaContinuousRtpIngressView>;
+    if (auto status = validateContinuousPreparation(m_continuousSource); !status)
+        return Result::failure(status.error());
+    if (!m_videoCandidate || m_audioCandidate.has_value() != m_continuousSource->plan().audio.has_value())
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "Continuous source requires its installed ingress candidates"));
+    return Result::success({m_videoCandidate->plan, m_audioCandidate ? &m_audioCandidate->plan : nullptr});
+}
+
 ::media::Result<MediaPreparedRtpSource> MediaRtpSourcePreflight::seal() &&
 {
     using Result = ::media::Result<MediaPreparedRtpSource>;

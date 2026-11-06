@@ -31,6 +31,12 @@ struct MediaCapturingRtpSourceView final {
     const MediaPreparedRealtimeInput* audio;
 };
 
+// Borrowed from an installed continuous preflight until it is moved or sealed.
+struct MediaContinuousRtpIngressView final {
+    const MediaRtpIngressPlan& video;
+    const MediaRtpIngressPlan* audio;
+};
+
 struct MediaPreparedRtpSourceInputs final {
     MediaPreparedRealtimeInput video;
     std::optional<MediaPreparedRealtimeInput> audio;
@@ -92,6 +98,7 @@ public:
     ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>> installContinuousSession(
         const MediaRealtimeCompositionSourceFacts& facts,
         const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation);
+    ::media::Result<MediaContinuousRtpIngressView> continuousIngress() const;
     ::media::Status validateContinuousPreparation(
         const std::shared_ptr<MediaPreparedRtpSourceSession>& source) const;
     ::media::Result<MediaPreparedRtpSource> seal() &&;

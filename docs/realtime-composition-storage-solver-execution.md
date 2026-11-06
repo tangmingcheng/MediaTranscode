@@ -422,3 +422,15 @@ Windows Release 会话 26341 终态退出 0（806 任务计划），四项产物
 后续基线审查确认 route 无需依赖完整 runtime：先 describe(members/readiness)，由 startup 数值视图和候选 queues 调用 planSynchronizedSource，取其 metadata/atomicMetadata 进行 route bind，再进入 Runtime 核验同一产品。packet 进展要求 reachableGraphHolders 至少 startupPackets＋acquiringPackets＋1（decoded video startupPackets 为 0，audio 为固定 Na）；decoder/filter retention 与 atomic completion 仍计入完整存储，不能因进展式约去就免计费。frame 由原 SourceFrameOwnershipStoragePlanner 核验。队列下界必须反推实际 topology/atomic-port，不能统一填 1 或解析错误文本扩容；只有已合法候选的明确总费用超预算才允许缩小搜索。
 
 RKMPP SSH 45071 终态 61/61、退出 0，保持 8 核增量 all-target。最终 14 源码双独立审查局部 PASS，15 修改文件 UTF-8/CRLF 与 diff 检查通过；未运行任何 local/realtime 媒体链路，无本轮抓包、截图、临时录制、日志或脚本，原有未跟踪文件保留。预算已进入现有 prepareFixed 生产调用，但 SourcePresentation 的 freeze 前工作区、具体 solver 和原规格实流仍未完成，不能标记合屏验收通过。
+
+## 2026-11-06 固定准备前移到真实 freeze 前调用
+
+Preparer 使用 planningResource 上按源数一次分配的 MediaFixedCapacityStorage 保存全部 FixedProducts，实际在 freeze 前 prepareFixed。数组地址稳定，候选借用尚未生成；原 facts/prepared video/deployment/session owners 在消费完成前不移动。continuousIngress 先验证连续准备 owner/receiver/phase，再借已安装候选 ingress；Kernel 当次复制所需事实，不跨 seal 保存该借用。原 seal 仍重读 ingress 并核验 sameProduct 及 frozen 门禁。
+
+SourcePlanner 删除整个重复 Request，直接接受 FixedProducts、sealedView、emission，所有固定事实只有一个来源。两路 sealed ingress sameProduct 与 audioRetention 同地址检查后调用 Kernel bind，不重复 prepare。最终仍从同一外部 prepared video 显式复制一份，原计划继续供 replay/report 使用，未把历史 video 副本归入本批已收费域。已删除全 src 无调用者的旧 Kernel plan 包装与请求类型。七源码双独立审查均局部 PASS；容量域、sealed owner、retention、producer holders 和 reservation 门禁保留，nullptr 仍拒绝 SourcePresentation。
+
+Windows Release 42441 全量终态退出0（806任务计划），四项产物通过，realtime CLI7225856字节、2026-11-06 16:23:20。实际四路诊断见 [r396](realtime-composition-r396-validation.md) 与 [r397](realtime-composition-r397-validation.md)：默认沙箱r396匹配RTP包为0、30秒probe超时；主机r397同规格收到包、四路解码准备后约4秒自然exit1，停在完整存储准入门禁。按当前控制流，该门禁前固定准备数组已全部构造成功；不能据此声称输出/失源重入或整体预算通过。两轮进程/实际日志已按清单清理，不保留临时测试设施。
+
+七源码同步前后哈希全部核验，RKMPP SSH90320正在原目录以8核增量all-target构建。下一批仍需合法候选基线、聚合/拓扑工作区完整计费、具体solver和sealed独立费用复算；本批不是合屏完成。
+
+RKMPP SSH90320终态14/14、退出0，使用8核增量all-target。七源码双独立局部PASS，两平台构建完成；r396/r397失败记录完整，本轮测试文件残留为0、复用120秒源保留。未推送、合并、部署或修复外部依赖；不创建成功媒体验收提交。

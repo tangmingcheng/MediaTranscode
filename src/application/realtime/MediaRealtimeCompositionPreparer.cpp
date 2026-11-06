@@ -12,6 +12,8 @@
 #include "internal/graph/planner/video/MediaVideoColorContractPlanner.h"
 #include "internal/graph/planner/video/MediaVideoCanvasGeometryPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourceAudioPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoParametersPlanner.h"
@@ -302,6 +304,22 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     if (!canvasCredit) return PreparedResult::failure(canvasCredit.error());
     auto canvasBudget = MediaPreparationStorageBudget::fromReservation(std::move(canvasCredit).value(), MediaStorageReleaseUnobserved{});
     if (!canvasBudget) return PreparedResult::failure(canvasBudget.error());
+    // Exact, budgeted and stable owner addresses for the later locked solver.
+    // All borrowed source/video/deployment owners remain stable through bind.
+    MediaFixedCapacityStorage<MediaCompositionSourceFixedProducts> fixedSources(
+        captures.size(), *planningResource.value());
+    for (std::size_t i = 0; i < captures.size(); ++i) {
+        auto ingress = captures[i].capture.continuousIngress();
+        if (!ingress) return PreparedResult::failure(ingress.error());
+        const auto& session = rtpSources[i]->plan();
+        auto fixed = MediaCompositionSourcePlanningKernel::prepareFixed({
+            facts[i].request, facts[i].raw, facts[i].timing, ingress.value().video, ingress.value().audio,
+            session.audioRetention ? &*session.audioRetention : nullptr,
+            prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
+            deployment.value(), output.value().activationOutputLead, i == selected}, planningResource.value());
+        if (!fixed) return PreparedResult::failure(fixed.error());
+        fixedSources.push_back(std::move(fixed).value());
+    }
     if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, nullptr); !frozen)
         return PreparedResult::failure(frozen.error());
     std::vector<MediaPreparedRtpSource> sealed;
@@ -312,9 +330,8 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
         sealed.push_back(std::move(source).value());
         auto view = sealed.back().resources();
         if (!view) return PreparedResult::failure(view.error());
-        auto plan = MediaRealtimeCompositionSourcePlanner::plan({facts[i].request, facts[i].raw, facts[i].timing,
-            view.value(), prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
-            emission.value(), deployment.value(), output.value().activationOutputLead, i == selected}, planningResource.value());
+        auto plan = MediaRealtimeCompositionSourcePlanner::plan(
+            std::move(fixedSources[i]), view.value(), emission.value());
         if (!plan) return PreparedResult::failure(plan.error());
         sourcePlans.push_back(std::move(plan).value());
     }

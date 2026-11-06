@@ -30,9 +30,6 @@ struct MediaCompositionSourceFixedRequest {
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
 };
-struct MediaCompositionSourcePlanningRequest final : MediaCompositionSourceFixedRequest {
-    MediaAvSyncCapacityFacts capacity;
-};
 // Original request/raw/deployment/retention/video owners must remain stable and
 // outlive preparation, every candidate, and binding. Runtime declarations are owned.
 struct MediaCompositionSourceFixedProducts final {
@@ -89,7 +86,5 @@ public:
         const MediaCompositionSourceFixedRequest& prepared,
         const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
         MediaCompositionSourcePlanningProducts& products);
-    static ::media::Result<MediaCompositionSourcePlanningProducts> plan(MediaCompositionSourcePlanningRequest request,
-        std::shared_ptr<MediaPreparationMemoryResource> resource);
 };
 }
