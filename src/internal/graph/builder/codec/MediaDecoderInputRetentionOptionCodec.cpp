@@ -1,7 +1,6 @@
 #include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/planner/capability/MediaDecoderInputRetentionAdapter.h"
-#include <limits>
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
@@ -9,16 +8,8 @@ namespace media::ffmpeg::graph {
 ::media::Result<MediaNodeOptions> MediaDecoderInputRetentionOptionCodec::encode(const MediaDecoderInputRetention& retention)
 {
     using Result = ::media::Result<MediaNodeOptions>;
+    if (auto valid = retention.validate(); !valid) return Result::failure(valid.error());
     MediaNodeOptions options;
-    const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-    if (retention.threadCount <= 0 || retention.threadType < 0 || retention.authority.empty() ||
-        retention.mainHandoffPackets > maximum ||
-        retention.frameWorkerPackets > maximum - retention.mainHandoffPackets ||
-        retention.serialPrivatePackets > maximum - retention.mainHandoffPackets - retention.frameWorkerPackets ||
-        retention.maximumInternalPackets() == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Decoder options require valid prepared input retention facts"));
-    }
     options.set("decoder.pipeline.input_retention.thread_count", std::to_string(retention.threadCount));
     options.set("decoder.pipeline.input_retention.thread_type", std::to_string(retention.threadType));
     options.set("decoder.pipeline.input_retention.main_handoff_packets", std::to_string(retention.mainHandoffPackets));

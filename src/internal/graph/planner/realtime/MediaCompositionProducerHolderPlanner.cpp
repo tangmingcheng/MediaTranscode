@@ -1,5 +1,4 @@
 #include "internal/graph/planner/realtime/MediaCompositionProducerHolderPlanner.h"
-#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -25,17 +24,16 @@ namespace media::ffmpeg::graph {
         (audioEnvelope && audioEnvelope->streamKind != MediaStreamKind::Audio))
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Source producer holder envelopes differ from their stream roles"));
-    MediaCompositionProducerHolderFacts holders{
-        {*video.decoder.preparedInputRetention,
-         videoEnvelope.asInputPayloadEnvelope().maximumPayloadsPerInputCompletion}, {}, {}};
-    if (audioDecoder) holders.audio.emplace(MediaCompositionStreamHolderFacts{
-        *audioDecoder, audioEnvelope->asInputPayloadEnvelope().maximumPayloadsPerInputCompletion});
-    if (auto valid = MediaDecoderInputRetentionOptionCodec::encode(holders.video.decoder); !valid)
+    if (auto valid = video.decoder.preparedInputRetention->validate(); !valid)
         return Result::failure(valid.error());
-    if (holders.audio) {
-        if (auto valid = MediaDecoderInputRetentionOptionCodec::encode(holders.audio->decoder); !valid)
+    if (audioDecoder) {
+        if (auto valid = audioDecoder->validate(); !valid)
             return Result::failure(valid.error());
     }
+    MediaCompositionProducerHolderFacts holders{
+        {*video.decoder.preparedInputRetention, videoEnvelope.maximumAccessUnitsPerPush}, {}, {}};
+    if (audioDecoder) holders.audio.emplace(MediaCompositionStreamHolderFacts{
+        *audioDecoder, audioEnvelope->maximumAccessUnitsPerPush});
     if (!holders.video.maximumAtomicInputCompletion || (holders.audio && !holders.audio->maximumAtomicInputCompletion))
         return Result::failure(::media::ErrorInfo::invalidArgument("Source producer holders require finite atomic completion bounds"));
     if (video.filterActive) {

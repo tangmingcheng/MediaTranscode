@@ -374,3 +374,15 @@ Kernel 的 FixedRequest 不含 capacity；prepareFixed 复用原 decoder/filter 
 Windows Release 82893 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7218176 字节、2026-11-06 15:16:10。远端 3＋2 源码同步前后 SHA256 核验通过；RKMPP SSH 74435 以 8 核增量 all-target 完成 6/6、退出 0。最终 5 源码双独立复审局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批未运行媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。
 
 预算范围复核：两位独立审查均 PASS。依据 MediaSourcePreparationStoragePlan 的 logical retained payload/public headers 声明及 C API 提案 r182，准备额度不是 RSS/不透明设备总内存；此前把全部日志列为本批前置条件过宽，此处收窄。下一批必须覆盖新增固定 owner/workspace 的 input/audio/group/sync/timing/assembly、嵌套分配、临时/Debug proxy、对象/control block 及最终消费峰值；不要求先重构全进程日志和所有历史元数据。借用既有事实不增加 backing，但不证明原存储已计费；新增复制必须计费。原媒体/输出/画布/目录预算不得减免，完成报告须明确新增域与历史未覆盖域，不能宣称整体分配硬界已经闭合。
+
+## 2026-11-06 固定准备实际分配清单修正与临时构造消除
+
+逐字段复核纠正此前口述计数：每路 input 为 4 直接字符串＋transport.bindAddress＋depacketizer 的 2 字符串＋envelope 的 3 字符串，共 10 项；audio resolvedOutput 为 5 直接字符串＋profile.canonicalName，共 6 项，非 7 项。普通 audio 自身、decoder authority、每成员 protocol/startup/timing/assembly 身份、groupKey 与 producer-holder authority 仍需覆盖。runtime.transition 的 participant vector 及每项 requiredChildren vector<string> 也是固定产品目录，不能漏计。
+
+本批将 decoder retention 原 encode 的完整校验移到模型唯一 validate，encode 和 holder 直接共用。保留 threadCount/threadType/authority、INT64_MAX 分段短路和非零总量检查及原错误文本；holder 不再为校验创建 7 项 options。envelope 已校验且角色匹配后直接取 maximumAccessUnitsPerPush，与原 asInputPayloadEnvelope 映射相同，避免为一个数创建 vector 和 authority 副本。校验先于 holder authority 复制，非法输入可更早返回原错误；正常输出事实不变。
+
+两位独立审查 residence_budget_audit、residence_budget_review_b 对 4 源码均局部 PASS，新 model cpp 已确认命中现有 graph CONFIGURE_DEPENDS。Windows Release 全量会话 90630 正在运行。此批只消除实际准备临时分配，新增固定 owner/workspace 的完整事前预算仍待实现。
+
+后续 STL 几何必须分别证明 fresh-copy、空串 assign、拼接和 vector 增长，不能套同一费用公式。若配置未完成权威审计，应在对应新分配前显式 Unsupported，不得漏计 Debug proxy 或使用估算 fallback；现有 DecoderContract 的已审计 Debug fresh-copy 能力应保留。此处仅记录设计边界，尚未新增配置拒绝门禁，也未宣称 Release 或 Debug 总预算闭合。
+
+临时构造消除批次：Windows Release 90630 全量终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7218688 字节、2026-11-06 15:30:06。4 源码同步前后 SHA256 核验通过，新 model cpp 触发正常重配置；RKMPP SSH 72980 以 8 核增量 all-target 完成 194/194、退出 0，出现 FFmpeg sample_fmts/supported_samplerates/pix_fmts 弃用警告，未修改依赖。双独立源码局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批无媒体链路测试或抓包、截图、录制、临时日志/脚本，原有未跟踪文件保持。

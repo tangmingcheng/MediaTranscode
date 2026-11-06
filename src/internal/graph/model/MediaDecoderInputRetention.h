@@ -1,4 +1,5 @@
 #pragma once
+#include "media_transcode/Result.h"
 
 #include <cstdint>
 #include <string>
@@ -12,6 +13,7 @@ struct MediaDecoderInputRetention final {
     std::uint64_t serialPrivatePackets;
     std::string authority;
     friend bool operator==(const MediaDecoderInputRetention&, const MediaDecoderInputRetention&) = default;
+    ::media::Status validate() const;
 
     std::uint64_t maximumInternalPackets() const noexcept
     {
