@@ -19,9 +19,9 @@ public:
     MediaVideoBranchShape videoDecoderShape;
     MediaVideoBranchShape videoFrameShape;
     std::optional<MediaAudioBranchShape> audioShape;
-    MediaConnectionCatalog<MediaVideoBranchConnection> videoDecoder;
-    MediaConnectionCatalog<MediaVideoBranchConnection> videoFrames;
-    MediaConnectionCatalog<MediaAudioBranchConnection> audio;
+    MediaPlanningCatalog<MediaVideoBranchConnection> videoDecoder;
+    MediaPlanningCatalog<MediaVideoBranchConnection> videoFrames;
+    MediaPlanningCatalog<MediaAudioBranchConnection> audio;
 };
 class MediaCompositionSourceBranchPlanner final {
 public:

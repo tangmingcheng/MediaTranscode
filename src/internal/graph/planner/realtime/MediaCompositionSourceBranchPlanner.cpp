@@ -30,7 +30,7 @@ template<bool Updating> ::media::Status compileBranches(
     if (!canonical) framePolicies.inputFrame = policies.preparedVideoFrame;
     const auto video = [&](const MediaVideoBranchShape& shape,
         const MediaVideoBranchConnectionPolicies& edgePolicies,
-        MediaConnectionCatalog<MediaVideoBranchConnection>& connections) -> ::media::Status {
+        MediaPlanningCatalog<MediaVideoBranchConnection>& connections) -> ::media::Status {
         if constexpr (Updating) {
             return MediaVideoBranchConnectionsPlanner::rebind(shape, edgePolicies, connections);
         } else {

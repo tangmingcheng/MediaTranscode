@@ -55,7 +55,7 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
     if (auto available = validateSessionAvailable(graph, options.sessionKey); !available) {
         return Result::failure(available.error());
     }
-    auto declaration=MediaOutputSegmentPlanner::execution(*options.edgePolicies);
+    auto declaration=MediaOutputSegmentPlanner::execution(*options.edgePolicies, *std::pmr::new_delete_resource());
     if(!declaration)return Result::failure(declaration.error());
     const MediaNodeId source = graph.addNode(
         *declaration.value().kind(MediaOutputSegmentRole::TransportPlan),

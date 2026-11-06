@@ -1,5 +1,5 @@
 #pragma once
-#include "internal/graph/planner/MediaConnectionCatalog.h"
+#include "internal/graph/planner/MediaPlanningCatalog.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "media_transcode/Result.h"
 #include <array>
@@ -39,7 +39,7 @@ public:
         const MediaRealtimeEdgePolicySet& policies, std::span<MediaAudioBranchConnection> connections);
     static MediaAudioBranchShape outputEncoder(bool synchronized) noexcept;
     static MediaAudioBranchShape source(bool normalizePackets, bool synchronized, bool externalCorrection) noexcept;
-    static ::media::Result<MediaConnectionCatalog<MediaAudioBranchConnection>> plan(
+    static ::media::Result<MediaPlanningCatalog<MediaAudioBranchConnection>> plan(
         const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource);
 };
 } // namespace media::ffmpeg::graph

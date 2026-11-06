@@ -142,7 +142,7 @@ struct CommonPlan final {
             "Scheduled MPEG-TS output requires one exact datagram transport"));
     }
     auto declaration=MediaOutputSegmentPlanner::mpegTs(expectAudio,rtpTransport,
-        expectAudio?MediaPayloadKind::CodecContext:MediaPayloadKind::CodecParameters,plan.edgePolicies);
+        expectAudio?MediaPayloadKind::CodecContext:MediaPayloadKind::CodecParameters,plan.edgePolicies, *std::pmr::new_delete_resource());
     if(!declaration)return Result::failure(declaration.error());
     auto addedMux = MediaProjectMpegTsMuxSegmentBuilder::build(
         graph, MediaProjectMpegTsMuxSegmentOptions{

@@ -95,16 +95,16 @@ template<bool Updating> ::media::Status compileConnections(
     return writer.finish();
 }
 } // namespace
-::media::Result<MediaConnectionCatalog<MediaAudioBranchConnection>> MediaAudioBranchConnectionsPlanner::plan(
+::media::Result<MediaPlanningCatalog<MediaAudioBranchConnection>> MediaAudioBranchConnectionsPlanner::plan(
     const MediaAudioBranchShape& shape, const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource)
 try {
-    using Result = ::media::Result<MediaConnectionCatalog<MediaAudioBranchConnection>>;
-    MediaConnectionCatalog<MediaAudioBranchConnection> result(resource);
+    using Result = ::media::Result<MediaPlanningCatalog<MediaAudioBranchConnection>>;
+    MediaPlanningCatalog<MediaAudioBranchConnection> result(resource);
     MediaConnectionPlanWriter<MediaAudioBranchConnection, false> writer(result);
     if (auto status = compileConnections(shape, policies, writer); !status) return Result::failure(status.error());
     return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
-    return ::media::Result<MediaConnectionCatalog<MediaAudioBranchConnection>>::failure(
+    return ::media::Result<MediaPlanningCatalog<MediaAudioBranchConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("audio branch connection plan"));
 }
 ::media::Status MediaAudioBranchConnectionsPlanner::rebind(

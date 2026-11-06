@@ -48,7 +48,7 @@ struct MediaCompositionSourcePlanningProducts final {
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
     std::optional<MediaStartupCoordinatorStoragePlan> startupCoordinatorStorage;
     MediaCompositionSourceBranchPlan branchConnections;
-    MediaConnectionCatalog<MediaSourceInputConnection> inputConnections;
+    MediaPlanningCatalog<MediaSourceInputConnection> inputConnections;
 };
 class MediaCompositionSourcePlanningKernel final {
 public:

@@ -5,14 +5,14 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include "internal/graph/planner/MediaConnectionCatalog.h"
+#include "internal/graph/planner/MediaPlanningCatalog.h"
 
 namespace media::ffmpeg::graph {
 // Connection declarations are identical in both modes. Rebinding preserves
 // their order and identity, changing only the already-planned edge policy.
 // On failure the caller must discard the partially updated candidate.
 template<class Connection, bool Updating> class MediaConnectionPlanWriter final {
-    using Target = std::conditional_t<Updating, std::span<Connection>, MediaConnectionCatalog<Connection>&>;
+    using Target = std::conditional_t<Updating, std::span<Connection>, MediaPlanningCatalog<Connection>&>;
 public:
     explicit MediaConnectionPlanWriter(Target target) : m_target(target) {}
     void reject(::media::ErrorInfo error) { if (!m_error) m_error.emplace(std::move(error)); }

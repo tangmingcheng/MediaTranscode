@@ -134,7 +134,7 @@ MediaScheduledRtpOutputSegmentBuilder::build(
     }
     const auto& output =
         std::get<MediaSeparateRtpOutputRuntimePlan>(plan.protocolOutput);
-    auto declaration=MediaOutputSegmentPlanner::rtp(true,MediaPayloadKind::CodecContext,plan.edgePolicies);
+    auto declaration=MediaOutputSegmentPlanner::rtp(true,MediaPayloadKind::CodecContext,plan.edgePolicies, *std::pmr::new_delete_resource());
     if(!declaration)return SegmentResult::failure(declaration.error());
     MediaNodeId video = graph.addNode(
         *declaration.value().kind(MediaOutputSegmentRole::VideoMaterializer),
@@ -241,7 +241,7 @@ MediaScheduledRtpOutputSegmentBuilder::buildVideoOnly(
             graph, plan.sessionKey); !available) {
         return Result::failure(available.error());
     }
-    auto declaration=MediaOutputSegmentPlanner::rtp(false,MediaPayloadKind::CodecParameters,plan.edgePolicies);
+    auto declaration=MediaOutputSegmentPlanner::rtp(false,MediaPayloadKind::CodecParameters,plan.edgePolicies, *std::pmr::new_delete_resource());
     if(!declaration)return Result::failure(declaration.error());
     const MediaNodeId video = graph.addNode(
         *declaration.value().kind(MediaOutputSegmentRole::VideoMaterializer),

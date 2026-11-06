@@ -19,16 +19,17 @@ private:
     const std::shared_ptr<MediaPreparationMemoryResource> m_resource;
 public:
     explicit MediaCompositionOutputTopologyDeclarations(std::shared_ptr<MediaPreparationMemoryResource> resource)
-        : m_resource(std::move(resource)), videoConnections(*m_resource), audioConnections(*m_resource) {}
+        : m_resource(std::move(resource)), videoConnections(*m_resource), audioConnections(*m_resource),
+          scheduler(*m_resource), protocol(*m_resource), execution(*m_resource) {}
     MediaCompositionOutputTopologyDeclarations(const MediaCompositionOutputTopologyDeclarations&) = delete;
     MediaCompositionOutputTopologyDeclarations& operator=(const MediaCompositionOutputTopologyDeclarations&) = delete;
     MediaCompositionOutputTopologyDeclarations(MediaCompositionOutputTopologyDeclarations&&) = default;
     MediaCompositionOutputTopologyDeclarations& operator=(MediaCompositionOutputTopologyDeclarations&&) = delete;
     MediaRealtimeEdgePolicySet policies;
     MediaVideoBranchShape videoShape;
-    MediaConnectionCatalog<MediaVideoBranchConnection> videoConnections;
+    MediaPlanningCatalog<MediaVideoBranchConnection> videoConnections;
     MediaAudioBranchShape audioShape;
-    MediaConnectionCatalog<MediaAudioBranchConnection> audioConnections;
+    MediaPlanningCatalog<MediaAudioBranchConnection> audioConnections;
     MediaOutputSegmentDeclaration scheduler;
     MediaOutputSegmentDeclaration protocol;
     MediaOutputSegmentDeclaration execution;

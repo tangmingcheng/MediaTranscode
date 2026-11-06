@@ -88,18 +88,18 @@ template<bool Updating> ::media::Status compileConnections(
     return writer.finish();
 }
 } // namespace
-::media::Result<MediaConnectionCatalog<MediaSourceInputConnection>> MediaSourceInputConnectionsPlanner::plan(
+::media::Result<MediaPlanningCatalog<MediaSourceInputConnection>> MediaSourceInputConnectionsPlanner::plan(
     MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
     MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource)
 try {
-    using Result = ::media::Result<MediaConnectionCatalog<MediaSourceInputConnection>>;
-    MediaConnectionCatalog<MediaSourceInputConnection> result(resource);
+    using Result = ::media::Result<MediaPlanningCatalog<MediaSourceInputConnection>>;
+    MediaPlanningCatalog<MediaSourceInputConnection> result(resource);
     MediaConnectionPlanWriter<MediaSourceInputConnection, false> writer(result);
     if (auto status = compileConnections(members, readiness, clock, policies, writer); !status)
         return Result::failure(status.error());
     return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
-    return ::media::Result<MediaConnectionCatalog<MediaSourceInputConnection>>::failure(
+    return ::media::Result<MediaPlanningCatalog<MediaSourceInputConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("source input connection plan"));
 }
 ::media::Status MediaSourceInputConnectionsPlanner::rebind(

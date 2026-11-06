@@ -21,25 +21,31 @@ MediaNodeKind MediaOutputSegmentPlanner::nodeKind(R role) noexcept {
     default:return MediaNodeKind::Unknown;
     }
 }
-Result MediaOutputSegmentPlanner::scheduler(const MediaRealtimeEdgePolicySet& p,const MediaEdgePolicy& audio)
+Result MediaOutputSegmentPlanner::scheduler(const MediaRealtimeEdgePolicySet& p,const MediaEdgePolicy& audio,std::pmr::memory_resource& resource)
 try {
-    return Result::success({{{R::Scheduler,nodeKind(R::Scheduler)},{R::Router,nodeKind(R::Router)}}, {
+    MediaOutputSegmentDeclaration d(resource);
+    d.nodes.assign({{R::Scheduler,nodeKind(R::Scheduler)},{R::Router,nodeKind(R::Router)}});
+    d.connections.assign({
         {R::VideoPacket,"",R::Scheduler,"video",S::Video,P::Packet,p.synchronizedPacket,"canonical video -> shared scheduler"},
         {R::AudioPacket,"",R::Scheduler,"audio",S::Audio,P::Packet,audio,"canonical audio -> shared scheduler"},
-        {R::Scheduler,"scheduled",R::Router,"scheduled",S::Any,P::Packet,p.synchronizedPacket,"shared scheduler -> typed router"}}});
+        {R::Scheduler,"scheduled",R::Router,"scheduled",S::Any,P::Packet,p.synchronizedPacket,"shared scheduler -> typed router"}});
+    return Result::success(std::move(d));
 } catch(const std::bad_alloc&) {return Result::failure(::media::ErrorInfo::allocationFailed("scheduler declaration"));}
-Result MediaOutputSegmentPlanner::execution(const MediaRealtimeEdgePolicySet& p)
+Result MediaOutputSegmentPlanner::execution(const MediaRealtimeEdgePolicySet& p,std::pmr::memory_resource& resource)
 try {
-    return Result::success({{{R::TransportPlan,nodeKind(R::TransportPlan)},{R::Sender,nodeKind(R::Sender)}}, {
+    MediaOutputSegmentDeclaration d(resource);
+    d.nodes.assign({{R::TransportPlan,nodeKind(R::TransportPlan)},{R::Sender,nodeKind(R::Sender)}});
+    d.connections.assign({
         {R::Activation,"",R::TransportPlan,"activation",S::Metadata,P::GraphEvent,p.atomicMetadata,"activation -> datagram transport plan"},
-        {R::TransportPlan,"plan",R::Sender,"plan",S::Metadata,P::DatagramTransportPlan,p.atomicMetadata,"transport plan -> common sender"}}});
+        {R::TransportPlan,"plan",R::Sender,"plan",S::Metadata,P::DatagramTransportPlan,p.atomicMetadata,"transport plan -> common sender"}});
+    return Result::success(std::move(d));
 } catch(const std::bad_alloc&) {return Result::failure(::media::ErrorInfo::allocationFailed("datagram execution declaration"));}
-Result MediaOutputSegmentPlanner::rtp(bool audio,P codec,const MediaRealtimeEdgePolicySet& p)
+Result MediaOutputSegmentPlanner::rtp(bool audio,P codec,const MediaRealtimeEdgePolicySet& p,std::pmr::memory_resource& resource)
 try {
     if (codec!=P::CodecContext && codec!=P::CodecParameters)
         return Result::failure(::media::ErrorInfo::invalidArgument("RTP declaration requires codec payload facts"));
-    MediaOutputSegmentDeclaration d;
-    d.nodes={{R::VideoMaterializer,nodeKind(R::VideoMaterializer)},{R::Sdp,nodeKind(R::Sdp)}};
+    MediaOutputSegmentDeclaration d(resource);
+    d.nodes.assign({{R::VideoMaterializer,nodeKind(R::VideoMaterializer)},{R::Sdp,nodeKind(R::Sdp)}});
     if(audio)d.nodes.push_back({R::AudioMaterializer,nodeKind(R::AudioMaterializer)});
     const auto activation=[&](R media) {d.connections.push_back({R::Activation,"",media,"activation",S::Metadata,P::GraphEvent,p.atomicMetadata,"output activation -> scheduled RTP sender"});};
     const auto transport=[&](R media) {d.connections.push_back({R::TransportPlan,"plan",media,"transport_plan",S::Metadata,P::DatagramTransportPlan,p.atomicMetadata,"transport plan -> RTP materializer"});};
@@ -55,14 +61,14 @@ try {
     }
     return Result::success(std::move(d));
 } catch(const std::bad_alloc&) {return Result::failure(::media::ErrorInfo::allocationFailed("RTP output declaration"));}
-Result MediaOutputSegmentPlanner::mpegTs(bool audio,bool rtp,P codec,const MediaRealtimeEdgePolicySet& p)
+Result MediaOutputSegmentPlanner::mpegTs(bool audio,bool rtp,P codec,const MediaRealtimeEdgePolicySet& p,std::pmr::memory_resource& resource)
 try {
     if(codec!=P::CodecContext && codec!=P::CodecParameters)
         return Result::failure(::media::ErrorInfo::invalidArgument("MPEGTS declaration requires codec payload facts"));
-    MediaOutputSegmentDeclaration d;
+    MediaOutputSegmentDeclaration d(resource);
     for(const auto role:{R::TsPlan,R::TsAdapter,R::TsMux,R::TsMaterializer})d.nodes.push_back({role,nodeKind(role)});
     if(rtp)d.nodes.push_back({R::Sdp,MediaNodeKind::MpegTsRtpSdpPublisher});
-    d.connections={
+    d.connections.assign({
         {R::Activation,"",R::TsPlan,"activation",S::Metadata,P::GraphEvent,p.atomicMetadata,"output activation -> MPEG-TS plan"},
         {R::VideoCodec,"",R::TsMux,"codec",S::Video,codec,p.metadata,"video codec -> MPEG-TS mux"},
         {R::SerializedPacket,"",R::TsAdapter,"scheduled",audio?S::Any:S::Video,P::Packet,p.synchronizedPacket,"scheduled media -> MPEG-TS adapter"},
@@ -73,7 +79,7 @@ try {
         {R::TransportPlan,"plan",R::TsPlan,"transport_plan",S::Metadata,P::DatagramTransportPlan,p.atomicMetadata,"transport plan -> MPEG-TS runtime plan"},
         {R::TransportPlan,"plan",R::TsMaterializer,"transport_plan",S::Metadata,P::DatagramTransportPlan,p.atomicMetadata,"transport plan -> MPEG-TS materializer"},
         {R::TsMux,"batch",R::TsMaterializer,"protocol_batch",S::Metadata,P::MpegTsProtocolDatagramBatch,p.synchronizedPacket,"MPEG-TS protocol datagrams -> wire materializer"},
-        {R::TsMaterializer,"wire_batch",R::Sender,"batch",S::Metadata,P::WireDatagramBatch,p.synchronizedPacket,"MPEG-TS wire datagrams -> shared shaper"}};
+        {R::TsMaterializer,"wire_batch",R::Sender,"batch",S::Metadata,P::WireDatagramBatch,p.synchronizedPacket,"MPEG-TS wire datagrams -> shared shaper"}});
     if(audio)d.connections.insert(std::find_if(d.connections.begin(),d.connections.end(),
         [](const auto& edge){return edge.from==R::TsPlan;}),{R::AudioCodec,"",R::TsMux,"codec",S::Audio,codec,p.metadata,"audio codec -> MPEG-TS mux"});
     if(rtp)d.connections.push_back({R::TsPlan,"plan",R::Sdp,"plan",S::Metadata,P::ProjectMpegTsRuntimePlan,p.atomicMetadata,"MPEG-TS RTP plan -> SDP publisher"});

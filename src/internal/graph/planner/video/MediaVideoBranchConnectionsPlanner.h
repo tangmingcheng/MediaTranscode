@@ -1,5 +1,5 @@
 #pragma once
-#include "internal/graph/planner/MediaConnectionCatalog.h"
+#include "internal/graph/planner/MediaPlanningCatalog.h"
 
 #include "internal/graph/core/MediaEdge.h"
 #include "media_transcode/Result.h"
@@ -51,7 +51,7 @@ public:
     static MediaVideoBranchShape outputEncoder() noexcept;
     static MediaVideoBranchShape sourceFrames(bool canonicalCadence, bool filterActive) noexcept;
     static MediaVideoBranchShape sourceDecoder() noexcept;
-    static ::media::Result<MediaConnectionCatalog<MediaVideoBranchConnection>> plan(
+    static ::media::Result<MediaPlanningCatalog<MediaVideoBranchConnection>> plan(
         const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies, std::pmr::memory_resource& resource);
 };
 } // namespace media::ffmpeg::graph

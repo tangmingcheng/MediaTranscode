@@ -198,3 +198,17 @@ branch_budget_review_a 与 branch_budget_review_b 对本轮 22 源码均明确�
 Windows Release 全量 99294 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7133696 字节、2026-11-06 11:55:56。22 源码分五批完成同步前后 SHA256 核验，新头文件核对原先不存在；RKMPP SSH 33999 正进行 8 核增量 all-target，新头文件触发现有 CMake 自动重新配置。无同步临时文件或新媒体测试产物。
 
 RKMPP SSH 33999 已终态退出 0，8 核增量 all-target 完成 54/54。本轮两平台构建通过，未执行 local 或 realtime 媒体测试；没有抓包、截图、日志、临时测试脚本或同步临时文件需清理。原规格实流与既有 Debug 风险仍明确未完成。
+
+## 2026-11-06 固定输出段声明预算接入
+
+scheduler/execution/RTP/MPEG-TS 声明的节点和连接目录统一显式使用 memory_resource。原可失败移动目录更名为 MediaPlanningCatalog，直接用于节点及连接，不保留旧类型/include alias；assign 与 insert 均作用于目标预算容器，initializer_list 只有栈上值和静态视图。节点、边、payload、policy 与声明顺序保持，MPEG-TS 音频边仍插到首个 TsPlan 来源边之前。
+
+合屏输出 owner 构造时同时绑定 scheduler/protocol/execution 三段目录，kernel 传入共享预算资源；原通用 graph-binding 路径显式保留 new_delete_resource 分配域。scheduler builder 的默认构造后赋 bindings 改成一次完整结果初始化，避免无资源默认目录。沿用前述标准 allocator 与既有静态分配协商，不增加媒体算法。
+
+此后固定输出声明目录完成预算接线；reference、packet/lineage/cost 的目录及临时投影、借用固定事实的具体 workspace、容量基线与实际 freeze solver 仍未完成，既有 Debug PMR 移动风险保留。当前无新的实流验收结论。
+
+branch_budget_review_a 与 branch_budget_review_b 对本轮冻结源码均明确局部 PASS；旧标识源码检索为零，git diff --check 通过。Windows Release 全量 82917 正在运行。下一批核验已确认引用投影的 retainingPositions 仍为嵌套普通数组，必须连同外层与临时 contributions 一起迁移，不能只改外层类型。
+
+Windows Release 全量 82917 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7140352 字节、2026-11-06 12:10:12。远端分三批核验 21 个源码路径的前后 SHA256（包括更名旧头删除与新头创建），最终 SSH 4357 正进行 8 核增量 all-target；沿用现有 CMake 自动重新配置，没有新建构建系统。没有同步临时文件或新媒体测试产物。
+
+RKMPP SSH 4357 终态退出 0，8 核增量 all-target 完成 60/60。两平台本轮构建通过，未执行 local 或 realtime 媒体测试。没有抓包、截图、临时媒体、测试脚本或同步临时文件待清理；用户复用源及原有未跟踪文件保持不变。

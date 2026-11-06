@@ -74,19 +74,19 @@ try {
     if(!videoConnections)return Result::failure(videoConnections.error());
     auto audioConnections=MediaAudioBranchConnectionsPlanner::plan(audioShape,policies, *resource);
     if(!audioConnections)return Result::failure(audioConnections.error());
-    auto schedulerDeclaration=MediaOutputSegmentPlanner::scheduler(policies,outputRuntime.canonicalAudioInputPolicy);
+    auto schedulerDeclaration=MediaOutputSegmentPlanner::scheduler(policies,outputRuntime.canonicalAudioInputPolicy, *resource);
     if(!schedulerDeclaration)return Result::failure(schedulerDeclaration.error());
-    auto executionDeclaration=MediaOutputSegmentPlanner::execution(policies);
+    auto executionDeclaration=MediaOutputSegmentPlanner::execution(policies, *resource);
     if(!executionDeclaration)return Result::failure(executionDeclaration.error());
     auto protocolDeclaration=[&]()->::media::Result<MediaOutputSegmentDeclaration>{
         if(outputRuntime.outputAdapter==MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp)
-            return MediaOutputSegmentPlanner::rtp(true,MediaPayloadKind::CodecContext,policies);
+            return MediaOutputSegmentPlanner::rtp(true,MediaPayloadKind::CodecContext,policies, *resource);
         const auto* mpegts=std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(&outputRuntime.protocolOutput);
         if(outputRuntime.outputAdapter!=MediaAvSyncOutputAdapterKind::ProjectMpegTs || !mpegts)
             return ::media::Result<MediaOutputSegmentDeclaration>::failure(::media::ErrorInfo::invalidArgument(
                 "Composition output has no declared protocol topology"));
         return MediaOutputSegmentPlanner::mpegTs(true,std::holds_alternative<MediaMpegTsRtpOutputPlan>(mpegts->transport),
-            MediaPayloadKind::CodecContext,policies);
+            MediaPayloadKind::CodecContext,policies, *resource);
     }();
     if(!protocolDeclaration)return Result::failure(protocolDeclaration.error());
     MediaCompositionTopologyPlanningProducts products(std::move(resource));

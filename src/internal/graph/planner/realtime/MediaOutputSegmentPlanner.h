@@ -3,7 +3,7 @@
 #include "internal/graph/model/MediaNodeKind.h"
 #include "media_transcode/Result.h"
 #include <optional>
-#include <vector>
+#include "internal/graph/planner/MediaPlanningCatalog.h"
 #include <string_view>
 namespace media::ffmpeg::graph {
 enum class MediaOutputSegmentRole : std::size_t {
@@ -23,8 +23,10 @@ struct MediaOutputSegmentConnection final {
     std::string_view label;
 };
 struct MediaOutputSegmentDeclaration final {
-    std::vector<MediaOutputSegmentNode> nodes;
-    std::vector<MediaOutputSegmentConnection> connections;
+    explicit MediaOutputSegmentDeclaration(std::pmr::memory_resource& resource)
+        : nodes(resource), connections(resource) {}
+    MediaPlanningCatalog<MediaOutputSegmentNode> nodes;
+    MediaPlanningCatalog<MediaOutputSegmentConnection> connections;
     std::optional<MediaNodeKind> kind(MediaOutputSegmentRole role) const noexcept {
         for(const auto& node:nodes)if(node.role==role)return node.kind;
         return std::nullopt;
@@ -34,11 +36,11 @@ class MediaOutputSegmentPlanner final {
 public:
     static MediaNodeKind nodeKind(MediaOutputSegmentRole role) noexcept;
     static ::media::Result<MediaOutputSegmentDeclaration> scheduler(const MediaRealtimeEdgePolicySet& policies,
-        const MediaEdgePolicy& audioPolicy);
-    static ::media::Result<MediaOutputSegmentDeclaration> execution(const MediaRealtimeEdgePolicySet& policies);
+        const MediaEdgePolicy& audioPolicy, std::pmr::memory_resource& resource);
+    static ::media::Result<MediaOutputSegmentDeclaration> execution(const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource);
     static ::media::Result<MediaOutputSegmentDeclaration> rtp(bool audio, MediaPayloadKind codecPayload,
-        const MediaRealtimeEdgePolicySet& policies);
+        const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource);
     static ::media::Result<MediaOutputSegmentDeclaration> mpegTs(bool audio, bool rtp,
-        MediaPayloadKind codecPayload, const MediaRealtimeEdgePolicySet& policies);
+        MediaPayloadKind codecPayload, const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource);
 };
 }

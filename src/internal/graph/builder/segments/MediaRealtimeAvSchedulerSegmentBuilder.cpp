@@ -134,7 +134,7 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
             ::media::ErrorInfo::invalidArgument(
                 "A/V scheduler segment rejects duplicate scheduling authority"));
     }
-    auto declaration=MediaOutputSegmentPlanner::scheduler(plan.edgePolicies,plan.canonicalAudioInputPolicy);
+    auto declaration=MediaOutputSegmentPlanner::scheduler(plan.edgePolicies,plan.canonicalAudioInputPolicy, *std::pmr::new_delete_resource());
     if(!declaration)return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(declaration.error());
     MediaNodeId scheduler = graph.addNode(
         *declaration.value().kind(MediaOutputSegmentRole::Scheduler), options.prefix + ".scheduler",
@@ -184,10 +184,8 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
     bindings.endpoint(MediaOutputSegmentRole::Router)={router,""};
     if(auto status=bindings.connect(graph,Owner);!status)
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(status.error());
-    MediaRealtimeAvSchedulerSegmentResult result;
-    result.bindings=std::move(bindings);
-    result.scheduler = scheduler;
-    result.outputMembers = {scheduler, router};
+    MediaRealtimeAvSchedulerSegmentResult result{
+        {}, {}, {}, scheduler, {scheduler, router}, std::move(bindings)};
     if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
         result.serialized = MediaEndpoint{router, "serialized"};
     } else {
