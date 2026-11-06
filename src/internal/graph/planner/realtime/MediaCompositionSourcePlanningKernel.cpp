@@ -150,11 +150,11 @@ try {
     threading.mode = MediaThreadingMode::PerNodeWorker;
     threading.priority = MediaThreadPriority::High;
     threading.collectWorkerMetrics = true;
-    auto runtime = MediaRealtimeAvSourceRuntimePlanner::planFacts({
+    auto runtime = MediaRealtimeAvSourceRuntimePlanner::planFacts({{
         MediaAvSyncGroupKey(request.sourceRequest.mediaId), RealtimeInputType::RtpPort,
         RealtimeInputStreamLayout::SeparateStreams, inputDraft.input, raw.video.streamIndex,
-        raw.video.codecName, queues, threading, request.video.filterActive,
-        request.activationOutputLead, request.selectedAudio, sourceCapacity}, std::move(audio),
+        raw.video.codecName, threading, request.video.filterActive,
+        request.activationOutputLead, request.selectedAudio}, queues, sourceCapacity}, std::move(audio),
         std::move(inputDraft.isolatedAudioInput), std::move(sync).value());
     if (!runtime) return Result::failure(runtime.error());
     if (!inputDraft.input.rtpAccessUnitEnvelope ||

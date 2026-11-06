@@ -432,12 +432,32 @@ template<class Assembly> ::media::Result<AcquiringPlan> capacityForAssembly(
     using Result = ::media::Result<MediaRealtimeAvSourceClockPlan>;
     auto view = planCapacityView(fixed, request, synchronization);
     if (!view) return Result::failure(view.error());
+    return consumeCapacity(std::move(fixed), view.value());
+}
+
+::media::Result<MediaRealtimeAvSourceClockPlan> MediaRealtimeAvSourceClockPlanner::consumeCapacity(
+    MediaRealtimeAvSourceClockFixedPlan&& fixed, const MediaRealtimeAvSyncAssemblyView& capacity)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourceClockPlan>;
+    if (&fixed.assembly.inputClock != &capacity.inputClock ||
+        &fixed.assembly.video.sourceIdentity != &capacity.video.sourceIdentity ||
+        &fixed.assembly.video.timing != &capacity.video.timing ||
+        fixed.assembly.audio.has_value() != capacity.audio.has_value() ||
+        fixed.assembly.generationPolicy != capacity.generationPolicy ||
+        fixed.assembly.initialGeneration != capacity.initialGeneration ||
+        fixed.assembly.evidencePolicy != capacity.evidencePolicy ||
+        !capacity.video.acquiringCapacity || capacity.video.acquiringTimeout <= MediaRunningTime::fromNanoseconds(0) ||
+        (capacity.audio && (&fixed.assembly.audio->sourceIdentity != &capacity.audio->sourceIdentity ||
+            &fixed.assembly.audio->duration != &capacity.audio->duration ||
+            fixed.assembly.audio->decodeOrder != capacity.audio->decodeOrder ||
+            !capacity.audio->acquiringCapacity || capacity.audio->acquiringTimeout != capacity.video.acquiringTimeout)))
+        return Result::failure(::media::ErrorInfo::invalidArgument("Clock capacity requires its original fixed declarations"));
     std::optional<MediaCanonicalAudioAssemblyPlan> audio;
     if (fixed.assembly.audio) audio.emplace(MediaCanonicalAudioAssemblyPlan{
-        std::move(*fixed.assembly.audio), view.value().audio->acquiringCapacity, view.value().audio->acquiringTimeout});
+        std::move(*fixed.assembly.audio), capacity.audio->acquiringCapacity, capacity.audio->acquiringTimeout});
     MediaRealtimeAvSyncAssemblyPlan assembly{
         std::move(static_cast<MediaRealtimeAvSyncAssemblyFixedFields&>(fixed.assembly)),
-        {std::move(fixed.assembly.video), view.value().video.acquiringCapacity, view.value().video.acquiringTimeout}, std::move(audio)};
+        {std::move(fixed.assembly.video), capacity.video.acquiringCapacity, capacity.video.acquiringTimeout}, std::move(audio)};
     return Result::success({std::move(fixed.timing), std::move(assembly)});
 }
 

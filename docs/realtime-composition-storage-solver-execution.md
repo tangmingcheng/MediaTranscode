@@ -350,3 +350,15 @@ Clock 的 planCapacityView 先共同检查真实 timing/固定声明，再由原
 下一 Runtime 迁移使用不拥有字符串的固定事实 view，分别从完整产品和固定 owner 映射同步/启动政策/assembly 的固定基类、audio/isolated input/groupKey、threading/activation/transition 和 inputAudioSampleRate；timing 仍显式传入，不由 sampleRate 重建。State 工厂先取得真实 acquiring，保存纯数值 startup（含 maximumGap）/servo/queues/edges/correction。旧完整产品只允许发布回原 owner 地址，固定 owner 走独立 consume，并在移动前结束候选借用；不得提供调用方可伪造的 owner token 或默认可用状态。此段为已审查下一实施边界，尚未实现。
 
 Windows Release 77536 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7195136 字节、2026-11-06 14:48:05。RKMPP 4＋1 文件同步前后 SHA256 核验通过，SSH 6984 以 8 核增量 all-target 完成 29/29、退出 0。5 源码双独立审查局部 PASS、UTF-8/CRLF 与 diff 检查通过。本批未运行媒体链路或生成抓包、截图、录制、临时日志及脚本；既有未跟踪文件保持，完整目标仍未完成。
+
+## 2026-11-06 源 Runtime 固定事实与容量状态实际分离
+
+原 planFacts 已实际组合 prepareFixed、planCapacity、bindFacts。固定 Request 不含 queues/sourceCapacity；固定产品持有 audio/isolated input/groupKey、SyncFixed、ClockFixed、threading/activation/filter/transition。候选 State 通过同一不拥有字符串的 FixedView 借固定产品或既有完整产品，原 Kernel rebind 已使用此映射。完整同步、输入、queue/route、acquiring 与音频修正政策仍复用原 planner；cadence 的 ledger 域和 SourcePresentation 容量域保持。固定 transition 现在先于候选容量检查生成，多项同时非法时首错误可能改变，不省略原门禁。
+
+Clock bind 与 Runtime bindFacts 复用唯一私有 consumeCapacity，验证原声明的引用、成员、generation/evidence/decodeOrder、正数量与期限后移动；没有第二套 assembly 组装。Runtime 的固定产品仍在现有 seal 后调用路径内，本批没有提前占用未预算的 freeze 工作区。
+
+初轮交叉审查整体 FAIL：新增 State 的公开可写字段允许合法规划后修改 acquiring/queues 再绑定，原身份检查不足以保证已验证候选。修复为私有字段、仅 RuntimePlanner 可更新、move-only 且移动后原对象失效；rebind 先置失效，全部成功才恢复，失败后不能重试或发布；bindFacts 消费右值候选并在移动固定事实前置失效；Clock 消费入口私有且只允许 RuntimePlanner 调用。两位独立审查 residence_budget_audit、residence_budget_review_b 对修正版 8 源码均局部 PASS。
+
+固定 owner 必须在候选使用期存活、不移动、不改写。普通固定产品字符串仍需构造前预算；Kernel 固定准备、Preparer 前置、合法基线、具体 solver 和实流验收仍未完成。Windows Release 全量会话 13622 正在运行；保留 freezeBatch 的 nullptr 失败门禁。
+
+Windows Release 13622 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7214080 字节、2026-11-06 15:03:02。远端 6＋2 源码同步前后 SHA256 核验通过，新头文件触发正常 CMake 重配置；RKMPP SSH 45885 以 8 核增量 all-target 完成 11/11、退出 0。修正版 8 源码双独立复审局部 PASS，保留初轮整体 FAIL；UTF-8/CRLF 与 diff 检查通过。本批未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。完整预算、Kernel/Preparer 固定准备前置、solver 与原规格实流仍未完成。

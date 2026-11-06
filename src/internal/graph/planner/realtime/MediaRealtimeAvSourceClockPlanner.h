@@ -64,6 +64,10 @@ public:
         const MediaRealtimeAvSourceClockRequest& request,
         const MediaAvSyncPlanView& synchronization);
 private:
+    friend class MediaRealtimeAvSourceRuntimePlanner;
+    // Only validated planner paths can consume a capacity view.
+    static ::media::Result<MediaRealtimeAvSourceClockPlan> consumeCapacity(
+        MediaRealtimeAvSourceClockFixedPlan&& fixed, const MediaRealtimeAvSyncAssemblyView& capacity);
     MediaRealtimeAvSourceClockPlanner() = delete;
 };
 

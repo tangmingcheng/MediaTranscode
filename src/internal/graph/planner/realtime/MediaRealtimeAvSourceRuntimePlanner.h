@@ -12,23 +12,39 @@ struct MediaAvSourceCapacityFacts;
 struct MediaRealtimeAvSourceClockRequest;
 struct MediaRealtimeAvSourceTimingFacts;
 
-struct MediaRealtimeAvSourceRuntimeRequest final {
+struct MediaRealtimeAvSourceRuntimeFixedRequest {
     MediaAvSyncGroupKey groupKey;
     RealtimeInputType inputType;
     RealtimeInputStreamLayout inputLayout;
     const MediaRealtimeRtpInputNodePlan& input;
     int videoStreamIndex;
     std::string_view videoCodecName;
-    MediaGraphQueueParameters queues;
     MediaThreadingPolicy threadingPolicy;
     bool videoFilterActive;
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
+};
+struct MediaRealtimeAvSourceRuntimeRequest final : MediaRealtimeAvSourceRuntimeFixedRequest {
+    MediaGraphQueueParameters queues;
     const MediaAvSourceCapacityFacts* sourceCapacity;
 };
 
 class MediaRealtimeAvSourceRuntimePlanner final {
 public:
+    static ::media::Result<MediaRealtimeAvSourceFixedProducts> prepareFixed(
+        const MediaRealtimeAvSourceRuntimeFixedRequest& request, MediaAudioPipelinePlan audio,
+        std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput, MediaAvSyncFixedPlan synchronization);
+    static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
+        const MediaRealtimeAvSourceFixedProducts& fixed, const MediaRealtimeAvSourceClockRequest& request,
+        const MediaAvSyncStartupCapacity& startup, const MediaGraphQueueParameters& queues);
+    static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
+        MediaRealtimeAvSourceFixedProducts&&, const MediaRealtimeAvSourceClockRequest&,
+        const MediaAvSyncStartupCapacity&, const MediaGraphQueueParameters&) = delete;
+    static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
+        const MediaRealtimeAvSourceFixedProducts&&, const MediaRealtimeAvSourceClockRequest&,
+        const MediaAvSyncStartupCapacity&, const MediaGraphQueueParameters&) = delete;
+    static ::media::Result<MediaRealtimeAvSourcePlanningProducts> bindFacts(
+        MediaRealtimeAvSourceFixedProducts&& fixed, MediaRealtimeAvSourceCapacityState&& capacity);
     // Prepared input/timing and all non-capacity source facts remain fixed.
     // The clock request borrows audio/isolated input from state.fixed.
     // Success allocates nothing; failure invalidates the entire candidate.

@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeInputValidator.h"
@@ -82,13 +83,85 @@ struct SourceCapacityPolicies final {
     return Result::success({std::move(edges).value(), std::move(audioCorrection)});
 }
 // Capacity quantities and maximum gap may vary. Identity is retained by the owning plan.
-auto fixedStartupFields(const MediaAvSyncStartupPolicyView& policy)
+template<class Policy> auto fixedStartupFields(const Policy& policy)
 {
     return std::tie(policy.videoReadiness, policy.requireVideoKeyFrame, policy.trimAudioToCommonStart,
         policy.maximumWaitNs, policy.prerollNs, policy.keyFrameWaitNs, policy.maximumAudioTrimNs,
         policy.maximumInitialSkewNs, policy.outputLeadNs, policy.allowDegradedClock);
 }
 } // namespace
+
+::media::Result<MediaRealtimeAvSourceFixedProducts>
+MediaRealtimeAvSourceRuntimePlanner::prepareFixed(
+    const MediaRealtimeAvSourceRuntimeFixedRequest& request, MediaAudioPipelinePlan audio,
+    std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput, MediaAvSyncFixedPlan synchronization)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourceFixedProducts>;
+    const MediaRealtimeAvSourceClockFixedRequest clockRequest{
+        request.inputType, request.inputLayout, request.input, request.videoStreamIndex,
+        request.videoCodecName, audio, isolatedAudioInput ? &*isolatedAudioInput : nullptr};
+    auto clock = MediaRealtimeAvSourceClockPlanner::prepareFixed(clockRequest, synchronization);
+    if (!clock) return Result::failure(clock.error());
+    if (!request.groupKey.valid() || !synchronization.sourceClockMode ||
+        !synchronization.startup.videoReadiness || !synchronization.recovery.reacquisitionTimeoutNs)
+        return Result::failure(::media::ErrorInfo::notInitialized("Fixed source runtime lacks identity or transition facts"));
+    auto transition = MediaAvGenerationTransitionPlanner::planSourceContribution(
+        *synchronization.sourceClockMode, audio.branchMode, request.videoFilterActive,
+        *synchronization.startup.videoReadiness, *synchronization.recovery.reacquisitionTimeoutNs, request.selectedAudio);
+    if (!transition) return Result::failure(transition.error());
+    return Result::success({std::move(audio), std::move(isolatedAudioInput), request.groupKey,
+        std::move(synchronization), std::move(clock).value(), request.threadingPolicy,
+        request.activationOutputLead, request.videoFilterActive, std::move(transition).value()});
+}
+
+::media::Result<MediaRealtimeAvSourceCapacityState>
+MediaRealtimeAvSourceRuntimePlanner::planCapacity(
+    const MediaRealtimeAvSourceFixedProducts& fixed, const MediaRealtimeAvSourceClockRequest& request,
+    const MediaAvSyncStartupCapacity& startup, const MediaGraphQueueParameters& queues)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourceCapacityState>;
+    const auto* isolated = fixed.isolatedAudioInput ? &*fixed.isolatedAudioInput : nullptr;
+    if (&request.audio != &fixed.audioPipeline || request.isolatedAudioInput != isolated)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Source capacity requires its fixed audio owner"));
+    MediaAvSyncPlanView synchronization(fixed.synchronization, startup);
+    if (auto status = validateSource(fixed.groupKey, request.videoStreamIndex, fixed.activationOutputLead,
+            queues, fixed.threadingPolicy, fixed.audioPipeline, isolated, synchronization); !status)
+        return Result::failure(status.error());
+    auto assembly = MediaRealtimeAvSourceClockPlanner::planCapacityView(fixed.clock, request, synchronization);
+    if (!assembly) return Result::failure(assembly.error());
+    if (auto status = MediaRealtimeAvSyncRuntimeInputValidator::validate(
+            request, synchronization, fixed.clock.timing, assembly.value()); !status)
+        return Result::failure(status.error());
+    auto policies = planCapacityPolicies(queues, fixed.audioPipeline, request.sourceCapacity, synchronization);
+    if (!policies) return Result::failure(policies.error());
+    return Result::success(MediaRealtimeAvSourceCapacityState{fixed, startup, synchronization.audioServo,
+        assembly.value(), queues, policies.value().edges, policies.value().correction});
+}
+
+::media::Result<MediaRealtimeAvSourcePlanningProducts>
+MediaRealtimeAvSourceRuntimePlanner::bindFacts(
+    MediaRealtimeAvSourceFixedProducts&& fixed, MediaRealtimeAvSourceCapacityState&& capacity)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourcePlanningProducts>;
+    const auto& candidate = capacity.assembly;
+    if (!capacity.m_valid || !capacity.fixed.belongsTo(fixed) || fixed.clock.assembly.audio.has_value() != candidate.audio.has_value() ||
+        &fixed.clock.assembly.inputClock != &candidate.inputClock ||
+        &fixed.clock.assembly.video.sourceIdentity != &candidate.video.sourceIdentity ||
+        &fixed.clock.assembly.video.timing != &candidate.video.timing ||
+        (candidate.audio && (&fixed.clock.assembly.audio->sourceIdentity != &candidate.audio->sourceIdentity ||
+            &fixed.clock.assembly.audio->duration != &candidate.audio->duration)))
+        return Result::failure(::media::ErrorInfo::invalidArgument("Source capacity binding requires its original fixed owner"));
+    capacity.m_valid = false;
+    fixed.synchronization.audioServo = capacity.audioServo;
+    auto synchronization = MediaAvSyncPlanner::bind(std::move(fixed.synchronization), capacity.startup);
+    if (!synchronization) return Result::failure(synchronization.error());
+    auto clock = MediaRealtimeAvSourceClockPlanner::consumeCapacity(std::move(fixed.clock), candidate);
+    if (!clock) return Result::failure(clock.error());
+    return Result::success({std::move(fixed.audioPipeline), std::move(fixed.isolatedAudioInput), std::move(fixed.groupKey),
+        std::move(synchronization).value(), std::move(clock.value().assembly), capacity.queues, capacity.edgePolicies,
+        fixed.threadingPolicy, fixed.activationOutputLead, fixed.videoFilterActive, std::move(fixed.transition),
+        clock.value().timing.inputAudioSampleRate, capacity.audioCorrection});
+}
 
 ::media::Result<MediaRealtimeAvSourcePlanningProducts>
 MediaRealtimeAvSourceRuntimePlanner::planFacts(
@@ -102,30 +175,19 @@ MediaRealtimeAvSourceRuntimePlanner::planFacts(
             request.queues, request.threadingPolicy, audio,
             isolatedAudioInput ? &*isolatedAudioInput : nullptr, synchronization); !status)
         return Result::failure(status.error());
+    const auto startup = static_cast<const MediaAvSyncStartupCapacity&>(synchronization.startup);
+    MediaAvSyncFixedPlan fixedSynchronization{
+        std::move(static_cast<MediaAvSyncFixedFields&>(synchronization)),
+        std::move(static_cast<MediaAvSyncStartupFixedPolicy&>(synchronization.startup))};
+    auto fixed = prepareFixed(request, std::move(audio), std::move(isolatedAudioInput), std::move(fixedSynchronization));
+    if (!fixed) return Result::failure(fixed.error());
     const MediaRealtimeAvSourceClockRequest clockRequest{{
         request.inputType, request.inputLayout, request.input, request.videoStreamIndex,
-        request.videoCodecName, audio, isolatedAudioInput ? &*isolatedAudioInput : nullptr},
-        request.sourceCapacity};
-    auto sourceClock = MediaRealtimeAvSourceClockPlanner::plan(clockRequest, synchronization);
-    if (!sourceClock) return Result::failure(sourceClock.error());
-    if (auto status = MediaRealtimeAvSyncRuntimeInputValidator::validate(
-            clockRequest, synchronization, sourceClock.value().timing, sourceClock.value().assembly);
-        !status) return Result::failure(status.error());
-    MediaAvSyncPlanView policyView(synchronization);
-    auto capacityPolicies = planCapacityPolicies(request.queues, audio, request.sourceCapacity, policyView);
-    if (!capacityPolicies) return Result::failure(capacityPolicies.error());
-    synchronization.audioServo = policyView.audioServo;
-
-    auto transition = MediaAvGenerationTransitionPlanner::planSourceContribution(
-        *synchronization.sourceClockMode, audio.branchMode, request.videoFilterActive,
-        *synchronization.startup.videoReadiness, *synchronization.recovery.reacquisitionTimeoutNs, request.selectedAudio);
-    if (!transition) return Result::failure(transition.error());
-    return Result::success({
-        std::move(audio), std::move(isolatedAudioInput), request.groupKey,
-        std::move(synchronization), std::move(sourceClock.value().assembly),
-        request.queues, std::move(capacityPolicies.value().edges), request.threadingPolicy,
-        request.activationOutputLead, request.videoFilterActive, std::move(transition).value(),
-        sourceClock.value().timing.inputAudioSampleRate, std::move(capacityPolicies.value().correction)});
+        request.videoCodecName, fixed.value().audioPipeline,
+        fixed.value().isolatedAudioInput ? &*fixed.value().isolatedAudioInput : nullptr}, request.sourceCapacity};
+    auto capacity = planCapacity(fixed.value(), clockRequest, startup, request.queues);
+    if (!capacity) return Result::failure(capacity.error());
+    return bindFacts(std::move(fixed).value(), std::move(capacity).value());
 }
 
 ::media::Status MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
@@ -133,9 +195,12 @@ MediaRealtimeAvSourceRuntimePlanner::planFacts(
     const MediaRealtimeAvSourceTimingFacts& timing, const MediaAvSyncStartupPolicyView& startup,
     MediaRealtimeAvSourceCapacityState& state)
 {
+    if (!state.m_valid)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source capacity candidate is invalid"));
+    state.m_valid = false;
     const auto* capacity = clockRequest.sourceCapacity;
     const auto& fixed = state.fixed;
-    const auto& current = fixed.synchronization.startup;
+    const auto& current = fixed.startup;
     const auto* isolated = fixed.isolatedAudioInput ? &*fixed.isolatedAudioInput : nullptr;
     if (!capacity || &clockRequest.audio != &fixed.audioPipeline || clockRequest.isolatedAudioInput != isolated ||
         fixedStartupFields(startup) != fixedStartupFields(current) ||
@@ -159,6 +224,7 @@ MediaRealtimeAvSourceRuntimePlanner::planFacts(
     state.queues = capacity->queues;
     state.edgePolicies = std::move(policies.value().edges);
     state.audioCorrection = std::move(policies.value().correction);
+    state.m_valid = true;
     return ::media::Status::success();
 }
 
