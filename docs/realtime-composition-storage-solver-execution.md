@@ -316,3 +316,13 @@ SourceClock validator 两入口复用同一模板，保留 demux prepared input 
 本批只拆共同编译阶段，固定 owning 字符串还未受完整租约约束；尚未替换 freezeBatch 的 nullptr，也未完成实际 solver 或原规格媒体链路。
 
 源时钟拆分 Windows Release 72746 首次全量退出 0（803 任务计划），四项产物核验通过，realtime CLI 7189504 字节、2026-11-06 14:12:27。远端两批 3＋4 源码 SHA256 核验同步；RKMPP SSH 67716 完成 124/124，8 核增量 all-target 退出 0。7 源码双独立审查 PASS、UTF-8/CRLF 与 diff 检查通过。本批没有运行媒体链路或生成媒体测试临时产物，完整目标仍未完成。
+
+## 2026-11-06 连续准备 decoder 契约的实际预算
+
+核验发现 SourcePreparer 原先在 reserve 前复制整份 sessionVideoPlan，实际只用于 10 项准备会话一致性检查。现用 application 层不可变 DecoderContract 保留完全相同的字段与 optional presence；创建成功后才发布，后续 probe/filter 失败仍不撤销原承诺。该合同不决定解码器或新增 fallback。
+
+普通元数据按已审计 stringCopy 逐项事前预留：3 个名称、可选 retention authority、3 个可选 HardwareDescriptor 各 4 个字符串，最多 16 项；engaged 空字符串的 Debug proxy 仍计费。构造直接从 const 成员 fresh-copy，无拼接和中间字符串。root 的预算 memory_resource 经 allocate_shared 计对象/control block 与真实分配头，普通字符串租约最先初始化、最后析构；零请求字节不创建租约，资源块自持 owner 至最后 weak owner，构造失败自动回收。
+
+首轮交叉审查整体 FAIL：新 application cpp 未列入 CMake 显式源列表。构建前补齐后，residence_budget_audit 与 residence_budget_review_b 对 5 文件完整复审均局部 PASS。Windows Release 全量 58419 正在运行。该修复只关闭 session 合同副本的预算，原 candidate、raw/request/facts、日志以及后续固定 owner 的其他元数据仍须处理；不能据此宣称准备存储已全面闭合。
+
+Decoder 契约 Windows Release 全量 58419 终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7195136 字节、2026-11-06 14:24:49。5 文件 SHA256 核验同步后，RKMPP SSH 16726 完成 7/7，8 核增量 all-target 退出 0。依用户最新要求，RKMPP 继续采用增量构建。本批未运行媒体验收，未生成抓包、截图、录制、临时日志或临时脚本；原有未跟踪文件保持不动。双独立源码复审局部 PASS 不代表合屏完整验收通过。

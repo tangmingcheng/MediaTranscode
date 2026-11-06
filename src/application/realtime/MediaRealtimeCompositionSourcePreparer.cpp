@@ -161,26 +161,16 @@ MediaRealtimeCompositionSourcePreparer::prepare(
     if (!retention) return Result::failure(::media::ErrorInfo::unsupported(
         "Composition prepared decoder has no authoritative packet retention"));
     candidate.decoder.preparedInputRetention = *retention;
-    if (captured.sessionVideoPlan) {
-        const auto* original = &*captured.sessionVideoPlan;
-        if (original->decoder.ffmpegName != candidate.decoder.ffmpegName ||
-            original->decoder.hwaccelName != candidate.decoder.hwaccelName ||
-            original->decoder.preparedInputRetention != candidate.decoder.preparedInputRetention ||
-            original->decoder.outputFrame != candidate.decoder.outputFrame ||
-            original->decoderLineagePropagation != candidate.decoderLineagePropagation ||
-            original->filterActive != candidate.filterActive ||
-            original->filter.filterName != candidate.filter.filterName ||
-            original->filter.inputFrame != candidate.filter.inputFrame ||
-            original->filter.outputFrame != candidate.filter.outputFrame ||
-            original->transferDirection != candidate.transferDirection)
+    if (captured.decoderContract) {
+        if (!captured.decoderContract->matches(candidate))
             return Result::failure(::media::ErrorInfo::unsupported(
                 "Source candidate differs from the installed continuous admission facts"));
     } else {
-        // Protocol installation is independent of decoder selection. Publish
-        // the first authoritative decoder contract only after its full copy is
-        // ready; a later probe/filter failure never rolls this commitment back.
-        auto sessionVideoPlan = candidate;
-        captured.sessionVideoPlan.emplace(std::move(sessionVideoPlan));
+        // Publish only after every retained fact has been admitted and copied.
+        // Later probe/filter failure preserves this original commitment.
+        auto contract = MediaRealtimeCompositionDecoderContract::create(candidate, storageScope.root);
+        if (!contract) return Result::failure(contract.error());
+        captured.decoderContract = std::move(contract).value();
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::PlannerCapability,
             "composition_decoder_contract_bound source=" + facts.request.mediaId +

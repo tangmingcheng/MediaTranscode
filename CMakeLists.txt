@@ -208,6 +208,7 @@ if(WIN32)
 endif()
 
 add_library(${TARGET_REALTIME_APPLICATION} STATIC
+    src/application/realtime/MediaRealtimeCompositionDecoderContract.cpp
     src/application/realtime/MediaRealtimeCompositionInputPreparer.cpp
     src/application/realtime/MediaRealtimeCompositionPreparationState.cpp
     src/application/realtime/MediaRealtimeCompositionPreparer.cpp

@@ -4,7 +4,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourceFactsPlanner.h"
 
-#include "internal/graph/planner/video/MediaVideoSourcePlan.h"
+#include "application/realtime/MediaRealtimeCompositionDecoderContract.h"
 #include <span>
 #include <stop_token>
 #include <vector>
@@ -21,7 +21,7 @@ struct MediaRealtimeCompositionCapturedSource final {
     MediaRealtimeCompositionSourceFacts facts;
     std::shared_ptr<MediaPreparedRtpSourceSession> session;
     std::shared_ptr<MediaMasterClock> masterClock;
-    std::optional<MediaVideoSourcePlan> sessionVideoPlan;
+    std::shared_ptr<const MediaRealtimeCompositionDecoderContract> decoderContract;
 };
 
 // Bounded parallel preparation workers finish before this transaction returns.
