@@ -19,8 +19,9 @@ struct MediaAvSyncStartupPolicyView final : MediaAvSyncStartupCapacity {
     const std::optional<std::string>& audioIdentity;
     std::optional<bool> allowDegradedClock;
     MediaAvSyncStartupPolicyView(const MediaAvSyncStartupPolicy& policy)
-        : MediaAvSyncStartupCapacity{policy.videoCapacity, policy.audioCapacity, policy.videoByteCapacity,
-            policy.audioByteCapacity, policy.maximumVideoUnitBytes, policy.maximumAudioUnitBytes, policy.maximumGapNs},
+        : MediaAvSyncStartupPolicyView(policy, static_cast<const MediaAvSyncStartupCapacity&>(policy)) {}
+    MediaAvSyncStartupPolicyView(const MediaAvSyncStartupFixedPolicy& policy, const MediaAvSyncStartupCapacity& capacity)
+        : MediaAvSyncStartupCapacity(capacity),
           videoReadiness(policy.videoReadiness), requireVideoKeyFrame(policy.requireVideoKeyFrame),
             trimAudioToCommonStart(policy.trimAudioToCommonStart), maximumWaitNs(policy.maximumWaitNs),
             prerollNs(policy.prerollNs), keyFrameWaitNs(policy.keyFrameWaitNs),
@@ -28,8 +29,8 @@ struct MediaAvSyncStartupPolicyView final : MediaAvSyncStartupCapacity {
             outputLeadNs(policy.outputLeadNs),
             videoIdentity(policy.videoIdentity), audioIdentity(policy.audioIdentity),
             allowDegradedClock(policy.allowDegradedClock) {}
-    MediaAvSyncStartupPolicyView(const MediaAvSyncStartupPolicy& policy, const MediaAvSyncStartupCapacity& capacity)
-        : MediaAvSyncStartupPolicyView(policy) { static_cast<MediaAvSyncStartupCapacity&>(*this) = capacity; }
+    MediaAvSyncStartupPolicyView(MediaAvSyncStartupFixedPolicy&&, const MediaAvSyncStartupCapacity&) = delete;
+    MediaAvSyncStartupPolicyView(const MediaAvSyncStartupFixedPolicy&&, const MediaAvSyncStartupCapacity&) = delete;
     MediaAvSyncStartupPolicyView(MediaAvSyncStartupPolicy&&) = delete;
     MediaAvSyncStartupPolicyView(const MediaAvSyncStartupPolicy&&) = delete;
     MediaAvSyncStartupPolicyView(MediaAvSyncStartupPolicy&&, const MediaAvSyncStartupCapacity&) = delete;
@@ -70,7 +71,9 @@ struct MediaAvSyncPlanView final {
     const MediaAvSyncMetricsPolicy& metrics;
     MediaAvSyncPlanView(const MediaAvSyncPlan& plan)
         : MediaAvSyncPlanView(plan, MediaAvSyncStartupPolicyView(plan.startup), plan.audioServo) {}
-    MediaAvSyncPlanView(const MediaAvSyncPlan& plan, MediaAvSyncStartupPolicyView startupPolicy,
+    MediaAvSyncPlanView(const MediaAvSyncFixedPlan& plan, const MediaAvSyncStartupCapacity& capacity)
+        : MediaAvSyncPlanView(plan, MediaAvSyncStartupPolicyView(plan.startup, capacity), plan.audioServo) {}
+    MediaAvSyncPlanView(const MediaAvSyncFixedFields& plan, MediaAvSyncStartupPolicyView startupPolicy,
         MediaAvSyncAudioServoPolicy servo)
         : members(plan.members), domainRole(plan.domainRole), sourceLifecycle(plan.sourceLifecycle),
             sourceClockMode(plan.sourceClockMode), controlGenerationPolicy(plan.controlGenerationPolicy),
@@ -79,6 +82,10 @@ struct MediaAvSyncPlanView final {
             audioServo(servo), video(plan.video), recovery(plan.recovery), rtpInput(plan.rtpInput),
             mpegTsInput(plan.mpegTsInput), demuxTimestampInput(plan.demuxTimestampInput),
             rtpOutput(plan.rtpOutput), projectMpegTsOutput(plan.projectMpegTsOutput), metrics(plan.metrics) {}
+    MediaAvSyncPlanView(MediaAvSyncFixedPlan&&, const MediaAvSyncStartupCapacity&) = delete;
+    MediaAvSyncPlanView(const MediaAvSyncFixedPlan&&, const MediaAvSyncStartupCapacity&) = delete;
+    MediaAvSyncPlanView(MediaAvSyncFixedFields&&, MediaAvSyncStartupPolicyView, MediaAvSyncAudioServoPolicy) = delete;
+    MediaAvSyncPlanView(const MediaAvSyncFixedFields&&, MediaAvSyncStartupPolicyView, MediaAvSyncAudioServoPolicy) = delete;
     MediaAvSyncPlanView(MediaAvSyncPlan&&) = delete;
     MediaAvSyncPlanView(const MediaAvSyncPlan&&) = delete;
     MediaAvSyncPlanView(MediaAvSyncPlan&&, MediaAvSyncStartupPolicyView, MediaAvSyncAudioServoPolicy) = delete;

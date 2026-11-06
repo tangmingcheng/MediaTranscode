@@ -392,7 +392,32 @@ template<class Synchronization> ::media::Result<MediaRealtimeAvSourceClockFixedP
     return Result::success({std::move(timing), std::move(*assembly)});
 }
 
+template<class Assembly> ::media::Result<AcquiringPlan> capacityForAssembly(
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization,
+    const MediaRealtimeAvSourceTimingFacts& timing, const Assembly& assembly)
+{
+    if (auto status = compileTiming<true>(request, synchronization, timing); !status)
+        return ::media::Result<AcquiringPlan>::failure(status.error());
+    if (auto status = compileDeclaration<true>(request, synchronization, timing, assembly); !status)
+        return ::media::Result<AcquiringPlan>::failure(status.error());
+    return planAcquiring(request, synchronization);
+}
+
 } // namespace
+
+::media::Result<MediaRealtimeAvSyncAssemblyView> MediaRealtimeAvSourceClockPlanner::planCapacityView(
+    const MediaRealtimeAvSourceClockFixedPlan& fixed,
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization)
+{
+    using Result = ::media::Result<MediaRealtimeAvSyncAssemblyView>;
+    auto acquiring = capacityForAssembly(request, synchronization, fixed.timing, fixed.assembly);
+    if (!acquiring) return Result::failure(acquiring.error());
+    std::optional<MediaCanonicalAudioAssemblyView> audio;
+    if (fixed.assembly.audio) audio.emplace(*fixed.assembly.audio,
+        *acquiring.value().audio, acquiring.value().timeout);
+    return Result::success(MediaRealtimeAvSyncAssemblyView{fixed.assembly,
+        MediaVideoInputAssemblyView{fixed.assembly.video, acquiring.value().video, acquiring.value().timeout}, audio});
+}
 
 ::media::Result<MediaRealtimeAvSourceClockFixedPlan> MediaRealtimeAvSourceClockPlanner::prepareFixed(
     const MediaRealtimeAvSourceClockFixedRequest& request, const MediaAvSyncFixedPlan& synchronization)
@@ -405,18 +430,14 @@ template<class Synchronization> ::media::Result<MediaRealtimeAvSourceClockFixedP
     const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization)
 {
     using Result = ::media::Result<MediaRealtimeAvSourceClockPlan>;
-    if (auto status = compileTiming<true>(request, synchronization, std::as_const(fixed.timing)); !status)
-        return Result::failure(status.error());
-    if (auto status = compileDeclaration<true>(request, synchronization, fixed.timing, std::as_const(fixed.assembly)); !status)
-        return Result::failure(status.error());
-    auto acquiring = planAcquiring(request, synchronization);
-    if (!acquiring) return Result::failure(acquiring.error());
+    auto view = planCapacityView(fixed, request, synchronization);
+    if (!view) return Result::failure(view.error());
     std::optional<MediaCanonicalAudioAssemblyPlan> audio;
     if (fixed.assembly.audio) audio.emplace(MediaCanonicalAudioAssemblyPlan{
-        std::move(*fixed.assembly.audio), *acquiring.value().audio, acquiring.value().timeout});
+        std::move(*fixed.assembly.audio), view.value().audio->acquiringCapacity, view.value().audio->acquiringTimeout});
     MediaRealtimeAvSyncAssemblyPlan assembly{
         std::move(static_cast<MediaRealtimeAvSyncAssemblyFixedFields&>(fixed.assembly)),
-        {std::move(fixed.assembly.video), acquiring.value().video, acquiring.value().timeout}, std::move(audio)};
+        {std::move(fixed.assembly.video), view.value().video.acquiringCapacity, view.value().video.acquiringTimeout}, std::move(audio)};
     return Result::success({std::move(fixed.timing), std::move(assembly)});
 }
 
@@ -432,9 +453,7 @@ template<class Synchronization> ::media::Result<MediaRealtimeAvSourceClockFixedP
     const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyView& assembly)
 {
-    if (auto status = compileTiming<true>(request, synchronization, timing); !status) return status;
-    if (auto status = compileDeclaration<true>(request, synchronization, timing, assembly); !status) return status;
-    auto acquiring = planAcquiring(request, synchronization);
+    auto acquiring = capacityForAssembly(request, synchronization, timing, assembly);
     if (!acquiring) return ::media::Status::failure(acquiring.error());
     assembly.video.acquiringCapacity = acquiring.value().video;
     assembly.video.acquiringTimeout = acquiring.value().timeout;

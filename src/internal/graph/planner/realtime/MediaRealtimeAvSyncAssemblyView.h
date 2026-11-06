@@ -10,8 +10,12 @@ struct MediaVideoInputAssemblyView final {
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
     MediaVideoInputAssemblyView(const MediaVideoInputAssemblyPlan& plan)
-        : sourceIdentity(plan.sourceIdentity), timing(plan.timing), acquiringCapacity(plan.acquiringCapacity),
-          acquiringTimeout(plan.acquiringTimeout) {}
+        : MediaVideoInputAssemblyView(plan, plan.acquiringCapacity, plan.acquiringTimeout) {}
+    MediaVideoInputAssemblyView(const MediaVideoInputAssemblyFixedPlan& plan,
+        std::size_t capacity, MediaRunningTime timeout)
+        : sourceIdentity(plan.sourceIdentity), timing(plan.timing), acquiringCapacity(capacity), acquiringTimeout(timeout) {}
+    MediaVideoInputAssemblyView(MediaVideoInputAssemblyFixedPlan&&, std::size_t, MediaRunningTime) = delete;
+    MediaVideoInputAssemblyView(const MediaVideoInputAssemblyFixedPlan&&, std::size_t, MediaRunningTime) = delete;
     MediaVideoInputAssemblyView(MediaVideoInputAssemblyPlan&&) = delete;
     MediaVideoInputAssemblyView(const MediaVideoInputAssemblyPlan&&) = delete;
 };
@@ -22,8 +26,13 @@ struct MediaCanonicalAudioAssemblyView final {
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
     MediaCanonicalAudioAssemblyView(const MediaCanonicalAudioAssemblyPlan& plan)
+        : MediaCanonicalAudioAssemblyView(plan, plan.acquiringCapacity, plan.acquiringTimeout) {}
+    MediaCanonicalAudioAssemblyView(const MediaCanonicalAudioAssemblyFixedPlan& plan,
+        std::size_t capacity, MediaRunningTime timeout)
         : sourceIdentity(plan.sourceIdentity), duration(plan.duration), decodeOrder(plan.decodeOrder),
-          acquiringCapacity(plan.acquiringCapacity), acquiringTimeout(plan.acquiringTimeout) {}
+          acquiringCapacity(capacity), acquiringTimeout(timeout) {}
+    MediaCanonicalAudioAssemblyView(MediaCanonicalAudioAssemblyFixedPlan&&, std::size_t, MediaRunningTime) = delete;
+    MediaCanonicalAudioAssemblyView(const MediaCanonicalAudioAssemblyFixedPlan&&, std::size_t, MediaRunningTime) = delete;
     MediaCanonicalAudioAssemblyView(MediaCanonicalAudioAssemblyPlan&&) = delete;
     MediaCanonicalAudioAssemblyView(const MediaCanonicalAudioAssemblyPlan&&) = delete;
 };
@@ -36,6 +45,10 @@ struct MediaRealtimeAvSyncAssemblyView final {
     MediaClockEvidencePolicy evidencePolicy;
     MediaVideoInputAssemblyView video;
     std::optional<MediaCanonicalAudioAssemblyView> audio;
+    MediaRealtimeAvSyncAssemblyView(const MediaRealtimeAvSyncAssemblyFixedFields& fields,
+        MediaVideoInputAssemblyView videoView, std::optional<MediaCanonicalAudioAssemblyView> audioView)
+        : inputClock(fields.inputClock), generationPolicy(fields.generationPolicy), initialGeneration(fields.initialGeneration),
+          evidencePolicy(fields.evidencePolicy), video(videoView), audio(audioView) {}
     MediaRealtimeAvSyncAssemblyView(const MediaRealtimeAvSyncAssemblyPlan& plan)
         : inputClock(plan.inputClock), generationPolicy(plan.generationPolicy), initialGeneration(plan.initialGeneration),
           evidencePolicy(plan.evidencePolicy), video(plan.video) {
@@ -43,5 +56,9 @@ struct MediaRealtimeAvSyncAssemblyView final {
     }
     MediaRealtimeAvSyncAssemblyView(MediaRealtimeAvSyncAssemblyPlan&&) = delete;
     MediaRealtimeAvSyncAssemblyView(const MediaRealtimeAvSyncAssemblyPlan&&) = delete;
+    MediaRealtimeAvSyncAssemblyView(MediaRealtimeAvSyncAssemblyFixedFields&&,
+        MediaVideoInputAssemblyView, std::optional<MediaCanonicalAudioAssemblyView>) = delete;
+    MediaRealtimeAvSyncAssemblyView(const MediaRealtimeAvSyncAssemblyFixedFields&&,
+        MediaVideoInputAssemblyView, std::optional<MediaCanonicalAudioAssemblyView>) = delete;
 };
 } // namespace media::ffmpeg::graph

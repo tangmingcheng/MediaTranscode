@@ -38,6 +38,15 @@ struct MediaRealtimeAvSourceClockPlan final {
 
 class MediaRealtimeAvSourceClockPlanner final {
 public:
+    // Borrows fixed identities; computes real acquiring quantities before construction.
+    static ::media::Result<MediaRealtimeAvSyncAssemblyView> planCapacityView(
+        const MediaRealtimeAvSourceClockFixedPlan& fixed,
+        const MediaRealtimeAvSourceClockRequest& request,
+        const MediaAvSyncPlanView& synchronization);
+    static ::media::Result<MediaRealtimeAvSyncAssemblyView> planCapacityView(
+        MediaRealtimeAvSourceClockFixedPlan&&, const MediaRealtimeAvSourceClockRequest&, const MediaAvSyncPlanView&) = delete;
+    static ::media::Result<MediaRealtimeAvSyncAssemblyView> planCapacityView(
+        const MediaRealtimeAvSourceClockFixedPlan&&, const MediaRealtimeAvSourceClockRequest&, const MediaAvSyncPlanView&) = delete;
     static ::media::Result<MediaRealtimeAvSourceClockFixedPlan> prepareFixed(
         const MediaRealtimeAvSourceClockFixedRequest& request,
         const MediaAvSyncFixedPlan& synchronization);

@@ -338,3 +338,15 @@ Decoder 契约 Windows Release 全量 58419 终态退出 0（804 任务计划）
 Windows Release 全量会话 8307 正在运行。尚未执行本批媒体链路；freezeBatch 的 nullptr 门禁保持，完整 solver 与实流验收未完成。
 
 本批双独立源码审查 residence_budget_audit、residence_budget_review_b 均局部 PASS。Windows Release 8307 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7193600 字节、2026-11-06 14:38:32。RKMPP SSH 75141 在同步前后核验源码 SHA256，8 核增量 all-target 完成 4/4、退出 0。本批未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。完整 owner 预算、solver 接线及原规格实流仍未完成。
+
+## 2026-11-06 固定同步和时钟声明的真实容量视图
+
+AvSync 的 startup view 可以借固定政策并持有实际容量，plan view 借固定字段；原 bind 在移动 owner 前用这组完整字段运行原 validatePolicy，成功后才构造拥有型产品。未补默认数量或削弱 validator。
+
+Clock 的 planCapacityView 先共同检查真实 timing/固定声明，再由原 planAcquiring 验证成员、route/readiness、startup 数量及 acquisitionWindow，最后构造借用 assembly view。原 bind 实际消费该 view，rebind 复用同一 capacityForAssembly，不复制协议算法、不生成 acquiring=0 占位。optional 音频在共同检查通过后才解引用；固定 owner 的 const/非 const 右值入口均禁止。bind 移动后只读取 view 自持数值，不读已移动身份。
+
+两位独立审查 residence_budget_audit、residence_budget_review_b 对本批 5 源码均局部 PASS。Windows Release 全量会话 77536 正在运行。本批使固定声明可直接组成可校验候选，但 Runtime CapacityState 仍借完整 runtime；尚须迁移共同固定事实视图、Kernel 固定准备及预算，再前置到 freeze。生产 nullptr 门禁仍保留，不能视为完整 solver 或媒体验收通过。
+
+下一 Runtime 迁移使用不拥有字符串的固定事实 view，分别从完整产品和固定 owner 映射同步/启动政策/assembly 的固定基类、audio/isolated input/groupKey、threading/activation/transition 和 inputAudioSampleRate；timing 仍显式传入，不由 sampleRate 重建。State 工厂先取得真实 acquiring，保存纯数值 startup（含 maximumGap）/servo/queues/edges/correction。旧完整产品只允许发布回原 owner 地址，固定 owner 走独立 consume，并在移动前结束候选借用；不得提供调用方可伪造的 owner token 或默认可用状态。此段为已审查下一实施边界，尚未实现。
+
+Windows Release 77536 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7195136 字节、2026-11-06 14:48:05。RKMPP 4＋1 文件同步前后 SHA256 核验通过，SSH 6984 以 8 核增量 all-target 完成 29/29、退出 0。5 源码双独立审查局部 PASS、UTF-8/CRLF 与 diff 检查通过。本批未运行媒体链路或生成抓包、截图、录制、临时日志及脚本；既有未跟踪文件保持，完整目标仍未完成。

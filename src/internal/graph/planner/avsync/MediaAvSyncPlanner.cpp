@@ -341,12 +341,12 @@ void planTsInput(MediaAvSyncFixedPlan& plan,
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::bind(
     MediaAvSyncFixedPlan fixed, const MediaAvSyncStartupCapacity& capacity)
 {
+    if (auto status = MediaAvSyncPlanValidator::validatePolicy(MediaAvSyncPlanView(fixed, capacity)); !status)
+        return ::media::Result<MediaAvSyncPlan>::failure(status.error());
     MediaAvSyncPlan plan;
     static_cast<MediaAvSyncFixedFields&>(plan) = std::move(static_cast<MediaAvSyncFixedFields&>(fixed));
     static_cast<MediaAvSyncStartupFixedPolicy&>(plan.startup) = std::move(fixed.startup);
     static_cast<MediaAvSyncStartupCapacity&>(plan.startup) = capacity;
-    if (auto status = MediaAvSyncPlanValidator::validatePolicy(plan); !status)
-        return ::media::Result<MediaAvSyncPlan>::failure(status.error());
     return ::media::Result<MediaAvSyncPlan>::success(std::move(plan));
 }
 
