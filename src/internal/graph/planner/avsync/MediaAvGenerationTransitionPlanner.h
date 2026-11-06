@@ -10,6 +10,10 @@ namespace media::ffmpeg::graph {
 
 class MediaAvGenerationTransitionPlanner final {
 public:
+    static ::media::Result<std::size_t> sourceContributionStorageBytes(
+        MediaAvSyncSourceClockMode sourceClockMode, MediaBranchMode audioBranchMode,
+        bool videoFilterActive, MediaVideoStartupReadiness videoReadiness, bool selectedAudio);
+
     static ::media::Result<MediaAvGenerationTransitionPlan> planSourceContribution(
         MediaAvSyncSourceClockMode sourceClockMode,
         MediaBranchMode audioBranchMode,

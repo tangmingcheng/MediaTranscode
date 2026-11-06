@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 #include "internal/graph/model/MediaOutputReservationStoragePlan.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
@@ -78,6 +79,8 @@ using MediaAvRuntimeDomainRole = std::variant<
     MediaAvOutputDomainBinding>;
 
 struct MediaAvRuntimeDomainBinding final {
+    // Survives plan and role destruction; composition transfers its fixed lease.
+    std::shared_ptr<const MediaPreparationStorageLease> fixedStorage;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan plan;
     MediaAvRuntimeDomainRole role;

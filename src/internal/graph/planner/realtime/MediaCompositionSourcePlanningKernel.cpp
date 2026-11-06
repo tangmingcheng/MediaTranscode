@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
+#include "internal/graph/planner/realtime/MediaCompositionSourceFixedStoragePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaCompositionProducerHolderPlanner.h"
 #include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
@@ -41,6 +42,8 @@ MediaCompositionSourcePlanningKernel::prepareFixed(MediaCompositionSourceFixedRe
 try {
     using Result = ::media::Result<MediaCompositionSourceFixedProducts>;
     if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument("Source planning requires a preparation resource"));
+    auto fixedStorage = MediaCompositionSourceFixedStoragePlanner::reserve(request, resource);
+    if (!fixedStorage) return Result::failure(fixedStorage.error());
     const auto& raw = request.raw;
     const auto* cadence = std::get_if<MediaObservedVideoCadence>(&request.timing);
     if (cadence && (cadence->rate.num <= 0 || cadence->rate.den <= 0 || cadence->rate != raw.video.frameRate))
@@ -160,7 +163,7 @@ try {
         hasAudio ? &*runtime.value().isolatedAudioInput->rtpAccessUnitEnvelope : nullptr);
     if (!plannedHolders) return Result::failure(plannedHolders.error());
     auto holders = std::move(plannedHolders).value();
-    return Result::success({resource, request.sourceRequest, raw, request.deployment, request.audioRetention,
+    return Result::success({fixedStorage.value(), resource, request.sourceRequest, raw, request.deployment, request.audioRetention,
         request.timing, RealtimeInputType::RtpPort, std::move(inputDraft.input),
         raw.video.streamIndex, request.video, raw.video.frameRate,
         cadence ? std::optional{MediaRational{raw.video.frameRate.den, raw.video.frameRate.num}} : std::nullopt,
@@ -227,7 +230,7 @@ try {
         *runtime.value().synchronization.startup.videoReadiness,
         *runtime.value().synchronization.sourceClockMode, runtime.value().edgePolicies, *resource);
     if (!inputConnections) return Result::failure(inputConnections.error());
-    return Result::success({resource, fixed.inputType, std::move(fixed.input), fixed.videoStreamIndex,
+    return Result::success({fixed.fixedStorage, resource, fixed.inputType, std::move(fixed.input), fixed.videoStreamIndex,
         fixed.video, fixed.frameRate, fixed.maximumFrameDuplicationGap,
         std::move(runtime).value(), std::move(fixed.producerHolders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),

@@ -18,6 +18,7 @@ namespace media::ffmpeg::graph {
 
 // Source preparation owns no encoder, muxer, sender or output FIFO product.
 struct MediaRealtimeCompositionSourcePlan final {
+    std::shared_ptr<const MediaPreparationStorageLease> fixedStorage;
     // Workspace allocation domain, distinct from source media reservations.
     // Declared first so it outlives every catalog; assignment is deliberately disabled.
     const std::shared_ptr<MediaPreparationMemoryResource> planningResource;

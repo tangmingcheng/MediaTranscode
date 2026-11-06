@@ -16,6 +16,74 @@ namespace media::ffmpeg::graph {
 // for these requests; heap implementation overhead is outside this contract.
 class MediaStandardContainerStorageReadback final {
 public:
+    // Fixed composition preparation transfers ordinary-allocator backing by
+    // move. Debug iterator-proxy transfer peaks are not covered by this model.
+    static ::media::Status validatePreparationMoves()
+    {
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L && !_HAS_CXX23 && _ITERATOR_DEBUG_LEVEL == 0
+        return ::media::Status::success();
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        return ::media::Status::success();
+#else
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "Fixed preparation storage requires audited release container moves"));
+#endif
+    }
+
+    // Assignment into a newly default-constructed empty string.
+    static ::media::Result<std::size_t> stringAssignEmpty(std::size_t count)
+    {
+        auto copy = stringCopy(count);
+        if (!copy) return copy;
+#if defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        const std::string empty;
+        if (count <= empty.capacity()) return copy;
+        // _M_mutate -> _M_create(count, old_capacity): geometric growth
+        // differs from fresh _M_construct(count, 0).
+        return total((std::max)(count, empty.capacity() * 2) + 1, 0);
+#else
+        return copy;
+#endif
+    }
+
+    // const string + const char*: MSVC constructs the concatenation once;
+    // libstdc++ copies the left operand then appends, retaining both allocations
+    // during growth. Return the construction peak, not just final capacity.
+    static ::media::Result<std::size_t> stringConcatenation(std::size_t left, std::size_t right)
+    {
+        auto length = MediaCheckedArithmetic::add(left, right, "string concatenation length");
+        if (!length) return ::media::Result<std::size_t>::failure(length.error());
+        if (length.value() > (std::numeric_limits<std::size_t>::max)())
+            return ::media::Result<std::size_t>::failure(::media::ErrorInfo::allocationFailed("String length overflows"));
+        auto result = stringCopy(static_cast<std::size_t>(length.value()));
+        if (!result) return result;
+#if defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && \
+    __cplusplus == 202002L && _GLIBCXX_USE_CXX11_ABI == 1 && !defined(_GLIBCXX_DEBUG)
+        const std::string empty;
+        const auto oldCapacity = (std::max)(left, empty.capacity());
+        auto initial = stringCopy(left);
+        if (!initial || length.value() <= oldCapacity) return initial;
+        const auto doubled = oldCapacity > empty.max_size() - oldCapacity
+            ? empty.max_size() : oldCapacity * 2;
+        return total((std::max)(static_cast<std::size_t>(length.value()), doubled) + 1, initial.value());
+#else
+        return result;
+#endif
+    }
+
+    // Fresh ordinary vector followed by reserve(count), with no live elements.
+    template<class T> static ::media::Result<std::size_t> vectorReserveEmpty(std::size_t count)
+    {
+        static_assert(!std::is_same_v<T, bool>);
+        auto proxy = proxyBytes();
+        if (!proxy) return proxy;
+        auto bytes = MediaCheckedArithmetic::multiply(count, sizeof(T), "fresh vector reservation");
+        if (!bytes) return ::media::Result<std::size_t>::failure(bytes.error());
+        return total(bytes.value(), proxy.value());
+    }
+
     static ::media::Result<std::size_t> string(const std::string& value)
     {
         auto proxy = proxyBytes();

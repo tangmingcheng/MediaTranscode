@@ -36,6 +36,8 @@ struct MediaCompositionSourcePlanningRequest final : MediaCompositionSourceFixed
 // Original request/raw/deployment/retention/video owners must remain stable and
 // outlive preparation, every candidate, and binding. Runtime declarations are owned.
 struct MediaCompositionSourceFixedProducts final {
+    // Shared across moves; declared before every covered owning field.
+    std::shared_ptr<const MediaPreparationStorageLease> fixedStorage;
     const std::shared_ptr<MediaPreparationMemoryResource> planningResource;
     const MediaRealtimeRtpTranscodeRequest& sourceRequest;
     const MediaRealtimeRawInputPlan& raw;
@@ -54,6 +56,8 @@ struct MediaCompositionSourceFixedProducts final {
 // Video remains borrowed from the original stable owner through all candidate
 // use. Other facts and workspace resource are owned; no source media reservation.
 struct MediaCompositionSourcePlanningProducts final {
+    // Shared across moves; declared before every covered owning field.
+    std::shared_ptr<const MediaPreparationStorageLease> fixedStorage;
     // Workspace allocation domain, distinct from source media reservations.
     // Declared first so it outlives every catalog; assignment is deliberately disabled.
     const std::shared_ptr<MediaPreparationMemoryResource> planningResource;

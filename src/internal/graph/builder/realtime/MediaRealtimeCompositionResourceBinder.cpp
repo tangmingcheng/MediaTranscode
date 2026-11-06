@@ -166,13 +166,13 @@ namespace media::ffmpeg::graph {
                     ? MediaLineageAllocationScope{MediaPreparedLineageAllocation{resources.rtpSources[i]->videoReferenceResource()}}
                     : MediaLineageAllocationScope{MediaRuntimeLineageAllocation{}}); !valid)
             return Result::failure(valid.error());
-        domains.push_back({runtime.groupKey, std::move(runtime.synchronization),
+        domains.push_back({options.sources[i].fixedStorage, runtime.groupKey, std::move(runtime.synchronization),
             MediaAvSourceDomainBinding{std::move(runtime.transition), std::move(topology.sources_[i]),
                 nullptr, std::move(runtime.reservationStorage), std::move(resources.videoDecoders[i]), std::move(resources.rtpSources[i])}});
     }
     auto outputMembers = topology.output_.processingMembers;
     auto& output = options.outputRuntime;
-    domains.push_back({output.groupKey, std::move(output.synchronization),
+    domains.push_back({nullptr, output.groupKey, std::move(output.synchronization),
         MediaAvOutputDomainBinding{std::move(topology.output_), std::move(aggregate),
             std::move(resources.videoEncoder), std::move(resources.canvas)}});
     auto outputProduct = std::visit([]<typename Product>(Product&& product) -> MediaAvSyncRuntimeOutputProduct {

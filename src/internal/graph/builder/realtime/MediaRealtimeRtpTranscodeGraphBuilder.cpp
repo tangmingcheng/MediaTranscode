@@ -633,7 +633,7 @@ MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& g
             std::move(runtimePlan->protocolOutput));
         const auto outputGroupKey = runtimePlan->groupKey;
         std::vector<MediaAvRuntimeDomainBinding> domains;
-        domains.push_back(MediaAvRuntimeDomainBinding{
+        domains.push_back(MediaAvRuntimeDomainBinding{nullptr,
             std::move(runtimePlan->groupKey),
             std::move(runtimePlan->synchronization),
             MediaAvSharedSourceOutputDomainBinding{

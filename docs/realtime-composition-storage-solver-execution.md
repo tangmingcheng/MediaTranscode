@@ -406,3 +406,19 @@ Kernel 的 FixedRequest、FixedProducts、PlanningProducts 改为借用 const vi
 后续实施收敛为一个完整批次：新增固定 owner 构造前预算、具体 batch solver、freezeBatch 接线及 seal 后消费同一事实。候选数组使用现有 MediaFixedCapacityStorage，拓扑/residence/cost 目录复用 MediaPlanningCatalog；普通字符串及元素嵌套分配仍需单独计费，不能因外层 PMR 认定已覆盖。锁内只使用 solve 传入的实际 snapshot/partition，不再次获取 session 锁；非法事实与 Unsupported 不能作为预算不足缩小搜索。当前 nullptr 门禁仍保留，合屏实流尚未恢复验收。
 
 Windows Release 全量会话 79248 终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7217152 字节、2026-11-06 15:49:20。3 源码同步前后 SHA256 核验通过；RKMPP SSH 1263 使用 8 核增量 all-target，5/5 完成、退出 0。两位独立源码审查均局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批未运行 local/realtime 媒体链路，未产生抓包、截图、临时录制、日志或脚本；原有未跟踪文件保持。固定 owner 预算、具体 solver 接线与原规格实流验收仍未完成。
+
+## 2026-11-06 固定产品普通分配预算接入生产准备
+
+Kernel prepareFixed 在构造 input/audio/sync/clock/transition/holder 前调用 FixedStoragePlanner::reserve。新增普通 backing 按实际空目标 assign、fresh copy、字符串拼接与确定的 reserve 操作计算；音频输出含 profile 共六字符串，有效 RTP 成员各保留 protocol/startup/timing/assembly 四份身份，group request 与结果两份，holder authority 单独计费。身份后缀与生产 planner 共用定义；transition 成员计数、字符串费用复用同一 visitor。准备过程中保守峰值预约保留到 owner 释放，不宣称是实际 RSS 或逐时刻最小费用。
+
+新几何依据本机 MSVC 145/202604 的 xstring concat/_Calculate_growth 和 vector::_Reallocate→C++20 allocate(count)，以及 RKMPP 实际 /opt/mt-tools/gcc-12.4-native/include/c++/12.4.0 的 _M_create 与 vector::reserve。GCC 空串 assign 可能按旧 SSO capacity 倍增；const string 拼接先复制再 append，费用包含增长时旧、新背板。新增固定准备路径只接受已审计 Release move 几何，Debug 或未知 STL 在拥有型构造前明确 Unsupported；既有 DecoderContract 的 Debug fresh-copy 支持未删改。
+
+租约控制块用预算 resource 的 allocate_shared，真实请求另行计费。共享句柄放在 FixedProducts、PlanningProducts、SourcePlan、最终 RuntimeDomainBinding 的首字段，并由 Binder 显式传递。设计审查曾判 FAIL：仅让 transition 持租约时，domain 的 role 比 sync plan 先析构，会提前退费；最终方案由 domain 自持，最后释放。两位独立审查对冻结的 14 源码均局部 PASS，额外核验 inputDraft 默认构造在审计 Release 没有额外非空字符串或 vector 元素 backing。
+
+范围仅为新增固定产品普通 backing 和构造峰值；历史 video/raw/request、后续独立图复制及未来固定 owner/候选数组仍不得冒充已收费。未来数组须通过预算资源实际构造，纳入 root otherRetainedBytes。本批未提前调用 freeze 前准备，nullptr 门禁仍保留；具体 solver、最终 sealed 复算与原规格实流待完成。Windows Release 全量会话 26341 正在运行，RKMPP 将继续 8 核增量。
+
+Windows Release 会话 26341 终态退出 0（806 任务计划），四项产物核验通过，realtime CLI 7224320 字节、2026-11-06 16:07:31。14 源码分批同步前后 SHA256 核验全部通过；RKMPP SSH 45071 已在原目录启动 8 核增量 all-target，新文件触发正常重配置。本批没有媒体验收或临时测试产物。
+
+后续基线审查确认 route 无需依赖完整 runtime：先 describe(members/readiness)，由 startup 数值视图和候选 queues 调用 planSynchronizedSource，取其 metadata/atomicMetadata 进行 route bind，再进入 Runtime 核验同一产品。packet 进展要求 reachableGraphHolders 至少 startupPackets＋acquiringPackets＋1（decoded video startupPackets 为 0，audio 为固定 Na）；decoder/filter retention 与 atomic completion 仍计入完整存储，不能因进展式约去就免计费。frame 由原 SourceFrameOwnershipStoragePlanner 核验。队列下界必须反推实际 topology/atomic-port，不能统一填 1 或解析错误文本扩容；只有已合法候选的明确总费用超预算才允许缩小搜索。
+
+RKMPP SSH 45071 终态 61/61、退出 0，保持 8 核增量 all-target。最终 14 源码双独立审查局部 PASS，15 修改文件 UTF-8/CRLF 与 diff 检查通过；未运行任何 local/realtime 媒体链路，无本轮抓包、截图、临时录制、日志或脚本，原有未跟踪文件保留。预算已进入现有 prepareFixed 生产调用，但 SourcePresentation 的 freeze 前工作区、具体 solver 和原规格实流仍未完成，不能标记合屏验收通过。

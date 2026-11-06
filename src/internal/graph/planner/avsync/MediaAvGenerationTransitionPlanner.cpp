@@ -2,6 +2,7 @@
 #include "internal/graph/sync/MediaDemuxClockBinderGenerationIdentities.h"
 #include "internal/graph/sync/MediaRtpIngressFrontiers.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
+#include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
 
 #include <utility>
 #include <string_view>
@@ -79,6 +80,38 @@ std::vector<MediaAvGenerationParticipantPlan> processingParticipants(
 }
 
 } // namespace
+
+::media::Result<std::size_t> MediaAvGenerationTransitionPlanner::sourceContributionStorageBytes(
+    MediaAvSyncSourceClockMode clock, MediaBranchMode audio, bool filter,
+    MediaVideoStartupReadiness readiness, bool selectedAudio)
+{
+    using Geometry = MediaStandardContainerStorageReadback;
+    using Result = ::media::Result<std::size_t>;
+    std::size_t bytes = 0;
+    std::optional<::media::ErrorInfo> error;
+    const auto add = [&](Result value) {
+        if (error) return;
+        if (!value) { error = value.error(); return; }
+        if (value.value() > (std::numeric_limits<std::size_t>::max)() - bytes) {
+            error = ::media::ErrorInfo::allocationFailed("Transition storage overflows"); return;
+        }
+        bytes += value.value();
+    };
+    std::size_t children = 0;
+    visitProcessingChildren(clock, audio, filter, readiness,
+        ProcessingDomain::SourceContribution, selectedAudio, [&](std::string_view identity) {
+            ++children;
+            add(Geometry::stringCopy(identity.size()));
+        });
+    const bool correction = audio == MediaBranchMode::TranscodeFrame;
+    add(Geometry::vectorReserveEmpty<MediaAvGenerationParticipantPlan>(1 + static_cast<std::size_t>(correction)));
+    add(Geometry::vectorReserveEmpty<std::string>(children));
+    if (correction) {
+        add(Geometry::vectorReserveEmpty<std::string>(1));
+        add(Geometry::stringCopy(std::string_view{MediaAudioCorrectionGenerationIdentity}.size()));
+    }
+    return error ? Result::failure(*error) : Result::success(bytes);
+}
 
 ::media::Result<MediaAvGenerationTransitionPlan>
 MediaAvGenerationTransitionPlanner::planSourceContribution(

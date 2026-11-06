@@ -165,7 +165,7 @@ try {
     if (!reservation) return Result::failure(reservation.error());
     auto runtime = MediaRealtimeAvSourceRuntimePlanner::bind(std::move(products.runtime), std::move(reservation).value());
     if (!runtime) return Result::failure(runtime.error());
-    return Result::success({products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
+    return Result::success({products.fixedStorage, products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
         std::move(request.video), products.frameRate, products.maximumFrameDuplicationGap,
         std::move(runtime).value(), {std::move(*storage.value().preparation), *request.prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),

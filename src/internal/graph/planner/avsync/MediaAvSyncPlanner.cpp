@@ -1,4 +1,5 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/avsync/MediaRtpInputIdentitySuffix.h"
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
@@ -68,11 +69,11 @@ void planSourceAudioServo(MediaAvSyncFixedFields& plan)
     MediaAvSyncRtpInputPlan input;
     const std::string& groupIdentity = request.mediaId;
 
-    input.videoInput.identity = groupIdentity + ".input.video";
+    input.videoInput.identity = groupIdentity + MediaRtpVideoInputIdentitySuffix;
     input.videoInput.payloadType = *request.input.videoRtp.payloadType;
     input.videoInput.clockRate = *request.input.videoRtp.clockRate;
     if (hasAudio) {
-        input.audioInput.identity = groupIdentity + ".input.audio";
+        input.audioInput.identity = groupIdentity + MediaRtpAudioInputIdentitySuffix;
         input.audioInput.payloadType = *audio.payloadType;
         input.audioInput.clockRate = *audio.clockRate;
     }
