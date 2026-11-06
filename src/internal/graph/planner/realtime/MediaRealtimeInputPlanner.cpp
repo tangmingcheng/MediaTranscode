@@ -18,6 +18,7 @@
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -548,15 +549,15 @@ MediaRealtimeRtpTransportPlan transportPlan(
 
 void fillNodePlan(
     const MediaRealtimeRtpTranscodeRequest& request,
-    std::string url,
-    std::string sdpText,
-    std::optional<MediaRealtimeRtpTransportPlan> transport,
-    std::optional<MediaRtpDepacketizerConfig> depacketizer,
-    std::optional<MediaPreparedRtpAccessUnitEnvelope> accessUnitEnvelope,
+    std::string_view url,
+    std::string_view sdpText,
+    const MediaRealtimeRtpTransportPlan* transport,
+    const MediaRtpDepacketizerConfig* depacketizer,
+    const MediaPreparedRtpAccessUnitEnvelope* accessUnitEnvelope,
     MediaRealtimeRtpInputNodePlan& node)
 {
-    node.url = std::move(url);
-    node.sdpText = std::move(sdpText);
+    node.url.assign(url);
+    node.sdpText.assign(sdpText);
     node.rtspTransport = request.input.rtspTransport;
     node.openTimeoutMs = *request.input.openTimeoutMs;
     node.readTimeoutMs = *request.input.readTimeoutMs;
@@ -564,9 +565,9 @@ void fillNodePlan(
     node.probeSizeBytes = *request.input.probeSizeBytes;
     node.lowLatency = RealtimeInputLowLatencyProduct;
     node.mediaId = request.mediaId;
-    node.rtpTransport = std::move(transport);
-    node.rtpDepacketizer = std::move(depacketizer);
-    node.rtpAccessUnitEnvelope = std::move(accessUnitEnvelope);
+    if (transport) node.rtpTransport.emplace(*transport); else node.rtpTransport.reset();
+    if (depacketizer) node.rtpDepacketizer.emplace(*depacketizer); else node.rtpDepacketizer.reset();
+    if (accessUnitEnvelope) node.rtpAccessUnitEnvelope.emplace(*accessUnitEnvelope); else node.rtpAccessUnitEnvelope.reset();
 }
 
 } // namespace
@@ -753,21 +754,19 @@ void MediaRealtimeInputPlanner::applyNodePlans(
     MediaRealtimeRtpTranscodePlanningDraft& plan)
 {
     fillNodePlan(request,
-                 raw ? raw->videoUrl : request.input.url,
-                 raw ? raw->videoSdp : std::string{},
-                 raw ? std::optional<MediaRealtimeRtpTransportPlan>(raw->videoTransport) : std::nullopt,
-                 raw ? std::optional<MediaRtpDepacketizerConfig>(raw->videoDepacketizer) : std::nullopt,
-                 raw ? std::optional<MediaPreparedRtpAccessUnitEnvelope>(
-                           raw->videoAccessUnitEnvelope)
-                     : std::nullopt,
+                 raw ? std::string_view{raw->videoUrl} : std::string_view{request.input.url},
+                 raw ? std::string_view{raw->videoSdp} : std::string_view{},
+                 raw ? &raw->videoTransport : nullptr,
+                 raw ? &raw->videoDepacketizer : nullptr,
+                 raw ? &raw->videoAccessUnitEnvelope : nullptr,
                  plan.input);
     if (raw && raw->audio) {
-        MediaRealtimeRtpInputNodePlan audioInput;
+        auto& audioInput = plan.isolatedAudioInput.emplace();
         fillNodePlan(request, raw->audioUrl, raw->audioSdp,
-                     raw->audioTransport, raw->audioDepacketizer,
-                     raw->audioAccessUnitEnvelope,
+                     raw->audioTransport ? &*raw->audioTransport : nullptr,
+                     raw->audioDepacketizer ? &*raw->audioDepacketizer : nullptr,
+                     raw->audioAccessUnitEnvelope ? &*raw->audioAccessUnitEnvelope : nullptr,
                      audioInput);
-        plan.isolatedAudioInput = std::move(audioInput);
     }
 }
 

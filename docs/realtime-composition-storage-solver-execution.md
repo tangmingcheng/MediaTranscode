@@ -326,3 +326,15 @@ SourceClock validator 两入口复用同一模板，保留 demux prepared input 
 首轮交叉审查整体 FAIL：新 application cpp 未列入 CMake 显式源列表。构建前补齐后，residence_budget_audit 与 residence_budget_review_b 对 5 文件完整复审均局部 PASS。Windows Release 全量 58419 正在运行。该修复只关闭 session 合同副本的预算，原 candidate、raw/request/facts、日志以及后续固定 owner 的其他元数据仍须处理；不能据此宣称准备存储已全面闭合。
 
 Decoder 契约 Windows Release 全量 58419 终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7195136 字节、2026-11-06 14:24:49。5 文件 SHA256 核验同步后，RKMPP SSH 16726 完成 7/7，8 核增量 all-target 退出 0。依用户最新要求，RKMPP 继续采用增量构建。本批未运行媒体验收，未生成抓包、截图、录制、临时日志或临时脚本；原有未跟踪文件保持不动。双独立源码复审局部 PASS 不代表合屏完整验收通过。
+
+## 2026-11-06 固定源构造路径复核与输入中间副本移除
+
+当前固定 owner 前置不能直接调用旧 Kernel：其 plan 仍要求容量，CapacityState 又借完整 runtime。下一完整接线须由 Kernel prepareFixed 生成 input/audio/sync/clock/运行政策，候选仅更新数值，最终 bind 消费同一 owner；原 plan 必须组合调用这条链路，不能保留第二次拥有型规划。双独立调查确认此边界。
+
+实际分配还有 input 嵌套协议字符串、audio resolvedOutput 的 7 字符串与 decoder 的 3 字符串及可选 authority、RTP identity 拼接、startup/timing/assembly 身份副本和 groupKey 副本。视频计划不能在现有 SourcePlanner 调用处直接移动：Preparer 后续 prepareReplay 及 decoder/filter 报告仍读取它。稳定借用只避免新副本，不证明原 video/raw/request 已预算；最终移动需调整真实消费顺序或为必要副本先取得租约。
+
+本批只修改共同 InputPlanner 的实际 applyNodePlans：URL/SDP 同步借用 string_view，协议事实借用指针，在目标 optional 直接构造；音频直接构造在 draft 的 optional，消除按值协议参数及局部 audioInput 的中间拥有者。C++ 标准的 [string assign](https://eel.is/c%2B%2Bdraft/string.assign) 与 [optional emplace](https://eel.is/c%2B%2Bdraft/optional.optional) 是此所有权重构的依据；没有改变媒体算法、参数或平台 adapter。所有调用方使用独立输入和新建 draft；异常退出时半成品销毁，不继续使用。string assign 的实际分配仍须核算，不能套 fresh-copy 费用宣称完整预算闭合。
+
+Windows Release 全量会话 8307 正在运行。尚未执行本批媒体链路；freezeBatch 的 nullptr 门禁保持，完整 solver 与实流验收未完成。
+
+本批双独立源码审查 residence_budget_audit、residence_budget_review_b 均局部 PASS。Windows Release 8307 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7193600 字节、2026-11-06 14:38:32。RKMPP SSH 75141 在同步前后核验源码 SHA256，8 核增量 all-target 完成 4/4、退出 0。本批未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。完整 owner 预算、solver 接线及原规格实流仍未完成。
