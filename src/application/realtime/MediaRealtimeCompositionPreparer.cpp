@@ -294,6 +294,8 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     if (!canvasCredit) return PreparedResult::failure(canvasCredit.error());
     auto canvasBudget = MediaPreparationStorageBudget::fromReservation(std::move(canvasCredit).value(), MediaStorageReleaseUnobserved{});
     if (!canvasBudget) return PreparedResult::failure(canvasBudget.error());
+    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value());
+    if (!planningResource) return PreparedResult::failure(planningResource.error());
     if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, nullptr); !frozen)
         return PreparedResult::failure(frozen.error());
     std::vector<MediaPreparedRtpSource> sealed;
@@ -306,7 +308,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
         if (!view) return PreparedResult::failure(view.error());
         auto plan = MediaRealtimeCompositionSourcePlanner::plan({facts[i].request, facts[i].raw, facts[i].timing,
             view.value(), prepared->sources[i].plan, *audio.value().resolvedOutput,
-            emission.value(), deployment.value(), output.value().activationOutputLead, i == selected});
+            emission.value(), deployment.value(), output.value().activationOutputLead, i == selected}, planningResource.value());
         if (!plan) return PreparedResult::failure(plan.error());
         sourcePlans.push_back(std::move(plan).value());
     }
@@ -324,8 +326,6 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     auto aggregate = MediaAvContinuousAggregatePlanner::plan(aggregateSources, output.value(),
         prepared->geometry.geometry, cadence, selected);
     if (!aggregate) return PreparedResult::failure(aggregate.error());
-    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value());
-    if (!planningResource) return PreparedResult::failure(planningResource.error());
     auto topology = MediaRealtimeCompositionGraphBuilder::buildTopology(request.mediaId,
         {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(aggregate).value()}, planningResource.value());
     if (!topology) return PreparedResult::failure(topology.error());

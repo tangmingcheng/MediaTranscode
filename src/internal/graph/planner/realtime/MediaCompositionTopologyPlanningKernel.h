@@ -15,11 +15,20 @@ struct MediaCompositionTopologySourceFacts final {
 // Fixed output facts are owned by the candidate workspace, never borrowed
 // across a freeze. Their nested storage still requires workspace admission.
 struct MediaCompositionOutputTopologyDeclarations final {
+private:
+    const std::shared_ptr<MediaPreparationMemoryResource> m_resource;
+public:
+    explicit MediaCompositionOutputTopologyDeclarations(std::shared_ptr<MediaPreparationMemoryResource> resource)
+        : m_resource(std::move(resource)), videoConnections(*m_resource), audioConnections(*m_resource) {}
+    MediaCompositionOutputTopologyDeclarations(const MediaCompositionOutputTopologyDeclarations&) = delete;
+    MediaCompositionOutputTopologyDeclarations& operator=(const MediaCompositionOutputTopologyDeclarations&) = delete;
+    MediaCompositionOutputTopologyDeclarations(MediaCompositionOutputTopologyDeclarations&&) = default;
+    MediaCompositionOutputTopologyDeclarations& operator=(MediaCompositionOutputTopologyDeclarations&&) = delete;
     MediaRealtimeEdgePolicySet policies;
     MediaVideoBranchShape videoShape;
-    std::vector<MediaVideoBranchConnection> videoConnections;
+    MediaConnectionCatalog<MediaVideoBranchConnection> videoConnections;
     MediaAudioBranchShape audioShape;
-    std::vector<MediaAudioBranchConnection> audioConnections;
+    MediaConnectionCatalog<MediaAudioBranchConnection> audioConnections;
     MediaOutputSegmentDeclaration scheduler;
     MediaOutputSegmentDeclaration protocol;
     MediaOutputSegmentDeclaration execution;
@@ -30,10 +39,10 @@ private:
     std::shared_ptr<MediaPreparationMemoryResource> m_resource;
 public:
     explicit MediaCompositionTopologyPlanningProducts(std::shared_ptr<MediaPreparationMemoryResource> resource)
-        : m_resource(std::move(resource)), aggregate(m_resource), sources(m_resource.get()), graph(m_resource), sourcePolicies(m_resource.get()) {}
+        : m_resource(std::move(resource)), aggregate(m_resource), sources(m_resource.get()), graph(m_resource), sourcePolicies(m_resource.get()), output(m_resource) {}
     MediaCompositionTopologyPlanningProducts(const MediaCompositionTopologyPlanningProducts&) = delete;
     MediaCompositionTopologyPlanningProducts& operator=(const MediaCompositionTopologyPlanningProducts&) = delete;
-    MediaCompositionTopologyPlanningProducts(MediaCompositionTopologyPlanningProducts&&) noexcept = default;
+    MediaCompositionTopologyPlanningProducts(MediaCompositionTopologyPlanningProducts&&) = default;
     MediaCompositionTopologyPlanningProducts& operator=(MediaCompositionTopologyPlanningProducts&&) = delete;
     MediaCompositionAggregateConnections aggregate;
     std::pmr::vector<MediaCompositionSourceTopology> sources;

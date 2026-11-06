@@ -179,7 +179,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             ::media::ErrorInfo::notInitialized("RTP source connection facts are absent"));
     auto packets = MediaSourceInputConnectionsPlanner::plan(*plan.synchronization.members,
         *plan.synchronization.startup.videoReadiness, MediaAvSyncSourceClockMode::RtpSenderReports,
-        plan.edgePolicies);
+        plan.edgePolicies, *std::pmr::new_delete_resource());
     if (!packets) return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(packets.error());
     for (const auto& connection : packets.value()) {
         if (connection.phase != MediaSourceInputConnectionPhase::ProtocolPackets) continue;

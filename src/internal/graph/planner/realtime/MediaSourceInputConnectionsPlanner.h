@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/planner/MediaConnectionCatalog.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
@@ -45,8 +46,8 @@ public:
         MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
         MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies,
         std::span<MediaSourceInputConnection> connections);
-    static ::media::Result<std::vector<MediaSourceInputConnection>> plan(
+    static ::media::Result<MediaConnectionCatalog<MediaSourceInputConnection>> plan(
         MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
-        MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies);
+        MediaAvSyncSourceClockMode clock, const MediaRealtimeEdgePolicySet& policies, std::pmr::memory_resource& resource);
 };
 } // namespace media::ffmpeg::graph

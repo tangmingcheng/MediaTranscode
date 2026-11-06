@@ -108,16 +108,16 @@ template<bool Updating> ::media::Status compileConnections(
     return writer.finish();
 }
 } // namespace
-::media::Result<std::vector<MediaVideoBranchConnection>> MediaVideoBranchConnectionsPlanner::plan(
-    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies)
+::media::Result<MediaConnectionCatalog<MediaVideoBranchConnection>> MediaVideoBranchConnectionsPlanner::plan(
+    const MediaVideoBranchShape& shape, const MediaVideoBranchConnectionPolicies& policies, std::pmr::memory_resource& resource)
 try {
-    using Result = ::media::Result<std::vector<MediaVideoBranchConnection>>;
-    std::vector<MediaVideoBranchConnection> result;
+    using Result = ::media::Result<MediaConnectionCatalog<MediaVideoBranchConnection>>;
+    MediaConnectionCatalog<MediaVideoBranchConnection> result(resource);
     MediaConnectionPlanWriter<MediaVideoBranchConnection, false> writer(result);
     if (auto status = compileConnections(shape, policies, writer); !status) return Result::failure(status.error());
     return Result::success(std::move(result));
 } catch (const std::bad_alloc&) {
-    return ::media::Result<std::vector<MediaVideoBranchConnection>>::failure(
+    return ::media::Result<MediaConnectionCatalog<MediaVideoBranchConnection>>::failure(
         ::media::ErrorInfo::allocationFailed("video branch connection plan"));
 }
 ::media::Status MediaVideoBranchConnectionsPlanner::rebind(

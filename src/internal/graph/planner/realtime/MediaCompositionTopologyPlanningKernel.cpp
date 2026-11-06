@@ -70,9 +70,9 @@ try {
     const auto audioShape=MediaAudioBranchConnectionsPlanner::outputEncoder(true);
     const auto& policies=outputRuntime.edgePolicies;
     auto videoConnections=MediaVideoBranchConnectionsPlanner::plan(videoShape,{policies.metadata,
-        policies.videoPacket,policies.videoFrame,policies.videoFrame,policies.preparedVideoFrame});
+        policies.videoPacket,policies.videoFrame,policies.videoFrame,policies.preparedVideoFrame}, *resource);
     if(!videoConnections)return Result::failure(videoConnections.error());
-    auto audioConnections=MediaAudioBranchConnectionsPlanner::plan(audioShape,policies);
+    auto audioConnections=MediaAudioBranchConnectionsPlanner::plan(audioShape,policies, *resource);
     if(!audioConnections)return Result::failure(audioConnections.error());
     auto schedulerDeclaration=MediaOutputSegmentPlanner::scheduler(policies,outputRuntime.canonicalAudioInputPolicy);
     if(!schedulerDeclaration)return Result::failure(schedulerDeclaration.error());
@@ -90,9 +90,14 @@ try {
     }();
     if(!protocolDeclaration)return Result::failure(protocolDeclaration.error());
     MediaCompositionTopologyPlanningProducts products(std::move(resource));
-    products.output={policies,videoShape,std::move(videoConnections).value(),
-        audioShape,std::move(audioConnections).value(),std::move(schedulerDeclaration).value(),
-        std::move(protocolDeclaration).value(),std::move(executionDeclaration).value()};
+    products.output.policies = policies;
+    products.output.videoShape = videoShape;
+    products.output.videoConnections = std::move(videoConnections).value();
+    products.output.audioShape = audioShape;
+    products.output.audioConnections = std::move(audioConnections).value();
+    products.output.scheduler = std::move(schedulerDeclaration).value();
+    products.output.protocol = std::move(protocolDeclaration).value();
+    products.output.execution = std::move(executionDeclaration).value();
     if (auto status=compileTopology<false>(sources,aggregate,products); !status)
         return Result::failure(status.error());
     return Result::success(std::move(products));

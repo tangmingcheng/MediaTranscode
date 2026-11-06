@@ -36,9 +36,11 @@ namespace {
 } // namespace
 
 ::media::Result<MediaCompositionSourcePlanningProducts>
-MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest request)
-{
+MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest request,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
+try {
     using Result = ::media::Result<MediaCompositionSourcePlanningProducts>;
+    if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument("Source planning requires a preparation resource"));
     const auto& raw = request.raw;
     const auto* cadence = std::get_if<MediaObservedVideoCadence>(&request.timing);
     if (cadence && (cadence->rate.num <= 0 || cadence->rate.den <= 0 || cadence->rate != raw.video.frameRate))
@@ -176,20 +178,23 @@ MediaCompositionSourcePlanningKernel::plan(MediaCompositionSourcePlanningRequest
         startupCoordinatorStorage = storage.value().coordinator;
     }
     auto branchConnections = MediaCompositionSourceBranchPlanner::plan(
-        request.timing, request.video.filterActive, hasAudio, runtime.value().edgePolicies);
+        request.timing, request.video.filterActive, hasAudio, runtime.value().edgePolicies, resource);
     if (!branchConnections) return Result::failure(branchConnections.error());
     if (!runtime.value().synchronization.sourceClockMode || !runtime.value().synchronization.startup.videoReadiness)
         return Result::failure(::media::ErrorInfo::notInitialized("Source input connections lack clock/readiness facts"));
     auto inputConnections = MediaSourceInputConnectionsPlanner::plan(*members,
         *runtime.value().synchronization.startup.videoReadiness,
-        *runtime.value().synchronization.sourceClockMode, runtime.value().edgePolicies);
+        *runtime.value().synchronization.sourceClockMode, runtime.value().edgePolicies, *resource);
     if (!inputConnections) return Result::failure(inputConnections.error());
-    return Result::success({RealtimeInputType::RtpPort, std::move(inputDraft.input),
+    return Result::success({resource, RealtimeInputType::RtpPort, std::move(inputDraft.input),
         raw.video.streamIndex, std::move(request.video), raw.video.frameRate,
         cadence ? std::optional{MediaRational{raw.video.frameRate.den, raw.video.frameRate.num}} : std::nullopt,
         std::move(runtime).value(), std::move(holders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),
         std::move(branchConnections).value(), std::move(inputConnections).value()});
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaCompositionSourcePlanningProducts>::failure(
+        ::media::ErrorInfo::allocationFailed("composition source planning catalogs"));
 }
 
 ::media::Status MediaCompositionSourcePlanningKernel::rebindCapacity(

@@ -17,9 +17,11 @@
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaRealtimeCompositionSourcePlan>
-MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanningRequest request)
-{
+MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanningRequest request,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
+try {
     using Result = ::media::Result<MediaRealtimeCompositionSourcePlan>;
+    if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument("Composition source requires a planning resource"));
     const auto& raw = request.raw;
     const auto* cadence = std::get_if<MediaObservedVideoCadence>(&request.timing);
     const auto* sealed = request.prepared.continuousAdmission;
@@ -138,7 +140,7 @@ MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanni
     auto planned = MediaCompositionSourcePlanningKernel::plan({request.sourceRequest, raw, request.timing,
         request.prepared.videoIngress, request.prepared.audioIngress, request.prepared.continuousAudioRetention,
         capacity, std::move(request.video), request.outputAudio, request.deployment,
-        request.activationOutputLead, request.selectedAudio});
+        request.activationOutputLead, request.selectedAudio}, resource);
     if (!planned) return Result::failure(planned.error());
     auto products = std::move(planned).value();
     if (!cadence) {
@@ -163,7 +165,7 @@ MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanni
     if (!reservation) return Result::failure(reservation.error());
     auto runtime = MediaRealtimeAvSourceRuntimePlanner::bind(std::move(products.runtime), std::move(reservation).value());
     if (!runtime) return Result::failure(runtime.error());
-    return Result::success({products.inputType, std::move(products.input), products.videoStreamIndex,
+    return Result::success({products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
         std::move(products.video), products.frameRate, products.maximumFrameDuplicationGap,
         std::move(runtime).value(), {std::move(*storage.value().preparation), *request.prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),
@@ -171,6 +173,9 @@ MediaRealtimeCompositionSourcePlanner::plan(MediaRealtimeCompositionSourcePlanni
         std::move(products.branchConnections), std::move(products.inputConnections),
         cadence ? std::nullopt : std::optional<MediaPreparedRtpSourceContainerBounds>{
             {sealed->video.bounds, sealed->audio ? std::optional{sealed->audio->bounds} : std::nullopt}}});
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaRealtimeCompositionSourcePlan>::failure(
+        ::media::ErrorInfo::allocationFailed("composition source planning products"));
 }
 
 } // namespace media::ffmpeg::graph

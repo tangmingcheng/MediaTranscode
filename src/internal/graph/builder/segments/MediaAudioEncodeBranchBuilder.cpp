@@ -266,7 +266,7 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     MediaAudioBranchShape shape{{}, options.source &&
         options.source->correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired};
     for (std::size_t i = 0; i < endpoints.size(); ++i) shape.present[i] = endpoints[i].node.isValid();
-    auto connections = MediaAudioBranchConnectionsPlanner::plan(shape, options.edgePolicies);
+    auto connections = MediaAudioBranchConnectionsPlanner::plan(shape, options.edgePolicies, *std::pmr::new_delete_resource());
     if (!connections) return ::media::Result<MediaAudioBranchBindings>::failure(connections.error());
     MediaAudioBranchBindings bindings{std::move(endpoints)};
     if(auto status=bindings.connect(graph,connections.value(),options.prefix,owner);!status)

@@ -158,7 +158,7 @@ const MediaEdgePolicy& sourceFramePolicy(const MediaVideoBranchConnectionOptions
         ? options.lineageEdgePolicies->preparedFrame
         : options.canonicalLineageCapacity ? policies.preparedVideoFrame : policies.videoFrame;
     auto connections = MediaVideoBranchConnectionsPlanner::plan(shape,
-        {policies.metadata, sourcePacketPolicy, videoFramePolicy, inputFramePolicy, filterOutputPolicy});
+        {policies.metadata, sourcePacketPolicy, videoFramePolicy, inputFramePolicy, filterOutputPolicy}, *std::pmr::new_delete_resource());
     if (!connections) return ::media::Result<MediaVideoBranchBindings>::failure(connections.error());
     MediaVideoBranchBindings bindings{std::move(endpoints)};
     if(auto status=bindings.connect(graph,connections.value(),options.prefix,owner);!status)
@@ -617,7 +617,7 @@ static ::media::Result<MediaEncodedBranchEndpoints> buildVideoSegment(
     bindings.endpoints[static_cast<std::size_t>(MediaVideoBranchRole::Encode)] = {nodes.videoEncode, ""};
     bindings.endpoints[static_cast<std::size_t>(MediaVideoBranchRole::OutputCodec)] = codec;
     auto connections=MediaVideoBranchConnectionsPlanner::plan(declaration,{options.edgePolicies.metadata,
-        options.edgePolicies.videoPacket,options.edgePolicies.videoFrame,options.edgePolicies.videoFrame,options.edgePolicies.preparedVideoFrame});
+        options.edgePolicies.videoPacket,options.edgePolicies.videoFrame,options.edgePolicies.videoFrame,options.edgePolicies.preparedVideoFrame}, *std::pmr::new_delete_resource());
     if(!connections)return Result::failure(connections.error());
     if(auto status=bindings.validateDeclaration(graph,declaration);!status)return Result::failure(status.error());
     if(auto status=bindings.connect(graph,connections.value(),options.prefix,owner);!status)return Result::failure(status.error());

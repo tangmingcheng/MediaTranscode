@@ -22,7 +22,8 @@ struct MediaRealtimeCompositionSourcePlanningRequest final {
 class MediaRealtimeCompositionSourcePlanner final {
 public:
     static ::media::Result<MediaRealtimeCompositionSourcePlan> plan(
-        MediaRealtimeCompositionSourcePlanningRequest request);
+        MediaRealtimeCompositionSourcePlanningRequest request,
+        std::shared_ptr<MediaPreparationMemoryResource> resource);
 };
 
 } // namespace media::ffmpeg::graph

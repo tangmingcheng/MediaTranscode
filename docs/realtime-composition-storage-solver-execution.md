@@ -184,3 +184,17 @@ presentation_plan_review 与 timing_path_review 对本轮 5 源码均明确局�
 Windows Release 全量 61725 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、16:18:07。RKMPP SSH 84140 同步五文件前后 SHA256 核验成功，正在运行 8 核增量 all-target；无同步临时文件或新媒体测试产物。
 
 2026-11-06 恢复执行时，84140 会话句柄已失效，未取得其最终退出码；远端核验无 ninja/cmake/cc1plus 编译进程，realtime CLI 时间为 2026-11-05 16:19:15、12379960 字节。重新运行同目录 8 核增量 all-target，SSH 43668 终态退出 0，Ninja 报 no work to do。该结果验证当前增量构建状态，不补造原会话退出码。无新媒体测试或临时产物。
+
+## 2026-11-06 共用 branch/input 连接目录预算接入
+
+video/audio/input 三个连接规划器统一显式接收 memory_resource，仍复用同一个声明 compiler/writer；合屏分支、输入连接及输出 video/audio 连接直接在根 preparation resource 上构造，没有普通 vector 中转复制。资源在 freeze 前创建，并贯穿 source kernel、最终 source 产品及 topology kernel。源产品首字段 const shared_ptr 与不可复制 branch 成员保管目录寿命并禁止隐式复制/移动赋值；输出目录在构造时绑定资源，按成员接收同资源产品。
+
+连接只含值和静态 string_view。新增 ConnectionCatalog 采用已有 LineageVector 的 allocator-extended 可失败移动方式；核验本机 VS 14.51.36231 的 vector:761–767，普通 noexcept move 在 Debug 仍调用 _Alloc_proxy。新目录移动不声明 noexcept，外层 source/branch/kernel 的对应错误边界保留 allocationFailed。既有 Source/GraphTopology/Aggregate 的普通 PMR 移动仍有同类 Debug 风险，明确列为未完成可靠性项；当前只做用户要求的 Release 验证，不宣称跨配置失败语义已完成。
+
+通用 segment builder 的短期 graph-binding 连接声明显式使用原普通堆分配域；它们不属于候选 workspace，没有引入媒体 fallback。scheduler/protocol/execution 三段输出声明、reference、packet/lineage 及临时投影仍待预算迁移；完整 solver 与实流验收仍未完成。
+
+branch_budget_review_a 与 branch_budget_review_b 对本轮 22 源码均明确局部 PASS；Windows Release 全量 99294 正在运行。受限环境 CIM 查询被拒，继续轮询原构建会话，没有重启构建。同步清单已通过 git cat-file 批量读取基线生成，尚未写入远端。
+
+Windows Release 全量 99294 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7133696 字节、2026-11-06 11:55:56。22 源码分五批完成同步前后 SHA256 核验，新头文件核对原先不存在；RKMPP SSH 33999 正进行 8 核增量 all-target，新头文件触发现有 CMake 自动重新配置。无同步临时文件或新媒体测试产物。
+
+RKMPP SSH 33999 已终态退出 0，8 核增量 all-target 完成 54/54。本轮两平台构建通过，未执行 local 或 realtime 媒体测试；没有抓包、截图、日志、临时测试脚本或同步临时文件需清理。原规格实流与既有 Debug 风险仍明确未完成。

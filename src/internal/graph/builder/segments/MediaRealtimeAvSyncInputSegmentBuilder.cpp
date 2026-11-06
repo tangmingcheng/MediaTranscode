@@ -270,7 +270,7 @@ constexpr std::string_view Owner = "MediaRealtimeAvSyncInputSegmentBuilder";
         return ::media::Result<void>::failure(::media::ErrorInfo::notInitialized(
             "Shared synchronized input requires its planned source clock mode"));
     auto connections = MediaSourceInputConnectionsPlanner::plan(route.shape.members,
-        route.shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies);
+        route.shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies, *std::pmr::new_delete_resource());
     if (!connections) return ::media::Result<void>::failure(connections.error());
     for (const auto& connection : connections.value()) {
         if (connection.phase != MediaSourceInputConnectionPhase::Shared) continue;
@@ -409,7 +409,7 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             graph, decoderOptions, MediaVideoDecodeLineageProduct::SourceAccessUnit);
         if (!decoder) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(decoder.error());
         auto connections = MediaSourceInputConnectionsPlanner::plan(route.value().shape.members,
-            route.value().shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies);
+            route.value().shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies, *std::pmr::new_delete_resource());
         if (!connections) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(connections.error());
         for (const auto& connection : connections.value()) {
             if (connection.phase != MediaSourceInputConnectionPhase::DecodedFrame) continue;

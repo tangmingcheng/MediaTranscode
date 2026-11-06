@@ -30,8 +30,11 @@ struct MediaCompositionSourcePlanningRequest final {
     bool selectedAudio;
 };
 // Request references are borrowed for this synchronous call only. Returned
-// products own their facts and contain no source storage owner or reservation.
+// products own their facts and workspace resource, but no source media reservation.
 struct MediaCompositionSourcePlanningProducts final {
+    // Workspace allocation domain, distinct from source media reservations.
+    // Declared first so it outlives every catalog; assignment is deliberately disabled.
+    const std::shared_ptr<MediaPreparationMemoryResource> planningResource;
     RealtimeInputType inputType;
     MediaRealtimeRtpInputNodePlan input;
     int videoStreamIndex;
@@ -45,7 +48,7 @@ struct MediaCompositionSourcePlanningProducts final {
     std::optional<MediaRtpClockRouteStoragePlan> clockRouteStorage;
     std::optional<MediaStartupCoordinatorStoragePlan> startupCoordinatorStorage;
     MediaCompositionSourceBranchPlan branchConnections;
-    std::vector<MediaSourceInputConnection> inputConnections;
+    MediaConnectionCatalog<MediaSourceInputConnection> inputConnections;
 };
 class MediaCompositionSourcePlanningKernel final {
 public:
@@ -55,6 +58,7 @@ public:
         const MediaCompositionSourcePlanningRequest& prepared,
         const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
         MediaCompositionSourcePlanningProducts& products);
-    static ::media::Result<MediaCompositionSourcePlanningProducts> plan(MediaCompositionSourcePlanningRequest request);
+    static ::media::Result<MediaCompositionSourcePlanningProducts> plan(MediaCompositionSourcePlanningRequest request,
+        std::shared_ptr<MediaPreparationMemoryResource> resource);
 };
 }
