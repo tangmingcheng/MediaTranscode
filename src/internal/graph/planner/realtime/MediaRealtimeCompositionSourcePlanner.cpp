@@ -139,7 +139,7 @@ try {
         : MediaAvSyncCapacityFacts{std::cref(*sourceCapacity)};
     auto planned = MediaCompositionSourcePlanningKernel::plan({{request.sourceRequest, raw, request.timing,
         request.prepared.videoIngress, request.prepared.audioIngress, request.prepared.continuousAudioRetention,
-        std::move(request.video), request.outputAudio, request.preparedAudioResampler, request.deployment,
+        request.video, request.outputAudio, request.preparedAudioResampler, request.deployment,
         request.activationOutputLead, request.selectedAudio}, capacity}, resource);
     if (!planned) return Result::failure(planned.error());
     auto products = std::move(planned).value();
@@ -166,7 +166,7 @@ try {
     auto runtime = MediaRealtimeAvSourceRuntimePlanner::bind(std::move(products.runtime), std::move(reservation).value());
     if (!runtime) return Result::failure(runtime.error());
     return Result::success({products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
-        std::move(products.video), products.frameRate, products.maximumFrameDuplicationGap,
+        std::move(request.video), products.frameRate, products.maximumFrameDuplicationGap,
         std::move(runtime).value(), {std::move(*storage.value().preparation), *request.prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),
         std::move(products.clockRouteStorage), std::move(products.startupCoordinatorStorage),

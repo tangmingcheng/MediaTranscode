@@ -396,3 +396,13 @@ processingParticipants 使用唯一 visitor 两遍输出同一成员集合：先
 Windows Release 4099 全量终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7218176 字节、2026-11-06 15:37:50。源码哈希核验同步后，RKMPP SSH 25831 正在进行 8 核增量 all-target 构建。
 
 Transition 批次 RKMPP SSH 25831 终态 4/4、退出 0；两平台构建及双独立源码局部审查通过。UTF-8/CRLF 与 diff 检查通过。本批没有运行媒体链路，也未生成抓包、截图、录制、临时日志或脚本；原有未跟踪文件保持。固定 owner 事前预算、solver 接线及原规格 Windows/RKMPP 实流仍未完成。
+
+## 2026-11-06 固定产品借用原视频计划
+
+Kernel 的 FixedRequest、FixedProducts、PlanningProducts 改为借用 const video；唯一生产调用方 SourcePlanner 的按值 request 保持稳定至全部校验结束，最后直接将 request.video 移入 SourcePlan。Kernel 不再在三个中间产品间移动拥有型 video；失败路径仍由原 request 析构。引用 owner 必须覆盖所有候选和 bind，禁止保存从临时 video 构造的产品。
+
+两位独立审查 residence_budget_audit、residence_budget_review_b 对冻结的 3 源码均局部 PASS。此变更只允许未来 freeze 前借用 prepared video；当前 Preparer 到 SourcePlanner 的初始副本仍存在，未因本批消除或计费。原容量、producer holder、sealed admission 校验保持。
+
+后续实施收敛为一个完整批次：新增固定 owner 构造前预算、具体 batch solver、freezeBatch 接线及 seal 后消费同一事实。候选数组使用现有 MediaFixedCapacityStorage，拓扑/residence/cost 目录复用 MediaPlanningCatalog；普通字符串及元素嵌套分配仍需单独计费，不能因外层 PMR 认定已覆盖。锁内只使用 solve 传入的实际 snapshot/partition，不再次获取 session 锁；非法事实与 Unsupported 不能作为预算不足缩小搜索。当前 nullptr 门禁仍保留，合屏实流尚未恢复验收。
+
+Windows Release 全量会话 79248 终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7217152 字节、2026-11-06 15:49:20。3 源码同步前后 SHA256 核验通过；RKMPP SSH 1263 使用 8 核增量 all-target，5/5 完成、退出 0。两位独立源码审查均局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批未运行 local/realtime 媒体链路，未产生抓包、截图、临时录制、日志或脚本；原有未跟踪文件保持。固定 owner 预算、具体 solver 接线与原规格实流验收仍未完成。

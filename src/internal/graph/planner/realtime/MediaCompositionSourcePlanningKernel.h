@@ -23,7 +23,7 @@ struct MediaCompositionSourceFixedRequest {
     const MediaRtpIngressPlan& videoIngress;
     const MediaRtpIngressPlan* audioIngress;
     const MediaPreparedInputRetentionStream* audioRetention;
-    MediaVideoSourcePlan video;
+    const MediaVideoSourcePlan& video;
     const MediaResolvedAudioOutputPlan& outputAudio;
     const std::optional<MediaSelectedAudioResampler>& preparedAudioResampler;
     const MediaRealtimeDeploymentEnvelope& deployment;
@@ -33,8 +33,8 @@ struct MediaCompositionSourceFixedRequest {
 struct MediaCompositionSourcePlanningRequest final : MediaCompositionSourceFixedRequest {
     MediaAvSyncCapacityFacts capacity;
 };
-// Original request/raw/deployment/retention owners must outlive preparation,
-// every candidate, and binding. Video and runtime declarations are owned here.
+// Original request/raw/deployment/retention/video owners must remain stable and
+// outlive preparation, every candidate, and binding. Runtime declarations are owned.
 struct MediaCompositionSourceFixedProducts final {
     const std::shared_ptr<MediaPreparationMemoryResource> planningResource;
     const MediaRealtimeRtpTranscodeRequest& sourceRequest;
@@ -45,14 +45,14 @@ struct MediaCompositionSourceFixedProducts final {
     RealtimeInputType inputType;
     MediaRealtimeRtpInputNodePlan input;
     int videoStreamIndex;
-    MediaVideoSourcePlan video;
+    const MediaVideoSourcePlan& video;
     MediaRational frameRate;
     std::optional<MediaRational> maximumFrameDuplicationGap;
     MediaRealtimeAvSourceFixedProducts runtime;
     MediaCompositionProducerHolderFacts producerHolders;
 };
-// Request references are borrowed for this synchronous call only. Returned
-// products own their facts and workspace resource, but no source media reservation.
+// Video remains borrowed from the original stable owner through all candidate
+// use. Other facts and workspace resource are owned; no source media reservation.
 struct MediaCompositionSourcePlanningProducts final {
     // Workspace allocation domain, distinct from source media reservations.
     // Declared first so it outlives every catalog; assignment is deliberately disabled.
@@ -60,7 +60,7 @@ struct MediaCompositionSourcePlanningProducts final {
     RealtimeInputType inputType;
     MediaRealtimeRtpInputNodePlan input;
     int videoStreamIndex;
-    MediaVideoSourcePlan video;
+    const MediaVideoSourcePlan& video;
     MediaRational frameRate;
     std::optional<MediaRational> maximumFrameDuplicationGap;
     MediaRealtimeAvSourcePlanningProducts runtime;

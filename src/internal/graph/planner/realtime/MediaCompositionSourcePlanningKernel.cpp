@@ -162,7 +162,7 @@ try {
     auto holders = std::move(plannedHolders).value();
     return Result::success({resource, request.sourceRequest, raw, request.deployment, request.audioRetention,
         request.timing, RealtimeInputType::RtpPort, std::move(inputDraft.input),
-        raw.video.streamIndex, std::move(request.video), raw.video.frameRate,
+        raw.video.streamIndex, request.video, raw.video.frameRate,
         cadence ? std::optional{MediaRational{raw.video.frameRate.den, raw.video.frameRate.num}} : std::nullopt,
         std::move(runtime).value(), std::move(holders)});
 } catch (const std::bad_alloc&) {
@@ -228,7 +228,7 @@ try {
         *runtime.value().synchronization.sourceClockMode, runtime.value().edgePolicies, *resource);
     if (!inputConnections) return Result::failure(inputConnections.error());
     return Result::success({resource, fixed.inputType, std::move(fixed.input), fixed.videoStreamIndex,
-        std::move(fixed.video), fixed.frameRate, fixed.maximumFrameDuplicationGap,
+        fixed.video, fixed.frameRate, fixed.maximumFrameDuplicationGap,
         std::move(runtime).value(), std::move(fixed.producerHolders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),
         std::move(branchConnections).value(), std::move(inputConnections).value()});
