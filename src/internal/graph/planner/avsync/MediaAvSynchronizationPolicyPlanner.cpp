@@ -12,7 +12,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 
 } // namespace
 
-void MediaAvSynchronizationPolicyPlanner::apply(MediaAvSyncPlan& plan)
+void MediaAvSynchronizationPolicyPlanner::apply(MediaAvSyncFixedFields& plan)
 {
     plan.masterClockMode = MediaAvSyncMasterClockMode::SteadyMonotonic;
     plan.canonicalTimeBaseNumerator = 1;

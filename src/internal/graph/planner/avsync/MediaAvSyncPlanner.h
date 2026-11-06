@@ -23,6 +23,18 @@ using MediaAvSynchronizationDomain =
 
 class MediaAvSyncPlanner final {
 public:
+    // Incomplete owning facts: cannot be passed to a runtime-plan validator.
+    static ::media::Result<MediaAvSyncFixedPlan> prepareFixed(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
+        MediaAvSynchronizationDomain domain,
+        const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+        MediaAvSyncStartupFixedPolicy startup,
+        MediaBranchMode audioBranchMode,
+        std::optional<int> resolvedOutputAudioSampleRate);
+    // Consume the fixed owner only after candidate borrows have ended.
+    static ::media::Result<MediaAvSyncPlan> bind(
+        MediaAvSyncFixedPlan fixed, const MediaAvSyncStartupCapacity& capacity);
     static ::media::Result<MediaAvSyncRtpInputPlan> planRtpInputClock(
         const MediaRealtimeRtpTranscodeRequest& request,
         MediaAvSourceLifecycleMode lifecycleMode);

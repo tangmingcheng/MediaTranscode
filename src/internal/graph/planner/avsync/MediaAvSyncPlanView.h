@@ -3,16 +3,6 @@
 #include <tuple>
 
 namespace media::ffmpeg::graph {
-// Candidate quantities only; no owning strings or protocol products.
-struct MediaAvSyncStartupCapacity {
-    std::optional<std::size_t> videoCapacity;
-    std::optional<std::size_t> audioCapacity;
-    std::optional<std::uint64_t> videoByteCapacity;
-    std::optional<std::uint64_t> audioByteCapacity;
-    std::optional<std::uint64_t> maximumVideoUnitBytes;
-    std::optional<std::uint64_t> maximumAudioUnitBytes;
-};
-
 // Numeric snapshot. Recreate after changing candidate quantities. Identities
 // borrow an lvalue owner that must outlive every use of this view.
 struct MediaAvSyncStartupPolicyView final : MediaAvSyncStartupCapacity {
@@ -24,19 +14,18 @@ struct MediaAvSyncStartupPolicyView final : MediaAvSyncStartupCapacity {
     std::optional<MediaRunningTime> keyFrameWaitNs;
     std::optional<MediaRunningTime> maximumAudioTrimNs;
     std::optional<MediaRunningTime> maximumInitialSkewNs;
-    std::optional<MediaRunningTime> maximumGapNs;
     std::optional<MediaRunningTime> outputLeadNs;
     const std::optional<std::string>& videoIdentity;
     const std::optional<std::string>& audioIdentity;
     std::optional<bool> allowDegradedClock;
     MediaAvSyncStartupPolicyView(const MediaAvSyncStartupPolicy& policy)
         : MediaAvSyncStartupCapacity{policy.videoCapacity, policy.audioCapacity, policy.videoByteCapacity,
-            policy.audioByteCapacity, policy.maximumVideoUnitBytes, policy.maximumAudioUnitBytes},
+            policy.audioByteCapacity, policy.maximumVideoUnitBytes, policy.maximumAudioUnitBytes, policy.maximumGapNs},
           videoReadiness(policy.videoReadiness), requireVideoKeyFrame(policy.requireVideoKeyFrame),
             trimAudioToCommonStart(policy.trimAudioToCommonStart), maximumWaitNs(policy.maximumWaitNs),
             prerollNs(policy.prerollNs), keyFrameWaitNs(policy.keyFrameWaitNs),
             maximumAudioTrimNs(policy.maximumAudioTrimNs), maximumInitialSkewNs(policy.maximumInitialSkewNs),
-            maximumGapNs(policy.maximumGapNs), outputLeadNs(policy.outputLeadNs),
+            outputLeadNs(policy.outputLeadNs),
             videoIdentity(policy.videoIdentity), audioIdentity(policy.audioIdentity),
             allowDegradedClock(policy.allowDegradedClock) {}
     MediaAvSyncStartupPolicyView(const MediaAvSyncStartupPolicy& policy, const MediaAvSyncStartupCapacity& capacity)

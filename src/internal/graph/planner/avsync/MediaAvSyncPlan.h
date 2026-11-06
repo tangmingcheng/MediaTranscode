@@ -26,7 +26,7 @@ enum class MediaAvSyncMasterClockMode : std::uint8_t {
     SteadyMonotonic = 0
 };
 
-struct MediaAvSyncStartupPolicy {
+struct MediaAvSyncStartupFixedPolicy {
     std::optional<MediaVideoStartupReadiness> videoReadiness;
     std::optional<bool> requireVideoKeyFrame;
     std::optional<bool> trimAudioToCommonStart;
@@ -35,18 +35,26 @@ struct MediaAvSyncStartupPolicy {
     std::optional<MediaRunningTime> keyFrameWaitNs;
     std::optional<MediaRunningTime> maximumAudioTrimNs;
     std::optional<MediaRunningTime> maximumInitialSkewNs;
-    std::optional<MediaRunningTime> maximumGapNs;
     std::optional<MediaRunningTime> outputLeadNs;
+    std::optional<std::string> videoIdentity;
+    std::optional<std::string> audioIdentity;
+    std::optional<bool> allowDegradedClock;
+    friend bool operator==(const MediaAvSyncStartupFixedPolicy&, const MediaAvSyncStartupFixedPolicy&) = default;
+};
+
+// Quantities and gap are bound only from actual capacity facts.
+struct MediaAvSyncStartupCapacity {
     std::optional<std::size_t> videoCapacity;
     std::optional<std::size_t> audioCapacity;
     std::optional<std::uint64_t> videoByteCapacity;
     std::optional<std::uint64_t> audioByteCapacity;
     std::optional<std::uint64_t> maximumVideoUnitBytes;
     std::optional<std::uint64_t> maximumAudioUnitBytes;
-    std::optional<std::string> videoIdentity;
-    std::optional<std::string> audioIdentity;
-    std::optional<bool> allowDegradedClock;
-    friend bool operator==(const MediaAvSyncStartupPolicy&, const MediaAvSyncStartupPolicy&) = default;
+    std::optional<MediaRunningTime> maximumGapNs;
+    bool operator==(const MediaAvSyncStartupCapacity&) const = default;
+};
+struct MediaAvSyncStartupPolicy : MediaAvSyncStartupFixedPolicy, MediaAvSyncStartupCapacity {
+    bool operator==(const MediaAvSyncStartupPolicy&) const = default;
 };
 
 enum class MediaAudioServoAntiWindupMode : std::uint8_t {
@@ -204,7 +212,7 @@ enum class MediaAvSyncDomainRole : std::uint8_t {
     ContinuousOutput = 3
 };
 
-struct MediaAvSyncPlan {
+struct MediaAvSyncFixedFields {
     std::optional<MediaTranscodeStreamSet> members;
     std::optional<MediaAvSyncDomainRole> domainRole;
     std::optional<MediaAvSourceLifecyclePlan> sourceLifecycle;
@@ -214,7 +222,6 @@ struct MediaAvSyncPlan {
     std::optional<MediaAvSyncMasterClockMode> masterClockMode;
     std::optional<int> canonicalTimeBaseNumerator;
     std::optional<int> canonicalTimeBaseDenominator;
-    MediaAvSyncStartupPolicy startup;
     MediaAvSyncAudioServoPolicy audioServo;
     MediaAvSyncVideoPolicy video;
     MediaAvSyncRecoveryPolicy recovery;
@@ -224,6 +231,14 @@ struct MediaAvSyncPlan {
     std::optional<MediaAvSyncRtpOutputPlan> rtpOutput;
     std::optional<MediaAvSyncProjectMpegTsOutputPlan> projectMpegTsOutput;
     MediaAvSyncMetricsPolicy metrics;
+};
+
+// Neither product converts to the other: an incomplete policy is not a runtime plan.
+struct MediaAvSyncFixedPlan : MediaAvSyncFixedFields {
+    MediaAvSyncStartupFixedPolicy startup;
+};
+struct MediaAvSyncPlan : MediaAvSyncFixedFields {
+    MediaAvSyncStartupPolicy startup;
 };
 
 } // namespace media::ffmpeg::graph

@@ -6,7 +6,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSynchronizationPolicyPlanner final {
 public:
-    static void apply(MediaAvSyncPlan& plan);
+    static void apply(MediaAvSyncFixedFields& plan);
 private:
     MediaAvSynchronizationPolicyPlanner() = delete;
 };

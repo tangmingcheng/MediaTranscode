@@ -288,3 +288,19 @@ Windows Release 全量 61027 已退出 0（803 任务计划），四项产物核
 本轮核验没有发现外部依赖修改的必要授权，也没有解除 RKMPP 的 AU 身份传播与剩余容器几何限制。上述为下一批实施边界，不是 solver 已实现；本轮尚未修改生产代码或运行媒体链路，不新增构建通过声明。
 
 双独立设计审查（residence_budget_audit、residence_budget_review_b）均为局部 PASS，限本节实施边界。补足交接约束：SourceCapacityState 必须直接借新固定 owner，不能再构造完整 runtime 中转；maximumGap 若属于固定事实必须校验一致，否则随容量绑定显式更新，不能只覆盖六个数量字段。最终移动 owning 字段前先销毁全部候选借用，或仅移动地址稳定的 owner 句柄；租约随最终事实存活，Debug proxy 的移动分配也必须纳入预算与异常边界。
+
+## 2026-11-06 同步固定产品与容量绑定实施中
+
+已拆分 StartupFixedPolicy 与 StartupCapacity（六容量及 maximumGap），完整 StartupPolicy 组合两者；FixedFields 不含 startup，FixedPlan 与完整 Plan 不互相转换。原 AvSyncPlanner::plan 组合 prepareFixed/bind，RTP/TS/demux、servo、等待规则仍为共同实现；完整 bind 保留原 validatePolicy。State 与 view 同步传递 maximumGap，最终 publish 不再漏该容量事实。尚未接通 freeze 前完整 owner 与 solver。
+
+执行约束：沿用本文件作为实施记录；仓库真实 realtime 验收与双独立复审要求优先于通用 executing-plans 技能的自动化测试和单次审查流程，不新增测试体系。
+
+首轮源码审查双 FAIL：误删 PreparedDemuxTimestampFacts.startup，FixedFields 残留重复完整 startup。Windows 全量 96284 终态退出 1（Ninja 子命令 2），编译证实缺失字段；修复后两者完整复审局部 PASS。第二轮 Windows 62823 终态退出 1（Ninja 子命令 2）：PlanValidator.cpp:521 的 view 与 owning 比较触发 C2666，新增容量基类 friend== 引起候选歧义。已开始修正比较声明并重新复审/构建；不得把源码审查 PASS 作为构建成功。
+
+第三轮 Windows 61857 终态退出 1，同处 C2666：仅将 Capacity 比较改成员仍留下 Policy 继承成员的 C++20 反向候选。进一步将完整 Policy 默认比较改成员，使 Policy/View 两侧都隐藏基类比较；保留完整逐字段比较。修正版重新双独立复审及第四轮 Windows 40362 全量构建，不掩盖前三轮失败。
+
+最终比较修正版双独立完整源码审查均为局部 PASS。Windows Release 第四轮 40362 退出 0（803 任务计划），四项产物核验通过，realtime CLI 7177728 字节、2026-11-06 13:53:42。远端两批 4＋6 源码 SHA256 核验同步成功；RKMPP SSH 72181 正在 8 核增量 all-target 构建（228 项），等待终态。
+
+下一步时钟拆分已按实际代码核对：validateSourceClock 不依赖尚未求出的 source startup 容量，但 demux 仍检查既有 prepared input 包数/字节证据，必须保留。固定 timing/clock/identity 声明由共同 compiler 生成；真实 route/acquisition 与数量在 bind 时核对。旧 plan 必须组合调用同一固定准备与 bind，rebind 复用声明核验和数值写入，不新增第二套协议算法；固定 owning 字符串仍需预算，不因模板或类型拆分而免计费。
+
+RKMPP SSH 72181 已完成 228/228，8 核增量 all-target 终态退出 0。本批修正版两平台构建通过，双独立源码复审 PASS；保留前三次 Windows 失败。10 源码 UTF-8 无 BOM、CRLF 与 diff 检查通过。本轮未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或临时脚本；所有既有未跟踪文件保持。固定 owner 预算、clock/assembly 固定准备、实际 solver 接线及原规格实流仍待完成。

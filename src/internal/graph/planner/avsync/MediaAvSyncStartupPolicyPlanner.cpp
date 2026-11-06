@@ -38,17 +38,12 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
                 "A/V startup deployment budget is incomplete"));
     }
 
+    auto fixed = MediaAvSyncStartupPolicyPlanner::prepare(members,
+        MediaVideoStartupReadiness::IntervalCoverage, outputLead);
+    if (!fixed) return ::media::Result<MediaAvSyncStartupPolicy>::failure(fixed.error());
     MediaAvSyncStartupPolicy startup;
-    startup.videoReadiness = MediaVideoStartupReadiness::IntervalCoverage;
-    startup.requireVideoKeyFrame = true;
-    startup.trimAudioToCommonStart = hasAudio;
-    startup.maximumWaitNs = runningTime(10 * Second);
-    startup.prerollNs = runningTime(500 * Millisecond);
-    startup.keyFrameWaitNs = runningTime(5 * Second);
-    if (hasAudio) startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
-    startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
+    static_cast<MediaAvSyncStartupFixedPolicy&>(startup) = std::move(fixed).value();
     startup.maximumGapNs = capacity.maximumGap;
-    startup.outputLeadNs = outputLead;
     startup.videoCapacity = capacity.videoUnits;
     startup.audioCapacity = capacity.audioUnits;
     startup.videoByteCapacity = capacity.videoBytes;
@@ -65,12 +60,36 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup capacity exceeds the runtime option range"));
     }
-    startup.allowDegradedClock = false;
     return ::media::Result<MediaAvSyncStartupPolicy>::success(
         std::move(startup));
 }
 
 } // namespace
+
+::media::Result<MediaAvSyncStartupFixedPolicy> MediaAvSyncStartupPolicyPlanner::prepare(
+    MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
+    std::optional<MediaRunningTime> outputLead)
+{
+    using Result = ::media::Result<MediaAvSyncStartupFixedPolicy>;
+    const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
+    if ((!hasAudio && members != MediaTranscodeStreamSet::VideoOnly) ||
+        (readiness != MediaVideoStartupReadiness::IntervalCoverage &&
+         readiness != MediaVideoStartupReadiness::DecodedPresentationSpan))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Startup fixed policy requires explicit members and readiness"));
+    MediaAvSyncStartupFixedPolicy startup;
+    startup.videoReadiness = readiness;
+    startup.requireVideoKeyFrame = true;
+    startup.trimAudioToCommonStart = hasAudio;
+    startup.maximumWaitNs = runningTime(10 * Second);
+    startup.prerollNs = runningTime(500 * Millisecond);
+    startup.keyFrameWaitNs = runningTime(5 * Second);
+    if (hasAudio) startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
+    startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
+    startup.outputLeadNs = outputLead;
+    startup.allowDegradedClock = false;
+    return Result::success(std::move(startup));
+}
 
 ::media::Result<MediaAvSyncStartupPolicy> MediaAvSyncStartupPolicyPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,

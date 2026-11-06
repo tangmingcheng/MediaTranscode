@@ -7,12 +7,7 @@ namespace media::ffmpeg::graph {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Source capacity publication requires its original fixed owner and members"));
     auto& policy = target.synchronization.startup;
-    policy.videoCapacity = startup.videoCapacity;
-    policy.audioCapacity = startup.audioCapacity;
-    policy.videoByteCapacity = startup.videoByteCapacity;
-    policy.audioByteCapacity = startup.audioByteCapacity;
-    policy.maximumVideoUnitBytes = startup.maximumVideoUnitBytes;
-    policy.maximumAudioUnitBytes = startup.maximumAudioUnitBytes;
+    static_cast<MediaAvSyncStartupCapacity&>(policy) = startup;
     target.synchronization.audioServo = audioServo;
     target.assembly.video.acquiringCapacity = assembly.video.acquiringCapacity;
     target.assembly.video.acquiringTimeout = assembly.video.acquiringTimeout;

@@ -81,12 +81,12 @@ struct SourceCapacityPolicies final {
 
     return Result::success({std::move(edges).value(), std::move(audioCorrection)});
 }
-// Only six capacity fields may vary. Identity is retained by the owning plan.
+// Capacity quantities and maximum gap may vary. Identity is retained by the owning plan.
 auto fixedStartupFields(const MediaAvSyncStartupPolicyView& policy)
 {
     return std::tie(policy.videoReadiness, policy.requireVideoKeyFrame, policy.trimAudioToCommonStart,
         policy.maximumWaitNs, policy.prerollNs, policy.keyFrameWaitNs, policy.maximumAudioTrimNs,
-        policy.maximumInitialSkewNs, policy.maximumGapNs, policy.outputLeadNs, policy.allowDegradedClock);
+        policy.maximumInitialSkewNs, policy.outputLeadNs, policy.allowDegradedClock);
 }
 } // namespace
 

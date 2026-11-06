@@ -12,6 +12,10 @@ struct MediaAvSourceCapacityFacts;
 
 class MediaAvSyncStartupPolicyPlanner final {
 public:
+    // Fixed waiting policy only; no placeholder quantity or byte capacity.
+    static ::media::Result<MediaAvSyncStartupFixedPolicy> prepare(
+        MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness,
+        std::optional<MediaRunningTime> outputLead);
     static ::media::Result<MediaAvSyncStartupPolicy> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeGraphResourceLedgerPlan& ledger,
