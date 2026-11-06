@@ -50,6 +50,7 @@ try {
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
     if ((!hasAudio && members != MediaTranscodeStreamSet::VideoOnly) ||
         hasAudio != raw.audio.has_value() || hasAudio != (request.audioIngress != nullptr) ||
+        hasAudio != request.preparedAudioResampler.has_value() ||
         !request.video.decoder.outputFrame || !request.video.decoder.preparedInputRetention ||
         request.sourceRequest.mediaId.empty())
         return Result::failure(::media::ErrorInfo::notInitialized(
@@ -107,7 +108,8 @@ try {
     audio.enabled = hasAudio;
     audio.branchMode = MediaBranchMode::Drop;
     if (hasAudio) {
-        auto planned = MediaAudioPipelinePlanner::planSourceForOutput(*raw.audio, request.outputAudio);
+        auto planned = MediaAudioPipelinePlanner::planSourceForOutput(
+            *raw.audio, request.outputAudio, request.preparedAudioResampler);
         if (!planned) return Result::failure(planned.error());
         audio = std::move(planned).value();
         if (audio.branchMode != MediaBranchMode::TranscodeFrame ||

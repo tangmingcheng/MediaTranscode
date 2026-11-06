@@ -139,7 +139,7 @@ try {
         : MediaAvSyncCapacityFacts{std::cref(*sourceCapacity)};
     auto planned = MediaCompositionSourcePlanningKernel::plan({request.sourceRequest, raw, request.timing,
         request.prepared.videoIngress, request.prepared.audioIngress, request.prepared.continuousAudioRetention,
-        capacity, std::move(request.video), request.outputAudio, request.deployment,
+        capacity, std::move(request.video), request.outputAudio, request.preparedAudioResampler, request.deployment,
         request.activationOutputLead, request.selectedAudio}, resource);
     if (!planned) return Result::failure(planned.error());
     auto products = std::move(planned).value();

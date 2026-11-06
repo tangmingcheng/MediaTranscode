@@ -258,3 +258,15 @@ Windows 修正版全量 71286 终态退出 0（802 任务计划），四项产�
 下一完整批次的硬边界：精确 held/history 只来自 freezeBatch 锁内 storageSnapshotLocked，不能由公开 session plan 或 probeSnapshot 替代。现有 Kernel::plan 会经 planSourceForOutput→AudioResamplerCapabilityProvider::verify 调用 swr_alloc_set_opts2/swr_init，不能整体移入 freeze 锁。必须锁外完成固定 capability/input/identity 准备并明确新存储的实际预算、固定地址与生命周期；锁内按真实快照确定合法基线，再一次初始化目录并数值刷新。seal 后应消费同一固定 owner，避免重复完整 Kernel::plan，同时保留最终 DAG 独立 readback。当前资源仅覆盖目录，普通 owning input/audio/sync/assembly 的新字符串并不因固定或借用而免计费；后续需闭合这项实际存储表示，不能继续仅加未接线视图。
 
 RKMPP SSH 1913 终态退出 0，8 核增量 all-target 完成 18/18。两平台修正版构建通过；本轮未运行 local/realtime 媒体链路，没有抓包、截图、临时日志或同步文件待清理。首次 Windows 失败保留；原规格实流、固定 owner 完整准入、具体 solver 和已有平台可靠性风险仍未完成。
+
+## 2026-11-06 源音频 capability 移到 freeze 外
+
+Preparer 在 freeze 前调用 SourceAudioPlanner，按全部源数在根 planningResource 上建立精确长度数值目录；无音频保留空槽。所选源核对完整 prepared decoder（含格式、声道和 retention authority）后复用 planKnownAudio 的 resampler；其余源用各自 decoder 与同一最终 resolvedOutput 进行原 verify，保留原 deadline/cancellation 前后检查。目录随 preparation 局部 owner 存活，归根的 otherRetainedBytes，不重复归源 0。
+
+共用 planSourceForOutput 改为绑定显式 preparedResampler，不再调用 swr_init；通过 SourcePlanner/Kernel 的原请求链消费对应槽。planKnownAudio 按原 TranscodeFrame 且 selectedDecoder 条件先验证，再调用同一绑定算法。通用无预选 decoder 的既有分支语义保留，合屏仍要求 decoder/resampler 齐全。输入改为 const 借用，最终 owning 计划仍复制必要事实；四个整数只在当前同源、同 output 不变链上复用，不宣称它们是格式/声道完整指纹。
+
+复用现有 libswresample 能力验证算法（swr_alloc_set_opts2、swr_init、原 steadyStateOutputBound），没有添加替代媒体算法。本批只闭合 source capability 调用位置及新数值目录预算；既有 capability 临时证明空间、固定 input/sync/assembly 新存储与实际 solver 仍须继续闭合。Windows Release 全量 61027 正在运行，源码双独立审查结果待归档。
+
+Windows Release 全量 61027 已退出 0（803 任务计划），四项产物核验通过，realtime CLI 7168000 字节、2026-11-06 13:22:09。residence_budget_audit 与 residence_budget_review_b 对本批源码均明确局部 PASS。按用户要求，RKMPP 保留已有构建产物，10 个源码分两批核验 SHA256 后同步，SSH 78720 执行 8 核增量 all-target，完成 159/159，终态退出 0；没有 clean-first。共享头文件变更导致依赖重编译，新增文件仅触发 CMake 自动更新清单。
+
+本批只确认两平台构建和局部审查通过，未运行媒体测试，未产生抓包、截图、临时日志或临时脚本。固定事实存储的完整预算、联合容量 solver 接入及原规格 Windows→RKMPP realtime 验收仍未完成。

@@ -70,12 +70,13 @@ public:
         const MediaAudioPipelinePlannerOptions& options);
 
     static ::media::Result<MediaAudioPipelinePlan> planKnownAudio(
-        MediaInputAudioStreamInfo inputInfo,
+        const MediaInputAudioStreamInfo& inputInfo,
         const MediaAudioPipelinePlannerOptions& options);
 
     static ::media::Result<MediaAudioPipelinePlan> planSourceForOutput(
-        MediaInputAudioStreamInfo inputInfo,
-        const MediaResolvedAudioOutputPlan& output);
+        const MediaInputAudioStreamInfo& inputInfo,
+        const MediaResolvedAudioOutputPlan& output,
+        const std::optional<MediaSelectedAudioResampler>& preparedResampler);
 
 private:
     MediaAudioPipelinePlanner() = default;

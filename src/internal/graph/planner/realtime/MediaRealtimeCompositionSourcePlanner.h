@@ -13,6 +13,7 @@ struct MediaRealtimeCompositionSourcePlanningRequest final {
     const MediaPreparedRtpSourceView& prepared;
     MediaVideoSourcePlan video;
     const MediaResolvedAudioOutputPlan& outputAudio;
+    const std::optional<MediaSelectedAudioResampler>& preparedAudioResampler;
     const MediaPreparedRealtimeEmissionSet& emission;
     const MediaRealtimeDeploymentEnvelope& deployment;
     MediaRunningTime activationOutputLead;

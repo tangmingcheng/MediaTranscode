@@ -12,6 +12,7 @@
 #include "internal/graph/planner/video/MediaVideoColorContractPlanner.h"
 #include "internal/graph/planner/video/MediaVideoCanvasGeometryPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionSourceAudioPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoParametersPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentPlanner.h"
@@ -176,6 +177,13 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     if (!audio.value().resolvedOutput || !audio.value().preparedEmission)
         return PreparedResult::failure(::media::ErrorInfo::notInitialized(
             "Composition audio output lacks the unique prepared encoder readback"));
+    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value());
+    if (!planningResource) return PreparedResult::failure(planningResource.error());
+    auto sourceAudio = MediaCompositionSourceAudioPlanner::prepare(
+        facts, selected, audio.value(), *planningResource.value(), control);
+    if (!sourceAudio) return PreparedResult::failure(sourceAudio.error());
+    if (auto status = MediaRealtimeCompositionPreparationState::validateInputs(captures, control); !status)
+        return PreparedResult::failure(status.error());
     auto videoParameters = MediaRealtimeVideoParametersPlanner::plan(
         request.parameters.video, request.output.streamLayout);
     if (!videoParameters) return PreparedResult::failure(videoParameters.error());
@@ -294,8 +302,6 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     if (!canvasCredit) return PreparedResult::failure(canvasCredit.error());
     auto canvasBudget = MediaPreparationStorageBudget::fromReservation(std::move(canvasCredit).value(), MediaStorageReleaseUnobserved{});
     if (!canvasBudget) return PreparedResult::failure(canvasBudget.error());
-    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value());
-    if (!planningResource) return PreparedResult::failure(planningResource.error());
     if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, nullptr); !frozen)
         return PreparedResult::failure(frozen.error());
     std::vector<MediaPreparedRtpSource> sealed;
@@ -307,7 +313,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
         auto view = sealed.back().resources();
         if (!view) return PreparedResult::failure(view.error());
         auto plan = MediaRealtimeCompositionSourcePlanner::plan({facts[i].request, facts[i].raw, facts[i].timing,
-            view.value(), prepared->sources[i].plan, *audio.value().resolvedOutput,
+            view.value(), prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
             emission.value(), deployment.value(), output.value().activationOutputLead, i == selected}, planningResource.value());
         if (!plan) return PreparedResult::failure(plan.error());
         sourcePlans.push_back(std::move(plan).value());

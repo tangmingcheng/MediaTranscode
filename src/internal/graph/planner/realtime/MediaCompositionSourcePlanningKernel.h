@@ -25,6 +25,7 @@ struct MediaCompositionSourcePlanningRequest final {
     MediaAvSyncCapacityFacts capacity;
     MediaVideoSourcePlan video;
     const MediaResolvedAudioOutputPlan& outputAudio;
+    const std::optional<MediaSelectedAudioResampler>& preparedAudioResampler;
     const MediaRealtimeDeploymentEnvelope& deployment;
     MediaRunningTime activationOutputLead;
     bool selectedAudio;

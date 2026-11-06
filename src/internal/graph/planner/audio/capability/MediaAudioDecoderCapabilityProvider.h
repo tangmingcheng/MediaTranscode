@@ -22,6 +22,7 @@ struct MediaSelectedAudioDecoder final {
     std::int64_t delayOutputSamples;
     std::int64_t maximumOutputBlockInputSamples;
     std::optional<MediaDecoderInputRetention> preparedInputRetention;
+    friend bool operator==(const MediaSelectedAudioDecoder&, const MediaSelectedAudioDecoder&) = default;
 };
 
 class MediaAudioDecoderCapabilityProvider final {
