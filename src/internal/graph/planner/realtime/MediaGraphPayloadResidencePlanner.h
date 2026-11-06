@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaFinalGraphResourceLedgerCompiler.h"
+#include "internal/graph/planner/MediaPlanningCatalog.h"
 #include <span>
 #include <variant>
 
@@ -18,7 +19,14 @@ enum class MediaPayloadResidenceOwnerKind {
 };
 enum class MediaPayloadResidenceSelection { LiveOwners, ReachableOwners };
 struct MediaPayloadResidenceOwner final {
-    std::vector<std::size_t> retainingPositions;
+    const std::shared_ptr<std::pmr::memory_resource> resource;
+    MediaPayloadResidenceOwner(std::shared_ptr<std::pmr::memory_resource> owner,
+        std::initializer_list<std::size_t> positions, std::uint64_t references,
+        MediaPayloadResidenceOwnerKind ownerKind, std::optional<std::size_t> edge,
+        std::optional<std::size_t> slot)
+        : resource(std::move(owner)), retainingPositions(*resource), maximumReferences(references), kind(ownerKind),
+          connection(edge), projectionSlot(slot) { retainingPositions.assign(positions); }
+    MediaPlanningCatalog<std::size_t> retainingPositions;
     std::uint64_t maximumReferences;
     MediaPayloadResidenceOwnerKind kind;
     // Index in the complete topology, not the filtered media connections.
@@ -54,9 +62,12 @@ public:
     virtual ::media::Result<std::optional<MediaPayloadResidenceOwnerView>> ownerAt(std::size_t index) const = 0;
 };
 struct MediaPayloadResidenceProjection final {
-    std::vector<std::size_t> reachablePositions;
+    const std::shared_ptr<std::pmr::memory_resource> resource;
+    explicit MediaPayloadResidenceProjection(std::shared_ptr<std::pmr::memory_resource> owner)
+        : resource(std::move(owner)), reachablePositions(*resource), maximumRetainedObjects(0), contributions(*resource) {}
+    MediaPlanningCatalog<std::size_t> reachablePositions;
     std::uint64_t maximumRetainedObjects;
-    std::vector<MediaPayloadResidenceOwner> contributions;
+    MediaPlanningCatalog<MediaPayloadResidenceOwner> contributions;
 };
 
 // Borrows only the caller's traversal workspace, never the topology storage.
@@ -99,7 +110,7 @@ public:
         std::span<std::size_t> workspace);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
-        MediaPayloadResidenceSelection selection);
+        MediaPayloadResidenceSelection selection, std::shared_ptr<std::pmr::memory_resource> resource);
     static ::media::Result<MediaPayloadResidenceProjection> plan(
         const MediaPayloadResidenceTopology& topology, std::size_t producerPosition);
     static ::media::Result<MediaGraphPayloadResidence> plan(

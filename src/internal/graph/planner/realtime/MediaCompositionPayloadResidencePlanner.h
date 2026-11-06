@@ -33,10 +33,16 @@ struct MediaCompositionStartupEventResidence final {
     MediaStartupRouteEventUnits units;
 };
 struct MediaCompositionReferenceResidencePlan final {
+    // Keep the allocator alive until every nested position catalog is destroyed.
+    const std::shared_ptr<MediaPreparationMemoryResource> resource;
+    explicit MediaCompositionReferenceResidencePlan(std::shared_ptr<MediaPreparationMemoryResource> owner)
+        : resource(std::move(owner)), nodeReferences(*resource), startupNodes(*resource),
+          startupEvents(*resource), aggregate(resource, {}, 0,
+              MediaPayloadResidenceOwnerKind::Shared, std::nullopt, std::nullopt) {}
     // Empty means a typed startup/shared owner replaces ordinary node retention.
-    std::vector<std::optional<std::uint64_t>> nodeReferences;
-    std::vector<MediaCompositionStartupNodeResidence> startupNodes;
-    std::vector<MediaCompositionStartupEventResidence> startupEvents;
+    MediaPlanningCatalog<std::optional<std::uint64_t>> nodeReferences;
+    MediaPlanningCatalog<MediaCompositionStartupNodeResidence> startupNodes;
+    MediaPlanningCatalog<MediaCompositionStartupEventResidence> startupEvents;
     MediaPayloadResidenceOwner aggregate;
 };
 class MediaCompositionPayloadResidencePlanner final {

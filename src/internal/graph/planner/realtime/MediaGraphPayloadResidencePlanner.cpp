@@ -111,12 +111,12 @@ bool MediaPayloadResidenceEvaluation::retains(const MediaPayloadResidenceOwnerVi
     const MediaPayloadResidenceTopology& topology, std::size_t producerPosition)
 {
     const OwnedResidenceView view(topology);
-    return plan(view, producerPosition, MediaPayloadResidenceSelection::LiveOwners);
+    return plan(view, producerPosition, MediaPayloadResidenceSelection::LiveOwners, std::shared_ptr<std::pmr::memory_resource>{std::shared_ptr<std::pmr::memory_resource>{}, std::pmr::new_delete_resource()});
 }
 
 ::media::Result<MediaPayloadResidenceProjection> MediaGraphPayloadResidencePlanner::plan(
     const MediaPayloadResidenceTopologyView& topology, std::size_t producerPosition,
-    MediaPayloadResidenceSelection selection)
+    MediaPayloadResidenceSelection selection, std::shared_ptr<std::pmr::memory_resource> resource)
 try {
     using Result = ::media::Result<MediaPayloadResidenceProjection>;
     if (selection != MediaPayloadResidenceSelection::LiveOwners &&
@@ -124,7 +124,7 @@ try {
         return Result::failure(::media::ErrorInfo::invalidArgument("Residence owner selection is invalid"));
     if (auto status = validateResidenceTopology(topology, producerPosition); !status)
         return Result::failure(status.error());
-    MediaPayloadResidenceProjection result{{}, 0, {}};
+    MediaPayloadResidenceProjection result(resource);
     if (topology.nodeCount() > result.reachablePositions.max_size())
         return Result::failure(::media::ErrorInfo::allocationFailed("Residence traversal exceeds addressable workspace"));
     result.reachablePositions.resize(topology.nodeCount());
@@ -137,7 +137,7 @@ try {
         if (!owner) return Result::failure(owner.error());
         if (!owner.value() || !evaluated.value().retains(*owner.value(), selection)) continue;
         const auto& borrowed = *owner.value();
-        MediaPayloadResidenceOwner materialized{{}, borrowed.maximumReferences, borrowed.kind, borrowed.connection, index};
+        MediaPayloadResidenceOwner materialized{resource, {}, borrowed.maximumReferences, borrowed.kind, borrowed.connection, index};
         for (std::size_t position = 0; position < borrowed.positionCount(); ++position)
             materialized.retainingPositions.push_back(borrowed.positionAt(position));
         result.contributions.push_back(std::move(materialized));
@@ -201,15 +201,15 @@ try {
         auto objects = MediaCheckedArithmetic::multiply(bound.wrapperSlots, *units,
             "startup event queue media retention");
         if (!objects) return Result::failure(objects.error());
-        topology.owners.push_back({{position(edge->from.nodeId)}, objects.value(),
-            MediaPayloadResidenceOwnerKind::StartupEdge, connection(bound.edge)});
+        topology.owners.push_back({std::shared_ptr<std::pmr::memory_resource>{std::shared_ptr<std::pmr::memory_resource>{}, std::pmr::new_delete_resource()}, {position(edge->from.nodeId)}, objects.value(),
+            MediaPayloadResidenceOwnerKind::StartupEdge, connection(bound.edge), std::nullopt});
     }
     for (const auto& bound : facts.startupNodes) {
         if (!graph.findNode(bound.node)) return Result::failure(::media::ErrorInfo::invalidArgument(
             "Payload residence startup node is missing"));
         const auto units = mediaUnits(bound);
-        if (units) topology.owners.push_back({{position(bound.node)}, *units,
-            MediaPayloadResidenceOwnerKind::StartupNode, std::nullopt});
+        if (units) topology.owners.push_back({std::shared_ptr<std::pmr::memory_resource>{std::shared_ptr<std::pmr::memory_resource>{}, std::pmr::new_delete_resource()}, {position(bound.node)}, *units,
+            MediaPayloadResidenceOwnerKind::StartupNode, std::nullopt, std::nullopt});
     }
     for (const auto& entry : facts.storage) {
         if (!entry.validReferenceIdentity())
@@ -221,8 +221,8 @@ try {
         const bool typedEdge = std::any_of(facts.startupEvents.begin(), facts.startupEvents.end(),
             [&](const auto& bound) { return entry.referenceEdge == bound.edge; });
         if (typedNode || typedEdge) continue;
-        MediaPayloadResidenceOwner owner{{}, entry.maximumBufferObjects,
-            MediaPayloadResidenceOwnerKind::Shared, std::nullopt};
+        MediaPayloadResidenceOwner owner{std::shared_ptr<std::pmr::memory_resource>{std::shared_ptr<std::pmr::memory_resource>{}, std::pmr::new_delete_resource()}, {}, entry.maximumBufferObjects,
+            MediaPayloadResidenceOwnerKind::Shared, std::nullopt, std::nullopt};
         if (!entry.retentionNodes.empty()) {
             // One storage entry can serve several retaining nodes. Charge it
             // once if any reachable owner can retain this producer's payload.

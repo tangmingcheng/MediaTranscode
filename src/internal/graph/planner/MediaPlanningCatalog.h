@@ -28,6 +28,11 @@ public:
     const Entry* data() const noexcept { return m_values.data(); }
     std::size_t size() const noexcept { return m_values.size(); }
     bool empty() const noexcept { return m_values.empty(); }
+    Entry& operator[](std::size_t index) noexcept { return m_values[index]; }
+    const Entry& operator[](std::size_t index) const noexcept { return m_values[index]; }
+    std::size_t max_size() const noexcept { return m_values.max_size(); }
+    void resize(std::size_t size) { m_values.resize(size); }
+    void push_back(Entry&& value) { m_values.push_back(std::move(value)); }
     void push_back(const Entry& value) { m_values.push_back(value); }
     void assign(std::initializer_list<Entry> values) { m_values.assign(values); }
     auto insert(typename std::pmr::vector<Entry>::const_iterator position, const Entry& value)

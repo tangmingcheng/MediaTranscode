@@ -170,7 +170,7 @@ template<bool Updating> ::media::Status compileReference(
     const MediaCompositionGraphTopology& topology, const MediaCompositionResidenceFacts& facts)
 try {
     using Result = ::media::Result<MediaCompositionReferenceResidencePlan>;
-    MediaCompositionReferenceResidencePlan result;
+    MediaCompositionReferenceResidencePlan result(topology.resource());
     result.nodeReferences.resize(topology.positions.size());
     if (auto status = compileReference<false>(topology, facts, result); !status)
         return Result::failure(status.error());

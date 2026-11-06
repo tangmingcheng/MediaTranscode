@@ -111,7 +111,7 @@ try {
     using Result=::media::Result<MediaPayloadResidenceProjection>;
     auto view = residenceView(topology, reference, stream, payload);
     if (!view) return Result::failure(view.error());
-    return MediaGraphPayloadResidencePlanner::plan(view.value(),producerPosition,selection);
+    return MediaGraphPayloadResidencePlanner::plan(view.value(),producerPosition,selection,topology.resource());
 }catch(const std::bad_alloc&){return ::media::Result<MediaPayloadResidenceProjection>::failure(
     ::media::ErrorInfo::allocationFailed("composition pure payload residence"));}
 

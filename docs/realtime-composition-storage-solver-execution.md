@@ -212,3 +212,13 @@ branch_budget_review_a 与 branch_budget_review_b 对本轮冻结源码均明确
 Windows Release 全量 82917 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7140352 字节、2026-11-06 12:10:12。远端分三批核验 21 个源码路径的前后 SHA256（包括更名旧头删除与新头创建），最终 SSH 4357 正进行 8 核增量 all-target；沿用现有 CMake 自动重新配置，没有新建构建系统。没有同步临时文件或新媒体测试产物。
 
 RKMPP SSH 4357 终态退出 0，8 核增量 all-target 完成 60/60。两平台本轮构建通过，未执行 local 或 realtime 媒体测试。没有抓包、截图、临时媒体、测试脚本或同步临时文件待清理；用户复用源及原有未跟踪文件保持不变。
+
+## 2026-11-06 引用目录与临时投影预算接入
+
+reference 的 node/startup/event 目录、projection 的遍历空间与 contributions，以及每个 Owner 的 retainingPositions 均直接绑定 preparation resource；复用原遍历、零数量可达槽与 rebind 算法。Owner 与 projection/reference 均先声明 const shared_ptr 资源所有者，保证目录逆序析构及移动后源容器的资源寿命。packet/lineage 根会被最终账本持久化（ResourcePlanner 的 sourceFrameOwnership），因此每个 Owner 自持资源，不能只借用临时 topology。普通最终图 readback 仍使用原堆分配域，以空 owner alias 引用进程级 new_delete_resource，不分配控制块。
+
+依据既有 polymorphic_allocator 标准及 [shared_ptr aliasing 规则](https://eel.is/c++draft/util.smartptr.shared.const)。residence_budget_audit 与 residence_budget_review_b 对冻结的六源码均明确局部 PASS。packet/lineage 外层根目录、rootIndices、候选费用产品、具体 workspace 与 freeze solver 仍未完成；本轮没有媒体测试，不代表完整预算或合屏验收通过。Windows Release 全核心全量构建 4848 正在运行，结果待终态核验。
+
+Windows Release 全量 4848 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7147008 字节、2026-11-06 12:25:44。六源码同步前后 SHA256 均已核验；RKMPP SSH 42610 正执行 8 核增量 all-target。没有同步临时文件或新媒体测试产物。
+
+RKMPP SSH 42610 终态退出 0，8 核增量 all-target 完成 61/61。两平台构建通过，没有新实流测试或临时产物。下一批合并迁移 packet/lineage 外层根目录与四组 rootIndices，并把 CandidateCost 的计划接收改为延迟构造，避免不可赋值 Owner 经 PMR 容器整体赋值；随后继续具体 workspace 和 solver 接线。
