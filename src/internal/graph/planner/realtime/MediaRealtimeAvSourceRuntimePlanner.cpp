@@ -102,9 +102,9 @@ MediaRealtimeAvSourceRuntimePlanner::planFacts(
             request.queues, request.threadingPolicy, audio,
             isolatedAudioInput ? &*isolatedAudioInput : nullptr, synchronization); !status)
         return Result::failure(status.error());
-    const MediaRealtimeAvSourceClockRequest clockRequest{
+    const MediaRealtimeAvSourceClockRequest clockRequest{{
         request.inputType, request.inputLayout, request.input, request.videoStreamIndex,
-        request.videoCodecName, audio, isolatedAudioInput ? &*isolatedAudioInput : nullptr,
+        request.videoCodecName, audio, isolatedAudioInput ? &*isolatedAudioInput : nullptr},
         request.sourceCapacity};
     auto sourceClock = MediaRealtimeAvSourceClockPlanner::plan(clockRequest, synchronization);
     if (!sourceClock) return Result::failure(sourceClock.error());

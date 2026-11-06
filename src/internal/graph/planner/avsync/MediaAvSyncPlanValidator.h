@@ -7,6 +7,8 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSyncPlanValidator final {
 public:
+    // Both phases use the same protocol validator; fixed facts omit startup quantities.
+    static ::media::Status validateSourceClock(const MediaAvSyncFixedPlan& plan);
     static ::media::Status validateSourceClock(const MediaAvSyncPlanView& plan);
     static ::media::Status validate(const MediaAvSyncPlanView& plan);
     static ::media::Status validatePolicy(const MediaAvSyncPlanView& plan);

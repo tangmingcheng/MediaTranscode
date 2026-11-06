@@ -118,34 +118,45 @@ struct MediaDecodedVideoAssemblyTiming final {
 using MediaVideoInputAssemblyTiming = std::variant<
     MediaCanonicalVideoAssemblyTiming, MediaDecodedVideoAssemblyTiming>;
 
-struct MediaVideoInputAssemblyPlan final {
+// Fixed declarations have no acquiring quantities and cannot become runtime
+// assemblies until the planner binds actual capacity facts.
+struct MediaVideoInputAssemblyFixedPlan {
     std::string sourceIdentity;
     MediaVideoInputAssemblyTiming timing;
+    bool operator==(const MediaVideoInputAssemblyFixedPlan&) const = default;
+};
+struct MediaVideoInputAssemblyPlan final : MediaVideoInputAssemblyFixedPlan {
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
-    friend bool operator==(const MediaVideoInputAssemblyPlan&,
-                           const MediaVideoInputAssemblyPlan&) = default;
+    bool operator==(const MediaVideoInputAssemblyPlan&) const = default;
 };
-
-struct MediaCanonicalAudioAssemblyPlan final {
+struct MediaCanonicalAudioAssemblyFixedPlan {
     std::string sourceIdentity;
     MediaCanonicalAudioDurationPlan duration;
     MediaDecodeOrderMode decodeOrder;
+    bool operator==(const MediaCanonicalAudioAssemblyFixedPlan&) const = default;
+};
+struct MediaCanonicalAudioAssemblyPlan final : MediaCanonicalAudioAssemblyFixedPlan {
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
-    friend bool operator==(const MediaCanonicalAudioAssemblyPlan&,
-                           const MediaCanonicalAudioAssemblyPlan&) = default;
+    bool operator==(const MediaCanonicalAudioAssemblyPlan&) const = default;
 };
-
-struct MediaRealtimeAvSyncAssemblyPlan final {
+struct MediaRealtimeAvSyncAssemblyFixedFields {
     MediaAvSyncInputClockPlan inputClock;
     MediaInitialGenerationPolicy generationPolicy;
     std::uint64_t initialGeneration;
     MediaClockEvidencePolicy evidencePolicy;
+    bool operator==(const MediaRealtimeAvSyncAssemblyFixedFields&) const = default;
+};
+struct MediaRealtimeAvSyncAssemblyFixedPlan final : MediaRealtimeAvSyncAssemblyFixedFields {
+    MediaVideoInputAssemblyFixedPlan video;
+    std::optional<MediaCanonicalAudioAssemblyFixedPlan> audio;
+    bool operator==(const MediaRealtimeAvSyncAssemblyFixedPlan&) const = default;
+};
+struct MediaRealtimeAvSyncAssemblyPlan final : MediaRealtimeAvSyncAssemblyFixedFields {
     MediaVideoInputAssemblyPlan video;
     std::optional<MediaCanonicalAudioAssemblyPlan> audio;
-    friend bool operator==(const MediaRealtimeAvSyncAssemblyPlan&,
-                           const MediaRealtimeAvSyncAssemblyPlan&) = default;
+    bool operator==(const MediaRealtimeAvSyncAssemblyPlan&) const = default;
 };
 
 } // namespace media::ffmpeg::graph

@@ -14,7 +14,7 @@ struct MediaRealtimeRtpInputNodePlan;
 struct MediaAudioPipelinePlan;
 struct MediaAvSourceCapacityFacts;
 
-struct MediaRealtimeAvSourceClockRequest final {
+struct MediaRealtimeAvSourceClockFixedRequest {
     RealtimeInputType inputType;
     RealtimeInputStreamLayout inputLayout;
     const MediaRealtimeRtpInputNodePlan& input;
@@ -22,7 +22,13 @@ struct MediaRealtimeAvSourceClockRequest final {
     std::string_view videoCodecName;
     const MediaAudioPipelinePlan& audio;
     const MediaRealtimeRtpInputNodePlan* isolatedAudioInput;
+};
+struct MediaRealtimeAvSourceClockRequest final : MediaRealtimeAvSourceClockFixedRequest {
     const MediaAvSourceCapacityFacts* sourceCapacity;
+};
+struct MediaRealtimeAvSourceClockFixedPlan final {
+    MediaRealtimeAvSourceTimingFacts timing;
+    MediaRealtimeAvSyncAssemblyFixedPlan assembly;
 };
 
 struct MediaRealtimeAvSourceClockPlan final {
@@ -32,6 +38,14 @@ struct MediaRealtimeAvSourceClockPlan final {
 
 class MediaRealtimeAvSourceClockPlanner final {
 public:
+    static ::media::Result<MediaRealtimeAvSourceClockFixedPlan> prepareFixed(
+        const MediaRealtimeAvSourceClockFixedRequest& request,
+        const MediaAvSyncFixedPlan& synchronization);
+    // Consumes the fixed owner after all candidate borrows have ended.
+    static ::media::Result<MediaRealtimeAvSourceClockPlan> bind(
+        MediaRealtimeAvSourceClockFixedPlan fixed,
+        const MediaRealtimeAvSourceClockRequest& request,
+        const MediaAvSyncPlanView& synchronization);
     // Fixed prepared input/timing facts; refresh acquiring capacity/time only.
     // Failure invalidates the candidate. Success does not allocate storage.
     static ::media::Status rebindAssembly(

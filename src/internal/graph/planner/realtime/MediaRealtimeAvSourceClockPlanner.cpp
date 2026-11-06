@@ -7,7 +7,7 @@
 
 #include <limits>
 #include <utility>
-#include <type_traits>
+#include <tuple>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -23,23 +23,18 @@ bool validPacketDurationEvidence(
         evidence.timeBase.den > 0;
 }
 
-template<bool Updating> ::media::Status compileAssembly(
-    const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlanView& synchronization,
-    const MediaRealtimeAvSourceTimingFacts& facts,
-    std::conditional_t<Updating, MediaRealtimeAvSyncAssemblyView, std::optional<MediaRealtimeAvSyncAssemblyPlan>>& result)
+template<bool Checking, class Synchronization, class Product> ::media::Status compileDeclaration(
+    const MediaRealtimeAvSourceClockFixedRequest& request,
+    const Synchronization& synchronization,
+    const MediaRealtimeAvSourceTimingFacts& facts, Product& result)
 {
     const bool hasAudio = synchronization.members == MediaTranscodeStreamSet::AudioVideo;
     if (request.audio.enabled != hasAudio || !synchronization.sourceClockMode ||
         !synchronization.startup.videoIdentity ||
         synchronization.startup.videoIdentity->empty() ||
-        !synchronization.startup.videoCapacity ||
-        *synchronization.startup.videoCapacity == 0 ||
         (hasAudio && (!synchronization.startup.audioIdentity ||
-                      synchronization.startup.audioIdentity->empty() ||
-                      !synchronization.startup.audioCapacity ||
-                      *synchronization.startup.audioCapacity == 0)) ||
-        (!hasAudio && (synchronization.startup.audioIdentity || synchronization.startup.audioCapacity)) ||
+                      synchronization.startup.audioIdentity->empty())) ||
+        (!hasAudio && synchronization.startup.audioIdentity) ||
         !synchronization.startup.maximumWaitNs ||
         *synchronization.startup.maximumWaitNs <=
             MediaRunningTime::fromNanoseconds(0) ||
@@ -53,29 +48,6 @@ template<bool Updating> ::media::Status compileAssembly(
     MediaAvSyncInputClockPlan inputClock;
     const bool decoded = synchronization.startup.videoReadiness ==
         MediaVideoStartupReadiness::DecodedPresentationSpan;
-    const auto* capacity = request.sourceCapacity;
-    if (decoded != (capacity != nullptr) ||
-        (capacity && (capacity->audioAcquiringCapacity.has_value() != hasAudio ||
-            capacity->route.shape.members != synchronization.members ||
-            capacity->route.shape.readiness != synchronization.startup.videoReadiness ||
-            capacity->acquisitionWindow != synchronization.startup.maximumWaitNs ||
-            capacity->startup.videoUnits != synchronization.startup.videoCapacity ||
-            capacity->startup.videoBytes != synchronization.startup.videoByteCapacity ||
-            capacity->startup.videoUnitBytes != synchronization.startup.maximumVideoUnitBytes ||
-            capacity->startup.audioUnits != synchronization.startup.audioCapacity ||
-            capacity->startup.audioBytes != synchronization.startup.audioByteCapacity ||
-            capacity->startup.audioUnitBytes != synchronization.startup.maximumAudioUnitBytes ||
-            !capacity->videoAcquiringCapacity ||
-            (hasAudio && !*capacity->audioAcquiringCapacity))))
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Source clock acquiring capacity requires matching capacity facts"));
-    const auto videoAcquiringCapacity = capacity
-        ? capacity->videoAcquiringCapacity : *synchronization.startup.videoCapacity;
-    const auto audioAcquiringCapacity = hasAudio
-        ? std::optional<std::size_t>{capacity ? *capacity->audioAcquiringCapacity
-                                            : *synchronization.startup.audioCapacity}
-        : std::nullopt;
     if ((!decoded && synchronization.startup.videoReadiness !=
             MediaVideoStartupReadiness::IntervalCoverage) ||
         (decoded && (synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution ||
@@ -163,7 +135,7 @@ template<bool Updating> ::media::Status compileAssembly(
         }
         const auto& demux = *synchronization.demuxTimestampInput;
         initialGeneration = *demux.initialGeneration;
-        if constexpr (Updating) {
+        if constexpr (Checking) {
             const auto* original = std::get_if<MediaDemuxTimestampInputClockAssemblyPlan>(&result.inputClock);
             if (!original || original->videoTimeBase != demux.videoTimeBase ||
                 original->audioTimeBase != demux.audioTimeBase ||
@@ -196,7 +168,7 @@ template<bool Updating> ::media::Status compileAssembly(
                 "A/V production input clock mode is unsupported"));
     }
 
-    if constexpr (Updating) {
+    if constexpr (Checking) {
         if (result.audio.has_value() != hasAudio ||
             result.video.sourceIdentity != *synchronization.startup.videoIdentity ||
             result.video.timing != videoTiming ||
@@ -208,34 +180,69 @@ template<bool Updating> ::media::Status compileAssembly(
                 result.audio->duration != audioDuration ||
                 result.audio->decodeOrder != MediaDecodeOrderMode::PresentationOrderNoReorder)))
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source assembly fixed identity changed"));
-        result.video.acquiringCapacity = videoAcquiringCapacity;
-        result.video.acquiringTimeout = *synchronization.startup.maximumWaitNs;
-        if (hasAudio) {
-            result.audio->acquiringCapacity = *audioAcquiringCapacity;
-            result.audio->acquiringTimeout = *synchronization.startup.maximumWaitNs;
-        }
     } else {
-        std::optional<MediaCanonicalAudioAssemblyPlan> audioAssembly;
-        if (hasAudio) audioAssembly.emplace(MediaCanonicalAudioAssemblyPlan{
+        std::optional<MediaCanonicalAudioAssemblyFixedPlan> audioAssembly;
+        if (hasAudio) audioAssembly.emplace(MediaCanonicalAudioAssemblyFixedPlan{
             *synchronization.startup.audioIdentity, std::move(audioDuration),
-            MediaDecodeOrderMode::PresentationOrderNoReorder,
-            *audioAcquiringCapacity, *synchronization.startup.maximumWaitNs});
-        result.emplace(MediaRealtimeAvSyncAssemblyPlan{std::move(inputClock), MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
-            initialGeneration, MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
-            {*synchronization.startup.videoIdentity, std::move(videoTiming), videoAcquiringCapacity,
-                *synchronization.startup.maximumWaitNs}, std::move(audioAssembly)});
+            MediaDecodeOrderMode::PresentationOrderNoReorder});
+        result.emplace(MediaRealtimeAvSyncAssemblyFixedPlan{
+            {std::move(inputClock), MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+                initialGeneration, MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire},
+            {*synchronization.startup.videoIdentity, std::move(videoTiming)}, std::move(audioAssembly)});
     }
     return ::media::Status::success();
 }
 
-} // namespace
+struct AcquiringPlan final {
+    std::size_t video;
+    std::optional<std::size_t> audio;
+    MediaRunningTime timeout;
+};
+::media::Result<AcquiringPlan> planAcquiring(
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization)
+{
+    using Result = ::media::Result<AcquiringPlan>;
+    const bool hasAudio = synchronization.members == MediaTranscodeStreamSet::AudioVideo;
+    if (!synchronization.startup.videoCapacity || !*synchronization.startup.videoCapacity ||
+        hasAudio != synchronization.startup.audioCapacity.has_value() ||
+        (hasAudio && !*synchronization.startup.audioCapacity) ||
+        !synchronization.startup.maximumWaitNs ||
+        *synchronization.startup.maximumWaitNs <= MediaRunningTime::fromNanoseconds(0))
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "A/V production assembly requires complete startup and source facts"));
+    const bool decoded = synchronization.startup.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan;
+    const auto* capacity = request.sourceCapacity;
+    if (decoded != (capacity != nullptr) ||
+        (capacity && (capacity->audioAcquiringCapacity.has_value() != hasAudio ||
+            capacity->route.shape.members != synchronization.members ||
+            capacity->route.shape.readiness != synchronization.startup.videoReadiness ||
+            capacity->acquisitionWindow != synchronization.startup.maximumWaitNs ||
+            capacity->startup.videoUnits != synchronization.startup.videoCapacity ||
+            capacity->startup.videoBytes != synchronization.startup.videoByteCapacity ||
+            capacity->startup.videoUnitBytes != synchronization.startup.maximumVideoUnitBytes ||
+            capacity->startup.audioUnits != synchronization.startup.audioCapacity ||
+            capacity->startup.audioBytes != synchronization.startup.audioByteCapacity ||
+            capacity->startup.audioUnitBytes != synchronization.startup.maximumAudioUnitBytes ||
+            !capacity->videoAcquiringCapacity ||
+            (hasAudio && !*capacity->audioAcquiringCapacity))))
+        return Result::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Source clock acquiring capacity requires matching capacity facts"));
+    const auto videoAcquiringCapacity = capacity
+        ? capacity->videoAcquiringCapacity : *synchronization.startup.videoCapacity;
+    const auto audioAcquiringCapacity = hasAudio
+        ? std::optional<std::size_t>{capacity ? *capacity->audioAcquiringCapacity
+                                            : *synchronization.startup.audioCapacity}
+        : std::nullopt;
+    return Result::success({videoAcquiringCapacity, audioAcquiringCapacity, *synchronization.startup.maximumWaitNs});
+}
 
-::media::Result<MediaRealtimeAvSourceClockPlan> MediaRealtimeAvSourceClockPlanner::plan(
-    const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlanView& synchronization)
+template<bool Checking, class Synchronization, class Timing> ::media::Status compileTiming(
+    const MediaRealtimeAvSourceClockFixedRequest& request,
+    const Synchronization& synchronization, Timing& result)
 {
     if (auto status = MediaAvSyncPlanValidator::validateSourceClock(synchronization); !status)
-        return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(status.error());
+        return ::media::Status::failure(status.error());
     const auto& audio = request.audio;
     const auto* isolatedAudioInput = request.isolatedAudioInput;
     const bool hasAudio = synchronization.members == MediaTranscodeStreamSet::AudioVideo;
@@ -247,13 +254,15 @@ template<bool Updating> ::media::Status compileAssembly(
         (audioCopy && (!audio.maximumAccessUnitSamples || *audio.maximumAccessUnitSamples <= 0 ||
                         audio.selectedDecoder || audio.selectedResampler)) ||
         (!audioCopy && (audio.branchMode != MediaBranchMode::TranscodeFrame || !audio.selectedDecoder)))))
-        return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+        return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("Source clock requires resolved audio source timing"));
     MediaRealtimeAvSourceTimingFacts facts;
-    facts.inputVideoIdentity = synchronization.startup.videoIdentity;
-    facts.inputAudioIdentity = synchronization.startup.audioIdentity;
+    if constexpr (!Checking) {
+        facts.inputVideoIdentity = synchronization.startup.videoIdentity;
+        facts.inputAudioIdentity = synchronization.startup.audioIdentity;
+    }
     if (!synchronization.sourceClockMode) {
-        return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+        return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "synchronized input clock mode is missing"));
     }
@@ -264,7 +273,7 @@ template<bool Updating> ::media::Status compileAssembly(
             (hasAudio && (!synchronization.rtpInput->audioInput.clockRate ||
              !isolatedAudioInput || !isolatedAudioInput->rtpDepacketizer ||
              isolatedAudioInput->rtpDepacketizer->accessUnitDurationRtpTicks <= 0))) {
-            return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+            return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "RTP input clock does not publish complete duration facts"));
         }
@@ -276,7 +285,7 @@ template<bool Updating> ::media::Status compileAssembly(
         };
         if (!boundedReceive(request.input) ||
             (hasAudio && !boundedReceive(*isolatedAudioInput))) {
-            return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+            return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "RTP receive wait must be shorter than source purge acknowledgement timeout"));
         }
@@ -318,7 +327,7 @@ template<bool Updating> ::media::Status compileAssembly(
                 selectedProgram->audioPacketDuration,
                 audio.sourceStreamIndex,
                 *synchronization.mpegTsInput->audioPid)) {
-            return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+            return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS input clock does not publish complete duration facts"));
         }
@@ -345,7 +354,7 @@ template<bool Updating> ::media::Status compileAssembly(
             inputSampleRate <= 0 || inputAccessUnitSamples <= 0 ||
             inputAccessUnitSamples >
                 std::numeric_limits<std::uint32_t>::max()) {
-            return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+            return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "demux timestamp input does not publish complete duration facts"));
         }
@@ -353,23 +362,87 @@ template<bool Updating> ::media::Status compileAssembly(
         facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
             inputAccessUnitSamples);
     } else {
-        return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(
+        return ::media::Status::failure(
             ::media::ErrorInfo::unsupported(
                 "synchronized input clock mode is unsupported"));
     }
 
-    std::optional<MediaRealtimeAvSyncAssemblyPlan> assembly;
-    if (auto status = compileAssembly<false>(request, synchronization, facts, assembly); !status)
-        return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(status.error());
-    return ::media::Result<MediaRealtimeAvSourceClockPlan>::success({std::move(facts), std::move(*assembly)});
+    if constexpr (Checking) {
+        if (result.inputVideoIdentity != synchronization.startup.videoIdentity ||
+            result.inputAudioIdentity != synchronization.startup.audioIdentity ||
+            std::tie(result.inputVideoClockRate, result.inputAudioSampleRate,
+                result.inputAudioSamplesPerAccessUnit, result.inputVideoPacketDuration, result.inputAudioPacketDuration) !=
+            std::tie(facts.inputVideoClockRate, facts.inputAudioSampleRate,
+                facts.inputAudioSamplesPerAccessUnit, facts.inputVideoPacketDuration, facts.inputAudioPacketDuration))
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Source clock fixed timing changed"));
+    } else result = std::move(facts);
+    return ::media::Status::success();
+}
+
+template<class Synchronization> ::media::Result<MediaRealtimeAvSourceClockFixedPlan> prepareClock(
+    const MediaRealtimeAvSourceClockFixedRequest& request, const Synchronization& synchronization)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourceClockFixedPlan>;
+    MediaRealtimeAvSourceTimingFacts timing;
+    if (auto status = compileTiming<false>(request, synchronization, timing); !status)
+        return Result::failure(status.error());
+    std::optional<MediaRealtimeAvSyncAssemblyFixedPlan> assembly;
+    if (auto status = compileDeclaration<false>(request, synchronization, timing, assembly); !status)
+        return Result::failure(status.error());
+    return Result::success({std::move(timing), std::move(*assembly)});
+}
+
+} // namespace
+
+::media::Result<MediaRealtimeAvSourceClockFixedPlan> MediaRealtimeAvSourceClockPlanner::prepareFixed(
+    const MediaRealtimeAvSourceClockFixedRequest& request, const MediaAvSyncFixedPlan& synchronization)
+{
+    return prepareClock(request, synchronization);
+}
+
+::media::Result<MediaRealtimeAvSourceClockPlan> MediaRealtimeAvSourceClockPlanner::bind(
+    MediaRealtimeAvSourceClockFixedPlan fixed,
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization)
+{
+    using Result = ::media::Result<MediaRealtimeAvSourceClockPlan>;
+    if (auto status = compileTiming<true>(request, synchronization, std::as_const(fixed.timing)); !status)
+        return Result::failure(status.error());
+    if (auto status = compileDeclaration<true>(request, synchronization, fixed.timing, std::as_const(fixed.assembly)); !status)
+        return Result::failure(status.error());
+    auto acquiring = planAcquiring(request, synchronization);
+    if (!acquiring) return Result::failure(acquiring.error());
+    std::optional<MediaCanonicalAudioAssemblyPlan> audio;
+    if (fixed.assembly.audio) audio.emplace(MediaCanonicalAudioAssemblyPlan{
+        std::move(*fixed.assembly.audio), *acquiring.value().audio, acquiring.value().timeout});
+    MediaRealtimeAvSyncAssemblyPlan assembly{
+        std::move(static_cast<MediaRealtimeAvSyncAssemblyFixedFields&>(fixed.assembly)),
+        {std::move(fixed.assembly.video), acquiring.value().video, acquiring.value().timeout}, std::move(audio)};
+    return Result::success({std::move(fixed.timing), std::move(assembly)});
+}
+
+::media::Result<MediaRealtimeAvSourceClockPlan> MediaRealtimeAvSourceClockPlanner::plan(
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization)
+{
+    auto fixed = prepareClock(request, synchronization);
+    if (!fixed) return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(fixed.error());
+    return bind(std::move(fixed).value(), request, synchronization);
 }
 
 ::media::Status MediaRealtimeAvSourceClockPlanner::rebindAssembly(
     const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyView& assembly)
 {
-    if (auto status = MediaAvSyncPlanValidator::validateSourceClock(synchronization); !status) return status;
-    return compileAssembly<true>(request, synchronization, timing, assembly);
+    if (auto status = compileTiming<true>(request, synchronization, timing); !status) return status;
+    if (auto status = compileDeclaration<true>(request, synchronization, timing, assembly); !status) return status;
+    auto acquiring = planAcquiring(request, synchronization);
+    if (!acquiring) return ::media::Status::failure(acquiring.error());
+    assembly.video.acquiringCapacity = acquiring.value().video;
+    assembly.video.acquiringTimeout = acquiring.value().timeout;
+    if (assembly.audio) {
+        assembly.audio->acquiringCapacity = *acquiring.value().audio;
+        assembly.audio->acquiringTimeout = acquiring.value().timeout;
+    }
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

@@ -220,10 +220,10 @@ try {
             "Composition capacity refresh requires fixed prepared source facts"));
     auto startup = MediaAvSyncStartupPolicyPlanner::plan(prepared.sourceRequest, capacity, prepared.deployment);
     if (!startup) return ::media::Status::failure(startup.error());
-    const MediaRealtimeAvSourceClockRequest clockRequest{
+    const MediaRealtimeAvSourceClockRequest clockRequest{{
         products.inputType, RealtimeInputStreamLayout::SeparateStreams, products.input,
         products.videoStreamIndex, prepared.raw.video.codecName, products.runtime.audioPipeline,
-        products.runtime.isolatedAudioInput ? &*products.runtime.isolatedAudioInput : nullptr, &capacity};
+        products.runtime.isolatedAudioInput ? &*products.runtime.isolatedAudioInput : nullptr}, &capacity};
     MediaRealtimeAvSourceCapacityState runtimeCapacity(products.runtime);
     if (auto status = MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
             clockRequest, clockTiming, startup.value(), runtimeCapacity); !status) return status;

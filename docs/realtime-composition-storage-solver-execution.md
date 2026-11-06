@@ -304,3 +304,15 @@ Windows Release 全量 61027 已退出 0（803 任务计划），四项产物核
 下一步时钟拆分已按实际代码核对：validateSourceClock 不依赖尚未求出的 source startup 容量，但 demux 仍检查既有 prepared input 包数/字节证据，必须保留。固定 timing/clock/identity 声明由共同 compiler 生成；真实 route/acquisition 与数量在 bind 时核对。旧 plan 必须组合调用同一固定准备与 bind，rebind 复用声明核验和数值写入，不新增第二套协议算法；固定 owning 字符串仍需预算，不因模板或类型拆分而免计费。
 
 RKMPP SSH 72181 已完成 228/228，8 核增量 all-target 终态退出 0。本批修正版两平台构建通过，双独立源码复审 PASS；保留前三次 Windows 失败。10 源码 UTF-8 无 BOM、CRLF 与 diff 检查通过。本轮未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或临时脚本；所有既有未跟踪文件保持。固定 owner 预算、clock/assembly 固定准备、实际 solver 接线及原规格实流仍待完成。
+
+## 2026-11-06 源时钟固定声明与容量绑定
+
+固定 ClockRequest 不含 sourceCapacity；固定 assembly 仅保存 clock/generation/evidence、视频身份和 timing、可选音频身份/duration/decodeOrder，完整类型在 bind 时才取得 acquiring 数量和期限。原 plan 实际执行共同 prepareClock 与 bind；没有新增第二套 RTP/TS/demux 算法。
+
+SourceClock validator 两入口复用同一模板，保留 demux prepared input 的包数/字节证据；timing compiler 同时用于首次准备和真实输入复核，保留 boundedReceive、音频分支、packet-duration 与整数范围检查。bind/rebind 先验证输入 timing 与固定声明，再由唯一 planAcquiring 校验成员、route/readiness、startup/acquisition 一致性及正数，最后写值。检查路径不复制身份字符串；demux 仍逐字段核对已有 clock，避免创建 owning 临时副本。
+
+类型基类的两处 request 聚合构造与唯一 assembly 构造已同步，所有新增相等比较使用成员形式。双独立审查（residence_budget_audit、residence_budget_review_b）均为本批 7 源码局部 PASS；固定事实校验现在先于容量校验，多项同时非法时首错误可能变化，但原拒绝条件与错误保留。Windows Release 全量 72746 正在运行。
+
+本批只拆共同编译阶段，固定 owning 字符串还未受完整租约约束；尚未替换 freezeBatch 的 nullptr，也未完成实际 solver 或原规格媒体链路。
+
+源时钟拆分 Windows Release 72746 首次全量退出 0（803 任务计划），四项产物核验通过，realtime CLI 7189504 字节、2026-11-06 14:12:27。远端两批 3＋4 源码 SHA256 核验同步；RKMPP SSH 67716 完成 124/124，8 核增量 all-target 退出 0。7 源码双独立审查 PASS、UTF-8/CRLF 与 diff 检查通过。本批没有运行媒体链路或生成媒体测试临时产物，完整目标仍未完成。

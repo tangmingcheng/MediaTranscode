@@ -283,7 +283,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
            stream.baseTimestamp && presentText(stream.cname);
 }
 
-::media::Status validateRtpInput(const MediaAvSyncPlanView& plan)
+template<class Plan> ::media::Status validateRtpInput(const Plan& plan)
 {
     if (!plan.rtpInput || plan.mpegTsInput || plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
@@ -327,7 +327,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateTsInput(const MediaAvSyncPlanView& plan)
+template<class Plan> ::media::Status validateTsInput(const Plan& plan)
 {
     if (plan.rtpInput || !plan.mpegTsInput || plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr ||
@@ -415,7 +415,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateDemuxInput(const MediaAvSyncPlanView& plan)
+template<class Plan> ::media::Status validateDemuxInput(const Plan& plan)
 {
     if (plan.rtpInput || plan.mpegTsInput || !plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps ||
@@ -549,9 +549,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         ? ::media::Status::success() : validateOutput(plan);
 }
 
-} // namespace
-
-::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlanView& plan)
+template<class Plan> ::media::Status validateSourceClockFacts(const Plan& plan)
 {
     const bool videoContribution = plan.members == MediaTranscodeStreamSet::VideoOnly &&
         plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
@@ -570,6 +568,18 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         return validateDemuxInput(plan);
     }
     return invalid("sourceClockMode");
+}
+
+} // namespace
+
+::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncFixedPlan& plan)
+{
+    return validateSourceClockFacts(plan);
+}
+
+::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlanView& plan)
+{
+    return validateSourceClockFacts(plan);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlanView& plan)
