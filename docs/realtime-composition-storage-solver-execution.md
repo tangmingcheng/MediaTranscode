@@ -362,3 +362,15 @@ Clock bind 与 Runtime bindFacts 复用唯一私有 consumeCapacity，验证原�
 固定 owner 必须在候选使用期存活、不移动、不改写。普通固定产品字符串仍需构造前预算；Kernel 固定准备、Preparer 前置、合法基线、具体 solver 和实流验收仍未完成。Windows Release 全量会话 13622 正在运行；保留 freezeBatch 的 nullptr 失败门禁。
 
 Windows Release 13622 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7214080 字节、2026-11-06 15:03:02。远端 6＋2 源码同步前后 SHA256 核验通过，新头文件触发正常 CMake 重配置；RKMPP SSH 45885 以 8 核增量 all-target 完成 11/11、退出 0。修正版 8 源码双独立复审局部 PASS，保留初轮整体 FAIL；UTF-8/CRLF 与 diff 检查通过。本批未运行 local/realtime 媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。完整预算、Kernel/Preparer 固定准备前置、solver 与原规格实流仍未完成。
+
+## 2026-11-06 Kernel 固定准备进入共同生产调用链
+
+Kernel 的 FixedRequest 不含 capacity；prepareFixed 复用原 decoder/filter readiness、allocation/ownership、audio、prepared ingress 和 producer-holder 校验，按真实 timing 调用同一 StartupPolicy prepare，再生成 SyncFixed 与 RuntimeFixed。FixedProducts 拥有 input/video/runtime/holders，timing 按值保存；只借原 request/raw/deployment/audioRetention 的外部 referent，不借按值 request 的局部 owning 成员。外部对象必须存活到所有候选与 bind 结束；当前仍是 seal 后同步组合，不提前移动 replay/report 后续所需的 prepared video。
+
+原 Kernel plan 实际调用 prepareFixed→bind；bind 保留 timing/capacity variant 匹配、原 StartupPolicyPlanner 的 route/acquisitionWindow/ledger retention 校验，以及音频 units/bytes/unitBytes 三项一致，再走 Runtime 容量规划与消费、原 storage/connections。Runtime 初次容量与 rebind 共用固定 startup 政策比较，除容量及 maximumGap 外等待政策/readiness/outputLead 必须一致，提供的身份也须匹配。容量域错误现在可能晚于固定准备错误返回，原拒绝条件保留。
+
+迁移后全 src 确认旧 Runtime planFacts 及其专用完整 Request 已无调用者，删除该包装，保留唯一 prepareFixed/planCapacity/bindFacts。两位独立审查 residence_budget_audit、residence_budget_review_b 对最终 5 源码均局部 PASS。普通 fixed 产品仍未完整事前计费；Preparer 前置、候选工作区/合法基线、具体 solver 和原规格实流仍待完成，freezeBatch 的 nullptr 门禁保持。
+
+Windows Release 82893 全量终态退出 0（804 任务计划），四项产物核验通过，realtime CLI 7218176 字节、2026-11-06 15:16:10。远端 3＋2 源码同步前后 SHA256 核验通过；RKMPP SSH 74435 以 8 核增量 all-target 完成 6/6、退出 0。最终 5 源码双独立复审局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批未运行媒体链路，未生成抓包、截图、录制、临时日志或脚本；既有未跟踪文件保持。
+
+预算范围复核：两位独立审查均 PASS。依据 MediaSourcePreparationStoragePlan 的 logical retained payload/public headers 声明及 C API 提案 r182，准备额度不是 RSS/不透明设备总内存；此前把全部日志列为本批前置条件过宽，此处收窄。下一批必须覆盖新增固定 owner/workspace 的 input/audio/group/sync/timing/assembly、嵌套分配、临时/Debug proxy、对象/control block 及最终消费峰值；不要求先重构全进程日志和所有历史元数据。借用既有事实不增加 backing，但不证明原存储已计费；新增复制必须计费。原媒体/输出/画布/目录预算不得减免，完成报告须明确新增域与历史未覆盖域，不能宣称整体分配硬界已经闭合。

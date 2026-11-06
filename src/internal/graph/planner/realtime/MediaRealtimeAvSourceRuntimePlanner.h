@@ -24,10 +24,6 @@ struct MediaRealtimeAvSourceRuntimeFixedRequest {
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
 };
-struct MediaRealtimeAvSourceRuntimeRequest final : MediaRealtimeAvSourceRuntimeFixedRequest {
-    MediaGraphQueueParameters queues;
-    const MediaAvSourceCapacityFacts* sourceCapacity;
-};
 
 class MediaRealtimeAvSourceRuntimePlanner final {
 public:
@@ -36,13 +32,13 @@ public:
         std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput, MediaAvSyncFixedPlan synchronization);
     static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
         const MediaRealtimeAvSourceFixedProducts& fixed, const MediaRealtimeAvSourceClockRequest& request,
-        const MediaAvSyncStartupCapacity& startup, const MediaGraphQueueParameters& queues);
+        const MediaAvSyncStartupPolicyView& startup, const MediaGraphQueueParameters& queues);
     static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
         MediaRealtimeAvSourceFixedProducts&&, const MediaRealtimeAvSourceClockRequest&,
-        const MediaAvSyncStartupCapacity&, const MediaGraphQueueParameters&) = delete;
+        const MediaAvSyncStartupPolicyView&, const MediaGraphQueueParameters&) = delete;
     static ::media::Result<MediaRealtimeAvSourceCapacityState> planCapacity(
         const MediaRealtimeAvSourceFixedProducts&&, const MediaRealtimeAvSourceClockRequest&,
-        const MediaAvSyncStartupCapacity&, const MediaGraphQueueParameters&) = delete;
+        const MediaAvSyncStartupPolicyView&, const MediaGraphQueueParameters&) = delete;
     static ::media::Result<MediaRealtimeAvSourcePlanningProducts> bindFacts(
         MediaRealtimeAvSourceFixedProducts&& fixed, MediaRealtimeAvSourceCapacityState&& capacity);
     // Prepared input/timing and all non-capacity source facts remain fixed.
@@ -52,11 +48,6 @@ public:
         const MediaRealtimeAvSourceClockRequest& clockRequest,
         const MediaRealtimeAvSourceTimingFacts& timing, const MediaAvSyncStartupPolicyView& startup,
         MediaRealtimeAvSourceCapacityState& state);
-    static ::media::Result<MediaRealtimeAvSourcePlanningProducts> planFacts(
-        const MediaRealtimeAvSourceRuntimeRequest& request,
-        MediaAudioPipelinePlan audio,
-        std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput,
-        MediaAvSyncPlan synchronization);
     static ::media::Result<MediaRealtimeAvSourceRuntimePlan> bind(
         MediaRealtimeAvSourcePlanningProducts products,
         MediaOutputReservationStoragePlan reservationStorage);

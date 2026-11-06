@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourceBranchPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceFixedProducts.h"
 #include "internal/graph/planner/realtime/MediaRtpClockRouteStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupBatchStoragePlanner.h"
@@ -15,20 +16,40 @@
 namespace media::ffmpeg::graph {
 struct MediaAvSourceCapacityFacts;
 struct MediaRealtimeAvSourceTimingFacts;
-struct MediaCompositionSourcePlanningRequest final {
+struct MediaCompositionSourceFixedRequest {
     const MediaRealtimeRtpTranscodeRequest& sourceRequest;
     const MediaRealtimeRawInputPlan& raw;
     const MediaVideoSourceTiming& timing;
     const MediaRtpIngressPlan& videoIngress;
     const MediaRtpIngressPlan* audioIngress;
     const MediaPreparedInputRetentionStream* audioRetention;
-    MediaAvSyncCapacityFacts capacity;
     MediaVideoSourcePlan video;
     const MediaResolvedAudioOutputPlan& outputAudio;
     const std::optional<MediaSelectedAudioResampler>& preparedAudioResampler;
     const MediaRealtimeDeploymentEnvelope& deployment;
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
+};
+struct MediaCompositionSourcePlanningRequest final : MediaCompositionSourceFixedRequest {
+    MediaAvSyncCapacityFacts capacity;
+};
+// Original request/raw/deployment/retention owners must outlive preparation,
+// every candidate, and binding. Video and runtime declarations are owned here.
+struct MediaCompositionSourceFixedProducts final {
+    const std::shared_ptr<MediaPreparationMemoryResource> planningResource;
+    const MediaRealtimeRtpTranscodeRequest& sourceRequest;
+    const MediaRealtimeRawInputPlan& raw;
+    const MediaRealtimeDeploymentEnvelope& deployment;
+    const MediaPreparedInputRetentionStream* audioRetention;
+    MediaVideoSourceTiming timing;
+    RealtimeInputType inputType;
+    MediaRealtimeRtpInputNodePlan input;
+    int videoStreamIndex;
+    MediaVideoSourcePlan video;
+    MediaRational frameRate;
+    std::optional<MediaRational> maximumFrameDuplicationGap;
+    MediaRealtimeAvSourceFixedProducts runtime;
+    MediaCompositionProducerHolderFacts producerHolders;
 };
 // Request references are borrowed for this synchronous call only. Returned
 // products own their facts and workspace resource, but no source media reservation.
@@ -53,10 +74,15 @@ struct MediaCompositionSourcePlanningProducts final {
 };
 class MediaCompositionSourcePlanningKernel final {
 public:
+    static ::media::Result<MediaCompositionSourceFixedProducts> prepareFixed(
+        MediaCompositionSourceFixedRequest request, std::shared_ptr<MediaPreparationMemoryResource> resource);
+    // Consumes the same fixed declarations after planning actual capacity.
+    static ::media::Result<MediaCompositionSourcePlanningProducts> bind(
+        MediaCompositionSourceFixedProducts&& fixed, MediaAvSyncCapacityFacts capacity);
     // Uses the original immutable prepared request/timing; only capacity facts
     // change. Success allocates nothing; failure invalidates all products.
     static ::media::Status rebindCapacity(
-        const MediaCompositionSourcePlanningRequest& prepared,
+        const MediaCompositionSourceFixedRequest& prepared,
         const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
         MediaCompositionSourcePlanningProducts& products);
     static ::media::Result<MediaCompositionSourcePlanningProducts> plan(MediaCompositionSourcePlanningRequest request,

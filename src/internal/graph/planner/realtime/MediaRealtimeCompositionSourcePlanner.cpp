@@ -137,10 +137,10 @@ try {
     const MediaAvSyncCapacityFacts capacity = cadence
         ? MediaAvSyncCapacityFacts{std::cref(*admitted)}
         : MediaAvSyncCapacityFacts{std::cref(*sourceCapacity)};
-    auto planned = MediaCompositionSourcePlanningKernel::plan({request.sourceRequest, raw, request.timing,
+    auto planned = MediaCompositionSourcePlanningKernel::plan({{request.sourceRequest, raw, request.timing,
         request.prepared.videoIngress, request.prepared.audioIngress, request.prepared.continuousAudioRetention,
-        capacity, std::move(request.video), request.outputAudio, request.preparedAudioResampler, request.deployment,
-        request.activationOutputLead, request.selectedAudio}, resource);
+        std::move(request.video), request.outputAudio, request.preparedAudioResampler, request.deployment,
+        request.activationOutputLead, request.selectedAudio}, capacity}, resource);
     if (!planned) return Result::failure(planned.error());
     auto products = std::move(planned).value();
     if (!cadence) {
