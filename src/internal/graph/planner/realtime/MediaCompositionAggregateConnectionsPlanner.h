@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
 #include "media_transcode/Result.h"
@@ -17,9 +18,9 @@ enum class MediaCompositionAggregateRole {
 };
 struct MediaCompositionAggregateConnection final {
     MediaCompositionAggregateRole from;
-    std::string output; // Empty means the actual branch endpoint's port.
+    std::pmr::string output; // Empty means the actual branch endpoint's port.
     MediaCompositionAggregateRole to;
-    std::string input;
+    std::pmr::string input;
     MediaStreamKind stream;
     MediaPayloadKind payload;
     MediaEdgePolicy policy;
@@ -29,9 +30,26 @@ inline constexpr std::array MediaCompositionAggregateNodes{
     MediaCompositionAggregateNode{MediaCompositionAggregateRole::VideoAggregate, MediaNodeKind::AvContinuousAggregate},
     MediaCompositionAggregateNode{MediaCompositionAggregateRole::AudioAggregate, MediaNodeKind::ContinuousAudioAggregate}};
 struct MediaCompositionAggregateConnections final {
+private:
+    std::shared_ptr<MediaPreparationMemoryResource> m_resource;
+public:
+    explicit MediaCompositionAggregateConnections(std::shared_ptr<MediaPreparationMemoryResource> resource)
+        : m_resource(std::move(resource)), sources(m_resource.get()), output(m_resource.get()) {}
+    MediaCompositionAggregateConnections(const MediaCompositionAggregateConnections&) = delete;
+    MediaCompositionAggregateConnections& operator=(const MediaCompositionAggregateConnections&) = delete;
+    MediaCompositionAggregateConnections(MediaCompositionAggregateConnections&&) noexcept = default;
+    // Replace allocator and owner together; PMR move assignment alone does not.
+    MediaCompositionAggregateConnections& operator=(MediaCompositionAggregateConnections&& other) noexcept {
+        if (this != &other) {
+            std::destroy_at(this);
+            std::construct_at(this, std::move(other));
+        }
+        return *this;
+    }
+    const std::shared_ptr<MediaPreparationMemoryResource>& resource() const noexcept { return m_resource; }
     // Source positions are the same positions as the aggregate source contract.
-    std::vector<std::vector<MediaCompositionAggregateConnection>> sources;
-    std::vector<MediaCompositionAggregateConnection> output;
+    std::pmr::vector<std::pmr::vector<MediaCompositionAggregateConnection>> sources;
+    std::pmr::vector<MediaCompositionAggregateConnection> output;
 };
 class MediaCompositionAggregateConnectionsPlanner final {
 public:
@@ -48,6 +66,7 @@ public:
     static ::media::Result<MediaCompositionAggregateConnections> plan(
         std::span<const MediaAvAggregateSourcePlan> sources, std::size_t audioSource,
         std::string_view audioPort, std::span<const MediaRealtimeEdgePolicySet> sourcePolicies,
-        const MediaRealtimeEdgePolicySet& outputPolicies);
+        const MediaRealtimeEdgePolicySet& outputPolicies,
+        std::shared_ptr<MediaPreparationMemoryResource> resource);
 };
 } // namespace media::ffmpeg::graph

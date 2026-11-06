@@ -30,7 +30,7 @@ private:
     std::shared_ptr<MediaPreparationMemoryResource> m_resource;
 public:
     explicit MediaCompositionTopologyPlanningProducts(std::shared_ptr<MediaPreparationMemoryResource> resource)
-        : m_resource(std::move(resource)), sources(m_resource.get()), graph(m_resource), sourcePolicies(m_resource.get()) {}
+        : m_resource(std::move(resource)), aggregate(m_resource), sources(m_resource.get()), graph(m_resource), sourcePolicies(m_resource.get()) {}
     MediaCompositionTopologyPlanningProducts(const MediaCompositionTopologyPlanningProducts&) = delete;
     MediaCompositionTopologyPlanningProducts& operator=(const MediaCompositionTopologyPlanningProducts&) = delete;
     MediaCompositionTopologyPlanningProducts(MediaCompositionTopologyPlanningProducts&&) noexcept = default;

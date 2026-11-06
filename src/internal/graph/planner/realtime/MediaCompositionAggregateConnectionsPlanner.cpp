@@ -24,7 +24,7 @@ template<bool Updating> ::media::Status compileConnections(
         if (result.sources.size() != sources.size()) return invalid("Aggregate source catalog changed");
     } else result.sources.resize(sources.size());
     bool identityValid = true;
-    const auto add = [&](std::vector<MediaCompositionAggregateConnection>& edges, std::size_t& cursor,
+    const auto add = [&](std::pmr::vector<MediaCompositionAggregateConnection>& edges, std::size_t& cursor,
         Role from, std::string_view output, Role to, std::string_view input,
         MediaStreamKind stream, MediaPayloadKind payload, const MediaEdgePolicy& policy) {
         if (!identityValid) return;
@@ -34,7 +34,7 @@ template<bool Updating> ::media::Status compileConnections(
             if (old.from != from || old.to != to || old.output != output || old.input != input ||
                 old.stream != stream || old.payload != payload) { identityValid = false; return; }
             old.policy = policy;
-        } else edges.push_back({from, std::string(output), to, std::string(input), stream, payload, policy});
+        } else edges.push_back({from, std::pmr::string(output, result.resource().get()), to, std::pmr::string(input, result.resource().get()), stream, payload, policy});
         ++cursor;
     };
     for (std::size_t i = 0; i < sources.size(); ++i) {
@@ -95,10 +95,13 @@ template<bool Updating> ::media::Status compileConnections(
 ::media::Result<MediaCompositionAggregateConnections> MediaCompositionAggregateConnectionsPlanner::plan(
     std::span<const MediaAvAggregateSourcePlan> sources, std::size_t audioSource,
     std::string_view audioPort, std::span<const MediaRealtimeEdgePolicySet> sourcePolicies,
-    const MediaRealtimeEdgePolicySet& outputPolicies)
+    const MediaRealtimeEdgePolicySet& outputPolicies,
+    std::shared_ptr<MediaPreparationMemoryResource> resource)
 try {
     using Result = ::media::Result<MediaCompositionAggregateConnections>;
-    MediaCompositionAggregateConnections result;
+    if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Aggregate connections require a preparation resource"));
+    MediaCompositionAggregateConnections result(std::move(resource));
     if (auto status = compileConnections<false>(sources, audioSource, audioPort, sourcePolicies, outputPolicies, result); !status)
         return Result::failure(status.error());
     return Result::success(std::move(result));

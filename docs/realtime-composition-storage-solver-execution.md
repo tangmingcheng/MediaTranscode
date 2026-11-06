@@ -172,3 +172,15 @@ presentation_plan_review 与 timing_path_review 已对修正版完整 11 源码�
 修复后 Windows Release 全量 64080 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、16:08:58。RKMPP 首次整包同步命令超过 Windows 命令长度上限，进程未创建；拆批后首次检查使用远端 Python 不支持的 Path.is_relative_to，写入前失败。改为父目录归属检查，三批 4＋4＋3 文件均前后 SHA256 核验成功；无同步临时文件，最终 SSH 21853 正进行 8 核增量 all-target 构建。
 
 RKMPP SSH 21853 已终态退出 0，8 核增量 all-target 完成 23/23。两平台本轮只验证构建，没有执行 local 或 realtime 媒体测试。没有新增测试产物待清理；用户指定复用源与既有未跟踪文件保持原状。下一项是沿同一资源迁移 aggregate/branch/reference/cost 目录并接具体 solver，仍保留 SourcePresentation 完整准入门禁。
+
+## 2026-11-05 聚合连接目录预算接入
+
+Aggregate 的外层源目录、每源内层连接数组、输出数组及端口字符串改用与 Source/GraphTopology 相同的 preparation resource。双层 PMR vector 依标准 uses-allocator 构造传播资源，普通 connection 的两个 string 仍显式传入资源；禁止总产品复制，整体移动替换 owner 和 allocator。kernel 首次构造与生产 builder 已使用新目录，builder 以 span 借用。原声明顺序、音频成员与端口冲突检查、固定目录 rebind 保持不变。
+
+延续前述 C++ 显式 allocator 与 GStreamer 静态分配协商依据，没有新媒体算法或平台分支。尚未覆盖 branch/input、固定输出声明、reference、packet/lineage 及其临时投影目录，freeze 仍为 nullptr，不构成完整 solver 或实流通过。
+
+presentation_plan_review 与 timing_path_review 对本轮 5 源码均明确局部 PASS，Windows Release 全量构建 61725 正在运行。下批调用核验：video/audio branch planner 还由通用 segment builder 消费，不能仅改合屏调用方；input planner 同时由 realtime protocol/input segment 消费。后续须统一显式分配入口及借用消费，禁止普通 vector 临时构造后再复制到预算目录。
+
+Windows Release 全量 61725 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7126016 字节、16:18:07。RKMPP SSH 84140 同步五文件前后 SHA256 核验成功，正在运行 8 核增量 all-target；无同步临时文件或新媒体测试产物。
+
+2026-11-06 恢复执行时，84140 会话句柄已失效，未取得其最终退出码；远端核验无 ninja/cmake/cc1plus 编译进程，realtime CLI 时间为 2026-11-05 16:19:15、12379960 字节。重新运行同目录 8 核增量 all-target，SSH 43668 终态退出 0，Ninja 报 no work to do。该结果验证当前增量构建状态，不补造原会话退出码。无新媒体测试或临时产物。

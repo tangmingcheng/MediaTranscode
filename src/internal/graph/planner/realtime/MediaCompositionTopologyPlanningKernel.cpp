@@ -23,7 +23,7 @@ template<bool Updating> ::media::Status compileTopology(
     } else {
         for (const auto& source : sources) products.sourcePolicies.push_back(source.policies);
         auto connections=MediaCompositionAggregateConnectionsPlanner::plan(aggregate.sources,
-            aggregate.audioSource, aggregate.audioPort, products.sourcePolicies, products.output.policies);
+            aggregate.audioSource, aggregate.audioPort, products.sourcePolicies, products.output.policies, products.graph.resource());
         if (!connections) return Result::failure(connections.error());
         products.aggregate=std::move(connections).value();
     }

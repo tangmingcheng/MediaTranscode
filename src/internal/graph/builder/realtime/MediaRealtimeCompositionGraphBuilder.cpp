@@ -192,7 +192,7 @@ MediaVideoOutputEncoderOptions videoOptions(
 
 template<class Bind>
 ::media::Status connectAggregate(MediaGraph& graph,
-    const std::vector<MediaCompositionAggregateConnection>& connections, const Bind& bind)
+    std::span<const MediaCompositionAggregateConnection> connections, const Bind& bind)
 {
     for (const auto& connection : connections) {
         auto from = bind(connection.from);
