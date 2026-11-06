@@ -386,3 +386,13 @@ Windows Release 82893 全量终态退出 0（804 任务计划），四项产物�
 后续 STL 几何必须分别证明 fresh-copy、空串 assign、拼接和 vector 增长，不能套同一费用公式。若配置未完成权威审计，应在对应新分配前显式 Unsupported，不得漏计 Debug proxy 或使用估算 fallback；现有 DecoderContract 的已审计 Debug fresh-copy 能力应保留。此处仅记录设计边界，尚未新增配置拒绝门禁，也未宣称 Release 或 Debug 总预算闭合。
 
 临时构造消除批次：Windows Release 90630 全量终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7218688 字节、2026-11-06 15:30:06。4 源码同步前后 SHA256 核验通过，新 model cpp 触发正常重配置；RKMPP SSH 72980 以 8 核增量 all-target 完成 194/194、退出 0，出现 FFmpeg sample_fmts/supported_samplerates/pix_fmts 弃用警告，未修改依赖。双独立源码局部 PASS，UTF-8/CRLF 与 diff 检查通过。本批无媒体链路测试或抓包、截图、录制、临时日志/脚本，原有未跟踪文件保持。
+
+## 2026-11-06 transition 固定成员目录的计数与构造统一
+
+processingParticipants 使用唯一 visitor 两遍输出同一成员集合：先计数，再 reserve 并直接 emplace 字符串；不再用字符串初始化列表、头部 insert 或 source 函数末尾追加。保留 demux video/audio 前缀、startup/video/audio/RTP 顺序及 aggregate_source→selected aggregate_audio；CanonicalLineage 在 AudioCorrection 前，后者的一项 child 也直接构造。输出域显式不选择 aggregate_audio，其后输出参与者追加逻辑未变。
+
+两位独立审查均局部 PASS，原输入拒绝条件、错误文本及成员顺序保持。此处 reserve 按实际成员数请求，不能仅凭标准把 capacity 当作精确值；本机 MSVC 14.51.36231 的 vector::reserve→_Reallocate→xmemory::_Allocate_at_least_helper 在 C++20 下调用 allocator.allocate(count)，已定位其实现路径，最终费用仍须结合实际目标 STL adapter。没有新增事前租约，不能宣称 transition 或固定 owner 预算已闭合。
+
+Windows Release 4099 全量终态退出 0（805 任务计划），四项产物核验通过，realtime CLI 7218176 字节、2026-11-06 15:37:50。源码哈希核验同步后，RKMPP SSH 25831 正在进行 8 核增量 all-target 构建。
+
+Transition 批次 RKMPP SSH 25831 终态 4/4、退出 0；两平台构建及双独立源码局部审查通过。UTF-8/CRLF 与 diff 检查通过。本批没有运行媒体链路，也未生成抓包、截图、录制、临时日志或脚本；原有未跟踪文件保持。固定 owner 事前预算、solver 接线及原规格 Windows/RKMPP 实流仍未完成。
