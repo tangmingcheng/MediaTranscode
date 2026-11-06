@@ -118,7 +118,7 @@ namespace media::ffmpeg::graph {
     }
     if (audioTranscode) {
         auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
-            runtime.synchronization, runtime.planningFacts);
+            runtime.synchronization.audioServo, runtime.planningFacts);
         if (!expectedCorrection || !runtime.audioCorrection ||
             *runtime.audioCorrection != expectedCorrection.value().correction ||
             !runtime.synchronization.audioServo.commandLeadNs ||

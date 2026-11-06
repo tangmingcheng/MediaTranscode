@@ -109,7 +109,7 @@ bool sameAudioFrames(const MediaResolvedAudioOutputPlan& a,
                 runtime->queues, runtime->audioPipeline);
             if (!sourceBounds) return ::media::Status::failure(sourceBounds.error());
             auto sourceCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
-                runtime->synchronization, MediaAudioSourceCorrectionFacts{
+                runtime->synchronization.audioServo, MediaAudioSourceCorrectionFacts{
                     runtime->audioPipeline.resolvedOutput->sampleRate(), sourceBounds.value()});
             if (!sourceCorrection) return ::media::Status::failure(sourceCorrection.error());
             const auto& correction = sourceCorrection.value();

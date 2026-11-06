@@ -232,3 +232,13 @@ packet/lineage 外层 roots 和 lineage 四组 rootIndices 直接使用显式 pr
 Windows Release 全量 97550 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7150080 字节、2026-11-06 12:33:20。七源码分两批 4＋3 文件核验同步前后 SHA256；RKMPP SSH 6408 正执行 8 核增量 all-target。未生成同步临时文件或媒体测试产物。
 
 RKMPP SSH 6408 终态退出 0，8 核增量 all-target 完成 61/61。本轮两平台构建通过，无新媒体测试或临时产物。接线前核验发现：freeze 前尚无 source runtime/synchronization/assembly 的稳定 owner，当前在 seal 后才生成。下一步必须将固定事实编译前移并稳定保管，或由现有 prepared 事实适配共同编译器；不能只创建指向尚不存在 runtime 的借用视图，也不能每候选重复 owning plan。
+
+## 2026-11-06 同步政策无分配读取接线
+
+新增同步读取视图：固定 protocol/生命周期/恢复等字段借用 owning plan，startup 数值和 servo 是无分配快照，startup 两个 identity 保留原字符串引用。六容量可由候选值覆写；完整 startup 的 19 字段值比较保持原连续输出校验语义。禁止从 const/非 const owning 右值构造视图；每次修改候选容量后必须重新生成快照，保存视图不延长原 owner 寿命。依据 [C++ 临时对象寿命](https://eel.is/c++draft/class.temporary) 与此前显式分配协商设计。
+
+整个原 PlanValidator 改为消费同一视图，所有 owning 入口隐式适配，不保留第二验证算法；TopologySourceFacts 按值保存视图并由现有 kernel 同步消费。AudioCorrectionReachabilityPlanner 只接其实际读取的 servo，五个现有调用全部更新，计算不变。此批尚未接 assembly/runtime 数值 workspace，也未前移固定事实准备或接 freeze solver。Windows Release 全量 73873 正在运行；源码双独立复审结果待归档。
+
+residence_budget_audit 与 residence_budget_review_b 对冻结的 11 源码（含新视图头文件）均明确局部 PASS。Windows Release 全量 73873 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7155712 字节、2026-11-06 12:43:07。远端分四批 1＋5＋3＋2 文件核验同步前后 SHA256，新头核对原先不存在；RKMPP SSH 27335 正执行 8 核增量 all-target。无新媒体测试或同步临时文件。
+
+RKMPP SSH 27335 终态退出 0，8 核增量 all-target 完成 21/21。本轮两平台构建通过，无新媒体测试、抓包、截图、日志或临时同步文件；原复用源与未跟踪依赖文件保持不变。下一步是 assembly/source runtime 的数值状态适配及 freeze 前固定事实准备，完整 solver 和原规格实流仍待完成。

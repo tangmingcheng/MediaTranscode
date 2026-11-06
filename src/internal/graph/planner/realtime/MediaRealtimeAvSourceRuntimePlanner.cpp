@@ -57,7 +57,7 @@ struct SourceCapacityPolicies final {
     if (hasAudio) {
         auto bounds = MediaRealtimeAvSyncComponentBoundsPlanner::planSource(queues, audio);
         if (!bounds) return Result::failure(bounds.error());
-        auto correction = MediaAudioCorrectionReachabilityPlanner::plan(synchronization,
+        auto correction = MediaAudioCorrectionReachabilityPlanner::plan(synchronization.audioServo,
             MediaAudioSourceCorrectionFacts{audio.resolvedOutput->sampleRate(), bounds.value()});
         if (!correction) return Result::failure(correction.error());
         synchronization.audioServo.commandLeadNs = correction.value().commandLead;

@@ -62,7 +62,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     std::optional<MediaAudioCorrectionReachabilityResult> correction;
     if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
         auto selected = MediaAudioCorrectionReachabilityPlanner::plan(
-            synchronization, facts.value().timing);
+            synchronization.audioServo, facts.value().timing);
         if (!selected) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 selected.error());

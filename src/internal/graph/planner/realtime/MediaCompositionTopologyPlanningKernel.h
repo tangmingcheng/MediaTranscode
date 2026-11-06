@@ -1,13 +1,13 @@
 #pragma once
 #include "internal/graph/planner/realtime/MediaCompositionGraphTopologyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
-#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanView.h"
 
 namespace media::ffmpeg::graph {
 // Borrowed only during plan(); candidate and sealed source products use the
 // same declarations without constructing a graph or a storage reservation.
 struct MediaCompositionTopologySourceFacts final {
-    const MediaAvSyncPlan& synchronization;
+    MediaAvSyncPlanView synchronization;
     const MediaRealtimeEdgePolicySet& policies;
     const MediaCompositionSourceBranchPlan& branches;
     std::span<const MediaSourceInputConnection> inputs;

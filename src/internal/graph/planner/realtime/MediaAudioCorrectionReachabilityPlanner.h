@@ -26,7 +26,7 @@ using MediaAudioCorrectionPlanningFacts = std::variant<
 class MediaAudioCorrectionReachabilityPlanner final {
 public:
     static ::media::Result<MediaAudioCorrectionReachabilityResult> plan(
-        const MediaAvSyncPlan& synchronization,
+        const MediaAvSyncAudioServoPolicy& servo,
         const MediaAudioCorrectionPlanningFacts& facts);
 
 private:

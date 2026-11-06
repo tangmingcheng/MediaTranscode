@@ -43,7 +43,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
            *maximumUnitBytes <= *bytes;
 }
 
-::media::Status validateMasterClock(const MediaAvSyncPlan& plan)
+::media::Status validateMasterClock(const MediaAvSyncPlanView& plan)
 {
     if (!plan.controlGenerationPolicy) {
         return invalid("controlGenerationPolicy");
@@ -60,7 +60,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     return ::media::Status::success();
 }
 
-::media::Status validateVideoPolicy(const MediaAvSyncPlan& plan)
+::media::Status validateVideoPolicy(const MediaAvSyncPlanView& plan)
 {
     const auto& video = plan.video;
     if (!positive(video.earlyHoldThresholdNs) ||
@@ -79,7 +79,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     return ::media::Status::success();
 }
 
-::media::Status validateMetrics(const MediaAvSyncPlan& plan)
+::media::Status validateMetrics(const MediaAvSyncPlanView& plan)
 {
     const auto& metrics = plan.metrics;
     if (!metrics.collectStateAndGeneration || !*metrics.collectStateAndGeneration ||
@@ -101,7 +101,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     return ::media::Status::success();
 }
 
-::media::Status validateAudioServo(const MediaAvSyncPlan& plan, bool finalized)
+::media::Status validateAudioServo(const MediaAvSyncPlanView& plan, bool finalized)
 {
     const auto& servo = plan.audioServo;
     if (!positive(servo.deadbandNs) ||
@@ -200,7 +200,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     return ::media::Status::success();
 }
 
-::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
+::media::Status validateShared(const MediaAvSyncPlanView& plan, bool finalized)
 {
     if (!plan.sourceLifecycle ||
         (plan.sourceLifecycle->mode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
@@ -283,7 +283,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
            stream.baseTimestamp && presentText(stream.cname);
 }
 
-::media::Status validateRtpInput(const MediaAvSyncPlan& plan)
+::media::Status validateRtpInput(const MediaAvSyncPlanView& plan)
 {
     if (!plan.rtpInput || plan.mpegTsInput || plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
@@ -327,7 +327,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateTsInput(const MediaAvSyncPlan& plan)
+::media::Status validateTsInput(const MediaAvSyncPlanView& plan)
 {
     if (plan.rtpInput || !plan.mpegTsInput || plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr ||
@@ -415,7 +415,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateDemuxInput(const MediaAvSyncPlan& plan)
+::media::Status validateDemuxInput(const MediaAvSyncPlanView& plan)
 {
     if (plan.rtpInput || plan.mpegTsInput || !plan.demuxTimestampInput ||
         *plan.sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps ||
@@ -454,7 +454,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         *demux.preparedInput, *demux.preparedEvidence);
 }
 
-::media::Status validateRtpOutput(const MediaAvSyncPlan& plan)
+::media::Status validateRtpOutput(const MediaAvSyncPlanView& plan)
 {
     if (!plan.rtpOutput || plan.projectMpegTsOutput) {
         return invalid("separate RTP output authority");
@@ -470,7 +470,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
-::media::Status validateProjectMpegTsOutput(const MediaAvSyncPlan& plan)
+::media::Status validateProjectMpegTsOutput(const MediaAvSyncPlanView& plan)
 {
     if (plan.rtpOutput || !plan.projectMpegTsOutput ||
         !plan.projectMpegTsOutput->outputMux ||
@@ -491,7 +491,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 }
 
 
-::media::Status validateOutput(const MediaAvSyncPlan& plan)
+::media::Status validateOutput(const MediaAvSyncPlanView& plan)
 {
     if (plan.rtpOutput.has_value() == plan.projectMpegTsOutput.has_value()) {
         return invalid("exactly one output authority");
@@ -501,7 +501,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         : validateProjectMpegTsOutput(plan);
 }
 
-::media::Status validateScoped(const MediaAvSyncPlan& plan, bool finalized)
+::media::Status validateScoped(const MediaAvSyncPlanView& plan, bool finalized)
 {
     if (!plan.domainRole) return invalid("domainRole");
     const bool videoContribution = plan.members == MediaTranscodeStreamSet::VideoOnly &&
@@ -551,7 +551,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 
 } // namespace
 
-::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlan& plan)
+::media::Status MediaAvSyncPlanValidator::validateSourceClock(const MediaAvSyncPlanView& plan)
 {
     const bool videoContribution = plan.members == MediaTranscodeStreamSet::VideoOnly &&
         plan.domainRole == MediaAvSyncDomainRole::SourceContribution &&
@@ -572,19 +572,19 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return invalid("sourceClockMode");
 }
 
-::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlan& plan)
+::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlanView& plan)
 {
     return validateScoped(plan, true);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validatePolicy(
-    const MediaAvSyncPlan& plan)
+    const MediaAvSyncPlanView& plan)
 {
     return validateScoped(plan, false);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validateRuntime(
-    const MediaAvSyncPlan& plan)
+    const MediaAvSyncPlanView& plan)
 {
     if (plan.domainRole == MediaAvSyncDomainRole::ContinuousOutput)
         return validateScoped(plan, false);
@@ -602,7 +602,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 }
 
 ::media::Status MediaAvSyncPlanValidator::validateDomain(
-    const MediaAvSyncPlan& plan, MediaAvSyncDomainRole expectedRole)
+    const MediaAvSyncPlanView& plan, MediaAvSyncDomainRole expectedRole)
 {
     if (plan.domainRole != expectedRole) return invalid("binding domain role");
     return validateRuntime(plan);

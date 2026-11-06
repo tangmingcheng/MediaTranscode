@@ -113,7 +113,7 @@ struct CorrectionTiming final {
 
 ::media::Result<MediaAudioCorrectionReachabilityResult>
 MediaAudioCorrectionReachabilityPlanner::plan(
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncAudioServoPolicy& servo,
     const MediaAudioCorrectionPlanningFacts& input)
 {
     auto resolved = resolveTiming(input);
@@ -133,21 +133,21 @@ MediaAudioCorrectionReachabilityPlanner::plan(
                            "audio command lead has no strict representable margin")
                      : required.error());
     }
-    if (!synchronization.audioServo.maximumMeasurementGapNs ||
-        !synchronization.audioServo.recoveryCorrectionLimitPpm ||
-        !synchronization.audioServo.normalCorrectionLimitPpm ||
-        !synchronization.audioServo.outputSampleRate ||
-        *synchronization.audioServo.outputSampleRate != facts.outputSampleRate ||
+    if (!servo.maximumMeasurementGapNs ||
+        !servo.recoveryCorrectionLimitPpm ||
+        !servo.normalCorrectionLimitPpm ||
+        !servo.outputSampleRate ||
+        *servo.outputSampleRate != facts.outputSampleRate ||
         facts.maximumResamplerOutputBlockSamples <= 0) {
         return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
             ::media::ErrorInfo::notInitialized(
                 "audio measurement correction facts are missing"));
     }
     auto measurementGapSamples = runningTimeToSamples(
-        *synchronization.audioServo.maximumMeasurementGapNs,
+        *servo.maximumMeasurementGapNs,
         facts.outputSampleRate);
     const auto correctionPpm = static_cast<std::int64_t>(
-        *synchronization.audioServo.recoveryCorrectionLimitPpm);
+        *servo.recoveryCorrectionLimitPpm);
     if (!measurementGapSamples || correctionPpm <= 0 ||
         measurementGapSamples.value() ==
             std::numeric_limits<std::int64_t>::max() ||
@@ -198,8 +198,8 @@ MediaAudioCorrectionReachabilityPlanner::plan(
         compensation.value(), commandLead.value(), facts.outputSampleRate);
     if (!quantizer) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(quantizer.error());
     auto distance = quantizer.value().maximumCompensationDistance(
-        std::max(*synchronization.audioServo.normalCorrectionLimitPpm,
-                 *synchronization.audioServo.recoveryCorrectionLimitPpm));
+        std::max(*servo.normalCorrectionLimitPpm,
+                 *servo.recoveryCorrectionLimitPpm));
     if (!distance) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(distance.error());
     const auto maximumOutputBlock = std::max<std::int64_t>(
         facts.maximumResamplerOutputBlockSamples, distance.value());
