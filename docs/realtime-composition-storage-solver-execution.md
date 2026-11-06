@@ -1,6 +1,6 @@
 # 合屏联合存储 solver 实施决策
 
-状态：2026-11-06，基于 `e12d65ce` 及本轮工作树核验。源、拓扑、residence 与费用的固定目录刷新已具备，连接、拓扑、引用与费用目录已接入预算资源；借用固定源事实的候选工作区、合法容量基线及具体 solver 尚未完成；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
+状态：2026-11-06，基于 `bd1cbfe0` 核验。源、拓扑、residence 与费用的固定目录刷新已具备，连接、拓扑、引用与费用目录已接入预算资源；借用固定源事实的候选工作区、合法容量基线及具体 solver 尚未完成；`MediaRealtimeCompositionPreparer.cpp` 的 `freezeBatch(rtpSources, nullptr)` 仍阻止 SourcePresentation 启动。本文件只收敛接线方案，不代表实流通过。
 
 ## 容量语义与依据
 
@@ -270,3 +270,21 @@ Preparer 在 freeze 前调用 SourceAudioPlanner，按全部源数在根 plannin
 Windows Release 全量 61027 已退出 0（803 任务计划），四项产物核验通过，realtime CLI 7168000 字节、2026-11-06 13:22:09。residence_budget_audit 与 residence_budget_review_b 对本批源码均明确局部 PASS。按用户要求，RKMPP 保留已有构建产物，10 个源码分两批核验 SHA256 后同步，SSH 78720 执行 8 核增量 all-target，完成 159/159，终态退出 0；没有 clean-first。共享头文件变更导致依赖重编译，新增文件仅触发 CMake 自动更新清单。
 
 本批只确认两平台构建和局部审查通过，未运行媒体测试，未产生抓包、截图、临时日志或临时脚本。固定事实存储的完整预算、联合容量 solver 接入及原规格 Windows→RKMPP realtime 验收仍未完成。
+
+## 2026-11-06 固定事实与容量依赖的实施边界
+
+核验当前生产链：`SourcePlanner::plan` 在 seal 后才调用 `SourcePlanningKernel::plan`；后者同时创建 input/audio/sync/group/assembly 的 owning 字段和容量相关目录。`freezeBatch` 已在全部源锁下提供 session plan 与精确 snapshot，且有最终预算复查与事务发布。无需改变冻结事务或增加运行时 fallback；应先消除源计划的固定事实与容量相互依赖。
+
+沿用 [GStreamer 启动前 allocation negotiation](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html) 的事实准备、分配协商、激活顺序；它不证明本项目字符串成本或共同增量目标。字符串成本只采用仓库 `MediaStandardContainerStorageReadback::stringCopy` 已审计的 STL 分支与真实构造路径，未知 STL 显式失败。
+
+下一实现批次按以下调用关系完成，不再只提交新增借用视图：
+
+1. **固定同步产品。** 从 `MediaAvSyncPlanner::plan` 提取同一固定编译过程：原参数校验、domain/lifecycle、同步策略、audio servo、RTP/TS/demux 身份与时钟声明。`StartupPolicyPlanner` 把固定等待策略与六容量字段的绑定分开；maximumGap、outputLead 仍来自原事实。使用独立的未完成产品类型承载，不把缺容量的 `MediaAvSyncPlan` 交给完整 validator，也不填虚构容量通过校验。原 plan 入口组合固定编译与容量绑定，保留原最终 validatePolicy。
+2. **固定输入与时钟产品。** `InputPlanner::applyNodePlans/fillNodePlan` 仍为唯一输入映射。`SourceClockPlanner::plan` 的 timing 解析（包括 boundedReceive）与 assembly 的固定 clock/identity/timing 声明前置，acquiring 数量与期限由原共同 compiler 绑定。RTP、TS、demux 共用原分支，不能另写合屏专属时钟算法。
+3. **真实存储 owner。** 源固定 owner 在 freeze 前构造，保留 input/audio/group/sync/timing/assembly 及其 root 租约；video 借用已有 prepared plan，先明确其既有预算归属。`stringCopy` 仅适用于 fresh copy/range，不适用于 `operator+`、append、赋值扩容。需逐项审计 URL/SDP/transport/depacketizer/envelope、audio 输出与 decoder、groupKey、RTP 身份拼接，以及 startup→timing→assembly 的多份身份。临时副本、容器 proxy、嵌套数组与对象目录均计入同时存活峰值；先 reserve，后构造，失败释放。固定 owner 销毁前不得释放租约，借用后不得移动 owner。
+4. **真实快照与候选。** 锁内仅从传入 snapshots 读取 held/history，推导合法基线并填入数值工作区；固定 owner 不再创建字符串。复用既有 runtime、edge、route、topology、residence 和 cost 的共同计算/刷新，预算覆盖所有目录实际分配。随后实施共同 k 搜索及源 admission；非法事实和平台不支持不能归类为超预算。
+5. **最终消费。** seal 后移动同一已计费固定事实并绑定最终数值，取消再次完整 Kernel::plan 的复制。保留 sealed owner、producer holders、成员、容量及最终 DAG 独立 readback；readback 使用实际最终图，不能拿候选缓存自证。
+
+本轮核验没有发现外部依赖修改的必要授权，也没有解除 RKMPP 的 AU 身份传播与剩余容器几何限制。上述为下一批实施边界，不是 solver 已实现；本轮尚未修改生产代码或运行媒体链路，不新增构建通过声明。
+
+双独立设计审查（residence_budget_audit、residence_budget_review_b）均为局部 PASS，限本节实施边界。补足交接约束：SourceCapacityState 必须直接借新固定 owner，不能再构造完整 runtime 中转；maximumGap 若属于固定事实必须校验一致，否则随容量绑定显式更新，不能只覆盖六个数量字段。最终移动 owning 字段前先销毁全部候选借用，或仅移动地址稳定的 owner 句柄；租约随最终事实存活，Debug proxy 的移动分配也必须纳入预算与异常边界。
