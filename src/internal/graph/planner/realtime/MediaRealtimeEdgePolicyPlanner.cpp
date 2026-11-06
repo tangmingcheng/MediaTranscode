@@ -176,7 +176,7 @@ MediaRealtimeEdgePolicyPlanner::planWithAvStartupRelease(
 
 ::media::Result<MediaRealtimeEdgePolicySet> MediaRealtimeEdgePolicyPlanner::planSynchronizedSource(
     const MediaGraphQueueParameters& queues,
-    const MediaAvSyncStartupPolicy& startup,
+    const MediaAvSyncStartupPolicyView& startup,
     MediaTranscodeStreamSet members)
 {
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;

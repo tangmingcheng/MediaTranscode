@@ -242,3 +242,19 @@ RKMPP SSH 6408 终态退出 0，8 核增量 all-target 完成 61/61。本轮两�
 residence_budget_audit 与 residence_budget_review_b 对冻结的 11 源码（含新视图头文件）均明确局部 PASS。Windows Release 全量 73873 终态退出 0（801 任务计划），四项产物核验通过，realtime CLI 7155712 字节、2026-11-06 12:43:07。远端分四批 1＋5＋3＋2 文件核验同步前后 SHA256，新头核对原先不存在；RKMPP SSH 27335 正执行 8 核增量 all-target。无新媒体测试或同步临时文件。
 
 RKMPP SSH 27335 终态退出 0，8 核增量 all-target 完成 21/21。本轮两平台构建通过，无新媒体测试、抓包、截图、日志或临时同步文件；原复用源与未跟踪依赖文件保持不变。下一步是 assembly/source runtime 的数值状态适配及 freeze 前固定事实准备，完整 solver 和原规格实流仍待完成。
+
+## 2026-11-06 assembly 与 runtime 候选数值状态
+
+assembly 的固定 clock variant、身份和 timing/duration 改为借用视图，acquiring 数量/超时自持；主/子 view 均禁止 owning 右值构造。原 clock compiler 和 RTP/MPEG-TS/demux 输入校验统一读取视图，未另建候选算法。SourceCapacityState 借原 runtime，保存六 startup 数量/字节、servo、assembly 数值、queues、edges、correction；SourceKernel 通过唯一 runtime rebind 更新，再核验同 owner 与音频成员并发布数值。初次 planFacts 同样复用政策规划并回写 servo。失败仍作废整个候选，不宣称整个 SourceKernel 事务回滚；首次 owning plan 仍会分配。
+
+沿用前述 C++ 借用寿命规则及构建前静态分配协商。首轮独立审查发现 planSynchronizedSource 仍接受 owning startup，无法接新视图，明确局部 FAIL；待当前 Windows 全量 26267 终态后修复共用入口并复审、重建。freeze 前固定事实 owner、完整工作区和 solver 仍未接通。
+
+26267 终态退出 1，Ninja 子命令退出 2；实际诊断 C2664 位于 MediaRealtimeAvSourceRuntimePlanner.cpp:71，确认 StartupPolicyView 无法转换到旧 owning 入口。已将 EdgePolicyPlanner 的唯一共用 planSynchronizedSource 声明/实现接入视图，原数值算法不变；重新复审及 Windows 全量构建，不启动失败版本的 RKMPP 验证。
+
+residence_budget_audit 与 residence_budget_review_b 已对修正版 12 源码（含三个新文件）完整复审，均明确局部 PASS，确认 EdgePolicy 遗漏关闭、两条 servo 回写及完整固定校验保留。Windows Release 全量 71286 正在进行；首轮 26267 失败记录保留。
+
+Windows 修正版全量 71286 终态退出 0（802 任务计划），四项产物核验通过，realtime CLI 7156736 字节、2026-11-06 12:56:39。远端三批 3＋6＋3 文件前后 SHA256 校验成功，三个新文件核对原先不存在；RKMPP SSH 1913 正执行 8 核增量 all-target。
+
+下一完整批次的硬边界：精确 held/history 只来自 freezeBatch 锁内 storageSnapshotLocked，不能由公开 session plan 或 probeSnapshot 替代。现有 Kernel::plan 会经 planSourceForOutput→AudioResamplerCapabilityProvider::verify 调用 swr_alloc_set_opts2/swr_init，不能整体移入 freeze 锁。必须锁外完成固定 capability/input/identity 准备并明确新存储的实际预算、固定地址与生命周期；锁内按真实快照确定合法基线，再一次初始化目录并数值刷新。seal 后应消费同一固定 owner，避免重复完整 Kernel::plan，同时保留最终 DAG 独立 readback。当前资源仅覆盖目录，普通 owning input/audio/sync/assembly 的新字符串并不因固定或借用而免计费；后续需闭合这项实际存储表示，不能继续仅加未接线视图。
+
+RKMPP SSH 1913 终态退出 0，8 核增量 all-target 完成 18/18。两平台修正版构建通过；本轮未运行 local/realtime 媒体链路，没有抓包、截图、临时日志或同步文件待清理。首次 Windows 失败保留；原规格实流、固定 owner 完整准入、具体 solver 和已有平台可靠性风险仍未完成。

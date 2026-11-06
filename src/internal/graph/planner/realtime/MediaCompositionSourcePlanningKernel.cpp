@@ -222,8 +222,10 @@ try {
         products.inputType, RealtimeInputStreamLayout::SeparateStreams, products.input,
         products.videoStreamIndex, prepared.raw.video.codecName, products.runtime.audioPipeline,
         products.runtime.isolatedAudioInput ? &*products.runtime.isolatedAudioInput : nullptr, &capacity};
+    MediaRealtimeAvSourceCapacityState runtimeCapacity(products.runtime);
     if (auto status = MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
-            clockRequest, clockTiming, startup.value(), products.runtime); !status) return status;
+            clockRequest, clockTiming, startup.value(), runtimeCapacity); !status) return status;
+    if (auto status = runtimeCapacity.publish(products.runtime); !status) return status;
     auto storage = sourceStartupStorage(capacity, products.input, products.runtime);
     if (!storage) return ::media::Status::failure(storage.error());
     products.startupBatchStorage = std::move(storage.value().batch);

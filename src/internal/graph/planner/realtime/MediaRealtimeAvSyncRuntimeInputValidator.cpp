@@ -19,9 +19,9 @@ namespace {
 
 ::media::Status validateRtpInput(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& facts,
-    const MediaRealtimeAvSyncAssemblyPlan& assembly)
+    const MediaRealtimeAvSyncAssemblyView& assembly)
 {
     const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
         &assembly.video.timing);
@@ -113,9 +113,9 @@ namespace {
 
 ::media::Status validateMpegTsInput(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& facts,
-    const MediaRealtimeAvSyncAssemblyPlan& assembly)
+    const MediaRealtimeAvSyncAssemblyView& assembly)
 {
     const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
         &assembly.video.timing);
@@ -197,9 +197,9 @@ namespace {
 
 ::media::Status validateDemuxInput(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& facts,
-    const MediaRealtimeAvSyncAssemblyPlan& assembly)
+    const MediaRealtimeAvSyncAssemblyView& assembly)
 {
     const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
         &assembly.video.timing);
@@ -293,9 +293,9 @@ namespace {
 
 ::media::Status MediaRealtimeAvSyncRuntimeInputValidator::validate(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& facts,
-    const MediaRealtimeAvSyncAssemblyPlan& assembly)
+    const MediaRealtimeAvSyncAssemblyView& assembly)
 {
     const bool decoded = synchronization.startup.videoReadiness ==
         MediaVideoStartupReadiness::DecodedPresentationSpan;

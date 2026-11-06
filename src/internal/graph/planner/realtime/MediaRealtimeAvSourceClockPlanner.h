@@ -2,7 +2,8 @@
 
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceTimingFacts.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyView.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanView.h"
 #include "media_transcode/Result.h"
 
 #include <string_view>
@@ -11,7 +12,6 @@ namespace media::ffmpeg::graph {
 
 struct MediaRealtimeRtpInputNodePlan;
 struct MediaAudioPipelinePlan;
-struct MediaAvSyncPlan;
 struct MediaAvSourceCapacityFacts;
 
 struct MediaRealtimeAvSourceClockRequest final {
@@ -35,11 +35,11 @@ public:
     // Fixed prepared input/timing facts; refresh acquiring capacity/time only.
     // Failure invalidates the candidate. Success does not allocate storage.
     static ::media::Status rebindAssembly(
-        const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlan& synchronization,
-        const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyPlan& assembly);
+        const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization,
+        const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyView& assembly);
     static ::media::Result<MediaRealtimeAvSourceClockPlan> plan(
         const MediaRealtimeAvSourceClockRequest& request,
-        const MediaAvSyncPlan& synchronization);
+        const MediaAvSyncPlanView& synchronization);
 private:
     MediaRealtimeAvSourceClockPlanner() = delete;
 };

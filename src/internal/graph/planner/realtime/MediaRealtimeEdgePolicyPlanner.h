@@ -3,13 +3,13 @@
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanView.h"
 
 #include <cstdint>
 #include <optional>
 
 namespace media::ffmpeg::graph {
 
-struct MediaAvSyncStartupPolicy;
 struct MediaRealtimeGraphResourceLedgerPlan;
 
 class MediaRealtimeEdgePolicyPlanner final {
@@ -21,7 +21,7 @@ public:
         const MediaRealtimeGraphResourceLedgerPlan& resources);
     static ::media::Result<MediaRealtimeEdgePolicySet> planSynchronizedSource(
         const MediaGraphQueueParameters& queues,
-        const MediaAvSyncStartupPolicy& startup,
+        const MediaAvSyncStartupPolicyView& startup,
         MediaTranscodeStreamSet members);
     static MediaRealtimeEdgePolicySet plan(
         const MediaGraphQueueParameters& queues);

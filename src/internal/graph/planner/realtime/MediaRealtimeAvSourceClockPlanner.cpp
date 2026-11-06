@@ -25,9 +25,9 @@ bool validPacketDurationEvidence(
 
 template<bool Updating> ::media::Status compileAssembly(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization,
+    const MediaAvSyncPlanView& synchronization,
     const MediaRealtimeAvSourceTimingFacts& facts,
-    std::conditional_t<Updating, MediaRealtimeAvSyncAssemblyPlan, std::optional<MediaRealtimeAvSyncAssemblyPlan>>& result)
+    std::conditional_t<Updating, MediaRealtimeAvSyncAssemblyView, std::optional<MediaRealtimeAvSyncAssemblyPlan>>& result)
 {
     const bool hasAudio = synchronization.members == MediaTranscodeStreamSet::AudioVideo;
     if (request.audio.enabled != hasAudio || !synchronization.sourceClockMode ||
@@ -232,7 +232,7 @@ template<bool Updating> ::media::Status compileAssembly(
 
 ::media::Result<MediaRealtimeAvSourceClockPlan> MediaRealtimeAvSourceClockPlanner::plan(
     const MediaRealtimeAvSourceClockRequest& request,
-    const MediaAvSyncPlan& synchronization)
+    const MediaAvSyncPlanView& synchronization)
 {
     if (auto status = MediaAvSyncPlanValidator::validateSourceClock(synchronization); !status)
         return ::media::Result<MediaRealtimeAvSourceClockPlan>::failure(status.error());
@@ -365,8 +365,8 @@ template<bool Updating> ::media::Status compileAssembly(
 }
 
 ::media::Status MediaRealtimeAvSourceClockPlanner::rebindAssembly(
-    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlan& synchronization,
-    const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyPlan& assembly)
+    const MediaRealtimeAvSourceClockRequest& request, const MediaAvSyncPlanView& synchronization,
+    const MediaRealtimeAvSourceTimingFacts& timing, MediaRealtimeAvSyncAssemblyView& assembly)
 {
     if (auto status = MediaAvSyncPlanValidator::validateSourceClock(synchronization); !status) return status;
     return compileAssembly<true>(request, synchronization, timing, assembly);

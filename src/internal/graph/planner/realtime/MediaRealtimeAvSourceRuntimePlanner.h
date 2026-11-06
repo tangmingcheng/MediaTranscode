@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceCapacityState.h"
 #include "media_transcode/Result.h"
 
 #include <string_view>
@@ -29,12 +30,12 @@ struct MediaRealtimeAvSourceRuntimeRequest final {
 class MediaRealtimeAvSourceRuntimePlanner final {
 public:
     // Prepared input/timing and all non-capacity source facts remain fixed.
-    // The clock request borrows audio/isolated input from these products.
+    // The clock request borrows audio/isolated input from state.fixed.
     // Success allocates nothing; failure invalidates the entire candidate.
     static ::media::Status rebindCapacity(
         const MediaRealtimeAvSourceClockRequest& clockRequest,
-        const MediaRealtimeAvSourceTimingFacts& timing, const MediaAvSyncStartupPolicy& startup,
-        MediaRealtimeAvSourcePlanningProducts& products);
+        const MediaRealtimeAvSourceTimingFacts& timing, const MediaAvSyncStartupPolicyView& startup,
+        MediaRealtimeAvSourceCapacityState& state);
     static ::media::Result<MediaRealtimeAvSourcePlanningProducts> planFacts(
         const MediaRealtimeAvSourceRuntimeRequest& request,
         MediaAudioPipelinePlan audio,
