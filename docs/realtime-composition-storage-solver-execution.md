@@ -486,3 +486,7 @@ AggregatePlanner现接受canvas const引用及实际planningResource，在任何
 aggregate_budget_review_a和aggregate_budget_review_b均对四源码明确局部PASS，覆盖费用清单、端口格式化范围、首次复制顺序、不可复制/不可赋值的所有权及最终move消费。两者均未将graph副本或整体预算计为完成。
 
 Windows Release会话77325终态退出0，806任务计划，configure/build均0，四项产物核验通过。本批尚未同步RKMPP或运行媒体链路；无新增媒体测试临时产物。两个独立审查局部PASS不改变完整solver未接入的状态。
+
+2026-11-09聚合预算RKMPP验证：56aaaaf3的4源码按2＋2分批同步，旧版/目标版及写后SHA256均核验一致；SSH41292在原rk-release目录以8核增量all-target完成38/38、退出0，realtime CLI链接成功。无媒体测试或临时测试文件，未推送。
+
+下一接线的所有权审查（aggregate_budget_review_a）：freeze内首次Kernel bind消耗FixedProducts后，seal后不能再构造同一fixed。需由Preparer稳定owners提供窄借用事实，候选PlanningProducts保留完整clock timing（当前Runtime bindFacts只留下inputAudioSampleRate），避免复制其身份字符串。先seal全部源，再从sealed权威容量/owner/ingress独立读取并与选中候选数值比较；随后共用kernel重算aggregate/topology/residence/cost，全部通过才逐源移动到SourcePlan。比较前不得覆盖选中值；新增标量快照/目录仍用预算资源。此项为后续实施方案，尚未接具体solver。
