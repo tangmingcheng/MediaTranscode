@@ -53,6 +53,9 @@ struct MediaRealtimeAvSourcePlanningProducts {
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeAvSourceTimingFacts sourceTiming;
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
+    // Immutable planner input, retained independently of the finalized servo
+    // in synchronization. Capacity refresh must start from this policy.
+    const MediaAvSyncAudioServoPolicy audioServoPolicy;
 };
 
 struct MediaRealtimeAvSourceRuntimePlan : MediaRealtimeAvSourcePlanningProducts {

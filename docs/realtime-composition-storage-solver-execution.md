@@ -626,3 +626,9 @@ Windows84868全量退出0（815任务计划），realtime CLI7399424字节、12:
 Windows81419全量退出0；r399已以四路实际callback/export相等且与import thunk不等证明地址修正有效，但solver因错误把batch会话resource与视频resource比较而失败。二者分别create、实际同m_budget。新增usesBudget查询ledger身份，不改变PMR do_is_equal或精确arrayowner；双独立源码复审PASS。Windows52637全量终态0，四产物核验，realtime CLI7401472字节、12:42:15。r400已越过该入口，当前失败为首次bindFacts把finalized audioServo回写fixed后送validatePolicy；后续rebind亦有同类风险。原始policy需独立保留，不能清空字段或放宽校验。r398/r399/r400均FAIL并完成精确PID及11项日志清理，无实流成功提交。
 
 RKMPP第一组52824同步成功；第二组63327连接关闭、45145 banner超时（均exit1）后，82170重试4文件成功；第三组23113成功；最后两文件39063同步核验后启动8核增量all-target。由于共享资源header变化，增量计划447项，未clean-first。当前仍在构建，不预记通过；远端运行的本批源码不再改写，下一修正需独立同步与复验。
+
+## 2026-11-09 原始音频策略保留与 r401
+
+原始audioServoPolicy以内联const字段独立保留；首次bind先验证原策略，再发布完成态并验证domain；solver、容量刷新及最终资源复算统一使用原策略，单源共享构造点同步修正。不清空字段、不改公式、不放宽校验，sizeof增长随现有类型化费用计费。两个独立审查者均源码局部PASS。Windows26389全量退出0，r401越过r400错误后在最小合法候选预算门禁失败；详见[r401记录](realtime-composition-r401-validation.md)。尚未起播，不能计合屏通过。
+
+上一批RKMPP39063连接关闭，不能算成功；后续后台PID548014增量检查终态0且ninja无待编译任务，仅覆盖95774e80远端状态。本轮七文件尚未同步。当前需核对2GiB下最小候选费用构成，区分真实预算不足与计费错误，不通过增加预算掩盖失败。

@@ -23,6 +23,7 @@ public:
     const std::optional<MediaRealtimeRtpInputNodePlan>& isolatedAudioInput;
     const MediaAvSyncGroupKey& groupKey;
     const MediaAvSyncFixedFields& synchronization;
+    const MediaAvSyncAudioServoPolicy& audioServoPolicy;
     const MediaAvSyncStartupFixedPolicy& startup;
     const MediaThreadingPolicy& threadingPolicy;
     const MediaRunningTime activationOutputLead;
@@ -32,13 +33,15 @@ public:
 
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourcePlanningProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
-          synchronization(source.synchronization), startup(source.synchronization.startup),
+          synchronization(source.synchronization), audioServoPolicy(source.audioServoPolicy),
+          startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
           sourceTiming(source.sourceTiming), m_completeOwner(&source), m_fixedOwner(nullptr) {}
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourceFixedProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
-          synchronization(source.synchronization), startup(source.synchronization.startup),
+          synchronization(source.synchronization), audioServoPolicy(source.synchronization.audioServo),
+          startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
           sourceTiming(source.clock.timing), m_completeOwner(nullptr), m_fixedOwner(&source) {}

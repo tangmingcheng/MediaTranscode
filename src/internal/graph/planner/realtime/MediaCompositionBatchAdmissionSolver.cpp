@@ -65,7 +65,7 @@ std::optional<std::size_t> MediaCompositionBatchAdmissionSolver::selectedIncreme
         auto bounds = MediaRealtimeAvSyncComponentBoundsPlanner::planSource(
             (*m_capacities)[i].capacity.queues, fixed.audioPipeline);
         if (!bounds) return Result::failure(bounds.error());
-        auto assessed = MediaAudioCorrectionReachabilityPlanner::assessCapacity(fixed.synchronization.audioServo,
+        auto assessed = MediaAudioCorrectionReachabilityPlanner::assessCapacity(fixed.audioServoPolicy,
             MediaAudioSourceCorrectionFacts{fixed.audioPipeline.resolvedOutput->sampleRate(), bounds.value()});
         if (!assessed) return Result::failure(assessed.error());
         if (const auto* rejected = std::get_if<MediaAudioCorrectionCapacityRejection>(&assessed.value())) {

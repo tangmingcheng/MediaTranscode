@@ -159,15 +159,19 @@ MediaRealtimeAvSourceRuntimePlanner::bindFacts(
             &fixed.clock.assembly.audio->duration != &candidate.audio->duration)))
         return Result::failure(::media::ErrorInfo::invalidArgument("Source capacity binding requires its original fixed owner"));
     capacity.m_valid = false;
-    fixed.synchronization.audioServo = capacity.audioServo;
+    const auto audioServoPolicy = fixed.synchronization.audioServo;
     auto synchronization = MediaAvSyncPlanner::bind(std::move(fixed.synchronization), capacity.startup);
     if (!synchronization) return Result::failure(synchronization.error());
+    synchronization.value().audioServo = capacity.audioServo;
+    if (auto status = MediaAvSyncPlanValidator::validateDomain(
+            synchronization.value(), MediaAvSyncDomainRole::SourceContribution); !status)
+        return Result::failure(status.error());
     auto clock = MediaRealtimeAvSourceClockPlanner::consumeCapacity(std::move(fixed.clock), candidate);
     if (!clock) return Result::failure(clock.error());
     return Result::success({std::move(fixed.audioPipeline), std::move(fixed.isolatedAudioInput), std::move(fixed.groupKey),
         std::move(synchronization).value(), std::move(clock.value().assembly), capacity.queues, capacity.edgePolicies,
         fixed.threadingPolicy, fixed.activationOutputLead, fixed.videoFilterActive, std::move(fixed.transition),
-        std::move(clock.value().timing), capacity.audioCorrection});
+        std::move(clock.value().timing), capacity.audioCorrection, audioServoPolicy});
 }
 
 ::media::Status MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
@@ -189,7 +193,7 @@ MediaRealtimeAvSourceRuntimePlanner::bindFacts(
             "Source capacity refresh changed fixed source facts"));
     state.startup = static_cast<const MediaAvSyncStartupCapacity&>(startup);
     MediaAvSyncPlanView synchronization(fixed.synchronization,
-        MediaAvSyncStartupPolicyView(current, state.startup), state.audioServo);
+        MediaAvSyncStartupPolicyView(current, state.startup), fixed.audioServoPolicy);
     if (auto status = validateSource(fixed.groupKey, clockRequest.videoStreamIndex, fixed.activationOutputLead,
             capacity->queues, fixed.threadingPolicy, fixed.audioPipeline, isolated, synchronization); !status) return status;
     if (auto status = MediaRealtimeAvSourceClockPlanner::rebindAssembly(

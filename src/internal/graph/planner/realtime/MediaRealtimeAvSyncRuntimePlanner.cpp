@@ -59,10 +59,13 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             ::media::ErrorInfo::notInitialized(
                 "A/V generation transition timing facts are incomplete"));
     }
+    if (auto status = MediaAvSyncPlanValidator::validatePolicy(synchronization); !status)
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(status.error());
+    const auto audioServoPolicy = synchronization.audioServo;
     std::optional<MediaAudioCorrectionReachabilityResult> correction;
     if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
         auto selected = MediaAudioCorrectionReachabilityPlanner::plan(
-            synchronization.audioServo, facts.value().timing);
+            audioServoPolicy, facts.value().timing);
         if (!selected) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 selected.error());
@@ -74,13 +77,6 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         synchronization.audioServo.frequencyFilterTimeConstantNs =
             correction->frequencyFilterTimeConstant;
         if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
-            !status) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                status.error());
-        }
-    } else {
-        if (auto status =
-                MediaAvSyncPlanValidator::validatePolicy(synchronization);
             !status) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 status.error());
@@ -142,7 +138,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt}, std::move(reservationStorage).value()}, *outer.avSyncComponentBounds, facts.value().timing, std::move(outputPlan.edgePolicies), std::move(outputPlan.canonicalAudioInputPolicy), outputPlan.outputAdapter, outputPlan.scheduling, std::move(outputPlan.protocolOutput),
+                : std::nullopt, audioServoPolicy}, std::move(reservationStorage).value()}, *outer.avSyncComponentBounds, facts.value().timing, std::move(outputPlan.edgePolicies), std::move(outputPlan.canonicalAudioInputPolicy), outputPlan.outputAdapter, outputPlan.scheduling, std::move(outputPlan.protocolOutput),
             std::move(outputPlan.datagramTransport), std::move(outputPlan.encoderFifoRetention)});
 }
 

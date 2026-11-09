@@ -267,7 +267,7 @@ try {
     if (hasAudio) {
         auto bounds = MediaRealtimeAvSyncComponentBoundsPlanner::planSource(runtime.queues, runtime.audioPipeline);
         if (!bounds) return Result::failure(bounds.error());
-        auto correction = MediaAudioCorrectionReachabilityPlanner::plan(runtime.synchronization.audioServo,
+        auto correction = MediaAudioCorrectionReachabilityPlanner::plan(runtime.audioServoPolicy,
             MediaAudioSourceCorrectionFacts{runtime.audioPipeline.resolvedOutput->sampleRate(), bounds.value()});
         if (!correction) return Result::failure(correction.error());
         if (!runtime.audioCorrection || *runtime.audioCorrection != correction.value().correction ||
