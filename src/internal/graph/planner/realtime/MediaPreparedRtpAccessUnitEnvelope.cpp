@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
 
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/utils/MediaAsciiStringUtils.h"
@@ -19,10 +20,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr std::uint64_t RtpHeaderBytes = 12;
-constexpr std::uint64_t AacAuHeadersLengthBytes = 2;
-constexpr std::uint64_t AacAuHeaderBytes = 2;
-constexpr std::uint64_t AacMinimumPayloadBytes = 1;
-constexpr std::uint64_t AacSizeLengthBits = 13;
 constexpr std::uint64_t H264AnnexBExpansionNumerator = 5;
 constexpr std::uint64_t HevcAnnexBExpansionNumerator = 3;
 
@@ -267,27 +264,26 @@ h264ProfileScale(std::uint8_t profileIdc)
     auto sizeLength = parameters
         ? requiredRtpFmtpInt(parameters.value(), "sizelength")
         : ::media::Result<int>::failure(parameters.error());
-    if (!sizeLength || sizeLength.value() != AacSizeLengthBits) {
+    if (!sizeLength || sizeLength.value() != MediaAacRtpAuHeaderLayout::SizeBits) {
         return ::media::Result<MediaPreparedRtpAccessUnitEnvelope>::failure(
             sizeLength ? ::media::ErrorInfo::unsupported(
                              "AAC RTP access-unit bound requires negotiated sizeLength=13")
                        : sizeLength.error());
     }
-    const auto minimumPerAu = AacAuHeaderBytes + AacMinimumPayloadBytes;
-    if (maximumPayload <= AacAuHeadersLengthBytes) {
+    if (maximumPayload <= MediaAacRtpAuHeaderLayout::LengthBytes) {
         return ::media::Result<MediaPreparedRtpAccessUnitEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AAC RTP maximum datagram cannot carry an AU header and payload"));
     }
     const auto completions =
-        (maximumPayload - AacAuHeadersLengthBytes) / minimumPerAu;
+        MediaAacRtpAuHeaderLayout::maximumCompleteAccessUnits(maximumPayload);
     if (completions == 0) {
         return ::media::Result<MediaPreparedRtpAccessUnitEnvelope>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AAC RTP maximum datagram cannot complete an access unit"));
     }
     const std::uint64_t maximumAuBytes =
-        (std::uint64_t{1} << AacSizeLengthBits) - 1;
+        MediaAacRtpAuHeaderLayout::MaximumAuBytes;
     return ::media::Result<MediaPreparedRtpAccessUnitEnvelope>::success({
         MediaStreamKind::Audio, codec, maximumAuBytes, completions,
         "RFC-3640-negotiated-13-bit-AU-size-field",

@@ -174,8 +174,8 @@ template<class T>
         // Thus malformed packets are bounded by wire header bits and datagram,
         // not by the later valid-completion bound.
         const auto datagram = stream.workingSet.maximumDatagramBytes;
-        const auto headers = (std::min)(datagram > 2 ? (datagram - 2) / 2 : 0,
-            static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)() / 16));
+        const auto headers = static_cast<std::size_t>(
+            MediaAacRtpAuHeaderLayout::maximumParsedHeaders(datagram));
         auto bytes = returnedVectorBytes<MediaAacRtpAuHeader>(headers);
         if (!bytes) return R::failure(bytes.error());
         result.aacHeaderPeakBytes = bytes.value();

@@ -1,3 +1,4 @@
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
@@ -132,7 +133,9 @@ namespace {
         if (mode == fmtp.value().end() ||
             lowercaseAscii(mode->second) != "aac-hbr") return ::media::Status::failure(
             ::media::ErrorInfo::unsupported("AAC RTP requires mode=AAC-hbr"));
-        for (const auto& [key, expected] : {std::pair{"sizelength", 13}, {"indexlength", 3}, {"indexdeltalength", 3}}) {
+        for (const auto& [key, expected] : {std::pair{"sizelength", MediaAacRtpAuHeaderLayout::SizeBits},
+                {"indexlength", MediaAacRtpAuHeaderLayout::IndexBits},
+                {"indexdeltalength", MediaAacRtpAuHeaderLayout::IndexDeltaBits}}) {
             auto value = requiredRtpFmtpInt(fmtp.value(), key);
             if (!value || value.value() != expected) return ::media::Status::failure(
                 ::media::ErrorInfo::unsupported("AAC RTP AU header configuration is unsupported"));

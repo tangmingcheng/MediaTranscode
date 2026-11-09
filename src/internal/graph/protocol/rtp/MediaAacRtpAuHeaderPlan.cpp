@@ -9,36 +9,37 @@ namespace media::ffmpeg::graph {
 MediaAacRtpAuHeaderPlanner::plan(std::span<const std::uint8_t> payload, MediaLineageAllocationScope allocation)
 try {
     using Result = ::media::Result<MediaAacRtpAuHeaderPlan>;
-    if (payload.size() < 4) {
+    using Layout = MediaAacRtpAuHeaderLayout;
+    if (payload.size() < Layout::LengthBytes + Layout::HeaderBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "AAC MPEG4-GENERIC RTP payload is truncated"));
     }
     const std::size_t headerBits =
-        (static_cast<std::size_t>(payload[0]) << 8) | payload[1];
-    if (headerBits == 0 || (headerBits % 16) != 0) {
+        (static_cast<std::size_t>(payload[0]) << Layout::BitsPerByte) | payload[1];
+    if (headerBits == 0 || (headerBits % Layout::HeaderBits) != 0) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "AAC MPEG4-GENERIC AU headers must use complete planned 16-bit headers"));
     }
-    const std::size_t headerCount = headerBits / 16;
-    const std::size_t headerBytes = headerBits / 8;
-    if (headerBytes > payload.size() - 2) {
+    const std::size_t headerCount = headerBits / Layout::HeaderBits;
+    const std::size_t headerBytes = headerBits / Layout::BitsPerByte;
+    if (headerBytes > payload.size() - Layout::LengthBytes) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "AAC MPEG4-GENERIC AU header section is truncated"));
     }
 
     MediaAacRtpAuHeaderPlan result(std::move(allocation));
-    result.payloadOffset = 2 + headerBytes;
+    result.payloadOffset = Layout::LengthBytes + headerBytes;
     result.payloadBytes = payload.size() - result.payloadOffset;
     try {
         result.accessUnits.reserve(headerCount);
         for (std::size_t index = 0; index < headerCount; ++index) {
-            const std::size_t offset = 2 + index * 2;
+            const std::size_t offset = Layout::LengthBytes + index * Layout::HeaderBytes;
             const std::uint16_t bits = static_cast<std::uint16_t>(
-                (static_cast<std::uint16_t>(payload[offset]) << 8) |
+                (static_cast<std::uint16_t>(payload[offset]) << Layout::BitsPerByte) |
                 payload[offset + 1]);
-            const std::size_t auSize = bits >> 3;
+            const std::size_t auSize = bits >> Layout::IndexBits;
             const std::uint8_t indexField =
-                static_cast<std::uint8_t>(bits & 0x07);
+                static_cast<std::uint8_t>(bits & Layout::IndexMask);
             if (auSize == 0) {
                 return Result::failure(::media::ErrorInfo::invalidArgument(
                     "AAC MPEG4-GENERIC AU size is zero"));
