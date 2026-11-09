@@ -533,3 +533,6 @@ Preparer在freeze前分配预算化sealed目录，seal全部源后才获取view�
 
 
 RKMPP会话1397终态14/14、退出0，realtime CLI链接成功；保持8核增量，无clean-first。本批双独立复审及Windows/RKMPP编译均完成，未运行local/realtime媒体测试，无本轮测试临时文件，既有未跟踪文件保留。具体solver、跨源sealed费用复算、opaque容量契约及完整实流验收仍未完成。
+
+
+2026-11-09 opaque容量设计证据已闭合到限定实现域：见[opaque保留契约](realtime-composition-opaque-retention-contract.md)。完成本机源码版本/无tracked修改及三库SHA256一致性核验，源码推导另经双独立设计PASS，显式排除LCEVC与未审计后端。下一实施应把registry从queues.frame解耦，版本化adapter产生内部事实并贯穿prepare/reopen、候选、sealed、费用及最终options；不能把设计结论算作代码或实流通过。
