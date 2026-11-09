@@ -466,3 +466,11 @@ RKMPP会话99659终态6/6、退出0，保持8核增量all-target；本轮三文�
 本次恢复确认HEAD仍为4aa9e99c，7源码和本文档改动完整保留。旧SSH句柄5335已不存在；重新SSH检查远端cmake --build/ninja/cc1plus未发现匹配进程。上次首批源码同步缺少终态输出，不能认定全部同步或RKMPP构建完成；后续应逐文件核验哈希再执行8核增量。没有因观察中断而重复启动构建。本批先保存本地代码检查点，不宣称合屏或RKMPP验收通过。
 
 2026-11-09 RKMPP复验完成：d93ca52b的7源码按1/2/3/1分批核对远端旧版或目标版SHA256，写入后逐文件原始字节哈希一致。SSH会话14116在原rk-release目录以8核增量all-target完成81/81、退出0，realtime CLI链接成功；未执行clean-first。没有媒体测试或临时脚本/日志文件。本结果补齐该批目标平台编译证据，不代表RKMPP运行能力、具体solver或完整合屏验收通过；生产freezeBatch仍传nullptr。
+
+## 2026-11-09 聚合候选工作区实施边界核验
+
+当前源码核验确认AggregatePlanner的canvas按值参数在函数进入前复制tiles；预算入口必须改为const引用，预约后再构造拥有型结果。普通backing清单为outputGroupKey、audio六字符串、canvas.tiles、sources目录，以及每源group/videoIdentity/videoPort、存在的audioIdentity/非选中discardedAudioPort和全局audioPort。source facts目录只借用成员，使用现有预算目录即可。颜色合同均为枚举/optional，不含额外字符串。
+
+端口当前使用字面量＋to_string的rvalue拼接，不可套用已审计的const string拼接几何。实施应复用栈缓冲区＋to_chars＋最终range string一次构造，长度由前缀和size_t十进制位数推导；同一格式化逻辑供费用和构造使用。其余fresh copy/空vector reserve使用既有MediaStandardContainerStorageReadback，未知STL仍显式拒绝。
+
+租约须在aggregate owner首字段保活至所有普通backing析构后；lease/control block通过预算resource实际allocate_shared。还须约束拥有型aggregate的复制，不能让默认深拷贝只复制同一租约而不增加额度。ResourceBinder:157–158最终aggregate是move，可转移同一额度；但:120的canvas副本、GraphBuilder:261的owning tuple及graph ports、最终make_shared对象/control均为独立分配，须另计或改为借用/预算分配，不能共享一份额度冒称已覆盖。本节是基于当前代码和此前独立审查的实施清单，尚未实现，不代表预算闭合或solver已接入。
