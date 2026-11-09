@@ -320,18 +320,32 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
         if (!fixed) return PreparedResult::failure(fixed.error());
         fixedSources.push_back(std::move(fixed).value());
     }
+    MediaFixedCapacityStorage<MediaPreparedRtpSource> sealed(captures.size(), *planningResource.value());
     if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, nullptr); !frozen)
         return PreparedResult::failure(frozen.error());
-    std::vector<MediaPreparedRtpSource> sealed;
-    std::vector<MediaRealtimeCompositionSourcePlan> sourcePlans;
     for (std::size_t i = 0; i < captures.size(); ++i) {
         auto source = std::move(captures[i].capture).seal();
         if (!source) return PreparedResult::failure(source.error());
         sealed.push_back(std::move(source).value());
-        auto view = sealed.back().resources();
+    }
+    // Seal all owners before taking views; the budgeted directory never moves.
+    std::vector<MediaRealtimeCompositionSourcePlan> sourcePlans;
+    for (std::size_t i = 0; i < sealed.size(); ++i) {
+        auto view = sealed[i].resources();
         if (!view) return PreparedResult::failure(view.error());
-        auto plan = MediaRealtimeCompositionSourcePlanner::plan(
-            std::move(fixedSources[i]), view.value(), emission.value());
+        const auto& session = rtpSources[i]->plan();
+        auto readback = MediaRealtimeCompositionSourcePlanner::readPrepared({
+            facts[i].request, facts[i].raw, facts[i].timing, deployment.value(),
+            session.audioRetention ? &*session.audioRetention : nullptr, prepared->sources[i].plan},
+            std::move(view).value(), emission.value());
+        if (!readback) return PreparedResult::failure(readback.error());
+        const auto capacity = std::visit([](const auto& value) -> MediaAvSyncCapacityFacts {
+            return std::cref(value);
+        }, readback.value().capacity);
+        auto candidate = MediaCompositionSourcePlanningKernel::bind(std::move(fixedSources[i]), capacity);
+        if (!candidate) return PreparedResult::failure(candidate.error());
+        auto plan = MediaRealtimeCompositionSourcePlanner::bind(
+            std::move(readback).value(), std::move(candidate).value());
         if (!plan) return PreparedResult::failure(plan.error());
         sourcePlans.push_back(std::move(plan).value());
     }

@@ -16,15 +16,13 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<MediaRealtimeCompositionSourcePlan>
-MediaRealtimeCompositionSourcePlanner::plan(MediaCompositionSourceFixedProducts&& fixed,
-    const MediaPreparedRtpSourceView& prepared, const MediaPreparedRealtimeEmissionSet& emission)
+::media::Result<MediaCompositionSourcePreparedFacts>
+MediaRealtimeCompositionSourcePlanner::readPrepared(MediaCompositionSourcePreparedRequest original,
+    MediaPreparedRtpSourceView prepared, const MediaPreparedRealtimeEmissionSet& emission)
 try {
-    using Result = ::media::Result<MediaRealtimeCompositionSourcePlan>;
-    const auto resource = fixed.planningResource;
-    if (!resource) return Result::failure(::media::ErrorInfo::invalidArgument("Composition source requires a planning resource"));
-    const auto& raw = fixed.raw;
-    const auto* cadence = std::get_if<MediaObservedVideoCadence>(&fixed.timing);
+    using Result = ::media::Result<MediaCompositionSourcePreparedFacts>;
+    const auto& raw = original.raw;
+    const auto* cadence = std::get_if<MediaObservedVideoCadence>(&original.timing);
     const auto* sealed = prepared.continuousAdmission;
     if (!cadence && (!sealed || !prepared.continuousVideoResource ||
         sealed->owner != prepared.continuousVideoResource ||
@@ -35,13 +33,13 @@ try {
     if (cadence && (cadence->rate.num <= 0 || cadence->rate.den <= 0 || cadence->rate != raw.video.frameRate))
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Composition canonical source cadence differs from its observed timing"));
-    const auto members = fixed.sourceRequest.parameters.execution.streamSet;
+    const auto members = original.sourceRequest.parameters.execution.streamSet;
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
     if ((!hasAudio && members != MediaTranscodeStreamSet::VideoOnly) ||
         hasAudio != raw.audio.has_value() || hasAudio != (prepared.audio != nullptr) ||
         hasAudio != (prepared.audioIngress != nullptr) ||
-        !fixed.video.decoder.outputFrame || !fixed.video.decoder.preparedInputRetention ||
-        fixed.sourceRequest.mediaId.empty())
+        !original.video.decoder.outputFrame || !original.video.decoder.preparedInputRetention ||
+        original.sourceRequest.mediaId.empty())
         return Result::failure(::media::ErrorInfo::notInitialized(
             "Composition source requires matching sealed members and prepared decoder facts"));
     std::optional<MediaAvSourceCapacityFacts> sourceCapacity;
@@ -59,19 +57,19 @@ try {
                 frame.surfacePixelFormat.empty() ? frame.pixelFormat : frame.surfacePixelFormat,
                 raw.video.frameRate, "prepared-composition-source-frame-contract"});
         };
-        addSurface(*fixed.video.decoder.outputFrame);
-        if (fixed.video.filterActive) {
-            if (!fixed.video.filter.inputFrame || !fixed.video.filter.outputFrame)
+        addSurface(*original.video.decoder.outputFrame);
+        if (original.video.filterActive) {
+            if (!original.video.filter.inputFrame || !original.video.filter.outputFrame)
                 return Result::failure(::media::ErrorInfo::notInitialized(
                     "Composition source filter has no negotiated input/output geometry"));
-            addSurface(*fixed.video.filter.inputFrame);
-            addSurface(*fixed.video.filter.outputFrame);
+            addSurface(*original.video.filter.inputFrame);
+            addSurface(*original.video.filter.outputFrame);
         }
         // This ledger supplies source queue and startup policy only. Composition's
         // final graph admission uses independently compiled per-producer facts.
         auto plannedLedger = MediaRealtimeGraphResourceLedgerPlanner::plan(
-            fixed.deployment.encode().latency, emission, surfaces,
-            fixed.video.decoder.hardware());
+            original.deployment.encode().latency, emission, surfaces,
+            original.video.decoder.hardware());
         if (!plannedLedger) return Result::failure(plannedLedger.error());
         ledger.emplace(std::move(plannedLedger).value());
     }
@@ -105,7 +103,7 @@ try {
             std::move(*ledger), std::move(storage.value().payload),
             storage.value().reservedBytes, std::move(storage.value().authority));
         if (!inputLedger) return Result::failure(inputLedger.error());
-        auto startup = MediaAvSyncStartupPolicyPlanner::planInputPreflight(fixed.sourceRequest);
+        auto startup = MediaAvSyncStartupPolicyPlanner::planInputPreflight(original.sourceRequest);
         if (!startup) return Result::failure(startup.error());
         if (!startup.value().maximumWaitNs)
             return Result::failure(::media::ErrorInfo::notInitialized(
@@ -135,24 +133,47 @@ try {
             sealed->startup.audioUnitBytes != prepared.continuousAudioRetention->maximumUnitBytes)))
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Decoded source startup differs from independent audio retention"));
-    const MediaAvSyncCapacityFacts capacity = cadence
-        ? MediaAvSyncCapacityFacts{std::cref(*admitted)}
-        : MediaAvSyncCapacityFacts{std::cref(*sourceCapacity)};
+    if (original.audioRetention != prepared.continuousAudioRetention)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Sealed source retention differs from its original owner"));
+    if (cadence) return Result::success({original, std::move(prepared), std::move(storage).value(), std::move(*admitted)});
+    return Result::success({original, std::move(prepared), std::move(storage).value(), std::move(*sourceCapacity)});
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaCompositionSourcePreparedFacts>::failure(
+        ::media::ErrorInfo::allocationFailed("composition sealed source facts"));
+}
+
+::media::Result<MediaRealtimeCompositionSourcePlan>
+MediaRealtimeCompositionSourcePlanner::bind(MediaCompositionSourcePreparedFacts&& facts,
+    MediaCompositionSourcePlanningProducts&& products)
+try {
+    using Result = ::media::Result<MediaRealtimeCompositionSourcePlan>;
+    const auto& prepared = facts.source;
+    const auto& original = facts.original;
+    const bool cadence = std::holds_alternative<MediaRealtimeGraphResourceLedgerPlan>(facts.capacity);
+    const bool hasAudio = original.sourceRequest.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
+    const auto* sealed = prepared.continuousAdmission;
+    if (!products.planningResource || &products.video != &original.video ||
+        products.runtime.synchronization.members != original.sourceRequest.parameters.execution.streamSet ||
+        products.runtime.groupKey.value() != original.sourceRequest.mediaId ||
+        cadence != std::holds_alternative<MediaObservedVideoCadence>(original.timing) ||
+        !facts.storage.preparation || !prepared.continuousStorage ||
+        (!cadence && (!sealed || !products.selectedCapacity ||
+            !products.selectedCapacity->sameProduct(std::get<MediaAvSourceCapacityFacts>(facts.capacity),
+                products.runtime.edgePolicies.metadata, products.runtime.edgePolicies.atomicMetadata))) ||
+        (cadence && products.selectedCapacity))
+        return Result::failure(::media::ErrorInfo::invalidArgument("Sealed source differs from its selected planning products"));
     // Fixed ingress declarations were copied before freeze. Seal independently
     // reobserved the original candidates; bind exactly the same products.
-    const auto* videoTransport = fixed.input.rtpTransport ? &*fixed.input.rtpTransport : nullptr;
-    const auto* audioTransport = fixed.runtime.isolatedAudioInput && fixed.runtime.isolatedAudioInput->rtpTransport
-        ? &*fixed.runtime.isolatedAudioInput->rtpTransport : nullptr;
+    const auto* videoTransport = products.input.rtpTransport ? &*products.input.rtpTransport : nullptr;
+    const auto* audioTransport = products.runtime.isolatedAudioInput && products.runtime.isolatedAudioInput->rtpTransport
+        ? &*products.runtime.isolatedAudioInput->rtpTransport : nullptr;
     if (!videoTransport || !videoTransport->ingress ||
         !videoTransport->ingress->sameProduct(prepared.videoIngress) ||
         hasAudio != (audioTransport != nullptr) ||
         (hasAudio && (!audioTransport->ingress || !audioTransport->ingress->sameProduct(*prepared.audioIngress))) ||
-        fixed.audioRetention != prepared.continuousAudioRetention)
+        original.audioRetention != prepared.continuousAudioRetention)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Sealed composition source differs from its fixed preparation"));
-    auto planned = MediaCompositionSourcePlanningKernel::bind(std::move(fixed), capacity);
-    if (!planned) return Result::failure(planned.error());
-    auto products = std::move(planned).value();
     if (!cadence) {
         if (!sealed->video.bounds.prefixObjects ||
             sealed->video.bounds.prefixObjects != sealed->video.compressed.maximumUnits)
@@ -176,8 +197,8 @@ try {
     auto runtime = MediaRealtimeAvSourceRuntimePlanner::bind(std::move(products.runtime), std::move(reservation).value());
     if (!runtime) return Result::failure(runtime.error());
     return Result::success({products.fixedStorage, products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
-        fixed.video, products.frameRate, products.maximumFrameDuplicationGap,
-        std::move(runtime).value(), {std::move(*storage.value().preparation), *prepared.continuousStorage},
+        products.video, products.frameRate, products.maximumFrameDuplicationGap,
+        std::move(runtime).value(), {std::move(*facts.storage.preparation), *prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),
         std::move(products.clockRouteStorage), std::move(products.startupCoordinatorStorage),
         std::move(products.branchConnections), std::move(products.inputConnections),

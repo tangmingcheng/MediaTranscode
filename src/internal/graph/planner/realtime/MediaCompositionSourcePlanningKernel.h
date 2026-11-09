@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaAvSourceCapacityFacts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourceBranchPlanner.h"
@@ -72,6 +73,8 @@ struct MediaCompositionSourcePlanningProducts final {
     std::optional<MediaStartupCoordinatorStoragePlan> startupCoordinatorStorage;
     MediaCompositionSourceBranchPlan branchConnections;
     MediaPlanningCatalog<MediaSourceInputConnection> inputConnections;
+    // Selected scalar product; publish only after the entire candidate succeeds.
+    std::optional<MediaAvSourceCapacitySelection> selectedCapacity;
 };
 class MediaCompositionSourcePlanningKernel final {
 public:

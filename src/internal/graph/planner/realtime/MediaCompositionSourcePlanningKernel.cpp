@@ -252,7 +252,8 @@ try {
         fixed.video, fixed.frameRate, fixed.maximumFrameDuplicationGap,
         std::move(runtime).value(), std::move(fixed.producerHolders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),
-        std::move(branchConnections).value(), std::move(inputConnections).value()});
+        std::move(branchConnections).value(), std::move(inputConnections).value(),
+        sourceCapacity ? std::optional{MediaAvSourceCapacitySelection{*sourceCapacity}} : std::nullopt});
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaCompositionSourcePlanningProducts>::failure(
         ::media::ErrorInfo::allocationFailed("composition source planning catalogs"));
@@ -263,6 +264,7 @@ try {
     const MediaAvSourceCapacityFacts& capacity,
     MediaCompositionSourcePlanningProducts& products)
 {
+    products.selectedCapacity.reset();
     const auto members = products.runtime.synchronization.members;
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
     if (!std::holds_alternative<MediaSourcePresentationTiming>(prepared.timing) ||
@@ -300,8 +302,10 @@ try {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized("Source input connections lack clock/readiness facts"));
     if (auto status = MediaCompositionSourceBranchPlanner::rebind(prepared.timing,
             products.video.filterActive, hasAudio, products.runtime.edgePolicies, products.branchConnections); !status) return status;
-    return MediaSourceInputConnectionsPlanner::rebind(*sync.members, *sync.startup.videoReadiness,
-        *sync.sourceClockMode, products.runtime.edgePolicies, products.inputConnections);
+    if (auto status = MediaSourceInputConnectionsPlanner::rebind(*sync.members, *sync.startup.videoReadiness,
+            *sync.sourceClockMode, products.runtime.edgePolicies, products.inputConnections); !status) return status;
+    products.selectedCapacity.emplace(capacity);
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
