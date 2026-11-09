@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/runtime/resource/MediaPreparationBackingOwner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpContainerStoragePlan.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAdmissionPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
@@ -35,6 +36,8 @@ struct MediaPreparedRtpStreamStorageAdmission final {
     MediaPreparedRtpContainerStoragePlan storage;
 };
 struct MediaPreparedRtpStorageAdmission final {
+    // Root-charged ordinary backing survives transfer into the sealed source.
+    MediaPreparationBackingOwner preparationOwner;
     std::size_t sharedCapacityBytes;
     MediaPreparedRtpStreamStorageAdmission video;
     std::optional<MediaPreparedRtpStreamStorageAdmission> audio;

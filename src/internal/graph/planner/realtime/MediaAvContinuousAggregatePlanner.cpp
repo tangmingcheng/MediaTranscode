@@ -241,7 +241,7 @@ template<bool Updating> ::media::Status compileAggregate(
     auto lease = resource.reserveStorage(static_cast<std::size_t>(backing.value), MediaStorageAdmission::RequiredAllocation);
     if (!lease) return Result::failure(lease.error());
     MediaAvContinuousAggregateTopology plan{
-        MediaAvAggregatePreparationOwner{std::move(lease).value()},
+        MediaPreparationBackingOwner{std::move(lease).value()},
         output.groupKey, {}, audioSource, PortName(PortName::audio, audioSource).owned(),
         canvas, outputFrameRate, output.audioOutput, lead,
         selected.initialGeneration, selected.audioCorrection->epochOutputSampleIndex,

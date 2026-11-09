@@ -602,3 +602,15 @@ RKMPP77502终态14/14、退出0，realtime CLI链接成功；两平台编译及�
 首次Windows21120构建退出1，Ninja子命令退出2，不计通过；返回输出截断了中间编译诊断，不能据此宣称已获得精确错误行。源码依赖核查发现新header模板直接引用MediaDecodedVideoAssemblyTiming但缺少定义header，已补直接include。完整重建将验证此修正，并完整捕获诊断；此前两位源码审查未发现此依赖问题。RKMPP目前只同步第一组Preparer文件，尚未开始构建。
 
 Windows修正后全量18504终态退出0，configure/build均0（812任务计划），四项产物已核验；realtime CLI为7278592字节、2026-11-09 12:00:20。六源码同步前后SHA256核验完成，RKMPP11402终态9/9、退出0，8核增量all-target完成。两位独立审查对补齐直接include后的六源码均明确局部PASS。未运行媒体测试，没有本批抓包、快照、临时媒体或测试脚本；生产空solver门禁仍未替换，不能计为合屏实流通过。
+
+## 2026-11-09 准入结果持有与刷新
+
+沿用[GStreamer启动前分配协商](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html)及[C++ memory_resource分配与归还契约](https://eel.is/c++draft/mem.res.class)，不新增媒体算法。两位独立设计审查确认：admission只有route两份group和video/可选audio decoder authority需要普通字符串backing；逐项先预约后复制，预约随每源sealed结果存活。已有aggregate owner泛化为共同的MediaPreparationBackingOwner，首字段后析构，只允许无异常移动构造，禁止复制和移动赋值。
+
+物化器直接消费CandidateCost已合并history的容器产品，不重算简化费用；刷新须先核验固定字符串、holder事实、源owner和成员，再更新数量。exact batch数组仍归source zero，新增owner由实际sizeof计入；字符串预约归root other，不重复加到source total。冻结仍要求fresh partition、全源验证及deadline检查后无失败发布。当前实现与复审进行中，未接入具体solver，尚无本批构建或实流通过结论。
+
+六源码实现已冻结，第一位独立审查timing_handoff_review_a明确局部PASS，第二位代码审查进行中。Windows Release57094全量终态退出0（813任务计划），四产物核验完成，realtime CLI为7278592字节、2026-11-09 12:14:02。六源码分两组同步，写前及写后SHA256核验完成；RKMPP67715启动8核增量all-target。没有媒体测试，未产生本轮抓包、截图、录制媒体或测试脚本。
+
+下一批将搜索、物化调用、独立sealed验证和Preparer接线一并实施。搜索上界可由既有preparedIndex的decoded模式实际费用推导，Nv+1的两类节点费用及固定head均来自现有geometry/footprint；只作为真实preparation费用下界，不借用graph payload，也不以相邻样本估计斜率。另与INT_MAX数量域、锁内acquiring/output下界取交集。此上界不保证所有full-cost中间算术均可表示；剩余算术错误原样终止准备，不能标记为预算不足或无解。仅成功返回时才宣称最大共同k已证明。
+
+两位独立审查timing_handoff_review_a与timing_handoff_review_b对最终六源码均明确局部PASS；结论依赖同源配对及workspace费用产品，不代表完整solver通过。RKMPP67715终态55/55、退出0，realtime CLI成功链接。本批双平台构建完成，没有媒体测试或本轮测试临时产物；未推送、合并、部署或修改外部依赖。
