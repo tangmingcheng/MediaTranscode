@@ -80,3 +80,7 @@ Windows 通过后才进入 RKMPP 对应验收；两平台使用同一 planner/ru
 两名独立审查者均判定实施设计 FAIL（方向成立）：尚需确定每源进展保留不等式、唯一旧 lease 迁移方式、等待时接收泵/expiry/RTCP及release重试路径，以及prepare→commit的真实事务边界。当前reorder已先变更，consume的ordinal又在drain成功后推进；不能把普通错误替换为等待并重放同一报文。下一版需明确内部“已接受但待信用”的类型化状态，保持一次接受、一次提交和原期限，不新增对外参数。未降低任何费用或开始执行此预算算法。
 
 首批预算封存设计已获两名独立审查者明确局部PASS，允许实现该机制；完整每源进展、协议事务与接收背压仍未通过。本轮RKMPP bd6aafc8增量121/121退出0，四个专属构建日志/退出标记清理后残留0。未执行本轮RKMPP媒体验收。
+
+## 首批实现进度
+
+六文件实现已冻结并获两名独立源码审查者局部PASS：MediaStorageBudget提供一次性sealPartition、actual/guaranteed/charged快照及双高水位；同root全验后无抛出提交，释放/析构锁外通知。未修改fromReservation语义，未接入source分类或降低费用。旧solver与source admission显式拒绝尚未接线的sealed产品，防止误用旧batch算式。Windows76595全核心Release重建退出0；[r403](realtime-composition-r403-validation.md)原四路回归仍因33.18GB候选费用拒绝，不能计合屏通过。没有生产sealPartition调用，封存执行与唤醒尚无实流覆盖。RKMPP六文件分组同步进行中，后续8核增量构建终态待收取。

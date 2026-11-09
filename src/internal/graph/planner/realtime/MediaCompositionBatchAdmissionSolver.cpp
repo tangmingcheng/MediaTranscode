@@ -154,13 +154,18 @@ try {
     if (!partition) return Result::failure(partition.error());
     if (!partition.value().root || !m_root->usesBudget(*partition.value().root))
         return Result::failure(invalid("Composition workspace does not use the source partition root budget"));
+    // This solver still prices the original unsealed source budgets. Sealed
+    // payload/metadata products require their own planned integration first.
+    for (const auto& snapshot : budgets.snapshots)
+        if (snapshot.sealed)
+            return Result::failure(invalid("Composition admission requires unsealed source budgets"));
     const auto capacity = partition.value().budget.capacity;
-    if (partition.value().otherRetainedBytes > capacity || batch.totalBytes > capacity - partition.value().otherRetainedBytes)
+    if (partition.value().otherChargedBytes > capacity || batch.totalBytes > capacity - partition.value().otherChargedBytes)
         return Result::failure(invalid("Composition batch storage exceeds deployment capacity"));
     for (const auto& source : sources)
         if (source.plan->storageBytes != capacity)
             return Result::failure(invalid("Composition sources require the same deployment capacity"));
-    auto limit = upperBound(sources, capacity - partition.value().otherRetainedBytes - batch.totalBytes);
+    auto limit = upperBound(sources, capacity - partition.value().otherChargedBytes - batch.totalBytes);
     if (!limit) return Result::failure(limit.error());
     m_capacities.emplace(sources.size(), *m_root);
     std::size_t first = 0;
@@ -196,16 +201,16 @@ try {
     partition = budgets.refresh();
     if (!partition) return Result::failure(partition.error());
     if (!partition.value().root || !m_root->usesBudget(*partition.value().root) ||
-        partition.value().budget.capacity != capacity || partition.value().otherRetainedBytes > capacity ||
-        batch.totalBytes > capacity - partition.value().otherRetainedBytes)
+        partition.value().budget.capacity != capacity || partition.value().otherChargedBytes > capacity ||
+        batch.totalBytes > capacity - partition.value().otherChargedBytes)
         return Result::failure(invalid("Composition workspace exceeds deployment capacity"));
-    const auto available = capacity - partition.value().otherRetainedBytes - batch.totalBytes;
+    const auto available = capacity - partition.value().otherChargedBytes - batch.totalBytes;
     const auto fits = [&]() -> ::media::Result<bool> {
         if (!m_workspace->valid()) return ::media::Result<bool>::failure(invalid("Composition search lost its candidate workspace"));
         for (std::size_t i = 0; i < sources.size(); ++i) {
             const auto batchCredit = i == 0 ? batch.totalBytes : 0;
-            if (budgets.snapshots[i].retainedBytes < batchCredit ||
-                m_workspace->costs[i].totalBytes < budgets.snapshots[i].retainedBytes - batchCredit)
+            if (budgets.snapshots[i].actualRetainedBytes < batchCredit ||
+                m_workspace->costs[i].totalBytes < budgets.snapshots[i].actualRetainedBytes - batchCredit)
                 return ::media::Result<bool>::failure(invalid("Composition candidate lost live source reservations"));
         }
         return ::media::Result<bool>::success(m_workspace->sourceBytes() <= available);
@@ -215,7 +220,7 @@ try {
     if (!feasible.value()) {
         std::string detail = "Composition minimum legal capacity exceeds deployment storage: k=" +
             std::to_string(first) + " capacity=" + std::to_string(capacity) +
-            " root_other=" + std::to_string(partition.value().otherRetainedBytes) +
+            " root_other=" + std::to_string(partition.value().otherChargedBytes) +
             " batch=" + std::to_string(batch.totalBytes) + " available=" + std::to_string(available) +
             " sources=" + std::to_string(m_workspace->sourceBytes());
         for (std::size_t i = 0; i < sources.size(); ++i) {

@@ -484,9 +484,12 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     const auto preparationStorage = preparationBudget.value()->snapshot();
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::PlannerCapability,
         "composition_preparation_storage stage=graph_bound scope=shared_reservations capacity=" +
-        std::to_string(preparationStorage.capacity) + " retained=" +
-        std::to_string(preparationStorage.retainedBytes) + " high_water=" +
-        std::to_string(preparationStorage.highWaterBytes));
+        std::to_string(preparationStorage.capacity) + " actual_retained_bytes=" +
+        std::to_string(preparationStorage.actualRetainedBytes) + " actual_high_water=" +
+        std::to_string(preparationStorage.actualHighWaterBytes) + " charged_bytes=" +
+        std::to_string(preparationStorage.chargedBytes) + " guaranteed_bytes=" +
+        std::to_string(preparationStorage.guaranteedBytes) + " charged_high_water=" +
+        std::to_string(preparationStorage.chargedHighWaterBytes));
     return PreparedResult::success({{std::move(bound.value().graph), std::move(inputs),
         std::move(bound.value().assembly.runtimeBinding)}, threading, std::move(report)});
 }

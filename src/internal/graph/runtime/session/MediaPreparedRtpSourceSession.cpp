@@ -631,10 +631,10 @@ MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLo
     const MediaPreparedRtpStorageAdmission& product, const MediaPreparedRtpStorageSnapshot& snapshot,
     std::size_t batchStorageBytes) const
 {
-    if (product.sharedCapacityBytes != m_plan.storageBytes || product.owner != snapshot.owner ||
+    if (snapshot.budget.sealed || product.sharedCapacityBytes != m_plan.storageBytes || product.owner != snapshot.owner ||
         !product.totalBytes || product.totalBytes > m_plan.storageBytes ||
-        batchStorageBytes > snapshot.budget.retainedBytes ||
-        product.totalBytes < snapshot.budget.retainedBytes - batchStorageBytes ||
+        batchStorageBytes > snapshot.budget.actualRetainedBytes ||
+        product.totalBytes < snapshot.budget.actualRetainedBytes - batchStorageBytes ||
         product.fixedBytes > product.totalBytes ||
         product.protocolBytes > product.totalBytes - product.fixedBytes ||
         product.startupBytes != product.totalBytes - product.fixedBytes - product.protocolBytes ||
@@ -775,7 +775,7 @@ try {
         // neither observation reserves future unrelated-root allocations.
         partition = budgetView.refresh();
         if (!partition) return ::media::Status::failure(partition.error());
-        std::size_t total = partition.value().otherRetainedBytes;
+        std::size_t total = partition.value().otherChargedBytes;
         const auto capacity = partition.value().budget.capacity;
         if (batchStorage->totalBytes > capacity - total)
             return invalid("Batch scratch and result exceed shared deployment capacity");

@@ -113,7 +113,7 @@ template<class Session>
     if (!session) return Result::failure(session.error());
     // Every byte in this fixed pool belongs to the one shared session and two
     // slots. No activation/purge can allocate a fourth block from this pool.
-    if (budget.value()->snapshot().retainedBytes != planned->geometry.totalBytes)
+    if (budget.value()->snapshot().actualRetainedBytes != planned->geometry.totalBytes)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Generation storage allocation differs from admitted pool bytes"));
     return session;

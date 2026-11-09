@@ -128,7 +128,7 @@ MediaRawRtpPreparedByteBudget::snapshot() const noexcept
 {
     std::scoped_lock lock(m_mutex);
     const auto storage = m_storage->snapshot();
-    return {storage.capacity, m_plan.maximumObservedWireBytes, m_observedBytes, storage.retainedBytes, m_phase,
+    return {storage.capacity, m_plan.maximumObservedWireBytes, m_observedBytes, storage.actualRetainedBytes, m_phase,
         m_probeActive};
 }
 

@@ -62,18 +62,24 @@ private:
 template <typename Domain>
 struct MediaStorageSnapshot final {
     std::size_t capacity;
-    // Charged credit includes backing guarantees, even while locally unused.
-    // It is not a count of currently live allocator bytes, RSS, or VRAM.
-    std::size_t retainedBytes;
-    std::size_t highWaterBytes;
+    // Actual lease reservations, including any fromReservation backing lease.
+    // Neither this nor chargedBytes measures allocator bytes, RSS or VRAM.
+    std::size_t actualRetainedBytes;
+    std::size_t guaranteedBytes;
+    std::size_t chargedBytes;
+    std::size_t actualHighWaterBytes;
+    std::size_t chargedHighWaterBytes;
+    bool sealed;
 };
 
 template <typename Domain>
 struct MediaStoragePartitionSnapshot final {
     std::shared_ptr<const MediaStorageBudget<Domain>> root;
     MediaStorageSnapshot<Domain> budget;
-    std::size_t selectedRetainedBytes;
-    std::size_t otherRetainedBytes;
+    std::size_t selectedActualBytes;
+    std::size_t selectedChargedBytes;
+    std::size_t otherActualBytes;
+    std::size_t otherChargedBytes;
 };
 
 // Domain separates independent admitted capacities at compile time.
@@ -86,6 +92,7 @@ class MediaStorageBudget final
         ConstructionKey() = default;
     };
 public:
+    ~MediaStorageBudget() noexcept;
     using BootstrapAllocator = MediaBudgetBootstrapAllocator<MediaStorageBudget<Domain>,
         MediaStorageBudget<Domain>, MediaStorageLease<Domain>>;
     // Public only for allocator_traits; the private key restricts creation.
@@ -102,6 +109,11 @@ public:
         const MediaStorageReleaseObservation& observation);
     ::media::Result<MediaStorageLease<Domain>> reserve(std::size_t bytes, MediaStorageAdmission admission);
     MediaStorageSnapshot<Domain> snapshot() const noexcept;
+    // All-or-nothing, one-time guarantees for distinct direct children. Zero is
+    // a valid sealed capacity for an empty child. No allocation/callback under lock.
+    static ::media::Status sealPartition(
+        std::span<const std::shared_ptr<MediaStorageBudget<Domain>>> children,
+        std::span<const std::size_t> capacities);
     // One ledger observation, not a reservation of future headroom. Caller
     // supplies storage; no allocator or callback runs under the ledger lock.
     static ::media::Result<MediaStoragePartitionSnapshot<Domain>> snapshotPartition(
@@ -115,12 +127,31 @@ private:
         std::shared_ptr<const MediaStorageReleaseNotification> notification) noexcept;
     std::mutex& ledgerMutex() const noexcept;
     void release(std::size_t bytes) noexcept;
+    std::size_t capacityLocked() const noexcept
+    { return m_sealed ? m_guaranteedBytes : m_storage.capacity(); }
+    std::size_t chargedLocked() const noexcept
+    { return m_storage.retainedBytes() + m_unusedGuaranteedBytes; }
+    MediaStorageSnapshot<Domain> snapshotLocked() const noexcept
+    {
+        return {capacityLocked(), m_storage.retainedBytes(), m_guaranteedBytes,
+            chargedLocked(), m_actualHighWaterBytes, m_chargedHighWaterBytes, m_sealed};
+    }
+    void updateHighWaterLocked() noexcept
+    {
+        m_actualHighWaterBytes = (std::max)(m_actualHighWaterBytes, m_storage.retainedBytes());
+        m_chargedHighWaterBytes = (std::max)(m_chargedHighWaterBytes, chargedLocked());
+    }
 
     mutable std::mutex m_mutex;
     const std::shared_ptr<MediaStorageBudget<Domain>> m_parent;
     std::optional<MediaStorageLease<Domain>> m_backing;
     MediaByteReservationCounter m_storage;
-    std::size_t m_highWaterBytes = 0;
+    std::size_t m_actualHighWaterBytes = 0;
+    std::size_t m_chargedHighWaterBytes = 0;
+    // Root values aggregate direct children; sealed child values describe itself.
+    std::size_t m_guaranteedBytes = 0;
+    std::size_t m_unusedGuaranteedBytes = 0;
+    bool m_sealed = false;
     const std::shared_ptr<const MediaStorageReleaseNotification> m_releaseNotification;
     bool m_pressureArmed = false;
 };
@@ -281,54 +312,146 @@ MediaStorageBudget<Domain>::fromReservation(
 }
 
 template <typename Domain>
+MediaStorageBudget<Domain>::~MediaStorageBudget() noexcept
+{
+    if (!m_parent || !m_sealed) return;
+    std::shared_ptr<const MediaStorageReleaseNotification> notification;
+    {
+        std::scoped_lock lock(m_parent->m_mutex);
+        // Every outstanding lease owns this child, so destruction implies none.
+        assert(m_storage.retainedBytes() == 0);
+        assert(m_unusedGuaranteedBytes == m_guaranteedBytes);
+        assert(m_parent->m_unusedGuaranteedBytes >= m_unusedGuaranteedBytes);
+        assert(m_parent->m_guaranteedBytes >= m_guaranteedBytes);
+        m_parent->m_unusedGuaranteedBytes -= m_unusedGuaranteedBytes;
+        m_parent->m_guaranteedBytes -= m_guaranteedBytes;
+        if (std::exchange(m_parent->m_pressureArmed, false))
+            notification = m_parent->m_releaseNotification;
+    }
+    if (notification) notification->notify();
+}
+
+template <typename Domain>
+::media::Status MediaStorageBudget<Domain>::sealPartition(
+    std::span<const std::shared_ptr<MediaStorageBudget<Domain>>> children,
+    std::span<const std::size_t> capacities)
+{
+    if (children.empty() || children.size() != capacities.size() ||
+        !children.front() || !children.front()->m_parent)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Storage sealing requires direct children and matching capacities"));
+    const auto root = children.front()->m_parent;
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        if (!children[i] || children[i]->m_parent != root)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Storage sealing requires one shared root"));
+        for (std::size_t j = 0; j < i; ++j)
+            if (children[i] == children[j])
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Storage sealing rejects duplicate children"));
+    }
+    const char* error = nullptr;
+    {
+        std::scoped_lock lock(root->m_mutex);
+        std::size_t unused = 0;
+        std::size_t guarantees = 0;
+        const auto remaining = root->m_storage.capacity() - root->chargedLocked();
+        for (std::size_t i = 0; i < children.size(); ++i) {
+            const auto& child = *children[i];
+            const auto capacity = capacities[i];
+            if (child.m_sealed || capacity < child.m_storage.retainedBytes() ||
+                capacity > child.m_storage.capacity()) {
+                error = "Storage sealing requires an unsealed child and capacity covering held credit within its original limit";
+                break;
+            }
+            const auto delta = capacity - child.m_storage.retainedBytes();
+            if (delta > remaining - unused) {
+                error = "Storage guarantees exceed shared deployment capacity";
+                break;
+            }
+            unused += delta;
+            if (capacity > root->m_storage.capacity() - root->m_guaranteedBytes - guarantees) {
+                error = "Storage guarantees exceed the root guarantee capacity";
+                break;
+            }
+            guarantees += capacity;
+        }
+        if (!error) {
+            assert(guarantees <= root->m_storage.capacity() - root->m_guaranteedBytes);
+            for (std::size_t i = 0; i < children.size(); ++i) {
+                auto& child = *children[i];
+                child.m_guaranteedBytes = capacities[i];
+                child.m_unusedGuaranteedBytes = capacities[i] - child.m_storage.retainedBytes();
+                child.m_sealed = true;
+                child.updateHighWaterLocked();
+            }
+            root->m_guaranteedBytes += guarantees;
+            root->m_unusedGuaranteedBytes += unused;
+            root->updateHighWaterLocked();
+        }
+    }
+    if (error) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(error));
+    return ::media::Status::success();
+}
+
+template <typename Domain>
 ::media::Result<MediaStorageLease<Domain>>
 MediaStorageBudget<Domain>::reserve(std::size_t bytes, MediaStorageAdmission admission)
 {
     using Result = ::media::Result<MediaStorageLease<Domain>>;
-    std::scoped_lock lock(ledgerMutex());
-    if (bytes == 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "storage budget reservation must be positive"));
-    }
+    if (bytes == 0) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "storage budget reservation must be positive"));
     if (admission != MediaStorageAdmission::RequiredAllocation &&
-        admission != MediaStorageAdmission::Backpressure) {
+        admission != MediaStorageAdmission::Backpressure)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "storage budget reservation requires a valid admission policy"));
-    }
-    if (admission == MediaStorageAdmission::Backpressure) {
+    enum class Failure { None, Oversize, Pressure, Unobserved, Allocation };
+    auto failure = Failure::None;
+    {
+        std::scoped_lock lock(ledgerMutex());
         auto& root = m_parent ? *m_parent : *this;
-        if (bytes > m_storage.capacity() ||
-            (m_parent && bytes > m_parent->m_storage.capacity())) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "storage request exceeds the admitted capacity"));
+        const bool oversize = bytes > capacityLocked() || bytes > root.m_storage.capacity();
+        const bool unavailable = oversize ||
+            bytes > capacityLocked() - m_storage.retainedBytes() ||
+            (!m_sealed && bytes > root.m_storage.capacity() - root.chargedLocked());
+        if (unavailable) {
+            if (admission == MediaStorageAdmission::RequiredAllocation)
+                failure = Failure::Allocation;
+            else if (oversize) failure = Failure::Oversize;
+            else if (!root.m_releaseNotification) failure = Failure::Unobserved;
+            else {
+                root.m_pressureArmed = true;
+                failure = Failure::Pressure;
+            }
+        } else {
+            const bool retained = m_storage.retain(bytes);
+            assert(retained);
+            (void)retained;
+            if (m_parent) {
+                const bool parentRetained = root.m_storage.retain(bytes);
+                assert(parentRetained);
+                (void)parentRetained;
+                if (m_sealed) {
+                    assert(bytes <= m_unusedGuaranteedBytes);
+                    m_unusedGuaranteedBytes -= bytes;
+                    root.m_unusedGuaranteedBytes -= bytes;
+                }
+                root.updateHighWaterLocked();
+            }
+            updateHighWaterLocked();
         }
-        if (bytes > m_storage.capacity() - m_storage.retainedBytes() ||
-            (m_parent && bytes > m_parent->m_storage.capacity() -
-                m_parent->m_storage.retainedBytes())) {
-            if (!root.m_releaseNotification) return Result::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "Storage backpressure requires a frozen notification domain"));
-            root.m_pressureArmed = true;
-            return Result::failure(::media::ErrorInfo::wouldBlock(
-                "storage admission is waiting for retained allocations to be released"));
-        }
     }
-    if (m_parent && bytes > m_parent->m_storage.capacity() - m_parent->m_storage.retainedBytes()) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "storage budget reservation exceeds the shared domain capacity"));
+    switch (failure) {
+    case Failure::Oversize: return Result::failure(::media::ErrorInfo::invalidArgument(
+        "storage request exceeds the admitted capacity"));
+    case Failure::Pressure: return Result::failure(::media::ErrorInfo::wouldBlock(
+        "storage admission is waiting for retained allocations to be released"));
+    case Failure::Unobserved: return Result::failure(::media::ErrorInfo::notInitialized(
+        "Storage backpressure requires a frozen notification domain"));
+    case Failure::Allocation: return Result::failure(::media::ErrorInfo::allocationFailed(
+        "storage budget reservation exceeds the admitted capacity"));
+    case Failure::None: break;
     }
-    if (!m_storage.retain(bytes)) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "storage budget reservation exceeds the admitted capacity"));
-    }
-    if (m_parent) {
-        const bool retained = m_parent->m_storage.retain(bytes);
-        assert(retained);
-        (void)retained;
-        m_parent->m_highWaterBytes = (std::max)(
-            m_parent->m_highWaterBytes, m_parent->m_storage.retainedBytes());
-    }
-    m_highWaterBytes = (std::max)(m_highWaterBytes, m_storage.retainedBytes());
     return Result::success(MediaStorageLease<Domain>(this->shared_from_this(), bytes));
 }
 
@@ -345,8 +468,14 @@ void MediaStorageBudget<Domain>::release(std::size_t bytes) noexcept
             const bool parentReleased = m_parent->m_storage.release(bytes);
             assert(parentReleased);
             (void)parentReleased;
+            if (m_sealed) {
+                m_unusedGuaranteedBytes += bytes;
+                m_parent->m_unusedGuaranteedBytes += bytes;
+            }
         }
         auto& root = m_parent ? *m_parent : *this;
+        // Also notify when sealed release leaves root charged bytes unchanged:
+        // that child's blocked producer may now have usable credit.
         if (std::exchange(root.m_pressureArmed, false))
             notification = root.m_releaseNotification;
     }
@@ -365,7 +494,7 @@ template <typename Domain>
 MediaStorageSnapshot<Domain> MediaStorageBudget<Domain>::snapshot() const noexcept
 {
     std::scoped_lock lock(ledgerMutex());
-    return {m_storage.capacity(), m_storage.retainedBytes(), m_highWaterBytes};
+    return snapshotLocked();
 }
 
 template <typename Domain>
@@ -389,22 +518,21 @@ MediaStorageBudget<Domain>::snapshotPartition(
                 return Result::failure(::media::ErrorInfo::invalidArgument(
                     "Storage partition rejects duplicate children"));
     }
-    MediaStoragePartitionSnapshot<Domain> partition{root, {}, 0, 0};
+    MediaStoragePartitionSnapshot<Domain> partition{root, {}, 0, 0, 0, 0};
     {
         std::scoped_lock lock(root->m_mutex);
-        partition.budget = {root->m_storage.capacity(),
-            root->m_storage.retainedBytes(), root->m_highWaterBytes};
+        partition.budget = root->snapshotLocked();
         for (std::size_t i = 0; i < children.size(); ++i) {
-            const auto& child = *children[i];
-            snapshots[i] = {child.m_storage.capacity(),
-                child.m_storage.retainedBytes(), child.m_highWaterBytes};
-            // Direct-child charges are disjoint and already included in root.
-            assert(snapshots[i].retainedBytes <=
-                partition.budget.retainedBytes - partition.selectedRetainedBytes);
-            partition.selectedRetainedBytes += snapshots[i].retainedBytes;
+            snapshots[i] = children[i]->snapshotLocked();
+            assert(snapshots[i].actualRetainedBytes <=
+                partition.budget.actualRetainedBytes - partition.selectedActualBytes);
+            assert(snapshots[i].chargedBytes <=
+                partition.budget.chargedBytes - partition.selectedChargedBytes);
+            partition.selectedActualBytes += snapshots[i].actualRetainedBytes;
+            partition.selectedChargedBytes += snapshots[i].chargedBytes;
         }
-        partition.otherRetainedBytes = partition.budget.retainedBytes -
-            partition.selectedRetainedBytes;
+        partition.otherActualBytes = partition.budget.actualRetainedBytes - partition.selectedActualBytes;
+        partition.otherChargedBytes = partition.budget.chargedBytes - partition.selectedChargedBytes;
     }
     return Result::success(std::move(partition));
 }
