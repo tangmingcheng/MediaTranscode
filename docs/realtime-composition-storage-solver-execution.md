@@ -490,3 +490,17 @@ Windows Release会话77325终态退出0，806任务计划，configure/build均0�
 2026-11-09聚合预算RKMPP验证：56aaaaf3的4源码按2＋2分批同步，旧版/目标版及写后SHA256均核验一致；SSH41292在原rk-release目录以8核增量all-target完成38/38、退出0，realtime CLI链接成功。无媒体测试或临时测试文件，未推送。
 
 下一接线的所有权审查（aggregate_budget_review_a）：freeze内首次Kernel bind消耗FixedProducts后，seal后不能再构造同一fixed。需由Preparer稳定owners提供窄借用事实，候选PlanningProducts保留完整clock timing（当前Runtime bindFacts只留下inputAudioSampleRate），避免复制其身份字符串。先seal全部源，再从sealed权威容量/owner/ingress独立读取并与选中候选数值比较；随后共用kernel重算aggregate/topology/residence/cost，全部通过才逐源移动到SourcePlan。比较前不得覆盖选中值；新增标量快照/目录仍用预算资源。此项为后续实施方案，尚未接具体solver。
+
+
+## 2026-11-09 候选时钟事实所有权交接
+
+已将SourcePlanningProducts的单一inputAudioSampleRate替换为完整sourceTiming；bindFacts从clock直接move，FixedView借用同一owner，Kernel容量刷新不再要求调用方另传timing。Runtime刷新比较完整固定时钟事实，保留原身份/协议/时长校验。合屏身份字符串沿既有fixedStorage预约存活，没有新增backing复制；旧单源planner仍保留planningFacts，因此显式复制source timing基类，最多新增两份身份字符串持有，不能宣称所有路径零拷贝。
+
+两名未参与实现的独立审查timing_handoff_review_a、timing_handoff_review_b均局部PASS；对照C++字符串移动构造与成员销毁顺序，确认合屏lease覆盖延长的持有期，未引入平台独立算法。git diff --check通过。Windows Release全量会话40463运行中；RKMPP首轮SSH7731在banner阶段超时、退出1，未同步；重试98617正在核验第一组源码。构建结果尚待终态，不计为通过。没有媒体测试或临时媒体产物。
+
+后续实际接线仍须把现有SourcePlanner分成sealed事实读取与最终消费两个职责：cadence通过同一Kernel生成产品，presentation消费solver已持有的产品；比较selected与sealed独立容量后再刷新，不能重造FixedProducts。freezeBatch空solver、合法候选工作区和原规格实流验收仍未完成。
+
+
+Windows Release会话40463终态退出0（806任务计划），四项构建产物核验通过，realtime CLI 7232000字节、2026-11-09 10:15:19。7源码按1＋3＋3同步前后哈希均一致；RKMPP会话99454已启动8核增量all-target，无clean-first。未运行媒体链路。
+
+下一绑定的具体产品缺口经独立只读核验：候选产品需要保存完整选中MediaAvSourceCapacityFacts标量快照，初次bind记录、rebind全部成功后才更新。sealed读取独立取得startup、route shape/metadata/atomicMetadata、queues、两路acquiring和acquisitionWindow，比较后才刷新；不能以刷新后的值证明候选一致。最终SourcePlanner保留ingress sameProduct、retention原指针、holders/prefix和真实lineage资源校验，不再内部重复Kernel.bind。cadence仍由同一Kernel消费ledger，禁止第二媒体链路。

@@ -51,7 +51,7 @@ struct MediaRealtimeAvSourcePlanningProducts {
     MediaRunningTime activationOutputLead;
     bool videoFilterActive;
     MediaAvGenerationTransitionPlan transition;
-    std::optional<int> inputAudioSampleRate;
+    MediaRealtimeAvSourceTimingFacts sourceTiming;
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
 };
 

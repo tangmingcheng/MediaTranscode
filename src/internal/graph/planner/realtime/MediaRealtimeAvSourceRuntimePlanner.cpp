@@ -167,7 +167,7 @@ MediaRealtimeAvSourceRuntimePlanner::bindFacts(
     return Result::success({std::move(fixed.audioPipeline), std::move(fixed.isolatedAudioInput), std::move(fixed.groupKey),
         std::move(synchronization).value(), std::move(clock.value().assembly), capacity.queues, capacity.edgePolicies,
         fixed.threadingPolicy, fixed.activationOutputLead, fixed.videoFilterActive, std::move(fixed.transition),
-        clock.value().timing.inputAudioSampleRate, capacity.audioCorrection});
+        std::move(clock.value().timing), capacity.audioCorrection});
 }
 
 ::media::Status MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
@@ -184,7 +184,7 @@ MediaRealtimeAvSourceRuntimePlanner::bindFacts(
     const auto* isolated = fixed.isolatedAudioInput ? &*fixed.isolatedAudioInput : nullptr;
     if (!capacity || &clockRequest.audio != &fixed.audioPipeline || clockRequest.isolatedAudioInput != isolated ||
         !matchesFixedStartup(current, startup) ||
-        timing.inputAudioSampleRate != fixed.inputAudioSampleRate)
+        timing != fixed.sourceTiming)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Source capacity refresh changed fixed source facts"));
     state.startup = static_cast<const MediaAvSyncStartupCapacity&>(startup);

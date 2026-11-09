@@ -84,7 +84,7 @@ public:
     // change. Success allocates nothing; failure invalidates all products.
     static ::media::Status rebindCapacity(
         const MediaCompositionSourceFixedRequest& prepared,
-        const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
+        const MediaAvSourceCapacityFacts& capacity,
         MediaCompositionSourcePlanningProducts& products);
 };
 }

@@ -28,20 +28,20 @@ public:
     const MediaRunningTime activationOutputLead;
     const bool videoFilterActive;
     const MediaAvGenerationTransitionPlan& transition;
-    const std::optional<int> inputAudioSampleRate;
+    const MediaRealtimeAvSourceTimingFacts& sourceTiming;
 
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourcePlanningProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
           synchronization(source.synchronization), startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
-          inputAudioSampleRate(source.inputAudioSampleRate), m_completeOwner(&source), m_fixedOwner(nullptr) {}
+          sourceTiming(source.sourceTiming), m_completeOwner(&source), m_fixedOwner(nullptr) {}
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourceFixedProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
           synchronization(source.synchronization), startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
-          inputAudioSampleRate(source.clock.timing.inputAudioSampleRate), m_completeOwner(nullptr), m_fixedOwner(&source) {}
+          sourceTiming(source.clock.timing), m_completeOwner(nullptr), m_fixedOwner(&source) {}
     MediaRealtimeAvSourceFixedView(MediaRealtimeAvSourcePlanningProducts&&) = delete;
     MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourcePlanningProducts&&) = delete;
     MediaRealtimeAvSourceFixedView(MediaRealtimeAvSourceFixedProducts&&) = delete;

@@ -138,7 +138,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outputPlan.activationOutputLead,
             outer.videoPlan.filterActive,
             std::move(transition),
-            facts.value().timing.inputAudioSampleRate,
+            static_cast<const MediaRealtimeAvSourceTimingFacts&>(facts.value().timing),
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)

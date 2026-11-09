@@ -277,8 +277,8 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
             std::get_if<MediaPacketDurationPlan>(
                 &assembly.audio->duration)) {
         if (!packet->requirePositiveDuration ||
-            !plan.inputAudioSampleRate ||
-            *plan.inputAudioSampleRate <= 0) {
+            !plan.sourceTiming.inputAudioSampleRate ||
+            *plan.sourceTiming.inputAudioSampleRate <= 0) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical packet-duration audio requires its planned sample rate"));
@@ -293,7 +293,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
         return setOption(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(
-                *plan.inputAudioSampleRate));
+                *plan.sourceTiming.inputAudioSampleRate));
     }
     return ::media::Result<void>::failure(
         ::media::ErrorInfo::invalidArgument(

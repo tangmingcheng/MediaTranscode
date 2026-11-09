@@ -260,7 +260,7 @@ try {
 
 ::media::Status MediaCompositionSourcePlanningKernel::rebindCapacity(
     const MediaCompositionSourceFixedRequest& prepared,
-    const MediaAvSourceCapacityFacts& capacity, const MediaRealtimeAvSourceTimingFacts& clockTiming,
+    const MediaAvSourceCapacityFacts& capacity,
     MediaCompositionSourcePlanningProducts& products)
 {
     const auto members = products.runtime.synchronization.members;
@@ -287,7 +287,7 @@ try {
         products.runtime.isolatedAudioInput ? &*products.runtime.isolatedAudioInput : nullptr}, &capacity};
     MediaRealtimeAvSourceCapacityState runtimeCapacity(products.runtime);
     if (auto status = MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(
-            clockRequest, clockTiming, startup.value(), runtimeCapacity); !status) return status;
+            clockRequest, products.runtime.sourceTiming, startup.value(), runtimeCapacity); !status) return status;
     if (auto status = runtimeCapacity.publish(products.runtime); !status) return status;
     auto storage = sourceStartupStorage(capacity, products.input, products.runtime);
     if (!storage) return ::media::Status::failure(storage.error());
