@@ -351,15 +351,8 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     }
     std::vector<MediaAvAggregateSourceFacts> aggregateSources;
     aggregateSources.reserve(sourcePlans.size());
-    for(const auto& source:sourcePlans){
-        const auto& runtime=source.runtime;
-        aggregateSources.push_back({runtime.groupKey,runtime.synchronization.members,runtime.synchronization.domainRole,
-            runtime.synchronization.startup.videoReadiness,std::holds_alternative<MediaDecodedVideoAssemblyTiming>(runtime.assembly.video.timing),
-            source.frameRate,runtime.queues.frame,runtime.activationOutputLead,runtime.assembly.initialGeneration,
-            runtime.assembly.video.sourceIdentity,runtime.assembly.audio?std::optional<std::string_view>{runtime.assembly.audio->sourceIdentity}:std::nullopt,
-            runtime.audioPipeline.enabled,runtime.audioPipeline.resolvedOutput?&*runtime.audioPipeline.resolvedOutput:nullptr,
-            runtime.audioCorrection?&*runtime.audioCorrection:nullptr});
-    }
+    for (const auto& source : sourcePlans)
+        aggregateSources.push_back(MediaAvContinuousAggregatePlanner::sourceFacts(source));
     auto aggregate = MediaAvContinuousAggregatePlanner::plan(aggregateSources, output.value(),
         prepared->geometry.geometry, cadence, selected, *planningResource.value());
     if (!aggregate) return PreparedResult::failure(aggregate.error());

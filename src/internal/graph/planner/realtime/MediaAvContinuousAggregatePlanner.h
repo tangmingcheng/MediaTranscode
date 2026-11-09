@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/model/MediaVideoStartupReadiness.h"
 #include <string_view>
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
@@ -29,6 +30,19 @@ struct MediaAvAggregateSourceFacts final {
 };
 class MediaAvContinuousAggregatePlanner final {
 public:
+    // Borrowed projection shared by candidate and final source products.
+    template<class Source> static MediaAvAggregateSourceFacts sourceFacts(const Source& source)
+    {
+        const auto& runtime = source.runtime;
+        return {runtime.groupKey, runtime.synchronization.members, runtime.synchronization.domainRole,
+            runtime.synchronization.startup.videoReadiness,
+            std::holds_alternative<MediaDecodedVideoAssemblyTiming>(runtime.assembly.video.timing),
+            source.frameRate, runtime.queues.frame, runtime.activationOutputLead, runtime.assembly.initialGeneration,
+            runtime.assembly.video.sourceIdentity,
+            runtime.assembly.audio ? std::optional<std::string_view>{runtime.assembly.audio->sourceIdentity} : std::nullopt,
+            runtime.audioPipeline.enabled, runtime.audioPipeline.resolvedOutput ? &*runtime.audioPipeline.resolvedOutput : nullptr,
+            runtime.audioCorrection ? &*runtime.audioCorrection : nullptr};
+    }
     // Candidate slots retained by the aggregate, not unique source allocations.
     static ::media::Result<std::size_t> videoCandidateCapacity(
         std::size_t frameQueueCapacity, bool sourceDisplayPoints,

@@ -587,3 +587,18 @@ Windows Release73393终态退出0（811任务计划），四项产物核验通�
 预算搜索界不得借用独立graph域的decoded payload作为preparation费用斜率；若采用startup索引或frame wrapper下界，必须从当前实际计费和共享归属证明，不能重复累计。具体solver、固定工作区、sealed跨源费用复算及生产nullptr替换仍未完成。
 
 RKMPP77502终态14/14、退出0，realtime CLI链接成功；两平台编译及双独立审查完成。未运行local/realtime媒体测试，没有本轮抓包、快照、临时媒体、日志或脚本残留。生产空solver门禁仍在，当前不计为合屏实流通过，不推送或修改外部依赖。
+
+
+## 2026-11-09 候选工作区贯通共同规划链
+
+新增MediaCompositionCandidateWorkspace，消费已绑定的源产品，首次构造聚合、拓扑、引用持有目录及逐源CandidateCost；刷新按同一顺序调用既有Kernel/aggregate/topology/residence/cost的rebind入口，成功后才发布valid及源费用总额。不是第二条媒体处理链路，没有重写上述算法。每次刷新重建借用facts，不增长exact arrays；失败立即失效，不按预算不足继续使用半更新结果。
+
+外层facts/held/cost数组使用root planning resource；route的两份普通字符串在复制前按既有容器几何预约，lease先声明后销毁并禁用move assignment。held快照保留初次锁内数值和owner，session plan及video保持借用。调用方必须保证sources/prepared/capacities/held源顺序与原freeze一致；ingress几何不等于源身份，本层不声称可以从几何恢复配对。后续seal之后须重新提供稳定的prepared ingress借用。
+
+原Preparer的aggregate source facts映射抽为共同投影，最终资源planner的输出encoder residence计算抽为共同产品，两处生产调用已复用，workspace不复制公式。sourceBytes只含逐源CandidateCost；root工作区、batch返回存储和最终图runtime registry各有独立归属，不能漏加或重复计费。
+
+两位独立审查timing_handoff_review_a、timing_handoff_review_b对六源码均明确局部PASS；Windows Release全量21120正在构建。本工作区尚未被具体solver调用，生产freeze仍传nullptr；搜索、admission字符串持有、独立sealed复算及原规格实流验收仍未完成。
+
+首次Windows21120构建退出1，Ninja子命令退出2，不计通过；返回输出截断了中间编译诊断，不能据此宣称已获得精确错误行。源码依赖核查发现新header模板直接引用MediaDecodedVideoAssemblyTiming但缺少定义header，已补直接include。完整重建将验证此修正，并完整捕获诊断；此前两位源码审查未发现此依赖问题。RKMPP目前只同步第一组Preparer文件，尚未开始构建。
+
+Windows修正后全量18504终态退出0，configure/build均0（812任务计划），四项产物已核验；realtime CLI为7278592字节、2026-11-09 12:00:20。六源码同步前后SHA256核验完成，RKMPP11402终态9/9、退出0，8核增量all-target完成。两位独立审查对补齐直接include后的六源码均明确局部PASS。未运行媒体测试，没有本批抓包、快照、临时媒体或测试脚本；生产空solver门禁仍未替换，不能计为合屏实流通过。

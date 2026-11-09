@@ -7,8 +7,15 @@
 #include "internal/graph/planner/audio/MediaAudioEncoderFifoRetentionPlan.h"
 
 namespace media::ffmpeg::graph {
+struct MediaCompositionOutputResidence final {
+    std::uint64_t videoFrames;
+    std::uint64_t audioFrames;
+};
 class MediaRealtimeCompositionResourcePlanner final {
 public:
+    static ::media::Result<MediaCompositionOutputResidence> outputResidence(
+        const MediaPreparedRealtimeEmissionSet& output,
+        const MediaRealtimeDeploymentLatencyBudget& latency);
     static ::media::Result<MediaFinalGraphResourceAdmissionPlan> plan(
         const MediaGraph& graph, const MediaCompositionGraphTopology& projection,
         const MediaCompositionGraphIdentity& identity, std::span<const MediaRealtimeCompositionSourceResources> sources,

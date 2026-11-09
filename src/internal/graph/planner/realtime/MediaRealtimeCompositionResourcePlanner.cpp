@@ -29,6 +29,18 @@ using Arithmetic = MediaCheckedArithmetic;
 }
 }
 
+::media::Result<MediaCompositionOutputResidence> MediaRealtimeCompositionResourcePlanner::outputResidence(
+    const MediaPreparedRealtimeEmissionSet& output, const MediaRealtimeDeploymentLatencyBudget& latency)
+{
+    using Result = ::media::Result<MediaCompositionOutputResidence>;
+    if (!output.audio || !output.video.maximumEncoderRetainedFrames)
+        return Result::failure(::media::ErrorInfo::notInitialized("Composition output residence lacks prepared encoder facts"));
+    auto audio = residenceUnits(output.audio->accessUnitsPerSecondNumerator,
+        output.audio->accessUnitsPerSecondDenominator, latency);
+    if (!audio) return Result::failure(audio.error());
+    return Result::success({output.video.maximumEncoderRetainedFrames, audio.value()});
+}
+
 ::media::Result<MediaFinalGraphResourceAdmissionPlan> MediaRealtimeCompositionResourcePlanner::plan(
     const MediaGraph& graph, const MediaCompositionGraphTopology& projection,
     const MediaCompositionGraphIdentity& identity, std::span<const MediaRealtimeCompositionSourceResources> sources,
@@ -56,12 +68,11 @@ try {
     if (!expectedFifo) return Result::failure(expectedFifo.error());
     if (expectedFifo.value() != outputFifo)
         return invalid("Output FIFO retention differs from the aggregate exact codec-frame output contract");
-    auto audioUnits = residenceUnits(output.audio->accessUnitsPerSecondNumerator,
-        output.audio->accessUnitsPerSecondDenominator, latency);
-    if (!audioUnits) return Result::failure(audioUnits.error());
+    auto outputRetention = outputResidence(output, latency);
+    if (!outputRetention) return Result::failure(outputRetention.error());
     MediaFinalGraphResourceAdmissionPlan result{
         MediaRealtimeGraphResourceBudgetScope::EngineManagedPayloadAndReservedStorage,
-        0, output.video.maximumEncoderRetainedFrames, audioUnits.value(), output.hardwareMemory,
+        0, output.video.maximumEncoderRetainedFrames, outputRetention.value().audioFrames, output.hardwareMemory,
         true, retention.encoderPool, {}, {}, {}, {}};
     for (const auto& source : sources) {
         if (source.preparationStorage.empty())
@@ -100,7 +111,7 @@ try {
         sourceReferenceFacts.push_back(*sources[index].referenceFacts);
     }
     const MediaCompositionResidenceFacts residenceFacts{sourceReferenceFacts,output.video.maximumEncoderRetainedFrames,
-        audioUnits.value(),aggregate.storage.maximumRetainedObjects};
+        outputRetention.value().audioFrames,aggregate.storage.maximumRetainedObjects};
     auto reference=MediaCompositionPayloadResidencePlanner::compile(projection,residenceFacts);
     if(!reference)return Result::failure(reference.error());
     if(auto status=MediaCompositionResidenceReadbackValidator::validate(graph,projection,identity,residenceFacts,
@@ -309,7 +320,8 @@ try {
         } else if (node.kind == MediaNodeKind::VideoEncode || node.kind == MediaNodeKind::AudioEncode) {
             const bool video = node.kind == MediaNodeKind::VideoEncode;
             auto objects = video ? residenceUnits(output.video.accessUnitsPerSecondNumerator,
-                output.video.accessUnitsPerSecondDenominator, latency) : audioUnits;
+                output.video.accessUnitsPerSecondDenominator, latency)
+                : ::media::Result<std::uint64_t>::success(outputRetention.value().audioFrames);
             if (!objects) return Result::failure(objects.error());
             // receive_packet reserves exactly one output packet before calling
             // FFmpeg; downstream draining does not require another packet owner.
