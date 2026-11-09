@@ -29,7 +29,7 @@ MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReport
 {
 }
 
-void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedAtNs)
+void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc)
 {
     if (m_mediaSsrc && *m_mediaSsrc != ssrc) {
         invalidate();
@@ -46,9 +46,10 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedA
     m_senderReportObservedAtNs = m_pendingSource->observedAtNs;
     m_cnameObservedAtNs = m_pendingSource->observedAtNs;
     m_pendingSource.reset();
-    if (observedAtNs >= m_senderReportObservedAtNs) {
-        m_evidenceUpdatePending = true;
-    }
+    // RTP and RTCP can be delivered by independent receivers. Matching the
+    // media SSRC completes pending evidence regardless of cross-channel arrival
+    // order; takeEvidenceUpdate evaluates age against its supplied clock.
+    m_evidenceUpdatePending = true;
 }
 
 void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept

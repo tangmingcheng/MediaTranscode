@@ -27,7 +27,7 @@ public:
     explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
         MediaLineageAllocationScope allocation);
 
-    void observeMedia(uint32_t ssrc, int64_t observedAtNs);
+    void observeMedia(uint32_t ssrc);
     void observeContinuityLoss() noexcept;
     ::media::Result<MediaRtcpObservation> observe(const MediaRtcpPackets& packets, int64_t observedAtNs);
     ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;

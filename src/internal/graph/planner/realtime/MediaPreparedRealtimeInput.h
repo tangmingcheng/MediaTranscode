@@ -78,7 +78,7 @@ private:
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaPreparedGenericInputBuffer> buffer);
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaTsPreparedInputBuffer> buffer);
     explicit MediaPreparedRealtimeInput(
-        std::unique_ptr<MediaRawRtpPreparedInputBuffer> buffer);
+        std::shared_ptr<MediaRawRtpPreparedInputBuffer> buffer);
 
     std::unique_ptr<FFmpegFormatContextBuffer> m_genericBuffer;
     std::unique_ptr<MediaPreparedGenericInputBuffer> m_preparedGenericBuffer;

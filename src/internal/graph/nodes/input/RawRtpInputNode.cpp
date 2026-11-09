@@ -715,7 +715,7 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
         }
         m_protocol->consumeFront();
     }
-    return ::media::Status::success();
+    return queueClockEvidence(context, mediaSteadyClockNowNs());
 }
 
 ::media::Status RawRtpInputNode::processPendingRtpPacket(
@@ -828,7 +828,7 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
         }
         return ::media::Status::success();
     }
-    return queueClockEvidence(context, observedAtNs);
+    return queueClockEvidence(context, mediaSteadyClockNowNs());
 }
 
 ::media::Status RawRtpInputNode::queueClockEvidence(

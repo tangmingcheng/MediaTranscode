@@ -2,7 +2,6 @@
 
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
-#include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
 
 #include <chrono>
 #include <limits>
@@ -14,11 +13,15 @@ namespace {
 ::media::Result<MediaRtpIngressPlan> planSnapshot(
     const MediaPreparedRtpIngressSnapshot& snapshot, const MediaRtpInputWaitPlan& inputWait)
 {
-    auto capability = MediaRtpIngressCapabilityMaterializer::materialize(
-        snapshot.socketReceiveCapacityBytes);
-    if (!capability) return ::media::Result<MediaRtpIngressPlan>::failure(capability.error());
-    return MediaRtpIngressPlan::create(capability.value(), snapshot.observation,
-        snapshot.preparedWireBytes, snapshot.maximumDatagramBytes, inputWait);
+    const auto& geometry = snapshot.receiveGeometry;
+    if (geometry.channel() != MediaRtpUdpChannel::Rtp ||
+        geometry.socketReceiveCapacityBytes() != snapshot.socketReceiveCapacityBytes ||
+        geometry.maximumDatagramBytes() != snapshot.maximumDatagramBytes ||
+        geometry.batchByteCapacity() > snapshot.preparedWireBytes)
+        return ::media::Result<MediaRtpIngressPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP snapshot differs from its original receive geometry"));
+    return MediaRtpIngressPlan::create(geometry, snapshot.observation, inputWait);
 }
 
 } // namespace
@@ -68,6 +71,7 @@ namespace {
             after.socketReceiveCapacityBytes != before.socketReceiveCapacityBytes ||
             after.preparedWireBytes != before.preparedWireBytes ||
             after.maximumDatagramBytes != before.maximumDatagramBytes ||
+            !after.receiveGeometry.sameProduct(before.receiveGeometry) ||
             after.observation.observedDatagrams() < before.observation.observedDatagrams() ||
             after.observation.observationSpanNanoseconds() < before.observation.observationSpanNanoseconds() ||
             after.observation.maximumDatagramBytes() < before.observation.maximumDatagramBytes() ||

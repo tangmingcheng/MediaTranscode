@@ -4,6 +4,10 @@
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoFrameRateObserver.h"
+#include "internal/graph/planner/realtime/MediaRtpIngressCapabilityMaterializer.h"
+#include "internal/graph/planner/realtime/MediaRtpReceiveGeometry.h"
+
+#include <array>
 
 #include <algorithm>
 #include <chrono>
@@ -16,6 +20,31 @@
 
 namespace media::ffmpeg::graph {
 namespace {
+
+::media::Result<std::array<MediaRtpReceiveGeometry, 2>> planReceiveGeometries(
+    const MediaRtpUdpTransport& transport, std::size_t wireCapacity)
+{
+    using Result = ::media::Result<std::array<MediaRtpReceiveGeometry, 2>>;
+    const auto planChannel = [&](MediaRtpUdpChannel channel)
+        -> ::media::Result<MediaRtpReceiveGeometry> {
+        const auto socketBytes = transport.effectiveReceiveBufferBytes(channel);
+        if (socketBytes <= 0)
+            return ::media::Result<MediaRtpReceiveGeometry>::failure(
+                ::media::ErrorInfo::invalidArgument("RTP channel lacks socket receive capacity"));
+        auto capability = MediaRtpIngressCapabilityMaterializer::materialize(
+            static_cast<std::size_t>(socketBytes));
+        if (!capability) return ::media::Result<MediaRtpReceiveGeometry>::failure(capability.error());
+        return MediaRtpReceiveGeometry::create(capability.value(), wireCapacity,
+            transport.maximumDatagramBytes(), channel);
+    };
+    auto rtp = planChannel(MediaRtpUdpChannel::Rtp);
+    if (!rtp) return Result::failure(rtp.error());
+    auto rtcp = planChannel(MediaRtpUdpChannel::Rtcp);
+    if (!rtcp) return Result::failure(rtcp.error());
+    // These are two physical receive arenas, not two reservations of the wire
+    // budget. Their combined allocation is charged by preparation storage.
+    return Result::success({std::move(rtp).value(), std::move(rtcp).value()});
+}
 
 ::media::ErrorInfo incompleteSignalingError(
     std::string reason,
@@ -180,13 +209,20 @@ namespace {
             opened.error());
     }
     MediaRtpUdpTransport transport = std::move(opened).value();
+    const auto wireCapacity = byteBudget.value()->snapshot().wireCapacity;
+    auto videoGeometries = planReceiveGeometries(transport, wireCapacity);
+    if (!videoGeometries)
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(videoGeometries.error());
     if (audio) {
+        auto audioGeometries = planReceiveGeometries(*audioTransport, wireCapacity);
+        if (!audioGeometries)
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(audioGeometries.error());
         auto createdAudio = MediaPreparedRealtimeInput::createRawRtp({
             byteBudget.value(), std::move(*audioTransport),
             std::move(*audioBuffered),
             audio->identity, std::nullopt, replayClock,
             std::make_shared<MediaRtpIngressObservationCollector>(),
-            audio->transport.cancellableReadTimeoutMs});
+            std::move(audioGeometries).value(), audio->transport.cancellableReadTimeoutMs});
         if (!createdAudio) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 createdAudio.error());
@@ -388,11 +424,10 @@ namespace {
                     retainDatagram = belongs.value();
                 }
             }
-            if (auto status = videoIngressObservation->observeDatagram(
-                    datagram.bytes.size(), observedSequenceNumber,
-                    observedAtNs); !status) {
-                return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                    status.error());
+            if (datagram.channel == MediaRtpUdpChannel::Rtp) {
+                if (auto status = videoIngressObservation->observeDatagram(
+                        datagram.bytes.size(), observedSequenceNumber, observedAtNs); !status)
+                    return ::media::Result<MediaPreparedRawRtpProbe>::failure(status.error());
             }
             if (retainDatagram) {
                 bufferedBytes += datagram.bytes.size();
@@ -436,7 +471,7 @@ namespace {
         auto prepared = MediaPreparedRealtimeInput::createRawRtp({
             byteBudget.value(), std::move(transport), std::move(buffered), video.identity,
             detected.value(), replayClock,
-            videoIngressObservation,
+            videoIngressObservation, std::move(videoGeometries).value(),
             video.transport.cancellableReadTimeoutMs, ingressFrontier});
         if (!prepared) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(

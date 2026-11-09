@@ -56,7 +56,7 @@ MediaRtpInputProtocolSession::MediaRtpInputProtocolSession(
     if (observedAtNs <= 0 || hasPending()) return ::media::Status::failure(
         ::media::ErrorInfo::invalidArgument(
             "RTP protocol observation requires a positive arrival time and drained pending items"));
-    const auto generationBefore = m_clock.observeMedia(packet.ssrc, observedAtNs);
+    const auto generationBefore = m_clock.observeMedia(packet.ssrc);
     auto reordered = m_reorder->push(std::move(packet),
         std::chrono::steady_clock::time_point(std::chrono::nanoseconds(observedAtNs)));
     if (!reordered) return ::media::Status::failure(reordered.error());

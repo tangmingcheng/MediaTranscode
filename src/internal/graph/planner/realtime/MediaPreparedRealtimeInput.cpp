@@ -24,7 +24,7 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
 }
 
 MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
-    std::unique_ptr<MediaRawRtpPreparedInputBuffer> buffer)
+    std::shared_ptr<MediaRawRtpPreparedInputBuffer> buffer)
     : m_rawRtpBuffer(std::move(buffer))
 {
 }

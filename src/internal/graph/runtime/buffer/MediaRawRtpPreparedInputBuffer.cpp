@@ -60,8 +60,8 @@ void logPreparedCaptureBoundary(const MediaPreparedRawRtpInput& prepared,
 } // namespace
 
 MediaRawRtpPreparedInputBuffer::MediaRawRtpPreparedInputBuffer(
-    MediaPreparedRawRtpInput prepared)
-    : m_prepared(std::move(prepared))
+    ConstructionKey, MediaPreparationBackingOwner workerBacking, MediaPreparedRawRtpInput prepared)
+    : m_workerBacking(std::move(workerBacking)), m_prepared(std::move(prepared))
 {
     for (const auto& datagram : m_prepared->datagrams) {
         m_bufferedBytes += datagram->datagram.bytes.size();
@@ -71,19 +71,48 @@ MediaRawRtpPreparedInputBuffer::MediaRawRtpPreparedInputBuffer(
     setDiagnosticName("MediaRawRtpPreparedInputBuffer");
 }
 
+::media::Result<std::size_t> MediaRawRtpPreparedInputBuffer::workerStorageBytes()
+{
+    using Result = ::media::Result<std::size_t>;
+    auto geometry = MediaThreadAllocationGeometry::current();
+    if (!geometry) return Result::failure(geometry.error());
+    auto perWorker = MediaCheckedArithmetic::add(geometry.value().invocationBytes,
+        geometry.value().stopStateBytes, "Prepared thread startup allocations");
+    if (!perWorker) return Result::failure(perWorker.error());
+    constexpr auto workers = std::tuple_size_v<decltype(MediaPreparedRawRtpInput::receiveGeometries)>;
+    auto total = MediaCheckedArithmetic::multiply(perWorker.value(), workers,
+        "Prepared channel worker allocations");
+    if (!total) return Result::failure(total.error());
+    if (total.value() > (std::numeric_limits<std::size_t>::max)())
+        return Result::failure(::media::ErrorInfo::allocationFailed("Prepared thread storage exceeds addressable memory"));
+    return Result::success(static_cast<std::size_t>(total.value()));
+}
+
 MediaRawRtpPreparedInputBuffer::~MediaRawRtpPreparedInputBuffer()
 {
     abort();
 }
 
-::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>
+::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>
 MediaRawRtpPreparedInputBuffer::create(MediaPreparedRawRtpInput prepared) try
 {
     std::size_t bufferedBytes = 0;
     if (!prepared.byteBudget || prepared.datagrams.resource() !=
             &prepared.byteBudget->storageResource()) {
-        return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
             ::media::ErrorInfo::invalidArgument("prepared RTP queue requires its admitted storage resource"));
+    }
+    for (std::size_t index = 0; index < prepared.receiveGeometries.size(); ++index) {
+        const auto& geometry = prepared.receiveGeometries[index];
+        if (auto status = geometry.validateProduct(); !status)
+            return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(status.error());
+        const auto channel = index == 0 ? MediaRtpUdpChannel::Rtp : MediaRtpUdpChannel::Rtcp;
+        if (geometry.channel() != channel ||
+            geometry.maximumDatagramBytes() != prepared.transport.maximumDatagramBytes() ||
+            geometry.socketReceiveCapacityBytes() != static_cast<std::size_t>(
+                prepared.transport.effectiveReceiveBufferBytes(channel)))
+            return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument("prepared RTP receive geometry differs from its socket readback"));
     }
     std::uint64_t previousOrdinal = 0;
     for (const auto& datagram : prepared.datagrams) {
@@ -91,7 +120,7 @@ MediaRawRtpPreparedInputBuffer::create(MediaPreparedRawRtpInput prepared) try
             datagram->ordinal > prepared.ingressFrontier ||
             datagram->datagram.bytes.resource() !=
                 &prepared.byteBudget->storageResource()) {
-            return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+            return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
                 ::media::ErrorInfo::invalidArgument("prepared RTP payload requires its admitted storage resource"));
         }
         previousOrdinal = datagram->ordinal;
@@ -112,25 +141,36 @@ MediaRawRtpPreparedInputBuffer::create(MediaPreparedRawRtpInput prepared) try
         !prepared.ingressObservation ||
         prepared.captureReadTimeoutMs <= 0 ||
         bufferedBytes > prepared.byteBudget->snapshot().wireCapacity) {
-        return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "raw RTP prepared input requires open transport and complete planned identity"));
     }
     for (const auto& datagram : prepared.datagrams) {
         if (auto status = prepared.replayClock->observe(
                 datagram->observedAtNs); !status) {
-            return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+            return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
                 status.error());
         }
     }
-    auto buffer = std::unique_ptr<MediaRawRtpPreparedInputBuffer>(
-        new MediaRawRtpPreparedInputBuffer(std::move(prepared)));
-    return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::success(
+    const auto allocation = prepared.byteBudget->allocationScope();
+    auto workerBytes = workerStorageBytes();
+    if (!workerBytes) return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(workerBytes.error());
+    const auto* preparedAllocation = std::get_if<MediaPreparedLineageAllocation>(&allocation);
+    if (!preparedAllocation || !preparedAllocation->resource)
+        return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+            ::media::ErrorInfo::invalidArgument("Prepared workers require their preparation allocation scope"));
+    auto workerLease = preparedAllocation->resource->reserveStorage(
+        workerBytes.value(), MediaStorageAdmission::RequiredAllocation);
+    if (!workerLease) return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(workerLease.error());
+    auto buffer = std::allocate_shared<MediaRawRtpPreparedInputBuffer>(
+        MediaLineageAllocator<MediaRawRtpPreparedInputBuffer>(allocation),
+        ConstructionKey{}, MediaPreparationBackingOwner(std::move(workerLease).value()), std::move(prepared));
+    return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::success(
         std::move(buffer));
 }
 
 catch (const std::bad_alloc&) {
-    return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
+    return ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
         ::media::ErrorInfo::allocationFailed("prepared RTP queue allocation failed"));
 }
 
@@ -163,6 +203,29 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
     return ::media::Status::success();
 }
 
+void MediaRawRtpPreparedInputBuffer::runPreflightWorker(
+    void* context, std::stop_token stopToken, std::size_t) noexcept
+{
+    auto* owner = static_cast<MediaRawRtpPreparedInputBuffer*>(context);
+    owner->capture(stopToken);
+    std::shared_ptr<MediaPreparedRtpSourceSession> source;
+    std::optional<::media::ErrorInfo> failure;
+    {
+        std::scoped_lock lock(owner->m_mutex);
+        owner->m_captureFinished = true;
+        source = owner->m_continuousSource;
+        failure = owner->m_captureError;
+    }
+    owner->m_ready.notify_all();
+    if (source && failure) source->fail(*failure);
+}
+
+void MediaRawRtpPreparedInputBuffer::runRuntimeWorker(
+    void* context, std::stop_token stopToken, std::size_t channelIndex) noexcept
+{
+    static_cast<MediaRawRtpPreparedInputBuffer*>(context)->captureRuntime(stopToken, channelIndex);
+}
+
 ::media::Status MediaRawRtpPreparedInputBuffer::startPreflightCapture()
 {
     std::scoped_lock lock(m_mutex);
@@ -171,20 +234,7 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP prepared capture can start exactly once before replay"));
     }
-    m_captureThread = std::jthread(
-        [owner = this](std::stop_token stopToken) {
-            owner->capture(stopToken);
-            std::shared_ptr<MediaPreparedRtpSourceSession> source;
-            std::optional<::media::ErrorInfo> failure;
-            {
-                std::scoped_lock lock(owner->m_mutex);
-                owner->m_captureFinished = true;
-                source = owner->m_continuousSource;
-                failure = owner->m_captureError;
-            }
-            owner->m_ready.notify_all();
-            if (source && failure) source->fail(*failure);
-        });
+    m_captureThread = std::jthread(MediaThreadWorkerEntry{&runPreflightWorker, this, 0});
     m_captureStarted = true;
     m_captureFinished = false;
     return ::media::Status::success();
@@ -259,7 +309,7 @@ MediaRawRtpPreparedInputBuffer::acquireProbeLease(
 ::media::Result<MediaPreparedRawRtpReplayInfo>
 MediaRawRtpPreparedInputBuffer::beginReplay()
 {
-    std::scoped_lock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     if (m_captureError) {
         return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
             *m_captureError);
@@ -305,6 +355,17 @@ MediaRawRtpPreparedInputBuffer::beginReplay()
         info.replayOffsetMilliseconds =
             (firstNs - m_replayEpoch->sourceOriginNs) / 1'000'000;
     }
+    if (m_runtimeIngress) {
+        try {
+            m_captureThread = std::jthread(MediaThreadWorkerEntry{&runRuntimeWorker, this, 0});
+            m_rtcpCaptureThread = std::jthread(MediaThreadWorkerEntry{&runRuntimeWorker, this, 1});
+        } catch (const std::system_error&) {
+            lock.unlock();
+            (void)stop();
+            return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
+                ::media::ErrorInfo::allocationFailed("RTP channel receive worker creation failed"));
+        }
+    }
     m_replayActive = true;
     return ::media::Result<MediaPreparedRawRtpReplayInfo>::success(
         std::move(info));
@@ -313,7 +374,7 @@ MediaRawRtpPreparedInputBuffer::beginReplay()
 ::media::Status MediaRawRtpPreparedInputBuffer::discardReplayMedia()
 {
     std::scoped_lock lock(m_mutex);
-    if (!m_prepared || !m_replayActive || m_stopped || m_captureThread.joinable())
+    if (!m_prepared || !m_replayActive || m_stopped || m_continuousSource)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RTP replay purge requires an active runtime owner and completed capture"));
     // Preserve ordered RTCP facts; only media preceding this owner boundary retires.
@@ -357,12 +418,12 @@ MediaRawRtpPreparedInputBuffer::receive(int timeoutMs)
                         std::string(m_prepared->identity.streamKind ==
                                 MediaStreamKind::Video ? "video" : "audio"));
             }
+            if (m_runtimeIngress) {
+                return ::media::Result<MediaPreparedRawRtpReplayDatagram>::failure(
+                    ::media::ErrorInfo::wouldBlock(
+                        "raw RTP prepared replay queue was consumed"));
+            }
             if (!m_captureThread.joinable()) {
-                if (m_runtimeIngress) {
-                    return ::media::Result<MediaPreparedRawRtpReplayDatagram>::failure(
-                        ::media::ErrorInfo::wouldBlock(
-                            "raw RTP prepared replay queue was consumed"));
-                }
                 return ::media::Result<MediaPreparedRawRtpReplayDatagram>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "raw RTP prepared replay has no active socket capture"));
@@ -482,18 +543,15 @@ MediaRawRtpPreparedInputBuffer::ingressSnapshot(
                 "RTP ingress snapshot reached the original preparation deadline"));
         auto observation = m_prepared->ingressObservation->snapshot();
         if (observation) {
-            const auto socketBytes = m_continuousIngressPlan
-                ? m_continuousIngressPlan->socketReceiveCapacityBytes()
-                : static_cast<std::size_t>(m_prepared->transport.effectiveReceiveBufferBytes());
-            const auto datagramBytes = m_continuousIngressPlan
-                ? m_continuousIngressPlan->maximumDatagramBytes()
-                : m_prepared->transport.maximumDatagramBytes();
+            const auto& geometry = m_prepared->receiveGeometries[0];
+            const auto socketBytes = geometry.socketReceiveCapacityBytes();
+            const auto datagramBytes = geometry.maximumDatagramBytes();
             const auto wireBytes = m_prepared->byteBudget->snapshot().wireCapacity;
             if (socketBytes <= 0 || !datagramBytes || !wireBytes || !m_prepared->ingressFrontier)
                 return Result::failure(::media::ErrorInfo::notInitialized(
                     "RTP ingress snapshot requires observed source and transport capacity facts"));
             return Result::success({std::move(observation).value(), m_prepared->ingressFrontier,
-                owner, static_cast<std::size_t>(socketBytes), wireBytes, datagramBytes});
+                owner, static_cast<std::size_t>(socketBytes), wireBytes, datagramBytes, geometry});
         }
         if (!wait || observation.error().code != ::media::ErrorCode::WouldBlock)
             return Result::failure(observation.error());
@@ -613,39 +671,56 @@ MediaRawRtpPreparedInputBuffer::accessUnitBoundLocked() const
     return Result::success(units);
 }
 
-::media::Status MediaRawRtpPreparedInputBuffer::configureRuntimeIngress(
+::media::Status MediaRawRtpPreparedInputBuffer::installRuntimeIngressLocked(
     const MediaRtpIngressPlan& plan)
 {
-    if (auto status = plan.validateProduct(); !status) return status;
-    {
-        std::scoped_lock lock(m_mutex);
-        if (m_captureError) return ::media::Status::failure(*m_captureError);
-        if (!m_prepared || m_stopped || m_replayActive || m_runtimeIngress ||
-            m_captureThread.joinable()) {
+    if (!m_prepared || m_runtimeIngress || m_rtcpIngress ||
+        !m_prepared->receiveGeometries[0].sameProduct(plan.receiveGeometry()))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP receiver installation requires its original channel geometries"));
+    for (std::size_t index = 0; index < m_prepared->receiveGeometries.size(); ++index) {
+        const auto& geometry = m_prepared->receiveGeometries[index];
+        if (auto status = geometry.validateProduct(); !status) return status;
+        if (geometry.channel() != (index == 0 ? MediaRtpUdpChannel::Rtp : MediaRtpUdpChannel::Rtcp))
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "raw RTP runtime ingress can be configured exactly once before replay"));
-        }
-        if (auto status = m_prepared->byteBudget->requireSealed(); !status) {
-            return status;
-        }
+                "RTP receiver geometry has mismatched channel ownership"));
     }
-    // Capture is joined before this shared handoff. Release its receive scratch
-    // before either platform adapter/receiver allocates the runtime arena.
-    if (auto status = m_prepared->transport.releaseReceiveStorage(); !status)
-        return status;
-    auto adapter = MediaRtpIngressAdapterFactory::create(
-        std::move(m_prepared->transport), plan);
-    if (!adapter) return ::media::Status::failure(adapter.error());
-    auto receiver = MediaRtpIngressReceiver::create(
-        plan, std::move(adapter).value());
-    if (!receiver) return ::media::Status::failure(receiver.error());
-    {
-        std::scoped_lock lock(m_mutex);
-        if (m_captureError) return ::media::Status::failure(*m_captureError);
-        m_runtimeIngress.emplace(std::move(receiver).value());
-        m_runtimeIngressPlan.emplace(plan);
+    if (auto status = m_prepared->transport.releaseReceiveStorage(); !status) return status;
+    const auto allocation = m_prepared->byteBudget->allocationScope();
+    auto transport = std::allocate_shared<MediaRtpUdpTransport>(
+        MediaLineageAllocator<MediaRtpUdpTransport>(allocation), std::move(m_prepared->transport));
+    std::array<std::optional<MediaRtpIngressReceiver>, 2> receivers;
+    for (std::size_t index = 0; index < receivers.size(); ++index) {
+        const auto& geometry = m_prepared->receiveGeometries[index];
+        auto adapter = MediaRtpIngressAdapterFactory::create(transport, geometry, allocation);
+        if (!adapter) return ::media::Status::failure(adapter.error());
+        auto receiver = MediaRtpIngressReceiver::create(geometry, std::move(adapter).value(), allocation);
+        if (!receiver) return ::media::Status::failure(receiver.error());
+        receivers[index].emplace(std::move(receiver).value());
     }
+    m_runtimeIngress.emplace(std::move(*receivers[0]));
+    m_rtcpIngress.emplace(std::move(*receivers[1]));
+    m_runtimeIngressPlan.emplace(plan);
     return ::media::Status::success();
+}
+
+::media::Status MediaRawRtpPreparedInputBuffer::configureRuntimeIngress(
+    const MediaRtpIngressPlan& plan) try
+{
+    if (auto status = plan.validateProduct(); !status) return status;
+    std::unique_lock lock(m_mutex);
+    if (m_captureError) return ::media::Status::failure(*m_captureError);
+    if (!m_prepared || m_stopped || m_replayActive || m_runtimeIngress ||
+        m_captureThread.joinable())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP runtime ingress can be configured exactly once before replay"));
+    if (auto status = m_prepared->byteBudget->requireSealed(); !status) return status;
+    if (auto status = installRuntimeIngressLocked(plan); !status) return status;
+    return ::media::Status::success();
+}
+catch (const std::bad_alloc&) {
+    return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        "RTP channel receiver allocation failed"));
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::validateRuntimeIngressPlan(
@@ -669,18 +744,26 @@ bool MediaRawRtpPreparedInputBuffer::preparedReplayDrained() const noexcept
 ::media::Result<MediaRtpIngressBatch>
 MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
 {
-    MediaRtpIngressReceiver* receiver = nullptr;
-    {
-        std::scoped_lock lock(m_mutex);
-        if (!m_prepared || !m_replayActive || m_stopped ||
-            !m_runtimeIngress || !m_prepared->datagrams.empty()) {
-            return ::media::Result<MediaRtpIngressBatch>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "raw RTP runtime batch receive requires consumed prepared replay and configured ingress"));
-        }
-        receiver = &*m_runtimeIngress;
-    }
-    return receiver->receiveNext(timeoutMilliseconds);
+    using Result = ::media::Result<MediaRtpIngressBatch>;
+    std::unique_lock lock(m_mutex);
+    if (timeoutMilliseconds <= 0 || !m_prepared || !m_replayActive || m_stopped ||
+        !m_runtimeIngress || !m_rtcpIngress || !m_prepared->datagrams.empty())
+        return Result::failure(::media::ErrorInfo::notInitialized(
+            "raw RTP runtime batch receive requires consumed prepared replay and configured ingress"));
+    m_ready.wait_for(lock, std::chrono::milliseconds(timeoutMilliseconds), [&] {
+        return m_stopped || m_captureError || m_readyBatches[0] || m_readyBatches[1];
+    });
+    if (m_captureError) return Result::failure(*m_captureError);
+    if (m_stopped) return Result::failure(::media::ErrorInfo::cancelled("RTP runtime receive was stopped"));
+    if (!m_readyBatches[0] && !m_readyBatches[1])
+        return Result::failure(::media::ErrorInfo::wouldBlock("RTP runtime receive timed out"));
+    std::size_t selected = m_readyBatches[0] ? 0 : 1;
+    if (m_readyBatches[0] && m_readyBatches[1] &&
+        m_readyBatches[1]->entries().front().observedAtNanoseconds <
+            m_readyBatches[0]->entries().front().observedAtNanoseconds) selected = 1;
+    auto batch = std::move(*m_readyBatches[selected]);
+    m_readyBatches[selected].reset();
+    return Result::success(std::move(batch));
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::finishPreflightCapture()
@@ -699,6 +782,9 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
     m_captureThread.join();
     if (auto status = m_prepared->transport.reset(); !status) return status;
     std::scoped_lock lock(m_mutex);
+    // join does not destroy the stop state. Retire it before constructing the
+    // replacement runtime worker, keeping the admitted two-worker upper bound.
+    m_captureThread = std::jthread{};
     if (m_captureError) return ::media::Status::failure(*m_captureError);
     logPreparedCaptureBoundary(*m_prepared, m_bufferedBytes,
         m_prepared->byteBudget->snapshot(), "sealed");
@@ -707,143 +793,165 @@ MediaRawRtpPreparedInputBuffer::receiveRuntimeBatch(int timeoutMilliseconds)
 
 ::media::Status MediaRawRtpPreparedInputBuffer::stop() noexcept
 {
-    m_captureThread.request_stop();
-    MediaRtpIngressReceiver* receiver = nullptr;
-    MediaRtpUdpTransport* transport = nullptr;
     {
         std::scoped_lock lock(m_mutex);
         m_stopped = true;
-        if (m_runtimeIngress) receiver = &*m_runtimeIngress;
-        else if (m_prepared) transport = &m_prepared->transport;
+        m_captureThread.request_stop();
+        m_rtcpCaptureThread.request_stop();
     }
-    m_ready.notify_all();
-    auto status = receiver ? receiver->stop()
-        : transport ? transport->stop()
-        : ::media::Status::failure(mediaCleanupError(::media::ErrorCode::NotInitialized,
-            "raw RTP prepared input has no owned transport", 0));
-    // The capture worker may use either transport after continuous preparation
-    // is installed. Join outside the buffer lock before its storage can die.
+    auto first = interruptReceive();
     if (m_captureThread.joinable()) m_captureThread.join();
-    return status;
+    if (m_rtcpCaptureThread.joinable()) m_rtcpCaptureThread.join();
+    if (m_runtimeIngress) {
+        auto status = m_runtimeIngress->stop();
+        if (!status && first) first = status;
+    }
+    if (m_rtcpIngress) {
+        auto status = m_rtcpIngress->stop();
+        if (!status && first) first = status;
+    }
+    return first;
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::interruptReceive() noexcept
 {
-    {
-        std::scoped_lock lock(m_mutex);
-        if (m_runtimeIngress) return m_runtimeIngress->interruptReceive();
-    }
-    MediaRtpUdpTransport* transport = markStopped();
-    if (!transport) {
-        return ::media::Status::failure(
-            mediaCleanupError(::media::ErrorCode::NotInitialized,
+    std::scoped_lock lock(m_mutex);
+    m_stopped = true;
+    m_captureThread.request_stop();
+    m_rtcpCaptureThread.request_stop();
+    m_ready.notify_all();
+    if (!m_runtimeIngress)
+        return m_prepared ? m_prepared->transport.interruptReceive()
+            : ::media::Status::failure(mediaCleanupError(::media::ErrorCode::NotInitialized,
                 "raw RTP prepared input has no owned transport", 0));
+    auto first = m_runtimeIngress->interruptReceive();
+    if (m_rtcpIngress) {
+        auto status = m_rtcpIngress->interruptReceive();
+        if (!status && first) first = status;
     }
-    return transport->interruptReceive();
+    return first;
 }
 
 void MediaRawRtpPreparedInputBuffer::abort() noexcept
 {
-    m_captureThread.request_stop();
-    MediaRtpIngressReceiver* receiver = nullptr;
-    MediaRtpUdpTransport* transport = nullptr;
     {
         std::scoped_lock lock(m_mutex);
         m_stopped = true;
-        if (m_runtimeIngress) receiver = &*m_runtimeIngress;
-        else if (m_prepared) transport = &m_prepared->transport;
+        m_captureThread.request_stop();
+        m_rtcpCaptureThread.request_stop();
     }
-    m_ready.notify_all();
-    if (receiver) (void)receiver->abort();
-    else if (transport) (void)transport->abort();
+    (void)interruptReceive();
     if (m_captureThread.joinable()) m_captureThread.join();
+    if (m_rtcpCaptureThread.joinable()) m_rtcpCaptureThread.join();
+    if (m_runtimeIngress) (void)m_runtimeIngress->abort();
+    if (m_rtcpIngress) (void)m_rtcpIngress->abort();
+    if (!m_runtimeIngress && m_prepared) (void)m_prepared->transport.abort();
 }
 
-MediaRtpUdpTransport*
-MediaRawRtpPreparedInputBuffer::markStopped() noexcept
-{
-    MediaRtpUdpTransport* transport = nullptr;
-    {
-        std::scoped_lock lock(m_mutex);
-        m_stopped = true;
-        if (m_prepared) transport = &m_prepared->transport;
-    }
-    m_ready.notify_all();
-    return transport;
-}
-
-::media::Status MediaRawRtpPreparedInputBuffer::captureContinuousBatch(
-    std::stop_token stopToken)
+::media::Status MediaRawRtpPreparedInputBuffer::captureRuntimeBatch(
+    std::stop_token stopToken, std::size_t channelIndex)
 {
     std::shared_ptr<MediaPreparedRtpSourceSession> source;
-    MediaRtpIngressReceiver* receiver = nullptr;
+    MediaRtpIngressReceiver* receiver;
     MediaStreamKind stream;
     int timeoutMs;
     {
         std::scoped_lock lock(m_mutex);
-        if (!m_prepared || m_stopped || !m_continuousSource || !m_continuousIngressPlan)
+        if (!m_prepared || m_stopped || !m_runtimeIngress || !m_rtcpIngress)
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                "continuous RTP reception requires its source and ingress contract"));
+                "RTP reception requires both fixed channel receivers"));
         source = m_continuousSource;
         stream = m_prepared->identity.streamKind;
         timeoutMs = m_prepared->captureReadTimeoutMs;
-        if (!m_runtimeIngress) {
-            // Only this original receiver worker may transfer the transport.
-            if (auto status = m_prepared->transport.releaseReceiveStorage(); !status)
-                return status;
-            auto adapter = MediaRtpIngressAdapterFactory::create(
-                std::move(m_prepared->transport), *m_continuousIngressPlan);
-            if (!adapter) return ::media::Status::failure(adapter.error());
-            auto ingress = MediaRtpIngressReceiver::create(
-                *m_continuousIngressPlan, std::move(adapter).value());
-            if (!ingress) return ::media::Status::failure(ingress.error());
-            m_runtimeIngress.emplace(std::move(ingress).value());
-            m_runtimeIngressPlan = m_continuousIngressPlan;
-        }
-        receiver = &*m_runtimeIngress;
+        receiver = channelIndex == 0 ? &*m_runtimeIngress : &*m_rtcpIngress;
     }
-    const auto beforeReceive = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    auto timeout = source->receiveTimeoutMs(stream, beforeReceive, timeoutMs);
-    if (!timeout) return ::media::Status::failure(timeout.error());
-    auto batch = receiver->receiveNext(timeout.value());
+    if (auto released = receiver->waitForBatchRelease(stopToken); !released) return released;
+    if (source) {
+        auto timeout = source->receiveTimeoutMs(stream, mediaSteadyClockNowNs(), timeoutMs);
+        if (!timeout) return ::media::Status::failure(timeout.error());
+        timeoutMs = timeout.value();
+    }
+    auto batch = receiver->receiveNext(timeoutMs);
     if (!batch) {
         if (stopToken.stop_requested()) return ::media::Status::success();
         if (batch.error().code != ::media::ErrorCode::WouldBlock)
             return ::media::Status::failure(batch.error());
-        const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        return source->tick(stream, now);
+        if (!source) return ::media::Status::success();
+        std::scoped_lock delivery(m_deliveryMutex);
+        return source->tick(stream, mediaSteadyClockNowNs());
     }
+    if (!source) {
+        std::scoped_lock lock(m_mutex);
+        if (m_stopped || stopToken.stop_requested()) return ::media::Status::success();
+        if (m_readyBatches[channelIndex]) return ::media::Status::failure(
+            ::media::ErrorInfo::internalError("RTP channel published a second outstanding arena lease"));
+        m_readyBatches[channelIndex].emplace(std::move(batch).value());
+        m_ready.notify_all();
+        return ::media::Status::success();
+    }
+    // The lock serializes protocol prepare/drain and delivery ordinal publication,
+    // never the blocking socket operation. Capture timestamps remain unchanged.
+    std::scoped_lock delivery(m_deliveryMutex);
     for (const auto& entry : batch.value().entries()) {
-        std::uint64_t ordinal;
-        {
-            std::scoped_lock lock(m_mutex);
-            if (m_stopped || stopToken.stop_requested()) return ::media::Status::success();
-            if (m_prepared->ingressFrontier == (std::numeric_limits<std::uint64_t>::max)())
-                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                    "continuous RTP ingress ordinal overflow"));
-            std::optional<std::uint16_t> sequence;
-            if (entry.channel == MediaRtpUdpChannel::Rtp) {
-                if (entry.bytes.size() < 4) return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("RTP datagram lacks its sequence field"));
-                sequence = static_cast<std::uint16_t>(
-                    (std::to_integer<std::uint16_t>(entry.bytes[2]) << 8) |
-                    std::to_integer<std::uint16_t>(entry.bytes[3]));
-            }
+        std::scoped_lock lock(m_mutex);
+        if (m_stopped || stopToken.stop_requested()) return ::media::Status::success();
+        if (m_prepared->ingressFrontier == (std::numeric_limits<std::uint64_t>::max)())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "continuous RTP ingress ordinal overflow"));
+        if (entry.channel != m_prepared->receiveGeometries[channelIndex].channel())
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "RTP receiver produced a datagram for another channel"));
+        if (entry.channel == MediaRtpUdpChannel::Rtp) {
+            if (entry.bytes.size() < 4) return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("RTP datagram lacks its sequence field"));
+            const auto sequence = static_cast<std::uint16_t>(
+                (std::to_integer<std::uint16_t>(entry.bytes[2]) << 8) |
+                std::to_integer<std::uint16_t>(entry.bytes[3]));
             if (auto status = m_prepared->ingressObservation->observeDatagram(
                     entry.bytes.size(), sequence, entry.observedAtNanoseconds); !status) return status;
-            ordinal = ++m_prepared->ingressFrontier;
-            m_ready.notify_all();
         }
+        const auto ordinal = m_prepared->ingressFrontier + 1;
         const std::span<const std::uint8_t> bytes{
             reinterpret_cast<const std::uint8_t*>(entry.bytes.data()), entry.bytes.size()};
         if (auto status = source->consume(stream, entry.channel, bytes,
                 entry.observedAtNanoseconds, ordinal); !status) return status;
+        m_prepared->ingressFrontier = ordinal;
+        m_ready.notify_all();
     }
-    const auto afterReceive = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    return source->tick(stream, afterReceive);
+    return source->tick(stream, mediaSteadyClockNowNs());
+}
+
+void MediaRawRtpPreparedInputBuffer::captureRuntime(
+    std::stop_token stopToken, std::size_t channelIndex) noexcept
+{
+    try {
+        while (!stopToken.stop_requested()) {
+            auto status = captureRuntimeBatch(stopToken, channelIndex);
+            if (status) continue;
+            if (stopToken.stop_requested()) return;
+            std::shared_ptr<MediaPreparedRtpSourceSession> source;
+            {
+                std::scoped_lock lock(m_mutex);
+                if (!m_captureError) m_captureError = status.error();
+                source = m_continuousSource;
+            }
+            m_ready.notify_all();
+            (void)interruptReceive();
+            if (source) source->fail(status.error());
+            return;
+        }
+    } catch (const std::bad_alloc&) {
+        std::shared_ptr<MediaPreparedRtpSourceSession> source;
+        const auto error = ::media::ErrorInfo::allocationFailed("RTP receive pump allocation failed");
+        {
+            std::scoped_lock lock(m_mutex);
+            if (!m_captureError) m_captureError = error;
+            source = m_continuousSource;
+        }
+        m_ready.notify_all();
+        (void)interruptReceive();
+        if (source) source->fail(error);
+    }
 }
 
 void MediaRawRtpPreparedInputBuffer::capture(
@@ -856,19 +964,18 @@ void MediaRawRtpPreparedInputBuffer::capture(
             continuous = static_cast<bool>(m_continuousSource);
         }
         if (continuous) {
-            auto status = captureContinuousBatch(stopToken);
-            if (!status) {
-                std::shared_ptr<MediaPreparedRtpSourceSession> source;
-                {
-                    std::scoped_lock lock(m_mutex);
+            {
+                std::scoped_lock lock(m_mutex);
+                if (m_stopped || stopToken.stop_requested()) return;
+                if (auto status = installRuntimeIngressLocked(*m_continuousIngressPlan); !status) {
                     m_captureError = status.error();
-                    source = m_continuousSource;
                     m_ready.notify_all();
+                    return;
                 }
-                if (source) source->fail(status.error());
-                return;
+                m_rtcpCaptureThread = std::jthread(MediaThreadWorkerEntry{&runRuntimeWorker, this, 1});
             }
-            continue;
+            captureRuntime(stopToken, 0);
+            return;
         }
         int timeoutMs = 0;
         {
@@ -944,8 +1051,9 @@ void MediaRawRtpPreparedInputBuffer::capture(
             }
             const auto sequence = rtpPacket ? std::optional<std::uint16_t>(rtpPacket->sequenceNumber)
                 : std::nullopt;
-            if (auto status = m_prepared->ingressObservation->observeDatagram(
-                    datagram.bytes.size(), sequence, observedAtNs); !status) {
+            if (auto status = datagram.channel == MediaRtpUdpChannel::Rtp
+                    ? m_prepared->ingressObservation->observeDatagram(
+                        datagram.bytes.size(), sequence, observedAtNs) : ::media::Status::success(); !status) {
                 m_captureError = status.error();
                 m_ready.notify_all();
                 return;
@@ -982,9 +1090,9 @@ void MediaRawRtpPreparedInputBuffer::capture(
         const auto sequenceNumber = rtpPacket
             ? std::optional<std::uint16_t>(rtpPacket->sequenceNumber)
             : std::nullopt;
-        if (auto status = m_prepared->ingressObservation->observeDatagram(
-                datagram.bytes.size(), sequenceNumber,
-                observedAtNs); !status) {
+        if (auto status = datagram.channel == MediaRtpUdpChannel::Rtp
+                ? m_prepared->ingressObservation->observeDatagram(
+                    datagram.bytes.size(), sequenceNumber, observedAtNs) : ::media::Status::success(); !status) {
             m_captureError = status.error();
             (void)m_prepared->byteBudget->fail(*m_captureError);
             m_ready.notify_all();
@@ -1005,6 +1113,11 @@ void MediaRawRtpPreparedInputBuffer::capture(
     }
 }
 
+catch (const std::system_error&) {
+    std::scoped_lock lock(m_mutex);
+    m_captureError = ::media::ErrorInfo::allocationFailed("prepared RTP channel worker creation failed");
+    m_ready.notify_all();
+}
 catch (const std::bad_alloc&) {
     std::scoped_lock lock(m_mutex);
     m_captureError = ::media::ErrorInfo::allocationFailed("prepared RTP capture allocation failed");

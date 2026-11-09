@@ -1,233 +1,118 @@
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 
-#include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 MediaRtpIngressPlan::MediaRtpIngressPlan(
-    const MediaRtpIngressCapability& capability,
-    std::size_t maximumDatagramBytes,
-    std::size_t batchByteCapacity,
-    std::size_t descriptorCapacity,
-    std::size_t reorderWindowPackets,
+    MediaRtpReceiveGeometry geometry, std::size_t reorderWindowPackets,
     std::int64_t maximumReorderDelayNanoseconds) noexcept
-    : m_adapterKind(capability.adapterKind()),
-      m_socketReceiveCapacityBytes(
-          capability.effectiveSocketReceivePayloadBytes()),
-      m_maximumDatagramBytes(maximumDatagramBytes),
-      m_batchByteCapacity(batchByteCapacity),
-      m_descriptorCapacity(descriptorCapacity),
-      m_requiredBufferAlignmentBytes(
-          capability.requiredBufferAlignmentBytes()),
+    : m_receiveGeometry(std::move(geometry)),
       m_reorderWindowPackets(reorderWindowPackets),
-      m_maximumReorderDelayNanoseconds(maximumReorderDelayNanoseconds),
-      m_storageOwnership(capability.storageOwnership()),
-      m_cancellationContract(capability.cancellationContract()),
-      m_completionEvidence(capability.completionEvidence())
-{
-}
-
-MediaRtpIngressPlan::MediaRtpIngressPlan(
-    MediaRtpIngressPlanFacts facts) noexcept
-    : m_adapterKind(facts.adapterKind),
-      m_socketReceiveCapacityBytes(facts.socketReceiveCapacityBytes),
-      m_maximumDatagramBytes(facts.maximumDatagramBytes),
-      m_batchByteCapacity(facts.batchByteCapacity),
-      m_descriptorCapacity(facts.descriptorCapacity),
-      m_requiredBufferAlignmentBytes(facts.requiredBufferAlignmentBytes),
-      m_reorderWindowPackets(facts.reorderWindowPackets),
-      m_maximumReorderDelayNanoseconds(
-          facts.maximumReorderDelayNanoseconds),
-      m_storageOwnership(facts.storageOwnership),
-      m_cancellationContract(facts.cancellationContract),
-      m_completionEvidence(facts.completionEvidence)
-{
-}
+      m_maximumReorderDelayNanoseconds(maximumReorderDelayNanoseconds) {}
 
 ::media::Result<MediaRtpIngressPlan> MediaRtpIngressPlan::create(
-    const MediaRtpIngressCapability& capability,
+    const MediaRtpReceiveGeometry& geometry,
     const MediaRtpIngressObservation& observation,
-    std::size_t preparedInputByteBudget,
-    std::size_t maximumDatagramBytes,
     const MediaRtpInputWaitPlan& inputWait)
 {
-    if (auto status = capability.validateProduct(); !status) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
-    }
-    if (auto status = observation.validateProduct(); !status) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
-    }
-    const std::size_t boundedReceiveBytes = (std::min)(
-        preparedInputByteBudget,
-        capability.effectiveSocketReceivePayloadBytes());
-    if (maximumDatagramBytes == 0 ||
-        observation.maximumDatagramBytes() > maximumDatagramBytes ||
-        boundedReceiveBytes < maximumDatagramBytes) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP ingress facts cannot form a bounded receive product"));
-    }
-    const std::size_t descriptorCapacity = (std::min)(
-        boundedReceiveBytes / maximumDatagramBytes,
-        capability.maximumReceiveCompletions());
-    if (capability.adapterKind() ==
-            MediaRtpIngressAdapterKind::WindowsOverlappedCompletionQueue &&
-        descriptorCapacity < 2) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Windows RTP ingress requires receive descriptors for both RTP and RTCP sockets"));
-    }
-    const std::size_t batchByteCapacity =
-        descriptorCapacity * maximumDatagramBytes;
-    if (observation.maximumSequenceDisplacementPackets() > descriptorCapacity) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP ingress reorder observation exceeds the receive descriptor budget"));
-    }
+    using Result = ::media::Result<MediaRtpIngressPlan>;
+    if (auto status = geometry.validateProduct(); !status)
+        return Result::failure(status.error());
+    if (auto status = observation.validateProduct(); !status)
+        return Result::failure(status.error());
+    if (geometry.channel() != MediaRtpUdpChannel::Rtp ||
+        observation.maximumDatagramBytes() > geometry.maximumDatagramBytes())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP ingress observation differs from its original receive geometry"));
+    if (observation.maximumSequenceDisplacementPackets() > geometry.descriptorCapacity())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP ingress reorder observation exceeds the receive descriptor budget"));
     auto delay = inputWait.finalNanoseconds(observation.maximumInterarrivalNanoseconds());
-    if (!delay) return ::media::Result<MediaRtpIngressPlan>::failure(delay.error());
-    MediaRtpIngressPlan product(
-        capability,
-        maximumDatagramBytes,
-        batchByteCapacity,
-        descriptorCapacity,
-        // Observed disorder is a minimum requirement, not a future network bound.
-        // Reordering shares the receive product's explicit descriptor capacity.
-        descriptorCapacity,
-        delay.value());
-    if (auto status = product.validateProduct(); !status) {
-        return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
-    }
-    return ::media::Result<MediaRtpIngressPlan>::success(std::move(product));
+    if (!delay) return Result::failure(delay.error());
+    // Observed disorder is a minimum requirement, not a future network bound.
+    // Preserve the original receive product's complete descriptor capacity.
+    MediaRtpIngressPlan product(geometry, geometry.descriptorCapacity(), delay.value());
+    if (auto status = product.validateProduct(); !status)
+        return Result::failure(status.error());
+    return Result::success(std::move(product));
 }
 
 ::media::Result<MediaRtpIngressPlan> MediaRtpIngressPlan::fromFacts(
     MediaRtpIngressPlanFacts facts)
 {
-    MediaRtpIngressPlan product(std::move(facts));
-    if (auto status = product.validateProduct(); !status) {
+    auto geometry = MediaRtpReceiveGeometry::fromFacts({
+        facts.adapterKind, facts.socketReceiveCapacityBytes,
+        facts.maximumDatagramBytes, facts.batchByteCapacity,
+        facts.descriptorCapacity, facts.requiredBufferAlignmentBytes,
+        facts.storageOwnership, facts.cancellationContract,
+        facts.completionEvidence, MediaRtpUdpChannel::Rtp});
+    if (!geometry)
+        return ::media::Result<MediaRtpIngressPlan>::failure(geometry.error());
+    MediaRtpIngressPlan product(std::move(geometry).value(),
+        facts.reorderWindowPackets, facts.maximumReorderDelayNanoseconds);
+    if (auto status = product.validateProduct(); !status)
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
-    }
     return ::media::Result<MediaRtpIngressPlan>::success(std::move(product));
 }
 
+const MediaRtpReceiveGeometry& MediaRtpIngressPlan::receiveGeometry() const noexcept
+{ return m_receiveGeometry; }
+
 MediaRtpIngressAdapterKind MediaRtpIngressPlan::adapterKind() const noexcept
-{
-    return m_adapterKind;
-}
+{ return m_receiveGeometry.adapterKind(); }
 
 std::size_t MediaRtpIngressPlan::socketReceiveCapacityBytes() const noexcept
-{
-    return m_socketReceiveCapacityBytes;
-}
+{ return m_receiveGeometry.socketReceiveCapacityBytes(); }
 
 std::size_t MediaRtpIngressPlan::maximumDatagramBytes() const noexcept
-{
-    return m_maximumDatagramBytes;
-}
+{ return m_receiveGeometry.maximumDatagramBytes(); }
 
 std::size_t MediaRtpIngressPlan::batchByteCapacity() const noexcept
-{
-    return m_batchByteCapacity;
-}
+{ return m_receiveGeometry.batchByteCapacity(); }
 
 std::size_t MediaRtpIngressPlan::descriptorCapacity() const noexcept
-{
-    return m_descriptorCapacity;
-}
+{ return m_receiveGeometry.descriptorCapacity(); }
 
 std::size_t MediaRtpIngressPlan::requiredBufferAlignmentBytes() const noexcept
-{
-    return m_requiredBufferAlignmentBytes;
-}
+{ return m_receiveGeometry.requiredBufferAlignmentBytes(); }
+
+MediaRtpIngressStorageOwnership MediaRtpIngressPlan::storageOwnership() const noexcept
+{ return m_receiveGeometry.storageOwnership(); }
+
+MediaRtpIngressCancellationContract MediaRtpIngressPlan::cancellationContract() const noexcept
+{ return m_receiveGeometry.cancellationContract(); }
+
+MediaRtpIngressCompletionEvidence MediaRtpIngressPlan::completionEvidence() const noexcept
+{ return m_receiveGeometry.completionEvidence(); }
 
 std::size_t MediaRtpIngressPlan::reorderWindowPackets() const noexcept
-{
-    return m_reorderWindowPackets;
-}
+{ return m_reorderWindowPackets; }
 
-std::int64_t
-MediaRtpIngressPlan::maximumReorderDelayNanoseconds() const noexcept
-{
-    return m_maximumReorderDelayNanoseconds;
-}
-
-MediaRtpIngressStorageOwnership
-MediaRtpIngressPlan::storageOwnership() const noexcept
-{
-    return m_storageOwnership;
-}
-
-MediaRtpIngressCancellationContract
-MediaRtpIngressPlan::cancellationContract() const noexcept
-{
-    return m_cancellationContract;
-}
-
-MediaRtpIngressCompletionEvidence
-MediaRtpIngressPlan::completionEvidence() const noexcept
-{
-    return m_completionEvidence;
-}
+std::int64_t MediaRtpIngressPlan::maximumReorderDelayNanoseconds() const noexcept
+{ return m_maximumReorderDelayNanoseconds; }
 
 MediaRtpIngressPlanFacts MediaRtpIngressPlan::facts() const noexcept
 {
-    return {m_adapterKind,
-            m_socketReceiveCapacityBytes,
-            m_maximumDatagramBytes,
-            m_batchByteCapacity,
-            m_descriptorCapacity,
-            m_requiredBufferAlignmentBytes,
-            m_reorderWindowPackets,
-            m_maximumReorderDelayNanoseconds,
-            m_storageOwnership,
-            m_cancellationContract,
-            m_completionEvidence};
+    const auto geometry = m_receiveGeometry.facts();
+    return {geometry.adapterKind, geometry.socketReceiveCapacityBytes,
+        geometry.maximumDatagramBytes, geometry.batchByteCapacity,
+        geometry.descriptorCapacity, geometry.requiredBufferAlignmentBytes,
+        m_reorderWindowPackets, m_maximumReorderDelayNanoseconds,
+        geometry.storageOwnership, geometry.cancellationContract,
+        geometry.completionEvidence};
 }
 
-bool MediaRtpIngressPlan::sameProduct(
-    const MediaRtpIngressPlan& other) const noexcept
-{
-    return facts() == other.facts();
-}
+bool MediaRtpIngressPlan::sameProduct(const MediaRtpIngressPlan& other) const noexcept
+{ return facts() == other.facts(); }
 
 ::media::Status MediaRtpIngressPlan::validateProduct() const
 {
-    const bool knownAdapter =
-        m_adapterKind == MediaRtpIngressAdapterKind::WindowsRegisteredIo ||
-        m_adapterKind == MediaRtpIngressAdapterKind::WindowsOverlappedCompletionQueue ||
-        m_adapterKind == MediaRtpIngressAdapterKind::LinuxIoUringZeroCopy ||
-        m_adapterKind == MediaRtpIngressAdapterKind::LinuxReceiveMultipleMessages;
-    const bool knownStorage =
-        m_storageOwnership == MediaRtpIngressStorageOwnership::RegisteredReusableArena ||
-        m_storageOwnership == MediaRtpIngressStorageOwnership::ReusableMessageArena;
-    const bool knownCancellation =
-        m_cancellationContract == MediaRtpIngressCancellationContract::CompletionQueueWake ||
-        m_cancellationContract == MediaRtpIngressCancellationContract::DescriptorWake;
-    const bool knownCompletion =
-        m_completionEvidence == MediaRtpIngressCompletionEvidence::RegisteredCompletionQueue ||
-        m_completionEvidence == MediaRtpIngressCompletionEvidence::OverlappedCompletionPort ||
-        m_completionEvidence == MediaRtpIngressCompletionEvidence::IoUringCompletionQueue ||
-        m_completionEvidence == MediaRtpIngressCompletionEvidence::ReceiveMultipleMessagesReturn;
-    if (!knownAdapter || !knownStorage || !knownCancellation ||
-        !knownCompletion || m_socketReceiveCapacityBytes == 0 ||
-        m_maximumDatagramBytes == 0 ||
-        m_maximumDatagramBytes > m_socketReceiveCapacityBytes ||
-        m_descriptorCapacity == 0 ||
-        m_descriptorCapacity >
-            (std::numeric_limits<std::size_t>::max)() /
-                m_maximumDatagramBytes ||
-        m_batchByteCapacity !=
-            m_descriptorCapacity * m_maximumDatagramBytes ||
-        m_requiredBufferAlignmentBytes == 0 ||
-        m_reorderWindowPackets == 0 ||
-        m_maximumReorderDelayNanoseconds <= 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP ingress plan contains incomplete or inconsistent facts"));
-    }
+    if (auto status = m_receiveGeometry.validateProduct(); !status) return status;
+    if (m_receiveGeometry.channel() != MediaRtpUdpChannel::Rtp ||
+        !m_reorderWindowPackets || m_maximumReorderDelayNanoseconds <= 0)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP ingress plan contains incomplete or inconsistent facts"));
     return ::media::Status::success();
 }
 

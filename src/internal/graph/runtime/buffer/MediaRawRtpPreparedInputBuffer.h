@@ -3,6 +3,8 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/runtime/resource/MediaPreparationBackingOwner.h"
+#include "internal/graph/runtime/resource/MediaThreadAllocationGeometry.h"
 #include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpProbeLease.h"
@@ -14,6 +16,7 @@
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressReceiver.h"
 #include "media_transcode/Result.h"
 
+#include <array>
 #include <deque>
 #include <chrono>
 #include <cstdint>
@@ -48,6 +51,7 @@ struct MediaPreparedRawRtpInput final {
     std::optional<MediaDetectedRtpVideoSignaling> videoSignaling;
     std::shared_ptr<MediaRawRtpPreparedReplayClock> replayClock;
     std::shared_ptr<MediaRtpIngressObservationCollector> ingressObservation;
+    std::array<MediaRtpReceiveGeometry, 2> receiveGeometries;
     int captureReadTimeoutMs = 0;
     std::uint64_t ingressFrontier = 0;
 };
@@ -62,10 +66,17 @@ struct MediaPreparedRawRtpReplayInfo final {
 };
 
 class MediaRawRtpPreparedInputBuffer final : public MediaBuffer {
+    class ConstructionKey final {
+        friend class MediaRawRtpPreparedInputBuffer;
+        ConstructionKey() = default;
+    };
 public:
+    MediaRawRtpPreparedInputBuffer(ConstructionKey, MediaPreparationBackingOwner workerBacking,
+        MediaPreparedRawRtpInput prepared);
+    static ::media::Result<std::size_t> workerStorageBytes();
     ~MediaRawRtpPreparedInputBuffer() override;
 
-    static ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>
+    static ::media::Result<std::shared_ptr<MediaRawRtpPreparedInputBuffer>>
     create(MediaPreparedRawRtpInput prepared);
 
     MediaBufferType type() const noexcept override;
@@ -113,11 +124,16 @@ private:
     ::media::Status continuousPreparationStatusLocked(
         const std::shared_ptr<class MediaPreparedRtpSourceSession>& expected) const;
     ::media::Result<std::uint64_t> accessUnitBoundLocked() const;
-    explicit MediaRawRtpPreparedInputBuffer(MediaPreparedRawRtpInput prepared);
+    static void runPreflightWorker(void* owner, std::stop_token token, std::size_t index) noexcept;
+    static void runRuntimeWorker(void* owner, std::stop_token token, std::size_t index) noexcept;
     void capture(std::stop_token stopToken) noexcept;
-    ::media::Status captureContinuousBatch(std::stop_token stopToken);
-    MediaRtpUdpTransport* markStopped() noexcept;
+    ::media::Status installRuntimeIngressLocked(const MediaRtpIngressPlan& plan);
+    ::media::Status captureRuntimeBatch(std::stop_token stopToken, std::size_t channelIndex);
+    void captureRuntime(std::stop_token stopToken, std::size_t channelIndex) noexcept;
 
+    // Declared before jthreads: their startup objects and stop states die before
+    // this ordinary-heap backing reservation is returned.
+    MediaPreparationBackingOwner m_workerBacking;
     std::optional<MediaPreparedRawRtpInput> m_prepared;
     std::size_t m_bufferedBytes = 0;
     std::optional<::media::ErrorInfo> m_captureError;
@@ -125,8 +141,12 @@ private:
     mutable std::mutex m_mutex;
     std::condition_variable m_ready;
     std::jthread m_captureThread;
+    std::jthread m_rtcpCaptureThread;
+    std::mutex m_deliveryMutex;
+    std::array<std::optional<MediaRtpIngressBatch>, 2> m_readyBatches;
     std::optional<MediaRawRtpPreparedReplayEpoch> m_replayEpoch;
     std::optional<MediaRtpIngressReceiver> m_runtimeIngress;
+    std::optional<MediaRtpIngressReceiver> m_rtcpIngress;
     std::optional<MediaRtpIngressPlan> m_runtimeIngressPlan;
     std::shared_ptr<class MediaPreparedRtpSourceSession> m_continuousSource;
     std::optional<MediaRtpIngressPlan> m_continuousIngressPlan;

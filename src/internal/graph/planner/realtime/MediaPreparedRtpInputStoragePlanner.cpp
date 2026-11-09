@@ -23,16 +23,6 @@ namespace media::ffmpeg::graph {
             raw.audioAccessUnitEnvelope->maximumAccessUnitBytes,
             raw.audioAccessUnitEnvelope->sizeAuthority});
     }
-    if (video) {
-        facts.reservedBytes = video->batchByteCapacity();
-        facts.authority = "prepared-raw-rtp-reusable-ingress-arena";
-    }
-    if (audio) {
-        auto total = MediaCheckedArithmetic::add(facts.reservedBytes,
-            audio->batchByteCapacity(), "prepared RTP video and audio ingress storage");
-        if (!total) return Result::failure(total.error());
-        facts.reservedBytes = total.value();
-    }
     if ((video != nullptr) != (preparedVideo != nullptr) ||
         (audio != nullptr) != (preparedAudio != nullptr) ||
         (preparedAudio && !preparedVideo))
@@ -54,11 +44,12 @@ namespace media::ffmpeg::graph {
                 return Result::failure(::media::ErrorInfo::invalidArgument(
                     "Prepared RTP AV inputs do not share one allocation budget"));
         }
-        auto total = MediaCheckedArithmetic::add(facts.reservedBytes,
-            reservation.value().maximumAllocationBytes, "prepared RTP storage and runtime ingress overlap");
-        if (!total) return Result::failure(total.error());
-        facts.reservedBytes = total.value();
-        facts.authority += "+" + reservation.value().authority;
+        // Both receive arenas, adapter state/control blocks and prepared input
+        // owners now allocate from this same admitted preparation resource.
+        // Its capacity already covers their coexistence; adding batch bytes
+        // again would charge the same owners twice.
+        facts.reservedBytes = reservation.value().maximumAllocationBytes;
+        facts.authority = reservation.value().authority;
         facts.preparation = std::move(reservation).value();
     }
     return Result::success(std::move(facts));

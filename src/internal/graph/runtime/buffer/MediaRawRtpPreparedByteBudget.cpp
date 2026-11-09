@@ -58,6 +58,11 @@ std::pmr::memory_resource& MediaRawRtpPreparedByteBudget::storageResource() cons
     return *m_resource;
 }
 
+MediaLineageAllocationScope MediaRawRtpPreparedByteBudget::allocationScope() const noexcept
+{
+    return MediaPreparedLineageAllocation{m_resource};
+}
+
 MediaPreparedRtpStorageReservation MediaRawRtpPreparedByteBudget::storageReservation() const
 {
     return {m_storage, m_plan.maximumAllocationBytes, m_plan.streamCount,

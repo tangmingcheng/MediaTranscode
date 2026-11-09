@@ -64,11 +64,10 @@ private:
     friend class MediaRtpUdpTransport;
     using CancelledFn = bool (*)(void*, std::uint64_t) noexcept;
     using MarkReceivedFn = void (*)(void*, MediaRtpUdpChannel) noexcept;
-    using ReleaseFn = void (*)(void*) noexcept;
+    using ReleaseFn = void (*)(void*, MediaRtpUdpChannel) noexcept;
 
     MediaRtpUdpIngressReceiveLease(
         std::shared_ptr<void> owner,
-        std::unique_lock<std::mutex> receiveLock,
         void* state,
         intptr_t rtpHandle,
         intptr_t rtcpHandle,
@@ -82,7 +81,6 @@ private:
     void release() noexcept;
 
     std::shared_ptr<void> m_owner;
-    std::unique_lock<std::mutex> m_receiveLock;
     void* m_state = nullptr;
     intptr_t m_rtpHandle = -1;
     intptr_t m_rtcpHandle = -1;
@@ -121,8 +119,9 @@ public:
     uint16_t rtcpPort() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
     int effectiveReceiveBufferBytes() const noexcept;
+    int effectiveReceiveBufferBytes(MediaRtpUdpChannel channel) const noexcept;
     ::media::Result<MediaRtpUdpIngressReceiveLease>
-    acquireIngressReceiveLease();
+    acquireIngressReceiveLease(MediaRtpUdpChannel channel);
 
 private:
     struct Impl;
@@ -133,7 +132,7 @@ private:
         void* state, std::uint64_t sequence) noexcept;
     static void ingressLeaseMarkReceived(
         void* state, MediaRtpUdpChannel channel) noexcept;
-    static void ingressLeaseRelease(void* state) noexcept;
+    static void ingressLeaseRelease(void* state, MediaRtpUdpChannel channel) noexcept;
     std::shared_ptr<Impl> snapshot() const noexcept;
 
     mutable std::mutex m_handleMutex;

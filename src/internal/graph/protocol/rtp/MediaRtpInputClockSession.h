@@ -33,7 +33,7 @@ public:
     MediaRtpInputClockSession(MediaRtpInputClockSession&&) = default;
     MediaRtpInputClockSession& operator=(MediaRtpInputClockSession&&) = default;
 
-    std::uint64_t observeMedia(std::uint32_t ssrc, std::int64_t observedAtNs);
+    std::uint64_t observeMedia(std::uint32_t ssrc);
     void observeDiscontinuity(std::uint64_t generationBefore) noexcept;
     ::media::Result<MediaRtcpObservation> observeRtcp(
         std::span<const std::uint8_t> datagram, std::int64_t observedAtNs);

@@ -2,7 +2,11 @@
 
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressBatch.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 
+#include <condition_variable>
+#include <mutex>
+#include <stop_token>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -19,6 +23,7 @@ struct MediaRtpIngressWritableSlot final {
 
 class MediaRtpIngressStorageState final {
 public:
+    explicit MediaRtpIngressStorageState(MediaLineageAllocationScope allocation);
     ~MediaRtpIngressStorageState();
 
 private:
@@ -33,18 +38,21 @@ private:
 
     void releaseBatch() noexcept;
 
+    MediaLineageAllocator<std::byte> allocation;
     std::byte* arena = nullptr;
     std::size_t byteCapacity = 0;
     std::size_t maximumDatagramBytes = 0;
     std::size_t descriptorCapacity = 0;
     std::size_t alignmentBytes = 0;
-    std::vector<MediaRtpIngressBatchEntry> entries;
-    std::vector<std::size_t> entrySlotIndices;
-    std::vector<SlotOwnership> slotOwnership;
+    std::pmr::vector<MediaRtpIngressBatchEntry> entries;
+    std::pmr::vector<std::size_t> entrySlotIndices;
+    std::pmr::vector<SlotOwnership> slotOwnership;
     std::size_t committedEntries = 0;
     std::size_t nextFreeSearch = 0;
     std::int64_t lastCommittedObservationNanoseconds = 0;
     bool leased = false;
+    std::mutex leaseMutex;
+    std::condition_variable leaseReleased;
 };
 
 class MediaRtpIngressStorage final {
@@ -61,7 +69,11 @@ public:
         std::size_t byteCapacity,
         std::size_t maximumDatagramBytes,
         std::size_t descriptorCapacity,
-        std::size_t alignmentBytes);
+        std::size_t alignmentBytes,
+        MediaLineageAllocationScope allocation);
+
+    static ::media::Result<std::size_t> preparationStorageBytes(
+        std::size_t byteCapacity, std::size_t descriptorCapacity, std::size_t alignmentBytes);
 
     std::byte* data() noexcept;
     std::size_t byteCapacity() const noexcept;
@@ -76,6 +88,7 @@ public:
         std::size_t byteCount,
         std::int64_t observedAtNanoseconds);
     ::media::Result<MediaRtpIngressBatch> seal(std::size_t entryCount);
+    ::media::Status waitForBatchRelease(std::stop_token stopToken);
     ::media::Status reset();
 
 private:

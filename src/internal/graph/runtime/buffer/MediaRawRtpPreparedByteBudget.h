@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 #include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "internal/graph/model/MediaRawRtpPreparationStoragePlan.h"
 #include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
@@ -34,6 +35,7 @@ public:
 
     ::media::Status observe(std::size_t bytes);
     std::pmr::memory_resource& storageResource() const noexcept;
+    MediaLineageAllocationScope allocationScope() const noexcept;
     const MediaPreparedRtpDatagramAllocationFacts& entryAllocationFacts() const noexcept;
     MediaPreparedRtpStorageReservation storageReservation() const;
     ::media::Status fail(::media::ErrorInfo error);

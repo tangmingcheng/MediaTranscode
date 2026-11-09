@@ -39,10 +39,10 @@ MediaRtpInputClockSession::MediaRtpInputClockSession(
 }
 
 std::uint64_t MediaRtpInputClockSession::observeMedia(
-    std::uint32_t ssrc, std::int64_t observedAtNs)
+    std::uint32_t ssrc)
 {
     const auto generationBefore = m_tracker.generation();
-    m_tracker.observeMedia(ssrc, observedAtNs);
+    m_tracker.observeMedia(ssrc);
     return generationBefore;
 }
 

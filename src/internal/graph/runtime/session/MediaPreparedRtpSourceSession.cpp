@@ -176,21 +176,28 @@ try {
             return invalid("Prepared RTP ingress requires ordered bootstrap or contiguous live ordinal and admitted datagram");
         if (!m_frozen && std::chrono::steady_clock::now() >= m_plan.deadline)
             return invalid("Prepared RTP session exceeded its original open deadline");
+        // Preserve capture time for reorder, activity and SR/CNAME provenance.
+        // Live evidence is evaluated at processing time, independently of the
+        // order in which the two channel workers acquired the session lock.
+        const auto evaluationAtNs = m_bootstrap ? observedAtNs : mediaSteadyClockNowNs();
         if (channel == MediaRtpUdpChannel::Rtp) {
             auto packet = MediaRtpPacketParser::parse(bytes);
             if (!packet) return ::media::Status::failure(packet.error());
             if (s.activity && packet.value().payloadType == s.plan.depacketizer.payloadType)
                 s.activity->observe(observedAtNs);
             if (auto status = s.protocol->observeRtp(std::move(packet).value(), observedAtNs); !status) return status;
-            if (auto status = drain(s, observedAtNs); !status) return status;
+            if (auto status = drain(s, evaluationAtNs); !status) return status;
+            // A matching first RTP packet may remain in reorder; evidence must
+            // still progress without waiting for another SR or completed AU.
+            if (auto status = evidence(s, evaluationAtNs); !status) return status;
         } else {
             auto observation = s.protocol->observeRtcp(bytes, observedAtNs);
             if (!observation) return ::media::Status::failure(observation.error());
             if (const auto* value = std::get_if<MediaRtpClockInvalidation>(&observation.value())) {
                 s.protocol->resetAssembly(); s.pending.clear();
                 if (auto status = event(s, std::allocate_shared<MediaRtpIngressEventBuffer>(
-                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()}, *value, s.nextSequence++), false, observedAtNs); !status) return status;
-            } else if (auto status = evidence(s, observedAtNs); !status) return status;
+                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()}, *value, s.nextSequence++), false, evaluationAtNs); !status) return status;
+            } else if (auto status = evidence(s, evaluationAtNs); !status) return status;
         }
         s.ordinal = ordinal;
         if (m_bootstrap) m_bootstrapObservedAtNs = observedAtNs;
@@ -269,8 +276,7 @@ try {
     }
     const MediaRtpIngressEventView view{e.kind(), e.sequence(), e.clockEvidence(), e.discontinuity(),
         e.discontinuityGeneration(), e.clockObservation(), e.clockInvalidation()};
-    const auto stateNow = m_bootstrap ? now : mediaSteadyClockNowNs();
-    auto consumed = m_group->consume(view, s.plan.depacketizer.streamKind, selectedClock, stateNow);
+    auto consumed = m_group->consume(view, s.plan.depacketizer.streamKind, selectedClock, now);
     if (!consumed) return ::media::Status::failure(consumed.error());
     if (consumed.value().rejected)
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
@@ -466,6 +472,7 @@ try {
     }
     if (auto status = s.protocol->expire(std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now))); !status) return status;
     if (auto status = drain(s, now); !status) return status;
+    if (auto status = evidence(s, now); !status) return status;
     auto transition = s.protocol->transition(now);
     if (!transition) return ::media::Status::failure(transition.error());
     if (transition.value()) {

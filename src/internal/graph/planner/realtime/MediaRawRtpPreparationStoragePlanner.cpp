@@ -3,6 +3,9 @@
 #include "internal/graph/runtime/buffer/MediaPreparedRtpDatagramStorage.h"
 #include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/protocol/rtp/ingress/MediaRtpIngressAdapterFactory.h"
+#include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
+#include "internal/graph/runtime/resource/MediaPreparedAllocationCost.h"
 #include <limits>
 
 namespace media::ffmpeg::graph {
@@ -58,6 +61,16 @@ MediaRawRtpPreparationStoragePlanner::plan(std::size_t wireBytes,
     for (const auto maximum : maximumDatagramBytes) {
         if (!maximum) return Result::failure(::media::ErrorInfo::invalidArgument(
             "RTP preparation transport has no datagram bound"));
+        auto ingress = MediaRtpIngressAdapterFactory::maximumPreparationStorageBytes(wireBytes, maximum);
+        auto receiverOwner = MediaPreparedAllocationCost::shared<MediaRawRtpPreparedInputBuffer>();
+        auto workers = MediaRawRtpPreparedInputBuffer::workerStorageBytes();
+        if (!ingress || !receiverOwner || !workers)
+            return Result::failure(!ingress ? ingress.error() : !receiverOwner ? receiverOwner.error() : workers.error());
+        for (const auto allocation : {ingress.value(), receiverOwner.value(), workers.value()}) {
+            total = MediaCheckedArithmetic::add(total.value(), allocation,
+                "RTP preparation dual-channel ingress and shared owner");
+            if (!total) return Result::failure(total.error());
+        }
         auto datagram = MediaPreparationMemoryResource::allocationFootprint(maximum, alignof(std::uint8_t));
         if (!datagram) return Result::failure(datagram.error());
         // One receiver scratch and one not-yet-observed payload can coexist per

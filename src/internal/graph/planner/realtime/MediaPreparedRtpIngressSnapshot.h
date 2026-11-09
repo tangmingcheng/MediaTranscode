@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaRtpIngressObservation.h"
+#include "internal/graph/planner/realtime/MediaRtpReceiveGeometry.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@ struct MediaPreparedRtpIngressSnapshot final {
     std::size_t socketReceiveCapacityBytes;
     std::size_t preparedWireBytes;
     std::size_t maximumDatagramBytes;
+    MediaRtpReceiveGeometry receiveGeometry;
 };
 
 } // namespace media::ffmpeg::graph
