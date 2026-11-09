@@ -640,33 +640,25 @@ MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLo
         product.startupBytes != product.totalBytes - product.fixedBytes - product.protocolBytes ||
         product.audio.has_value() != static_cast<bool>(m_audio))
         return invalid("Storage admission changed source budget, owner or membership");
-    const auto valid = [&](const MediaPreparedRtpStreamStorageAdmission& value,
+    const auto validateBounds = [&](const MediaPreparedRtpStreamStorageAdmission& value,
         const MediaPreparedRtpStreamStorageSnapshot& held,
-        const MediaPreparedRtpSourceSessionStreamPlan& stream) {
-        return value.compressed.maximumBytes == m_plan.storageBytes && value.compressed.maximumUnits &&
-            value.compressed.maximumUnits >= held.admittedUnits &&
-            value.bounds.prefixObjects == value.compressed.maximumUnits &&
-            value.bounds.prefixObjects >= held.prefixObjects &&
-            value.bounds.acquiringObjects >= held.acquiringObjects && value.bounds.acquiringObjects &&
-            value.bounds.outputObjects >= held.outputObjects && value.bounds.outputObjects &&
-            value.storage.maximumPrefixObjects == value.bounds.prefixObjects &&
-            value.storage.maximumPendingLeases == stream.envelope.maximumAccessUnitsPerPush &&
-            value.storage.maximumPendingLeases >= held.pendingLeases && value.storage.peakBytes;
-    };
-    if (!valid(product.video, snapshot.video, m_plan.video) ||
-        (m_audio && !valid(*product.audio, *snapshot.audio, *m_plan.audio)))
-        return invalid("Storage admission cannot discard already owned protocol input");
-    const auto validateCompletion = [](const MediaPreparedRtpSourceSessionStreamPlan& stream,
-        const MediaPreparedRtpStreamStorageAdmission& admission) -> ::media::Status {
-        auto completion = MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(stream);
-        if (!completion) return ::media::Status::failure(completion.error());
-        if (admission.bounds.outputObjects < completion.value())
-            return invalid("Storage admission cannot contain its serialized protocol completion");
+        const MediaPreparedRtpSourceSessionStreamPlan& stream) -> ::media::Status {
+        auto floor = MediaPreparedRtpSourceStoragePlanner::minimumBounds(stream, held);
+        if (!floor) return ::media::Status::failure(floor.error());
+        if (value.compressed.maximumBytes != m_plan.storageBytes ||
+            value.bounds.prefixObjects != value.compressed.maximumUnits ||
+            value.bounds.prefixObjects < floor.value().prefixObjects ||
+            value.bounds.acquiringObjects < floor.value().acquiringObjects ||
+            value.bounds.outputObjects < floor.value().outputObjects ||
+            value.storage.maximumPrefixObjects != value.bounds.prefixObjects ||
+            value.storage.maximumPendingLeases != stream.envelope.maximumAccessUnitsPerPush ||
+            !value.storage.peakBytes)
+            return invalid("Storage admission cannot discard owned input or serialized completion capacity");
         return ::media::Status::success();
     };
-    if (auto status = validateCompletion(m_plan.video, product.video); !status) return status;
+    if (auto status = validateBounds(product.video, snapshot.video, m_plan.video); !status) return status;
     if (m_audio) {
-        if (auto status = validateCompletion(*m_plan.audio, *product.audio); !status) return status;
+        if (auto status = validateBounds(*product.audio, *snapshot.audio, *m_plan.audio); !status) return status;
     }
     if (product.startup.audioUnits.has_value() != static_cast<bool>(m_audio) ||
         product.startup.audioBytes.has_value() != static_cast<bool>(m_audio) ||

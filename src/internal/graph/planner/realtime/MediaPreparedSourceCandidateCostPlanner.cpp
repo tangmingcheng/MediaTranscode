@@ -94,19 +94,15 @@ template<bool Updating> ::media::Status streamCosts(
 {
     using R = ::media::Status;
     if (auto valid = stream.envelope.validate(); !valid) return R::failure(valid.error());
-    auto completion = MediaPreparedRtpSourceStoragePlanner::completionOutputObjects(stream);
-    if (!completion) return R::failure(completion.error());
-    if (facts.containers.outputObjects < completion.value())
-        return R::failure(::media::ErrorInfo::invalidArgument(
-            "Candidate output capacity cannot contain its serialized protocol completion"));
+    auto floor = MediaPreparedRtpSourceStoragePlanner::minimumBounds(stream, held);
+    if (!floor) return R::failure(floor.error());
     if (stream.envelope.streamKind != streamKind)
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate payload envelope has the wrong stream role"));
-    if (held.pendingLeases > held.pendingCapacity ||
-        stream.envelope.maximumAccessUnitsPerPush < held.pendingLeases ||
-        facts.containers.prefixObjects < held.prefixObjects ||
-        facts.containers.acquiringObjects < held.acquiringObjects ||
-        facts.containers.outputObjects < held.outputObjects)
-        return R::failure(::media::ErrorInfo::invalidArgument("Candidate cannot discard live preparation owners"));
+    if (facts.containers.prefixObjects < floor.value().prefixObjects ||
+        facts.containers.acquiringObjects < floor.value().acquiringObjects ||
+        facts.containers.outputObjects < floor.value().outputObjects)
+        return R::failure(::media::ErrorInfo::invalidArgument(
+            "Candidate cannot discard live preparation owners or serialized completion capacity"));
     auto candidate = MediaPreparedRtpSourceStoragePlanner::containers(stream, facts.containers, snapshot);
     auto history = MediaPreparedRtpSourceStoragePlanner::containers(stream, held.history, snapshot);
     if (!candidate) return R::failure(candidate.error());

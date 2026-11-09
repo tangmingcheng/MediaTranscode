@@ -448,3 +448,19 @@ RKMPP SSH90320终态14/14、退出0，使用8核增量all-target。七源码双�
 RKMPP会话99659终态6/6、退出0，保持8核增量all-target；本轮三文件UTF-8/CRLF及diff检查通过。无媒体测试临时产物，既有未跟踪文件保留。未推送、合并或部署，不创建成功媒体验收提交。
 
 下一步只读审查再次确认：现有 checker 可验证进展，却没有从 locked snapshot 反推合法 queues 的入口。须在数值基线 planner 中复用实际 input/branch/atomic 连接约束：视频 packet 的 startupPackets为0，音频为固定Na；reachableGraphHolders须覆盖startupPackets＋acquiring＋1。decoder frame下界含filter retained inputs，不能把需求随意均摊或统一队列设为1。还须定位prepared-frame videoUnitBytes、maximumGap、typed queue贡献与atomic发布批量的权威产品；没有这些事实不能调用候选费用checker试错扩容。
+
+## 2026-11-06 准入下界事实与启动载荷单位
+
+原startup实际消费MediaAvStartupEnvelopeBuffer的payloadFootprintBytes：解码视频由MediaFramePayloadFootprint按真实帧几何及hw_frames_ctx.sw_format计算逻辑图像字节。候选应复用MediaVideoSurfaceFootprint，取prepared decoder.outputFrame，不能取filter/canvas或压缩AU。maximumGap沿原ledger的deployment.latency.maximumResidence；10秒maximumWait及500毫秒preroll保留。已将这套数值生成接入Kernel初次bind与rebind的独立比对，供solver共用，不增加public字段。
+
+锁内容器下界采用实际snapshot：prefix至少1/admittedUnits/prefixObjects，acquiring至少1/live acquiring，outputs至少实际live和原completionOutputObjects；history backing仍单独取保守费用。下界生成与CandidateCost/冻结校验共用，避免计划值替代实际持有量。它不等于完整合法队列或进展证明。工业依据延续GStreamer分配协商与最后引用归还原则；本次直接读取官方allocation页面超时，不伪称新增在线证据。无新线程、平台处理链或释放算法。
+
+重新审查纠正队列推导：binder普通node owner本身包含acquiring，audio coordinator及typed startup events已包含Na；不能再次简单要求queues.packet≥Na＋acquiring＋1。后续须从真实typed reachable owners提取进展约束，保留原validator终检；不得按错误文本试增。该修正不降低原进展要求，防止重复转换形成不必要的大队列。
+
+本批7源码已由residence_budget_audit与residence_budget_review_b分别明确局部PASS。最终freeze与CandidateCost保留history backing独立核算，新增下界不取代历史存储；source startup的音频三个字段、视频总字节和gap均完整复算比对。Windows Release全量会话50928运行中，尚无本批构建或实流通过结论。后续只采用已证明的queue/atomic合法下界与typed progress终检，不引入无需求的通用符号求解器。
+
+## 2026-11-09 中断恢复核验
+
+上次Windows Release会话50928已在2026-11-06终态退出0，806任务计划，configure/build均0；当时四项产物核验成功，realtime CLI为7228416字节、16:59:19。上文“运行中”是未及时更新的中间状态，不是最终结果。7源码双独立局部PASS保持；本批未运行媒体验收。
+
+本次恢复确认HEAD仍为4aa9e99c，7源码和本文档改动完整保留。旧SSH句柄5335已不存在；重新SSH检查远端cmake --build/ninja/cc1plus未发现匹配进程。上次首批源码同步缺少终态输出，不能认定全部同步或RKMPP构建完成；后续应逐文件核验哈希再执行8核增量。没有因观察中断而重复启动构建。本批先保存本地代码检查点，不宣称合屏或RKMPP验收通过。

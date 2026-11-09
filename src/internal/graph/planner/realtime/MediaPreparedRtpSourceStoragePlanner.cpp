@@ -74,6 +74,21 @@ template<class T>
     return Result::success(static_cast<std::size_t>(objects.value()));
 }
 
+::media::Result<MediaPreparedRtpContainerBounds> MediaPreparedRtpSourceStoragePlanner::minimumBounds(
+    const MediaPreparedRtpSourceSessionStreamPlan& stream, const MediaPreparedRtpStreamStorageSnapshot& held)
+{
+    using Result = ::media::Result<MediaPreparedRtpContainerBounds>;
+    auto completion = completionOutputObjects(stream);
+    if (!completion) return Result::failure(completion.error());
+    if (held.pendingLeases > held.pendingCapacity || held.pendingLeases > stream.envelope.maximumAccessUnitsPerPush)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Prepared snapshot exceeds its pending completion facts"));
+    // One slot permits future input when the live snapshot is empty. No arrival
+    // rate, source cadence or lifetime horizon is inferred from this floor.
+    return Result::success({(std::max)({std::size_t{1}, held.admittedUnits, held.prefixObjects}),
+        (std::max)(std::size_t{1}, held.acquiringObjects),
+        (std::max)(completion.value(), held.outputObjects)});
+}
+
 ::media::Result<MediaPreparedRtpContainerStoragePlan> MediaPreparedRtpSourceStoragePlanner::containers(
     const MediaPreparedRtpSourceSessionStreamPlan& stream, MediaPreparedRtpContainerBounds bounds, bool snapshot)
 {

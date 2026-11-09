@@ -12,6 +12,11 @@ public:
     // Does not cover prior occupancy or guarantee continuous consumer progress.
     static ::media::Result<std::size_t> completionOutputObjects(
         const MediaPreparedRtpSourceSessionStreamPlan& stream);
+    // Forms minimum future capacities from the lock-held snapshot.
+    // Retained history backing is separately preserved by storage accounting.
+    static ::media::Result<MediaPreparedRtpContainerBounds> minimumBounds(
+        const MediaPreparedRtpSourceSessionStreamPlan& stream,
+        const MediaPreparedRtpStreamStorageSnapshot& held);
     static ::media::Result<MediaPreparedRtpContainerStoragePlan> containers(
         const MediaPreparedRtpSourceSessionStreamPlan& stream,
         MediaPreparedRtpContainerBounds bounds, bool probeSnapshot);

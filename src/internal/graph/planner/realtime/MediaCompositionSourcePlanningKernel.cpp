@@ -34,6 +34,20 @@ namespace {
         capacity.startup.videoUnits, capacity.startup.audioUnits, runtime.groupKey.value().size(),
         std::span<const std::size_t>{datagrams.data(), hasAudio ? 2u : 1u});
 }
+::media::Status validateDecodedStartup(const MediaVideoSourcePlan& video,
+    const MediaPreparedInputRetentionStream* audio, const MediaRealtimeDeploymentEnvelope& deployment,
+    const MediaRealtimeMediaCapacityPlan& capacity)
+{
+    if (!video.decoder.outputFrame)
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized("Decoded startup lacks its prepared frame contract"));
+    auto expected = MediaRealtimeMediaCapacityPlanner::planDecodedSource(
+        *video.decoder.outputFrame, capacity.videoUnits, audio, deployment.encode().latency);
+    if (!expected) return ::media::Status::failure(expected.error());
+    if (capacity != expected.value())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Decoded startup capacity differs from prepared frame, audio retention or deployment facts"));
+    return ::media::Status::success();
+}
 } // namespace
 
 ::media::Result<MediaCompositionSourceFixedProducts>
@@ -185,6 +199,10 @@ try {
     const auto* ledgerReference = std::get_if<std::reference_wrapper<const MediaRealtimeGraphResourceLedgerPlan>>(&capacity);
     if (cadence != static_cast<bool>(ledgerReference) || (!cadence && !sourceCapacity))
         return Result::failure(::media::ErrorInfo::invalidArgument("Source timing differs from capacity facts domain"));
+    if (sourceCapacity) {
+        if (auto status = validateDecodedStartup(fixed.video, fixed.audioRetention, fixed.deployment,
+                sourceCapacity->startup); !status) return Result::failure(status.error());
+    }
     const auto members = fixed.runtime.synchronization.members;
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
     auto startup = std::visit([&](const auto& facts) {
@@ -259,6 +277,8 @@ try {
         !products.clockRouteStorage || !products.startupCoordinatorStorage)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Composition capacity refresh requires fixed prepared source facts"));
+    if (auto status = validateDecodedStartup(products.video, prepared.audioRetention, prepared.deployment,
+            capacity.startup); !status) return status;
     auto startup = MediaAvSyncStartupPolicyPlanner::plan(prepared.sourceRequest, capacity, prepared.deployment);
     if (!startup) return ::media::Status::failure(startup.error());
     const MediaRealtimeAvSourceClockRequest clockRequest{{
