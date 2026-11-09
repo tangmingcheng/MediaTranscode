@@ -19,7 +19,7 @@ $p=Start-Process -FilePath 'D:/VideoLAN/VLC/vlc.exe' -ArgumentList '--no-one-ins
 
 ## 跨平台构建准备
 
-已准备 37 文件源包，基线 e09c9fcf（源码与远端 AAC 批一致），含逐文件写前/写后 hash；包 SHA256 为 `9abe2702791d9b9d15b8446e3ffc9ebb825ac7c8ce6fc27782bdae96b315116f`。尚未同步，不作为 RKMPP 构建或实流证据。
+已准备 37 文件源包，基线 e09c9fcf（源码与远端 AAC 批一致），含逐文件写前/写后 hash；包 SHA256 为 `9abe2702791d9b9d15b8446e3ffc9ebb825ac7c8ce6fc27782bdae96b315116f`。已完成 37 文件写前/写后 hash 核验与同步，远端专属源包已删除；RKMPP 八核增量 all-target 后台 PID 113600，日志/退出标记 composition-build-0f280247，终态已收取：152/152、退出码 0，realtime CLI 成功链接，后台 PID 已不存在。此为最新源码的 RKMPP 构建证据，不代表实流验收通过。
 
 ## 实际结果
 
@@ -69,3 +69,5 @@ CLI_EXIT=1
 ~~~
 
 清理终态：四源工具句柄均退出 -1（主动清理，不记自然结束），六个精确 PID 均无残留；本轮 11 项日志/stdout 已删除，文件前缀查询残留 0。source3.out 首次因句柄未关闭未能删除，收取源进程终态后已重试删除。指定连续源保留。
+
+本机专属源包在远端 hash 验证和记录后删除；远端本轮构建 log/exit 已逐项删除，核验残留 0。保留正式文档及构建产物。
