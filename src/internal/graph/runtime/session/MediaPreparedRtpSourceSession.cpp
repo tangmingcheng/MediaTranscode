@@ -759,11 +759,12 @@ try {
             budgets.push_back(source->m_budget);
             budgetSnapshots.push_back({});
         }
-        auto partition = MediaPreparationStorageBudget::snapshotPartition(budgets.view(), budgetSnapshots.view());
+        const MediaPreparedRtpBatchBudgetView budgetView{budgets.view(), budgetSnapshots.view()};
+        auto partition = budgetView.refresh();
         if (!partition) return ::media::Status::failure(partition.error());
         for (std::size_t i = 0; i < sources.size(); ++i)
             snapshots[i].snapshot.budget = budgetSnapshots[i];
-        auto solved = solver->solve(snapshots.view(), partition.value(), *batchStorage);
+        auto solved = solver->solve(snapshots.view(), budgetView, *batchStorage);
         if (!solved) return ::media::Status::failure(solved.error());
         if (solved.value().size() != batchStorage->sourceCount ||
             solved.value().capacity() != batchStorage->sourceCount ||
@@ -772,7 +773,7 @@ try {
         admissions.emplace(std::move(solved).value());
         // Solver storage may have changed the ledger. Reobserve held credit;
         // neither observation reserves future unrelated-root allocations.
-        partition = MediaPreparationStorageBudget::snapshotPartition(budgets.view(), budgetSnapshots.view());
+        partition = budgetView.refresh();
         if (!partition) return ::media::Status::failure(partition.error());
         std::size_t total = partition.value().otherRetainedBytes;
         const auto capacity = partition.value().budget.capacity;

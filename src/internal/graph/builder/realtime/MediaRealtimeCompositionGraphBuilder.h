@@ -2,7 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaCompositionGraphIdentity.h"
-#include "internal/graph/planner/realtime/MediaCompositionGraphTopologyPlanner.h"
+#include "internal/graph/planner/realtime/MediaCompositionTopologyPlanningKernel.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourceResourcesPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlan.h"
@@ -90,7 +90,7 @@ class MediaRealtimeCompositionGraphBuilder final {
 public:
     static ::media::Result<MediaRealtimeCompositionTopology> buildTopology(
         const std::string& prefix, MediaRealtimeCompositionGraphOptions options,
-        std::shared_ptr<MediaPreparationMemoryResource> planningResource);
+        MediaCompositionTopologyPlanningProducts plannedTopology);
     // Compiles final admission from this exact graph and validates real resources.
     // A topology is not a preparation budget or permission to allocate a pool.
     static ::media::Result<MediaRealtimeCompositionGraph> bind(

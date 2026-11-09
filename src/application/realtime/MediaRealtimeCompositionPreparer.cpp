@@ -363,8 +363,17 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     auto aggregate = MediaAvContinuousAggregatePlanner::plan(aggregateSources, output.value(),
         prepared->geometry.geometry, cadence, selected, *planningResource.value());
     if (!aggregate) return PreparedResult::failure(aggregate.error());
+    MediaFixedCapacityStorage<MediaCompositionTopologySourceFacts> topologySources(
+        sourcePlans.size(), *planningResource.value());
+    for (const auto& source : sourcePlans)
+        topologySources.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
+            source.branchConnections, source.inputConnections});
+    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(topologySources.view(),
+        aggregate.value(), output.value(), planningResource.value());
+    if (!plannedTopology) return PreparedResult::failure(plannedTopology.error());
     auto topology = MediaRealtimeCompositionGraphBuilder::buildTopology(request.mediaId,
-        {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(aggregate).value()}, planningResource.value());
+        {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(aggregate).value()},
+        std::move(plannedTopology).value());
     if (!topology) return PreparedResult::failure(topology.error());
     auto sourceResources = topology.value().planSourceResources();
     if (!sourceResources) return PreparedResult::failure(sourceResources.error());

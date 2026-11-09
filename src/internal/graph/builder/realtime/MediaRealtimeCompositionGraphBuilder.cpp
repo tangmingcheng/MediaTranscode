@@ -1,3 +1,4 @@
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "internal/graph/planner/realtime/MediaCompositionTopologyPlanningKernel.h"
 #include "internal/graph/builder/realtime/MediaCompositionGraphBindings.h"
 #include "internal/graph/builder/realtime/MediaCompositionGraphTopologyValidator.h"
@@ -215,7 +216,7 @@ template<class Bind>
 
 ::media::Result<MediaRealtimeCompositionTopology> MediaRealtimeCompositionGraphBuilder::buildTopology(
     const std::string& prefix, MediaRealtimeCompositionGraphOptions options,
-    std::shared_ptr<MediaPreparationMemoryResource> planningResource)
+    MediaCompositionTopologyPlanningProducts plannedTopology)
 {
     using Result = ::media::Result<MediaRealtimeCompositionTopology>;
     MediaGraph graph;
@@ -224,16 +225,21 @@ template<class Bind>
     if (auto status = validateOptions(options); !status) return Result::failure(status.error());
     const auto& aggregate = options.aggregate;
     auto& outputRuntime = options.outputRuntime;
-    std::vector<MediaCompositionTopologySourceFacts> sourceFacts;
-    sourceFacts.reserve(options.sources.size());
+    if (!plannedTopology.graph.resource()) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Composition assembly requires an owned planned topology"));
+    MediaFixedCapacityStorage<MediaCompositionTopologySourceFacts> sourceFacts(
+        options.sources.size(), *plannedTopology.graph.resource());
     for (const auto& source : options.sources)
         sourceFacts.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
             source.branchConnections, source.inputConnections});
-    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(sourceFacts, aggregate, outputRuntime, std::move(planningResource));
-    if (!plannedTopology) return Result::failure(plannedTopology.error());
-    auto& aggregateConnections = plannedTopology.value().aggregate;
-    auto& sourceTopologies = plannedTopology.value().sources;
-    auto& graphTopology = plannedTopology.value().graph;
+    // Consume the admitted declarations instead of allocating a second topology.
+    // Rebind independently checks fixed identities against the final source plans.
+    if (auto status = MediaCompositionTopologyPlanningKernel::rebind(
+            sourceFacts.view(), aggregate, plannedTopology); !status)
+        return Result::failure(status.error());
+    auto& aggregateConnections = plannedTopology.aggregate;
+    auto& sourceTopologies = plannedTopology.sources;
+    auto& graphTopology = plannedTopology.graph;
     MediaCompositionGraphBindings graphBindings(graphTopology);
     using GraphDomain=MediaCompositionGraphDomain;
     using OutputRole=MediaOutputSegmentRole;

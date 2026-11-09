@@ -60,12 +60,24 @@ struct MediaPreparedRtpBatchStoragePlan final {
     std::size_t resultBytes;
     std::size_t totalBytes;
 };
+// Borrowed only for the lock-held solve call. The owning freeze transaction
+// keeps both exact-size arrays alive; refresh uses the existing ledger lock.
+// A refreshed observation is not a reservation of future root headroom.
+struct MediaPreparedRtpBatchBudgetView final {
+    std::span<const std::shared_ptr<MediaPreparationStorageBudget>> children;
+    std::span<MediaPreparationStorageSnapshot> snapshots;
+
+    ::media::Result<MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>> refresh() const
+    {
+        return MediaPreparationStorageBudget::snapshotPartition(children, snapshots);
+    }
+};
 class MediaPreparedRtpBatchAdmissionSolver {
 public:
     virtual ~MediaPreparedRtpBatchAdmissionSolver() = default;
     virtual ::media::Result<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> solve(
         std::span<const MediaPreparedRtpStorageSourceSnapshot> sources,
-        const MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>& partition,
+        const MediaPreparedRtpBatchBudgetView& budgets,
         // Source totals exclude this batch product. Return exactly sourceCount
         // elements/capacity on owner; these arrays are charged to source zero.
         const MediaPreparedRtpBatchStoragePlan& batchStorage) const = 0;

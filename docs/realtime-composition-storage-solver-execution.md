@@ -542,3 +542,18 @@ RKMPP会话1397终态14/14、退出0，realtime CLI链接成功；保持8核增�
 
 
 RKMPP15313终态120/120、退出0，8核增量完成；既有pix_fmts废弃警告保留。opaque契约与独立registry本轮完成源码及两平台编译检查，真实SourcePresentation/solver和RKMPP运行能力仍不计为通过。无媒体测试临时产物，既有未跟踪文件保留。
+
+
+## 2026-11-09 冻结预算刷新与最终拓扑消费
+
+按既有静态分配协商与候选所有权方案，solver接口改为借用freeze已有的budget/snapshot数组，通过同一snapshotPartition读取新的根预算分区。工作区分配后不再只能得到过期的入口partition；没有新增数组、锁或公共参数。solve返回后仍独立刷新并逐源检查held、owner、history、总额和deadline；刷新不是未来headroom预约。
+
+最终GraphBuilder改为消费调用方已规划的TopologyPlanningProducts，使用共同rebind核对最终源事实，再由完整TopologyValidator核对实际图与投影。原plan调用移到Preparer；源事实目录改用预算资源。vector移动保留源对象地址，原借用目录移动后不再解引用。此接线使后续候选拓扑能够直接交给最终builder，避免再生成第二份拓扑产品；当前仍是seal后规划，不宣称freeze内solver已接通。
+
+本批五源码冻结，第一位独立审查timing_handoff_review_a明确局部PASS；第二位审查及Windows Release全量6043尚待完成。尚未运行媒体链路，未产生媒体测试临时文件。后续完整工作区仍需覆盖源/聚合/拓扑/residence/费用目录、admission中字符串的复制预约及最终构图临时目录峰值，不能把本接口调整当作完整预算闭合。
+
+两位独立审查timing_handoff_review_a、timing_handoff_review_b均对五源码给出局部PASS。第二位明确适用边界：当前唯一调用点在plan后立即move同一个output，因此固定输出成立；最终validator不能独立证明任意重新规划的output与旧声明等价，因为aggregate输出边直接消费已保存的策略。后续solver必须保留同一固定output，不能以validator替代这个前提。两份借用facts目录目前同时持有且均实际计费；未来候选预算必须覆盖此峰值。
+
+Windows Release全量会话6043终态退出0，810任务计划，configure/build均0，四项产物核验通过；realtime CLI为7273472字节、2026-11-09 11:20:28。五源码按1＋1＋2＋1同步，写前基线和写后SHA256均核验成功；RKMPP92380已在原目录开始8核增量all-target，没有clean-first。没有运行local/realtime媒体链路，没有新增抓包、快照、录制或测试脚本。
+
+RKMPP92380终态25/25、退出0，realtime CLI链接成功；本批两平台编译及双独立源码审查完成。未运行媒体测试，未产生本轮测试临时产物，不涉及外部依赖修复、推送、合并或部署。生产freezeBatch仍传nullptr，具体候选求解、sealed跨源费用复算和原规格合屏实流验收仍未完成。
