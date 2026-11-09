@@ -347,7 +347,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
             runtime.audioCorrection?&*runtime.audioCorrection:nullptr});
     }
     auto aggregate = MediaAvContinuousAggregatePlanner::plan(aggregateSources, output.value(),
-        prepared->geometry.geometry, cadence, selected);
+        prepared->geometry.geometry, cadence, selected, *planningResource.value());
     if (!aggregate) return PreparedResult::failure(aggregate.error());
     auto topology = MediaRealtimeCompositionGraphBuilder::buildTopology(request.mediaId,
         {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(aggregate).value()}, planningResource.value());

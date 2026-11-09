@@ -8,11 +8,25 @@
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 
+#include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
+#include <array>
+#include <charconv>
 #include <algorithm>
 #include <limits>
 
 namespace media::ffmpeg::graph {
 namespace {
+struct PortName final {
+    static constexpr std::string_view video = "source_video_", audio = "source_audio_";
+    std::array<char, video.size() + std::numeric_limits<std::size_t>::digits10 + 1> text{};
+    std::size_t length;
+    PortName(std::string_view prefix, std::size_t index) {
+        std::copy(prefix.begin(), prefix.end(), text.begin());
+        const auto result = std::to_chars(text.data() + prefix.size(), text.data() + text.size(), index);
+        length = static_cast<std::size_t>(result.ptr - text.data());
+    }
+    std::string owned() const { return std::string(text.data(), length); }
+};
 class Size final {
 public:
     bool add(std::uint64_t count, std::uint64_t bytes = 1) noexcept
@@ -113,8 +127,8 @@ template<bool Updating> ::media::Status compileAggregate(
                 return fail("Aggregate capacity refresh changed its source identity or lineage product");
             owned.maximumVideoCandidates = candidates;
         } else {
-            plan.sources.push_back({source.groupKey, "source_video_" + std::to_string(i), candidates,
-                i == plan.audioSource || !hasAudio ? std::nullopt : std::optional<std::string>("source_audio_" + std::to_string(i)),
+            plan.sources.push_back({source.groupKey, PortName(PortName::video, i).owned(), candidates,
+                i == plan.audioSource || !hasAudio ? std::nullopt : std::optional<std::string>(PortName(PortName::audio, i).owned()),
                 std::string(source.videoIdentity),
                 hasAudio ? std::optional<std::string>(std::string(*source.audioIdentity)) : std::nullopt,
                 display ? MediaVideoFrameLineageProduct::SourceDisplayPoint : MediaVideoFrameLineageProduct::CanonicalInterval});
@@ -177,8 +191,8 @@ template<bool Updating> ::media::Status compileAggregate(
 
 ::media::Result<MediaAvContinuousAggregateTopology> MediaAvContinuousAggregatePlanner::plan(
     std::span<const MediaAvAggregateSourceFacts> sources,
-    const MediaRealtimeAvOutputRuntimePlan& output, MediaVideoCanvasGeometry canvas,
-    MediaRational outputFrameRate, std::size_t audioSource)
+    const MediaRealtimeAvOutputRuntimePlan& output, const MediaVideoCanvasGeometry& canvas,
+    MediaRational outputFrameRate, std::size_t audioSource, MediaPreparationMemoryResource& resource)
 {
     using Result = ::media::Result<MediaAvContinuousAggregateTopology>;
     const auto fail = [](const char* message) { return Result::failure(::media::ErrorInfo::invalidArgument(message)); };
@@ -197,9 +211,39 @@ template<bool Updating> ::media::Status compileAggregate(
             return fail("Aggregate source preparation lead is missing");
         lead = std::max(lead, source.activationOutputLead);
     }
+    using Geometry = MediaStandardContainerStorageReadback;
+    if (auto status = Geometry::validatePreparationMoves(); !status) return Result::failure(status.error());
+    Size backing;
+    std::optional<::media::ErrorInfo> storageError;
+    const auto add = [&](::media::Result<std::size_t> value) {
+        if (storageError) return;
+        if (!value) { storageError = value.error(); return; }
+        if (!backing.add(value.value())) storageError = ::media::ErrorInfo::allocationFailed("Aggregate preparation storage overflow");
+    };
+    const auto copy = [&](std::string_view text) { add(Geometry::stringCopy(text.size())); };
+    copy(output.groupKey.value());
+    const auto& audio = output.audioOutput;
+    for (const auto* text : {&audio.codecName(), &audio.profile().canonicalName(), &audio.channelLayout(),
+            &audio.sampleFormat(), &audio.encoderName(), &audio.preset()}) copy(*text);
+    add(Geometry::vectorReserveEmpty<MediaVideoCanvasRectangle>(canvas.tiles.size()));
+    add(Geometry::vectorReserveEmpty<MediaAvAggregateSourcePlan>(sources.size()));
+    add(Geometry::stringCopy(PortName(PortName::audio, audioSource).length));
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        copy(sources[i].groupKey.value()); copy(sources[i].videoIdentity);
+        add(Geometry::stringCopy(PortName(PortName::video, i).length));
+        if (sources[i].audioIdentity) {
+            copy(*sources[i].audioIdentity);
+            if (i != audioSource) add(Geometry::stringCopy(PortName(PortName::audio, i).length));
+        }
+    }
+    if (storageError) return Result::failure(*storageError);
+    if (backing.value > (std::numeric_limits<std::size_t>::max)()) return fail("Aggregate preparation exceeds address space");
+    auto lease = resource.reserveStorage(static_cast<std::size_t>(backing.value), MediaStorageAdmission::RequiredAllocation);
+    if (!lease) return Result::failure(lease.error());
     MediaAvContinuousAggregateTopology plan{
-        output.groupKey, {}, audioSource, "source_audio_" + std::to_string(audioSource),
-        std::move(canvas), outputFrameRate, output.audioOutput, lead,
+        MediaAvAggregatePreparationOwner{std::move(lease).value()},
+        output.groupKey, {}, audioSource, PortName(PortName::audio, audioSource).owned(),
+        canvas, outputFrameRate, output.audioOutput, lead,
         selected.initialGeneration, selected.audioCorrection->epochOutputSampleIndex,
         selected.frameQueueCapacity, 0, static_cast<std::size_t>(output.audioOutput.codecFrameSamples()), 0, {0, 0, 0}};
     plan.sources.reserve(sources.size());

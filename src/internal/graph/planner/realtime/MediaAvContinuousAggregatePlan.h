@@ -7,6 +7,7 @@
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,7 +30,16 @@ struct MediaAvAggregateStoragePlan final {
     std::uint64_t maximumRetainedObjects;
 };
 
+// Transfers the reservation with its backing; assignment could release the old
+// reservation before the old strings/vectors, so it is deliberately unavailable.
+struct MediaAvAggregatePreparationOwner final {
+    explicit MediaAvAggregatePreparationOwner(MediaPreparationStorageLease&& value) : lease(std::move(value)) {}
+    MediaAvAggregatePreparationOwner(MediaAvAggregatePreparationOwner&&) = default;
+    MediaAvAggregatePreparationOwner& operator=(MediaAvAggregatePreparationOwner&&) = delete;
+    MediaPreparationStorageLease lease;
+};
 struct MediaAvContinuousAggregateTopology {
+    MediaAvAggregatePreparationOwner preparationOwner;
     MediaAvSyncGroupKey outputGroupKey;
     std::vector<MediaAvAggregateSourcePlan> sources;
     std::size_t audioSource;

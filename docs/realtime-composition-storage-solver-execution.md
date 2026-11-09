@@ -474,3 +474,15 @@ RKMPP会话99659终态6/6、退出0，保持8核增量all-target；本轮三文�
 端口当前使用字面量＋to_string的rvalue拼接，不可套用已审计的const string拼接几何。实施应复用栈缓冲区＋to_chars＋最终range string一次构造，长度由前缀和size_t十进制位数推导；同一格式化逻辑供费用和构造使用。其余fresh copy/空vector reserve使用既有MediaStandardContainerStorageReadback，未知STL仍显式拒绝。
 
 租约须在aggregate owner首字段保活至所有普通backing析构后；lease/control block通过预算resource实际allocate_shared。还须约束拥有型aggregate的复制，不能让默认深拷贝只复制同一租约而不增加额度。ResourceBinder:157–158最终aggregate是move，可转移同一额度；但:120的canvas副本、GraphBuilder:261的owning tuple及graph ports、最终make_shared对象/control均为独立分配，须另计或改为借用/预算分配，不能共享一份额度冒称已覆盖。本节是基于当前代码和此前独立审查的实施清单，尚未实现，不代表预算闭合或solver已接入。
+
+## 2026-11-09 聚合首次普通分配预算接线
+
+AggregatePlanner现接受canvas const引用及实际planningResource，在任何拥有型聚合构造前计算并预约前述清单；原生产Preparer已传入同一准备资源。端口采用栈数组/to_chars/range string，成本与构造共用PortName；canvas和sources目录、output group/audio六字符串及每源存在的身份/端口均计费。成功刷新保持原存储。
+
+本实现直接内嵌move-only MediaPreparationStorageLease，无需另建shared lease控制块。首字段PreparationOwner最后析构，禁止复制及move assignment，允许已审计Release容器移动构造，避免旧backing未释放就退费；最终Binder的原move路径携带同一预约。候选本体外壳由其实际工作区容器计费，不在普通backing重复累计。最终graph独立端口/canvas副本和make_shared仍为既有独立费用，不宣称被本租约覆盖。
+
+四源码已冻结，双独立审查与Windows Release全量会话77325运行中；尚无本批编译/媒体验收通过结论。具体solver未接，不能以这批预约声称全局预算已闭合。
+
+aggregate_budget_review_a和aggregate_budget_review_b均对四源码明确局部PASS，覆盖费用清单、端口格式化范围、首次复制顺序、不可复制/不可赋值的所有权及最终move消费。两者均未将graph副本或整体预算计为完成。
+
+Windows Release会话77325终态退出0，806任务计划，configure/build均0，四项产物核验通过。本批尚未同步RKMPP或运行媒体链路；无新增媒体测试临时产物。两个独立审查局部PASS不改变完整solver未接入的状态。

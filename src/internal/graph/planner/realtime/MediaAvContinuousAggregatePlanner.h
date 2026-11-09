@@ -5,6 +5,7 @@
 #include <string_view>
 #include "internal/graph/planner/realtime/MediaRealtimeAvOutputRuntimePlan.h"
 #include <span>
+#include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 
 namespace media::ffmpeg::graph {
 struct MediaAudioCorrectionReachabilityPlan;
@@ -35,8 +36,8 @@ public:
     static ::media::Result<MediaAvContinuousAggregateTopology> plan(
         std::span<const MediaAvAggregateSourceFacts> sources,
         const MediaRealtimeAvOutputRuntimePlan& output,
-        MediaVideoCanvasGeometry canvas, MediaRational outputFrameRate,
-        std::size_t audioSource);
+        const MediaVideoCanvasGeometry& canvas, MediaRational outputFrameRate,
+        std::size_t audioSource, MediaPreparationMemoryResource& resource);
     // Same immutable prepared declarations as plan(); only queue/reachability
     // capacities may change. Output/canvas/identity backing remains owned.
     // Success allocates nothing. A failed refresh invalidates the workspace.
