@@ -80,6 +80,96 @@
 
 **后续未闭合项**：当前 composition root 用 `MediaStorageReleaseUnobserved` 创建，通知字段不可替换；后续背压必须从 root 创建时安装真实释放 notifier，并规划对象/目标存储费用及生命周期，不能 freeze 后更换或容忍 NotInitialized。本分类批不启用背压，因此不顺带改变通知。分类批之后须紧接修正共享 AAC parser/header geometry：按两字节 AU-headers-length 与当前 16-bit 头格式得到 4095 合法头上界，保留全部合法聚合/分片，不使用样例包大小；否则旧 1.68m outputs 对象元数据仍可能超预算。该修正不混入本批守恒分类。各源最小进展、保证/弹性分配及事务状态机仍须后续完成；分类全量构建与原规格回归只证明接线没有改变既有失败，不代表 r402 修复。
 
+## 后续完整背压：固定 RTP/RTCP channel 双 pump（待双审）
+
+本节取代上文“等待时暂停该源下一批接收”的笼统表述：只暂停 RTP pump，RTCP pump 必须继续独立进展。前述诊断和已实施步骤保留为阶段证据。本节不是实现完成或验收通过声明；不得先降低 payload 费用再补执行。
+
+### 成熟机制与仓库差异
+
+[GStreamer rtpbin 官方实现及接收示例](https://github.com/GStreamer/gstreamer/blob/main/subprojects/gst-plugins-good/gst/rtpmanager/gstrtpbin.c) 将独立 udpsrc 接入同一 session 的 recv_rtp_sink/recv_rtcp_sink，以 RTCP SR 同步媒体；[udpsrc](https://gstreamer.freedesktop.org/documentation/udp/udpsrc.html) 基于 GstPushSrc，可使用外部 socket。采用这种控制与媒体输入分别驱动、会话共同同步的结构，不复制第二套媒体协议或 DAG。其 udpsrc 允许超出 mtu 时扩展缓冲，本项目坚持 planner 固定 arena、最大 datagram 和显式失败，不能照搬该扩容行为或默认容量。
+
+现代码的 `MediaRtpUdpTransport` 以一个 receiveMutex/receiveActive 覆盖两个 socket；Windows adapter 同时投递两路并 drain/repost，Linux poll 同时监听两路；`MediaRtpIngressReceiver::receiveNext` reset 唯一 arena，batch lease 尚活时失败。因此不能仅启动第二条线程共享现 receiver。固定 channel adapter 可避免动态 mask、信用 IOCP completion key、信用 eventfd 和混合 batch 移槽状态，但仍需明确 channel 独占及停止屏障。
+
+### 类型、线程和存储
+
+- 内部 `MediaRtpIngressChannelPlan` 绑定现有 `MediaRtpUdpChannel`、该 socket capability/readback、datagram 上限、descriptor/arena 几何和取消域。共同 receiver/adapter/pump 实现按该固定产品实例化；不增 CLI/API，不建立 codec/platform 特例。`acquireIngressReceiveLease(channel)` 每 channel 独占，两个 lease 共用 transport 生命周期；禁止同 socket 双读。
+- 每个已声明 RTP/RTCP 会话对应两个 pump，是协议 channel 数推导的固定线程数。RTP 与 RTCP 各有自己的 arena、descriptor、在途 receive 和 batch lease；线程/通知对象及 allocator 请求纳入 root/metadata 产品，线程栈/OS 资源单独记录真实平台创建事实，不冒充引擎准备字节或写经验栈大小。按现有线程 RAII/stop/join 管理，不临时创建恢复线程。
+- 每 channel arena 费用由现有最大 datagram、该 socket 的实际 receive buffer 能力及 planner 分配的共享部署额度，通过现有 descriptor 几何计算；还须计 batch entry、slot ownership、Windows operation 或 Linux mmsghdr/iovec 的真实容量。两 channel 实际总费用与 bootstrap 重叠一起满足 root 预算，不能各自重复宣称独占全部 B，也不能把现有混合 descriptorCapacity 直接复制两份却只计一份。缺少任一 channel 权威 capability 或固定内存时，发布前失败。
+- Windows 每实例只把其 channel socket 关联自己的 completion port，并仅投递/drain/repost该 channel；Linux 每实例 poll 该 socket 与取消句柄，recvmmsg 沿用固定数组。信用等待发生在 RTP pump 的接收调用之外，复用 `MediaNodeWakeup::sequence/wait/notify`；不调用取消型 interruptReceive，不增 OS 专用信用唤醒。
+- 初始化先建立两套产品/arena/wakeup，再启动 workers；任一启动失败，记录原错误，request_stop并唤醒已启动worker、join完成后销毁arena和socket。停止同时唤醒 socket wait 与信用 wait；不得持 session/capture 锁 join，worker 不自 join。root 创建时安装同一合法 release notifier，弱引用到 pump wakeup并计费；不得事后修改现有 const 通知域。
+
+### bootstrap、身份和锁
+
+**修订后的唯一生命周期**：从首次 bootstrap 收包开始就创建固定 RTP/RTCP 两套 receiver/pump，socket→IOCP 关联直到销毁都不改变。Windows handle 关联 IOCP 后不能在保持 socket 打开时改绑另一 port，因此废弃“先混合接收、再拆两 receiver”的交接方案；不新增中央完成分发线程。bootstrap→continuous 只切换同一 pump 的消费阶段，不重建 socket、receiver、arena、IOCP 或 worker，也不调用取消型 interruptReceive。
+
+
+阶段交接只冻结消费目标与已发布prefix成员，不声称capture锁能冻结OS完成。使用现有capture mutex/condition及probe lease固定每channel的已发布prefix长度和frontier；持lease期间该轮归并不扩展成员。两pump已返回但尚未发布的batch/cursor仍在原固定arena内，费用与prefix同时计入，最终cut后按原channel ordinal进入live恰好一次。尚在途的IOCP/recvmmsg项不强行纳入cut，不取消、不移槽，完成后按原消费阶段规则交付。交接锁同时发布共同session与每channel已接受frontier，worker在发布点读阶段，避免同一条目既replay又live。
+
+不存在跨轮tail要求：FirstFrameProbe每轮重建reorder和previousArrival=0，对该轮固定prefix全量独立遍历；最终Preflight只新建一次session，对最终固定prefix单次归并，然后finishBootstrap解除历史全局单调检查。下一轮prefix可能补入早于上一轮尾部的其他channel条目，不拼接两个cut即可；不建立在线水位，不为此停所有OS完成。现MediaRtpUdpTransportPhaseController只有receive/stop/abort诊断同步点，不冒称它已提供生产快照cut；生产切换复用capture/probe已有锁与lease生命周期。
+
+`MediaRtpIngressProvenance` 保留 channel、channel ordinal、接收时间、既有RTP sequence/SSRC；从首次收包即使用channel ordinal，不再建立旧混合capture ordinal，不伪装跨socket wire总序。channel ordinal在本pump接受datagram时恰好前进一步，session分别检查各channel连续性。进入共同session锁后分配现有内部事件/媒体generation序号；Clock/Event共享严格递增顺序。锁序为capture状态短锁取owner→释放→session锁；信用等待/网络等待/通知均不持session锁。
+
+### 事务、控制输出与恢复
+
+| 状态 | 具体执行契约 |
+| --- | --- |
+| 接受 RTP | observeRtp成功即提交channel ordinal；prepare当前pendingFront的申请清单，后续返回AcceptedReady或AcceptedWaitingCredit，不重放datagram。事务只覆盖prepare→commit，不回滚已接受的reorder。 |
+| 等待信用 | RTP pump保留本channel batch与游标，停止调用receiveNext；RTCP pump仍可进入同一session。等待前读取wakeup sequence，session锁内重试预约，锁外wait；释放/控制进展发生在检查与wait之间也不丢唤醒。 |
+| 恢复 | 对象槽与整批payload费用同时取得后，才releaseExisting并commit；复用Lease::split。旧assembly与新预约共存费用保留；最后consumeFront，再继续旧batch，旧batch完成后才能reset该arena。 |
+| 控制推进 | RTCP观察一次返回invalidation或可选evidence，现session分支每次最多产生其中一种控制输出；tick、RTP discontinuity以及pending reorder也会产生控制事件，必须分别由各自既有状态机产品计入，不能将RTCP的单次上界当作所有事件总界。控制对象/字节有专属保证，不能被RTP包用尽。 |
+| 下游调度 | session将Packet与有序Control输出分开；Clock/Event共用Control FIFO。共同ControlOutput DAG节点通过shared session的typed control endpoint消费全部RTP/RTCP/tick生成的Control FIFO，输出到既有clock/event目标。其pendingTransfer与Raw的packet pendingTransfer天然独立，不修改所有节点的共同runtime lane。Raw仍是唯一RTP generation purge身份；ControlOutput不另立媒体源或第二个purge owner。不得让Clock越过早先Invalidation；DAG控制边及下游metadata事务必须有独立进展额度，不能被packet边反压覆盖。 |
+| generation变化 | RTCP invalidation/SSRC/loss事件复用既有generation purge/frontier，先登记fence再允许新generation媒体；清理被fence覆盖的Raw pending、prepared prefix/acquiring及协议carry。若需等待purge确认，保留原有控制顺序；不能为等待packet credit而阻止发出触发purge的控制事件，也不能恢复后重发旧generation包。 |
+| 取消/失败 | 任一pump真实错误终止共同会话并唤醒另一pump；未提交事务RAII回滚，已提交协议按会话失败清理，不伪称可回滚。控制容量用尽、原期限到达仍显式失败；不无限排队、不覆盖旧控制事件、不延长原期限。 |
+
+在Raw或prepared binder成功附着graph payload credit后，原preparation payload lease释放；其后的decoder/DAG持有归graph域。进展模型的终点必须采用这个真实转交点，不能把decoder驻留再乘入prep，也不能在takeOutput时提前宣称payload释放。
+
+### 最小进展与联合预算证明
+
+对每源i，定义由现有状态机可同时持有集合导出的准备payload进展界 `Pmin_i(k)=max_s[heldBeforeTransfer_i(s,k)+nextAtomicPayload_i(s)]`；状态s包含prefix/acquiring、旧assembly、pending完成批、Raw/binder待graph-credit所有者及允许的generation重叠，别名payload只计一次。nextAtomic来自协议批次实际总字节守恒与完整fragment预约，不是最大AU乘所有输出槽。graph成功接管后的持有不属于该集合。对象进展界用同一集合分别计算，不能用字节额度代替对象槽。
+
+控制保证 `Cmin_i=max_s[queuedControl_i(s)+pendingControlEmit_i(s)+nextControlTransaction_i(s)]`，以checked对象数和实际分配几何分别求界；控制边独立额度同时覆盖下游clock-group/binder/purge推进所需metadata原子事务。每源payload与control保证均不得小于对应最大不可拆事务。若计算所需headroom不能由现有RTCP/purge/edge产品证明，先补类型化产品，不用“一两个槽”替代。
+
+整体要求：`rootOther + batch + receiver/线程管理/通知固定费用 + 固定metadata + startup增量 + Σ(payloadGuarantee_i + controlGuarantee_i) ≤ B`，且逐源保证分别≥Pmin/Cmin；每个费用归唯一owner，已有held包含在保证内。还须验证等待图：RTP等待的prep释放可由独立Control/DAG credit推进达成，Control等待的对象释放不得反向依赖新的RTP输入。图存在环则拒绝该产品，不能以增加任意容量掩盖。
+
+这里的max集合必须在后续实施前展开成现有holder/容器/事务产品的显式有限表达式，并证明旧/新generation互斥或重叠关系；当前源码尚无完整产品，不能据本节公式直接降费。部署不可能覆盖无限UDP生产者或无限下游停顿，保持原期限、丢失处理与失败语义，完整原规格门禁不变。
+
+### 第二轮审查阻断与有限推导任务（当前 FAIL，未实施）
+
+两名独立审查者尚未批准完整双pump+背压。IOCP关联冲突已按上节修订设计，但仍须复审；以下执行与进展缺口不能用“异步等待”或抽象max表达式代替。
+
+`MediaRtpInputProtocolSession::observeRtcp` 和 `expire` 当前有 hasPending guard。RTP AcceptedWaitingCredit必然保留pending，直接调用现接口会终止会话；不能删guard。须将同一协议状态机的控制推进明确为：先解析/规划本次RTCP或时钟到期结果并取得控制输出信用，再在session锁内提交。未失效的SR只更新同generation时钟证据并保留pending事务；BYE/clock invalidation先作废该generation未提交事务、清理协议pending/assembly并登记purge fence，再发布有序失效事件。不得保留指向已清空pendingFront的申请清单。reorder expire在等待期间不能覆盖已有pending；到期时间仍推进到控制时钟检查，但reorder释放须在原pending事务处理完或明确失效后进行。为避免先变clock后分配失败，需要从现有clock observer提取共同prepare/commit事务，不另写SR/BYE算法。
+
+下一步只需完成以下四项源码调查并落实有限表达式，不再新增同义规划层：
+
+1. **准备payload六个根**：直接沿用CandidateCostPlanner的Prefix、Acquiring、Outputs、ProtocolPending、RawInputCreditWait、BinderCreditWait。Prefix/acquiring界来自candidate containers；Raw/Binder各单对象来自实际成员，不是经验常量。handoff前prefix/acquiring由session持有，后由MediaRtpPacketClockBinderNode持有；`purgeMedia`不会替代binder清理，必须核对现有purge确认点。旧assembly固定费用已在compressed protocol域，计算新事务重叠时只增加新预约，不能再次加同一assembly。
+2. **可先写出的安全payload不等式**：令U为现有preparedMediaPacketStorageBytes(maxAU)，Np/Na为prefix/acquiring上界，T为一个prepare→commit的整批最大实际预约（AAC聚合总字节+逐AU overhead、fragment完整AU、视频原最大AU），Wraw/Wbinder为实际单对象等待成员。bootstrap进展至少覆盖`protocolCompressed + (Np+Na)×U + T`；handoff运行阶段至少覆盖`protocolCompressed + (Wraw+Wbinder)×U + T`，若prefix/acquiring尚未移交graph credit或purge尚未确认，它们仍须计入同一阶段，不能取不成立的互斥max。Outputs使用受实际字节池限制的可转交积压，不再承诺每个数量槽都能同时放maxAU；但该改变必须与整批背压执行同时发布，且只有下游graph已准入必要startup/解码进展才可等待其释放。是否需要额外pending旧reservation与T共存，逐项沿releaseExisting/fragment状态证明后明确加项。
+3. **控制对象计数**：从实际分支得到单次RTCP最多一个可选evidence或invalidation；单次pendingFront最多对应一个discontinuity，但RTP evidence与该项可共存；tick还可能产生invalidation。分别展开其控制事务对象数，不把三种调用叠成无界循环。Cmin至少覆盖Control FIFO已持有槽、独立pendingControlTransfer、下一控制事务最大对象及其CNAME/事件分配几何；FIFO满时RTCP pump停在本channel控制信用等待，释放由独立control DAG路径推进，不依赖新的RTP。具体FIFO与下游原子metadata需求复用edgePolicies和现有clock/purge队列产品，不任意指定槽数。
+4. **共同ControlOutput节点与信用转交**：复用普通FFmpegNodeRuntime的独立实例，使控制节点自己的pendingTransfer只持Control，不受Raw packet flush阻塞；核对typed session endpoint、对应图边credit及两节点调度唤醒；逐项核对Raw attachPayloadCredit、binder m_preparedPendingCredit的成功转交和purge释放。输出控制事件保持严格sequence顺序，不能用最新SR覆盖较早失效，也不能为了调度控制绕开graph metadata预算。若既有产品不足以证明下游控制进展，只补该缺失的持有/事务事实后重新双审。
+
+上述不等式是可审计的保守下界/覆盖要求，尚不是已证明充分的最终Pmin；不能据此降费或声称2GiB已可行。交付下一版设计时必须用上述四处实际代码把仍存活集合、互斥关系和控制容量表达式填完，并明确每处PASS/FAIL；不通过者继续阻止完整实施。
+
+### 可独立接线的首个生产切片（仍需双审）
+
+先将 `MediaRawRtpPreparedInputBuffer::startPreflightCapture/capture`、continuous batch入口、Transport::acquireIngressReceiveLease(channel)、AdapterFactory/Receiver::create以及两OS adapter全部接成从首次收包就固定channel的双pump。维持当前consume完整drain、RequiredAllocation和原候选费用，不seal、不启用AcceptedWaitingCredit、不删除RTCP/expire guard、不改变Raw控制调度；因此不会提前引入“pending期间收RTCP”的新行为。该切片的目标是完整生产socket/receiver生命周期，而非仅新增未消费类型。
+
+两pump的交付串行区覆盖消费序号分配与当前consume调用，RTCP进入时前一个RTP事务已完整drain。网络接收/信用等待不得持此串行区；保留每channel原接收ordinal/time，另以内部delivery ordinal表示共同session接受顺序。异步接收完成时间可能倒序，必须同步分离原接收provenance与处理时钟：审查所有bootstrap replay、ingressObservation及m_bootstrapObservedAtNs消费者，不能重写历史时间或直接移除单调校验。双receiver的arena/control/线程管理费用精确增加，原存储公式不下降；若新增费用使原预算提前失败，记录真实结果而非缩规格。该切片通过不授权启用完整信用等待，剩余控制释放环仍受上述FAIL门禁约束。
+
+### 固定双channel基础切片的真实时间方案（待双审）
+
+接收时刻在各adapter成功接收/取到completion时采样并随entry保留，永不改成取得delivery/session锁的时刻。每channel本身顺序接收，分别保持原单调断言；交付串行区只保护session状态及delivery顺序，不能宣称其顺序等于捕获时序。
+
+- `MediaRtpIngressObservationCollector` 每channel独立，仍按真实capturedAt计算该channel的首尾、interarrival与数量；RTP sequence displacement及reorder等待推导只消费RTP collector，RTCP的socket/字节观测消费RTCP collector。跨channel max gap不能从两个max gap相加或取max冒充合并流事实。共享部署成本对两个产品求和，流量时间统计保持显式channel身份。
+- raw bootstrap分别保留每channel有序prefix及ordinal；probe快照通过固定数量游标的k-way归并视图（比较capturedAt，等时按稳定stream/channel次序）读取，不排序、不复制payload、不生成额外引用数组。首次视频probe合并其RTP/RTCP两视图，`MediaRtpSourceFirstFrameProbe::previousArrival`原断言保留；source bootstrap将现有Preflight两stream merge复用扩展为最多四channel游标，`m_bootstrapObservedAtNs`原跨stream单调断言保留。所有接受frontier均按channel记账，归并输出顺序不是虚构wire序号。
+- `MediaRawRtpPreparedReplayClock::observe`激活前本来保存最小sourceOrigin；epoch取真实首个capture边界：各channel在首次接收采样时、对外发布entry之前同步调用共同replayClock.observe，保留全channel最小sourceOrigin；activate必须等所有已开始capture但未完成observe的发布临界区退出。尚无已采样时刻的在途OS项不需要纳入。激活后仍保留observedAt>=sourceOrigin校验；不得让线程将已采样的早时刻滞留在局部变量、越过activate后才首次observe。归并cut与epoch同步不同，不要求所有已返回项都纳入同一prefix。
+- live阶段显式区分capture time和evaluation time：observeRtp/reorder、observeRtcp/SR/CNAME存储使用原capturedAt；evidence可用性、timeout/tick和运行时event发布评估使用session串行执行时真实steady now。该now仅判断现在是否过期，不替换任何接收事实、SR年龄起点或provenance；bootstrap evaluation time仍使用k-way replay的历史capturedAt，避免把重放当作当前接收。
+- 必须同步修正已有tracker总序假设：`MediaRtcpSenderReportTracker::observeMedia`采纳pending SR后，当前仅在RTP capturedAt≥SR capturedAt时置evidenceUpdatePending。双channel可先处理较晚SR再处理较早首RTP，导致已齐备证据不再发布。pending标志应表示“证据变化待评估”，采纳时即置位；是否可发布继续由现有evidence(evaluationNow)检查now≥SR/CNAME capturedAt与原timeout。缺失/尚未到时仍返回NotInitialized并保留pending，不绕过校验。SR NTP倒退与同NTP改变RTP timestamp的原失败保持不变，同RTCP channel不重排SR。
+
+该时间修正必须和基础双receiver接线一批实施，不能先双线程再吞time-regressed错误。需额外核对：activity只接受同RTP channel的真实时刻；RTCP先于首RTP的pending-source采用路径；bootstrap与live切换时所有已完成entry的归属。基础切片仍完整drain，所以observeRtcp/expire的pending guard保持，不启用信用等待。两名审查者批准这些具体消费者后，才实施完整调用链，不再增加未消费的描述产品。
+
+### 最小完整修改与审查门禁
+
+修改共同IngressPlan/capability/readback、Transport per-channel lease/phase、Receiver/Storage及Windows/Linux固定channel adapter；共同capture pump与bootstrap屏障、source session事务/ordinal/双输出；共同ControlOutput节点与Raw唯一purge接线；planner的receiver/control/payload进展、root notifier和保证产品；solver/sealed/final resources统一消费。禁止只提交能运行的双线程却未闭合控制释放环。双审必须逐项确认线程与buffer生命周期、原子预约、事件因果顺序及每项进展表达式；任一项未证明则实施门禁FAIL。随后Windows原规格Release realtime→RKMPP增量与原规格实流，记录并清理本轮产物。
+
 ## 修改阶段
 
 | 阶段 | 共享修改与交付证据 |
@@ -115,7 +205,7 @@ RKMPP710832f9构建终态已核验：后台PID153698已不存在，8核增量476
 
 为避免逐文件SSH往返，23源码生成临时同步包，73465字节，SHA256 `1ccd785c0e0833c1a29502b1c29708ce055baaf2ab8c5b35011f6db9a56d3fc8`；内含每文件原版本与新版本hash，远端先全部验证再逐项写入并复核。仅项目源码，不含媒体或外部依赖。同步后删除本机/远端该专属包，RKMPP构建终态另记。
 
-同步终态：23文件写前与写后hash均通过；远端临时包已删除，本机专属包随后删除。RKMPP后台构建PID302747已启动，8核增量all-target，日志/退出标记为composition-build-16d1cffa，终态待收取。
+同步终态：23文件写前与写后hash均通过；远端临时包已删除，本机专属包随后删除。RKMPP后台构建PID302747（16d1cffa）已完成476/476，exit0，专属log/exit残留0。AAC 0b0b4917五文件同步hash验证通过，PID448136增量11/11 exit0，专属产物清理0；正式证据见[r405](realtime-composition-r405-validation.md)，记录提交0217805d。构建成功不代表RKMPP实流合屏验收通过。
 
 ## 下一步 AAC 数量几何
 
