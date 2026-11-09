@@ -504,3 +504,8 @@ Windows Release会话77325终态退出0，806任务计划，configure/build均0�
 Windows Release会话40463终态退出0（806任务计划），四项构建产物核验通过，realtime CLI 7232000字节、2026-11-09 10:15:19。7源码按1＋3＋3同步前后哈希均一致；RKMPP会话99454已启动8核增量all-target，无clean-first。未运行媒体链路。
 
 下一绑定的具体产品缺口经独立只读核验：候选产品需要保存完整选中MediaAvSourceCapacityFacts标量快照，初次bind记录、rebind全部成功后才更新。sealed读取独立取得startup、route shape/metadata/atomicMetadata、queues、两路acquiring和acquisitionWindow，比较后才刷新；不能以刷新后的值证明候选一致。最终SourcePlanner保留ingress sameProduct、retention原指针、holders/prefix和真实lineage资源校验，不再内部重复Kernel.bind。cadence仍由同一Kernel消费ledger，禁止第二媒体链路。
+
+
+RKMPP会话99454终态116/116、退出0，realtime CLI链接成功；保持8核增量all-target，没有clean-first。代码检查点382b8629已本地提交，未推送。Windows/RKMPP编译及双独立源码审查通过，仅覆盖本批所有权交接；未运行local或realtime媒体测试，没有本轮抓包、截图、临时录制、日志或脚本，既有未跟踪文件保留。
+
+候选基线补充调查：AggregatePlanner对SourcePresentation明确要求frameQueueCapacity至少2，对应current与successor；不是可以全部取1。SourceResourcesPlanner同时将queues.frame作为video.lineage.capacity，现有LineageStoragePlanner只检查正值并计费，尚未证明registry的进展下界。decoder输出立即释放opaque_ref，不能把所有startup Nv机械加入registry；压缩包内部持有证据也不能未经核验等价为所有codec opaque持有。后续需核对真实decoder/filter契约，不能以maximumInternalPackets加经验常量替代证明。本条为尚未闭合的设计证据，不宣称已复现新的运行故障。
