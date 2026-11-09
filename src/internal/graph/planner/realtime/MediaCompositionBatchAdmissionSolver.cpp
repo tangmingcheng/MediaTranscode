@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <new>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -211,7 +212,25 @@ try {
     };
     auto feasible = fits();
     if (!feasible) return Result::failure(feasible.error());
-    if (!feasible.value()) return Result::failure(invalid("Composition minimum legal capacity exceeds deployment storage"));
+    if (!feasible.value()) {
+        std::string detail = "Composition minimum legal capacity exceeds deployment storage: k=" +
+            std::to_string(first) + " capacity=" + std::to_string(capacity) +
+            " root_other=" + std::to_string(partition.value().otherRetainedBytes) +
+            " batch=" + std::to_string(batch.totalBytes) + " available=" + std::to_string(available) +
+            " sources=" + std::to_string(m_workspace->sourceBytes());
+        for (std::size_t i = 0; i < sources.size(); ++i) {
+            const auto& cost = m_workspace->costs[i];
+            detail += " source[" + std::to_string(i) + "]={total=" + std::to_string(cost.totalBytes) +
+                " fixed=" + std::to_string(cost.fixedBytes) + " protocol=" + std::to_string(cost.protocolBytes) +
+                " startup=" + std::to_string(cost.startupBytes) +
+                " video_payload=" + std::to_string(cost.video.payload.bytes);
+            if (cost.audio) detail += " audio_payload=" + std::to_string(cost.audio->payload.bytes) +
+                " audio_reservations=" + std::to_string(cost.audio->payload.maximumLiveReservations) +
+                " audio_reservation_bytes=" + std::to_string(cost.audio->payload.maximumReservationBytes);
+            detail += "}";
+        }
+        return Result::failure(::media::ErrorInfo::invalidArgument(std::move(detail)));
+    }
     std::size_t best = first;
     std::size_t hi = limit.value();
     if (first < hi) {
