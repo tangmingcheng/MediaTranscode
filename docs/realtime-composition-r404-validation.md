@@ -52,4 +52,4 @@ CLI_EXIT=1
 
 记录后按精确PID清理四源/VLC及本轮11项日志/stdout；没有生成快照、抓包或录制，保留复用源。
 
-Cleanup: four source handles exited -1; six PIDs and eleven temporary files absent.
+清理核验：四源句柄exit -1，六个精确PID及11项临时文件均无残留。

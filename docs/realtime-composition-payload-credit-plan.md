@@ -114,3 +114,11 @@ RKMPP710832f9构建终态已核验：后台PID153698已不存在，8核增量476
 23源码已冻结并获双独立局部PASS；原协议项费用守恒，新 child/control/数组实际费用完整计入。Windows97346全核心Release重建退出0。[r404](realtime-composition-r404-validation.md)原四路已进入k0预算计算，无新增角色身份错误，仍因31.26GB源费用超限而自然退出1，不计合屏通过。四源清理exit -1，六精确PID与11项日志残留均0。未启用seal/背压，最小进展与实际输出仍未完成。
 
 为避免逐文件SSH往返，23源码生成临时同步包，73465字节，SHA256 `1ccd785c0e0833c1a29502b1c29708ce055baaf2ab8c5b35011f6db9a56d3fc8`；内含每文件原版本与新版本hash，远端先全部验证再逐项写入并复核。仅项目源码，不含媒体或外部依赖。同步后删除本机/远端该专属包，RKMPP构建终态另记。
+
+同步终态：23文件写前与写后hash均通过；远端临时包已删除，本机专属包随后删除。RKMPP后台构建PID302747已启动，8核增量all-target，日志/退出标记为composition-build-16d1cffa，终态待收取。
+
+## 下一步 AAC 数量几何
+
+依据RFC 3640的两字节AU-headers-length和当前13-bit size/3-bit index布局，公共协议定义提供两个不同查询：解析头数上界=min(UINT16_MAX/headerBits,(payloadBytes-lengthBytes)/headerBytes)；合法完成AU上界=min(UINT16_MAX/headerBits,(maximumPayload-lengthBytes)/(headerBytes+minimumAuBytes))。小于最小长度须显式报错或返回空界供原错误路径处理，不允许无符号下溢。当前headerBits=16，合法协议头数界4095来自字段宽度，不是经验常量。
+
+parser、depacketizer factory、access-unit envelope及PMR header容量统一消费布局；保留原错误顺序与畸形无payload/短payload头表的临时分配覆盖，不能以合法完成数给parser vector计费。canonical legacy header覆盖及对应migrated扣项本步保持原值；分片仍按单AU完整size预约。只修协议数量几何，不解决跨批载荷信用、视频费用或接收背压，实施前再核对独立审查结论。
