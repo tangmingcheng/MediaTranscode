@@ -78,3 +78,5 @@ RKMPP 构建补记：上一批 16d1cffa 的 PID 302747 已不存在，8 核增�
 AAC 同步：五文件写前/写后 hash 均通过；专属 zip SHA256 为 98972bccd4f9ee6c2a821e7a4626857c3a073d1cdbf5ee90fe41024721e103ef，本机及远端同步包已删除。上一批 RKMPP 两个构建临时文件也已删除，残留 0。初次同步因远端 Python 不支持 Path.is_relative_to 在写入前终止，改用 parents 路径核验后完成。
 
 AAC 五源码再次由两名独立审查者明确 SOURCE PASS，未更改其冻结版本；RKMPP 新增量构建 PID 448136，专属日志/退出标记 composition-build-aac-r405，终态待核验。
+
+RKMPP AAC 终态：PID 448136 已不存在，增量 all-target 11/11、退出标记 0，realtime CLI 成功链接；未执行 local 媒体测试，也未将构建视为 RKMPP 合屏验收。两个专属构建临时文件在记录后逐项清理。
