@@ -10,6 +10,10 @@ public:
     // creating a resource, graph, or candidate container.
     static ::media::Result<MediaPreparedStartupIndexStorage> preparedIndex(
         std::size_t capacity, MediaVideoStartupReadiness readiness);
+    // Exact inverse of decoded prepared-index pricing, capped by the existing
+    // signed-int startup count domain. Zero means no positive count fits.
+    // This is an index-only bound, not complete-source admission.
+    static ::media::Result<std::size_t> maximumPreparedDisplayCapacity(std::size_t availableBytes);
     static ::media::Result<MediaPreparedStartupGenerationStorage> preparedGeneration(
         std::size_t videoCapacity, std::size_t audioCapacity);
     static ::media::Status validateGeneration(const MediaAvStartupGenerationStoragePlan& plan,

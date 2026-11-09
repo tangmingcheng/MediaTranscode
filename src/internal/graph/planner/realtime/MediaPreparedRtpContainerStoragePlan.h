@@ -29,6 +29,7 @@ struct MediaPreparedRtpContainerStoragePlan final {
     std::size_t aacHeaderPeakBytes = 0;
     // Candidate envelope only; other protocol owners are separate products.
     std::size_t peakBytes = 0;
+    bool operator==(const MediaPreparedRtpContainerStoragePlan&) const = default;
 };
 
 } // namespace media::ffmpeg::graph

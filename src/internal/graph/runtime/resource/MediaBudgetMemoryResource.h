@@ -156,6 +156,11 @@ public:
     ::media::Result<Lease> reserveStorage(std::size_t footprint, MediaStorageAdmission admission)
     { return m_budget->reserve(footprint, admission); }
 
+    // Budget identity is distinct from PMR allocation-owner identity: separate
+    // resource wrappers may charge the same ledger without being interchangeable.
+    bool usesBudget(const Budget& budget) const noexcept
+    { return m_budget.get() == &budget; }
+
     MediaBudgetMemoryResource(const MediaBudgetMemoryResource&) = delete;
     MediaBudgetMemoryResource& operator=(const MediaBudgetMemoryResource&) = delete;
 

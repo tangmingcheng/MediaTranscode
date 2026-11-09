@@ -13,6 +13,9 @@
 #include "internal/graph/planner/video/MediaVideoCanvasGeometryPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
+#include "internal/graph/planner/realtime/MediaCompositionBatchAdmissionSolver.h"
+#include "internal/graph/planner/realtime/MediaCompositionSealedAdmissionValidator.h"
+#include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
 #include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourceAudioPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAudioPlannerOptionsResolver.h"
@@ -308,28 +311,47 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     // All borrowed source/video/deployment owners remain stable through bind.
     MediaFixedCapacityStorage<MediaCompositionSourceFixedProducts> fixedSources(
         captures.size(), *planningResource.value());
+    MediaFixedCapacityStorage<MediaCompositionSourceFixedRequest> fixedRequests(
+        captures.size(), *planningResource.value());
     for (std::size_t i = 0; i < captures.size(); ++i) {
         auto ingress = captures[i].capture.continuousIngress();
         if (!ingress) return PreparedResult::failure(ingress.error());
         const auto& session = rtpSources[i]->plan();
-        auto fixed = MediaCompositionSourcePlanningKernel::prepareFixed({
+        fixedRequests.push_back({
             facts[i].request, facts[i].raw, facts[i].timing, ingress.value().video, ingress.value().audio,
             session.audioRetention ? &*session.audioRetention : nullptr,
             prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
-            deployment.value(), output.value().activationOutputLead, i == selected}, planningResource.value());
+            deployment.value(), output.value().activationOutputLead, i == selected});
+        auto fixed = MediaCompositionSourcePlanningKernel::prepareFixed(fixedRequests[i], planningResource.value());
         if (!fixed) return PreparedResult::failure(fixed.error());
         fixedSources.push_back(std::move(fixed).value());
     }
+    // These directories coexist with the selected workspace during seal and
+    // final binding. Allocate them before the solver observes root headroom.
     MediaFixedCapacityStorage<MediaPreparedRtpSource> sealed(captures.size(), *planningResource.value());
-    if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, nullptr); !frozen)
+    MediaFixedCapacityStorage<MediaCompositionSourcePreparedFacts> readbacks(captures.size(), *planningResource.value());
+    MediaFixedCapacityStorage<MediaCompositionSourceFixedRequest> sealedRequests(captures.size(), *planningResource.value());
+    auto sourcePlanBytes = MediaStandardContainerStorageReadback::vectorReserveEmpty<MediaRealtimeCompositionSourcePlan>(captures.size());
+    if (!sourcePlanBytes) return PreparedResult::failure(sourcePlanBytes.error());
+    auto sourcePlanBacking = planningResource.value()->reserveStorage(sourcePlanBytes.value(), MediaStorageAdmission::RequiredAllocation);
+    if (!sourcePlanBacking) return PreparedResult::failure(sourcePlanBacking.error());
+    std::vector<MediaRealtimeCompositionSourcePlan> sourcePlans;
+    sourcePlans.reserve(captures.size());
+    MediaCompositionBatchAdmissionSolver solver(fixedRequests.view(), fixedSources, output.value(),
+        prepared->geometry.geometry, cadence, selected, emission.value(), deployment.value().encode().latency,
+        planningResource.value(), control);
+    if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, &solver); !frozen)
         return PreparedResult::failure(frozen.error());
+    auto* workspace = solver.workspace();
+    if (!workspace) return PreparedResult::failure(::media::ErrorInfo::notInitialized(
+        "Composition freeze did not publish its selected workspace"));
     for (std::size_t i = 0; i < captures.size(); ++i) {
         auto source = std::move(captures[i].capture).seal();
         if (!source) return PreparedResult::failure(source.error());
         sealed.push_back(std::move(source).value());
     }
-    // Seal all owners before taking views; the budgeted directory never moves.
-    std::vector<MediaRealtimeCompositionSourcePlan> sourcePlans;
+    // Seal all owners before taking views. Pre-freeze ingress references are
+    // no longer used; each readback borrows the new stable sealed directory.
     for (std::size_t i = 0; i < sealed.size(); ++i) {
         auto view = sealed[i].resources();
         if (!view) return PreparedResult::failure(view.error());
@@ -339,34 +361,24 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
             session.audioRetention ? &*session.audioRetention : nullptr, prepared->sources[i].plan},
             std::move(view).value(), emission.value());
         if (!readback) return PreparedResult::failure(readback.error());
-        const auto capacity = std::visit([](const auto& value) -> MediaAvSyncCapacityFacts {
-            return std::cref(value);
-        }, readback.value().capacity);
-        auto candidate = MediaCompositionSourcePlanningKernel::bind(std::move(fixedSources[i]), capacity);
-        if (!candidate) return PreparedResult::failure(candidate.error());
-        auto plan = MediaRealtimeCompositionSourcePlanner::bind(
-            std::move(readback).value(), std::move(candidate).value());
+        readbacks.push_back(std::move(readback).value());
+        const auto& source = readbacks[i].source;
+        sealedRequests.push_back({facts[i].request, facts[i].raw, facts[i].timing,
+            source.videoIngress, source.audioIngress, session.audioRetention ? &*session.audioRetention : nullptr,
+            prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
+            deployment.value(), output.value().activationOutputLead, i == selected});
+    }
+    if (auto status = MediaCompositionSealedAdmissionValidator::validate(*workspace,
+            sealedRequests.view(), readbacks.view(), solver.capacities()); !status)
+        return PreparedResult::failure(status.error());
+    for (std::size_t i = 0; i < sealed.size(); ++i) {
+        auto plan = MediaRealtimeCompositionSourcePlanner::bind(std::move(readbacks[i]), std::move(workspace->sources[i]));
         if (!plan) return PreparedResult::failure(plan.error());
         sourcePlans.push_back(std::move(plan).value());
     }
-    std::vector<MediaAvAggregateSourceFacts> aggregateSources;
-    aggregateSources.reserve(sourcePlans.size());
-    for (const auto& source : sourcePlans)
-        aggregateSources.push_back(MediaAvContinuousAggregatePlanner::sourceFacts(source));
-    auto aggregate = MediaAvContinuousAggregatePlanner::plan(aggregateSources, output.value(),
-        prepared->geometry.geometry, cadence, selected, *planningResource.value());
-    if (!aggregate) return PreparedResult::failure(aggregate.error());
-    MediaFixedCapacityStorage<MediaCompositionTopologySourceFacts> topologySources(
-        sourcePlans.size(), *planningResource.value());
-    for (const auto& source : sourcePlans)
-        topologySources.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
-            source.branchConnections, source.inputConnections});
-    auto plannedTopology = MediaCompositionTopologyPlanningKernel::plan(topologySources.view(),
-        aggregate.value(), output.value(), planningResource.value());
-    if (!plannedTopology) return PreparedResult::failure(plannedTopology.error());
     auto topology = MediaRealtimeCompositionGraphBuilder::buildTopology(request.mediaId,
-        {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(aggregate).value()},
-        std::move(plannedTopology).value());
+        {std::move(sourcePlans), prepared->output.plan, std::move(output).value(), std::move(*workspace->aggregate)},
+        std::move(*workspace->topology));
     if (!topology) return PreparedResult::failure(topology.error());
     auto sourceResources = topology.value().planSourceResources();
     if (!sourceResources) return PreparedResult::failure(sourceResources.error());
