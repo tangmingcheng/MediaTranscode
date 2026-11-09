@@ -572,3 +572,18 @@ Windows Release全量会话92622正在构建，两份源码独立审查进行中
 后续音频域接线调查：将Quantizer现有窗口/补偿距离检查抽为共享精确判定，区分固定事实错误、严格margin空洞与不可恢复的数值上界；Reachability的现有plan与域查询必须共享resolveTiming、样本/ns转换、measurement headroom和command/window计算。仅提供typed membership尚不足以对带空洞区间二分；合法k的后继/排名必须另外证明，不能在solver复制音频公式或拒绝原已支持采样率以简化搜索。此项尚未实施。
 
 RKMPP11384终态4/4、退出0，两CLI链接成功；本批双平台编译完成。没有运行local/realtime媒体链路，未产生测试临时文件。数量候选生成器尚待具体solver调用，生产空solver门禁和RKMPP硬件身份传播能力缺口保持未完成，不以本轮构建替代合屏验收。
+
+
+## 2026-11-09 音频精确容量成员判定
+
+Quantizer现有create和maximumCompensationDistance复用抽取的窗口/距离计算；新增内部assessCapacity返回合法距离或QuantizationGap/UpperBound，固定非法事实仍为错误。Reachability原plan与容量判定共用evaluateCorrection，resolveTiming、样本/ns换算、measurement headroom、lead/window计算保持单份；runtime保留create后distance的首错顺序，容量判定允许距离上界优先于同时存在的量化空洞。没有新增CLI/API参数、改变媒体算法或设置默认容量。
+
+首轮交叉审查一位PASS、一位FAIL：高采样率可能把不同样本位置量化到相同纳秒，leadNs==windowNs不能在容量模式中一律视为固定事实错误。已引入明确判定模式，runtime保留原等值报错，容量模式先检查窗口上界再将等值归为gap，并继续检查距离上界。随后两位独立审查timing_handoff_review_a、timing_handoff_review_b对最终四源码均明确局部PASS。上界含义严格限于rate/servo/block固定、候选lead/window不减；早期算术或事实错误仍直接传播。
+
+Windows Release73393终态退出0（811任务计划），四项产物核验通过，realtime CLI 7278592字节、2026-11-09 11:42:38。四源码写前/写后SHA256均核验，RKMPP77502开始8核增量all-target。尚未运行本批媒体链路，未产生媒体测试临时产物；源码及编译通过不能替代最终合屏实流。
+
+下一搜索实现的条件审查：在未决[lo,hi]取mid，从mid向前以精确判定寻找首个合法q；q费用满足则记q并令lo=q+1，费用不满足则hi=mid-1（[mid,q)已证gap，>=q因费用单调不可行）；没有合法q或遇到已证明UpperBound则同样缩减hi。mid=0/q=hi显式处理，不允许无符号绕回。每点必须检查所有源，不能用某源gap遮蔽另一源错误；每次步进检查原取消与deadline，超时不返回未证明最大的当前最好值。固定事实与费用基准不变、完整费用在合法k上单调是必要前提。此方案不需数组或全域预扫描，最坏membership仍线性；尚未实现或实流证明。依据为[C++标准分区二分前提](https://eel.is/c++draft/alg.binary.search)与[OR-Tools搜索时限语义](https://developers.google.com/optimization/cp/cp_tasks)，不宣称同等剪枝能力。
+
+预算搜索界不得借用独立graph域的decoded payload作为preparation费用斜率；若采用startup索引或frame wrapper下界，必须从当前实际计费和共享归属证明，不能重复累计。具体solver、固定工作区、sealed跨源费用复算及生产nullptr替换仍未完成。
+
+RKMPP77502终态14/14、退出0，realtime CLI链接成功；两平台编译及双独立审查完成。未运行local/realtime媒体测试，没有本轮抓包、快照、临时媒体、日志或脚本残留。生产空solver门禁仍在，当前不计为合屏实流通过，不推送或修改外部依赖。

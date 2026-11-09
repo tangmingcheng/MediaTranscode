@@ -6,6 +6,7 @@
 #include <string>
 #include <initializer_list>
 #include <type_traits>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -109,15 +110,13 @@ struct CorrectionTiming final {
             (samples * NanosecondsPerSecond + sampleRate - 1) / sampleRate));
 }
 
-} // namespace
-
-::media::Result<MediaAudioCorrectionReachabilityResult>
-MediaAudioCorrectionReachabilityPlanner::plan(
+enum class CorrectionEvaluation { RuntimeContract, CapacityDomain };
+::media::Result<MediaAudioCorrectionReachabilityAssessment> evaluateCorrection(
     const MediaAvSyncAudioServoPolicy& servo,
-    const MediaAudioCorrectionPlanningFacts& input)
+    const MediaAudioCorrectionPlanningFacts& input, CorrectionEvaluation mode)
 {
     auto resolved = resolveTiming(input);
-    if (!resolved) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(resolved.error());
+    if (!resolved) return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(resolved.error());
     const auto& facts = resolved.value();
     const auto worst = facts.worstCaseInFlightSamples;
     auto required = checkedAdd(
@@ -128,7 +127,7 @@ MediaAudioCorrectionReachabilityPlanner::plan(
     }
     if (!required || required.value() ==
             std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(
             required ? ::media::ErrorInfo::invalidArgument(
                            "audio command lead has no strict representable margin")
                      : required.error());
@@ -139,7 +138,7 @@ MediaAudioCorrectionReachabilityPlanner::plan(
         !servo.outputSampleRate ||
         *servo.outputSampleRate != facts.outputSampleRate ||
         facts.maximumResamplerOutputBlockSamples <= 0) {
-        return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(
             ::media::ErrorInfo::notInitialized(
                 "audio measurement correction facts are missing"));
     }
@@ -154,7 +153,7 @@ MediaAudioCorrectionReachabilityPlanner::plan(
         measurementGapSamples.value() >
             (std::numeric_limits<std::int64_t>::max() - 999'999) /
                 correctionPpm) {
-        return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(
             measurementGapSamples
                 ? ::media::ErrorInfo::invalidArgument(
                       "audio measurement correction headroom overflow")
@@ -167,7 +166,7 @@ MediaAudioCorrectionReachabilityPlanner::plan(
         "audio measurement command lead");
     if (!measurementLead || measurementLead.value() ==
             std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(
             measurementLead ? ::media::ErrorInfo::invalidArgument(
                                   "audio measurement command lead has no strict margin")
                             : measurementLead.error());
@@ -190,20 +189,32 @@ MediaAudioCorrectionReachabilityPlanner::plan(
         : ::media::Result<std::int64_t>::failure(compensation.error());
     if (!commandLead || !compensation || !frequency ||
         frequency.value() > 60'000'000'000) {
-        return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "bounded audio queues exceed the synchronization policy duration"));
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::success(
+            MediaAudioCorrectionCapacityRejection{MediaAudioCorrectionCapacityPosition::UpperBound,
+                ::media::ErrorInfo::invalidArgument(
+                    "bounded audio queues exceed the synchronization policy duration")});
     }
-    auto quantizer = MediaAudioCorrectionQuantizer::create(
-        compensation.value(), commandLead.value(), facts.outputSampleRate);
-    if (!quantizer) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(quantizer.error());
-    auto distance = quantizer.value().maximumCompensationDistance(
-        std::max(*servo.normalCorrectionLimitPpm,
-                 *servo.recoveryCorrectionLimitPpm));
-    if (!distance) return ::media::Result<MediaAudioCorrectionReachabilityResult>::failure(distance.error());
+    // Runtime diagnostics retain the original create-then-distance ordering.
+    // Capacity assessment may instead prioritize a proven distance upper limit
+    // over a simultaneous, recoverable quantization hole.
+    auto distance = [&]() -> ::media::Result<MediaAudioCorrectionCapacityAssessment> {
+        if (mode == CorrectionEvaluation::CapacityDomain)
+            return MediaAudioCorrectionQuantizer::assessCapacity(compensation.value(), commandLead.value(),
+                facts.outputSampleRate, std::max(*servo.normalCorrectionLimitPpm, *servo.recoveryCorrectionLimitPpm));
+        auto quantizer = MediaAudioCorrectionQuantizer::create(
+            compensation.value(), commandLead.value(), facts.outputSampleRate);
+        if (!quantizer) return ::media::Result<MediaAudioCorrectionCapacityAssessment>::failure(quantizer.error());
+        auto bound = quantizer.value().maximumCompensationDistance(
+            std::max(*servo.normalCorrectionLimitPpm, *servo.recoveryCorrectionLimitPpm));
+        if (!bound) return ::media::Result<MediaAudioCorrectionCapacityAssessment>::failure(bound.error());
+        return ::media::Result<MediaAudioCorrectionCapacityAssessment>::success(bound.value());
+    }();
+    if (!distance) return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::failure(distance.error());
+    if (const auto* rejected = std::get_if<MediaAudioCorrectionCapacityRejection>(&distance.value()))
+        return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::success(*rejected);
     const auto maximumOutputBlock = std::max<std::int64_t>(
-        facts.maximumResamplerOutputBlockSamples, distance.value());
-    return ::media::Result<MediaAudioCorrectionReachabilityResult>::success(
+        facts.maximumResamplerOutputBlockSamples, std::get<int>(distance.value()));
+    return ::media::Result<MediaAudioCorrectionReachabilityAssessment>::success(
         MediaAudioCorrectionReachabilityResult{
             MediaAudioCorrectionReachabilityPlan{
                 facts.outputSampleRate, 0, worst,
@@ -212,6 +223,26 @@ MediaAudioCorrectionReachabilityPlanner::plan(
                 commandLeadSamples, facts.mailboxCapacity},
             commandLead.value(), compensation.value(),
             MediaRunningTime::fromNanoseconds(frequency.value()), maximumOutputBlock});
+}
+
+} // namespace
+
+::media::Result<MediaAudioCorrectionReachabilityResult> MediaAudioCorrectionReachabilityPlanner::plan(
+    const MediaAvSyncAudioServoPolicy& servo, const MediaAudioCorrectionPlanningFacts& facts)
+{
+    using Result = ::media::Result<MediaAudioCorrectionReachabilityResult>;
+    auto assessed = evaluateCorrection(servo, facts, CorrectionEvaluation::RuntimeContract);
+    if (!assessed) return Result::failure(assessed.error());
+    if (const auto* rejected = std::get_if<MediaAudioCorrectionCapacityRejection>(&assessed.value()))
+        return Result::failure(rejected->error);
+    return Result::success(std::get<MediaAudioCorrectionReachabilityResult>(std::move(assessed).value()));
+}
+
+::media::Result<MediaAudioCorrectionReachabilityAssessment>
+MediaAudioCorrectionReachabilityPlanner::assessCapacity(
+    const MediaAvSyncAudioServoPolicy& servo, const MediaAudioCorrectionPlanningFacts& facts)
+{
+    return evaluateCorrection(servo, facts, CorrectionEvaluation::CapacityDomain);
 }
 
 } // namespace media::ffmpeg::graph
