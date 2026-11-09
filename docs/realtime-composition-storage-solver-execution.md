@@ -557,3 +557,18 @@ RKMPP15313终态120/120、退出0，8核增量完成；既有pix_fmts废弃警�
 Windows Release全量会话6043终态退出0，810任务计划，configure/build均0，四项产物核验通过；realtime CLI为7273472字节、2026-11-09 11:20:28。五源码按1＋1＋2＋1同步，写前基线和写后SHA256均核验成功；RKMPP92380已在原目录开始8核增量all-target，没有clean-first。没有运行local/realtime媒体链路，没有新增抓包、快照、录制或测试脚本。
 
 RKMPP92380终态25/25、退出0，realtime CLI链接成功；本批两平台编译及双独立源码审查完成。未运行媒体测试，未产生本轮测试临时产物，不涉及外部依赖修复、推送、合并或部署。生产freezeBatch仍传nullptr，具体候选求解、sealed跨源费用复算和原规格合屏实流验收仍未完成。
+
+
+## 2026-11-09 共同增量数量候选
+
+新增SourceCapacityPlanner：从锁内minimumBounds保留prefix，分别为video/audio的acquiring和outputs增加共同k；视频startup与frame队列从两个展示点开始，packet/metadata从正队列的一个槽开始，源无mux保持结构零值。decoded payload字节、独立audioRetention、startup等待与route政策继续调用原planner。候选不包含预算判断，不把溢出、缺失事实或其他错误转换成“太大”。
+
+这只是solver工作区将消费的数量产品，当前尚无生产调用；不能称为可执行基线、最优容量、完整准入或实流通过。仍需kernel/拓扑/residence/费用检查以及合法k域。音频量化域复查发现：当输出率R不超过1e9且输出block S=1时，严格lead margin要求commandLeadSamples为R/gcd(R,1e9)的倍数，合法k可能离散；S≥2时该特定量化间隔问题消失，但仍要核验时长与整数上界。不能直接对所有整数k调用kernel并将失败误当超预算；R更高时不能套用此简化证明。该域分析仍待落实到共享音频planner，不采用样例AAC常量绕过。
+
+Windows Release全量会话92622正在构建，两份源码独立审查进行中；尚无本批构建或媒体通过结论。
+
+两位独立审查timing_handoff_review_a、timing_handoff_review_b均对最终两源码明确局部PASS，包含utility直接依赖与lock-held措辞修正。Windows Release92622终态退出0（811任务计划），四项产物核验通过，realtime CLI 7273472字节、2026-11-09 11:30:44。两新文件以目标SHA256验证同步，RKMPP11384已启动8核增量all-target；本批没有媒体测试或测试临时产物。
+
+后续音频域接线调查：将Quantizer现有窗口/补偿距离检查抽为共享精确判定，区分固定事实错误、严格margin空洞与不可恢复的数值上界；Reachability的现有plan与域查询必须共享resolveTiming、样本/ns转换、measurement headroom和command/window计算。仅提供typed membership尚不足以对带空洞区间二分；合法k的后继/排名必须另外证明，不能在solver复制音频公式或拒绝原已支持采样率以简化搜索。此项尚未实施。
+
+RKMPP11384终态4/4、退出0，两CLI链接成功；本批双平台编译完成。没有运行local/realtime媒体链路，未产生测试临时文件。数量候选生成器尚待具体solver调用，生产空solver门禁和RKMPP硬件身份传播能力缺口保持未完成，不以本轮构建替代合屏验收。
