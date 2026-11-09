@@ -309,7 +309,7 @@ template<class Bind>
         video.maximumFrameDuplicationGap = plan.maximumFrameDuplicationGap;
         video.queues = runtime.queues;
         video.edgePolicies = runtime.edgePolicies;
-        video.canonicalLineageCapacity = runtime.queues.frame;
+        video.canonicalLineageCapacity = plan.lineageRegistryCapacity;
         video.generationStartRequiresKeyFrame = runtime.synchronization.startup.requireVideoKeyFrame;
         video.formatSourceNode = inputs.value().videoFormat.node;
         video.formatSourcePort = inputs.value().videoFormat.port;

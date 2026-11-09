@@ -1,3 +1,4 @@
+#include "internal/graph/builder/codec/MediaDecoderOpaqueRetentionOptionCodec.h"
 #include "internal/graph/sync/lineage/MediaVideoDecodeLineageOption.h"
 #include "internal/graph/builder/codec/CodecResolverDecoderContextBuilder.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
@@ -277,6 +278,8 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
     if (options) {
         if (auto retained = MediaDecoderInputRetentionOptionCodec::validateOpened(*decoderContext, *options); !retained)
             return Result::failure(retained.error());
+        if (auto opaque = MediaDecoderOpaqueRetentionOptionCodec::validateOpened(*decoderContext, *options); !opaque)
+            return Result::failure(opaque.error());
     }
     MediaDecoderRuntimeFacts facts{decoder->name, decoderContext->hwaccel_flags, suppliedHardwareFramesContext};
     codecResolverLog(MediaGraphDiagnosticLevel::State,

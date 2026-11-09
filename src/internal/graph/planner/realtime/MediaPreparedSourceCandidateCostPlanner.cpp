@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaCompositionSourceRegistryPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedSourceCandidateCostPlanner.h"
 #include <new>
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
@@ -209,6 +210,10 @@ template<bool Updating> ::media::Status computeCosts(
         facts.startupVideoUnits > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         (audio && (!*facts.startupAudioUnits || *facts.startupAudioUnits > static_cast<std::size_t>((std::numeric_limits<int>::max)()))))
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate costs require prepared source member facts"));
+    auto registry = MediaCompositionSourceRegistryPlanner::plan(facts.videoPlan);
+    if (!registry) return R::failure(registry.error());
+    if (facts.registryCapacity != registry.value())
+        return R::failure(::media::ErrorInfo::invalidArgument("Candidate registry capacity differs from prepared opaque retention"));
     auto fixed = add(session.fixedStorageBytes, *session.fixedOwnerAllocationBytes);
     if (!fixed) return R::failure(fixed.error());
     fixed = add(fixed.value(), session.video.unmigratedProtocolStorageBytes);

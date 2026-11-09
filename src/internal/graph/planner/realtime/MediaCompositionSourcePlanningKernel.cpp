@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaCompositionSourceRegistryPlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourcePlanningKernel.h"
 #include "internal/graph/planner/realtime/MediaCompositionSourceFixedStoragePlanner.h"
 
@@ -217,6 +218,9 @@ try {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Composition startup audio capacity differs from prepared source retention"));
     const auto& queues = cadence ? ledgerReference->get().queues : sourceCapacity->queues;
+    auto registry = cadence ? ::media::Result<std::uint64_t>::success(queues.frame)
+        : MediaCompositionSourceRegistryPlanner::plan(fixed.video);
+    if (!registry) return Result::failure(registry.error());
     const MediaRealtimeAvSourceClockRequest clockRequest{{fixed.inputType,
         RealtimeInputStreamLayout::SeparateStreams, fixed.input, fixed.videoStreamIndex,
         fixed.raw.video.codecName, fixed.runtime.audioPipeline,
@@ -249,7 +253,7 @@ try {
         *runtime.value().synchronization.sourceClockMode, runtime.value().edgePolicies, *resource);
     if (!inputConnections) return Result::failure(inputConnections.error());
     return Result::success({fixed.fixedStorage, resource, fixed.inputType, std::move(fixed.input), fixed.videoStreamIndex,
-        fixed.video, fixed.frameRate, fixed.maximumFrameDuplicationGap,
+        fixed.video, fixed.frameRate, fixed.maximumFrameDuplicationGap, registry.value(),
         std::move(runtime).value(), std::move(fixed.producerHolders), std::move(startupBatchStorage),
         std::move(startupRouteStorage), std::move(clockRouteStorage), std::move(startupCoordinatorStorage),
         std::move(branchConnections).value(), std::move(inputConnections).value(),

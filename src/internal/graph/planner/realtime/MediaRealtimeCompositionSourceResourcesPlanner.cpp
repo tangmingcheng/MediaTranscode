@@ -1,3 +1,5 @@
+#include "internal/graph/builder/codec/MediaDecoderOpaqueRetentionOptionCodec.h"
+#include "internal/graph/planner/realtime/MediaCompositionSourceRegistryPlanner.h"
 #include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourceResourcesPlanner.h"
 #include "internal/graph/planner/realtime/MediaStartupRoutePlanner.h"
@@ -157,6 +159,15 @@ try {
                 return invalid("Composition producer holders differ from the actual filter contract");
         } else if (node.kind == MediaNodeKind::VideoDecode) {
             ++videoDecoders;
+            if (std::holds_alternative<MediaDecodedVideoAssemblyTiming>(runtime.assembly.video.timing)) {
+                if (!source.video.decoder.preparedOpaqueRetention)
+                    return invalid("Decoded source lacks its prepared opaque retention contract");
+                auto opaque = MediaDecoderOpaqueRetentionOptionCodec::encode(*source.video.decoder.preparedOpaqueRetention);
+                if (!opaque) return Result::failure(opaque.error());
+                for (const auto& [key, value] : opaque.value().values())
+                    if (!node.options.has(key) || node.options.value(key) != value)
+                        return invalid("Composition decoder opaque options differ from prepared facts");
+            }
             auto expected = MediaDecoderInputRetentionOptionCodec::encode(holders.video.decoder);
             if (!expected) return Result::failure(expected.error());
             for (const auto& [key, value] : expected.value().values())
@@ -222,11 +233,13 @@ try {
         };
         if (auto status = checkReadiness(*decoder, *source.video.decoderReadiness); !status) return Result::failure(status.error());
         if (filter) if (auto status = checkReadiness(*filter, *source.video.filterReadiness); !status) return Result::failure(status.error());
-        if (!runtime.queues.frame ||
-            graph.findNode(*decoder)->options.value("video.lineage.capacity") != std::to_string(runtime.queues.frame) ||
-            (filter && graph.findNode(*filter)->options.value("video.lineage.capacity") != std::to_string(runtime.queues.frame)))
+        auto expectedRegistry = MediaCompositionSourceRegistryPlanner::plan(source.video);
+        if (!expectedRegistry) return Result::failure(expectedRegistry.error());
+        if (source.lineageRegistryCapacity != expectedRegistry.value() ||
+            graph.findNode(*decoder)->options.value("video.lineage.capacity") != std::to_string(source.lineageRegistryCapacity) ||
+            (filter && graph.findNode(*filter)->options.value("video.lineage.capacity") != std::to_string(source.lineageRegistryCapacity)))
             return invalid("Source lineage registry capacity differs from common runtime facts");
-        result.sourceLineageRegistryCapacity = runtime.queues.frame;
+        result.sourceLineageRegistryCapacity = source.lineageRegistryCapacity;
         result.preparedPacketContainers = *source.preparedPacketContainers;
         result.packetStorageHolders = holders;
         // The second source reservation is the continuous preparation domain;

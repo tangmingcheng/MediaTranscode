@@ -65,6 +65,7 @@ struct MediaCompositionSourcePlanningProducts final {
     const MediaVideoSourcePlan& video;
     MediaRational frameRate;
     std::optional<MediaRational> maximumFrameDuplicationGap;
+    std::uint64_t lineageRegistryCapacity;
     MediaRealtimeAvSourcePlanningProducts runtime;
     MediaCompositionProducerHolderFacts producerHolders;
     std::optional<MediaStartupBatchStorageCosts> startupBatchStorage;

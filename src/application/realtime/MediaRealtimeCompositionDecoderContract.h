@@ -30,6 +30,7 @@ private:
     std::string m_decoderName;
     std::string m_hardwareName;
     std::optional<MediaDecoderInputRetention> m_decoderRetention;
+    std::optional<MediaDecoderOpaqueRetention> m_opaqueRetention;
     std::optional<MediaHardwareDescriptor> m_decoderFrame;
     MediaVideoLineagePropagation m_decoderLineage;
     bool m_filterActive;

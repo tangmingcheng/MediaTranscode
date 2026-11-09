@@ -1,3 +1,4 @@
+#include "internal/graph/builder/codec/MediaDecoderOpaqueRetentionOptionCodec.h"
 #include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 #include "internal/graph/builder/codec/MediaVideoDecoderPlanOptionCodec.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
@@ -48,6 +49,11 @@ namespace media::ffmpeg::graph {
         auto retained = MediaDecoderInputRetentionOptionCodec::encode(*decoder.preparedInputRetention);
         if (!retained) return Result::failure(retained.error());
         for (const auto& [key, value] : retained.value().values()) options.set(key, value);
+    }
+    if (decoder.preparedOpaqueRetention) {
+        auto opaque = MediaDecoderOpaqueRetentionOptionCodec::encode(*decoder.preparedOpaqueRetention);
+        if (!opaque) return Result::failure(opaque.error());
+        for (const auto& [key, value] : opaque.value().values()) options.set(key, value);
     }
     return Result::success(std::move(options));
 }

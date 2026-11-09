@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaDecoderOpaqueRetention.h"
 #include "internal/graph/model/MediaVideoColorRangeFact.h"
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
 #include "internal/graph/model/MediaVideoSharedSourcePlan.h"
@@ -54,6 +55,7 @@ struct MediaPipelineStagePlan {
     std::optional<MediaPreparedEncoderEmissionEnvelope> preparedEmission;
     std::shared_ptr<const FFmpegCodecParametersSnapshot> preparedCodecParameters;
     std::optional<MediaDecoderInputRetention> preparedInputRetention;
+    std::optional<MediaDecoderOpaqueRetention> preparedOpaqueRetention;
     std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
 
     const MediaHardwareDescriptor* frameContract() const noexcept

@@ -56,3 +56,18 @@ SourcePresentation 的 `queues.frame` 当前同时成为 decoder/filter 的 `vid
 lineage_capacity_audit完成源码推导；另两位未参与推导的审查者timing_handoff_review_a、timing_handoff_review_b独立核验后均给限定域设计PASS。两者提出的LCEVC排除和actual active_thread_type要求已写入。没有以单次输入输出一一对应为前提；[FFmpeg COPY_OPAQUE官方说明](https://ffmpeg.org/doxygen/trunk/group__lavc__core.html)明确允许多对多及无输出，正是需要按引用生命周期计费的原因。
 
 推导结果：无frame线程H264为83、HEVC为269；有T个实际frame workers时分别为164*T+166、536*T+538。仅是registry唯一token容量上界，不是AVFrame数量、payload、frame pool或全会话内存上界。版本身份由root本轮git只读核验，子审查者仅能读源码。未改生产代码、未运行媒体测试、未修改外部依赖，也未新增测试产物。
+
+
+## 2026-11-09 实施检查点（构建待终态）
+
+已新增无字符串的MediaDecoderOpaqueRetention事实、版本/完整配置限定adapter、checked arithmetic容量planner与独立options codec。直接加载项目DLL只读核验得到与工具一致的版本和配置，avcodec/avutil配置一致；adapter只接受审计配置、native h264/hevc、software/native cuda及默认get_buffer2。SourcePresentation准备期强制读取，decoder contract保留，所有经CodecResolver的reopen逐字段复核。未知实现明确Unsupported，不扩展RKMPP能力声明。
+
+Kernel规划独立lineageRegistryCapacity，filter取已验证保留输入加pending/receive工作位，与decoder结果取较大值。SourcePlan、builder、candidate lineage成本、sealed最终绑定和最终graph readback共用此产品，帧队列不再承担registry槽位。cadence保留其原有明确策略。candidate lineage费用不包含registry所有物理字节，map/opaque本体继续由既有final graph ledger按实际容量计费，不能宣称整体预算闭合。
+
+首轮审查发现capacity字段缺失会跳过reopen核验、最终options没有全字段读回，已修复为拒绝部分契约并强制最终SourcePresentation全字段比较；纯planner也拒绝未知线程bit及worker数不一致。两位独立审查timing_handoff_review_a、timing_handoff_review_b对最终13个修改源码及9个新增文件均明确局部PASS。旧Windows构建36589在修正前启动，不能作冻结版证据。具体solver仍未接入，本轮尚未运行媒体链路。
+
+
+冻结版本Windows Release会话46861终态退出0（810任务计划），四项产物核验通过，realtime CLI 7248384字节、2026-11-09 10:54:28。此前36589也退出0，但不替代冻结版本证据。22源码分8批核验旧版/目标版与写后SHA256，新增文件验证原先不存在；第二组首试SSH被关闭、退出1，重试完成，其余均成功。RKMPP15313已启动原目录8核增量all-target，新文件触发正常CMake重配置，尚待终态。23修改/新增文件UTF-8/CRLF与diff检查通过，无媒体测试、日志/抓包/截图/临时脚本产物。
+
+
+RKMPP15313终态120/120、退出0，realtime CLI链接成功，保持8核增量all-target；有既有AVCodec::pix_fmts废弃警告，无编译错误。本轮双独立复审与两平台构建已完成，未运行任何local/realtime媒体测试，无本轮临时测试文件。该成功只证明跨平台编译，RKMPP运行库不在新opaque capability已审计域内，仍明确拒绝且不声称RKMPP合屏可运行。

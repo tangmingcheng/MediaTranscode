@@ -1,3 +1,4 @@
+#include "internal/graph/planner/capability/MediaDecoderOpaqueRetentionAdapter.h"
 #include "internal/graph/planner/realtime/MediaRtpSourceProbeGoalPlanner.h"
 #include <new>
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -161,6 +162,12 @@ MediaRealtimeCompositionSourcePreparer::prepare(
     if (!retention) return Result::failure(::media::ErrorInfo::unsupported(
         "Composition prepared decoder has no authoritative packet retention"));
     candidate.decoder.preparedInputRetention = *retention;
+    if (std::holds_alternative<MediaSourcePresentationTiming>(facts.timing)) {
+        auto opaque = MediaDecoderOpaqueRetentionAdapter::readAfterOpen(*decoder.context, candidate.decoder.hwaccelName);
+        if (!opaque) return Result::failure(::media::ErrorInfo::unsupported(
+            "Composition decoder has no authoritative opaque retention contract"));
+        candidate.decoder.preparedOpaqueRetention = *opaque;
+    }
     if (captured.decoderContract) {
         if (!captured.decoderContract->matches(candidate))
             return Result::failure(::media::ErrorInfo::unsupported(

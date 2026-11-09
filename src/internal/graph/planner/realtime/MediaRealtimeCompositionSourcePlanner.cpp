@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaCompositionSourceRegistryPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourcePlanner.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
@@ -162,6 +163,11 @@ try {
                 products.runtime.edgePolicies.metadata, products.runtime.edgePolicies.atomicMetadata))) ||
         (cadence && products.selectedCapacity))
         return Result::failure(::media::ErrorInfo::invalidArgument("Sealed source differs from its selected planning products"));
+    auto registry = cadence ? ::media::Result<std::uint64_t>::success(products.runtime.queues.frame)
+        : MediaCompositionSourceRegistryPlanner::plan(original.video);
+    if (!registry) return Result::failure(registry.error());
+    if (products.lineageRegistryCapacity != registry.value())
+        return Result::failure(::media::ErrorInfo::invalidArgument("Sealed source registry differs from its prepared opaque facts"));
     // Fixed ingress declarations were copied before freeze. Seal independently
     // reobserved the original candidates; bind exactly the same products.
     const auto* videoTransport = products.input.rtpTransport ? &*products.input.rtpTransport : nullptr;
@@ -197,7 +203,7 @@ try {
     auto runtime = MediaRealtimeAvSourceRuntimePlanner::bind(std::move(products.runtime), std::move(reservation).value());
     if (!runtime) return Result::failure(runtime.error());
     return Result::success({products.fixedStorage, products.planningResource, products.inputType, std::move(products.input), products.videoStreamIndex,
-        products.video, products.frameRate, products.maximumFrameDuplicationGap,
+        products.video, products.frameRate, products.maximumFrameDuplicationGap, products.lineageRegistryCapacity,
         std::move(runtime).value(), {std::move(*facts.storage.preparation), *prepared.continuousStorage},
         std::move(products.producerHolders), std::move(products.startupBatchStorage), std::move(products.startupRouteStorage),
         std::move(products.clockRouteStorage), std::move(products.startupCoordinatorStorage),

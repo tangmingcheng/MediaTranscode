@@ -28,6 +28,7 @@ struct MediaRealtimeCompositionSourcePlan final {
     MediaVideoSourcePlan video;
     MediaRational frameRate;
     std::optional<MediaRational> maximumFrameDuplicationGap;
+    std::uint64_t lineageRegistryCapacity;
     MediaRealtimeAvSourceRuntimePlan runtime;
     std::vector<MediaPreparedRtpStorageReservation> preparationStorage;
     MediaCompositionProducerHolderFacts producerHolders;

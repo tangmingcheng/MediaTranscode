@@ -45,6 +45,7 @@ MediaRealtimeCompositionDecoderContract::MediaRealtimeCompositionDecoderContract
     std::optional<MediaPreparationStorageLease> metadataStorage)
     : m_metadataStorage(std::move(metadataStorage)), m_decoderName(candidate.decoder.ffmpegName),
       m_hardwareName(candidate.decoder.hwaccelName), m_decoderRetention(candidate.decoder.preparedInputRetention),
+      m_opaqueRetention(candidate.decoder.preparedOpaqueRetention),
       m_decoderFrame(candidate.decoder.outputFrame), m_decoderLineage(candidate.decoderLineagePropagation),
       m_filterActive(candidate.filterActive), m_filterName(candidate.filter.filterName),
       m_filterInputFrame(candidate.filter.inputFrame), m_filterOutputFrame(candidate.filter.outputFrame),
@@ -80,6 +81,7 @@ bool MediaRealtimeCompositionDecoderContract::matches(const MediaVideoSourcePlan
     return m_decoderName == candidate.decoder.ffmpegName &&
         m_hardwareName == candidate.decoder.hwaccelName &&
         m_decoderRetention == candidate.decoder.preparedInputRetention &&
+        m_opaqueRetention == candidate.decoder.preparedOpaqueRetention &&
         m_decoderFrame == candidate.decoder.outputFrame &&
         m_decoderLineage == candidate.decoderLineagePropagation &&
         m_filterActive == candidate.filterActive && m_filterName == candidate.filter.filterName &&
