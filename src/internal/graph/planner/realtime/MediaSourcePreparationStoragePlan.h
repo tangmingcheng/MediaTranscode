@@ -12,6 +12,12 @@ enum class MediaSourcePreparationInput {
     CompletedAccessUnits
 };
 
+struct MediaRtpProtocolStorageCosts final {
+    std::size_t metadataBytes;
+    std::size_t compressedBytes;
+    std::size_t totalBytes;
+};
+
 // Protocol payload working set, before opening a decoder. Transport, clock
 // history and retained output AU stores are admitted separately by their owners.
 struct MediaRtpProtocolPreparationStoragePlan final {
@@ -27,6 +33,7 @@ struct MediaRtpProtocolPreparationStoragePlan final {
     std::size_t assemblyBytes;
     std::size_t configurationBytes;
     std::string authority;
+    MediaRtpProtocolStorageCosts costs;
 };
 
 // Logical retained payload and public object headers, not allocator RSS or

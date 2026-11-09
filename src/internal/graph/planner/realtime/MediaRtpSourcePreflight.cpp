@@ -211,9 +211,9 @@ MediaRtpSourcePreflight::installContinuousSession(
             m_audioCandidate ? &*m_audioCandidate : nullptr, videoBound.value(), audioBound,
             m_deadline, observedNow, shared->root->snapshot().capacity);
         if (!plan) return Result::failure(plan.error());
-        auto budget = MediaPreparationStorageBudget::create(plan.value().storageBytes, m_storageScope, MediaStorageReleaseUnobserved{});
+        auto budget = MediaPreparedRtpSourceBudgets::create(plan.value().storageBytes, m_storageScope, plan.value().audio.has_value());
         if (!budget) return Result::failure(budget.error());
-        auto source = MediaPreparedRtpSourceSession::create(std::move(plan).value(), budget.value(), masterClock);
+        auto source = MediaPreparedRtpSourceSession::create(std::move(plan).value(), std::move(budget).value(), masterClock);
         if (!source) return Result::failure(source.error());
         // Merge the two already ordered streams without copying a datagram or
         // allocating a cross-stream reference table. Ordinals remain per stream.

@@ -3,7 +3,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceSessionPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpInputProtocolSession.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
-#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
+#include "internal/graph/runtime/resource/MediaPreparedRtpSourceBudgets.h"
 #include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
@@ -72,18 +72,20 @@ class MediaPreparedRtpSourceSession final {
         MediaPreparationStorageLease fixed;
         std::optional<MediaPreparationStorageLease> video;
         std::optional<MediaPreparationStorageLease> audio;
+        std::optional<MediaPreparationStorageLease> videoCompressed;
+        std::optional<MediaPreparationStorageLease> audioCompressed;
     };
 public:
     // Public for allocate_shared; only create can supply the private key.
     MediaPreparedRtpSourceSession(ConstructionKey, MediaPreparedRtpSourceSessionPlan&& plan,
-        std::shared_ptr<MediaPreparationStorageBudget>&& budget,
+        MediaPreparedRtpSourceBudgets&& budgets,
         std::shared_ptr<MediaMasterClock>&& clock,
         std::shared_ptr<MediaPreparationMemoryResource> resource,
         MediaLineageUniquePtr<MediaRtpClockGroupSession>&& group, WorkingSet&& workingSet);
     static MediaPreparedRtpSourceStorageFacts storageFacts() noexcept;
     static ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>> create(
         MediaPreparedRtpSourceSessionPlan plan,
-        std::shared_ptr<MediaPreparationStorageBudget> budget,
+        MediaPreparedRtpSourceBudgets budgets,
         std::shared_ptr<MediaMasterClock> clock);
     ::media::Status consume(MediaStreamKind stream, MediaRtpUdpChannel channel,
         std::span<const std::uint8_t> bytes, std::int64_t observedAtNs,
@@ -122,13 +124,15 @@ public:
 private:
     struct Stream final {
         Stream(const MediaPreparedRtpSourceSessionStreamPlan& value,
-            std::shared_ptr<MediaPreparationMemoryResource> owner)
-            : resource(std::move(owner)), plan(value), pending(resource.get()),
+            std::shared_ptr<MediaPreparationMemoryResource> owner,
+            std::shared_ptr<MediaPreparationStorageBudget> payload)
+            : resource(std::move(owner)), payloadBudget(std::move(payload)), plan(value), pending(resource.get()),
               protocol(nullptr, MediaLineageObjectDeleter<MediaRtpInputProtocolSession>{MediaPreparedLineageAllocation{resource}}),
               binder(nullptr, MediaLineageObjectDeleter<MediaRtpPacketClockSession>{MediaPreparedLineageAllocation{resource}}),
               prefix(makeMediaLineageUnique<MediaPreparedRtpPrefix>(MediaPreparedLineageAllocation{resource}, resource)),
               outputs(resource.get()) {}
         std::shared_ptr<MediaPreparationMemoryResource> resource;
+        std::shared_ptr<MediaPreparationStorageBudget> payloadBudget;
         // m_plan is constructed before streams and destroyed after them.
         const MediaPreparedRtpSourceSessionStreamPlan& plan;
         // Pending payload fees outlive the protocol assembly they cover.
@@ -155,7 +159,7 @@ private:
     ::media::Status bindAvailable(Stream& stream);
     ::media::Status tickLocked(Stream& stream, std::int64_t now);
     ::media::Status prepareFreezeLocked();
-    MediaPreparedRtpStorageSnapshot storageSnapshotLocked() const;
+    ::media::Result<MediaPreparedRtpStorageSnapshot> storageSnapshotLocked() const;
     ::media::Status validateStorageAdmissionLocked(const MediaPreparedRtpStorageAdmission& product,
         const MediaPreparedRtpStorageSnapshot& snapshot, std::size_t batchStorageBytes) const;
     void applyStorageAdmissionLocked(MediaPreparedRtpStorageAdmission product) noexcept;
@@ -165,7 +169,7 @@ private:
     // Includes plan/configuration storage and must outlive all covered objects.
     WorkingSet m_workingSet;
     MediaPreparedRtpSourceSessionPlan m_plan;
-    std::shared_ptr<MediaPreparationStorageBudget> m_budget;
+    MediaPreparedRtpSourceBudgets m_budgets;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::shared_ptr<MediaPreparationMemoryResource> m_ownerResource;
     MediaLineageUniquePtr<MediaRtpClockGroupSession> m_group;

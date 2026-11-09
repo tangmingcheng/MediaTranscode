@@ -354,20 +354,30 @@ template<class T>
             failure = ::media::ErrorInfo::invalidArgument("Migrated protocol owners exceed legacy workspace");
             return;
         }
-        stream.unmigratedProtocolStorageBytes = static_cast<std::size_t>(stream.workingSet.maximumBytes - migrated);
+        if (migrated > stream.workingSet.costs.metadataBytes ||
+            stream.workingSet.costs.totalBytes != stream.workingSet.maximumBytes) {
+            failure = ::media::ErrorInfo::invalidArgument("Migrated protocol metadata exceeds its classified owner");
+            return;
+        }
+        stream.unmigratedProtocolStorage = {
+            static_cast<std::size_t>(stream.workingSet.costs.metadataBytes - migrated),
+            stream.workingSet.costs.compressedBytes,
+            static_cast<std::size_t>(stream.workingSet.maximumBytes - migrated)};
         if (!p.canonicalRuntimeRetention) {
             auto ordinary = MediaRtpProtocolOrdinaryStoragePlanner::plan(stream);
             if (!ordinary) { failure = ordinary.error(); return; }
             auto configuration = MediaRtpConfigurationStoragePlanner::plan(stream.depacketizer, stream.envelope);
             if (!configuration) { failure = configuration.error(); return; }
-            const auto reserved = add(ordinary.value(), configuration.value().peakBytes);
+            const auto reserved = add(ordinary.value().totalBytes, configuration.value().peakBytes);
             if (failure || reserved > (std::numeric_limits<std::size_t>::max)()) {
                 if (!failure) failure = ::media::ErrorInfo::allocationFailed("Protocol ordinary reserve overflow");
                 return;
             }
-            stream.unmigratedProtocolStorageBytes = static_cast<std::size_t>(reserved);
+            stream.unmigratedProtocolStorage = {
+                static_cast<std::size_t>(reserved - ordinary.value().compressedBytes),
+                ordinary.value().compressedBytes, static_cast<std::size_t>(reserved)};
         }
-        protocolBytes = add(protocolBytes, stream.unmigratedProtocolStorageBytes);
+        protocolBytes = add(protocolBytes, stream.unmigratedProtocolStorage.totalBytes);
     };
     account(p.video);
     if (p.audio) account(*p.audio);

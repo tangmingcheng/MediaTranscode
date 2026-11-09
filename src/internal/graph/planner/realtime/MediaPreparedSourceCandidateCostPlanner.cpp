@@ -216,9 +216,9 @@ template<bool Updating> ::media::Status computeCosts(
         return R::failure(::media::ErrorInfo::invalidArgument("Candidate registry capacity differs from prepared opaque retention"));
     auto fixed = add(session.fixedStorageBytes, *session.fixedOwnerAllocationBytes);
     if (!fixed) return R::failure(fixed.error());
-    fixed = add(fixed.value(), session.video.unmigratedProtocolStorageBytes);
+    fixed = add(fixed.value(), session.video.unmigratedProtocolStorage.totalBytes);
     if (!fixed) return R::failure(fixed.error());
-    if (audio) { fixed = add(fixed.value(), session.audio->unmigratedProtocolStorageBytes); if (!fixed) return R::failure(fixed.error()); }
+    if (audio) { fixed = add(fixed.value(), session.audio->unmigratedProtocolStorage.totalBytes); if (!fixed) return R::failure(fixed.error()); }
     if (facts.videoPlan.transferDirection != MediaHardwareTransferDirection::None)
         return R::failure(::media::ErrorInfo::unsupported(
             "Source lineage requires a proven passthrough transfer contract"));

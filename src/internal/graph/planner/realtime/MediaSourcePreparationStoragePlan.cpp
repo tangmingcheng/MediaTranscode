@@ -67,17 +67,22 @@ MediaSourcePreparationStoragePlanner::protocolWorkingSet(
     const auto requests = multiply(envelope.maximumAccessUnitsPerPush,
         sizeof(std::uint64_t));
     const auto au = envelope.maximumAccessUnitBytes;
-    const auto emitted = multiply(envelope.maximumAccessUnitsPerPush,
-        add(au, AV_INPUT_BUFFER_PADDING_SIZE + sizeof(AVPacket) + sizeof(MediaRtpAccessUnit)));
+    const auto emittedPayload = multiply(envelope.maximumAccessUnitsPerPush,
+        add(au, AV_INPUT_BUFFER_PADDING_SIZE + sizeof(AVPacket)));
+    const auto emitted = add(emittedPayload, multiply(envelope.maximumAccessUnitsPerPush, sizeof(MediaRtpAccessUnit)));
     std::uint64_t signaling = 0;
     std::uint64_t assembly = 0;
+    std::uint64_t compressed = add(packetPayload, emittedPayload);
     if (envelope.streamKind == MediaStreamKind::Video) {
         // Each NAL occupies at least one wire byte. Signaling and depayloading
         // can coexist in continuous preparation, so neither replaces the other.
         const auto nalViews = multiply(maximumDatagramBytes, sizeof(MediaRtpNalUnit));
         const auto parameterSets = envelope.codecName == "h264" ? 2u : 3u;
-        signaling = add(multiply(2 * parameterSets + 1, au), nalViews);
-        assembly = add(add(multiply(2, au), emitted), nalViews);
+        const auto parameterBytes = multiply(2 * parameterSets + 1, au);
+        const auto assemblyPayload = multiply(2, au);
+        signaling = add(parameterBytes, nalViews);
+        compressed = add(compressed, add(parameterBytes, assemblyPayload));
+        assembly = add(add(assemblyPayload, emitted), nalViews);
     } else if (envelope.codecName == "aac") {
         // RFC 3640 high-bitrate mode uses 16-bit AU headers. The parser may
         // allocate all headers before it rejects invalid AU payload sizes.
@@ -85,10 +90,12 @@ MediaSourcePreparationStoragePlanner::protocolWorkingSet(
         const auto headers = multiply(maximumDatagramBytes / 2,
             sizeof(MediaAacRtpAuHeader));
         assembly = add(add(au, emitted), headers);
+        compressed = add(compressed, au);
     } else {
         // Opus has no cross-packet assembly; makeRtpAccessUnit copies its
         // by-value input while creating the independently owning AVPacket.
         assembly = add(au, emitted);
+        compressed = add(compressed, au);
     }
     // parseRtpFmtp owns the map plus current token/key/value and trim input.
     // At most one nonempty parameter can originate from each text byte. These
@@ -100,6 +107,8 @@ MediaSourcePreparationStoragePlanner::protocolWorkingSet(
     const auto maximum = add(add(add(parser, pending), signaling),
         add(add(assembly, requests), configuration));
     if (failure) return Result::failure(failure);
+    if (compressed > maximum)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Protocol compressed classification exceeds total storage"));
     if (maximum > (std::numeric_limits<std::size_t>::max)())
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "Protocol preparation storage exceeds addressable memory"));
@@ -109,7 +118,9 @@ MediaSourcePreparationStoragePlanner::protocolWorkingSet(
         static_cast<std::size_t>(parser), static_cast<std::size_t>(pending),
         static_cast<std::size_t>(requests), static_cast<std::size_t>(signaling),
         static_cast<std::size_t>(assembly), static_cast<std::size_t>(configuration),
-        "RTP-window+" + envelope.sizeAuthority + ";owning-payload-coexistence"});
+        "RTP-window+" + envelope.sizeAuthority + ";owning-payload-coexistence",
+        {static_cast<std::size_t>(maximum - compressed), static_cast<std::size_t>(compressed),
+         static_cast<std::size_t>(maximum)}});
 }
 
 ::media::Result<MediaSourcePreparationStoragePlan>

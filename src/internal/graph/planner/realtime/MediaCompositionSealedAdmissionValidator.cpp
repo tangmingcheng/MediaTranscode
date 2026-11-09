@@ -19,8 +19,11 @@ namespace {
         const auto& view = sealed[i].source;
         const auto* admission = view.continuousAdmission;
         const auto* capacity = std::get_if<MediaAvSourceCapacityFacts>(&sealed[i].capacity);
-        if (!admission || !capacity || !source.selectedCapacity ||
+        if (!admission || !capacity || !source.selectedCapacity || !admission->owner || !admission->budgets.metadata ||
             admission->owner != view.continuousVideoResource ||
+            !view.continuousStorage || !view.continuousStorage->sourceBudgets ||
+            admission->budgets != *view.continuousStorage->sourceBudgets ||
+            !admission->owner->usesBudget(*admission->budgets.metadata) ||
             source.runtime.groupKey.value() != sealed[i].original.sourceRequest.mediaId ||
             &source.video != &sealed[i].original.video ||
             !source.selectedCapacity->sameProduct(*capacity, source.runtime.edgePolicies.metadata,

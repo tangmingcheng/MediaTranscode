@@ -34,13 +34,13 @@ MediaPreparedRtpSourceStorageFacts MediaPreparedRtpSourceSession::storageFacts()
 
 MediaPreparedRtpSourceSession::MediaPreparedRtpSourceSession(
     ConstructionKey, MediaPreparedRtpSourceSessionPlan&& plan,
-    std::shared_ptr<MediaPreparationStorageBudget>&& budget,
+    MediaPreparedRtpSourceBudgets&& budgets,
     std::shared_ptr<MediaMasterClock>&& clock,
     std::shared_ptr<MediaPreparationMemoryResource> resource,
     MediaLineageUniquePtr<MediaRtpClockGroupSession>&& group,
     WorkingSet&& workingSet)
     : m_workingSet(std::move(workingSet)), m_plan(std::move(plan)),
-      m_budget(std::move(budget)), m_clock(std::move(clock)),
+      m_budgets(std::move(budgets)), m_clock(std::move(clock)),
       m_ownerResource(std::move(resource)), m_group(std::move(group)),
       m_video(nullptr, MediaLineageObjectDeleter<Stream>{MediaPreparedLineageAllocation{m_ownerResource}}),
       m_audio(nullptr, MediaLineageObjectDeleter<Stream>{MediaPreparedLineageAllocation{m_ownerResource}})
@@ -50,11 +50,13 @@ MediaPreparedRtpSourceSession::MediaPreparedRtpSourceSession(
 
 ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>>
 MediaPreparedRtpSourceSession::create(MediaPreparedRtpSourceSessionPlan plan,
-    std::shared_ptr<MediaPreparationStorageBudget> budget,
+    MediaPreparedRtpSourceBudgets budgets,
     std::shared_ptr<MediaMasterClock> clock)
 try {
     using Result = ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>>;
-    if (!budget || !clock || !plan.videoSignaling || (budget && budget->snapshot().capacity != plan.storageBytes) ||
+    if (!budgets.root || !budgets.metadata || !budgets.videoPayload ||
+        static_cast<bool>(budgets.audioPayload) != plan.audio.has_value() || !clock || !plan.videoSignaling ||
+        budgets.root->snapshot().capacity != plan.storageBytes ||
         !plan.admission.sharedCapacityBytes || plan.storageBytes != plan.admission.sharedCapacityBytes ||
         !plan.admission.video.maximumUnits || plan.video.binder.acquiringCapacity != plan.admission.video.maximumUnits ||
         plan.admission.video.maximumBytes != plan.storageBytes ||
@@ -66,22 +68,24 @@ try {
         (plan.lifecycleMode != MediaAvSourceLifecycleMode::FailSessionOnSourceLoss &&
          plan.lifecycleMode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
         return Result::failure(::media::ErrorInfo::invalidArgument("Prepared RTP session requires owned storage, clock and current plan"));
+    if (auto valid = budgets.validate(plan.storageBytes, plan.audio.has_value()); !valid)
+        return Result::failure(valid.error());
     if (auto audio = plan.validateAudioRetention(); !audio) return Result::failure(audio.error());
     if (plan.canonicalRuntimeRetention) {
         if (auto status = plan.canonicalRuntimeRetention->validate(); !status) return Result::failure(status.error());
     }
-    auto fixed = budget->reserve(plan.fixedStorageBytes, MediaStorageAdmission::RequiredAllocation);
+    auto fixed = budgets.metadata->reserve(plan.fixedStorageBytes, MediaStorageAdmission::RequiredAllocation);
     if (!fixed) return Result::failure(fixed.error());
-    WorkingSet workingSet{std::move(fixed).value(), std::nullopt, std::nullopt};
+    WorkingSet workingSet{std::move(fixed).value(), std::nullopt, std::nullopt, std::nullopt, std::nullopt};
     auto group = MediaRtpClockGroupSession::create(plan.clockGroup);
     if (!group) return Result::failure(group.error());
-    auto resource = MediaPreparationMemoryResource::create(budget);
+    auto resource = MediaPreparationMemoryResource::create(budgets.metadata);
     if (!resource) return Result::failure(resource.error());
     auto groupOwner = makeMediaLineageUnique<MediaRtpClockGroupSession>(
         MediaPreparedLineageAllocation{resource.value()}, std::move(group).value());
     auto owner = std::allocate_shared<MediaPreparedRtpSourceSession>(
         std::pmr::polymorphic_allocator<MediaPreparedRtpSourceSession>{resource.value().get()},
-        ConstructionKey{}, std::move(plan), std::move(budget), std::move(clock), resource.value(),
+        ConstructionKey{}, std::move(plan), std::move(budgets), std::move(clock), resource.value(),
         std::move(groupOwner), std::move(workingSet));
     const auto make = [&](MediaPreparedRtpSourceSessionStreamPlan& p)
         -> ::media::Result<MediaLineageUniquePtr<Stream>> {
@@ -89,9 +93,17 @@ try {
         if (p.containerStorage.maximumPrefixObjects != p.binder.acquiringCapacity ||
             p.containerStorage.maximumPendingLeases != p.envelope.maximumAccessUnitsPerPush)
             return R::failure(::media::ErrorInfo::invalidArgument("Prepared stream lacks its container capacity product"));
-        auto storage = owner->m_budget->reserve(p.unmigratedProtocolStorageBytes, MediaStorageAdmission::RequiredAllocation);
+        if (p.unmigratedProtocolStorage.metadataBytes > p.unmigratedProtocolStorage.totalBytes ||
+            p.unmigratedProtocolStorage.compressedBytes != p.unmigratedProtocolStorage.totalBytes - p.unmigratedProtocolStorage.metadataBytes)
+            return R::failure(::media::ErrorInfo::invalidArgument("Protocol storage classification changed its total"));
+        auto storage = owner->m_budgets.metadata->reserve(p.unmigratedProtocolStorage.metadataBytes, MediaStorageAdmission::RequiredAllocation);
         if (!storage) return R::failure(storage.error());
-        auto resource = MediaPreparationMemoryResource::create(owner->m_budget);
+        const auto payload = p.depacketizer.streamKind == MediaStreamKind::Video
+            ? owner->m_budgets.videoPayload : owner->m_budgets.audioPayload;
+        auto compressed = payload->reserve(p.unmigratedProtocolStorage.compressedBytes,
+            MediaStorageAdmission::RequiredAllocation);
+        if (!compressed) return R::failure(compressed.error());
+        auto resource = MediaPreparationMemoryResource::create(owner->m_budgets.metadata);
         if (!resource) return R::failure(resource.error());
         auto depay = MediaRtpDepacketizerFactory::create(p.depacketizer, p.envelope.maximumAccessUnitBytes,
             MediaPreparedLineageAllocation{resource.value()});
@@ -108,7 +120,7 @@ try {
         }
         auto binder = MediaRtpPacketClockSession::create(p.binder, MediaPreparedLineageAllocation{resource.value()});
         if (!binder) return R::failure(binder.error());
-        auto s = makeMediaLineageUnique<Stream>(MediaPreparedLineageAllocation{resource.value()}, p, resource.value());
+        auto s = makeMediaLineageUnique<Stream>(MediaPreparedLineageAllocation{resource.value()}, p, resource.value(), payload);
         s->protocol = makeMediaLineageUnique<MediaRtpInputProtocolSession>(
             MediaPreparedLineageAllocation{resource.value()}, std::move(protocol).value());
         s->binder = makeMediaLineageUnique<MediaRtpPacketClockSession>(
@@ -116,6 +128,9 @@ try {
         auto& lease = p.depacketizer.streamKind == MediaStreamKind::Video
             ? owner->m_workingSet.video : owner->m_workingSet.audio;
         lease.emplace(std::move(storage).value());
+        auto& payloadLease = p.depacketizer.streamKind == MediaStreamKind::Video
+            ? owner->m_workingSet.videoCompressed : owner->m_workingSet.audioCompressed;
+        payloadLease.emplace(std::move(compressed).value());
         return R::success(std::move(s));
     };
     auto video = make(owner->m_plan.video);
@@ -332,7 +347,7 @@ try {
                     for (auto bytes : action.value().reserveBytes) {
                         auto storage = preparedMediaPacketStorageBytes(bytes, MediaPacketStorageExtent::Payload);
                         if (!storage) return ::media::Status::failure(storage.error());
-                        auto lease = m_budget->reserve(storage.value(), MediaStorageAdmission::RequiredAllocation);
+                        auto lease = s.payloadBudget->reserve(storage.value(), MediaStorageAdmission::RequiredAllocation);
                         if (!lease) return ::media::Status::failure(lease.error());
                         s.pending.push_back(std::allocate_shared<MediaPreparationStorageLease>(
                             std::pmr::polymorphic_allocator<MediaPreparationStorageLease>{s.resource.get()}, std::move(lease).value()));
@@ -516,8 +531,8 @@ void MediaPreparedRtpSourceSession::fail(::media::ErrorInfo error)
 
 MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationStorage() const
 {
-    return {m_budget, m_plan.storageBytes, m_plan.audio ? 2u : 1u,
-        "continuous-RTP-source-protocol+retained-AU+handoff-finite-admission"};
+    return {m_budgets.metadata, m_plan.storageBytes, m_plan.audio ? 2u : 1u,
+        "continuous-RTP-source-protocol+retained-AU+handoff-finite-admission", m_budgets};
 }
 
 ::media::Status MediaPreparedRtpSourceSession::activateStream(MediaStreamKind kind,
@@ -570,7 +585,7 @@ MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationSto
     if (m_video->prefix->packets.size() > m_video->plan.containerStorage.maximumPrefixObjects)
         return R::failure(::media::ErrorInfo::invalidArgument("Prepared probe exceeds planned snapshot capacity"));
     try {
-        auto resource = MediaPreparationMemoryResource::create(m_budget);
+        auto resource = MediaPreparationMemoryResource::create(m_budgets.metadata);
         if (!resource) return R::failure(resource.error());
         // PMR admits the actual allocation request before allocating. Its
         // allocation owner retains fees through deallocation, including any
@@ -611,7 +626,7 @@ MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationSto
     return ::media::Status::success();
 }
 
-MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLocked() const
+::media::Result<MediaPreparedRtpStorageSnapshot> MediaPreparedRtpSourceSession::storageSnapshotLocked() const
 {
     const auto observe = [](const Stream& stream) {
         const auto& binder = *stream.binder;
@@ -621,20 +636,30 @@ MediaPreparedRtpStorageSnapshot MediaPreparedRtpSourceSession::storageSnapshotLo
             stream.pending.size(), stream.pending.capacity(), stream.outputs.size(),
             {stream.admittedUnits, binder.m_acquiringHighWater, stream.outputHighWater}};
     };
+    using R = ::media::Result<MediaPreparedRtpStorageSnapshot>;
+    const std::array owners{m_budgets.metadata, m_budgets.videoPayload, m_budgets.audioPayload};
+    std::array<MediaPreparationStorageSnapshot, 3> budgets{};
+    const std::size_t count = m_audio ? 3 : 2;
+    auto partition = MediaPreparationStorageBudget::snapshotPartition(
+        std::span{owners}.first(count), std::span{budgets}.first(count));
+    if (!partition) return R::failure(partition.error());
     MediaPreparedRtpStorageSnapshot snapshot{observe(*m_video), std::nullopt, m_revision,
-        m_budget->snapshot(), m_video->resource};
+        {budgets[0], budgets[1], m_audio ? std::optional{budgets[2]} : std::nullopt},
+        m_budgets, {}, m_video->resource};
     if (m_audio) snapshot.audio.emplace(observe(*m_audio));
-    return snapshot;
+    return R::success(std::move(snapshot));
 }
 
 ::media::Status MediaPreparedRtpSourceSession::validateStorageAdmissionLocked(
     const MediaPreparedRtpStorageAdmission& product, const MediaPreparedRtpStorageSnapshot& snapshot,
     std::size_t batchStorageBytes) const
 {
-    if (snapshot.budget.sealed || product.sharedCapacityBytes != m_plan.storageBytes || product.owner != snapshot.owner ||
+    if (product.budgets.root != m_budgets.root || product.budgets.metadata != m_budgets.metadata ||
+        product.budgets.videoPayload != m_budgets.videoPayload || product.budgets.audioPayload != m_budgets.audioPayload ||
+        snapshot.budgets.sealed() || product.sharedCapacityBytes != m_plan.storageBytes || product.owner != snapshot.owner ||
         !product.totalBytes || product.totalBytes > m_plan.storageBytes ||
-        batchStorageBytes > snapshot.budget.actualRetainedBytes ||
-        product.totalBytes < snapshot.budget.actualRetainedBytes - batchStorageBytes ||
+        batchStorageBytes > snapshot.budgets.actualBytes() ||
+        product.totalBytes < snapshot.budgets.actualBytes() - batchStorageBytes ||
         product.fixedBytes > product.totalBytes ||
         product.protocolBytes > product.totalBytes - product.fixedBytes ||
         product.startupBytes != product.totalBytes - product.fixedBytes - product.protocolBytes ||
@@ -727,10 +752,17 @@ try {
     }
     // Exact-size transient storage, charged before allocation to the same shared
     // preparation domain. Storage snapshots include these live reservations.
+    std::size_t childCount = 0;
+    for (const auto& source : sources) {
+        const std::size_t count = source->m_audio ? 3 : 2;
+        if (childCount > (std::numeric_limits<std::size_t>::max)() - count)
+            return invalid("Prepared source budget membership overflows");
+        childCount += count;
+    }
     auto resource = sources.front()->m_ownerResource;
     std::optional<MediaPreparedRtpBatchStoragePlan> batchStorage;
     if (solver) {
-        auto planned = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), resource);
+        auto planned = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), childCount, resource);
         if (!planned) return ::media::Status::failure(planned.error());
         batchStorage.emplace(std::move(planned).value());
     }
@@ -749,21 +781,29 @@ try {
             return invalid("Source presentation batch requires complete storage admission");
         if (auto status = source->prepareFreezeLocked(); !status) return status;
     }
-    for (const auto& source : sources)
-        snapshots.push_back({&source->m_plan, source->storageSnapshotLocked()});
+    for (const auto& source : sources) {
+        auto snapshot = source->storageSnapshotLocked();
+        if (!snapshot) return ::media::Status::failure(snapshot.error());
+        snapshots.push_back({&source->m_plan, std::move(snapshot).value()});
+    }
     std::optional<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> admissions;
     if (solver) {
-        MediaFixedCapacityStorage<std::shared_ptr<MediaPreparationStorageBudget>> budgets(sources.size(), *resource);
-        MediaFixedCapacityStorage<MediaPreparationStorageSnapshot> budgetSnapshots(sources.size(), *resource);
-        for (const auto& source : sources) {
-            budgets.push_back(source->m_budget);
-            budgetSnapshots.push_back({});
+        MediaFixedCapacityStorage<std::shared_ptr<MediaPreparationStorageBudget>> budgets(childCount, *resource);
+        MediaFixedCapacityStorage<MediaPreparationStorageSnapshot> budgetSnapshots(childCount, *resource);
+        for (std::size_t i = 0; i < sources.size(); ++i) {
+            const auto& owners = sources[i]->m_budgets;
+            auto& roles = snapshots[i].snapshot.roles;
+            roles.metadata = budgets.size(); budgets.push_back(owners.metadata); budgetSnapshots.push_back({});
+            roles.videoPayload = budgets.size(); budgets.push_back(owners.videoPayload); budgetSnapshots.push_back({});
+            if (owners.audioPayload) {
+                roles.audioPayload = budgets.size(); budgets.push_back(owners.audioPayload); budgetSnapshots.push_back({});
+            }
         }
         const MediaPreparedRtpBatchBudgetView budgetView{budgets.view(), budgetSnapshots.view()};
         auto partition = budgetView.refresh();
         if (!partition) return ::media::Status::failure(partition.error());
         for (std::size_t i = 0; i < sources.size(); ++i)
-            snapshots[i].snapshot.budget = budgetSnapshots[i];
+            snapshots[i].snapshot.budgets = budgetView.source(snapshots[i].snapshot.roles);
         auto solved = solver->solve(snapshots.view(), budgetView, *batchStorage);
         if (!solved) return ::media::Status::failure(solved.error());
         if (solved.value().size() != batchStorage->sourceCount ||
@@ -783,7 +823,7 @@ try {
         for (std::size_t i = 0; i < sources.size(); ++i) {
             if (sources[i]->m_plan.storageBytes != capacity)
                 return invalid("Batch admission requires one shared deployment capacity");
-            snapshots[i].snapshot.budget = budgetSnapshots[i];
+            snapshots[i].snapshot.budgets = budgetView.source(snapshots[i].snapshot.roles);
             // All batch arrays are alive here and charged to source zero's
             // budget. Count them once in the batch, never in each source total.
             if (auto status = sources[i]->validateStorageAdmissionLocked((*admissions)[i], snapshots[i].snapshot,

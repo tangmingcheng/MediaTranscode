@@ -17,6 +17,11 @@ namespace {
     if (!held.plan || !held.snapshot.owner || !source.planningResource || !source.selectedCapacity)
         return invalid("Admission materialization requires a complete source workspace");
     const bool audio = held.plan->audio.has_value();
+    if (!held.snapshot.owners.root || !held.snapshot.owners.metadata || !held.snapshot.owners.videoPayload ||
+        static_cast<bool>(held.snapshot.owners.audioPayload) != audio ||
+        !held.snapshot.owner->usesBudget(*held.snapshot.owners.metadata) ||
+        !source.planningResource->usesBudget(*held.snapshot.owners.root))
+        return invalid("Admission materialization changed source budget roles");
     const auto& capacity = candidate.capacity;
     if (!held.plan->storageBytes || audio != held.snapshot.audio.has_value() ||
         audio != candidate.containers.audio.has_value() || audio != costs.audio.has_value() ||
@@ -110,7 +115,7 @@ try {
         stream(candidate.containers.video, costs.video, bytes),
         candidate.containers.audio ? std::optional{stream(*candidate.containers.audio, *costs.audio, bytes)} : std::nullopt,
         capacity.startup, capacity.acquisitionWindow, route, capacity.queues, holders,
-        costs.fixedBytes, costs.protocolBytes, costs.startupBytes, costs.totalBytes, held.snapshot.owner});
+        costs.fixedBytes, costs.protocolBytes, costs.startupBytes, costs.totalBytes, held.snapshot.owner, held.snapshot.owners});
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaPreparedRtpStorageAdmission>::failure(
         ::media::ErrorInfo::allocationFailed("Composition admission materialization"));
@@ -128,7 +133,10 @@ try {
     if (auto status = validate(held, candidate, source, costs); !status) return status;
     const auto& route = candidate.capacity.route;
     const auto& holders = source.producerHolders;
-    if (!wasValid || admission.owner != held.snapshot.owner || admission.sharedCapacityBytes != held.plan->storageBytes ||
+    if (!wasValid || admission.budgets.root != held.snapshot.owners.root ||
+        admission.budgets.metadata != held.snapshot.owners.metadata ||
+        admission.budgets.videoPayload != held.snapshot.owners.videoPayload ||
+        admission.budgets.audioPayload != held.snapshot.owners.audioPayload || admission.owner != held.snapshot.owner || admission.sharedCapacityBytes != held.plan->storageBytes ||
         admission.audio.has_value() != candidate.containers.audio.has_value() ||
         admission.producerHolders.audio.has_value() != holders.audio.has_value() ||
         !sameHolder(admission.producerHolders.video, holders.video) ||

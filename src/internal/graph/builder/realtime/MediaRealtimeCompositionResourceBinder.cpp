@@ -74,6 +74,7 @@ namespace media::ffmpeg::graph {
         const auto members = options.sources[source].runtime.synchronization.members;
         if (allocation == planned.end() || allocation->maximumAllocationBytes != actual.maximumAllocationBytes ||
             allocation->streamCount != actual.streamCount || allocation->authority != actual.authority ||
+            allocation->sourceBudgets != actual.sourceBudgets ||
             actual.streamCount != (members == MediaTranscodeStreamSet::AudioVideo ? 2u : 1u))
             return invalid("Composition continuous RTP allocation differs from its admitted source budget");
         const bool decoded = std::holds_alternative<MediaDecodedVideoAssemblyTiming>(

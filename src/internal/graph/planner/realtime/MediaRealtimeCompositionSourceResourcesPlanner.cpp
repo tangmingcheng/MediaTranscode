@@ -114,6 +114,13 @@ try {
                 return invalid("Composition preparation allocation identity is repeated");
         }
     }
+    const auto& continuous = source.preparationStorage[1];
+    if (!continuous.sourceBudgets || source.preparationStorage[0].sourceBudgets ||
+        !continuous.sourceBudgets->root || !continuous.sourceBudgets->metadata ||
+        !continuous.sourceBudgets->videoPayload ||
+        continuous.allocationOwner != continuous.sourceBudgets->metadata ||
+        static_cast<bool>(continuous.sourceBudgets->audioPayload) != hasAudio)
+        return invalid("Composition preparation lacks typed continuous budget roles");
     MediaRealtimeCompositionSourceResources result{targets.sourceIndex, {}, {}};
     result.preparationStorage = source.preparationStorage;
     result.preparationOwners.push_back(targets.primaryInput);

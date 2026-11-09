@@ -97,8 +97,9 @@ public:
         MediaStorageBudget<Domain>, MediaStorageLease<Domain>>;
     // Public only for allocator_traits; the private key restricts creation.
     MediaStorageBudget(ConstructionKey, std::size_t capacity,
+        std::shared_ptr<MediaStorageBudget<Domain>> parent,
         std::shared_ptr<const MediaStorageReleaseNotification> notification) noexcept
-        : MediaStorageBudget(capacity, nullptr, std::move(notification)) {}
+        : MediaStorageBudget(capacity, std::move(parent), std::move(notification)) {}
     static ::media::Result<std::shared_ptr<MediaStorageBudget<Domain>>> create(
         std::size_t capacity, const MediaStorageScope<Domain>& scope,
         const MediaStorageReleaseObservation& observation);
@@ -270,8 +271,12 @@ MediaStorageBudget<Domain>::create(std::size_t capacity,
         notification = parent->m_releaseNotification;
     }
     try {
+        if (parent) return Result::success(std::allocate_shared<MediaStorageBudget<Domain>>(
+            BootstrapAllocator{parent}, ConstructionKey{}, capacity, parent, std::move(notification)));
         return Result::success(std::shared_ptr<MediaStorageBudget<Domain>>(
-            new MediaStorageBudget<Domain>(capacity, std::move(parent), std::move(notification))));
+            new MediaStorageBudget<Domain>(capacity, nullptr, std::move(notification))));
+    } catch (const MediaBudgetBootstrapFailure& failure) {
+        return Result::failure(failure.error);
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "storage budget allocation failed"));
@@ -300,7 +305,7 @@ MediaStorageBudget<Domain>::fromReservation(
         // budget itself. Its block retains credit through the last weak owner.
         auto budget = std::allocate_shared<MediaStorageBudget<Domain>>(
             BootstrapAllocator{reservation.m_owner}, ConstructionKey{},
-            reservation.bytes(), std::move(notification));
+            reservation.bytes(), std::shared_ptr<MediaStorageBudget<Domain>>{}, std::move(notification));
         budget->m_backing.emplace(std::move(reservation));
         return Result::success(std::move(budget));
     } catch (const MediaBudgetBootstrapFailure& failure) {

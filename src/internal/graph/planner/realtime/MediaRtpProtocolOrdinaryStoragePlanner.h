@@ -8,7 +8,7 @@ namespace media::ffmpeg::graph {
 // internals and process RSS are not this engine storage domain.
 class MediaRtpProtocolOrdinaryStoragePlanner final {
 public:
-    static ::media::Result<std::size_t> plan(const MediaPreparedRtpSourceSessionStreamPlan& stream);
+    static ::media::Result<MediaRtpProtocolStorageCosts> plan(const MediaPreparedRtpSourceSessionStreamPlan& stream);
 };
 
 } // namespace media::ffmpeg::graph

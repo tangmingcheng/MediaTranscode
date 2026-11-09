@@ -1,5 +1,6 @@
 #pragma once
 #include "internal/graph/runtime/resource/MediaPreparationBackingOwner.h"
+#include "internal/graph/runtime/resource/MediaPreparedRtpSourceBudgets.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpContainerStoragePlan.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAdmissionPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
@@ -23,11 +24,32 @@ struct MediaPreparedRtpStreamStorageSnapshot final {
     // Observed successful-push high water, never the configured ceiling.
     MediaPreparedRtpContainerBounds history;
 };
+struct MediaPreparedRtpBudgetRoles final {
+    std::size_t metadata;
+    std::size_t videoPayload;
+    std::optional<std::size_t> audioPayload;
+};
+struct MediaPreparedRtpSourceBudgetSnapshot final {
+    MediaPreparationStorageSnapshot metadata;
+    MediaPreparationStorageSnapshot videoPayload;
+    std::optional<MediaPreparationStorageSnapshot> audioPayload;
+    // Disjoint direct children of one root, observed together while source is locked.
+    std::size_t actualBytes() const noexcept
+    { return metadata.actualRetainedBytes + videoPayload.actualRetainedBytes +
+        (audioPayload ? audioPayload->actualRetainedBytes : 0); }
+    std::size_t chargedBytes() const noexcept
+    { return metadata.chargedBytes + videoPayload.chargedBytes +
+        (audioPayload ? audioPayload->chargedBytes : 0); }
+    bool sealed() const noexcept
+    { return metadata.sealed || videoPayload.sealed || (audioPayload && audioPayload->sealed); }
+};
 struct MediaPreparedRtpStorageSnapshot final {
     MediaPreparedRtpStreamStorageSnapshot video;
     std::optional<MediaPreparedRtpStreamStorageSnapshot> audio;
     std::uint64_t revision;
-    MediaPreparationStorageSnapshot budget;
+    MediaPreparedRtpSourceBudgetSnapshot budgets;
+    MediaPreparedRtpSourceBudgets owners;
+    MediaPreparedRtpBudgetRoles roles;
     std::shared_ptr<MediaPreparationMemoryResource> owner;
 };
 struct MediaPreparedRtpStreamStorageAdmission final {
@@ -51,6 +73,7 @@ struct MediaPreparedRtpStorageAdmission final {
     std::size_t startupBytes;
     std::size_t totalBytes;
     std::shared_ptr<MediaPreparationMemoryResource> owner;
+    MediaPreparedRtpSourceBudgets budgets;
 };
 struct MediaPreparedRtpStorageSourceSnapshot final {
     const MediaPreparedRtpSourceSessionPlan* plan;
@@ -58,6 +81,7 @@ struct MediaPreparedRtpStorageSourceSnapshot final {
 };
 struct MediaPreparedRtpBatchStoragePlan final {
     std::size_t sourceCount;
+    std::size_t childCount;
     std::shared_ptr<MediaPreparationMemoryResource> owner;
     std::size_t scratchBytes;
     std::size_t resultBytes;
@@ -70,6 +94,24 @@ struct MediaPreparedRtpBatchBudgetView final {
     std::span<const std::shared_ptr<MediaPreparationStorageBudget>> children;
     std::span<MediaPreparationStorageSnapshot> snapshots;
 
+    MediaPreparedRtpSourceBudgetSnapshot source(const MediaPreparedRtpBudgetRoles& roles) const
+    {
+        return {snapshots[roles.metadata], snapshots[roles.videoPayload],
+            roles.audioPayload ? std::optional{snapshots[*roles.audioPayload]} : std::nullopt};
+    }
+    bool matches(const MediaPreparedRtpStorageSnapshot& source) const noexcept
+    {
+        const auto& roles = source.roles;
+        if (roles.metadata >= children.size() || roles.videoPayload >= children.size() ||
+            roles.metadata == roles.videoPayload ||
+            roles.audioPayload.has_value() != static_cast<bool>(source.owners.audioPayload) ||
+            roles.audioPayload.has_value() != source.audio.has_value()) return false;
+        if (roles.audioPayload && (*roles.audioPayload >= children.size() ||
+            *roles.audioPayload == roles.metadata || *roles.audioPayload == roles.videoPayload)) return false;
+        return children[roles.metadata] == source.owners.metadata &&
+            children[roles.videoPayload] == source.owners.videoPayload &&
+            (!roles.audioPayload || children[*roles.audioPayload] == source.owners.audioPayload);
+    }
     ::media::Result<MediaStoragePartitionSnapshot<MediaPreparationStorageDomain>> refresh() const
     {
         return MediaPreparationStorageBudget::snapshotPartition(children, snapshots);

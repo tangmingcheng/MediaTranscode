@@ -7,10 +7,10 @@
 #include "internal/graph/protocol/rtp/depacketizer/MediaOpusRtpDepacketizer.h"
 
 namespace media::ffmpeg::graph {
-::media::Result<std::size_t> MediaRtpProtocolOrdinaryStoragePlanner::plan(
+::media::Result<MediaRtpProtocolStorageCosts> MediaRtpProtocolOrdinaryStoragePlanner::plan(
     const MediaPreparedRtpSourceSessionStreamPlan& stream)
 {
-    using R = ::media::Result<std::size_t>;
+    using R = ::media::Result<MediaRtpProtocolStorageCosts>;
     const auto packets = stream.workingSet.maximumReorderedPackets;
     const auto datagram = stream.workingSet.maximumDatagramBytes;
     const auto accessUnit = stream.workingSet.maximumAccessUnitBytes;
@@ -36,6 +36,7 @@ namespace media::ffmpeg::graph {
     if (!tree) return R::failure(tree.error());
     if (!proxy) return R::failure(proxy.error());
     std::uint64_t bytes = tree.value();
+    std::uint64_t compressed = 0;
     // push's accumulated result and expire's returned result coexist; inserting
     // the second range can retain the old and new first-result backing.
     auto results = add(peak(MediaStandardContainerGeometry::rangeVector<MediaRtpPacket>(packets)),
@@ -48,7 +49,9 @@ namespace media::ffmpeg::graph {
     // Wire CC is four bits. Payload and extension each have exact range/assign
     // allocation; bounding them independently by D preserves per-request costs.
     auto packetBytes = peak(MediaStandardContainerGeometry::vector<std::uint32_t>(15, false));
-    packetBytes = add(packetBytes, mul(2, peak(MediaStandardContainerGeometry::vector<std::uint8_t>(datagram, false))));
+    const auto packetData = mul(2, peak(MediaStandardContainerGeometry::vector<std::uint8_t>(datagram, false)));
+    packetBytes = add(packetBytes, packetData);
+    compressed = add(compressed, mul(packets, packetData));
     bytes = add(bytes, mul(packets, packetBytes));
     // Reallocation can contain old/new packet objects, and parser/observe/push/
     // emplace retain moved-from packet shells. Their three vector proxies remain.
@@ -59,23 +62,31 @@ namespace media::ffmpeg::graph {
         bytes = add(bytes, codec == "h264" ? sizeof(MediaH264RtpDepacketizer) : sizeof(MediaHevcRtpDepacketizer));
         // Fragment storage moves into the NAL batch; it is not copied. Assembly
         // is a second independent byte vector. Both use bounded range insertion.
-        bytes = add(bytes, mul(2, peak(MediaStandardContainerGeometry::rangeVector<std::uint8_t>(accessUnit))));
+        const auto backing = mul(2, peak(MediaStandardContainerGeometry::rangeVector<std::uint8_t>(accessUnit)));
+        bytes = add(bytes, backing);
+        compressed = add(compressed, backing);
         bytes = add(bytes, peak(MediaStandardContainerGeometry::rangeVector<MediaRtpNalUnit>(datagram)));
         // Borrowed NALs still contain an empty vector in the debug STL. Account
         // relocation plus the owned-fragment construction/return shells.
         bytes = add(bytes, mul(add(mul(2, datagram), 7), proxy.value()));
     } else if (codec == "aac") {
         bytes = add(bytes, sizeof(MediaAacRtpDepacketizer));
-        bytes = add(bytes, peak(MediaStandardContainerGeometry::rangeVector<std::uint8_t>(accessUnit)));
+        const auto backing = peak(MediaStandardContainerGeometry::rangeVector<std::uint8_t>(accessUnit));
+        bytes = add(bytes, backing);
+        compressed = add(compressed, backing);
         // Fragment move into makeRtpAccessUnit keeps a moved-from vector shell.
         bytes = add(bytes, proxy.value());
     } else if (codec == "opus") {
         bytes = add(bytes, sizeof(MediaOpusRtpDepacketizer));
-        bytes = add(bytes, peak(MediaStandardContainerGeometry::vector<std::uint8_t>(accessUnit, false)));
+        const auto backing = peak(MediaStandardContainerGeometry::vector<std::uint8_t>(accessUnit, false));
+        bytes = add(bytes, backing);
+        compressed = add(compressed, backing);
     } else return R::failure(::media::ErrorInfo::unsupported("Protocol ordinary owner layout requires known depacketizer"));
     if (failure) return R::failure(failure);
+    if (compressed > bytes) return R::failure(::media::ErrorInfo::invalidArgument("Ordinary protocol classification exceeds total"));
     if (bytes > (std::numeric_limits<std::size_t>::max)())
         return R::failure(::media::ErrorInfo::allocationFailed("Protocol ordinary owner storage overflow"));
-    return R::success(static_cast<std::size_t>(bytes));
+    return R::success({static_cast<std::size_t>(bytes - compressed),
+        static_cast<std::size_t>(compressed), static_cast<std::size_t>(bytes)});
 }
 } // namespace media::ffmpeg::graph

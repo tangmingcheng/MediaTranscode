@@ -58,6 +58,28 @@
 
 **尚未完成的进展推导**：各源关键帧装配、音频 startup、pending/output/binder 同时持有、旧/新 generation 重叠决定最小进展额度；尚未得到完整权威上界与池分配产品。不能将最大单包替代整个进展需求，也不能平均切预算。此项、共享弹性额度策略及完整最大 k 可行域证明必须在后续接入前另经双审，首批封存机制通过不代表这些事项通过。
 
+## 下一批完整接线：创建时分类与同域快照（待双审）
+
+本批从共同 source 创建到 freeze/solver 的身份与 held 观察完整接线；不调用 seal、不启用背压、不降低原候选费用。单源 canonical 与 composition 共用预算 bundle、协议分项和快照类型，不新增专用媒体链。
+
+**root 与创建控制块**：bundle 接收明确容量 B 与现有 scope。Shared 必须指向 root，直接复用；Standalone 仅在已有权威 B 时先创建一个独立 root，再把 metadata、videoPayload、可选 audioPayload 都创建为该 root 的 direct children，不将原 source child 当父节点。当前 `MediaRtpSourcePreflight` 的 continuous 分支明确要求 Shared 且从 root 取得 B；本批保留该校验，不从 probeSize 或 legacy workingSet 猜测 standalone 的 B，也不扩大原拒绝场景。有限 probe 路径保持既有行为。bundle 的 standalone 能力仅供已持有明确容量的共同创建入口使用。
+
+现有 `MediaStorageBudget::create` 使用 new+shared_ptr，其 child 对象/control block 未归预算；本批 child 创建改用现有 `MediaBudgetBootstrapAllocator` 对 root 的一次实际 allocate_shared 申请计费（含 `MediaBudgetAllocationBlock` header/alignment），由 control allocator 持有 root，费用一直保留到最后 weak reference。费用归 rootOther 一次，不计入任何 source metadata/payload child，不叠加相同预计费。child 按真实 allocator 请求及 allocation block 几何直接计费，不以 sizeof(Budget)+经验控制块大小代替，也不增加未消费的预测接口。原 `MediaBudgetMemoryResource` 的 allocator-request readback 提取为单一职责的共用组件，保持其现有消费者和测量行为。根预算自身保持既有 bootstrap 创建，不令其 allocator 持有自己形成循环；本批新增的 child 控制块均有原 root 承担。失败沿用原错误，新增结构/资源控制块的真实费用不声称为零。
+
+**协议分项守恒**：新增内部产品 `metadataBytes / compressedBytes / totalBytes`，在原公式构造处累加同一批项，checked 验证两项之和等于旧 total，严禁在消费者重新复制公式。metadata 包括对象/控制块、树节点、vector 描述/proxy、AU/NAL/header 描述数组、配置字符串与 clock/binder 状态；compressed 包括 reorder payload/extension、NAL fragment、AU assembly、signaling 参数集字节及临时 AU 字节。lease 控制块与 packet wrapper 留 metadata，AU allocation 的原预约仍归 payload，已有 padding/AVPacket 费用仍按原函数整体承保，不在本批拆小或扣减。
+
+- canonical 原式位于 `MediaSourcePreparationStoragePlanner::protocolWorkingSet`：parser=packetPayload+packetHeaders；video signaling=(2×parameterSets+1)×AU+NAL views，assembly=2×AU+emitted+NAL views；AAC assembly=AU+emitted+headers；Opus assembly=AU+emitted；configuration 独立。原 emitted 含每 AU payload、padding、AVPacket 与 MediaRtpAccessUnit，按已明确的归属分项，保留每一个原费用项。
+- `MediaPreparedRtpSourceStoragePlanner` 的 migrated 项（pendingResult、allocationRequest、MediaRtpAccessUnit 数组、AAC headers）全部从对应 metadata 分项扣除，不从 compressed 扣除。canonical 原式中即使与另行 AU reservation 存在保守重叠，本批也保留，不以分类名义降费。
+- 非 canonical 的 `MediaRtpProtocolOrdinaryStoragePlanner` 保留原 tree/rangeVector/proxy peak：reorder payload/extension byte-vector backing、H.264/HEVC 两个 AU byte-vector peak、AAC fragment、Opus temporary 归 compressed；其余对象及配置 peak 归 metadata。byte-vector 的存储几何整体归对应 byte owner；不得另加一次相同 proxy。返回类型化总和，不改变普通容器峰值算法。
+
+**执行归属**：source 原 PMR resource 改绑定 metadata child；`create` 的固定费用和协议 metadata 固定 lease 留此域；每流协议 compressed 固定 lease 与 `drain` 的 AU reservation 使用该流 payload child。stream 持有两个协议固定 backing，确保普通分配从创建到销毁始终有覆盖。pending→prefix/acquiring→output 的 payload lease owner 原样延续，退出/重入仍遵循既有生命周期。startup route/coordinator、holder、规划产品和 batch scratch 保留既有 metadata/root owner；decoded frame、GPU surface、graph payload credit 不迁入压缩 payload。仅费用分类，暂不改变 prepare/commit 或接收泵状态机。
+
+**类型化成员与 exact arrays**：新增 source budget bundle 及 source role mapping，显式 metadata/videoPayload/optional audioPayload 索引；flat child 数为各源 `2+audio存在` 之和，checked 计算。freeze 使用既有 exact-capacity storage 构造 child array 与 snapshot array；每源 snapshot 保存角色映射和相应成员观察，明确总 actual/charged 求和，不把多 owner 汇总伪装成单个 `MediaStorageSnapshot`。`snapshotPartition` 一次观察全部 direct children，otherCharged 从 root charged 扣 selectedCharged；solver 校验各角色 owner 与 root 身份。source 0 metadata 中的 batch 费用只扣一次。sourceCount 数组和 childCount 数组分别计费，结果 admissions 仍按 sourceCount。新结构 sizeof 增长由现有精确数组计费同步覆盖。
+
+**完整文件范围**：`MediaRtpSourcePreflight`；`MediaPreparedRtpSourceSession`及其 stream/session plan；`MediaSourcePreparationStoragePlan`；`MediaRtpProtocolOrdinaryStoragePlanner`；`MediaPreparedRtpSourceStoragePlanner`；`MediaPreparedSourceCandidateCostPlanner`（只消费守恒分项）；`MediaPreparedRtpStorageAdmission`；`MediaPreparedRtpBatchStoragePlanner`；`MediaCompositionBatchAdmissionSolver`；必要的 budget child bootstrap/readback 共用组件。新增 bundle 放 runtime/resource，角色及规划快照放 planner/realtime；不产生未被共同生产路径消费的独立 helper。
+
+**后续未闭合项**：当前 composition root 用 `MediaStorageReleaseUnobserved` 创建，通知字段不可替换；后续背压必须从 root 创建时安装真实释放 notifier，并规划对象/目标存储费用及生命周期，不能 freeze 后更换或容忍 NotInitialized。本分类批不启用背压，因此不顺带改变通知。分类批之后须紧接修正共享 AAC parser/header geometry：按两字节 AU-headers-length 与当前 16-bit 头格式得到 4095 合法头上界，保留全部合法聚合/分片，不使用样例包大小；否则旧 1.68m outputs 对象元数据仍可能超预算。该修正不混入本批守恒分类。各源最小进展、保证/弹性分配及事务状态机仍须后续完成；分类全量构建与原规格回归只证明接线没有改变既有失败，不代表 r402 修复。
+
 ## 修改阶段
 
 | 阶段 | 共享修改与交付证据 |
@@ -84,3 +106,11 @@ Windows 通过后才进入 RKMPP 对应验收；两平台使用同一 planner/ru
 ## 首批实现进度
 
 六文件实现已冻结并获两名独立源码审查者局部PASS：MediaStorageBudget提供一次性sealPartition、actual/guaranteed/charged快照及双高水位；同root全验后无抛出提交，释放/析构锁外通知。未修改fromReservation语义，未接入source分类或降低费用。旧solver与source admission显式拒绝尚未接线的sealed产品，防止误用旧batch算式。Windows76595全核心Release重建退出0；[r403](realtime-composition-r403-validation.md)原四路回归仍因33.18GB候选费用拒绝，不能计合屏通过。没有生产sealPartition调用，封存执行与唤醒尚无实流覆盖。RKMPP六文件分组同步进行中，后续8核增量构建终态待收取。
+
+RKMPP710832f9构建终态已核验：后台PID153698已不存在，8核增量476/476、退出标记0，realtime CLI成功链接。该批未执行RKMPP媒体测试；不能据此推断seal执行或合屏通过。两个专属log/exit文件读取并记录后逐项清理，正式构建产物保留。
+
+## 分类完整接线实现进度
+
+23源码已冻结并获双独立局部PASS；原协议项费用守恒，新 child/control/数组实际费用完整计入。Windows97346全核心Release重建退出0。[r404](realtime-composition-r404-validation.md)原四路已进入k0预算计算，无新增角色身份错误，仍因31.26GB源费用超限而自然退出1，不计合屏通过。四源清理exit -1，六精确PID与11项日志残留均0。未启用seal/背压，最小进展与实际输出仍未完成。
+
+为避免逐文件SSH往返，23源码生成临时同步包，73465字节，SHA256 `1ccd785c0e0833c1a29502b1c29708ce055baaf2ab8c5b35011f6db9a56d3fc8`；内含每文件原版本与新版本hash，远端先全部验证再逐项写入并复核。仅项目源码，不含媒体或外部依赖。同步后删除本机/远端该专属包，RKMPP构建终态另记。

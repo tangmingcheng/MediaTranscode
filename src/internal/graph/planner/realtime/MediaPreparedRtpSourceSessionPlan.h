@@ -26,7 +26,7 @@ struct MediaPreparedRtpSourceSessionStreamPlan final {
     std::size_t maximumProtocolOutputBytes;
     MediaPreparedRtpContainerStoragePlan containerStorage;
     // Residual legacy protocol owners; actual migrated requests are excluded.
-    std::size_t unmigratedProtocolStorageBytes = 0;
+    MediaRtpProtocolStorageCosts unmigratedProtocolStorage{};
 };
 
 struct MediaPreparedRtpSourceSessionPlan final {

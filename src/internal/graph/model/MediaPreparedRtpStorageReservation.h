@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/runtime/resource/MediaPreparedRtpSourceBudgets.h"
+#include <optional>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -12,6 +14,8 @@ struct MediaPreparedRtpStorageReservation final {
     std::size_t maximumAllocationBytes;
     std::size_t streamCount;
     std::string authority;
+    // Continuous sources retain all direct-child identities; raw bootstrap has none.
+    std::optional<MediaPreparedRtpSourceBudgets> sourceBudgets;
 };
 
 } // namespace media::ffmpeg::graph

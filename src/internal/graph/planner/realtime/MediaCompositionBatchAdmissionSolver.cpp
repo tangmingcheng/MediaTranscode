@@ -130,25 +130,25 @@ try {
     if (m_attempted) return Result::failure(invalid("Composition admission solver is single-use"));
     m_attempted = true;
     if (!m_root || sources.empty() || sources.size() != m_prepared.size() || sources.size() != m_fixed.size() ||
-        budgets.children.size() != sources.size() || budgets.snapshots.size() != sources.size() ||
+        budgets.children.size() != batch.childCount || budgets.snapshots.size() != batch.childCount ||
         m_fixed.resource() != m_root.get() || batch.sourceCount != sources.size() || !batch.owner ||
         batch.owner == m_root || m_audioSource >= sources.size())
         return Result::failure(invalid("Composition admission requires matching prepared sources and storage owners"));
     if (auto status = check(sources); !status) return Result::failure(status.error());
-    auto expectedBatch = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), batch.owner);
+    auto expectedBatch = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), batch.childCount, batch.owner);
     if (!expectedBatch) return Result::failure(expectedBatch.error());
     if (expectedBatch.value().scratchBytes != batch.scratchBytes || expectedBatch.value().resultBytes != batch.resultBytes ||
         expectedBatch.value().totalBytes != batch.totalBytes)
         return Result::failure(invalid("Composition batch storage differs from actual array geometry"));
     for (std::size_t i = 0; i < sources.size(); ++i) {
-        if (!sources[i].snapshot.owner || !budgets.children[i] ||
-            !sources[i].snapshot.owner->usesBudget(*budgets.children[i]) ||
+        if (!sources[i].snapshot.owner || !budgets.matches(sources[i].snapshot) ||
+            !sources[i].snapshot.owner->usesBudget(*sources[i].snapshot.owners.metadata) ||
             m_fixed[i].planningResource != m_root ||
             &m_fixed[i].video != &m_prepared[i].video ||
             m_fixed[i].sourceRequest.mediaId != m_prepared[i].sourceRequest.mediaId)
             return Result::failure(invalid("Composition admission changed original source association"));
     }
-    if (!batch.owner->usesBudget(*budgets.children.front()))
+    if (!batch.owner->usesBudget(*sources.front().snapshot.owners.metadata))
         return Result::failure(invalid("Composition batch storage is not charged to source zero's budget"));
     auto partition = budgets.refresh();
     if (!partition) return Result::failure(partition.error());
@@ -159,6 +159,28 @@ try {
     for (const auto& snapshot : budgets.snapshots)
         if (snapshot.sealed)
             return Result::failure(invalid("Composition admission requires unsealed source budgets"));
+    std::size_t selectedChildren = 0;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        const auto& source = sources[i].snapshot;
+        if (source.owners.root != partition.value().root)
+            return Result::failure(invalid("Composition source roles changed their root owner"));
+        const std::size_t roleCount = source.roles.audioPayload ? 3 : 2;
+        if (selectedChildren > batch.childCount || roleCount > batch.childCount - selectedChildren)
+            return Result::failure(invalid("Composition source role count exceeds partition"));
+        selectedChildren += roleCount;
+        for (std::size_t j = 0; j < i; ++j) {
+            const auto& other = sources[j].snapshot.roles;
+            const auto overlaps = [&](std::size_t role) {
+                return role == other.metadata || role == other.videoPayload ||
+                    (other.audioPayload && role == *other.audioPayload);
+            };
+            if (overlaps(source.roles.metadata) || overlaps(source.roles.videoPayload) ||
+                (source.roles.audioPayload && overlaps(*source.roles.audioPayload)))
+                return Result::failure(invalid("Composition source budget roles overlap"));
+        }
+    }
+    if (selectedChildren != batch.childCount)
+        return Result::failure(invalid("Composition source roles do not cover the budget partition"));
     const auto capacity = partition.value().budget.capacity;
     if (partition.value().otherChargedBytes > capacity || batch.totalBytes > capacity - partition.value().otherChargedBytes)
         return Result::failure(invalid("Composition batch storage exceeds deployment capacity"));
@@ -209,8 +231,8 @@ try {
         if (!m_workspace->valid()) return ::media::Result<bool>::failure(invalid("Composition search lost its candidate workspace"));
         for (std::size_t i = 0; i < sources.size(); ++i) {
             const auto batchCredit = i == 0 ? batch.totalBytes : 0;
-            if (budgets.snapshots[i].actualRetainedBytes < batchCredit ||
-                m_workspace->costs[i].totalBytes < budgets.snapshots[i].actualRetainedBytes - batchCredit)
+            const auto held = budgets.source(sources[i].snapshot.roles).actualBytes();
+            if (held < batchCredit || m_workspace->costs[i].totalBytes < held - batchCredit)
                 return ::media::Result<bool>::failure(invalid("Composition candidate lost live source reservations"));
         }
         return ::media::Result<bool>::success(m_workspace->sourceBytes() <= available);

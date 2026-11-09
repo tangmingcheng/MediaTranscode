@@ -2,7 +2,7 @@
 
 #include "media_transcode/Result.h"
 #include "internal/graph/runtime/resource/MediaStorageBudget.h"
-#include "internal/graph/runtime/resource/MediaBudgetBootstrapAllocator.h"
+#include "internal/graph/runtime/resource/MediaBudgetBootstrapReadback.h"
 #include "internal/graph/runtime/storage/MediaOwnedMemoryAllocation.h"
 
 #include <algorithm>
@@ -31,7 +31,6 @@ class MediaBudgetMemoryResource final
     static_assert(std::is_nothrow_move_constructible_v<Lease>);
     static_assert(std::is_nothrow_destructible_v<Lease>);
     using Block = MediaBudgetAllocationBlock<std::shared_ptr<MediaBudgetMemoryResource>, Lease>;
-    using BootstrapBlock = MediaBudgetAllocationBlock<std::shared_ptr<Budget>, Lease>;
     class ConstructionKey final {
         friend class MediaBudgetMemoryResource;
         ConstructionKey() = default;
@@ -43,50 +42,14 @@ public:
         : m_budget(std::move(budget)) {}
     static ::media::Result<std::size_t> bootstrapAllocationFootprint(
         std::size_t bytes, std::size_t alignment)
-    {
-        auto layout = BootstrapBlock::layout(bytes, alignment);
-        if (!layout) return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::allocationFailed("Budget bootstrap layout is invalid or overflows"));
-        return ::media::Result<std::size_t>::success(layout->bytes);
-    }
-    // Complete the actual allocate_shared path, as the existing raw-RTP entry
-    // adapter does. No supplier gate or incomplete first-request extrapolation.
+    { return MediaBudgetBootstrapReadback<Budget, Lease>::allocationFootprint(bytes, alignment); }
     static ::media::Result<std::size_t> bootstrapStorageBytes()
     {
-        using R = ::media::Result<std::size_t>;
-        class Readback final : public std::pmr::memory_resource {
-        public:
-            std::size_t bytes = 0;
-        private:
-            void* do_allocate(std::size_t requested, std::size_t alignment) override
-            {
-                if (bytes || !requested) throw std::bad_alloc();
-                auto cost = bootstrapAllocationFootprint(requested, alignment);
-                if (!cost) throw MediaBudgetBootstrapFailure{cost.error()};
-                auto* pointer = std::pmr::new_delete_resource()->allocate(requested, alignment);
-                bytes = cost.value();
-                return pointer;
-            }
-            void do_deallocate(void* pointer, std::size_t requested, std::size_t alignment) override
-            { std::pmr::new_delete_resource()->deallocate(pointer, requested, alignment); }
-            bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override
-            { return this == &other; }
-        };
-        try {
-            Readback readback;
-            {
-                auto resource = std::allocate_shared<MediaBudgetMemoryResource>(
+        return MediaBudgetBootstrapReadback<Budget, Lease>::measure(
+            [](std::pmr::memory_resource& readback) {
+                return std::allocate_shared<MediaBudgetMemoryResource>(
                     BootstrapAllocator{readback}, ConstructionKey{}, std::shared_ptr<Budget>{});
-            }
-            if (!readback.bytes) return R::failure(::media::ErrorInfo::unsupported(
-                "Resource bootstrap requires an observed allocator request"));
-            return R::success(readback.bytes);
-        } catch (const MediaBudgetBootstrapFailure& failure) {
-            return R::failure(failure.error);
-        } catch (const std::bad_alloc&) {
-            return R::failure(::media::ErrorInfo::allocationFailed(
-                "Resource bootstrap requires a verified single allocation"));
-        }
+            });
     }
     static ::media::Result<std::shared_ptr<MediaBudgetMemoryResource>> create(
         std::shared_ptr<Budget> budget)
