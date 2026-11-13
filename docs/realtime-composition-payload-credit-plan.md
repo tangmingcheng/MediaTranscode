@@ -309,3 +309,12 @@ bootstrap 在冻结前尚无 DAG 释放 prefix，因此不能盲目使用运行�
 2026-11-13 RKMPP 构建终态：PID 1323872 已结束，343/343，退出码 0，最终链接 realtime CLI；覆盖本机 02d84c15 的 57 文件同步版本。本轮未运行媒体测试，不能记为合屏验收通过。专属构建日志与退出标记在记录后按精确路径清理。
 
 第 3 门禁复审发现控制释放前提尚不成立：Binder 的 pending transfer、preparedPendingCredit 和 prefix 可先于 clock 消费；fanout 任一支路满会反压 Group/ControlOutput。已发布 purge 可以越过媒体阻塞，但尚未发布的失效不能依赖该路径。因此暂不发布 Pmin 或启用 WaitingCredit；下一步复用 acceptClock 将有界 clock 消费提前到基类媒体等待前，并核查 StateAdapter 及实际状态消费者，保持 FIFO、generation 与 purge 契约。该结论不等于已证明发生运行期死锁。
+
+
+### 控制进展复核收窄（2026-11-13）
+
+已追踪 StateAdapter→状态 fanout→Gate／StartupClock→Coordinator。不能将所有 pending transfer 一律判为循环：Coordinator 的 barrier 仅封存已存在媒体；release 后由 EpochBinder、Sequencer／Extractor 推进，活跃 Aggregate 按 master deadline 填空，不要求新 RTP／SR。因此保留现有 StartupClock tick FIFO 与 Coordinator 截止快照，本轮不新增 tick 缓存或拆节点。
+
+明确待解的是 Binder／Gate 控制消费优先级：Group 发布 snapshot 尚未请求全局 reacquisition，实际请求发生在 Gate 消费时钟证据时。不能假设 fanout 阻塞前 purge 已发布。Binder 的 acceptClock 会清除投影、lookahead 和 pending terminal，但不取消已经绑定的待发包；直接搬到 process 开头还会绕过基类 finished 门禁。最小方案必须同时核对生命周期、旧包 publication／Gate generation 校验、公平性与 purge 优先级，不能只靠返回 Progress 后期待下一轮恰好完成失效。
+
+行业对应依据：[GStreamer Events](https://gstreamer.freedesktop.org/documentation/additional/design/events.html) 将解除阻塞的 FLUSH_START 与必须同媒体排序的 EOS／SEGMENT 区分；这里复用既有 generation purge 和有序 tick，不把全部时钟证据当成可无序覆盖的通知。当前两审仍未通过信用保证发布。独立推进 AAC prepare／push 共用合法事务校验，先验证完整 payload 守恒和分片连续性再预约；不启用 WaitingCredit、不降低费用。
