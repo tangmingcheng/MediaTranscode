@@ -318,3 +318,10 @@ bootstrap 在冻结前尚无 DAG 释放 prefix，因此不能盲目使用运行�
 明确待解的是 Binder／Gate 控制消费优先级：Group 发布 snapshot 尚未请求全局 reacquisition，实际请求发生在 Gate 消费时钟证据时。不能假设 fanout 阻塞前 purge 已发布。Binder 的 acceptClock 会清除投影、lookahead 和 pending terminal，但不取消已经绑定的待发包；直接搬到 process 开头还会绕过基类 finished 门禁。最小方案必须同时核对生命周期、旧包 publication／Gate generation 校验、公平性与 purge 优先级，不能只靠返回 Progress 后期待下一轮恰好完成失效。
 
 行业对应依据：[GStreamer Events](https://gstreamer.freedesktop.org/documentation/additional/design/events.html) 将解除阻塞的 FLUSH_START 与必须同媒体排序的 EOS／SEGMENT 区分；这里复用既有 generation purge 和有序 tick，不把全部时钟证据当成可无序覆盖的通知。当前两审仍未通过信用保证发布。独立推进 AAC prepare／push 共用合法事务校验，先验证完整 payload 守恒和分片连续性再预约；不启用 WaitingCredit、不降低费用。
+
+
+### AAC 合法事务前置校验（2026-11-13）
+
+8 文件实现完成：prepare 与 push 共用只读合法产品，完整 AU 守恒、分片连续性／marker 及时间戳乘法溢出在预约前验证。首次双审发现前置拒绝丢失 fragment 清理；修复后以 typed rejection 明确提交原清理，Raw 与 SourceSession 均释放对应 pending 租约并返回原错误。两名独立审查者重新明确 SOURCE PASS。仍未启用 WaitingCredit 或降低载荷费用，未执行本批媒体测试。
+
+同步包 SHA256 410887c4b17e152bde8d718f201b1df4d5f687510f5201114284bdbde2a6f139；8 文件远端写前／写后 hash 全部通过，远端源包已删除。首次 SSH 包装命令引号错误，Python 未执行同步；修正命令后启动八核增量构建 PID 1427498，专属标记 composition-build-aac-20261113，终态待收取。本机源包按精确路径删除。

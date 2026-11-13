@@ -729,14 +729,20 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
         m_protocol->releasePayloadState();
         return ::media::Status::failure(action.error());
     }
-    if (action.value().drop) return ::media::Status::success();
-    if (action.value().releaseExisting) {
+    if (const auto* rejected = std::get_if<MediaRtpPacketRejection>(&action.value())) {
+        auto failure = m_protocol->commitPacketRejection(*rejected);
+        m_pendingPayloadReservations.clear();
+        return failure;
+    }
+    const auto& allocation = std::get<MediaRtpPacketAllocationAction>(action.value());
+    if (allocation.drop) return ::media::Status::success();
+    if (allocation.releaseExisting) {
         m_pendingPayloadReservations.clear();
         m_protocol->releasePayloadState();
     }
     if (m_pendingPayloadReservations.empty()) {
         auto reservations = context.reservePayloadBatch(
-            nodeId(), m_config.streamKind, MediaPayloadKind::Packet, action.value().reserveBytes);
+            nodeId(), m_config.streamKind, MediaPayloadKind::Packet, allocation.reserveBytes);
         if (!reservations) {
             m_protocol->releasePayloadState();
             return ::media::Status::failure(reservations.error());

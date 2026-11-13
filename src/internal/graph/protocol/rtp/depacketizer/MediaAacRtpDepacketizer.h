@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 
+#include "internal/graph/protocol/rtp/MediaAacRtpPacketPlan.h"
 #include <optional>
 
 namespace media::ffmpeg::graph {
@@ -11,6 +12,9 @@ public:
     explicit MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
+    ::media::Status commitRejection(const MediaRtpPacketRejection& rejection);
+    MediaAacRtpPacketPreparation preparePacket(const MediaRtpPacket& packet,
+        std::optional<std::uint64_t> maximumAccessUnits) const;
 
 private:
     struct FragmentedAccessUnit final {

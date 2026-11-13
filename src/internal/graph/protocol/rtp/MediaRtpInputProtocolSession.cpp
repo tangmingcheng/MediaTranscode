@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtpInputProtocolSession.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
-#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
+#include "internal/graph/protocol/rtp/depacketizer/MediaAacRtpDepacketizer.h"
 #include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 #include <algorithm>
@@ -105,36 +105,59 @@ void MediaRtpInputProtocolSession::observeDiscontinuity(
     releasePayloadState();
 }
 
-::media::Result<MediaRtpPacketAllocationAction> MediaRtpInputProtocolSession::preparePacket(
+::media::Result<MediaRtpPacketPreparation> MediaRtpInputProtocolSession::preparePacket(
     const MediaRtpPacket& packet, std::size_t heldReservations) const
 try {
-    using Result = ::media::Result<MediaRtpPacketAllocationAction>;
-    if (m_waitingForClockEvidence) return Result::success({true, false,
+    using Result = ::media::Result<MediaRtpPacketPreparation>;
+    if (m_waitingForClockEvidence) return Result::success(MediaRtpPacketAllocationAction{true, false,
         MediaLineageVector<std::uint64_t>{MediaLineageAllocator<std::uint64_t>{m_allocation}}});
     const auto codec = lowercaseAscii(m_config.codecName);
     MediaRtpPacketAllocationAction action{false,
         (codec == "h264" || codec == "hevc") && m_reservedAccessUnitTimestamp &&
         *m_reservedAccessUnitTimestamp != packet.timestamp,
         MediaLineageVector<std::uint64_t>{MediaLineageAllocator<std::uint64_t>{m_allocation}}};
+    // A held AAC fragment still requires header, marker and continuity
+    // validation before its existing reservation authorizes another push.
+    if (codec == "aac") {
+        const auto* aac = dynamic_cast<const MediaAacRtpDepacketizer*>(m_depacketizer.get());
+        if (!aac) return Result::failure(::media::ErrorInfo::internalError(
+            "AAC admission requires its AAC depacketizer owner"));
+        auto prepared = aac->preparePacket(packet, heldReservations ? std::nullopt
+            : std::optional<std::uint64_t>{m_envelope.maximumAccessUnitsPerPush});
+        if (const auto* rejected = std::get_if<MediaRtpPacketRejection>(&prepared))
+            return Result::success(*rejected);
+        const auto& headers = std::get<MediaAacRtpPacketPlan>(prepared).headers;
+        if (heldReservations) return Result::success(std::move(action));
+        try {
+            action.reserveBytes.reserve(headers.accessUnits.size());
+            for (const auto& unit : headers.accessUnits) action.reserveBytes.push_back(unit.size);
+        } catch (const std::bad_alloc&) {
+            return Result::failure(::media::ErrorInfo::allocationFailed("RTP payload credit request"));
+        }
+        return Result::success(std::move(action));
+    }
     if (heldReservations && !action.releaseExisting) return Result::success(std::move(action));
     try {
-        if (codec == "aac") {
-            auto headers = MediaAacRtpAuHeaderPlanner::plan(packet.payload, m_allocation);
-            if (!headers) return Result::failure(headers.error());
-            if (headers.value().accessUnits.size() > m_envelope.maximumAccessUnitsPerPush)
-                return Result::failure(::media::ErrorInfo::invalidArgument(
-                    "AAC RTP push exceeds its prepared completion bound"));
-            action.reserveBytes.reserve(headers.value().accessUnits.size());
-            for (const auto& unit : headers.value().accessUnits) action.reserveBytes.push_back(unit.size);
-        } else if (codec == "opus") action.reserveBytes.push_back(packet.payload.size());
+        if (codec == "opus") action.reserveBytes.push_back(packet.payload.size());
         else action.reserveBytes.push_back(m_envelope.maximumAccessUnitBytes);
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed("RTP payload credit request"));
     }
     return Result::success(std::move(action));
 } catch (const std::bad_alloc&) {
-    return ::media::Result<MediaRtpPacketAllocationAction>::failure(
+    return ::media::Result<MediaRtpPacketPreparation>::failure(
         ::media::ErrorInfo::allocationFailed("RTP payload request owner allocation failed"));
+}
+
+::media::Status MediaRtpInputProtocolSession::commitPacketRejection(
+    const MediaRtpPacketRejection& rejection)
+{
+    auto* aac = dynamic_cast<MediaAacRtpDepacketizer*>(m_depacketizer.get());
+    if (!aac) return ::media::Status::failure(::media::ErrorInfo::internalError(
+        "Prepared AAC rejection requires its AAC depacketizer owner"));
+    auto failure = aac->commitRejection(rejection);
+    releasePayloadState();
+    return failure;
 }
 
 ::media::Result<MediaRtpPacketCompletion> MediaRtpInputProtocolSession::commitPacket(

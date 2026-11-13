@@ -348,12 +348,18 @@ try {
             if (auto status = evidence(s, now); !status) return status;
             auto action = s.protocol->preparePacket(*packet, s.pending.size());
             if (!action) return ::media::Status::failure(action.error());
-            if (!action.value().drop) {
-                if (action.value().releaseExisting) { s.pending.clear(); s.protocol->releasePayloadState(); }
+            if (const auto* rejected = std::get_if<MediaRtpPacketRejection>(&action.value())) {
+                auto failure = s.protocol->commitPacketRejection(*rejected);
+                s.pending.clear();
+                return failure;
+            }
+            const auto& allocation = std::get<MediaRtpPacketAllocationAction>(action.value());
+            if (!allocation.drop) {
+                if (allocation.releaseExisting) { s.pending.clear(); s.protocol->releasePayloadState(); }
                 if (s.pending.empty()) {
-                    if (action.value().reserveBytes.size() > s.plan.containerStorage.maximumPendingLeases)
+                    if (allocation.reserveBytes.size() > s.plan.containerStorage.maximumPendingLeases)
                         return invalid("Prepared protocol pending leases exceed planned container capacity");
-                    for (auto bytes : action.value().reserveBytes) {
+                    for (auto bytes : allocation.reserveBytes) {
                         auto storage = preparedMediaPacketStorageBytes(bytes, MediaPacketStorageExtent::Payload);
                         if (!storage) return ::media::Status::failure(storage.error());
                         auto lease = s.payloadBudget->reserve(storage.value(), MediaStorageAdmission::RequiredAllocation);

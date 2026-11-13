@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpInputClockSession.h"
+#include "internal/graph/protocol/rtp/MediaRtpPacketRejection.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
 #include "internal/graph/runtime/storage/MediaLineageVector.h"
@@ -17,6 +18,8 @@ struct MediaRtpPacketAllocationAction final {
     bool releaseExisting;
     MediaLineageVector<std::uint64_t> reserveBytes;
 };
+
+using MediaRtpPacketPreparation = std::variant<MediaRtpPacketAllocationAction, MediaRtpPacketRejection>;
 
 struct MediaRtpPacketCompletion final {
     MediaRtpDepacketizerResult media;
@@ -51,8 +54,9 @@ public:
     void consumeFront();
     void observeDiscontinuity(MediaRtpDiscontinuityReason reason,
         std::uint64_t generationBefore) noexcept;
-    ::media::Result<MediaRtpPacketAllocationAction> preparePacket(
+    ::media::Result<MediaRtpPacketPreparation> preparePacket(
         const MediaRtpPacket& packet, std::size_t heldReservations) const;
+    ::media::Status commitPacketRejection(const MediaRtpPacketRejection& rejection);
     ::media::Result<MediaRtpPacketCompletion> commitPacket(
         const MediaRtpPacket& packet, std::size_t admittedReservations);
     MediaRtpAccessUnitAdmission admitAccessUnit(bool keyFrame) noexcept;
