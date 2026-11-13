@@ -48,3 +48,13 @@ Windows源和VLC沿rk407相同参数，日志/快照前缀rk409；实际结果�
 独立源码核查确认现有opaque adapter未覆盖RKMPP；共享DAG仍复用，但平台身份/持有上界契约不足。禁止以FIFO或近似PTS猜测绕过，不修改外部FFmpeg。下一步聚焦仓库adapter能力证据，暂不重复相同失败链路。
 
 清理核验：远端14项临时文件全部删除，目录为空；本机3项日志删除，本轮前缀无残留。
+
+## 依赖身份复核
+
+只读SSH复核：`source /opt/mt-tools/mtenv.sh && mtenv on && source /etc/profile.d/ffenv.sh && ffenv on && ldd /home/tang/MediaTranscode-composition-09093919/out/build/rk-release/media_transcode_realtime_video_cli` 退出0，无缺失符号；libstdc++与libgcc来自/opt/mt-tools/gcc-12.4-native/lib64，FFmpeg来自/home/tang/ffmpeg-ab1e61a/lib，MPP来自/usr/local/lib。此为同环境动态解析，不冒充已结束进程的/proc/maps。
+
+初次只激活ffenv的只读查询出现GLIBCXX_3.4.29/30及CXXABI_1.3.13缺失；补齐实际测试使用的mtenv后消失。rk409脚本本来包含两者，故这不是rk409失败原因。
+
+FFmpeg自报ab1e61a、libavcodec62.28.102；libavcodec.so.62 SHA256 `7e81d6b42ccd8b70f32a59889c2ccb410c5ef7b67ae204eb12551e32cd91a591`；MPP库SHA256 `a5235b4d60afdaef44574c68569eb5b39969e43db1b1c6c9a7b4ef98c90c480b`。/root/mpp HEAD仍c08762ebfadeb4e986d2fed993bc7a54862d3ebe，status只有未跟踪out/；源码提交不单独证明库的构建来源。
+
+独立admission_gap_audit复核：共享合屏算法没有独立RKMPP副本；缺口为RKMPP平台输入身份传播与逐输入退休合同。既有PTS/token/FIFO方案不能证明丢弃、重排及多输出身份，现阶段未找到无需外部依赖修改的已证实路线。构建通过不等于RKMPP合屏可用。此次只读核验未生成文件或启动媒体进程，不重复已知失败测试。
