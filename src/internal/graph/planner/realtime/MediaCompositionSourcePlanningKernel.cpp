@@ -31,7 +31,7 @@ namespace {
     if (videoDatagram <= 0 || (hasAudio && audioDatagram <= 0))
         return Result::failure(::media::ErrorInfo::invalidArgument("CNAME route requires positive datagram capacities"));
     const std::array<std::size_t, 2> datagrams{static_cast<std::size_t>(videoDatagram), static_cast<std::size_t>(audioDatagram)};
-    return MediaCompositionStartupStoragePlanner::plan(capacity.route,
+    return MediaCompositionStartupStoragePlanner::plan(capacity.route, runtime.rtpControlDelivery,
         capacity.startup.videoUnits, capacity.startup.audioUnits, runtime.groupKey.value().size(),
         std::span<const std::size_t>{datagrams.data(), hasAudio ? 2u : 1u});
 }
@@ -165,7 +165,7 @@ try {
         MediaAvSyncGroupKey(request.sourceRequest.mediaId), RealtimeInputType::RtpPort,
         RealtimeInputStreamLayout::SeparateStreams, inputDraft.input, raw.video.streamIndex,
         raw.video.codecName, threading, request.video.filterActive,
-        request.activationOutputLead, request.selectedAudio}, std::move(audio),
+        request.activationOutputLead, request.selectedAudio, request.rtpControlDelivery}, std::move(audio),
         std::move(inputDraft.isolatedAudioInput), std::move(sync).value());
     if (!runtime) return Result::failure(runtime.error());
     if (!inputDraft.input.rtpAccessUnitEnvelope ||
@@ -274,6 +274,7 @@ try {
     if (!std::holds_alternative<MediaSourcePresentationTiming>(prepared.timing) ||
         products.video.transferDirection != MediaHardwareTransferDirection::None ||
         prepared.sourceRequest.parameters.execution.streamSet != members ||
+        prepared.rtpControlDelivery != products.runtime.rtpControlDelivery ||
         hasAudio != (prepared.audioRetention != nullptr) ||
         (hasAudio && (!prepared.audioRetention->valid() ||
             capacity.startup.audioUnits != prepared.audioRetention->maximumUnits ||

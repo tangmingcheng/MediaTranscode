@@ -1,15 +1,27 @@
 #pragma once
 #include <array>
+#include "internal/graph/model/MediaRtpControlDelivery.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 
 namespace media::ffmpeg::graph {
-enum class MediaRtpClockRouteRole { VideoInput, AudioInput, Group, Fanout, VideoBinder, AudioBinder, StateAdapter };
+enum class MediaRtpClockRouteRole { VideoInput, AudioInput, Group, Fanout, VideoBinder, AudioBinder, StateAdapter, VideoControl, AudioControl };
 struct MediaRtpClockRouteShape final {
     MediaTranscodeStreamSet members;
+    MediaRtpControlDelivery controlDelivery;
     bool has(MediaRtpClockRouteRole role) const noexcept {
-        return (role != MediaRtpClockRouteRole::AudioInput && role != MediaRtpClockRouteRole::AudioBinder) ||
+        using R = MediaRtpClockRouteRole;
+        if ((role == R::VideoControl || role == R::AudioControl) &&
+            controlDelivery != MediaRtpControlDelivery::SharedPreparedSession) return false;
+        return (role != R::AudioInput && role != R::AudioBinder && role != R::AudioControl) ||
             members == MediaTranscodeStreamSet::AudioVideo;
+    }
+    MediaRtpClockRouteRole controlSource(MediaRtpClockRouteRole role) const noexcept {
+        if (controlDelivery == MediaRtpControlDelivery::SharedPreparedSession) {
+            if (role == MediaRtpClockRouteRole::VideoInput) return MediaRtpClockRouteRole::VideoControl;
+            if (role == MediaRtpClockRouteRole::AudioInput) return MediaRtpClockRouteRole::AudioControl;
+        }
+        return role;
     }
     static MediaNodeKind nodeKind(MediaRtpClockRouteRole role) noexcept {
         using R = MediaRtpClockRouteRole;
@@ -19,6 +31,7 @@ struct MediaRtpClockRouteShape final {
         case R::Fanout: return MediaNodeKind::RtpClockSnapshotFanout;
         case R::VideoBinder: case R::AudioBinder: return MediaNodeKind::RtpPacketClockBinder;
         case R::StateAdapter: return MediaNodeKind::RtpSourceClockStateAdapter;
+        case R::VideoControl: case R::AudioControl: return MediaNodeKind::RtpControlOutput;
         }
         return MediaNodeKind::Unknown;
     }

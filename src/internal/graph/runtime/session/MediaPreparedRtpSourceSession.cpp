@@ -205,8 +205,10 @@ try {
     };
     auto status = consume();
     if (!status) m_error = status.error();
-    for (auto* notify : {m_video.get(), m_audio.get()})
+    for (auto* notify : {m_video.get(), m_audio.get()}) {
         if (notify && notify->wakeup) notify->wakeup->notify();
+        if (notify && notify->controlWakeup) notify->controlWakeup->notify();
+    }
     m_ready.notify_all();
     return status;
 } catch (const std::bad_alloc&) {
@@ -220,7 +222,7 @@ try {
     if (!mediaPreparedRtpOutputPortName(port))
         return invalid("Prepared RTP output has an unknown protocol port");
     // Object count and bytes are independently bounded by the typed handoff plan.
-    if (s.outputs.size() >= s.plan.maximumProtocolOutputObjects)
+    if ((s.packets.size() + s.controls.size()) >= s.plan.maximumProtocolOutputObjects)
         return invalid("Prepared RTP output object admission exhausted");
     std::uint64_t bytes = sizeof(MediaPreparedRtpOutput);
     if (const auto* e = dynamic_cast<const MediaRtpIngressEventBuffer*>(buffer.get())) {
@@ -236,8 +238,9 @@ try {
     if (bytes > s.plan.maximumProtocolOutputBytes ||
         s.outputBytes > s.plan.maximumProtocolOutputBytes - bytes)
         return invalid("Prepared RTP output byte admission exhausted");
-    s.outputs.push_back({port, std::move(buffer), static_cast<std::size_t>(bytes)});
-    s.outputHighWater = (std::max)(s.outputHighWater, s.outputs.size());
+    auto& output = port == MediaPreparedRtpOutputPort::Packet ? s.packets : s.controls;
+    output.push_back({port, std::move(buffer), static_cast<std::size_t>(bytes)});
+    s.outputHighWater = (std::max)(s.outputHighWater, (s.packets.size() + s.controls.size()));
     s.outputBytes += static_cast<std::size_t>(bytes);
     return ::media::Status::success();
 }
@@ -500,8 +503,10 @@ try
     if (m_bootstrap) return invalid("Prepared RTP live timer precedes bootstrap handoff");
     auto status = tickLocked(*selected.value(), mediaSteadyClockNowNs());
     if (!status) m_error = status.error();
-    for (auto* notify : {m_video.get(), m_audio.get()})
+    for (auto* notify : {m_video.get(), m_audio.get()}) {
         if (notify && notify->wakeup) notify->wakeup->notify();
+        if (notify && notify->controlWakeup) notify->controlWakeup->notify();
+    }
     m_ready.notify_all();
     return status;
 } catch (const std::bad_alloc&) {
@@ -514,7 +519,10 @@ void MediaPreparedRtpSourceSession::fail(::media::ErrorInfo error)
 {
     std::scoped_lock lock(m_mutex);
     if (!m_error) m_error = std::move(error);
-    for (auto* s : {m_video.get(), m_audio.get()}) if (s && s->wakeup) s->wakeup->notify();
+    for (auto* s : {m_video.get(), m_audio.get()}) {
+        if (s && s->wakeup) s->wakeup->notify();
+        if (s && s->controlWakeup) s->controlWakeup->notify();
+    }
     m_ready.notify_all();
 }
 
@@ -555,6 +563,30 @@ MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationSto
     return ::media::Status::success();
 }
 
+::media::Status MediaPreparedRtpSourceSession::activateControl(
+    MediaStreamKind kind, std::shared_ptr<MediaNodeWakeup> wakeup)
+{
+    std::scoped_lock lock(m_mutex);
+    auto selected = stream(kind);
+    if (!selected) return ::media::Status::failure(selected.error());
+    if (!m_frozen || !wakeup || selected.value()->controlWakeup)
+        return invalid("Prepared RTP control activation requires one frozen stream consumer");
+    selected.value()->controlWakeup = std::move(wakeup);
+    if (m_error || !selected.value()->controls.empty()) selected.value()->controlWakeup->notify();
+    return ::media::Status::success();
+}
+
+void MediaPreparedRtpSourceSession::deactivateControl(
+    MediaStreamKind kind, const std::shared_ptr<MediaNodeWakeup>& wakeup) noexcept
+{
+    std::scoped_lock lock(m_mutex);
+    auto* selected = kind == MediaStreamKind::Video ? m_video.get()
+        : kind == MediaStreamKind::Audio ? m_audio.get() : nullptr;
+    if (selected && selected->controlWakeup == wakeup &&
+        !selected->controlWakeup.owner_before(wakeup) && !wakeup.owner_before(selected->controlWakeup))
+        selected->controlWakeup.reset();
+}
+
 ::media::Result<std::uint64_t> MediaPreparedRtpSourceSession::purgeMedia(MediaStreamKind kind)
 {
     std::scoped_lock lock(m_mutex);
@@ -563,7 +595,7 @@ MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationSto
     if (!selected) return R::failure(selected.error());
     if (!m_frozen) return R::failure(::media::ErrorInfo::invalidArgument("Prepared RTP purge precedes handoff"));
     auto& s = *selected.value();
-    std::erase_if(s.outputs, [&](const auto& item) {
+    std::erase_if(s.packets, [&](const auto& item) {
         if (item.port != MediaPreparedRtpOutputPort::Packet) return false;
         s.outputBytes -= item.admissionBytes;
         return true;
@@ -640,7 +672,7 @@ MediaPreparedRtpStorageReservation MediaPreparedRtpSourceSession::preparationSto
         return MediaPreparedRtpStreamStorageSnapshot{
             stream.admittedUnits, stream.prefix->packets.size(), binder.m_acquiringPackets->size(),
             static_cast<std::size_t>(!!binder.m_videoLookahead) + static_cast<std::size_t>(!!binder.m_pendingTerminal),
-            stream.pending.size(), stream.pending.capacity(), stream.outputs.size(),
+            stream.pending.size(), stream.pending.capacity(), (stream.packets.size() + stream.controls.size()),
             {stream.admittedUnits, binder.m_acquiringHighWater, stream.outputHighWater}};
     };
     using R = ::media::Result<MediaPreparedRtpStorageSnapshot>;
@@ -940,7 +972,8 @@ try {
         ::media::ErrorInfo::allocationFailed("Prepared clock handoff allocation failed"));
 }
 
-::media::Result<std::optional<MediaPreparedRtpOutput>> MediaPreparedRtpSourceSession::takeOutput(MediaStreamKind kind)
+::media::Result<std::optional<MediaPreparedRtpOutput>> MediaPreparedRtpSourceSession::takeOutput(
+    MediaStreamKind kind, MediaPreparedRtpOutputClass outputClass)
 {
     std::scoped_lock lock(m_mutex);
     using R = ::media::Result<std::optional<MediaPreparedRtpOutput>>;
@@ -948,7 +981,10 @@ try {
     auto selected = stream(kind);
     if (!selected) return R::failure(selected.error());
     if (!m_frozen) return R::failure(::media::ErrorInfo::invalidArgument("Prepared RTP runtime output precedes handoff"));
-    auto& queue = selected.value()->outputs;
+    auto& stream = *selected.value();
+    if (outputClass != MediaPreparedRtpOutputClass::Packet && outputClass != MediaPreparedRtpOutputClass::Control)
+        return R::failure(::media::ErrorInfo::invalidArgument("Unknown prepared RTP output class"));
+    auto& queue = outputClass == MediaPreparedRtpOutputClass::Packet ? stream.packets : stream.controls;
     if (queue.empty()) return R::success(std::nullopt);
     auto output = std::move(queue.front()); queue.pop_front();
     selected.value()->outputBytes -= output.admissionBytes;

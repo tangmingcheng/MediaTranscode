@@ -25,6 +25,7 @@ namespace {
             admission->budgets != *view.continuousStorage->sourceBudgets ||
             !admission->owner->usesBudget(*admission->budgets.metadata) ||
             source.runtime.groupKey.value() != sealed[i].original.sourceRequest.mediaId ||
+            source.runtime.rtpControlDelivery != prepared[i].rtpControlDelivery ||
             &source.video != &sealed[i].original.video ||
             !source.selectedCapacity->sameProduct(*capacity, source.runtime.edgePolicies.metadata,
                 source.runtime.edgePolicies.atomicMetadata) ||

@@ -18,6 +18,8 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaPreparedRtpOutputClass { Packet, Control };
+
 struct MediaPreparedRtpOutput final {
     MediaPreparedRtpOutputPort port;
     MediaBufferRef buffer;
@@ -100,7 +102,10 @@ public:
         std::span<const std::shared_ptr<MediaPreparedRtpSourceSession>> sources,
         const MediaPreparedRtpBatchAdmissionSolver* solver);
     bool isFrozen() const;
-    ::media::Result<std::optional<MediaPreparedRtpOutput>> takeOutput(MediaStreamKind stream);
+    ::media::Result<std::optional<MediaPreparedRtpOutput>> takeOutput(
+        MediaStreamKind stream, MediaPreparedRtpOutputClass outputClass);
+    ::media::Status activateControl(MediaStreamKind stream, std::shared_ptr<MediaNodeWakeup> wakeup);
+    void deactivateControl(MediaStreamKind stream, const std::shared_ptr<MediaNodeWakeup>& wakeup) noexcept;
     ::media::Result<int> receiveTimeoutMs(MediaStreamKind stream, std::int64_t now,
         int plannedMaximumMs);
     ::media::Status activateStream(MediaStreamKind stream,
@@ -130,7 +135,7 @@ private:
               protocol(nullptr, MediaLineageObjectDeleter<MediaRtpInputProtocolSession>{MediaPreparedLineageAllocation{resource}}),
               binder(nullptr, MediaLineageObjectDeleter<MediaRtpPacketClockSession>{MediaPreparedLineageAllocation{resource}}),
               prefix(makeMediaLineageUnique<MediaPreparedRtpPrefix>(MediaPreparedLineageAllocation{resource}, resource)),
-              outputs(resource.get()) {}
+              packets(resource.get()), controls(resource.get()) {}
         std::shared_ptr<MediaPreparationMemoryResource> resource;
         std::shared_ptr<MediaPreparationStorageBudget> payloadBudget;
         // m_plan is constructed before streams and destroyed after them.
@@ -140,8 +145,10 @@ private:
         MediaLineageUniquePtr<MediaRtpInputProtocolSession> protocol;
         MediaLineageUniquePtr<MediaRtpPacketClockSession> binder;
         MediaLineageUniquePtr<MediaPreparedRtpPrefix> prefix;
-        std::pmr::deque<MediaPreparedRtpOutput> outputs;
+        std::pmr::deque<MediaPreparedRtpOutput> packets;
+        std::pmr::deque<MediaPreparedRtpOutput> controls;
         std::shared_ptr<MediaNodeWakeup> wakeup;
+        std::shared_ptr<MediaNodeWakeup> controlWakeup;
         std::shared_ptr<MediaInputActivity> activity;
         std::uint64_t nextSequence = 1;
         std::uint64_t ordinal = 0;

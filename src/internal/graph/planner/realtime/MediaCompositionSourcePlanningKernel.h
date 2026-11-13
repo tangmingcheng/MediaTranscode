@@ -30,6 +30,7 @@ struct MediaCompositionSourceFixedRequest {
     const MediaRealtimeDeploymentEnvelope& deployment;
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
+    MediaRtpControlDelivery rtpControlDelivery;
 };
 // Original request/raw/deployment/retention/video owners must remain stable and
 // outlive preparation, every candidate, and binding. Runtime declarations are owned.

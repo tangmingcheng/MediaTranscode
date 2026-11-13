@@ -17,6 +17,7 @@
 #include "internal/graph/nodes/demux/StreamSplitNode.h"
 #include "internal/graph/nodes/input/FileInputNode.h"
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
+#include "internal/graph/nodes/input/MediaRtpControlOutputNode.h"
 #include "internal/graph/nodes/input/RealtimeInputNode.h"
 #include "internal/graph/nodes/lifecycle/EofBarrierNode.h"
 #include "internal/graph/nodes/lifecycle/FinalizeNode.h"
@@ -422,6 +423,9 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketNormalizeNode>(node.id));
     case MediaNodeKind::PacketStartGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
+    case MediaNodeKind::RtpControlOutput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaRtpControlOutputNode>(node.id));
     case MediaNodeKind::RtpClockGroup:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MediaRtpClockGroupNode>(node.id));
     case MediaNodeKind::RtpPacketClockBinder: {
@@ -1254,6 +1258,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketSourceConfig:
     case MediaNodeKind::PacketNormalize:
     case MediaNodeKind::PacketStartGate:
+    case MediaNodeKind::RtpControlOutput:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpPacketClockBinder:
     case MediaNodeKind::DemuxPacketClockBinder:

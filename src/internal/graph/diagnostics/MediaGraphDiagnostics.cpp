@@ -131,6 +131,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketSourceConfig: return "PacketSourceConfig";
     case MediaNodeKind::PacketNormalize: return "PacketNormalize";
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
+    case MediaNodeKind::RtpControlOutput: return "RtpControlOutput";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
     case MediaNodeKind::RtpPacketClockBinder: return "RtpPacketClockBinder";
     case MediaNodeKind::DemuxPacketClockBinder: return "DemuxPacketClockBinder";

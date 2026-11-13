@@ -299,10 +299,8 @@ public:
         auto encodingLease = ledger->extractInitialBranch(std::move(partition.value().shared.payloadCreditPlan),
             std::move(partition.value().encoding.payloadCreditPlan));
         if (!encodingLease) return ::media::Status::failure(encodingLease.error());
-        auto sharedStorage = ledger->extractInitialFixedStorage(
-            partition.value().shared.admittedGraphPayloadAndReservedStorageBytes);
-        if (!sharedStorage) return ::media::Status::failure(sharedStorage.error());
-        sharedStorageLease = std::move(sharedStorage).value();
+        if (auto retained = runtime.retainInitialFixedStorage(
+                partition.value().shared.admittedGraphPayloadAndReservedStorageBytes); !retained) return retained;
         auto encodingStorage = ledger->extractInitialFixedStorage(
             partition.value().encoding.admittedGraphPayloadAndReservedStorageBytes);
         if (!encodingStorage) return ::media::Status::failure(encodingStorage.error());
@@ -995,7 +993,6 @@ public:
     const MediaRealtimeVideoRunPolicy& policy;
     std::shared_ptr<const MediaGraph> graph;
     std::shared_ptr<EgressAccount> egress;
-    std::shared_ptr<MediaGraphPayloadBranchReservation> sharedStorageLease;
     // Retained through zero outputs; joining a branch never resets virtual time.
     std::shared_ptr<MediaDatagramServiceScopeArbiter> serviceScopeArbiter;
     VideoOutputFanoutNode* fanout = nullptr;

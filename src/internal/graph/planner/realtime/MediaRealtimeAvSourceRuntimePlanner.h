@@ -23,6 +23,7 @@ struct MediaRealtimeAvSourceRuntimeFixedRequest {
     bool videoFilterActive;
     MediaRunningTime activationOutputLead;
     bool selectedAudio;
+    MediaRtpControlDelivery rtpControlDelivery;
 };
 
 class MediaRealtimeAvSourceRuntimePlanner final {

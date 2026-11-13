@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/resource/MediaThreadAllocationGeometry.h"
+#include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include <new>
 #include <thread>
 #include <tuple>
@@ -9,6 +10,10 @@ namespace {
 struct InvocationTag {
     friend constexpr std::size_t allocationBytes(InvocationTag);
     friend constexpr std::size_t allocationAlignment(InvocationTag);
+};
+struct GraphInvocationTag {
+    friend constexpr std::size_t allocationBytes(GraphInvocationTag);
+    friend constexpr std::size_t allocationAlignment(GraphInvocationTag);
 };
 struct StopStateTag {
     friend constexpr std::size_t allocationBytes(StopStateTag);
@@ -24,6 +29,8 @@ template<class Tag, class T> struct AllocationReadback {
 template struct AllocationReadback<InvocationTag,
     std::thread::_State_impl<std::thread::_Call_wrapper<MediaThreadWorkerEntry, std::stop_token>>>;
 template struct AllocationReadback<StopStateTag, std::stop_token::_Stop_state_t>;
+template struct AllocationReadback<GraphInvocationTag,
+    std::thread::_State_impl<std::thread::_Call_wrapper<void (MediaGraphWorker::*)(), MediaGraphWorker*>>>;
 #endif
 } // namespace
 
@@ -46,6 +53,24 @@ template struct AllocationReadback<StopStateTag, std::stop_token::_Stop_state_t>
 #if (defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L) ||     (defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG))
     static_assert(geometry.invocationAlignment <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     static_assert(geometry.stopStateAlignment <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+    return Result::success(geometry);
+#endif
+}
+::media::Result<MediaThreadInvocationGeometry> MediaThreadAllocationGeometry::graphWorker()
+{
+    using Result = ::media::Result<MediaThreadInvocationGeometry>;
+#if defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L
+    using Invocation = std::tuple<void (MediaGraphWorker::*)(), MediaGraphWorker*>;
+    constexpr MediaThreadInvocationGeometry geometry{sizeof(Invocation), alignof(Invocation)};
+#elif defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG)
+    constexpr MediaThreadInvocationGeometry geometry{
+        allocationBytes(GraphInvocationTag{}), allocationAlignment(GraphInvocationTag{})};
+#else
+    return Result::failure(::media::ErrorInfo::unsupported(
+        "Graph worker thread allocation requires an audited standard-library implementation"));
+#endif
+#if (defined(_MSVC_STL_VERSION) && _MSVC_STL_VERSION == 145 && _MSVC_STL_UPDATE == 202604L) || (defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE == 12 && __GLIBCXX__ == 20240620 && __cplusplus == 202002L && !defined(_GLIBCXX_DEBUG))
+    static_assert(geometry.alignment <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     return Result::success(geometry);
 #endif
 }

@@ -24,6 +24,7 @@ struct MediaPreparedSourceCandidateCostFacts final {
     const MediaStartupRoutePlan& startupRoute;
     std::size_t groupKeyCharacters;
     const MediaCompositionProducerHolderFacts& producerHolders;
+    MediaRtpControlDelivery controlDelivery;
 };
 enum class MediaPreparedPayloadLeaseRootKind {
     Prefix, Acquiring, Outputs, ProtocolPending, RawInputCreditWait, BinderCreditWait, Count

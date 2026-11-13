@@ -237,6 +237,8 @@ void MediaGraphRuntimeLifecycleExecutor::reset(MediaGraphRuntime& runtime)
     runtime.m_acceptanceCollector.reset();
     runtime.m_queueHighWatermark = 0;
     runtime.m_state = MediaGraphRuntimeState::Empty;
+    // Workers, scheduler nodes and context indices have now relinquished their owners.
+    runtime.m_rootStorageReservation.reset();
 }
 
 } // namespace media::ffmpeg::graph

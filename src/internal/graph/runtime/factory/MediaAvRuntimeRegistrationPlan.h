@@ -3,6 +3,8 @@
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/model/MediaProcessingNodeOwnership.h"
 
+#include "internal/graph/model/MediaRtpControlDelivery.h"
+
 #include <optional>
 
 namespace media::ffmpeg::graph {
@@ -18,6 +20,9 @@ struct MediaAvRtpClockRegistration final {
     MediaNodeId videoBinder;
     std::optional<MediaNodeId> audioRaw;
     std::optional<MediaNodeId> audioBinder;
+    std::optional<MediaNodeId> videoControl;
+    std::optional<MediaNodeId> audioControl;
+    MediaRtpControlDelivery controlDelivery;
 };
 
 struct MediaAvRuntimeInputRegistration final {

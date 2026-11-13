@@ -15,6 +15,7 @@ struct MediaCompositionSourceTopologyFacts final {
     MediaTranscodeStreamSet members;
     MediaVideoStartupReadiness readiness;
     MediaAvSyncSourceClockMode clock;
+    MediaRtpControlDelivery controlDelivery;
     const MediaRealtimeEdgePolicySet& policies;
     const MediaCompositionSourceBranchPlan& branches;
     std::span<const MediaSourceInputConnection> inputs;

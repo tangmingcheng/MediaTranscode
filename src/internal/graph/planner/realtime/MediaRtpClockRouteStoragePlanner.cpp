@@ -7,7 +7,7 @@
 
 namespace media::ffmpeg::graph {
 ::media::Result<MediaRtpClockRouteStoragePlan> MediaRtpClockRouteStoragePlanner::plan(
-    MediaTranscodeStreamSet members, const MediaEdgePolicy& metadata,
+    MediaTranscodeStreamSet members, MediaRtpControlDelivery delivery, const MediaEdgePolicy& metadata,
     std::span<const std::size_t> datagrams)
 {
     using R = ::media::Result<MediaRtpClockRouteStoragePlan>;
@@ -16,6 +16,9 @@ namespace media::ffmpeg::graph {
     if ((!audio && members != MediaTranscodeStreamSet::VideoOnly) || datagrams.size() != streams ||
         !metadata.queuePolicy.bounded || !metadata.queuePolicy.capacity)
         return R::failure(::media::ErrorInfo::invalidArgument("CNAME route requires exact members and bounded metadata"));
+    if (delivery != MediaRtpControlDelivery::RawProtocolOwner &&
+        delivery != MediaRtpControlDelivery::SharedPreparedSession)
+        return R::failure(::media::ErrorInfo::invalidArgument("CNAME route requires declared control delivery"));
     auto wire = MediaRtcpPreparationStoragePlanner::plan(datagrams, 0, MediaRtcpPreparationUse::ParseOnly);
     if (!wire) return R::failure(wire.error());
     auto allocation = wire.value().maximumCnameBytes
@@ -43,8 +46,11 @@ namespace media::ffmpeg::graph {
     // snapshots conservatively; they are not a claim of one copy per edge.
     const auto snapshotCnames = streams + 1;
     const auto evidenceQueue = mul(evidenceSlots, allocation.value());
-    // One raw-node pending transfer and two Group StreamPending inputs per stream.
-    const auto evidenceInFlightObjects = streams * 3;
+    // Preserve the admitted raw-node holder and two Group StreamPending inputs.
+    // Shared delivery adds its independent ControlOutput pending transfer; the
+    // raw payload holder is not reclaimed to offset this new control owner.
+    const auto evidenceInFlightObjects = streams *
+        (3 + (delivery == MediaRtpControlDelivery::SharedPreparedSession ? 1 : 0));
     const auto evidenceObjects = add(evidenceSlots, evidenceInFlightObjects);
     const auto evidenceInFlight = mul(evidenceInFlightObjects, allocation.value());
     const auto snapshotQueue = mul(mul(snapshotSlots, snapshotCnames), allocation.value());

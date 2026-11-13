@@ -38,6 +38,7 @@ MediaCompositionCandidateWorkspace::MediaCompositionCandidateWorkspace(
             ? &*source.runtime.isolatedAudioInput->rtpTransport : nullptr;
         if (source.planningResource != m_resource || &source.video != &input.video ||
             source.runtime.groupKey.value() != input.sourceRequest.mediaId ||
+            source.runtime.rtpControlDelivery != input.rtpControlDelivery ||
             !transport || !transport->ingress || !transport->ingress->sameProduct(input.videoIngress) ||
             (audio && (!audioTransport || !audioTransport->ingress || !input.audioIngress ||
                 !audioTransport->ingress->sameProduct(*input.audioIngress))) ||
@@ -50,7 +51,7 @@ MediaCompositionCandidateWorkspace::MediaCompositionCandidateWorkspace(
             return invalid("Composition workspace differs from selected source capacity or ingress");
         m_aggregateFacts.push_back(MediaAvContinuousAggregatePlanner::sourceFacts(source));
         m_topologyFacts.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
-            source.branchConnections, source.inputConnections});
+            source.branchConnections, source.inputConnections, source.runtime.rtpControlDelivery});
         if (initial) {
             m_residenceFacts.push_back({capacity.route, capacity.startup.videoUnits, capacity.startup.audioUnits,
                 capacity.videoAcquiringCapacity, capacity.audioAcquiringCapacity,
@@ -102,7 +103,7 @@ MediaCompositionCandidateWorkspace::MediaCompositionCandidateWorkspace(
             candidate.containers.audio ? std::optional{MediaPreparedStreamCandidateCostFacts{*candidate.containers.audio}} : std::nullopt,
             candidate.capacity.startup.videoUnits, candidate.capacity.startup.audioUnits, source.video,
             topology->graph, *residence, i, source.lineageRegistryCapacity, candidate.capacity.route,
-            source.runtime.groupKey.value().size(), source.producerHolders};
+            source.runtime.groupKey.value().size(), source.producerHolders, source.runtime.rtpControlDelivery};
         if (initial) {
             auto planned = MediaPreparedSourceCandidateCostPlanner::plan(*m_held[i].plan, m_held[i].snapshot, costFacts);
             if (!planned) return ::media::Status::failure(planned.error());

@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaRtpControlDelivery.h"
 #include "internal/graph/model/MediaOutputReservationStoragePlan.h"
 
 #include "internal/graph/planner/realtime/MediaEncodedAccessUnitSchedulingPlan.h"
@@ -56,6 +57,7 @@ struct MediaRealtimeAvSourcePlanningProducts {
     // Immutable planner input, retained independently of the finalized servo
     // in synchronization. Capacity refresh must start from this policy.
     const MediaAvSyncAudioServoPolicy audioServoPolicy;
+    MediaRtpControlDelivery rtpControlDelivery;
 };
 
 struct MediaRealtimeAvSourceRuntimePlan : MediaRealtimeAvSourcePlanningProducts {

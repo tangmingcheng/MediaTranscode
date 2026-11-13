@@ -270,7 +270,7 @@ template<bool Updating> ::media::Status computeCosts(
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u},
         queued.value(), MediaRtcpPreparationUse::SourceClock);
     if (!sourceClock) return R::failure(sourceClock.error());
-    auto startup = MediaCompositionStartupStoragePlanner::plan(facts.startupRoute,
+    auto startup = MediaCompositionStartupStoragePlanner::plan(facts.startupRoute, facts.controlDelivery,
         facts.startupVideoUnits, facts.startupAudioUnits, facts.groupKeyCharacters,
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u});
     if (!startup) return R::failure(startup.error());

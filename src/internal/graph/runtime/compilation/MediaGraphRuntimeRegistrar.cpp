@@ -14,6 +14,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
+#include "internal/graph/nodes/input/MediaRtpControlOutputNode.h"
 #include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
@@ -94,6 +95,19 @@ namespace media::ffmpeg::graph {
         }
     }
     for (const auto& source : sources) {
+        if (source.input->rtpClock) {
+            const auto& rtp = *source.input->rtpClock;
+            const bool shared = rtp.controlDelivery == MediaRtpControlDelivery::SharedPreparedSession;
+            if ((!shared && rtp.controlDelivery != MediaRtpControlDelivery::RawProtocolOwner) ||
+                shared != static_cast<bool>(source.rtpSource) ||
+                rtp.videoControl.has_value() != shared ||
+                rtp.audioControl.has_value() != (shared && rtp.audioRaw.has_value()))
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "RTP control delivery differs from the exact prepared session ownership"));
+        } else if (source.rtpSource) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Prepared RTP session lacks its typed control delivery registration"));
+        }
         const auto* sequencer = context.graph()->findNode(source.input->activationSequencer);
         const auto* extractor = context.graph()->findNode(source.input->releaseExtractor);
         const auto* owner = context.graph()->findNode(source.preparationOwner);
@@ -267,6 +281,15 @@ namespace media::ffmpeg::graph {
                 if (!raw) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "Prepared RTP registration does not name a raw input"));
                 if (auto status = raw->bindPreparedSession(source.rtpSource); !status) return status;
+            } else if ((rtp.videoControl && node.id == *rtp.videoControl) ||
+                       (rtp.audioControl && node.id == *rtp.audioControl)) {
+                auto* control = dynamic_cast<MediaRtpControlOutputNode*>(runtimeNode.value().get());
+                if (!control) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Prepared RTP registration does not name a control output"));
+                auto endpoint = MediaPreparedRtpControlEndpoint::create(source.rtpSource,
+                    node.id == *rtp.videoControl ? MediaStreamKind::Video : MediaStreamKind::Audio);
+                if (!endpoint) return ::media::Status::failure(endpoint.error());
+                if (auto status = control->bindEndpoint(std::move(endpoint).value()); !status) return status;
             } else if (node.id == rtp.clockGroup) {
                 auto* clock = dynamic_cast<MediaRtpClockGroupNode*>(runtimeNode.value().get());
                 if (!clock) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(

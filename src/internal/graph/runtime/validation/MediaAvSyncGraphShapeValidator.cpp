@@ -33,6 +33,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioDriftController:
     case MediaNodeKind::AvOutputScheduler:
     case MediaNodeKind::ScheduledOutputRouter:
+    case MediaNodeKind::RtpControlOutput:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::RtpSourceClockStateAdapter:

@@ -154,13 +154,13 @@ MediaRealtimeInitialOutputResourcePartitionPlanner::plan(
         }
     }
     if (all.size() != graph.nodeCount()) return Result::failure(::media::ErrorInfo::invalidArgument("Initial execution partition omits nodes"));
-    auto complete = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, {});
+    auto complete = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, {}, MediaExecutionContextStorageOwnership::NewContext);
     if (!complete) return Result::failure(complete.error());
-    auto shared = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.sharedNodeIds);
+    auto shared = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.sharedNodeIds, MediaExecutionContextStorageOwnership::NewContext);
     if (!shared) return Result::failure(shared.error());
-    auto encoding = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.encodingNodeIds);
+    auto encoding = MediaFinalGraphResourceLedgerCompiler::compile(graph, ledger, topology.encodingNodeIds, MediaExecutionContextStorageOwnership::ExtractedContext);
     if (!encoding) return Result::failure(encoding.error());
-    auto protocol = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, ledger, topology.outputNodeIds);
+    auto protocol = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, ledger, topology.outputNodeIds, MediaExecutionContextStorageOwnership::ExtractedContext);
     if (!protocol) return Result::failure(protocol.error());
     auto fixedNetwork = Arithmetic::add(shared.value().protocolGenerationStorage.admittedBytes,
         encoding.value().protocolGenerationStorage.admittedBytes, "initial fixed network control partitions");

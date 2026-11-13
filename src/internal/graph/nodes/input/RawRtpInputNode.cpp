@@ -183,14 +183,15 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
     if (m_preparedSource) {
         if (auto status = m_preparedReceiver->captureStatus(); !status) return processProgress(status);
         if (!m_preparedPendingPacket) {
-            auto output = m_preparedSource->takeOutput(m_config.streamKind);
+            auto output = m_preparedSource->takeOutput(m_config.streamKind, MediaPreparedRtpOutputClass::Packet);
             if (!output) return processProgress(::media::Status::failure(output.error()));
             if (!output.value()) return processWaiting();
             const auto* port = mediaPreparedRtpOutputPortName(output.value()->port);
             if (!port) return processProgress(::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Prepared RTP output has an unknown protocol port")));
             if (output.value()->port != MediaPreparedRtpOutputPort::Packet)
-                return processProgress(emitOutput(context, port, output.value()->buffer));
+                return processProgress(::media::Status::failure(::media::ErrorInfo::internalError(
+                    "Prepared RTP packet endpoint returned control output")));
             m_preparedPendingPacket = std::move(output.value()->buffer);
         }
         const auto bytes = m_preparedPendingPacket->payloadFootprintBytes();

@@ -52,7 +52,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const MediaRealtimeAvSyncInputSegmentOptions& options,
     const MediaRealtimeAvSourceRuntimePlan& plan)
 {
-    const MediaRtpClockRouteShape declaration{*plan.synchronization.members};
+    const MediaRtpClockRouteShape declaration{*plan.synchronization.members, plan.rtpControlDelivery};
     const bool hasAudio = declaration.has(MediaRtpClockRouteRole::AudioInput);
     std::vector<MediaNodeId> rawInputs{options.sources.videoPacket.node};
     if (hasAudio) rawInputs.push_back(options.sources.audioPacket.node);
@@ -161,15 +161,42 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             failure(status.error());
     }
 
+    std::optional<MediaNodeId> videoControl, audioControl;
+    if (plan.rtpControlDelivery == MediaRtpControlDelivery::SharedPreparedSession) {
+        const auto addControl = [&](const char* stream) -> ::media::Result<MediaNodeId> {
+            auto node = Support::addNode(graph, MediaNodeKind::RtpControlOutput,
+                options.prefix + "." + stream + ".rtp.control", "RTP shared session control output");
+            if (!node) return node;
+            for (const char* port : {"clock", "event"}) {
+                if (auto status = Support::addOutput(graph, node.value(), port, MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status)
+                    return ::media::Result<MediaNodeId>::failure(status.error());
+            }
+            if (auto status = Support::setOption(graph, node.value(), "rtp.sync_group", plan.groupKey.value()); !status)
+                return ::media::Result<MediaNodeId>::failure(status.error());
+            if (auto status = Support::setOption(graph, node.value(), "rtp.control_stream", stream); !status)
+                return ::media::Result<MediaNodeId>::failure(status.error());
+            return node;
+        };
+        auto node = addControl("video");
+        if (!node) return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(node.error());
+        videoControl = node.value();
+        if (hasAudio) {
+            auto audioNode = addControl("audio");
+            if (!audioNode) return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(audioNode.error());
+            audioControl = audioNode.value();
+        }
+    }
     const auto& metadata = plan.edgePolicies.metadata;
     const MediaRtpProtocolNodeBindings bindings{
         {options.sources.protocolClock.node, options.sources.videoPacket.node, video,
-            hasAudio ? std::optional{options.sources.audioPacket.node} : std::nullopt, audio},
+            hasAudio ? std::optional{options.sources.audioPacket.node} : std::nullopt, audio, videoControl, audioControl, plan.rtpControlDelivery},
         snapshot, adapter};
     for (const auto& connection : MediaRtpClockRouteConnections) {
-        if (connection.payload != MediaRtpClockRoutePayload::Snapshot || (!declaration.has(connection.from) || !declaration.has(connection.to))) continue;
-        const auto from = connection.from == MediaRtpClockRouteRole::Group
-            ? options.sources.protocolClock : MediaEndpoint{bindings.routeNode(connection.from), connection.output};
+        const auto sourceRole = declaration.controlSource(connection.from);
+        if (!declaration.has(sourceRole) || !declaration.has(connection.to)) continue;
+        const auto from = sourceRole == MediaRtpClockRouteRole::Group
+            ? options.sources.protocolClock : MediaEndpoint{bindings.routeNode(sourceRole), connection.output};
         if (auto status = Support::connect(graph, from, bindings.routeNode(connection.to), connection.input,
                 connection.label, metadata); !status)
             return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(status.error());
@@ -192,6 +219,8 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     }
     std::vector<MediaNodeId> members{snapshot, video, adapter};
     if (audio) members.push_back(*audio);
+    if (videoControl) members.push_back(*videoControl);
+    if (audioControl) members.push_back(*audioControl);
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::success(
         MediaRealtimeAvSyncProtocolInputEndpoints{
             MediaEndpoint{video, "packet"}, audio ? MediaEndpoint{*audio, "packet"} : MediaEndpoint{},

@@ -11,6 +11,7 @@ struct MediaCompositionTopologySourceFacts final {
     const MediaRealtimeEdgePolicySet& policies;
     const MediaCompositionSourceBranchPlan& branches;
     std::span<const MediaSourceInputConnection> inputs;
+    MediaRtpControlDelivery controlDelivery;
 };
 // Fixed output facts are owned by the candidate workspace, never borrowed
 // across a freeze. Their nested storage still requires workspace admission.

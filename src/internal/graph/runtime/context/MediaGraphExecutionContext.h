@@ -16,7 +16,8 @@
 #include <vector>
 #include <memory>
 #include <span>
-#include <unordered_map>
+#include <map>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -109,8 +110,8 @@ private:
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
     MediaFixedCapacityStorage<MediaWorkerExecutionPlan> m_workerExecutionPlans;
-    std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
-    std::unordered_map<uint32_t, std::shared_ptr<MediaGraphWorkerExitToken>> m_nodeExitTokens;
+    std::optional<std::map<uint32_t, std::shared_ptr<MediaNodeWakeup>>> m_nodeWakeups;
+    std::optional<std::map<uint32_t, std::shared_ptr<MediaGraphWorkerExitToken>>> m_nodeExitTokens;
     MediaAvSyncGroupRegistry m_avSyncGroups;
     std::shared_ptr<MediaGraphPayloadCreditLedger> m_payloadCreditLedger;
     std::shared_ptr<MediaInputActivity> m_inputActivity;

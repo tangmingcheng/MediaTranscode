@@ -1,6 +1,7 @@
 #pragma once
 #include "internal/graph/core/MediaEdge.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
+#include "internal/graph/model/MediaRtpControlDelivery.h"
 #include "media_transcode/Result.h"
 #include <span>
 
@@ -22,7 +23,7 @@ struct MediaRtpClockRouteStoragePlan final {
 class MediaRtpClockRouteStoragePlanner final {
 public:
     static ::media::Result<MediaRtpClockRouteStoragePlan> plan(
-        MediaTranscodeStreamSet members, const MediaEdgePolicy& metadata,
+        MediaTranscodeStreamSet members, MediaRtpControlDelivery delivery, const MediaEdgePolicy& metadata,
         std::span<const std::size_t> maximumDatagramBytes);
 };
 }

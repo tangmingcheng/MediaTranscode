@@ -16,7 +16,9 @@ template<bool Updating> ::media::Status compileTopology(
     using A = MediaAudioBranchRole;
     using G = MediaCompositionAggregateRole;
     const auto invalid = [](const char* text) { return Result::failure(::media::ErrorInfo::invalidArgument(text)); };
-    if (facts.clock != MediaAvSyncSourceClockMode::RtpSenderReports)
+    if ((facts.controlDelivery != MediaRtpControlDelivery::RawProtocolOwner &&
+         facts.controlDelivery != MediaRtpControlDelivery::SharedPreparedSession) ||
+        facts.clock != MediaAvSyncSourceClockMode::RtpSenderReports)
         return invalid("Source topology requires declared RTP startup facts");
     auto described = MediaStartupRoutePlanner::describe(facts.members, facts.readiness);
     if (!described) return Result::failure(described.error());
@@ -24,7 +26,7 @@ template<bool Updating> ::media::Status compileTopology(
         facts.policies.atomicMetadata);
     if (!startup) return Result::failure(startup.error());
     const MediaSourceInputNodeShape input{described.value(), facts.clock};
-    const MediaRtpClockRouteShape rtp{facts.members};
+    const MediaRtpClockRouteShape rtp{facts.members, facts.controlDelivery};
     const bool audio = rtp.has(R::AudioInput);
     const bool decoded = input.has(I::DecoderFrame);
     std::size_t positionCursor = 0, bindingCursor = 0;
@@ -60,7 +62,7 @@ template<bool Updating> ::media::Status compileTopology(
         bind(role, *position);
         return !identityInvalid;
     };
-    for (const auto role : {R::VideoInput, R::AudioInput, R::Group, R::Fanout, R::VideoBinder, R::AudioBinder, R::StateAdapter})
+    for (const auto role : {R::VideoInput, R::AudioInput, R::Group, R::Fanout, R::VideoBinder, R::AudioBinder, R::StateAdapter, R::VideoControl, R::AudioControl})
         if (rtp.has(role)) declare(key(D::Rtp, role), rtp.nodeKind(role));
     for (const auto role : {S::VideoInput, S::AudioInput, S::Coordinator, S::Binder, S::Sequencer, S::Extractor})
         if (role != S::AudioInput || audio) declare(key(D::Startup, role), described.value().nodeKind(role));
@@ -124,9 +126,12 @@ template<bool Updating> ::media::Status compileTopology(
     for (const auto& edge : startup.value().shape.connections()) if (startup.value().shape.includes(edge))
         add(key(D::Startup,edge.from),key(D::Startup,edge.to),edge.output,edge.input,
             MediaPayloadKind::GraphEvent,MediaStreamKind::Metadata,startup.value().policy(edge));
-    for (const auto& edge : MediaRtpClockRouteConnections) if (rtp.has(edge.from) && rtp.has(edge.to))
-        add(key(D::Rtp,edge.from),key(D::Rtp,edge.to),edge.output,edge.input,
-            MediaPayloadKind::GraphEvent,MediaStreamKind::Metadata,facts.policies.metadata);
+    for (const auto& edge : MediaRtpClockRouteConnections) {
+        const auto from = rtp.controlSource(edge.from);
+        if (rtp.has(from) && rtp.has(edge.to))
+            add(key(D::Rtp,from),key(D::Rtp,edge.to),edge.output,edge.input,
+                MediaPayloadKind::GraphEvent,MediaStreamKind::Metadata,facts.policies.metadata);
+    }
     const auto branch = [&](D domain, const auto& edges) {
         for (const auto& edge : edges) add(key(domain,edge.from),key(domain,edge.to),edge.output,
             edge.input,edge.payload,edge.stream,edge.policy);

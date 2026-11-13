@@ -113,16 +113,20 @@ struct MediaFinalGraphResourceAdmissionPlan final {
     std::vector<MediaSourceFrameOwnershipStorageEvidence> sourceFrameOwnership;
 };
 
+enum class MediaExecutionContextStorageOwnership { NewContext, ExtractedContext };
+
 class MediaFinalGraphResourceLedgerCompiler final {
 public:
     static ::media::Result<MediaFinalGraphReferenceStoragePlan> compileReferenceStorage(
         const MediaGraph& graph,
         const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
-        std::span<const MediaNodeId> selectedNodes);
+        std::span<const MediaNodeId> selectedNodes,
+        MediaExecutionContextStorageOwnership ownership);
     static ::media::Result<MediaFinalGraphResourceLedger> compile(
         const MediaGraph& graph,
         const MediaRealtimeGraphResourceLedgerPlan& planningLedger,
-        std::span<const MediaNodeId> selectedNodes);
+        std::span<const MediaNodeId> selectedNodes,
+        MediaExecutionContextStorageOwnership ownership);
     static ::media::Result<MediaFinalGraphReferenceStoragePlan> compileReferenceStorage(
         const MediaGraph& graph, const MediaFinalGraphResourceAdmissionPlan& facts);
     static ::media::Result<MediaFinalGraphResourceLedger> compile(

@@ -138,7 +138,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             correction
                 ? std::optional<MediaAudioCorrectionReachabilityPlan>(
                       correction->correction)
-                : std::nullopt, audioServoPolicy}, std::move(reservationStorage).value()}, *outer.avSyncComponentBounds, facts.value().timing, std::move(outputPlan.edgePolicies), std::move(outputPlan.canonicalAudioInputPolicy), outputPlan.outputAdapter, outputPlan.scheduling, std::move(outputPlan.protocolOutput),
+                : std::nullopt, audioServoPolicy, MediaRtpControlDelivery::RawProtocolOwner}, std::move(reservationStorage).value()}, *outer.avSyncComponentBounds, facts.value().timing, std::move(outputPlan.edgePolicies), std::move(outputPlan.canonicalAudioInputPolicy), outputPlan.outputAdapter, outputPlan.scheduling, std::move(outputPlan.protocolOutput),
             std::move(outputPlan.datagramTransport), std::move(outputPlan.encoderFifoRetention)});
 }
 

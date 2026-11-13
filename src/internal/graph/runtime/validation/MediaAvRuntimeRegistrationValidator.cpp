@@ -68,6 +68,69 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         const auto* node = graph.findNode(id);
         return members.contains(id.value) && node && node->kind == kind;
     };
+    // Control delivery is an explicit source role, never an extra input owner.
+    const auto* rtp = input && input->rtpClock ? &*input->rtpClock : nullptr;
+    std::size_t expectedControls = 0;
+    if (rtp) {
+        const bool separate = rtp->controlDelivery == MediaRtpControlDelivery::SharedPreparedSession;
+        if ((rtp->controlDelivery != MediaRtpControlDelivery::RawProtocolOwner && !separate) ||
+            rtp->videoControl.has_value() != separate ||
+            rtp->audioControl.has_value() != (separate && rtp->audioRaw.has_value()))
+            return invalid("RTP control registration differs from its declared delivery product");
+        if (rtp->audioControl && (!rtp->videoControl || !rtp->audioRaw))
+            return invalid("RTP audio control requires its video control and audio input");
+        if (rtp->videoControl && rtp->audioRaw.has_value() != rtp->audioControl.has_value())
+            return invalid("Shared RTP control must cover every registered stream");
+        const auto validateControl = [&](MediaNodeId id, MediaNodeId raw,
+            const char* stream, const char* clockInput, const char* eventInput) -> ::media::Status {
+            if (!matches(id, MediaNodeKind::RtpControlOutput) || !sourceOwned(id) ||
+                !matches(raw, MediaNodeKind::RawRtpInput) || !sourceOwned(raw) ||
+                !matches(rtp->clockGroup, MediaNodeKind::RtpClockGroup) ||
+                !sourceOwned(rtp->clockGroup))
+                return invalid("RTP control registration requires its exact source-owned nodes");
+            const auto* node = graph.findNode(id);
+            if (!node->inputPorts.empty() || node->outputPorts.size() != 2 ||
+                node->options.value("rtp.control_stream") != stream ||
+                node->options.value("rtp.sync_group") != binding.groupKey.value())
+                return invalid("RTP control output differs from its registered stream or group");
+            for (const auto& port : node->outputPorts) {
+                const char* target = port.name == "clock" ? clockInput :
+                    port.name == "event" ? eventInput : nullptr;
+                if (!target || !connected(graph, id, port.name.c_str(), rtp->clockGroup, target))
+                    return invalid("RTP control output must feed its registered clock group");
+                std::size_t consumers = 0;
+                for (const auto& edge : graph.edges())
+                    if (edge.from.nodeId == id && edge.from.portId == port.id) ++consumers;
+                const auto* destination = graph.findInputPort(rtp->clockGroup, target);
+                if (consumers != 1 || !destination ||
+                    MediaGraphShapeQuery::incomingEdgeCount(graph, destination->id) != 1)
+                    return invalid("RTP control output requires one exclusive group edge");
+                const auto* edge = MediaGraphShapeQuery::singleEdge(graph, port.id, destination->id);
+                if (!MediaGraphShapeQuery::validPort(&port, MediaPortDirection::Output,
+                        MediaStreamKind::Metadata, MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
+                    !MediaGraphShapeQuery::validPort(destination, MediaPortDirection::Input,
+                        MediaStreamKind::Metadata, MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
+                    !edge || edge->policy != binding.edgePolicies.metadata)
+                    return invalid("RTP control edge differs from its planned metadata contract");
+            }
+            return ::media::Status::success();
+        };
+        if (rtp->videoControl) {
+            if (auto status = validateControl(*rtp->videoControl, rtp->videoRaw,
+                    "video", "video_clock", "video_event"); !status) return status;
+            ++expectedControls;
+        }
+        if (rtp->audioControl) {
+            if (auto status = validateControl(*rtp->audioControl, *rtp->audioRaw,
+                    "audio", "audio_clock", "audio_event"); !status) return status;
+            ++expectedControls;
+        }
+    }
+    std::size_t actualControls = 0;
+    for (const auto& node : graph.nodes())
+        if (binding.contains(node.id) && node.kind == MediaNodeKind::RtpControlOutput) ++actualControls;
+    if (actualControls != expectedControls)
+        return invalid("A/V registration must cover every RTP control output exactly once");
     if (input && (!matches(input->epochBinder, MediaNodeKind::PlaybackEpochBinder) ||
         !matches(input->activationSequencer, MediaNodeKind::ActivatedStartupReleaseSequencer) ||
         !matches(input->releaseExtractor, MediaNodeKind::AvBoundReleaseExtractor)))
@@ -175,6 +238,7 @@ bool connected(const MediaGraph& graph, MediaNodeId from, const char* output,
         case MediaNodeKind::FileMux:
             break;
         case MediaNodeKind::RawRtpInput:
+        case MediaNodeKind::RtpControlOutput:
         case MediaNodeKind::RealtimeInput:
         case MediaNodeKind::MpegTsDemux:
         case MediaNodeKind::Demux:

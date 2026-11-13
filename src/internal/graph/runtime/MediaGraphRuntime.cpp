@@ -1,5 +1,6 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/threading/MediaRuntimeBranch.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 #include <algorithm>
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
@@ -108,13 +109,17 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 ::media::Status MediaGraphRuntime::compileTransaction(
     MediaRealtimeExecutableGraph executable)
 {
-    return MediaGraphRuntimeCompiler::compile(
+    auto status = MediaGraphRuntimeCompiler::compile(
         std::move(executable), m_graph, m_inputBindings,
         m_avDomains,
         m_protocolOutputAuthority,
         m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
         m_queueHighWatermark, m_state);
+    // The compiler retires the previous execution owners only on success.
+    // Failed preparation leaves their reservation with the existing runtime.
+    if (status) m_rootStorageReservation.reset();
+    return status;
 }
 
 ::media::Status MediaGraphRuntime::registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node)
@@ -184,6 +189,18 @@ void MediaGraphRuntime::abort() noexcept
         m_state == MediaGraphRuntimeState::DefaultRegistrationPending;
     MediaGraphRuntimeLifecycleExecutor::abort(*this);
     if (unstarted) m_context.cancelUnstartedExecution();
+}
+
+::media::Status MediaGraphRuntime::retainInitialFixedStorage(std::uint64_t bytes)
+{
+    auto ledger = m_context.payloadCreditLedger();
+    if (!bytes || !ledger || m_rootStorageReservation || m_state != MediaGraphRuntimeState::Compiled)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Root fixed storage requires one reservation before execution"));
+    auto reservation = ledger->extractInitialFixedStorage(bytes);
+    if (!reservation) return ::media::Status::failure(reservation.error());
+    m_rootStorageReservation = std::move(reservation).value();
+    return ::media::Status::success();
 }
 
 void MediaGraphRuntime::reset()

@@ -100,6 +100,7 @@ namespace {
     }
     case MediaAvSyncSourceClockMode::MpegTsPcr:
         return shape.requireExact({
+            {MediaNodeKind::RtpControlOutput, 0, "RTP control output"},
             {MediaNodeKind::RtpClockGroup, 0, "RTP clock group"},
             {MediaNodeKind::RtpClockSnapshotFanout, 0,
              "RTP clock snapshot fanout"},
@@ -113,6 +114,7 @@ namespace {
             "MPEG-TS source-clock shape");
     case MediaAvSyncSourceClockMode::DemuxTimestamps: {
         auto cardinality = shape.requireExact({
+            {MediaNodeKind::RtpControlOutput, 0, "RTP control output"},
             {MediaNodeKind::RtpClockGroup, 0, "RTP clock group"},
             {MediaNodeKind::RtpClockSnapshotFanout, 0,
              "RTP clock snapshot fanout"},

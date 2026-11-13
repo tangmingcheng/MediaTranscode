@@ -47,6 +47,8 @@ struct MediaRtpProtocolNodeBindings final {
         case R::VideoBinder: return registered.videoBinder;
         case R::AudioBinder: return registered.audioBinder.value_or(MediaNodeId::invalid());
         case R::StateAdapter: return stateAdapter;
+        case R::VideoControl: return registered.videoControl.value_or(MediaNodeId::invalid());
+        case R::AudioControl: return registered.audioControl.value_or(MediaNodeId::invalid());
         }
         return MediaNodeId::invalid();
     }

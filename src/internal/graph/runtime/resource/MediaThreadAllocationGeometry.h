@@ -15,11 +15,17 @@ struct MediaThreadWorkerEntry final {
     { function(context, token, index); }
 };
 
+struct MediaThreadInvocationGeometry final {
+    std::size_t bytes;
+    std::size_t alignment;
+};
+
 struct MediaThreadAllocationGeometry final {
     std::size_t invocationBytes;
     std::size_t invocationAlignment;
     std::size_t stopStateBytes;
     std::size_t stopStateAlignment;
     static ::media::Result<MediaThreadAllocationGeometry> current();
+    static ::media::Result<MediaThreadInvocationGeometry> graphWorker();
 };
 } // namespace media::ffmpeg::graph

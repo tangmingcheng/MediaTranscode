@@ -103,6 +103,9 @@ MediaRealtimeAvSourceRuntimePlanner::prepareFixed(
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput, MediaAvSyncFixedPlan synchronization)
 {
     using Result = ::media::Result<MediaRealtimeAvSourceFixedProducts>;
+    if (request.rtpControlDelivery != MediaRtpControlDelivery::RawProtocolOwner &&
+        request.rtpControlDelivery != MediaRtpControlDelivery::SharedPreparedSession)
+        return Result::failure(::media::ErrorInfo::invalidArgument("Unknown RTP control delivery ownership"));
     const MediaRealtimeAvSourceClockFixedRequest clockRequest{
         request.inputType, request.inputLayout, request.input, request.videoStreamIndex,
         request.videoCodecName, audio, isolatedAudioInput ? &*isolatedAudioInput : nullptr};
@@ -117,7 +120,7 @@ MediaRealtimeAvSourceRuntimePlanner::prepareFixed(
     if (!transition) return Result::failure(transition.error());
     return Result::success({std::move(audio), std::move(isolatedAudioInput), request.groupKey,
         std::move(synchronization), std::move(clock).value(), request.threadingPolicy,
-        request.activationOutputLead, request.videoFilterActive, std::move(transition).value()});
+        request.activationOutputLead, request.videoFilterActive, std::move(transition).value(), request.rtpControlDelivery});
 }
 
 ::media::Result<MediaRealtimeAvSourceCapacityState>
@@ -171,7 +174,7 @@ MediaRealtimeAvSourceRuntimePlanner::bindFacts(
     return Result::success({std::move(fixed.audioPipeline), std::move(fixed.isolatedAudioInput), std::move(fixed.groupKey),
         std::move(synchronization).value(), std::move(clock.value().assembly), capacity.queues, capacity.edgePolicies,
         fixed.threadingPolicy, fixed.activationOutputLead, fixed.videoFilterActive, std::move(fixed.transition),
-        std::move(clock.value().timing), capacity.audioCorrection, audioServoPolicy});
+        std::move(clock.value().timing), capacity.audioCorrection, audioServoPolicy, fixed.rtpControlDelivery});
 }
 
 ::media::Status MediaRealtimeAvSourceRuntimePlanner::rebindCapacity(

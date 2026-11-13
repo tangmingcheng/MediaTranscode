@@ -165,6 +165,24 @@ probe lease 固定本轮已发布的原 prefix，FirstFrameProbe 每轮重建 re
 
 当前状态仅为源码接线及局部审查：整批源码交两名未参与实现者复审，尚未执行本批 Windows Release 构建或真实 realtime，也未取得本批 RKMPP 实流证据。完整信用事务、独立控制进展与 Pmin/Cmin 仍受前述 FAIL 门禁约束。
 
+### 独立 ControlOutput（已接线，复审与构建未通过）
+
+前置证据：0f280247 已本地提交，Windows 修正后 Release 32066 退出 0；r406 原四路进入 10 个 adapter 并完成清理，仍因 k0 17.21 GB 超过 2 GiB 失败。接收双 pump 已接通，但 `SourceSession::Stream::outputs` 仍混放 Packet/Clock/Event，只有一个 wakeup；Raw 的 `m_preparedPendingPacket` 及基类 pendingTransfer 会阻止后续控制出队。此切片只消除该调度依赖，不降低 payload 费用、不启用 WaitingCredit，也不声称控制容量保证已完成。
+
+成熟对应：核验 [GStreamer rtpsession 源码](https://github.com/GStreamer/gstreamer/blob/main/subprojects/gst-plugins-good/gst/rtpmanager/gstrtpsession.c) 的 recv_rtp_src 与 sync_src：同一 session 将媒体与 RTCP SR 同步事实分别输出。本切片映射为共用 session、独立 DAG 控制出口；项目自有 generation/purge 事件仍复用现有状态机，不能声称 GStreamer 已替本项目证明事件信用或死锁自由。
+
+**执行和所有权**：增加 `nodes/input/MediaRtpControlOutputNode.{h,cpp}`，复用独立 FFmpegNodeRuntime 的调度、metadata emit 和唯一 pendingTransfer，不增加线程或所有节点共用的双 lane。增加 `runtime/session/MediaPreparedRtpControlEndpoint.h`，类型只持共享 source session 与已验证 stream 身份，提供控制出队、状态及独立 wakeup 激活；不持 transport、活动超时所有权、purge handle 或 payload credit。session 保持唯一协议执行者。Raw 仍唯一处理 activity、transport 停止和 generation purge/frontier；控制节点停止只解除自己的 wakeup，不能停止共享源，也不能清空尚未消费的失效事件。会话错误同时唤醒两个消费者。
+
+**队列与顺序**：在 `MediaPreparedRtpSourceSession.h/.cpp` 将 mixed outputs 拆为 Packet FIFO 与 Clock/Event 共用 Control FIFO；全部 RTP、RTCP、tick 控制分支仍调用原 queue，不复制协议算法。Raw 只取 Packet，endpoint 只取 Control，禁止从不同类型队列补取。两队列共用原 maximumProtocolOutputObjects/Bytes 的总计数门禁；本批不扩大有效载荷许可、不以覆盖旧事件释放槽。Control FIFO 保留现有 ingress sequence，节点一次只取一个，前一次 emit 的 pendingTransfer 完成后才取下一个。沿现有 clock/event 两边发往 Group，`MediaRtpClockGroupNode::processStream` 已按两头 sequence 选择，保持同源 Clock/Event 顺序。Packet 可以独立推进，但旧 generation 的 Raw pending 与 binder pending 仍通过原 purge fence 清理；ControlOutput 不申请第二 purge 身份。
+
+**真实拓扑绑定**：不能用 codec、平台或合屏数量选择节点。当前只有 Registrar 的 `source.rtpSource` 明确表示共享会话，builder 使用的 PlanningProducts 尚无这个所有权事实；实施时须由已取得 prepared session 的共同 preparer 形成内部 typed control-delivery 产品，贯通 FixedProducts/PlanningProducts，不从 CLI 猜测。该产品显式区分现有 Raw 自持协议与共享 session endpoint；共享会话的单源和合屏均走同一 `MediaRealtimeAvSyncProtocolInputBuilder` 分支，finite/node-owned 没有共享 session 时保留其已有原始协议所有权，不伪造 endpoint。缺产品或绑定不匹配在 DAG 发布前失败。
+
+接线文件组：`MediaNodeKind.h` 末尾追加种类及相应节点描述/port 校验；`MediaRtpClockRoute.h` 追加 VideoControl/AudioControl 角色，Input 角色继续指 Raw，control-delivery 产品决定 clock/event 边的实际源；`MediaAvSyncInputBindings.h`、`MediaAvRuntimeRegistrationPlan.h`、共同 ProtocolInputBuilder、`MediaRuntimeNodeFactory.cpp`、`MediaGraphRuntimeRegistrar.cpp` 同步登记、创建并绑定 typed endpoint。Registrar 核对原 source、stream、group、控制节点与 Raw 一一对应，source shared_ptr 生命周期覆盖两个节点；只修改这条 RTP 共同路径，不给其他协议加空节点。
+
+**费用闭合**：`MediaPreparedRtpSourceStoragePlanner` 为两 deque 分别计真实 PMR map/block 峰值（不能用总对象数门禁假定容器只分配一份）；session 新 wakeup 引用和节点嵌入字段以真实 sizeof 计费。原 output payload 总界保持；每 stream 新增一个 ControlOutput pendingTransfer 控制持有者，由 source topology/storage 产品计入事件 wrapper/control block/CNAME 的最大合法费用。`MediaRtpClockRoute` 的 builder、metadata edge 和 CNAME retention 消费者统一更新，Raw 既有 payload holder 不改名、不扣费；solver、materializer、sealed readback 与最终 runtime 必须消费相同角色和费用产品。endpoint 若内嵌节点则不另收一份动态对象费用；任何实际 shared control allocation 使用既有 Lineage owner 归账。
+
+双审需先判定：typed 所有权产品是否贯通所有共享入口、控制 FIFO 经过两输出边仍无越序、独立 wakeup/停机不会误停源、原 purge cutoff 是否覆盖已经移到 Raw/binder 的旧包、所有新增 retained control 是否计入。同意后整批接线并实际连入生产 DAG，不单独落闲置 helper。随后 Windows 原规格 realtime 验证，再 RKMPP；原总槽耗尽仍显式失败，专属控制 headroom 与 AcceptedWaitingCredit 事务留待下一门禁，不把本切片当作完整背压证明。
+
 ### 最小完整修改与审查门禁
 
 修改共同IngressPlan/capability/readback、Transport per-channel lease/phase、Receiver/Storage及Windows/Linux固定channel adapter；共同capture pump与bootstrap屏障、source session事务/ordinal/双输出；共同ControlOutput节点与Raw唯一purge接线；planner的receiver/control/payload进展、root notifier和保证产品；solver/sealed/final resources统一消费。基础接收切片可独立验证，但不得将双线程接线当作控制释放环已闭合或完整合屏通过。双审必须逐项确认线程与buffer生命周期、原子预约、事件因果顺序及每项进展表达式；任一项未证明则实施门禁FAIL。随后Windows原规格Release realtime→RKMPP增量与原规格实流，记录并清理本轮产物。
@@ -215,3 +233,54 @@ parser、depacketizer factory、access-unit envelope及PMR header容量统一消
 ## 固定通道实现复验
 
 本批已接通共用 finite/continuous 双接收泵，真实分配统一归准备资源。线程启动包装及 stop-state 的初次审查漏项已按版本锁定的真实 STL 类型补齐；两名独立审查者重新明确完整 SOURCE PASS。修正后的 Windows Release 全量构建 32066 退出 0。[r406](realtime-composition-r406-validation.md)原四路复验实际进入十个独立通道 adapter，压力/截断计数为 0，准入失败后正常清理退出；候选源费用 17,209,464,813 bytes 仍超过 2 GiB 总部署预算，CLI 自然退出 1，未起播，不能计合屏通过。六 PID 与本轮临时测试产物残留 0。RKMPP 同步/增量构建另记。下一步仍为控制输出独立推进、协议等待事务和联合载荷信用，不改变原验收范围。
+
+## ControlOutput 当前复验进度
+
+生产接线已实现：共享 session 双 FIFO、独立控制节点、真实 ownership 产品、Factory/Registrar、拓扑与候选/最终费用、端口及登记校验。两 FIFO 保持原对象/字节总门禁，未启用 WaitingCredit 或降低载荷费用。Windows Release 全量构建 98552 退出 1：sealed 校验错误访问 PreparedRequest 的 rtpControlDelivery 字段；已改为实际 FixedRequest 的 prepared[i] 字段，尚未重建。未执行本批媒体测试。
+
+全批审查尚未通过：最终 ledger 节点白名单漏项已补 RtpControlOutput；新增节点的 context 索引、ExitToken 和线程启动包装费用仍待闭合。原 ledger 已覆盖 worker 本体、owner 槽及执行计划数组，不重复收费。将沿既有 graph 固定费用域补齐实际所有权，区分抽取共享对象与新增 segment 对象；完成后重新双审和全量构建。
+
+2026-11-13 恢复核验：第二轮构建 12152 的工具句柄已不存在，本机无 cmake/ninja/cl 残留；虽然已有 realtime CLI 产物，缺少可核验的终态退出码，故不记构建通过。context 两索引、ExitToken 与线程启动包装的费用补充已落盘；两审随后均指出 root fixed reservation 早于实际 runtime 资源释放，先前局部通过不能作为最终通过。正在修正实际资源持有者与租约的共同生命周期，完成后重新双审和重建。本批未启动媒体测试，无本轮媒体临时产物需清理。
+
+2026-11-13 最新终态：根固定租约已移至 Runtime，reset 在执行资源清理后释放；直接重编译仅在成功替换旧资源后退休旧租约，失败保留。两个 optional map 在 reset 真正销毁树及 sentinel。两名独立审查者均重新明确完整 SOURCE PASS。Windows 97503 已收取退出码 0，但早于最后的重编译租约修正，不作为最终源码构建证据。
+
+遵照最新指示，RKMPP 适配期间改为本机修改/提交、直接 RKMPP 八核增量编译，暂不再启动 Windows 编译。57 文件源码包 SHA256 为 0ae2317f93a79905046c838ab897310637c7e9b55ff1edb3a77590dfed61f67c，远端写前/写后 hash 全部核验通过；源包已从远端删除。增量构建 PID 1323872，专属日志/退出标记 composition-build-control-20261113，终态待收取；尚未执行本批 RKMPP 实流。
+
+
+## 下一批：已接受待信用事务与完整接线（待双审）
+
+本批拟一次接通协议事务、RTP 等待、控制进展、联合载荷池、候选搜索和 sealed 发布；不交付未消费的 helper，不先降费用。目标是在原 2 GiB 下消除“每个可选输出槽同时占最大 AU”的错误独立极值模型；是否足够必须由以下进展不等式及原规格实流证明，不能承诺任意合法流量都无 UDP 丢包。沿用前文 Flink 专属进展保证和 GStreamer 独立媒体/控制调度依据；UDP 没有发送端 credit，停收期间只保留原 socket/arena 硬界，溢出仍是原可观测协议事件。
+
+### 接受、预约与提交
+
+`MediaPreparedRtpSourceSession::consume` 返回内部类型化结果 `AcceptedReady` 或 `AcceptedWaitingCredit`，普通协议/分配/期限错误仍返回原错误。`observeRtp` 成功即一次提交 session ordinal，调用方同一次提交 ingressFrontier；后续等待只重试原 pending front，不重新 observe、不重复 collector 或 provenance。事务粒度是单次 `preparePacket→commitPacket`，不是已被 reorder 改变的整批。
+
+| 状态/触发 | 持锁动作 | 锁外动作与边界 |
+| --- | --- | --- |
+| 新 RTP 被接受 | 验证并 observe 一次；保存 pending front 与原 generation；提交 ordinal/frontier | 原 arena batch 的 cursor 前进一次，余项仍由同一 arena lease 持有 |
+| 预约不足 | checked 累加全部 AU 的 padded allocation 费用，检查完整 completion 对象槽及字节门禁；一次 `reserve(sum)` 不成功时不改 depacketizer、不释放旧 assembly | 返回 AcceptedWaitingCredit；释放 delivery/buffer/session 锁，RTP pump 等释放通知或原期限/取消；RTCP pump 继续运行 |
+| 预约成功 | 对象信用和 payload 总租约同时持有；通过既有 `Lease::split` 切分；此后才执行 releaseExisting、commit 和按顺序发布；单次提交释放事务暂占槽 | 下游 takeOutput/attachGraphCredit/最后 lease 析构返回各自信用并唤醒；不得部分预约后等待另一个 AU |
+| 释放唤醒 | 先核原 generation、cursor、期限，再重试同一事务；只能一个 RTP pump 推进该 pending front | 先重新检查再等待，复用 wakeup 版本/令牌避免检查和休眠间丢通知；取消唤醒并退出，不刷新原 deadline |
+| RTCP 失效、expiry、取消 | 先完成该控制事务预约；按原协议规则使旧 generation pending 无效，清理其 assembly/租约，保持已接受 ordinal；Clock/Event sequence 与 Raw purge cutoff 仍唯一 | 等待者醒来必须看到失效事实；不可把新 generation 接到旧 AU；终态失败保持原错误并通知两个消费者 |
+
+目前 `drain` 在 reserve 前立即执行 releaseExisting，且逐 AU reserve；两者都须移入上述完整预约后的 commit 段。payload 原子预约和对象信用在同一 session 锁下组合：对象检查失败不申请 payload；payload 不足不扣对象；split/必要 wrapper 分配失败则回滚本事务保留并终止，不能将真实 allocation failure 改为可等待。普通 metadata 分配费用仍沿真实 resource 计费，已占用 payload 与 metadata 不混账。
+
+### 控制路径与接收泵
+
+修改 `MediaRtpInputProtocolSession::observeRtcp` 的事务接口，而非删除 hasPending guard：非失效 SR/CNAME 可以更新时钟证据，但不得 drain/替换 RTP pending；会引起 generation 失效的观察必须在控制信用预约后一次提交，并显式作废旧 pending。先核查 `MediaRtpInputClockSession`/tracker 每次观察、transition、evidence 可产生的控制集合，再从该集合推导专属控制槽/bytes，禁止经验配额。独立 ControlOutput 保持全部 RTP/RTCP/tick 控制 FIFO；前次 edge 提交后才能取下一项。普通 RTP 不得消耗控制保证，否则独立 RTCP 接收线程仍可能因队尾控制无槽自锁。
+
+`MediaRawRtpPreparedInputBuffer::captureRuntimeBatch` 当前持 delivery 锁覆盖整批、内部又持 buffer 锁调用 consume，必须收窄为每次接受/恢复事务；等待发生在两个锁及 session 锁之外。每 channel 仍只持一个原 arena batch，保存明确 cursor，RTP 停在待提交项时不得继续接收第二 batch，RTCP 自己的 receiver/pump 不停。finite/continuous 交接和 bootstrap 同用此结果，不能只改 live 热路径；tick 不得在 pending 未完成时再次调用有 drained 前提的协议方法。
+
+准备 root 创建时即安装 `MediaStorageReleaseNotification`：按已规划源/stream 构造稳定 RTP-pump wakeup，通知只持 weak_ptr，root/children 保持同一个 immutable notifier。该 wakeup、通知对象/targets 和每泵等待状态按真实分配计费并贯通取消；禁止 freeze 时替换 const notifier，也不得持 budget 锁调用 session。对象槽释放使用同一唤醒目标。
+
+### 进展池与发布：仍须先判定的事实
+
+候选产品须给每源 payload 保证 `Pmin`、metadata/control 保证及对象上限，复用现有同 root 分类 children 与 sealPartition，不再建立平行账本。`Pmin` 至少覆盖同时不可释放的启动/重入 retained 集合，加一个能够促使该集合释放的完整合法事务；旧 generation 与新 generation 只按真实 purge/信用释放顺序计算共存。已持有 lease 保留原预算身份，seal 采用实际 held 与保证上界，不逐 lease 迁移。总条件为 rootOther＋全部 metadata/control 保证＋全部 payload 保证不超过原 root；剩余弹性若没有必要，不引入 floating pool。
+
+尚缺且必须在实施前双审确认的最小证据：
+
+1. **启动与重入不可释放集合**：逐一核验 Prefix、Acquiring、Outputs、ProtocolPending、RawInputCreditWait、BinderCreditWait。运行期 Outputs 可经 DAG 消费，但 DAG 未启动的 prefix 和等待 common-start/关键帧的 acquiring 不能假定会释放；以当前 startup/capacity/residence 产品推导所需同时保留数和字节。输出跨多批可能全为最大 AU，必须靠明确 byte-credit 限制，不能套用单 datagram 守恒。
+2. **合法单事务峰值**：视频按现 envelope 的完整 AU 上界及原 assembly 共存；AAC 复用 AU header 合法布局与单 datagram payload 守恒，分片仍按声明完整 AU size；包括 padding、所有 AU wrapper/lease control 与完成槽。不可把所有 AAC 头数分别乘最大 size，也不可丢弃合法分片覆盖。
+3. **控制保证和失效提交点**：由实际 SR/BYE/expiry/transition 输出集合与 ControlOutput/Group 的在途 holder 推导控制槽与字节；确认控制满载时下游仍可消费，失效不能等待被它自己持有的 RTP payload。未完成该证明前不允许返回 WaitingCredit。
+
+落实范围为共享 protocol prepare/commit、SourceSession、PreparedInputBuffer、root release notifier、候选 cost/solver、AdmissionMaterializer/sealed validator 及最终 ledger。每个产品在同批有执行消费者；独立 readback 对照 sealed 容量、held、保证、对象槽和 owner 身份。若推导的最小保证仍超过 2 GiB，应保留真实拒绝并报告具体不可释放项，不能降低原参数或用 min() 裁费用。先 Windows Release 原规格 realtime，再 RKMPP 增量与同规格验证；本节目前是待审实施设计，未实现信用算法。

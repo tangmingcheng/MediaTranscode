@@ -19,7 +19,7 @@ struct MediaCompositionStartupStoragePlan final {
 class MediaCompositionStartupStoragePlanner final {
 public:
     static ::media::Result<MediaCompositionStartupStoragePlan> plan(
-        const MediaStartupRoutePlan& route, std::size_t videoUnits,
+        const MediaStartupRoutePlan& route, MediaRtpControlDelivery controlDelivery, std::size_t videoUnits,
         std::optional<std::size_t> audioUnits, std::size_t groupKeyCharacters,
         std::span<const std::size_t> maximumDatagramBytes);
 };

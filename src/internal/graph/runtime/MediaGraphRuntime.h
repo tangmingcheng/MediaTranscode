@@ -23,6 +23,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphRuntimeLifecycleExecutor;
+class MediaGraphPayloadBranchReservation;
 class MediaRuntimeBranch;
 class MediaRuntimeBranchResourceReservation;
 class MediaAvSyncClockSource;
@@ -84,6 +85,7 @@ public:
     ::media::Status stop();
     void abort() noexcept;
     void reset();
+    ::media::Status retainInitialFixedStorage(std::uint64_t bytes);
 
     MediaGraphRuntimeState state() const noexcept;
     bool compiled() const noexcept;
@@ -111,6 +113,8 @@ private:
     friend class MediaContinuousOutputDrain;
     ::media::Status compileTransaction(MediaRealtimeExecutableGraph executable);
 
+    // The root storage lease outlives all execution owners, including map sentinels.
+    std::shared_ptr<MediaGraphPayloadBranchReservation> m_rootStorageReservation;
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;

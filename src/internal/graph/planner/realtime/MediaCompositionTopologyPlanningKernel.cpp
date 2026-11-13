@@ -34,7 +34,7 @@ template<bool Updating> ::media::Status compileTopology(
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Source topology requires declared RTP startup facts"));
         const MediaCompositionSourceTopologyFacts facts{
-            *sync.members, *sync.startup.videoReadiness, *sync.sourceClockMode,
+            *sync.members, *sync.startup.videoReadiness, *sync.sourceClockMode, source.controlDelivery,
             source.policies, source.branches, source.inputs, products.aggregate.sources[i]};
         if constexpr (Updating) {
             if (auto status=MediaCompositionSourceTopologyPlanner::rebind(facts, products.sources[i]); !status) return status;

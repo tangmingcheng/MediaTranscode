@@ -334,7 +334,7 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
     if (auto status = MediaTsFinalGraphStoragePlanner::apply(graph, {}); !status)
         return ::media::Result<MediaGraph>::failure(status.error());
     auto finalLedger = MediaFinalGraphResourceLedgerCompiler::compile(
-        graph, *plan.resourceLedger, {});
+        graph, *plan.resourceLedger, {}, MediaExecutionContextStorageOwnership::NewContext);
     if (!finalLedger) {
         return ::media::Result<MediaGraph>::failure(finalLedger.error());
     }
@@ -415,7 +415,7 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendEncodingGroup(
         nodes.push_back(graph.nodes()[index].id);
     }
     auto resources = MediaFinalGraphResourceLedgerCompiler::compile(
-        graph, *plan.resourceLedger, nodes);
+        graph, *plan.resourceLedger, nodes, MediaExecutionContextStorageOwnership::NewContext);
     if (!resources) return Result::failure(resources.error());
     auto* resolver = graph.findNode(nodes.front());
     if (!resolver || resolver->kind != MediaNodeKind::CodecResolver) return Result::failure(
@@ -464,7 +464,7 @@ MediaRealtimeRtpTranscodeGraphBuilder::appendProtocolOutput(
     for (std::size_t index = previous; index < graph.nodeCount(); ++index) nodes.push_back(graph.nodes()[index].id);
     if (auto status = MediaTsFinalGraphStoragePlanner::apply(graph, nodes); !status)
         return Result::failure(status.error());
-    auto storage = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, *plan.resourceLedger, nodes);
+    auto storage = MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(graph, *plan.resourceLedger, nodes, MediaExecutionContextStorageOwnership::NewContext);
     if (!storage) return Result::failure(storage.error());
     if (!graph.appendProtocolGenerationStorage(std::move(storage.value().protocolGenerationStorage)))
         return Result::failure(::media::ErrorInfo::invalidArgument(

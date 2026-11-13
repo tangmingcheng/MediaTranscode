@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/model/MediaRtpControlDelivery.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
 
@@ -14,6 +15,7 @@ struct MediaRealtimeAvSourceFixedProducts final {
     MediaRunningTime activationOutputLead;
     bool videoFilterActive;
     MediaAvGenerationTransitionPlan transition;
+    MediaRtpControlDelivery rtpControlDelivery;
 };
 
 // Mapping only: no policy selection, allocation, or owner lifetime extension.
@@ -30,6 +32,7 @@ public:
     const bool videoFilterActive;
     const MediaAvGenerationTransitionPlan& transition;
     const MediaRealtimeAvSourceTimingFacts& sourceTiming;
+    const MediaRtpControlDelivery rtpControlDelivery;
 
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourcePlanningProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
@@ -37,14 +40,14 @@ public:
           startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
-          sourceTiming(source.sourceTiming), m_completeOwner(&source), m_fixedOwner(nullptr) {}
+          sourceTiming(source.sourceTiming), rtpControlDelivery(source.rtpControlDelivery), m_completeOwner(&source), m_fixedOwner(nullptr) {}
     explicit MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourceFixedProducts& source)
         : audioPipeline(source.audioPipeline), isolatedAudioInput(source.isolatedAudioInput), groupKey(source.groupKey),
           synchronization(source.synchronization), audioServoPolicy(source.synchronization.audioServo),
           startup(source.synchronization.startup),
           threadingPolicy(source.threadingPolicy), activationOutputLead(source.activationOutputLead),
           videoFilterActive(source.videoFilterActive), transition(source.transition),
-          sourceTiming(source.clock.timing), m_completeOwner(nullptr), m_fixedOwner(&source) {}
+          sourceTiming(source.clock.timing), rtpControlDelivery(source.rtpControlDelivery), m_completeOwner(nullptr), m_fixedOwner(&source) {}
     MediaRealtimeAvSourceFixedView(MediaRealtimeAvSourcePlanningProducts&&) = delete;
     MediaRealtimeAvSourceFixedView(const MediaRealtimeAvSourcePlanningProducts&&) = delete;
     MediaRealtimeAvSourceFixedView(MediaRealtimeAvSourceFixedProducts&&) = delete;

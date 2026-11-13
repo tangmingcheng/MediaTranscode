@@ -18,6 +18,9 @@ struct GroupOptionContract final {
 
 constexpr std::array GroupContracts{
     GroupOptionContract{
+        MediaNodeKind::RtpControlOutput,
+        "rtp.sync_group"},
+    GroupOptionContract{
         MediaNodeKind::RawRtpInput,
         "rtp.sync_group"},
     GroupOptionContract{

@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRtpConfigurationStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
+#include "internal/graph/nodes/input/MediaRtpControlOutputNode.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
@@ -118,8 +119,14 @@ template<class T>
         controlRequest.value(), "Prepared pending lease controls");
     if (!controls || controls.value() > (std::numeric_limits<std::size_t>::max)())
         return R::failure(::media::ErrorInfo::allocationFailed("Prepared pending lease controls overflow"));
+    // Each FIFO can independently reach the shared object limit over time and
+    // retain its map/blocks. Account both real container peaks, not one sum size.
+    auto outputStorage = MediaCheckedArithmetic::multiply(outputs.value().peakBytes, 2,
+        "Prepared packet and control FIFO storage");
+    if (!outputStorage || outputStorage.value() > (std::numeric_limits<std::size_t>::max)())
+        return R::failure(::media::ErrorInfo::allocationFailed("Prepared output FIFO storage overflow"));
     MediaPreparedRtpContainerStoragePlan result{prefixCount, stream.envelope.maximumAccessUnitsPerPush,
-        outputs.value().peakBytes, acquiring.value().peakBytes, prefix.value().peakBytes,
+        static_cast<std::size_t>(outputStorage.value()), acquiring.value().peakBytes, prefix.value().peakBytes,
         pending.value().peakBytes, static_cast<std::size_t>(controls.value()),
         snapshot ? references.value().peakBytes : 0, 0};
     if (snapshot) {
@@ -254,6 +261,10 @@ template<class T>
     // their real resource and must never be charged by this lease a second time.
     std::uint64_t fixed = add(sizeof(MediaRtpClockGroupValidator),
         mul(streams, sizeof(MediaRtpSourceClockMapper)));
+    // Shared prepared sessions own one control consumer per stream. Its ordinary
+    // node allocation (including the inline endpoint) is covered by this fixed
+    // lease before factory construction, not charged as a fictitious PMR block.
+    fixed = add(fixed, mul(streams, sizeof(MediaRtpControlOutputNode)));
     p.fixedOwnerAllocationBytes.reset();
     if (!p.canonicalRuntimeRetention) {
         auto source = probeMediaSharedAllocationGeometry<MediaPreparedRtpSourceSession>(

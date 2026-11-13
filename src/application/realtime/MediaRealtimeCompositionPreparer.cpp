@@ -321,7 +321,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
             facts[i].request, facts[i].raw, facts[i].timing, ingress.value().video, ingress.value().audio,
             session.audioRetention ? &*session.audioRetention : nullptr,
             prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
-            deployment.value(), output.value().activationOutputLead, i == selected});
+            deployment.value(), output.value().activationOutputLead, i == selected, MediaRtpControlDelivery::SharedPreparedSession});
         auto fixed = MediaCompositionSourcePlanningKernel::prepareFixed(fixedRequests[i], planningResource.value());
         if (!fixed) return PreparedResult::failure(fixed.error());
         fixedSources.push_back(std::move(fixed).value());
@@ -366,7 +366,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
         sealedRequests.push_back({facts[i].request, facts[i].raw, facts[i].timing,
             source.videoIngress, source.audioIngress, session.audioRetention ? &*session.audioRetention : nullptr,
             prepared->sources[i].plan, *audio.value().resolvedOutput, sourceAudio.value()[i],
-            deployment.value(), output.value().activationOutputLead, i == selected});
+            deployment.value(), output.value().activationOutputLead, i == selected, MediaRtpControlDelivery::SharedPreparedSession});
     }
     if (auto status = MediaCompositionSealedAdmissionValidator::validate(*workspace,
             sealedRequests.view(), readbacks.view(), solver.capacities()); !status)

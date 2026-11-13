@@ -225,7 +225,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
     }
-    const MediaRtpClockRouteShape declaration{*avSync.members};
     const std::int64_t identityEvidenceTimeoutNs =
         avSync.rtpInput->input.identityEvidenceTimeoutNs->nanoseconds();
     const MediaNodeId group = graph.addNode(MediaRtpClockRouteShape::nodeKind(MediaRtpClockRouteRole::Group),
@@ -293,13 +292,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             graph, owner, group, "clock_group", MediaStreamKind::Metadata,
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, false, true); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
-    }
-    for (const auto& connection : MediaRtpClockRouteConnections) {
-        if (connection.to != MediaRtpClockRouteRole::Group || !declaration.has(connection.from) || !declaration.has(connection.to)) continue;
-        const auto from = connection.from == MediaRtpClockRouteRole::VideoInput ? videoInput : *audioInput;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, from, connection.output,
-                group, connection.input, connection.label, edgePolicies.metadata); !status)
-            return ::media::Result<MediaNodeId>::failure(status.error());
     }
     return ::media::Result<MediaNodeId>::success(group);
 }

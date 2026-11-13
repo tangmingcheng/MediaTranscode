@@ -20,6 +20,9 @@
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
+#include "internal/graph/runtime/resource/MediaPmrContainerGeometry.h"
+#include "internal/graph/runtime/resource/MediaSharedAllocationGeometryProbe.h"
+#include "internal/graph/runtime/resource/MediaThreadAllocationGeometry.h"
 #include <algorithm>
 #include <charconv>
 #include <map>
@@ -40,6 +43,7 @@ bool productionRealtimeNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::FileOutput:
     case MediaNodeKind::RealtimeInput:
     case MediaNodeKind::RawRtpInput:
+    case MediaNodeKind::RtpControlOutput:
     case MediaNodeKind::Demux:
     case MediaNodeKind::MpegTsDemux:
     case MediaNodeKind::StreamSplit:
@@ -211,7 +215,8 @@ catch (const std::bad_alloc&) {
 compileLedger(
     const MediaGraph& graph,
     const MediaFinalGraphResourceAdmissionPlan& planningLedger,
-    std::span<const MediaNodeId> selectedNodes, bool credits, bool enforceBudget = true)
+    std::span<const MediaNodeId> selectedNodes, bool credits,
+    MediaExecutionContextStorageOwnership ownership, bool enforceBudget = true)
 {
     const auto selected = [&](MediaNodeId id) {
         return selectedNodes.empty() ||
@@ -329,6 +334,45 @@ compileLedger(
         if (!workers) return Result::failure(workers.error());
         if (auto reserved = reserveFixedStorage("execution-worker-owners", workers.value(), memberCount,
                 "one worker object+fixed owner slot+fixed scheduler rollback identity per executing node"); !reserved)
+            return Result::failure(reserved.error());
+        // Each context owns its index nodes. Extraction copies these indices
+        // while sharing the original wakeup/token allocations, whose root
+        // reservation remains alive. New suffixes own new shared allocations.
+        if (ownership != MediaExecutionContextStorageOwnership::NewContext &&
+            ownership != MediaExecutionContextStorageOwnership::ExtractedContext)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Unknown execution storage ownership"));
+        if (ownsRootService && ownership == MediaExecutionContextStorageOwnership::ExtractedContext)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Root execution storage cannot be extracted"));
+        using WakeupEntry = std::pair<const std::uint32_t, std::shared_ptr<MediaNodeWakeup>>;
+        using ExitEntry = std::pair<const std::uint32_t, std::shared_ptr<MediaGraphWorkerExitToken>>;
+        auto wakeupIndex = MediaStandardContainerGeometry::tree<WakeupEntry>(contractCount);
+        auto exitIndex = MediaStandardContainerGeometry::tree<ExitEntry>(contractCount);
+        if (!wakeupIndex) return Result::failure(wakeupIndex.error());
+        if (!exitIndex) return Result::failure(exitIndex.error());
+        auto indices = Arithmetic::add(wakeupIndex.value(), exitIndex.value(), "context execution ownership indices");
+        if (!indices) return Result::failure(indices.error());
+        if (auto reserved = reserveFixedStorage("execution-context-indices", indices.value(), contractCount,
+                "two actual STL map allocations per context; root original backing and extracted indices coexist"); !reserved)
+            return Result::failure(reserved.error());
+        if (ownership == MediaExecutionContextStorageOwnership::NewContext) {
+            auto wakeup = probeMediaMakeSharedAllocationGeometry<MediaNodeWakeup>();
+            auto exit = probeMediaMakeSharedAllocationGeometry<MediaGraphWorkerExitToken>();
+            if (!wakeup) return Result::failure(wakeup.error());
+            if (!exit) return Result::failure(exit.error());
+            auto unit = Arithmetic::add(wakeup.value().bytes, exit.value().bytes, "execution shared object requests");
+            if (!unit) return Result::failure(unit.error());
+            auto owners = Arithmetic::multiply(contractCount, unit.value(), "execution shared object owners");
+            if (!owners) return Result::failure(owners.error());
+            if (auto reserved = reserveFixedStorage("execution-shared-owners", owners.value(), contractCount,
+                    "actual make_shared wakeup and exit token requests; extraction borrows root owners"); !reserved)
+                return Result::failure(reserved.error());
+        }
+        auto invocation = MediaThreadAllocationGeometry::graphWorker();
+        if (!invocation) return Result::failure(invocation.error());
+        auto invocations = Arithmetic::multiply(memberCount, invocation.value().bytes, "worker thread startup allocations");
+        if (!invocations) return Result::failure(invocations.error());
+        if (auto reserved = reserveFixedStorage("execution-thread-invocations", invocations.value(), memberCount,
+                "audited std::thread member-function invocation allocation; no stop state; retained through worker join"); !reserved)
             return Result::failure(reserved.error());
         if (ownsRootService) {
             // Branch context/scheduler/gate are already embedded in the branch
@@ -804,7 +848,7 @@ compileLedger(
 
 ::media::Result<MediaFinalGraphResourceLedger> MediaFinalGraphResourceLedgerCompiler::compile(
     const MediaGraph& graph, const MediaRealtimeGraphResourceLedgerPlan& planning,
-    std::span<const MediaNodeId> nodes)
+    std::span<const MediaNodeId> nodes, MediaExecutionContextStorageOwnership ownership)
 {
     using Result = ::media::Result<MediaFinalGraphResourceLedger>;
     if (auto status = MediaRealtimeGraphResourceLedgerPlanner::validate(planning); !status)
@@ -817,20 +861,20 @@ compileLedger(
         std::nullopt, std::move(producers).value(), {}};
     if (auto status = admitPreparedStorage(graph, planning, admission); !status)
         return Result::failure(status.error());
-    return compileLedger(graph, admission, nodes, true);
+    return compileLedger(graph, admission, nodes, true, ownership);
 }
 
 ::media::Result<MediaFinalGraphResourceLedger> MediaFinalGraphResourceLedgerCompiler::compile(
     const MediaGraph& graph, const MediaFinalGraphResourceAdmissionPlan& admission)
 {
-    return compileLedger(graph, admission, {}, true);
+    return compileLedger(graph, admission, {}, true, MediaExecutionContextStorageOwnership::NewContext);
 }
 
 ::media::Result<MediaFinalGraphReferenceStoragePlan> MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(
     const MediaGraph& graph, const MediaFinalGraphResourceAdmissionPlan& facts)
 {
     using Result = ::media::Result<MediaFinalGraphReferenceStoragePlan>;
-    auto ledger = compileLedger(graph, facts, {}, false, false);
+    auto ledger = compileLedger(graph, facts, {}, false, MediaExecutionContextStorageOwnership::NewContext, false);
     if (!ledger) return Result::failure(ledger.error());
     return Result::success({ledger.value().admittedGraphPayloadAndReservedStorageBytes,
         std::move(ledger.value().entries), std::move(ledger.value().startupEventMedia), std::move(ledger.value().startupNodeMedia),
@@ -839,7 +883,7 @@ compileLedger(
 
 ::media::Result<MediaFinalGraphReferenceStoragePlan> MediaFinalGraphResourceLedgerCompiler::compileReferenceStorage(
     const MediaGraph& graph, const MediaRealtimeGraphResourceLedgerPlan& planning,
-    std::span<const MediaNodeId> nodes)
+    std::span<const MediaNodeId> nodes, MediaExecutionContextStorageOwnership ownership)
 {
     using Result = ::media::Result<MediaFinalGraphReferenceStoragePlan>;
     if (nodes.empty()) return Result::failure(::media::ErrorInfo::invalidArgument("Reference segment is empty"));
@@ -851,7 +895,7 @@ compileLedger(
         std::nullopt, {}, {}};
     if (auto status = admitPreparedStorage(graph, planning, admission); !status)
         return Result::failure(status.error());
-    auto ledger = compileLedger(graph, admission, nodes, false);
+    auto ledger = compileLedger(graph, admission, nodes, false, ownership);
     if (!ledger) return Result::failure(ledger.error());
     return Result::success({ledger.value().admittedGraphPayloadAndReservedStorageBytes,
         std::move(ledger.value().entries), std::move(ledger.value().startupEventMedia), std::move(ledger.value().startupNodeMedia),

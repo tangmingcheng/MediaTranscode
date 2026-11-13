@@ -231,7 +231,7 @@ template<class Bind>
         options.sources.size(), *plannedTopology.graph.resource());
     for (const auto& source : options.sources)
         sourceFacts.push_back({source.runtime.synchronization, source.runtime.edgePolicies,
-            source.branchConnections, source.inputConnections});
+            source.branchConnections, source.inputConnections, source.runtime.rtpControlDelivery});
     // Consume the admitted declarations instead of allocating a second topology.
     // Rebind independently checks fixed identities against the final source plans.
     if (auto status = MediaCompositionTopologyPlanningKernel::rebind(

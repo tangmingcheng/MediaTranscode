@@ -102,7 +102,8 @@ enum class MediaNodeKind {
     AvContinuousAggregate = 76,
     ContinuousAudioAggregate = 77,
     VideoPreparation = 78,
-    DecodedVideoStartup = 79
+    DecodedVideoStartup = 79,
+    RtpControlOutput = 80
 };
 
 } // namespace media::ffmpeg::graph
