@@ -338,3 +338,15 @@ AAC 单事务上界已审可用闭式：沿现 envelope 的 payload 上界 P，K
 
 
 控制解阻本批 9 源码已冻结并获两名独立审查者完整 SOURCE PASS，覆盖 terminal purge、FIFO 公平处理、首发 pending owner、generation 仲裁、取消 waiter 和 Binder 真实本体费用。同步包 SHA256 10b8b658a7fea189898e62fd8aaaf593bccbcee99eafd48134045c7a19f08ecf，9 文件远端写前／写后 hash 全部通过。远端包已删除，本机包按精确路径删除。RKMPP 八核增量构建 PID 1479997，专属日志／退出标记 composition-build-progress-20261113，终态待收取。尚未运行本批媒体链路，未启用 WaitingCredit，未声称 Pmin 全部前提成立。
+
+
+### RTCP 只读预判与无分配提交（设计双审后实施）
+
+复用现有 CompoundParser 的完整验证与零分配 wire range，不另建解析器。Tracker 将原顺序演算抽成 scalar／CNAME span 的只读 delta：保留未绑定时首 SR／首匹配 CNAME、绑定后 wire 顺序与 BYE 早停，以及原错误触发的 invalidate。delta 明列 pendingSource、SR、last NTP、CNAME 来源、时间、generation 和 evidencePending；不复制整个 tracker，不在 commit 重解析。预判引用当前接收 arena 或旧 tracker 的字节，只能在同一同步事务及版本匹配期间物化；所有 observeMedia、continuity、reset、evidence 消费和提交均使旧版本失效。
+
+ClockSession 共同规划最终 0／1 个 Clock／Invalidation（或原错误），沿原 schedule 规则保留 capture／evaluation 时间。ProtocolSession 预判不清 RTP pending；SourceSession 与 finite Raw 两个生产入口先完成 CNAME、wrapper、sequence 及 FIFO 位置的可能失败操作，再执行版本核验后的无分配提交。失效提交才 reset assembly 并释放 pending 租约；非失效 SR 保持原 RTP pending。失败回滚尚未发布的 FIFO 项，不推进 ordinal/frontier；错误型 invalidate 仍显式提交原清理再返回原错误。0／1 是单次控制事务界，不代替跨批队列容量。
+
+实施范围为 Tracker、InputClockSession、InputProtocolSession 及 SourceSession／Raw 调用者；复用既有 allocator、输出队列及 source 锁，不新增线程、公开参数或平行账本。bootstrap 的 event 还会同步处理 group／binder，须将提交前的物化与提交后的既有处理明确分开，不能声称整个下游计算可回滚。新增字段真实 sizeof 沿既有费用路径计入；旧／新 CNAME 同时持有峰值继续受原上界约束。本批不启用 WaitingCredit、不降低 payload 费用；完整共享信用仍待后续联合产品闭合。
+
+
+控制解阻构建终态：0faf4553 对应 RKMPP 八核增量 84/84，PID 1479997 已结束，退出码 0，realtime CLI 链接成功。记录后删除本轮专属 log／exit；源包本机／远端均已删除。仅源码双审及构建通过，完整控制池进展、WaitingCredit 和原规格实流仍未完成。
