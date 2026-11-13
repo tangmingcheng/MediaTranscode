@@ -407,3 +407,11 @@ GCC 容器 adapter 已本机独立提交 `c7a38df1`（双审 SOURCE PASS，未�
 
 
 整批实现已本机提交 `75a83c7e`，未推送。最终增量10文件远端写前/写后hash全部通过；首轮专属log/exit及两端源码包已按清单删除。最终源码RKMPP八核增量构建已启动，PID 1800374，专属日志/退出标记 `composition-build-credit-final-20261113.log/.exit`，300秒上限；终态待收取，仍无本批媒体结果。
+
+
+最终源码首段构建终态：PID 1800374 已不存在，300 秒到限，退出码 124，完成至 217/328，日志未见 error；不计成功。源码未变，下一段从已完成对象八核增量续编。记录后按清单删除 `composition-build-credit-final-20261113.log/.exit`，不清理构建对象。
+
+实流预检（尚未启动媒体）：远端指定源 124427809 bytes，SHA256 6e0de760672a6b8386b59b22f824de442e2a5ef7594d7b872c6851b64cabca9b；本机 ffprobe exit0 确认120秒、H2641280×720/30、8013434bps、AAC44100双声道。输入61020/21/22/23/30/31/40/41/50/51未见绑定；本机实际IPv4仍192.168.96.122。RK hevc_rkmpp help exit0、支持CBR，同时保留其 `client 12 driver is not ready` 提示；help不是实际编码通过证据。
+
+
+最终源码续编终态：PID 1829881已不存在，111/111，退出码0，realtime CLI链接成功。保留前两次300秒超时记录；这是75a83c7e源码的RKMPP构建通过，尚不代表媒体通过。记录后删除专属composition-build-credit-resume-20261113.log/.exit。
