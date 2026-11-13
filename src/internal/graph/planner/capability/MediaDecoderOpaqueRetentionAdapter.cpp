@@ -44,7 +44,9 @@ auto defaultBufferCallback(const AVCodecContext& context) noexcept
 }
 std::optional<MediaDecoderOpaqueRetention> readRkmppAfterOpen(const AVCodecContext& context)
 {
-    if (!MediaRkmppDependencyIdentity::matchesRuntime() || !avcodec_is_open(&context) ||
+    // FFmpeg declares this read-only open-state query with a non-const pointer.
+    if (!MediaRkmppDependencyIdentity::matchesRuntime() ||
+        !avcodec_is_open(const_cast<AVCodecContext*>(&context)) ||
         !context.codec || !context.codec->name || !context.priv_data ||
         context.codec_type != AVMEDIA_TYPE_VIDEO || context.thread_count <= 0 ||
         context.active_thread_type != 0 || !(context.flags & AV_CODEC_FLAG_COPY_OPAQUE)) return {};

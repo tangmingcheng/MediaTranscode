@@ -89,3 +89,7 @@ configure 沿实际旧安装功能配置：GPL、version3、libdrm、gnutls、rk
 
 原 FFmpeg 库路径为 `/home/tang/ffmpeg-ab1e61a/lib`，原 MPP 路径为 `/usr/local/lib/librockchip_mpp.so.1`。只读版本调用仍输出 `mpp_platform: client 12 driver is not ready!`；此次没有启动解码，不能据此判定硬件解码失败或通过。以上只证明依赖构建、安装及加载身份，不代表实时合屏验收完成。
 清理记录：主线程与 MPP 作者确认无需继续读取后，已逐项删除本轮 14 个远端临时文本：`ffmpeg-configure`、`ffmpeg-build-1`、`ffmpeg-build-2`、`ffmpeg-build-version`、`ffmpeg-install` 各自的 `.log`/`.exit`，以及 `ffmpeg-version.txt`、`ffmpeg-ldd.txt`、`dependency-sha256.txt`、`original-dependency-sha256-after.txt`。清理后精确清单残留为零；源码、对象缓存、隔离安装、rollback 与两份 patch 均保留，未触碰项目 rk-release 构建日志。
+
+## 项目增量首次失败与修正
+
+原rk-release重新配置PID2350470退出0，六个库和头文件目录均已指向prefix-ffmpeg。项目8核增量PID2353126退出1，停于246/820，不是超时：MediaDecoderOpaqueRetentionAdapter.cpp向avcodec_is_open(AVCodecContext*)传入const指针。Windows现有头文件同样签名，属于新共享源码编译问题，不是平台API差异。修正只读查询调用，与既有MediaEncoderOpenContractAdapter采用相同const_cast边界；不改变查询语义或Windows依赖。对象缓存保留，双审后续编；Windows暂不构建遵从用户要求，故不能声称本轮Windows复验通过。rk410尚未启动。
