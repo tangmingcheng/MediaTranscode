@@ -10,7 +10,7 @@ class MediaRkmppDependencyIdentity final {
 public:
     static bool matchesRuntime() noexcept;
     static constexpr std::string_view sourceRevision =
-        "ffmpeg-rockchip/ab1e61adaa21ff129caa8e01a1198156044567ed";
+        "ffmpeg-rockchip/92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696";
 };
 
 } // namespace media::ffmpeg::graph

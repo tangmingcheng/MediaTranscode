@@ -53,3 +53,11 @@ MPP输入userdata引用、packet/frame生命周期、H264/HEVC picture传播及�
 MPP补齐packet复制分配失败、segments独立所有权及put入队失败回收；只有入队成功才消费源packet。最终8核增量构建PID2257585退出0，隔离prefix-mpp安装PID2262247退出0。FFmpeg EOS改为单次提交并分类错误，只有成功接受EOS才进入draining；可重试失败先排空，致命错误直接返回。补丁hash已更新README。
 
 两名未参与实现的独立审查者已对冻结补丁明确SOURCE PASS，本机5处源码亦通过源码审查；容量结论仅为受审模式下的身份持有上界，不等于RSS总额。设备永久停滞的退出能力仍待真实失败链路验证。FFmpeg隔离configure PID2265961退出0，首次8核all构建PID2275937正在进行。新隔离树无可复用对象缓存，首次构建不是项目的全量重建；后续保留对象增量续编。尚未运行新依赖下的媒体验收，不把源码审查与构建结果视为合屏通过。
+
+## 新依赖构建与接入进度
+
+FFmpeg首段PID2275937/2275938超时退出124；保留对象续编PID2311656退出0。隔离提交92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696，版本增量2327082与安装2330856均退出0。MPP隔离提交560734e83e7d3d8a0a2a337d07108f04f4030caa。
+
+目标项目5个opaque合同源码已在检查旧hash后同步dee00de1，写后hash全部一致；目标目录无.git。初次SSH命令因Windows长度限制未启动，改为临时同步脚本执行退出0。本机out/dependency-sync-command.txt、out/dependency-sync.py和远端out/dependency-work/project-source-sync.py已按精确路径清理。
+
+两名独立审查者对4文件identity与证据文字更新明确SOURCE PASS；其他5个RKMPP能力合同继续有效。新props不引用输入packet.buf，其opaque引用由新增合同覆盖，不重复加入压缩输入槽位；后端malloc不宣称属于引擎PMR预算。原rk-release需刷新FFMPEG_*、pkgcfg_lib_FFMPEG_*、__pkg_config_*FFMPEG缓存再增量构建。新依赖媒体验收仍未开始。

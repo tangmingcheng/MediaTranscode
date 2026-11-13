@@ -61,13 +61,13 @@ MediaDecoderInputRetentionAdapter::readAfterOpen(
         // The verified rkmpp_decode_receive_frame has one last_pkt, released
         // unconditionally by decoder close in the deployed ownership fix.
         // EAGAIN may return a decoded frame while retaining that packet; a
-        // successful put_packet immediately unrefs it. MPP c08762ebf copies
+        // successful put_packet immediately unrefs it. MPP c08762ebf plus the audited lineage patch copies
         // non-MppBuffer input in mpp_put_packet -> mpp_packet_copy_init before
         // submission, so its internal bitstream does not pin our AVBuffer.
         // The common decode buffer_pkt handoff remains a separate slot.
         facts.serialPrivatePackets = 1;
         facts.authority = std::string(MediaRkmppDependencyIdentity::sourceRevision) +
-            ":last_pkt-close-release+mpp-c08762ebf-copy-on-put";
+            ":last_pkt-close-release+mpp-c08762ebf-lineage-copy-on-put";
         return facts;
     }
     return {};
