@@ -1,5 +1,5 @@
 diff --git a/libavcodec/rkmppdec.c b/libavcodec/rkmppdec.c
-index 731b705..0e11ec2 100644
+index 731b705..9dca7bd 100644
 --- a/libavcodec/rkmppdec.c
 +++ b/libavcodec/rkmppdec.c
 @@ -29,6 +29,8 @@
@@ -261,7 +261,7 @@ index 731b705..0e11ec2 100644
  
                  if ((ret = ff_get_buffer(avctx, frame, 0)) < 0) {
                      av_log(avctx, AV_LOG_ERROR, "ff_get_buffer failed: %d\n", ret);
-@@ -959,6 +1080,12 @@ export:
+@@ -959,11 +1080,28 @@ export:
      }
  
  exit:
@@ -274,7 +274,41 @@ index 731b705..0e11ec2 100644
      if (mpp_frame)
          mpp_frame_deinit(&mpp_frame);
      return ret;
-@@ -1129,6 +1256,11 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
+ }
+ 
++static int rkmpp_packet_submission_error(int ret)
++{
++    if (ret == MPP_OK)
++        return 0;
++    if (ret == MPP_ERR_BUFFER_FULL || ret == MPP_ERR_TIMEOUT || ret == MPP_NOK)
++        return AVERROR(EAGAIN);
++    if (ret == MPP_ERR_MALLOC || ret == MPP_ERR_NOMEM)
++        return AVERROR(ENOMEM);
++    return AVERROR_EXTERNAL;
++}
++
+ static int rkmpp_send_eos(AVCodecContext *avctx)
+ {
+     RKMPPDecContext *r = avctx->priv_data;
+@@ -983,13 +1121,11 @@ static int rkmpp_send_eos(AVCodecContext *avctx)
+     }
+     mpp_packet_set_eos(mpp_pkt);
+ 
+-    do {
+-        ret = r->mapi->decode_put_packet(r->mctx, mpp_pkt);
+-    } while (ret != MPP_OK);
+-
+-    r->draining = 1;
+-
++    ret = rkmpp_packet_submission_error(r->mapi->decode_put_packet(r->mctx, mpp_pkt));
+     mpp_packet_deinit(&mpp_pkt);
++    if (ret < 0)
++        return ret;
++    r->draining = 1;
+     return 0;
+ }
+ 
+@@ -1129,6 +1265,11 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
              return AVERROR_EXTERNAL;
          }
          mpp_packet_set_pts(mpp_pkt, mpp_pkt_pts);
@@ -286,20 +320,16 @@ index 731b705..0e11ec2 100644
  
          ret = r->mapi->decode_put_packet(r->mctx, mpp_pkt);
      }
-@@ -1137,6 +1269,12 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
+@@ -1137,6 +1278,8 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
          av_log(avctx, AV_LOG_TRACE, "Decoder buffer is full\n");
          if (mpp_pkt)
              mpp_packet_deinit(&mpp_pkt);
-+        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
-+            if (ret == MPP_ERR_MALLOC || ret == MPP_ERR_NOMEM)
-+                return AVERROR(ENOMEM);
-+            if (ret != MPP_ERR_BUFFER_FULL && ret != MPP_ERR_TIMEOUT && ret != MPP_NOK)
-+                return AVERROR_EXTERNAL;
-+        }
++        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE)
++            return rkmpp_packet_submission_error(ret);
          return AVERROR(EAGAIN);
      }
      /* update the last pts */
-@@ -1169,6 +1307,14 @@ static int rkmpp_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+@@ -1169,12 +1312,31 @@ static int rkmpp_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
      }
  
      while (1) {
@@ -314,6 +344,24 @@ index 731b705..0e11ec2 100644
          if (!pkt->size) {
              ret = ff_decode_get_packet(avctx, pkt);
              if (ret == AVERROR_EOF) {
+                 av_log(avctx, AV_LOG_DEBUG, "Decoder is at EOF\n");
+                 /* send EOS and start draining */
+-                rkmpp_send_eos(avctx);
++                ret = rkmpp_send_eos(avctx);
++                if (ret == AVERROR(EAGAIN)) {
++                    /* Pending EOS still needs decoder input credit. Drain with
++                     * the same bounded wait as a pending media packet; never
++                     * block waiting for an EOS that has not been accepted. */
++                    ret = rkmpp_get_frame(avctx, frame, 100);
++                    if (ret == AVERROR(EAGAIN))
++                        continue;
++                    goto exit;
++                }
++                if (ret < 0)
++                    goto exit;
+                 ret = rkmpp_get_frame(avctx, frame, MPP_TIMEOUT_BLOCK);
+                 goto exit;
+             } else if (ret == AVERROR(EAGAIN)) {
 diff --git a/libavcodec/rkmppdec.h b/libavcodec/rkmppdec.h
 index 9a69d82..bc3f10a 100644
 --- a/libavcodec/rkmppdec.h

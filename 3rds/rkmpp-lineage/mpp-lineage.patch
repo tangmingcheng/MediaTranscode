@@ -201,19 +201,93 @@ index ea6e4b30a..de4f0cb82 100644
 +    return ((MppFrameImpl *)owner)->user_data;
 +}
 diff --git a/mpp/base/mpp_packet.c b/mpp/base/mpp_packet.c
-index 19e26dc18..a21d5cb49 100644
+index 19e26dc18..ab11075e7 100644
 --- a/mpp/base/mpp_packet.c
 +++ b/mpp/base/mpp_packet.c
-@@ -140,6 +140,8 @@ MPP_RET mpp_packet_copy_init(MppPacket *packet, const MppPacket src)
+@@ -124,6 +124,11 @@ MPP_RET mpp_packet_copy_init(MppPacket *packet, const MppPacket src)
+     MppPacketImpl *src_impl;
+     MppPacket pkt;
+     MPP_RET ret;
++    void *copy_data = NULL;
++    size_t copy_length = 0;
++    MppPktSeg *copy_segments = NULL;
++    MppPacketImpl *dst_impl;
++    RK_U32 n;
+ 
+     if (!packet || check_is_mpp_packet(src)) {
+         mpp_err_f("found invalid input %p %p\n", packet, src);
+@@ -137,8 +142,49 @@ MPP_RET mpp_packet_copy_init(MppPacket *packet, const MppPacket src)
+     if (ret)
+         return ret;
+ 
++    /* Allocate before copying ownership fields. Failure must not release
++     * source data, segment storage, or its packet completion callback. */
++    if (!src_impl->buffer) {
++        copy_length = mpp_packet_get_length(src);
++        if (copy_length > (size_t)-1 - 256) {
++            mpp_packet_deinit(&pkt);
++            return MPP_ERR_VALUE;
++        }
++        copy_data = mpp_malloc_size(void, copy_length + 256);
++        if (!copy_data) {
++            mpp_packet_deinit(&pkt);
++            return MPP_ERR_MALLOC;
++        }
++    }
++
++    if (src_impl->segment_nb > MPP_PKT_SEG_CNT_DEFAULT) {
++        copy_segments = mpp_calloc(MppPktSeg, src_impl->segment_nb);
++        if (!copy_segments) {
++            mpp_free(copy_data);
++            mpp_packet_deinit(&pkt);
++            return MPP_ERR_MALLOC;
++        }
++    }
++
      /* copy the source data */
      memcpy(pkt, src_impl, sizeof(*src_impl));
- 
-+    mpp_user_data_ref(src_impl->user_data);
++    dst_impl = (MppPacketImpl *)pkt;
++    /* Completion callbacks belong to the original submission, not clones. */
++    dst_impl->release = NULL;
++    dst_impl->release_ctx = NULL;
++    dst_impl->release_arg = NULL;
++    dst_impl->segments_ext = copy_segments;
++    dst_impl->segments = copy_segments ? copy_segments : dst_impl->segments_def;
++    dst_impl->segment_buf_cnt = copy_segments ? src_impl->segment_nb : MPP_PKT_SEG_CNT_DEFAULT;
++    if (src_impl->segment_nb) {
++        memcpy(dst_impl->segments, src_impl->segments,
++               sizeof(*copy_segments) * src_impl->segment_nb);
++        for (n = 0; n < src_impl->segment_nb; n++)
++            dst_impl->segments[n].next = n + 1 < src_impl->segment_nb ?
++                                        &dst_impl->segments[n + 1] : NULL;
++    }
 +
++    mpp_user_data_ref(src_impl->user_data);
+ 
      /* increase reference of meta data */
      if (src_impl->meta)
-         mpp_meta_inc_ref(src_impl->meta);
-@@ -194,6 +196,8 @@ MPP_RET mpp_packet_deinit(MppPacket *packet)
+@@ -152,18 +198,8 @@ MPP_RET mpp_packet_copy_init(MppPacket *packet, const MppPacket src)
+         /*
+          * NOTE: only copy valid data
+          */
+-        size_t length = mpp_packet_get_length(src);
+-        /*
+-         * due to parser may be read 32 bit interface so we must alloc more size
+-         * then real size to avoid read carsh
+-         */
+-        void *pos = mpp_malloc_size(void, length + 256);
+-
+-        if (!pos) {
+-            mpp_err_f("malloc failed, size %d\n", length);
+-            mpp_packet_deinit(&pkt);
+-            return MPP_ERR_MALLOC;
+-        }
++        size_t length = copy_length;
++        void *pos = copy_data;
+ 
+         p = (MppPacketImpl *)pkt;
+         p->data = p->pos = pos;
+@@ -194,6 +230,8 @@ MPP_RET mpp_packet_deinit(MppPacket *packet)
  
      p = (MppPacketImpl *)(*packet);
  
@@ -222,7 +296,7 @@ index 19e26dc18..a21d5cb49 100644
      /* release buffer reference */
      if (p->buffer)
          mpp_buffer_put(p->buffer);
-@@ -305,6 +309,7 @@ MPP_RET mpp_packet_reset(MppPacketImpl *packet)
+@@ -305,6 +343,7 @@ MPP_RET mpp_packet_reset(MppPacketImpl *packet)
      data = packet->data;
      size = packet->size;
  
@@ -230,7 +304,7 @@ index 19e26dc18..a21d5cb49 100644
      memset(packet, 0, sizeof(*packet));
  
      packet->data = data;
-@@ -693,3 +698,19 @@ MPP_PACKET_ACCESSORS(RK_S64, dts)
+@@ -693,3 +732,19 @@ MPP_PACKET_ACCESSORS(RK_S64, dts)
  MPP_PACKET_ACCESSORS(RK_U32, flag)
  MPP_PACKET_ACCESSORS(MppTask, task)
  MPP_PACKET_ACCESSOR_GET(RK_U32, segment_nb)
@@ -524,10 +598,63 @@ index b63293b54..3a3d933cc 100644
      mpp_parser_control(dec->parser, cmd, param);
  
 diff --git a/mpp/mpp.c b/mpp/mpp.c
-index bb9e25866..74d18a45a 100644
+index bb9e25866..b61fbc2bf 100644
 --- a/mpp/mpp.c
 +++ b/mpp/mpp.c
-@@ -1445,6 +1445,7 @@ MPP_RET mpp_control_dec(Mpp *mpp, MpiCmd cmd, MppParam param)
+@@ -412,6 +412,7 @@ MPP_RET mpp_put_packet(Mpp *mpp, MppPacket packet)
+     MppPollType timeout = mpp->mInputTimeout;
+     MppTask task_dequeue = NULL;
+     RK_U32 pkt_copy = 0;
++    MppPacket source_packet = packet;
+ 
+     if (mpp->mDisableThread) {
+         mpp_err_f("no thread decoding case MUST use mpi_decode interface\n");
+@@ -474,8 +475,11 @@ MPP_RET mpp_put_packet(Mpp *mpp, MppPacket packet)
+         /* packet copy path */
+         MppPacket pkt_in = NULL;
+ 
+-        mpp_packet_copy_init(&pkt_in, packet);
+-        mpp_packet_set_length(packet, 0);
++        ret = mpp_packet_copy_init(&pkt_in, packet);
++        if (ret) {
++            mpp->mInputTask = task_dequeue;
++            goto RET;
++        }
+         pkt_copy = 1;
+         packet = pkt_in;
+         ret = MPP_OK;
+@@ -491,6 +495,8 @@ MPP_RET mpp_put_packet(Mpp *mpp, MppPacket packet)
+         mpp_err_f("set input frame to task ret %d\n", ret);
+         /* keep current task for next */
+         mpp->mInputTask = task_dequeue;
++        if (pkt_copy)
++            mpp_packet_deinit(&packet);
+         goto RET;
+     }
+ 
+@@ -499,10 +505,21 @@ MPP_RET mpp_put_packet(Mpp *mpp, MppPacket packet)
+     /* enqueue valid task to decoder */
+     ret = mpp_enqueue(mpp, MPP_PORT_INPUT, task_dequeue);
+     if (ret) {
++        MppPacket detached = NULL;
++        MPP_RET detach_ret;
++
+         mpp_err_f("enqueue ret %d\n", ret);
++        detach_ret = mpp_task_meta_get_packet(task_dequeue, KEY_INPUT_PACKET, &detached);
++        mpp_assert(detach_ret == MPP_OK && detached == packet);
++        mpp->mInputTask = task_dequeue;
++        if (!detach_ret && pkt_copy)
++            mpp_packet_deinit(&detached);
+         goto RET;
+     }
+ 
++    if (pkt_copy)
++        mpp_packet_set_length(source_packet, 0);
++
+     mpp->mPacketPutCount++;
+ 
+     if (timeout && !pkt_copy)
+@@ -1445,6 +1462,7 @@ MPP_RET mpp_control_dec(Mpp *mpp, MpiCmd cmd, MppParam param)
      } break;
      case MPP_DEC_GET_VPUMEM_USED_COUNT :
      case MPP_DEC_SET_OUTPUT_FORMAT :
