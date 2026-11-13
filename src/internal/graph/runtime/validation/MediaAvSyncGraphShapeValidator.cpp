@@ -141,7 +141,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     for (std::size_t index = 0; index < binding.domains.size(); ++index) {
         const auto& domain = binding.domains[index];
         const MediaAvDomainValidationView view{domain.groupKey, domain.plan, domain.role,
-            binding.edgePolicies, binding.datagramTransport, binding.audioExecutionProduct,
+            domain.edgePolicies, binding.datagramTransport, binding.audioExecutionProduct,
             binding.outputProduct, members[index]};
         if (!std::holds_alternative<MediaAvOutputDomainBinding>(domain.role)) {
             if (auto source = MediaSourceClockShapeValidator::validate(graph, view); !source) return source;

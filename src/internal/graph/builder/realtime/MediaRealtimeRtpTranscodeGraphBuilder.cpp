@@ -636,13 +636,13 @@ MediaRealtimeRtpTranscodeGraphBuilder::initialOutputTopology(const MediaGraph& g
         domains.push_back(MediaAvRuntimeDomainBinding{nullptr,
             std::move(runtimePlan->groupKey),
             std::move(runtimePlan->synchronization),
+            runtimePlan->outputEdgePolicies,
             MediaAvSharedSourceOutputDomainBinding{
                 std::move(runtimePlan->transition), std::move(*registration), nullptr, std::move(runtimePlan->reservationStorage)}});
         runtimeBinding.emplace<MediaAvSyncRuntimeBinding>(
             MediaAvSyncRuntimeBinding{
             std::move(domains),
             outputGroupKey,
-            runtimePlan->outputEdgePolicies,
             std::move(runtimePlan->datagramTransport),
             audioExecutionProduct,
             std::move(outputProduct), runtimePlan->scheduling});

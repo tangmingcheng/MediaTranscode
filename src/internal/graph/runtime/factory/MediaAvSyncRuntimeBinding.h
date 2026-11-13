@@ -83,6 +83,7 @@ struct MediaAvRuntimeDomainBinding final {
     std::shared_ptr<const MediaPreparationStorageLease> fixedStorage;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan plan;
+    MediaRealtimeEdgePolicySet edgePolicies;
     MediaAvRuntimeDomainRole role;
 
     MediaAvSyncDomainRole domainRole() const noexcept
@@ -98,7 +99,6 @@ struct MediaAvRuntimeDomainBinding final {
 struct MediaAvSyncRuntimeBinding final {
     std::vector<MediaAvRuntimeDomainBinding> domains;
     MediaAvSyncGroupKey outputGroupKey;
-    MediaRealtimeEdgePolicySet edgePolicies;
     MediaDatagramTransportPlanTemplate datagramTransport;
     MediaSynchronizedAudioExecutionProduct audioExecutionProduct;
     MediaAvSyncRuntimeOutputProduct outputProduct;

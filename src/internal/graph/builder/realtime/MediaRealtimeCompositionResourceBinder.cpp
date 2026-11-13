@@ -168,18 +168,18 @@ namespace media::ffmpeg::graph {
                     : MediaLineageAllocationScope{MediaRuntimeLineageAllocation{}}); !valid)
             return Result::failure(valid.error());
         domains.push_back({options.sources[i].fixedStorage, runtime.groupKey, std::move(runtime.synchronization),
-            MediaAvSourceDomainBinding{std::move(runtime.transition), std::move(topology.sources_[i]),
+            std::move(runtime.edgePolicies), MediaAvSourceDomainBinding{std::move(runtime.transition), std::move(topology.sources_[i]),
                 nullptr, std::move(runtime.reservationStorage), std::move(resources.videoDecoders[i]), std::move(resources.rtpSources[i])}});
     }
     auto outputMembers = topology.output_.processingMembers;
     auto& output = options.outputRuntime;
     domains.push_back({nullptr, output.groupKey, std::move(output.synchronization),
-        MediaAvOutputDomainBinding{std::move(topology.output_), std::move(aggregate),
+        std::move(output.edgePolicies), MediaAvOutputDomainBinding{std::move(topology.output_), std::move(aggregate),
             std::move(resources.videoEncoder), std::move(resources.canvas)}});
     auto outputProduct = std::visit([]<typename Product>(Product&& product) -> MediaAvSyncRuntimeOutputProduct {
         return MediaAvSyncRuntimeOutputProduct(std::forward<Product>(product));
     }, std::move(output.protocolOutput));
-    MediaAvSyncRuntimeBinding binding{std::move(domains), output.groupKey, std::move(output.edgePolicies),
+    MediaAvSyncRuntimeBinding binding{std::move(domains), output.groupKey,
         std::move(output.datagramTransport), MediaSynchronizedAudioExecutionProduct::FrameTranscode,
         std::move(outputProduct), output.scheduling, std::move(resources.masterClock)};
     if (auto status = MediaAvSyncGraphShapeValidator::validate(graph, binding); !status)
