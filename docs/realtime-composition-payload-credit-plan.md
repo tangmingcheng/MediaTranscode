@@ -355,3 +355,6 @@ ClockSession 共同规划最终 0／1 个 Clock／Invalidation（或原错误）
 RTCP 事务 10 文件已获两名独立审查者完整 SOURCE PASS：保留原 compound 顺序、拒绝及 invalidate，准备只读，提交校验 owner／revision；Raw 和共享 SourceSession 均先物化事件并预留队尾，提交失败回滚，成功后推进序号。非失效 SR 保留 RTP pending。CNAME 临时峰值沿原较大 publication 界，无费用降低。旧 MediaRtcpObservation 两个无消费者声明列入后续相邻清理。
 
 本批包 SHA256 a1bd3f22cc0496958122bc0a1dd2db4534428915e6ec25300668677ec1ea6f22，10 文件远端写前／写后 hash 全通过；远端包已删除，本机包按精确路径删除。RKMPP 八核增量 PID 1527764，专属日志／退出标记 composition-build-rtcp-20261113，终态待收取。尚未启用 WaitingCredit，未运行本批实流。
+
+
+RTCP 构建终态：552eb76b 对应 RKMPP 八核增量 45/45，PID 1527764 已结束，退出码 0，realtime CLI 链接成功。记录后删除本轮专属 log／exit；同步包本机和远端均已删除。本批无媒体测试，不计合屏验收通过。
