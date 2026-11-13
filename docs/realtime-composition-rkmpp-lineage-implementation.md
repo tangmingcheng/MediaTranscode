@@ -39,3 +39,5 @@
 ## 当前进度
 
 已完成基线核验与两独立源码副本创建；MPP和FFmpeg负责人正在对齐接口并实施。尚无新增库、项目构建或媒体验收通过结论。原Windows与RKMPP安装保持原样。
+
+回退CLI已实际复制至项目out/dependency-work/rollback-75a83c7e/media_transcode_realtime_video_cli，源/副本SHA256一致：adb299c6c8f3a2a5ff47aafa55dfeeef8cfbb6d0040282d194fece193e709bd2；同目录manifest.json记录源码与依赖路径。该备份验证仅为字节一致，不代表已执行回退后的媒体验收。
