@@ -153,7 +153,7 @@ template<bool Updating> ::media::Status streamCosts(
         Root{Kind::Outputs, facts.containers.outputObjects},
         Root{Kind::ProtocolPending, stream.envelope.maximumAccessUnitsPerPush},
         Root{Kind::RawInputCreditWait, 1}, // RawRtpInputNode::m_preparedPendingPacket
-        Root{Kind::BinderCreditWait, 1}}; // RtpPacketClockBinderNode::m_preparedPendingCredit
+        Root{Kind::BinderCreditWait, 1}}; // RtpPacketClockBinderNode::m_pendingPublication
     // Protocol construction is inside the bounded pending batch. Before freeze,
     // binding drains acquiring serially under the session mutex, so its removed
     // slot covers the in-flight control until prefix publication. Snapshot copies

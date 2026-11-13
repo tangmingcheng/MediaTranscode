@@ -101,15 +101,30 @@ MediaLockedPacketGateNode::reserveOutputCommit(
         MediaControlConsumerGenerationRequirement::ExactWhenPresent);
 }
 
-::media::Result<MediaNodeProcessResult>
-MediaLockedPacketGateNode::process(MediaGraphExecutionContext& context)
+::media::Result<std::optional<MediaNodeProcessResult>>
+MediaLockedPacketGateNode::processControlBeforeOutput(MediaGraphExecutionContext& context, bool allowClock, bool& progressed)
 {
-    if (auto status = configure(context); !status) return processProgress(status);
+    using Result = ::media::Result<std::optional<MediaNodeProcessResult>>;
+    if (auto status = configure(context); !status) return Result::failure(status.error());
     auto purge = m_syncGroup->progressGenerationPurge();
-    if (!purge) return processProgress(::media::Status::failure(purge.error()));
-    if (purge.value()) return ::media::Result<MediaNodeProcessResult>::success(
+    if (!purge) return Result::failure(purge.error());
+    if (purge.value()) return Result::success(
         MediaNodeProcessResult::waitingUntilInputOrDeadline(*m_syncGroupKey, *purge.value()));
-    return FFmpegNodeRuntime::process(context);
+    if (!allowClock) return Result::success(std::nullopt);
+    auto clock = tryPopInputOptional(context, "clock");
+    if (!clock) return Result::failure(clock.error());
+    if (clock.value()) {
+        progressed = true;
+        auto accepted = acceptClock(*clock.value());
+        if (!accepted) return Result::failure(accepted.error());
+        // Observation may start a purge. Never publish media before checking
+        // the newly established generation boundary in this same process call.
+        purge = m_syncGroup->progressGenerationPurge();
+        if (!purge) return Result::failure(purge.error());
+        if (purge.value()) return Result::success(
+            MediaNodeProcessResult::waitingUntilInputOrDeadline(*m_syncGroupKey, *purge.value()));
+    }
+    return Result::success(std::nullopt);
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -126,17 +141,6 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         }
     }
 
-    auto clock = tryPopInputOptional(context, "clock");
-    if (!clock) {
-        return ::media::Result<MediaNodeProcessResult>::failure(clock.error());
-    }
-    if (clock.value()) {
-        auto disposition = acceptClock(*clock.value());
-        return disposition
-            ? processProgress()
-            : processProgress(
-                  ::media::Status::failure(disposition.error()));
-    }
     if (m_pendingInput) {
         if (!m_lockedGeneration &&
             m_syncGroup->reacquisitionSnapshot().phase ==

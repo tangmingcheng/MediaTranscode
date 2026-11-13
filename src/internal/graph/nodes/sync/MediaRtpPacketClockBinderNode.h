@@ -24,7 +24,6 @@ public:
     ~MediaRtpPacketClockBinderNode() override;
     ::media::Status bindPreparedSession(std::shared_ptr<MediaPreparedRtpSourceSession> source);
     ::media::Status start(MediaGraphExecutionContext& context) override;
-    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     std::string_view generationPurgeIdentity() const noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
     static MediaNodeKind staticKind() noexcept;
@@ -32,6 +31,9 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
+    ::media::Result<std::optional<MediaNodeProcessResult>> processControlBeforeOutput(
+        MediaGraphExecutionContext& context, bool allowClock, bool& progressed) override;
+    ::media::Result<MediaOutputCommitReservation> reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
 
@@ -47,6 +49,7 @@ private:
     ::media::Status finishPacketInput(MediaGraphExecutionContext& context,
                                       MediaBufferRef terminal);
     void resetState() noexcept;
+    ::media::Status releasePendingPublication(MediaGraphExecutionContext& context);
     ::media::Status emitPacket(MediaGraphExecutionContext& context, MediaBufferRef buffer);
 
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
@@ -58,7 +61,9 @@ private:
     std::optional<MediaRtpPacketClockSession> m_clockSession;
     MediaLineageUniquePtr<MediaPreparedRtpPrefix> m_preparedPrefix{
         nullptr, MediaLineageObjectDeleter<MediaPreparedRtpPrefix>{MediaRuntimeLineageAllocation{}}};
-    MediaBufferRef m_preparedPendingCredit;
+    // One first-publication owner, shared by graph-credit and authority waits.
+    MediaBufferRef m_pendingPublication;
+    std::uint64_t m_initialGeneration = 0;
     bool m_configured = false;
 };
 

@@ -3,6 +3,8 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/sync/MediaAvInitialClockAdmission.h"
 #include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -122,30 +124,25 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
     return m_ownerPurge;
 }
 
-::media::Result<MediaNodeProcessResult> MediaRtpPacketClockBinderNode::process(
-    MediaGraphExecutionContext& context)
+::media::Result<std::optional<MediaNodeProcessResult>> MediaRtpPacketClockBinderNode::processControlBeforeOutput(
+    MediaGraphExecutionContext& context, bool allowClock, bool& progressed)
 {
+    using Result = ::media::Result<std::optional<MediaNodeProcessResult>>;
+    if (auto configured = configure(context); !configured) return Result::failure(configured.error());
     if (const auto purge = m_ownerPurge->pending()) {
-        if (m_preparedSource) {
-            auto ledger = context.payloadCreditLedger();
-            auto cancelled = ledger ? ledger->cancelProducerWaiter(
-                {nodeId(), m_streamKind, MediaPayloadKind::Packet})
-                : ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                    "Prepared RTP binder purge requires its payload credit ledger"));
-            if (!cancelled) {
-                const auto completed = m_ownerPurge->complete(*purge, cancelled);
-                return processProgress(completed ? cancelled : completed);
-            }
+        if (auto released = releasePendingPublication(context); !released) {
+            const auto completed = m_ownerPurge->complete(*purge, released);
+            return Result::failure(completed ? released.error() : completed.error());
         }
         cancelPendingOutputTransfer();
         if (m_preparedPrefix) m_preparedPrefix->packets.clear();
-        m_preparedPendingCredit.reset();
+        m_pendingPublication.reset();
         m_clockSession->invalidateClockProjection();
         m_clockSession->m_acquiringPackets->clear();
         m_clockSession->m_acquisitionDeadline->clear();
         m_clockSession->m_discardingUnboundCandidates = false;
         auto frontier = m_syncGroup->rtpIngressFrontiers()->find(m_streamKind, *purge);
-        if (frontier && !frontier.value()) return processWaiting();
+        if (frontier && !frontier.value()) return Result::success(MediaNodeProcessResult::waiting());
         const auto status = frontier ? ::media::Status::success()
             : ::media::Status::failure(frontier.error());
         if (frontier) {
@@ -157,9 +154,18 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
                 " cutoff=" + std::to_string(*m_clockSession->m_ingressCutoff));
         }
         const auto completed = m_ownerPurge->complete(*purge, status);
-        return processProgress(completed ? status : completed);
+        if (!completed) return Result::failure(completed.error());
+        if (!status) return Result::failure(status.error());
+        return Result::success(MediaNodeProcessResult::progress());
     }
-    return FFmpegNodeRuntime::process(context);
+    if (!allowClock) return Result::success(std::nullopt);
+    auto clock = tryPopInputOptional(context, "clock");
+    if (!clock) return Result::failure(clock.error());
+    if (clock.value()) {
+        progressed = true;
+        if (auto accepted = acceptClock(*clock.value()); !accepted) return Result::failure(accepted.error());
+    }
+    return Result::success(std::nullopt);
 }
 
 ::media::Result<bool> MediaRtpPacketClockBinderNode::retireExpiredCandidates()
@@ -211,7 +217,7 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
     MediaGraphExecutionContext& context)
 {
     if (auto status = configure(context); !status) return processProgress(status);
-    if (m_preparedPendingCredit) return processProgress(emitPacket(context, m_preparedPendingCredit));
+    if (m_pendingPublication) return processProgress(emitPacket(context, m_pendingPublication));
     if (m_preparedPrefix && !m_preparedPrefix->packets.empty()) {
         auto packet = std::move(m_preparedPrefix->packets.front());
         m_preparedPrefix->packets.pop_front();
@@ -243,14 +249,6 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
         return terminal->isEof()
             ? processFinished(emitOutput(context, "packet", terminal))
             : processProgress(emitOutput(context, "packet", terminal));
-    }
-
-    auto clock = tryPopInputOptional(context, "clock");
-    if (!clock) {
-        return ::media::Result<MediaNodeProcessResult>::failure(clock.error());
-    }
-    if (clock.value()) {
-        if (auto status = acceptClock(*clock.value()); !status) return processProgress(status);
     }
 
     if (!m_clockSession->m_acquiringPackets->empty()) {
@@ -325,6 +323,9 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
     auto groupName = requiredNodeOption(
         options, "MediaRtpPacketClockBinderNode",
         "rtp_clock_binder.sync_group");
+    auto initialGeneration = requiredPositiveInt64NodeOption(
+        options, "MediaRtpPacketClockBinderNode", "rtp_clock_binder.initial_generation");
+    if (!initialGeneration) return ::media::Status::failure(initialGeneration.error());
     if (!stream) return ::media::Status::failure(stream.error());
     if (!capacity) return ::media::Status::failure(capacity.error());
     if (!timeout) return ::media::Status::failure(timeout.error());
@@ -403,6 +404,7 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
         m_clockSession.emplace(std::move(prepared.value().session));
         m_preparedPrefix = std::move(prepared.value().prefix);
     } else m_clockSession.emplace(std::move(session).value());
+    m_initialGeneration = static_cast<std::uint64_t>(initialGeneration.value());
     m_configured = true;
     return ::media::Status::success();
 }
@@ -457,15 +459,82 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
                           : ::media::Status::success();
 }
 
+::media::Result<MediaOutputCommitReservation>
+MediaRtpPacketClockBinderNode::reserveOutputCommit(const MediaBufferRef& buffer) const
+{
+    using Result = ::media::Result<MediaOutputCommitReservation>;
+    if (dynamic_cast<const MediaControlBuffer*>(buffer.get()))
+        return FFmpegNodeRuntime::reserveOutputCommit(buffer);
+    const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get());
+    const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(source ? source->media().get() : buffer.get());
+    if (!m_syncGroup || !m_clockSession || !m_initialGeneration || !packet ||
+        packet->streamKind() != m_streamKind || !packet->sourceTiming() ||
+        packet->sourceTiming()->readiness != MediaSourceClockReadiness::Locked ||
+        !packet->sourceTiming()->generation)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP binder publication requires its bound protocol clock generation"));
+    const auto generation = packet->sourceTiming()->generation;
+    auto arbitration = m_syncGroup->reserveGenerationArbitration();
+    if (!arbitration) return Result::failure(arbitration.error());
+    const auto& transition = arbitration.value().reacquisition();
+    const auto& epoch = arbitration.value().epoch();
+    const bool initial = transition.phase == MediaAvReacquisitionPhase::Inactive &&
+        !transition.transition && !epoch.poisoned && !epoch.activation &&
+        epoch.readiness == MediaAvGenerationReadiness::Acquiring &&
+        !epoch.outputPermitted && !epoch.completedTransitionSequence;
+    if (initial) {
+        if (auto admitted = validateMediaInitialClockGeneration(generation, m_initialGeneration); !admitted)
+            return Result::failure(admitted.error());
+    } else {
+        auto classified = classifyMediaAvGenerationEvidence(transition, epoch, generation);
+        if (!classified) return Result::failure(classified.error());
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Retired)
+            return Result::failure(::media::ErrorInfo::cancelled("RTP binder retires obsolete bound publication"));
+        // A bound packet originates in our verified protocol snapshot. Its
+        // authority may arrive at the Gate later through another fanout edge.
+        // Waiting here must not invent or initiate a generation transition.
+        if (classified.value() == MediaAvGenerationEvidenceDisposition::Future ||
+            transition.phase == MediaAvReacquisitionPhase::Purging)
+            return Result::failure(::media::ErrorInfo::wouldBlock("RTP binder awaits source generation authority"));
+    }
+    if (!m_clockSession->m_lockedSnapshot ||
+        m_clockSession->m_lockedSnapshot->groupGeneration != generation)
+        return Result::failure(::media::ErrorInfo::wouldBlock("RTP binder awaits matching protocol projection"));
+    return Result::success(MediaOutputCommitReservation::hold(
+        std::move(arbitration).value().retainPublicationAuthority()));
+}
+
+::media::Status MediaRtpPacketClockBinderNode::releasePendingPublication(MediaGraphExecutionContext& context)
+{
+    if (m_preparedSource) {
+        auto ledger = context.payloadCreditLedger();
+        if (!ledger) return invalid("Prepared RTP binder cancellation requires its payload credit ledger");
+        if (auto cancelled = ledger->cancelProducerWaiter(
+                {nodeId(), m_streamKind, MediaPayloadKind::Packet}); !cancelled) return cancelled;
+    }
+    m_pendingPublication.reset();
+    return ::media::Status::success();
+}
+
 ::media::Status MediaRtpPacketClockBinderNode::emitPacket(
     MediaGraphExecutionContext& context, MediaBufferRef buffer)
 {
+    if (m_pendingPublication && m_pendingPublication != buffer)
+        return invalid("RTP binder cannot replace its first-publication owner");
     const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get());
     const MediaBufferRef& owner = source ? source->media() : buffer;
     if (!dynamic_cast<FFmpegPacketBuffer*>(owner.get()))
         return invalid("RTP binder output requires one raw packet payload owner");
+    m_pendingPublication = buffer;
+    {
+        auto authority = reserveOutputCommit(buffer);
+        if (!authority) {
+            if (authority.error().code == ::media::ErrorCode::Cancelled)
+                return releasePendingPublication(context);
+            return ::media::Status::failure(authority.error());
+        }
+    }
     if (!owner->payloadCredit() && m_preparedSource) {
-        m_preparedPendingCredit = buffer;
         const auto bytes = owner->payloadFootprintBytes();
         if (!bytes) return invalid("Prepared binder output lacks payload ownership facts");
         auto reservation = context.reservePayloadBatch(nodeId(), m_streamKind,
@@ -473,20 +542,29 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
         if (!reservation) return ::media::Status::failure(reservation.error());
         if (auto status = reservation.value().front().attachTo(*owner); !status) return status;
     }
-    m_preparedPendingCredit.reset();
-    return emitOutput(context, "packet", buffer);
+    auto emitted = emitOutput(context, "packet", buffer);
+    // The base can take ownership of this same packet when its edge is full.
+    // Otherwise a credit/authority WouldBlock leaves our sole owner intact.
+    if (emitted || retainsPendingOutput(buffer)) m_pendingPublication.reset();
+    return emitted;
 }
 
 ::media::Status MediaRtpPacketClockBinderNode::stop(
     MediaGraphExecutionContext& context)
 {
+    auto released = releasePendingPublication(context);
     resetState();
-    return FFmpegNodeRuntime::stop(context);
+    auto stopped = FFmpegNodeRuntime::stop(context);
+    return released ? stopped : released;
 }
 
 void MediaRtpPacketClockBinderNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    if (m_preparedSource) {
+        if (auto ledger = context.payloadCreditLedger())
+            (void)ledger->cancelProducerWaiter({nodeId(), m_streamKind, MediaPayloadKind::Packet});
+    }
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -496,9 +574,10 @@ void MediaRtpPacketClockBinderNode::resetState() noexcept
     m_ownerPurge->stop();
     m_clockSession.reset();
     if (m_preparedPrefix) m_preparedPrefix->packets.clear();
-    m_preparedPendingCredit.reset();
+    m_pendingPublication.reset();
     m_syncGroupKey.reset();
     m_syncGroup.reset();
+    m_initialGeneration = 0;
     m_configured = false;
 }
 

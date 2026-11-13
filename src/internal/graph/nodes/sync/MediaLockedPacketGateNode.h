@@ -19,11 +19,12 @@ class MediaLockedPacketGateNode final : public FFmpegNodeRuntime {
 public:
     explicit MediaLockedPacketGateNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
-    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
+    ::media::Result<std::optional<MediaNodeProcessResult>> processControlBeforeOutput(
+        MediaGraphExecutionContext& context, bool allowClock, bool& progressed) override;
     ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaNodeProcessResult> onProcess(

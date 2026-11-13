@@ -47,6 +47,12 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     MediaNodeRuntime::abort(context);
 }
 
+::media::Result<std::optional<MediaNodeProcessResult>> FFmpegNodeRuntime::processControlBeforeOutput(
+    MediaGraphExecutionContext&, bool, bool&)
+{
+    return ::media::Result<std::optional<MediaNodeProcessResult>>::success(std::nullopt);
+}
+
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::process(MediaGraphExecutionContext& context)
 {
     return processImpl(context);
@@ -58,6 +64,14 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     if (m_finished) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
+    }
+    bool controlProgress = false;
+    auto control = processControlBeforeOutput(context, !m_finishPending, controlProgress);
+    if (!control) return ::media::Result<MediaNodeProcessResult>::failure(control.error());
+    if (control.value()) {
+        if (controlProgress && control.value()->state == MediaNodeProcessState::Waiting)
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+        return ::media::Result<MediaNodeProcessResult>::success(*control.value());
     }
     if (m_pendingTransfer &&
         !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
@@ -76,7 +90,8 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(pendingStatus.error());
     }
     if (waiting) {
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        return ::media::Result<MediaNodeProcessResult>::success(
+            controlProgress ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
     if (hadPendingTransfer) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
@@ -90,7 +105,8 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     }
     auto outcome = MediaNodeRuntime::process(context);
     if (!outcome && outcome.error().code == ::media::ErrorCode::WouldBlock) {
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        return ::media::Result<MediaNodeProcessResult>::success(
+            controlProgress ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
     if (outcome && outcome.value().state == MediaNodeProcessState::Finished &&
         m_pendingTransfer.has_value()) {
@@ -100,6 +116,8 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     if (outcome && outcome.value().state == MediaNodeProcessState::Finished) {
         m_finished = true;
     }
+    if (controlProgress && outcome && outcome.value().state == MediaNodeProcessState::Waiting)
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     return outcome;
 }
 

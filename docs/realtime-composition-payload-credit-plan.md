@@ -328,3 +328,13 @@ bootstrap 在冻结前尚无 DAG 释放 prefix，因此不能盲目使用运行�
 
 
 AAC 构建终态：本机提交 6ac20191 对应 RKMPP 增量 25/25，PID 1427498 已结束，退出码 0；realtime CLI 链接成功。仅构建通过，无本批媒体验收结论。记录后删除本轮专属 log／exit；源包本机与远端均已删除。
+
+
+### 控制消费与事务上界的已审实施边界
+
+Binder／Gate 方案经两名审查者明确 DESIGN PASS：基类 finished 门禁后、媒体 pending 之前每轮最多观察一条 clock，同轮继续媒体；已消费控制但媒体 Waiting 时保留 Progress。终止输出只阻止普通 clock，不阻止既有 purge。Binder 复用 group arbitration，已验证 protocol snapshot 的 Future 等待原控制链确认，Retired 取消，Purging 等待；初始与获取期允许必要输入，不等待输出 epoch 已 Locked。原单 pending 槽保留首发信用／提交等待，只有成功、明确取消或基类接管同一对象才移交。该方案尚待源码双审与实际验证，不等于 Pmin 已可发布。
+
+AAC 单事务上界已审可用闭式：沿现 envelope 的 payload 上界 P，K=Layout.maximumCompleteAccessUnits(P)，H=preparedMediaPacketStorageBytes(0,Payload)，D=min(P-LengthBytes-K*HeaderBytes,K*MaximumAuBytes)；T=max(D+K*H,preparedMediaPacketStorageBytes(MaximumAuBytes,Payload))。须 K>0、H>HeaderBytes 并使用 checked 运算；完整包费用随头数单调增加，分片仍保留声明完整 AU 上界。对象 K 与字节 T 是独立界，不能宣称同一报文同时达到。产品尚未接入候选／sealed／runtime；metadata 另计。
+
+
+控制解阻本批 9 源码已冻结并获两名独立审查者完整 SOURCE PASS，覆盖 terminal purge、FIFO 公平处理、首发 pending owner、generation 仲裁、取消 waiter 和 Binder 真实本体费用。同步包 SHA256 10b8b658a7fea189898e62fd8aaaf593bccbcee99eafd48134045c7a19f08ecf，9 文件远端写前／写后 hash 全部通过。远端包已删除，本机包按精确路径删除。RKMPP 八核增量构建 PID 1479997，专属日志／退出标记 composition-build-progress-20261113，终态待收取。尚未运行本批媒体链路，未启用 WaitingCredit，未声称 Pmin 全部前提成立。

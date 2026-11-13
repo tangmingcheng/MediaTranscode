@@ -59,6 +59,10 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
     if (auto status = setOption(
             graph, node, "rtp_clock_binder.sync_group",
             plan.groupKey.value()); !status) return status;
+    if (!plan.assembly.initialGeneration) return ::media::Result<void>::failure(
+        ::media::ErrorInfo::invalidArgument("RTP binder requires its planned initial generation"));
+    if (auto status = setOption(graph, node, "rtp_clock_binder.initial_generation",
+            std::to_string(plan.assembly.initialGeneration)); !status) return status;
     if (!isVideo) return ::media::Result<void>::success();
 
     if (std::holds_alternative<MediaDecodedVideoAssemblyTiming>(plan.assembly.video.timing)) {

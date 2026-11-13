@@ -2,6 +2,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/nodes/input/MediaRtpControlOutputNode.h"
+#include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
@@ -257,14 +258,14 @@ template<class T>
     };
     const std::uint64_t streams = p.audio ? 2 : 1;
     // These remaining ordinary owners are still covered by the fixed lease.
-    // Session/control, Stream, protocol, binder and group now allocate through
+    // Session/control, Stream, protocol, binder session and group allocate through
     // their real resource and must never be charged by this lease a second time.
     std::uint64_t fixed = add(sizeof(MediaRtpClockGroupValidator),
         mul(streams, sizeof(MediaRtpSourceClockMapper)));
-    // Shared prepared sessions own one control consumer per stream. Its ordinary
-    // node allocation (including the inline endpoint) is covered by this fixed
+    // Shared prepared sources retain each control consumer and packet binder.
+    // Their ordinary node allocations (including inline fields) use this fixed
     // lease before factory construction, not charged as a fictitious PMR block.
-    fixed = add(fixed, mul(streams, sizeof(MediaRtpControlOutputNode)));
+    fixed = add(fixed, mul(streams, add(sizeof(MediaRtpControlOutputNode), sizeof(MediaRtpPacketClockBinderNode))));
     p.fixedOwnerAllocationBytes.reset();
     if (!p.canonicalRuntimeRetention) {
         auto source = probeMediaSharedAllocationGeometry<MediaPreparedRtpSourceSession>(

@@ -39,6 +39,9 @@ protected:
     const MediaBuffer* pendingOutputBuffer() const noexcept;
     bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
     void cancelPendingOutputTransfer() noexcept;
+    // Opt-in bounded control observation; no second publication lane.
+    virtual ::media::Result<std::optional<MediaNodeProcessResult>> processControlBeforeOutput(
+        MediaGraphExecutionContext& context, bool allowClock, bool& progressed);
     virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
     virtual ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const;
