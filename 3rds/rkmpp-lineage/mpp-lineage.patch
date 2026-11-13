@@ -1,0 +1,568 @@
+diff --git a/inc/mpp_dec_userdata.h b/inc/mpp_dec_userdata.h
+new file mode 100644
+index 000000000..e4a80408a
+--- /dev/null
++++ b/inc/mpp_dec_userdata.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: Apache-2.0 OR MIT */
++#ifndef MPP_DEC_USERDATA_H
++#define MPP_DEC_USERDATA_H
++#include "rk_type.h"
++/* Context geometry, not a bound on an undrained public output queue.
++ * Query under the decoder control serialization after initialization.
++ * The caller must preserve the inspected decode mode. */
++typedef struct MppDecUserDataGeometry_t {
++    RK_U32 version;
++    RK_U32 coding;
++    RK_U32 split_parse;
++    RK_U32 frame_slots;
++    RK_U32 input_tasks;
++    RK_U32 hal_tasks;
++    RK_U32 context_packet_slots;
++    RK_U32 parser_owner_slots;
++    RK_U32 vproc_owner_slots;
++    RK_U64 user_data_bytes;
++} MppDecUserDataGeometry;
++#endif
+diff --git a/inc/mpp_frame.h b/inc/mpp_frame.h
+index 0bb541e49..2f2878a41 100644
+--- a/inc/mpp_frame.h
++++ b/inc/mpp_frame.h
+@@ -8,6 +8,7 @@
+ 
+ #include "mpp_buffer.h"
+ #include "mpp_meta.h"
++#include "mpp_user_data.h"
+ 
+ /*
+  * bit definition for mode flag in MppFrame
+@@ -491,6 +492,10 @@ void    mpp_frame_set_hdr_dynamic_meta(MppFrame frame, MppFrameHdrDynamicMeta *v
+  * HDR parameter
+  */
+ 
++/* Setter retains; getter borrows until replacement or owner destruction. */
++void mpp_frame_set_user_data(MppFrame owner, MppUserData ref);
++MppUserData mpp_frame_get_user_data(MppFrame owner);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/inc/mpp_packet.h b/inc/mpp_packet.h
+index dd3f16389..4585d99d8 100644
+--- a/inc/mpp_packet.h
++++ b/inc/mpp_packet.h
+@@ -7,6 +7,7 @@
+ #define MPP_PACKET_H
+ 
+ #include "mpp_meta.h"
++#include "mpp_user_data.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -99,6 +100,10 @@ struct MppPktSeg_t {
+ RK_U32 mpp_packet_get_segment_nb(const MppPacket packet);
+ const MppPktSeg *mpp_packet_get_segment_info(const MppPacket packet);
+ 
++/* Setter retains; getter borrows until replacement or owner destruction. */
++void mpp_packet_set_user_data(MppPacket owner, MppUserData ref);
++MppUserData mpp_packet_get_user_data(MppPacket owner);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/inc/mpp_user_data.h b/inc/mpp_user_data.h
+new file mode 100644
+index 000000000..10ecef05e
+--- /dev/null
++++ b/inc/mpp_user_data.h
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: Apache-2.0 OR MIT */
++#ifndef MPP_USER_DATA_H
++#define MPP_USER_DATA_H
++#include <stddef.h>
++#include "mpp_err.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++typedef struct MppUserDataImpl_t *MppUserData;
++/* Success takes data; failure leaves it owned by the caller. */
++MPP_RET mpp_user_data_create(MppUserData *ref, void *data, void (*release)(void *));
++/* References share one allocation; ref/unref never allocate. */
++void mpp_user_data_ref(MppUserData ref);
++void mpp_user_data_unref(MppUserData *ref);
++void *mpp_user_data_get_data(MppUserData ref);
++/* Logical object size, not allocator overhead or a total storage budget. */
++size_t mpp_user_data_object_size(void);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/inc/rk_mpi_cmd.h b/inc/rk_mpi_cmd.h
+index 55861c0ef..5f0d86f86 100644
+--- a/inc/rk_mpi_cmd.h
++++ b/inc/rk_mpi_cmd.h
+@@ -109,6 +109,7 @@ typedef enum {
+     MPP_DEC_CMD_QUERY                   = MPP_FLAG_OR(CMD_MODULE_CODEC, CMD_CTX_ID_DEC, CMD_DEC_QUERY),
+     /* query decoder runtime information for decode stage */
+     MPP_DEC_QUERY,                      /* set and get MppDecQueryCfg structure */
++    MPP_DEC_QUERY_USER_DATA,            /* MppDecUserDataGeometry; local lineage ABI */
+ 
+     CMD_DEC_CMD_CFG                     = MPP_FLAG_OR(CMD_MODULE_CODEC, CMD_CTX_ID_DEC, CMD_DEC_CFG),
+     MPP_DEC_SET_CFG,                    /* set MppDecCfg structure */
+diff --git a/mpp/base/CMakeLists.txt b/mpp/base/CMakeLists.txt
+index 20b66755e..9119c0bc3 100644
+--- a/mpp/base/CMakeLists.txt
++++ b/mpp/base/CMakeLists.txt
+@@ -14,6 +14,7 @@ add_library(mpp_base OBJECT
+     mpp_buf_slot.c
+     mpp_buffer_impl.c
+     mpp_buffer.c
++    mpp_user_data.c
+     mpp_packet.c
+     mpp_frame.c
+     mpp_task_impl.c
+diff --git a/mpp/base/inc/mpp_frame_impl.h b/mpp/base/inc/mpp_frame_impl.h
+index 98f1021f1..55cdc5d7d 100644
+--- a/mpp/base/inc/mpp_frame_impl.h
++++ b/mpp/base/inc/mpp_frame_impl.h
+@@ -77,6 +77,7 @@ typedef union MppFrameStatus_u {
+ 
+ struct MppFrameImpl_t {
+     const char  *name;
++    MppUserData user_data;
+ 
+     /*
+      * dimension parameter for display
+diff --git a/mpp/base/inc/mpp_packet_impl.h b/mpp/base/inc/mpp_packet_impl.h
+index 984add9fc..863e74e05 100644
+--- a/mpp/base/inc/mpp_packet_impl.h
++++ b/mpp/base/inc/mpp_packet_impl.h
+@@ -58,6 +58,7 @@ typedef union MppPacketStatus_t {
+  */
+ typedef struct MppPacketImpl_t {
+     const char      *name;
++    MppUserData user_data;
+ 
+     void            *data;
+     void            *pos;
+diff --git a/mpp/base/mpp_frame.c b/mpp/base/mpp_frame.c
+index ea6e4b30a..de4f0cb82 100644
+--- a/mpp/base/mpp_frame.c
++++ b/mpp/base/mpp_frame.c
+@@ -103,6 +103,7 @@ MPP_RET mpp_frame_deinit(MppFrame *frame)
+     }
+ 
+     p = (MppFrameImpl *)*frame;
++    mpp_user_data_unref(&p->user_data);
+     if (p->buffer)
+         mpp_buffer_put(p->buffer);
+ 
+@@ -237,6 +238,7 @@ MppFrame mpp_frame_dup(MppFrame src)
+ 
+     ret = (MppFrameImpl *)frame;
+     memcpy(ret, p, sizeof(MppFrameImpl));
++    mpp_user_data_ref(p->user_data);
+ 
+     if (p->meta)
+         ret->meta = mpp_meta_dup(p->meta);
+@@ -253,9 +255,14 @@ MPP_RET mpp_frame_copy(MppFrame dst, MppFrame src)
+         return MPP_ERR_UNKNOW;
+     }
+ 
++    if (dst == src)
++        return MPP_OK;
++
+     if (p->meta)
+         mpp_meta_put(p->meta);
+ 
++    mpp_user_data_ref(((MppFrameImpl *)src)->user_data);
++    mpp_user_data_unref(&p->user_data);
+     memcpy(dst, src, sizeof(MppFrameImpl));
+     p = (MppFrameImpl *)src;
+     if (p->meta)
+@@ -368,3 +375,19 @@ MPP_FRAME_ACCESSORS(size_t, fbc_size)
+ MPP_FRAME_ACCESSORS(MppFmtLayout, fmt_layout)
+ MPP_FRAME_ACCESSORS(RK_U32, fbc_uncompress)
+ MPP_FRAME_ACCESSORS(RK_U32, fbc_sparse)
++
++void mpp_frame_set_user_data(MppFrame owner, MppUserData ref)
++{
++    MppFrameImpl *p = (MppFrameImpl *)owner;
++    if (check_is_mpp_frame(owner))
++        return;
++    mpp_user_data_ref(ref);
++    mpp_user_data_unref(&p->user_data);
++    p->user_data = ref;
++}
++MppUserData mpp_frame_get_user_data(MppFrame owner)
++{
++    if (check_is_mpp_frame(owner))
++        return NULL;
++    return ((MppFrameImpl *)owner)->user_data;
++}
+diff --git a/mpp/base/mpp_packet.c b/mpp/base/mpp_packet.c
+index 19e26dc18..a21d5cb49 100644
+--- a/mpp/base/mpp_packet.c
++++ b/mpp/base/mpp_packet.c
+@@ -140,6 +140,8 @@ MPP_RET mpp_packet_copy_init(MppPacket *packet, const MppPacket src)
+     /* copy the source data */
+     memcpy(pkt, src_impl, sizeof(*src_impl));
+ 
++    mpp_user_data_ref(src_impl->user_data);
++
+     /* increase reference of meta data */
+     if (src_impl->meta)
+         mpp_meta_inc_ref(src_impl->meta);
+@@ -194,6 +196,8 @@ MPP_RET mpp_packet_deinit(MppPacket *packet)
+ 
+     p = (MppPacketImpl *)(*packet);
+ 
++    mpp_user_data_unref(&p->user_data);
++
+     /* release buffer reference */
+     if (p->buffer)
+         mpp_buffer_put(p->buffer);
+@@ -305,6 +309,7 @@ MPP_RET mpp_packet_reset(MppPacketImpl *packet)
+     data = packet->data;
+     size = packet->size;
+ 
++    mpp_user_data_unref(&packet->user_data);
+     memset(packet, 0, sizeof(*packet));
+ 
+     packet->data = data;
+@@ -693,3 +698,19 @@ MPP_PACKET_ACCESSORS(RK_S64, dts)
+ MPP_PACKET_ACCESSORS(RK_U32, flag)
+ MPP_PACKET_ACCESSORS(MppTask, task)
+ MPP_PACKET_ACCESSOR_GET(RK_U32, segment_nb)
++
++void mpp_packet_set_user_data(MppPacket owner, MppUserData ref)
++{
++    MppPacketImpl *p = (MppPacketImpl *)owner;
++    if (check_is_mpp_packet(owner))
++        return;
++    mpp_user_data_ref(ref);
++    mpp_user_data_unref(&p->user_data);
++    p->user_data = ref;
++}
++MppUserData mpp_packet_get_user_data(MppPacket owner)
++{
++    if (check_is_mpp_packet(owner))
++        return NULL;
++    return ((MppPacketImpl *)owner)->user_data;
++}
+diff --git a/mpp/base/mpp_user_data.c b/mpp/base/mpp_user_data.c
+new file mode 100644
+index 000000000..7d4b7d0f0
+--- /dev/null
++++ b/mpp/base/mpp_user_data.c
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: Apache-2.0 OR MIT */
++#include <stdlib.h>
++#include "mpp_user_data.h"
++struct MppUserDataImpl_t {
++    unsigned int refs;
++    void *data;
++    void (*release)(void *);
++};
++MPP_RET mpp_user_data_create(MppUserData *ref, void *data, void (*release)(void *))
++{
++    MppUserData value;
++    if (!ref || !release)
++        return MPP_ERR_NULL_PTR;
++    *ref = NULL;
++    value = malloc(sizeof(*value));
++    if (!value)
++        return MPP_ERR_MALLOC;
++    value->refs = 1;
++    value->data = data;
++    value->release = release;
++    *ref = value;
++    return MPP_OK;
++}
++void mpp_user_data_ref(MppUserData ref)
++{
++    if (ref)
++        __atomic_add_fetch(&ref->refs, 1, __ATOMIC_RELAXED);
++}
++void mpp_user_data_unref(MppUserData *ref)
++{
++    MppUserData value = ref ? *ref : NULL;
++    if (!value)
++        return;
++    *ref = NULL;
++    if (!__atomic_sub_fetch(&value->refs, 1, __ATOMIC_ACQ_REL)) {
++        value->release(value->data);
++        free(value);
++    }
++}
++void *mpp_user_data_get_data(MppUserData ref)
++{
++    return ref ? ref->data : NULL;
++}
++size_t mpp_user_data_object_size(void)
++{
++    return sizeof(struct MppUserDataImpl_t);
++}
+diff --git a/mpp/codec/dec/h264/h264d_api.c b/mpp/codec/dec/h264/h264d_api.c
+index 617bc1d39..19f144f02 100644
+--- a/mpp/codec/dec/h264/h264d_api.c
++++ b/mpp/codec/dec/h264/h264d_api.c
+@@ -25,6 +25,7 @@
+ #include "mpp_frame_impl.h"
+ 
+ #include "mpp_parser.h"
++#include "mpp_dec_userdata.h"
+ #include "h264d_global.h"
+ #include "h264d_parse.h"
+ #include "h264d_sps.h"
+@@ -417,6 +418,8 @@ MPP_RET h264d_reset(void *decoder)
+         check_mvc_dpb(p_Dec->p_Vid, p_Dec->p_Vid->p_Dpb_layer[0], p_Dec->p_Vid->p_Dpb_layer[1]);
+     }
+     flush_dpb_buf_slot(p_Dec);
++    mpp_packet_set_user_data(p_Dec->task_pkt, NULL);
++    mpp_frame_set_user_data(p_Dec->curframe, NULL);
+     //!< reset input parameter
+     p_Dec->p_Inp->in_buf        = NULL;
+     p_Dec->p_Inp->pkt_eos       = 0;
+@@ -505,6 +508,17 @@ MPP_RET h264d_control(void *decoder, MpiCmd cmd_type, void *param)
+     H264_DecCtx_t *p_Dec = (H264_DecCtx_t *)decoder;
+ 
+     switch (cmd_type) {
++    case MPP_DEC_QUERY_USER_DATA: {
++        MppDecUserDataGeometry *geometry = (MppDecUserDataGeometry *)param;
++        const MppPacket packets[] = { p_Dec->task_pkt };
++        const MppFrame frames[] = { p_Dec->curframe };
++
++        if (!geometry)
++            return MPP_ERR_NULL_PTR;
++        /* The picture itself resides in frame_slots, counted separately. */
++        geometry->parser_owner_slots = MPP_ARRAY_ELEMS(packets) + MPP_ARRAY_ELEMS(frames);
++        return MPP_OK;
++    } break;
+     case MPP_DEC_SET_ENABLE_FAST_PLAY:
+         p_Dec->cfg->base.enable_fast_play = (param) ? (*((RK_U32 *)param)) : (1);
+         mpp_env_get_u32("force_fast_play_mode", &p_Dec->cfg->base.enable_fast_play,
+@@ -548,6 +562,10 @@ MPP_RET h264d_prepare(void *decoder, MppPacket pkt, HalDecTask *task)
+     INP_CHECK(ret, !decoder && !pkt && !task);
+ 
+     p_Inp = p_Dec->p_Inp;
++    /* User data belongs to a complete access unit, not a timestamp. */
++    mpp_packet_set_user_data(p_Dec->task_pkt, NULL);
++    if (mpp_packet_get_user_data(pkt) && p_Dec->cfg->base.split_parse)
++        return MPP_ERR_VALUE;
+     if (p_Inp->has_get_eos) {
+         mpp_packet_set_length(pkt, 0);
+         task->flags.eos = mpp_packet_get_eos(pkt);
+@@ -610,6 +628,7 @@ MPP_RET h264d_prepare(void *decoder, MppPacket pkt, HalDecTask *task)
+         mpp_packet_set_data(p_Dec->task_pkt, p_Dec->dxva_ctx->bitstream);
+         mpp_packet_set_length(p_Dec->task_pkt, MPP_ALIGN(p_Dec->dxva_ctx->strm_offset, 16));
+         mpp_packet_set_size(p_Dec->task_pkt, p_Dec->dxva_ctx->max_strm_size);
++        mpp_packet_set_user_data(p_Dec->task_pkt, mpp_packet_get_user_data(pkt));
+         task->input_packet = p_Dec->task_pkt;
+     } else {
+         task->input_packet = NULL;
+@@ -674,6 +693,8 @@ MPP_RET h264d_parse(void *decoder, HalDecTask *in_task)
+         in_task->flags.ref_err |= ((p_err->dpb_err_flag | p_err->cur_err_flag) != 0) ? 1 : 0;
+     }
+ 
++    mpp_packet_set_user_data(p_Dec->task_pkt, NULL);
++    mpp_frame_set_user_data(p_Dec->curframe, NULL);
+     return ret;
+ }
+ 
+diff --git a/mpp/codec/dec/h264/h264d_init.c b/mpp/codec/dec/h264/h264d_init.c
+index 572ea8309..ef2ba41d6 100644
+--- a/mpp/codec/dec/h264/h264d_init.c
++++ b/mpp/codec/dec/h264/h264d_init.c
+@@ -463,6 +463,8 @@ static MPP_RET dpb_mark_malloc(H264dVideoCtx_t *p_Vid, H264_StorePic_t *dec_pic)
+             /* After cropped */
+             impl->width = p_Vid->width_after_crop;
+             impl->height = p_Vid->height_after_crop;
++            mpp_frame_set_user_data(p_Dec->curframe,
++                                    mpp_packet_get_user_data(p_Dec->task_pkt));
+             impl->pts = p_Vid->p_Cur->last_pts;
+             impl->dts = p_Vid->p_Cur->last_dts;
+ 
+diff --git a/mpp/codec/dec/h265/h265d_api.c b/mpp/codec/dec/h265/h265d_api.c
+index f8f0552a3..465c55ecc 100644
+--- a/mpp/codec/dec/h265/h265d_api.c
++++ b/mpp/codec/dec/h265/h265d_api.c
+@@ -12,6 +12,7 @@
+ #include "rk_hdr_meta_com.h"
+ 
+ #include "mpp_parser.h"
++#include "mpp_dec_userdata.h"
+ #include "h265d_debug.h"
+ #include "h265d_spliter.h"
+ #include "h265d_dpb.h"
+@@ -86,6 +87,10 @@ MPP_RET h265d_prepare(void *ctx, MppPacket pkt, HalDecTask *task)
+     MPP_RET ret = MPP_OK;
+ 
+     task->valid = 0;
++    /* User data belongs to a complete access unit, not a timestamp. */
++    mpp_packet_set_user_data(s->input_packet, NULL);
++    if (mpp_packet_get_user_data(pkt) && p->cfg->base.split_parse)
++        return MPP_ERR_VALUE;
+     s->eos = mpp_packet_get_eos(pkt);
+ 
+     if (p->cfg->base.split_parse && NULL == spl) {
+@@ -169,6 +174,7 @@ MPP_RET h265d_prepare(void *ctx, MppPacket pkt, HalDecTask *task)
+ 
+         if (MPP_OK == h265d_syntax_fill_slice(s->ctx, task->input)) {
+             task->valid = 1;
++            mpp_packet_set_user_data(s->input_packet, mpp_packet_get_user_data(pkt));
+             task->input_packet = s->input_packet;
+         }
+     }
+@@ -213,6 +219,7 @@ MPP_RET h265d_parse(void *ctx, HalDecTask *task)
+         s->is_decoded = 0;
+     }
+     h265d_dpb_output(ctx, 0);
++    mpp_packet_set_user_data(s->input_packet, NULL);
+     return MPP_OK;
+ }
+ 
+@@ -228,6 +235,7 @@ MPP_RET h265d_reset(void *ctx)
+     } while (ret);
+ 
+     h265d_dpb_flush(s);
++    mpp_packet_set_user_data(s->input_packet, NULL);
+ 
+     h265d_spliter_reset(p->spliter);
+ 
+@@ -268,6 +276,17 @@ MPP_RET h265d_control(void *ctx, MpiCmd cmd, void *param)
+     H265dCtx *p = (H265dCtx *)ctx;
+ 
+     switch (cmd) {
++    case MPP_DEC_QUERY_USER_DATA: {
++        H265dPrs *s = (H265dPrs *)p->parser;
++        MppDecUserDataGeometry *geometry = (MppDecUserDataGeometry *)param;
++        const MppPacket packets[] = { s->input_packet };
++
++        if (!geometry)
++            return MPP_ERR_NULL_PTR;
++        /* Each DPB entry owns a frame independently of its slot copy. */
++        geometry->parser_owner_slots = MPP_ARRAY_ELEMS(packets) + MPP_ARRAY_ELEMS(s->dpb);
++        return MPP_OK;
++    } break;
+     case MPP_DEC_SET_FRAME_INFO : {
+         MppFrame frame = (MppFrame) param;
+ 
+diff --git a/mpp/codec/dec/h265/h265d_dpb.c b/mpp/codec/dec/h265/h265d_dpb.c
+index e49a7427c..ab8c8c462 100644
+--- a/mpp/codec/dec/h265/h265d_dpb.c
++++ b/mpp/codec/dec/h265/h265d_dpb.c
+@@ -46,6 +46,7 @@ void h265d_frame_unref(H265dPrs *p, RK_U32 dpb_idx, H265dFrmRefStatus clear_mask
+         }
+ 
+         h265d_dbg_ref("unref_frame poc %d slot_index %d\n", frame->poc, frame->slot_index);
++        mpp_frame_set_user_data(frame->frame, NULL);
+         frame->poc = INT_MAX;
+         frame->slot_index = 0xff;
+         /* Clear error status when frame is fully unreferenced */
+@@ -127,6 +128,8 @@ static H265dFrame *h265d_frame_create(H265dPrs *p, RK_S32 poc, RK_U32 ref_only)
+ 
+         mpp_frame_set_errinfo(frame->frame, ref_only ? 1 : 0);
+         mpp_frame_set_discard(frame->frame, 0);
++        mpp_frame_set_user_data(frame->frame, ref_only ? NULL :
++                                mpp_packet_get_user_data(p->input_packet));
+         mpp_frame_set_pts(frame->frame, p->pts);
+         mpp_frame_set_dts(frame->frame, p->dts);
+         mpp_frame_set_poc(frame->frame, poc);
+diff --git a/mpp/codec/mpp_dec.c b/mpp/codec/mpp_dec.c
+index b63293b54..3a3d933cc 100644
+--- a/mpp/codec/mpp_dec.c
++++ b/mpp/codec/mpp_dec.c
+@@ -15,6 +15,8 @@
+ 
+ #include "mpp_dec_debug.h"
+ #include "mpp_dec_vproc.h"
++#include "mpp_dec_userdata.h"
++#include "mpp_user_data.h"
+ #include "mpp_dec_cb_param.h"
+ #include "mpp_dec_normal.h"
+ #include "mpp_dec_no_thread.h"
+@@ -150,6 +152,40 @@ static MPP_RET mpp_dec_check_data_layout(MppDecImpl *p)
+ MPP_RET mpp_dec_proc_cfg(MppDecImpl *dec, MpiCmd cmd, void *param)
+ {
+     MPP_RET ret = MPP_OK;
++    if (cmd == MPP_DEC_QUERY_USER_DATA) {
++        MppDecUserDataGeometry facts = { 0 };
++        Mpp *mpp = (Mpp *)dec->mpp;
++        RK_S32 slots;
++        if (!param || !mpp || !dec->cfg || !dec->frame_slots)
++            return MPP_ERR_NULL_PTR;
++        if (dec->cfg->base.split_parse || mpp->mDisableThread)
++            return MPP_ERR_UNKNOW;
++        slots = mpp_buf_slot_get_count(dec->frame_slots);
++        if (slots <= 0 || mpp->mInputTaskCount <= 0 ||
++            !dec->cfg->status.hal_task_count)
++            return MPP_ERR_UNKNOW;
++        facts.coding = dec->coding;
++        facts.split_parse = dec->cfg->base.split_parse;
++        facts.frame_slots = slots;
++        facts.input_tasks = mpp->mInputTaskCount;
++        facts.hal_tasks = dec->cfg->status.hal_task_count;
++        /* Physical packet owner fields outside task queues. Count sites even
++         * when the current values alias parser/task owners. */
++        facts.context_packet_slots =
++            (sizeof(dec->mpp_pkt_in) + sizeof(mpp->mExtraPacket)) / sizeof(MppPacket);
++        ret = mpp_parser_control(dec->parser, cmd, &facts);
++        if (ret || !facts.parser_owner_slots)
++            return ret ? ret : MPP_ERR_UNKNOW;
++        facts.vproc_owner_slots = dec->enable_deinterlace ?
++            dec_vproc_userdata_owner_slots() : 0;
++        facts.user_data_bytes = mpp_user_data_object_size();
++        if (!facts.user_data_bytes)
++            return MPP_ERR_UNKNOW;
++        facts.version = 1;
++        *(MppDecUserDataGeometry *)param = facts;
++        return MPP_OK;
++    }
++
+ 
+     mpp_parser_control(dec->parser, cmd, param);
+ 
+diff --git a/mpp/mpp.c b/mpp/mpp.c
+index bb9e25866..74d18a45a 100644
+--- a/mpp/mpp.c
++++ b/mpp/mpp.c
+@@ -1445,6 +1445,7 @@ MPP_RET mpp_control_dec(Mpp *mpp, MpiCmd cmd, MppParam param)
+     } break;
+     case MPP_DEC_GET_VPUMEM_USED_COUNT :
+     case MPP_DEC_SET_OUTPUT_FORMAT :
++    case MPP_DEC_QUERY_USER_DATA:
+     case MPP_DEC_QUERY :
+     case MPP_DEC_SET_MAX_USE_BUFFER_SIZE: {
+         ret = mpp_dec_control(mpp->mDec, cmd, param);
+diff --git a/mpp/vproc/inc/mpp_dec_vproc.h b/mpp/vproc/inc/mpp_dec_vproc.h
+index 72e621057..77ae10ac0 100644
+--- a/mpp/vproc/inc/mpp_dec_vproc.h
++++ b/mpp/vproc/inc/mpp_dec_vproc.h
+@@ -49,6 +49,7 @@ MPP_RET dec_vproc_stop(MppDecVprocCtx ctx);
+ MPP_RET dec_vproc_signal(MppDecVprocCtx ctx);
+ MPP_RET dec_vproc_reset(MppDecVprocCtx ctx);
+ RK_U32 dec_vproc_get_version(MppDecVprocCtx ctx);
++RK_U32 dec_vproc_userdata_owner_slots(void);
+ MPP_RET dec_vproc_set_mode(MppDecVprocCtx ctx, MppVprocMode mode);
+ 
+ #ifdef __cplusplus
+diff --git a/mpp/vproc/mpp_dec_vproc.c b/mpp/vproc/mpp_dec_vproc.c
+index daf0741d6..ccacfb777 100644
+--- a/mpp/vproc/mpp_dec_vproc.c
++++ b/mpp/vproc/mpp_dec_vproc.c
+@@ -100,6 +100,14 @@ typedef struct MppDecVprocCtxImpl_t {
+     MPP_RET (*start_dei)(MppDecVprocCtx *vproc_ctx, RK_U32 mode);
+     MPP_RET (*update_ref)(MppDecVprocCtx *vproc_ctx, MppFrame frm, RK_U32 index);
+ } MppDecVprocCtxImpl;
++/* Both saved frame references are bounded fields, also pinned in frame_slots.
++ * Return a conservative owner-site count, not a count of output frames. */
++RK_U32 dec_vproc_userdata_owner_slots(void)
++{
++    return (sizeof(((MppDecVprocCtxImpl *)0)->prev_frm0) +
++            sizeof(((MppDecVprocCtxImpl *)0)->prev_frm1)) / sizeof(MppFrame);
++}
++
+ 
+ static void dec_vproc_put_frame(Mpp *mpp, MppFrame frame, MppBuffer buf, RK_S64 pts, RK_U32 err)
+ {

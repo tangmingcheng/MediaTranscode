@@ -41,3 +41,9 @@
 已完成基线核验与两独立源码副本创建；MPP和FFmpeg负责人正在对齐接口并实施。尚无新增库、项目构建或媒体验收通过结论。原Windows与RKMPP安装保持原样。
 
 回退CLI已实际复制至项目out/dependency-work/rollback-75a83c7e/media_transcode_realtime_video_cli，源/副本SHA256一致：adb299c6c8f3a2a5ff47aafa55dfeeef8cfbb6d0040282d194fece193e709bd2；同目录manifest.json记录源码与依赖路径。该备份验证仅为字节一致，不代表已执行回退后的媒体验收。
+
+## 首批实现检查点
+
+MPP输入userdata引用、packet/frame生命周期、H264/HEVC picture传播及实时几何query已实现于隔离树。首轮8核Release全目标构建PID2179343退出0，之后补context_packet_slots查询字段；后续增量复编尚待终态，不把首轮成功扩大到最终源码。FFmpeg桥接已实现COPY_OPAQUE属性传递、export所有权、discard/infochange处理与每次送包前排空输出；两份补丁保存3rds/rkmpp-lineage，原树/原库不变。
+
+本机将native与backend opaque容量事实分为variant：native公式及options保持，backend读opened私有只读option形成上界再checked+2；opened校验拒绝混合/未知字段。SourcePresentation要求COPY_OPAQUE；旧依赖identity暂时保留，待最终依赖版本冻结后更新，当前不开放运行能力。单独本机5文件初审PASS，但两位整批独立审查仍进行中。没有新媒体验收结果。

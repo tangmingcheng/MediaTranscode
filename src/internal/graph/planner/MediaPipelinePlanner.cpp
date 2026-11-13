@@ -349,7 +349,11 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     if (consumerFrameRate && (consumerFrameRate->num <= 0 || consumerFrameRate->den <= 0))
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Decoder completion checks require a positive declared consumer rate"));
-    source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+    // SourcePresentation requires picture identity across decoder reordering.
+    // The opened backend capability check must authorize COPY_OPAQUE before
+    // preparation publishes a usable source contract.
+    source.decoderLineagePropagation = source.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP &&
+        !std::holds_alternative<MediaSourcePresentationTiming>(timing)
         ? MediaVideoLineagePropagation::SubmissionOrder : MediaVideoLineagePropagation::CodecCopyOpaque;
     source.filterImplementation = !source.filterActive ? MediaVideoFilterImplementation::None
         : source.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP

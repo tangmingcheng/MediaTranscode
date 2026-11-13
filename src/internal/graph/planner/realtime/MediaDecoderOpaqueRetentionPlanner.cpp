@@ -5,10 +5,19 @@ extern "C" {
 }
 namespace media::ffmpeg::graph {
 ::media::Result<std::uint64_t> MediaDecoderOpaqueRetentionPlanner::registryCapacity(
-    const MediaDecoderOpaqueRetention& facts)
+    const MediaDecoderOpaqueRetention& evidence)
 {
     using Result = ::media::Result<std::uint64_t>;
     using A = MediaCheckedArithmetic;
+    if (evidence.valueless_by_exception())
+        return Result::failure(::media::ErrorInfo::invalidArgument("Decoder opaque retention variant is unavailable"));
+    if (const auto* backend = std::get_if<MediaBackendDecoderOpaqueRetention>(&evidence)) {
+        if (backend->threadCount <= 0 || backend->activeThreadType != 0 ||
+            backend->contractVersion != 1 || !backend->retainedPackets)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Backend opaque retention requires an opened serial contract"));
+        return A::add(backend->retainedPackets, 2, "backend decoder and engine opaque progress slots");
+    }
+    const auto& facts = std::get<MediaNativeDecoderOpaqueRetention>(evidence);
     if (facts.threadCount <= 0 || facts.activeThreadType < 0 ||
         (facts.activeThreadType & ~(FF_THREAD_FRAME | FF_THREAD_SLICE)) ||
         !facts.privateFrameSlots || !facts.genericSlots ||
