@@ -303,7 +303,7 @@ static ::media::Result<MediaRealtimeInputGraph> appendInput(
     const MediaRealtimeRtpInputNodePlan& inputPlan, int videoStreamIndex,
     MediaBranchMode videoMode, const MediaRealtimeVideoRuntimePlan* videoRuntime,
     const MediaRealtimeAvSourceRuntimePlan* avRuntime,
-    const MediaVideoSourcePlan* sourceVideo)
+    const MediaVideoSourcePlan* sourceVideo, std::optional<std::uint64_t> sourceRegistryCapacity)
 {
     if (prefix.empty()) return ::media::Result<MediaRealtimeInputGraph>::failure(
         ::media::ErrorInfo::invalidArgument("Realtime input requires a graph prefix"));
@@ -455,8 +455,9 @@ static ::media::Result<MediaRealtimeInputGraph> appendInput(
             : MediaEndpoint{};
         const bool decoded = std::holds_alternative<MediaDecodedVideoAssemblyTiming>(avRuntime->assembly.video.timing);
         if (decoded) {
-            if (!sourceVideo) return ::media::Result<MediaRealtimeInputGraph>::failure(
-                ::media::ErrorInfo::notInitialized("Decoded startup requires its source video plan"));
+            if (!sourceVideo || !sourceRegistryCapacity || !*sourceRegistryCapacity)
+                return ::media::Result<MediaRealtimeInputGraph>::failure(
+                    ::media::ErrorInfo::notInitialized("Decoded startup requires its source video and registry capacity plans"));
             MediaVideoSourceBranchOptions decoder;
             decoder.prefix = prefix + ".video";
             decoder.plan = *sourceVideo;
@@ -464,7 +465,7 @@ static ::media::Result<MediaRealtimeInputGraph> appendInput(
             decoder.timing = MediaSourcePresentationTiming{};
             decoder.queues = avRuntime->queues;
             decoder.edgePolicies = avRuntime->edgePolicies;
-            decoder.canonicalLineageCapacity = avRuntime->queues.frame;
+            decoder.canonicalLineageCapacity = *sourceRegistryCapacity;
             decoder.generationStartRequiresKeyFrame = avRuntime->synchronization.startup.requireVideoKeyFrame;
             decoder.formatSourceNode = videoInputChain.value().input;
             decoder.formatSourcePort = "format";
@@ -514,14 +515,14 @@ static ::media::Result<MediaRealtimeInputGraph> appendInput(
 {
     return appendInput(graph, prefix, plan.inputType, plan.input, plan.videoPlan.sourceStreamIndex,
         plan.videoPlan.branchMode, std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime),
-        std::get_if<MediaRealtimeAvSyncRuntimePlan>(&plan.runtime), nullptr);
+        std::get_if<MediaRealtimeAvSyncRuntimePlan>(&plan.runtime), nullptr, std::nullopt);
 }
 
 ::media::Result<MediaRealtimeInputGraph> MediaRealtimeInputGraphBuilder::append(
     MediaGraph& graph, const std::string& prefix, const MediaRealtimeCompositionSourcePlan& plan)
 {
     return appendInput(graph, prefix, plan.inputType, plan.input, plan.videoStreamIndex,
-        MediaBranchMode::TranscodeFrame, nullptr, &plan.runtime, &plan.video);
+        MediaBranchMode::TranscodeFrame, nullptr, &plan.runtime, &plan.video, plan.lineageRegistryCapacity);
 }
 
 } // namespace media::ffmpeg::graph
