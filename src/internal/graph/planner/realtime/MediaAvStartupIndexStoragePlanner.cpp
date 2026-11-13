@@ -7,21 +7,25 @@
 
 namespace media::ffmpeg::graph {
 namespace {
-// The decoded index has two node-and-head classes, one empty coverage
-// head, and no pending intervals. Both forward pricing and the budget inverse
-// consume this declaration; the inverse never estimates a slope from samples.
+// The decoded index has two entry classes, empty-container head facts,
+// and no pending intervals. Forward pricing and the budget inverse consume
+// the same declaration rather than estimating a slope from samples.
 struct LinearRequests final { std::uint64_t perUnit; std::uint64_t fixed; };
-constexpr std::array<LinearRequests, 4> decodedRequests{{{1, 1}, {1, 1}, {0, 1}, {0, 0}}};
-using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
+std::array<LinearRequests, 4> decodedRequests(const MediaAvStartupIndexGeometries& geometry)
+{
+    return {{{1, geometry[0].emptyHeadRequests}, {1, geometry[1].emptyHeadRequests},
+        {0, geometry[2].emptyHeadRequests}, {0, 0}}};
+}
+using IndexFootprints = std::array<std::size_t, 4>;
 
 ::media::Result<IndexFootprints> footprints(const MediaAvStartupIndexGeometries& geometry)
 {
     using R = ::media::Result<IndexFootprints>;
     IndexFootprints result{};
     for (std::size_t i = 0; i < geometry.size(); ++i) {
-        if (!geometry[i].bytes) return R::failure(::media::ErrorInfo::invalidArgument(
+        if (!geometry[i].request.bytes) return R::failure(::media::ErrorInfo::invalidArgument(
             "Startup index requires nonempty allocator geometry"));
-        auto footprint = MediaPreparationMemoryResource::allocationFootprint(geometry[i].bytes, geometry[i].alignment);
+        auto footprint = MediaPreparationMemoryResource::allocationFootprint(geometry[i].request.bytes, geometry[i].request.alignment);
         if (!footprint) return R::failure(footprint.error());
         result[i] = footprint.value();
     }
@@ -34,18 +38,21 @@ using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
 {
     using R = ::media::Result<MediaPreparedStartupIndexStorage>;
     const std::uint64_t count = capacity;
-    std::array<std::uint64_t, decodedRequests.size()> limits{};
+    const auto requestsPerClass = decodedRequests(geometry);
+    std::array<std::uint64_t, 4> limits{};
     for (std::size_t i = 0; i < limits.size(); ++i) {
-        auto nodes = MediaCheckedArithmetic::multiply(count, decodedRequests[i].perUnit,
+        auto nodes = MediaCheckedArithmetic::multiply(count, requestsPerClass[i].perUnit,
             "Startup index node count");
         if (!nodes) return R::failure(nodes.error());
-        auto requests = MediaCheckedArithmetic::add(nodes.value(), decodedRequests[i].fixed,
+        auto requests = MediaCheckedArithmetic::add(nodes.value(), requestsPerClass[i].fixed,
             "Startup index node and head count");
         if (!requests) return R::failure(requests.error());
         limits[i] = requests.value();
     }
     if (readiness == MediaVideoStartupReadiness::IntervalCoverage) {
-        auto coverageHeads = MediaCheckedArithmetic::add(count, 1, "Startup coverage node and head count");
+        auto coverageHeads = MediaCheckedArithmetic::add(count,
+            geometry[static_cast<std::size_t>(MediaAvStartupIndexClass::Coverage)].emptyHeadRequests,
+            "Startup coverage node and head count");
         if (!coverageHeads) return R::failure(coverageHeads.error());
         // Each later interval can occur once in each earlier candidate. Divide
         // an even factor first; no N*N intermediate or sampled growth estimate.
@@ -53,7 +60,13 @@ using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
         const auto right = count % 2 == 0 ? count - 1 : (count - 1) / 2;
         auto pairs = MediaCheckedArithmetic::multiply(left, right, "Startup pending interval pairs");
         if (!pairs) return R::failure(pairs.error());
-        auto live = MediaCheckedArithmetic::add(pairs.value(), coverageHeads.value(),
+        auto pendingContainers = MediaCheckedArithmetic::add(count, 1, "Startup pending containers including temporary move");
+        if (!pendingContainers) return R::failure(pendingContainers.error());
+        auto pendingHeads = MediaCheckedArithmetic::multiply(pendingContainers.value(),
+            geometry[static_cast<std::size_t>(MediaAvStartupIndexClass::Pending)].emptyHeadRequests,
+            "Startup pending container heads");
+        if (!pendingHeads) return R::failure(pendingHeads.error());
+        auto live = MediaCheckedArithmetic::add(pairs.value(), pendingHeads.value(),
             "Startup pending nodes, live heads and temporary move head");
         if (!live) return R::failure(live.error());
         limits[static_cast<std::size_t>(MediaAvStartupIndexClass::Coverage)] = coverageHeads.value();
@@ -74,8 +87,8 @@ using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
             sum.value() > (std::numeric_limits<std::size_t>::max)())
             return R::failure(::media::ErrorInfo::allocationFailed(
                 "Startup index storage exceeds addressable memory"));
-        result.allocations[index] = {geometry[index], static_cast<std::size_t>(limits[index]),
-            static_cast<std::size_t>(bytes.value())};
+        result.allocations[index] = {geometry[index].request, static_cast<std::size_t>(limits[index]),
+            static_cast<std::size_t>(bytes.value()), geometry[index].emptyHeadRequests};
         total = sum.value();
     }
     result.allocationBytes = static_cast<std::size_t>(total);
@@ -104,10 +117,11 @@ using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
     if (!costs) return R::failure(costs.error());
     std::uint64_t perUnit = 0;
     std::uint64_t fixed = 0;
-    for (std::size_t i = 0; i < decodedRequests.size(); ++i) {
-        auto variableBytes = MediaCheckedArithmetic::multiply(decodedRequests[i].perUnit, costs.value()[i],
+    const auto requestsPerClass = decodedRequests(geometry.value());
+    for (std::size_t i = 0; i < requestsPerClass.size(); ++i) {
+        auto variableBytes = MediaCheckedArithmetic::multiply(requestsPerClass[i].perUnit, costs.value()[i],
             "Decoded index per-unit footprint");
-        auto fixedBytes = MediaCheckedArithmetic::multiply(decodedRequests[i].fixed, costs.value()[i],
+        auto fixedBytes = MediaCheckedArithmetic::multiply(requestsPerClass[i].fixed, costs.value()[i],
             "Decoded index fixed footprint");
         if (!variableBytes || !fixedBytes) return R::failure(!variableBytes ? variableBytes.error() : fixedBytes.error());
         auto variableSum = MediaCheckedArithmetic::add(perUnit, variableBytes.value(), "Decoded index per-unit total");
@@ -152,15 +166,14 @@ using IndexFootprints = std::array<std::size_t, decodedRequests.size()>;
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Startup index plan differs from its source capacity, readiness or allocation domain"));
     if (!prepared) return ::media::Status::success();
-    MediaAvStartupIndexGeometries geometry{};
-    for (std::size_t i = 0; i != geometry.size(); ++i) geometry[i] = prepared->allocations[i].request;
-    auto expected = prepare(capacity, readiness, geometry);
+    auto geometry = MediaAvStartupStreamStore::allocationGeometry();
+    if (!geometry) return ::media::Status::failure(geometry.error());
+    auto expected = prepare(capacity, readiness, geometry.value());
     if (!expected) return ::media::Status::failure(expected.error());
     if (prepared->allocationBytes != expected.value().allocationBytes)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Startup index total footprint differs from geometry"));
-    for (std::size_t i = 0; i != geometry.size(); ++i)
-        if (prepared->allocations[i].maximumLiveRequests != expected.value().allocations[i].maximumLiveRequests ||
-            prepared->allocations[i].allocationBytes != expected.value().allocations[i].allocationBytes)
+    for (std::size_t i = 0; i != geometry.value().size(); ++i)
+        if (prepared->allocations[i] != expected.value().allocations[i])
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Startup index class footprint differs from geometry"));
     return ::media::Status::success();
 }

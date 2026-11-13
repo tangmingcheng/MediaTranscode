@@ -1,12 +1,14 @@
 #pragma once
 #include "internal/graph/model/MediaAvStartupIndexStoragePlan.h"
 #include "internal/graph/runtime/resource/MediaSharedAllocationGeometry.h"
+#include <optional>
 
 namespace media::ffmpeg::graph {
 struct MediaAvStartupHashGeometry final {
     MediaAvStartupIndexGeometry node;
-    MediaAvStartupIndexGeometry initialBuckets;
+    std::optional<MediaAvStartupIndexGeometry> initialBuckets;
     MediaAvStartupIndexGeometry finalBuckets;
+    std::size_t initialNodeRequests;
     std::size_t initialBucketCount;
     std::size_t bucketCount;
     float maximumLoadFactor;

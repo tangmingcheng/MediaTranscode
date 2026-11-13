@@ -13,11 +13,17 @@ struct MediaAvStartupIndexGeometry final {
     std::size_t alignment;
     bool operator==(const MediaAvStartupIndexGeometry&) const noexcept = default;
 };
-using MediaAvStartupIndexGeometries = std::array<MediaAvStartupIndexGeometry, 4>;
+struct MediaAvStartupIndexContainerGeometry final {
+    MediaAvStartupIndexGeometry request;
+    std::size_t emptyHeadRequests;
+    bool operator==(const MediaAvStartupIndexContainerGeometry&) const noexcept = default;
+};
+using MediaAvStartupIndexGeometries = std::array<MediaAvStartupIndexContainerGeometry, 4>;
 struct MediaAvStartupIndexAllocationPlan final {
     MediaAvStartupIndexGeometry request;
     std::size_t maximumLiveRequests;
     std::size_t allocationBytes;
+    std::size_t emptyHeadRequests;
     bool operator==(const MediaAvStartupIndexAllocationPlan&) const noexcept = default;
 };
 struct MediaRuntimeStartupIndexStorage final {};

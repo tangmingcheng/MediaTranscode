@@ -2,7 +2,6 @@
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include <algorithm>
-#include <bit>
 #include <limits>
 
 namespace media::ffmpeg::graph {
@@ -17,28 +16,11 @@ namespace {
         return R::failure(::media::ErrorInfo::allocationFailed("Startup generation capacity exceeds addressable memory"));
     return R::success(static_cast<std::size_t>(count.value()));
 }
-::media::Result<std::size_t> bucketCount(std::size_t maximum)
-{
-    using R = ::media::Result<std::size_t>;
-    // Audited xhash minimum, not a media policy default. Probe independently
-    // reads back the actual initial count and default maximum load factor.
-    const auto required = (std::max)(std::size_t{8}, maximum);
-    constexpr auto largestPower = std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
-    if (required > largestPower)
-        return R::failure(::media::ErrorInfo::allocationFailed("Startup hash power-of-two capacity overflows"));
-    const auto buckets = std::bit_ceil(required);
-    auto cells = MediaCheckedArithmetic::multiply(buckets, 2, "Startup hash bucket cells");
-    if (!cells || cells.value() > (std::numeric_limits<std::size_t>::max)())
-        return R::failure(::media::ErrorInfo::allocationFailed("Startup hash bucket cells exceed addressable memory"));
-    return R::success(buckets);
-}
 ::media::Result<MediaPreparedStartupGenerationStorage> prepare(
-    std::size_t maximum, std::size_t buckets, const std::array<MediaAvStartupHashGeometry, 2>& geometry,
+    std::size_t maximum, const std::array<MediaAvStartupHashGeometry, 2>& geometry,
     const MediaSharedAllocationGeometry& sharedObject)
 {
     using R = ::media::Result<MediaPreparedStartupGenerationStorage>;
-    auto nodes = MediaCheckedArithmetic::add(maximum, 1, "Startup hash nodes including sentinel");
-    if (!nodes) return R::failure(nodes.error());
     if (sharedObject.count != 1 || !sharedObject.bytes)
         return R::failure(::media::ErrorInfo::invalidArgument("Startup generation requires one combined shared object/control allocation"));
     auto fixed = MediaPreparationMemoryResource::allocationFootprint(sharedObject.bytes, sharedObject.alignment);
@@ -49,30 +31,33 @@ namespace {
     std::uint64_t total = fixed.value();
     for (std::size_t i = 0; i != result.hashes.size(); ++i) {
         const auto& facts = geometry[i];
-        if (facts.initialBucketCount != 8 || facts.bucketCount != buckets ||
-            facts.maximumLoadFactor != 1.0f || !facts.node.bytes ||
-            !facts.initialBuckets.bytes || facts.initialBuckets.bytes % 16 != 0 ||
-            facts.initialBuckets.alignment != facts.finalBuckets.alignment)
+        if (!facts.initialBucketCount || !facts.bucketCount || facts.maximumLoadFactor != 1.0f ||
+            facts.bucketCount < maximum || !facts.node.bytes || !facts.finalBuckets.bytes ||
+            (facts.initialBuckets && (!facts.initialBuckets->bytes ||
+                facts.initialBuckets->alignment != facts.finalBuckets.alignment)))
             return R::failure(::media::ErrorInfo::unsupported("Startup hash geometry differs from audited node/bucket layout"));
-        auto cells = MediaCheckedArithmetic::multiply(buckets, 2, "Startup hash final cells");
-        if (!cells) return R::failure(cells.error());
-        auto bucketBytes = MediaCheckedArithmetic::multiply(cells.value(), facts.initialBuckets.bytes / 16,
-            "Startup hash final bucket request");
-        if (!bucketBytes) return R::failure(bucketBytes.error());
-        if (bucketBytes.value() != facts.finalBuckets.bytes)
-            return R::failure(::media::ErrorInfo::invalidArgument("Startup hash bucket request differs from cell geometry"));
+        auto nodes = MediaCheckedArithmetic::add(maximum, facts.initialNodeRequests, "Startup hash elements and empty nodes");
+        if (!nodes) return R::failure(nodes.error());
         auto nodeFootprint = MediaPreparationMemoryResource::allocationFootprint(facts.node.bytes, facts.node.alignment);
-        auto initialFootprint = MediaPreparationMemoryResource::allocationFootprint(facts.initialBuckets.bytes, facts.initialBuckets.alignment);
         auto finalFootprint = MediaPreparationMemoryResource::allocationFootprint(facts.finalBuckets.bytes, facts.finalBuckets.alignment);
-        if (!nodeFootprint || !initialFootprint || !finalFootprint)
-            return R::failure(!nodeFootprint ? nodeFootprint.error() : !initialFootprint ? initialFootprint.error() : finalFootprint.error());
+        if (!nodeFootprint || !finalFootprint)
+            return R::failure(!nodeFootprint ? nodeFootprint.error() : finalFootprint.error());
+        std::size_t initialFootprint = 0;
+        if (facts.initialBuckets) {
+            auto footprint = MediaPreparationMemoryResource::allocationFootprint(
+                facts.initialBuckets->bytes, facts.initialBuckets->alignment);
+            if (!footprint) return R::failure(footprint.error());
+            initialFootprint = footprint.value();
+        }
         auto nodeBytes = MediaCheckedArithmetic::multiply(nodes.value(), nodeFootprint.value(), "Startup hash node footprint");
         if (!nodeBytes) return R::failure(nodeBytes.error());
         auto retained = MediaCheckedArithmetic::add(nodeBytes.value(), finalFootprint.value(), "Startup hash sealed storage");
         if (!retained) return R::failure(retained.error());
-        auto preparing = MediaCheckedArithmetic::add(nodeFootprint.value(), initialFootprint.value(), "Startup hash initial storage");
+        auto emptyNodes = MediaCheckedArithmetic::multiply(facts.initialNodeRequests, nodeFootprint.value(), "Startup hash empty nodes");
+        if (!emptyNodes) return R::failure(emptyNodes.error());
+        auto preparing = MediaCheckedArithmetic::add(emptyNodes.value(), initialFootprint, "Startup hash initial storage");
         if (!preparing) return R::failure(preparing.error());
-        if (facts.bucketCount != facts.initialBucketCount) {
+        if (!facts.initialBuckets || facts.bucketCount != facts.initialBucketCount) {
             preparing = MediaCheckedArithmetic::add(preparing.value(), finalFootprint.value(), "Startup hash rehash overlap");
             if (!preparing) return R::failure(preparing.error());
         }
@@ -82,7 +67,7 @@ namespace {
         if (nodes.value() > (std::numeric_limits<std::size_t>::max)() || sum.value() > (std::numeric_limits<std::size_t>::max)())
             return R::failure(::media::ErrorInfo::allocationFailed("Startup generation storage footprint exceeds addressable memory"));
         result.hashes[i] = {facts, {facts.node, static_cast<std::size_t>(nodes.value()),
-            static_cast<std::size_t>(nodeBytes.value())}, static_cast<std::size_t>(peak)};
+            static_cast<std::size_t>(nodeBytes.value()), facts.initialNodeRequests}, static_cast<std::size_t>(peak)};
         total = sum.value();
     }
     result.allocationBytes = static_cast<std::size_t>(total);
@@ -96,13 +81,11 @@ namespace {
     using R = ::media::Result<MediaPreparedStartupGenerationStorage>;
     auto maximum = capacity(videoCapacity, audioCapacity);
     if (!maximum) return R::failure(maximum.error());
-    auto buckets = bucketCount(maximum.value());
-    if (!buckets) return R::failure(buckets.error());
-    auto geometry = MediaAvStartupGenerationState::allocationGeometry(buckets.value());
+    auto geometry = MediaAvStartupGenerationState::allocationGeometry(maximum.value());
     if (!geometry) return R::failure(geometry.error());
     auto sharedObject = MediaAvStartupGenerationState::sharedAllocationGeometry();
     if (!sharedObject) return R::failure(sharedObject.error());
-    return prepare(maximum.value(), buckets.value(), geometry.value(), sharedObject.value());
+    return prepare(maximum.value(), geometry.value(), sharedObject.value());
 }
 
 ::media::Result<MediaAvStartupGenerationStoragePlan> MediaAvStartupIndexStoragePlanner::planGeneration(
@@ -132,13 +115,11 @@ namespace {
         (scope && !scope->resource))
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Startup generation plan differs from its source capacity or allocation domain"));
     if (!prepared) return ::media::Status::success();
-    auto buckets = bucketCount(maximum.value());
-    if (!buckets) return ::media::Status::failure(buckets.error());
-    const std::array<MediaAvStartupHashGeometry, 2> geometry{
-        prepared->hashes[0].geometry, prepared->hashes[1].geometry};
+    auto geometry = MediaAvStartupGenerationState::allocationGeometry(maximum.value());
+    if (!geometry) return ::media::Status::failure(geometry.error());
     auto sharedObject = MediaAvStartupGenerationState::sharedAllocationGeometry();
     if (!sharedObject) return ::media::Status::failure(sharedObject.error());
-    auto expected = prepare(maximum.value(), buckets.value(), geometry, sharedObject.value());
+    auto expected = prepare(maximum.value(), geometry.value(), sharedObject.value());
     if (!expected) return ::media::Status::failure(expected.error());
     if (*prepared != expected.value())
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("Startup generation node limits or footprints differ from planned geometry"));

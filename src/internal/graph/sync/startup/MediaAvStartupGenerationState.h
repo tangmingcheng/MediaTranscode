@@ -24,7 +24,7 @@ public:
     MediaAvStartupGenerationState(MediaAvStartupGenerationState&&) = delete;
     MediaAvStartupGenerationState& operator=(MediaAvStartupGenerationState&&) = delete;
     static ::media::Result<std::array<MediaAvStartupHashGeometry, 2>> allocationGeometry(
-        std::size_t buckets);
+        std::size_t maximumElements);
     ::media::Status prepareStorage();
 
     static constexpr std::string_view plannedIdentity() noexcept

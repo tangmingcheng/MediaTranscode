@@ -3,7 +3,7 @@
 #include <memory_resource>
 
 namespace media::ffmpeg::graph {
-// MSVC hash lifecycle: head, initial buckets, optional empty-table rehash,
+// Audited hash lifecycle: optional empty nodes and buckets, empty-table rehash,
 // then node allocations only. Bucket identity never depends on request size.
 class MediaAvStartupHashMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -21,7 +21,7 @@ private:
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
     std::pmr::memory_resource& m_upstream;
     const MediaAvStartupHashStoragePlan* m_prepared;
-    Phase m_phase = Phase::Head;
+    Phase m_phase;
     std::size_t m_liveNodes = 0;
     void* m_initialBuckets = nullptr;
     void* m_finalBuckets = nullptr;

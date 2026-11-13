@@ -21,10 +21,16 @@ rk412 已进入四路解码能力绑定及 HEVC 编码器准备，随后被启�
 4. 本机提交，哈希保护同步目标，原 rk-release 8 核增量 all 构建；保留原失败与超时记录。
 5. 原规格四路 realtime 复验，不以构建或容量诊断替代输出、失源恢复、内存和 A/V 验收。记录后按清单清理临时产物。
 
-状态：目标源码核验完成，完整适配实施中，尚未验证通过。RTP 64 包窗口与 UDP 链路问题保留独立证据，不用本适配掩盖。
+状态：9文件完整适配已冻结，两名独立审查者均明确整批SOURCE PASS；尚未构建或运行验证。RTP 64 包窗口与 UDP 链路问题保留独立证据，不用本适配掩盖。
 
 ## 已核目标源码依据
 
 目标头根/opt/mt-tools/gcc-12.4-native/include/c++/12.4.0：c++config.h34/37确认release12/update20240620；stl_list.h234/453/517确认元素node与内嵌header；stl_tree.h216/562/665确认Rb节点与内嵌header；hashtable.h388–400确认空表逻辑1桶指向_M_single_bucket而不分配；213及48–54确认节点是否缓存hash由实际hasher traits决定；2533–2535确认rehash交给_Prime_rehash_policy::_M_next_bkt。独立调查已直接读取这些目标文件，无候选容器试分配。
 
 实现范围：两个model storage plan、两个startup geometry、index/generation planner、HashMemoryResource h/cpp，以及必要的GenerationState geometry声明。固定head请求与可选初始桶进入内部事实合同；不新增CLI/C API字段。Pending上界为N(N−1)/2+(N+1)×head；hash保留最大元素节点与初始节点、按实际初始/最终桶重叠计峰值。MSVC值必须逐公式保持原结果。
+
+## 实现检查点
+
+内部index合同新增emptyHeadRequests，正向预算和反解共用同一事实；hash合同新增initialNodeRequests及optional initialBuckets。GCC节点取实际cache trait，调用真实prime policy推导final bucket，resource按事实进入Ready并校验rehash/seal。MSVC保留head1、初始8桶/双cell、旧峰值公式。两个validate均重新读取当前adapter几何，而非用传入计划自证。未改IndexMemoryResource、媒体状态机、共享对象分配helper及外部依赖。
+
+第二审查直接复核目标hashtable.h2525–2545与/opt/mt-tools/src/gcc-12.4.0/libstdc++-v3/src/c++11/hashtable_c++0x.cc：空表rehash先max(request,_M_bkt_for_elements(1))再_M_next_bkt，返回至少2且设置next_resize；因此随后插入不走未准备空表的首次增长路径。源码审查不代表构建或媒体通过。
