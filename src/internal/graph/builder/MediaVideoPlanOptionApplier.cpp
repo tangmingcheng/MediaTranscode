@@ -130,6 +130,22 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
     return ::media::Result<void>::success();
 }
+// The resolver owns codec-open readback; the decode node owns the registry.
+// Both consumers receive the same planner-encoded retention contract.
+::media::Result<void> applyDecoderContracts(MediaGraph& graph,
+    const MediaVideoTranscodeBranchNodes& nodes, const MediaNodeOptions& options)
+{
+    if (auto status = applyOptions(graph, nodes.codecResolver, options); !status) return status;
+    // A shared-decoder output branch has no local decode node.
+    if (!nodes.videoDecode.isValid()) return ::media::Result<void>::success();
+    for (const auto& [key, value] : options.values()) {
+        if (key.starts_with("decoder.opaque_retention.")) {
+            if (auto status = setOption(graph, nodes.videoDecode, key, value); !status) return status;
+        }
+    }
+    return ::media::Result<void>::success();
+}
+
 ::media::Result<void> applyDuplicationBound(
     MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
     const std::optional<MediaRational>& maximumDuplicationGap)
@@ -273,7 +289,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
         }
     }
 
-    if (auto status = applyOptions(graph, nodes.codecResolver, decoderOptions.value()); !status) return status;
+    if (auto status = applyDecoderContracts(graph, nodes, decoderOptions.value()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
     if (auto status = applyEncoderPlan(graph, nodes, chain.encoder, chain.encoderAbortPolicy);
         !status) return status;
@@ -325,7 +341,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
             "Video source decoder requires its planned resolver and decoder"));
     auto decoder = MediaVideoDecoderPlanOptionCodec::encode(plan.decoder, std::nullopt);
     if (!decoder) return ::media::Result<void>::failure(decoder.error());
-    if (auto status = applyOptions(graph, nodes.codecResolver, decoder.value()); !status) return status;
+    if (auto status = applyDecoderContracts(graph, nodes, decoder.value()); !status) return status;
     if (auto status = applySourceStageFacts(graph, {nodes.codecResolver, nodes.videoDecode},
             plan, decoder.value()); !status) return status;
     if (plan.decoderReadiness) {
