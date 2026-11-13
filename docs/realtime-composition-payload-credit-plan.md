@@ -284,3 +284,28 @@ parser、depacketizer factory、access-unit envelope及PMR header容量统一消
 3. **控制保证和失效提交点**：由实际 SR/BYE/expiry/transition 输出集合与 ControlOutput/Group 的在途 holder 推导控制槽与字节；确认控制满载时下游仍可消费，失效不能等待被它自己持有的 RTP payload。未完成该证明前不允许返回 WaitingCredit。
 
 落实范围为共享 protocol prepare/commit、SourceSession、PreparedInputBuffer、root release notifier、候选 cost/solver、AdmissionMaterializer/sealed validator 及最终 ledger。每个产品在同批有执行消费者；独立 readback 对照 sealed 容量、held、保证、对象槽和 owner 身份。若推导的最小保证仍超过 2 GiB，应保留真实拒绝并报告具体不可释放项，不能降低原参数或用 min() 裁费用。先 Windows Release 原规格 realtime，再 RKMPP 增量与同规格验证；本节目前是待审实施设计，未实现信用算法。
+
+
+### 第 1 门禁细化：六类载荷根与冻结后进展保证（供复审）
+
+权威代码边界：`MediaBuffer::attachPayloadCredit` 成功即释放 preparation lease；Raw 的 prepared 分支先附 graph credit 再 emit；Binder 的 prepared prefix 分支先移出一项，`emitPacket` 先附 graph credit 再送入后续 DAG。故 common-start、解码关键帧及音频 startup 保留发生在 graph 信用域，不能把 `startupVideoUnits/startupAudioUnits` 再乘最大 AU 加进 preparation 保证；其进展仍必须通过现有 `validatePacketProgress`、producer residence 与最终 graph account 检查，不能省略。
+
+| 载荷根 | bootstrap／冻结切点 | 冻结后运行及重入 |
+| --- | --- | --- |
+| Prefix | 尚无 DAG 消费者，单调保留；具体字节纳入锁内 payload child actual | `takeClockHandoff` 移交给 Binder，逐项换成 graph credit；不会新增 prefix。copy snapshot 只是别名，不新租约 |
+| Acquiring | 等待 matching SR/CNAME calibration；共同锁定后 `bindAvailable` 移到 prefix，同一租约无复制 | freeze 时旧项可能仍持 preparation 租约，计入 actual；后来从 Raw 到达的项已附 graph credit。满队列仍优先服务 clock 输入，不因 prep pool 缺字节停止 RTCP |
+| Outputs | freeze 前不走运行期 packet 输出队列 | 多批累积但可由 Raw 移出并换 graph credit；不能按单 datagram 限制累计bytes，也不要求与所有槽最大 AU 同时可分配 |
+| ProtocolPending | 一个串行 depacketizer 事务；旧 partial AU 的租约可跨报文 | 唯一可能仅靠 RTP 推进才能释放的 prep 根；按完整单事务费用及旧／新事务重叠保证，不能等待自己的旧 reservation |
+| RawInputCreditWait | bootstrap 无此 runtime holder | 一个完整 AU，等 graph producer credit；成功立刻释放 prep，且不阻塞独立 ControlOutput |
+| BinderCreditWait | bootstrap 无此 runtime holder | 主要来自旧 prefix/acquiring；一个完整 AU，等 graph producer credit；成功立刻释放 prep；新 live Raw packet不再持 prep lease |
+
+冻结后的每 stream 保证可以用现有事实计算：令 `F` 为已经全额预约、贯穿 session 的 `unmigratedProtocolStorage.compressedBytes`（包含普通 packet/assembly byte-vector 峰值）；`H` 为最后全 session 锁内该 payload child 的 `actualRetainedBytes`，它已含 F 和所有旧 prefix/acquiring/lookahead/pending lease；`T` 为第 2 门禁证明的最大单次完整 payload 预约，包含每 AU padding但不混入metadata。采用足够保证 `Pmin = max(H, checked_add(F, checked_mul(2,T)))`。系数 2 来自现有 releaseExisting 必须在新事务完整预约成功后才生效：旧 partial reservation 与新事务必须可并存，不是经验队列数；若未来以更强协议状态证明可减小，须另审，本批不提前减。
+
+证明分两种状态：存在 Outputs/Raw/Binder/旧 prefix/acquiring 完整 AU 时，由已通过的 graph producer 进展合同或独立 RTCP 控制合同换域/退役后释放 prep；这些根不要求接收新的 RTP 才释放。无这种可消费根时，除 F 仅剩一个旧 partial 事务，至多 T，故另一个 T 可完整预约并推进。跨源 common-start 等待由 graph 域保留承担，不能反向要求完整 AU 继续占 prep。旧 generation payload 不新增固定整倍费用：先保持 cut 的 H，Raw 唯一 purge 保留控制序列；遗留完整 AU可换域/退役，只有新旧 partial 的同存受上述两事务保证覆盖。此证明以第 3 门禁控制路径无循环等待、graph progress 原校验通过为前提，缺任一条件不得发布信用产品。
+
+bootstrap 在冻结前尚无 DAG 释放 prefix，因此不能盲目使用运行期 WaitingCredit：仍按原准备预算与原 deadline 完成探测；遇全部不可释放而预算不足必须保留明确准备失败，不能睡眠等待不存在的消费者。冻结时以最新 H 计算保证并原子 seal，不使用早轮 snapshot。source 的视频/音频是独立 payload children，各自计算 Pmin，汇总原 root；对象容器上限保持候选产品，只有载荷池从“全部槽最大 AU”变为上述有执行信用的联合约束。将该公式直接加入候选 cost，sealed 独立重算 H/F/T，runtime消费相同每stream保证；T及控制合同尚待对应独立审查，本段不代表完整设计已通过。
+
+
+2026-11-13 RKMPP 构建终态：PID 1323872 已结束，343/343，退出码 0，最终链接 realtime CLI；覆盖本机 02d84c15 的 57 文件同步版本。本轮未运行媒体测试，不能记为合屏验收通过。专属构建日志与退出标记在记录后按精确路径清理。
+
+第 3 门禁复审发现控制释放前提尚不成立：Binder 的 pending transfer、preparedPendingCredit 和 prefix 可先于 clock 消费；fanout 任一支路满会反压 Group/ControlOutput。已发布 purge 可以越过媒体阻塞，但尚未发布的失效不能依赖该路径。因此暂不发布 Pmin 或启用 WaitingCredit；下一步复用 acceptClock 将有界 clock 消费提前到基类媒体等待前，并核查 StateAdapter 及实际状态消费者，保持 FIFO、generation 与 purge 契约。该结论不等于已证明发生运行期死锁。
