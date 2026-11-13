@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "application/realtime/MediaRealtimeCompositionInputPreparer.h"
 #include "internal/graph/runtime/resource/MediaPreparationControl.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -106,7 +107,8 @@ MediaRealtimeCompositionInputPreparer::prepare(
                     }
                     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                         MediaGraphDiagnosticPhase::PlannerCapability,
-                        "composition_protocol_installed source=" + std::to_string(index));
+                        "composition_protocol_installed source=" + std::to_string(index) +
+                        " session=" + std::to_string(reinterpret_cast<std::uintptr_t>(session.value().get())));
                     promise.set_value(SourceResult::success(Captured{
                         std::move(capture).value(), std::move(observed).value(), deadline,
                         std::move(facts).value(), std::move(session).value(), masterClock, {}}));

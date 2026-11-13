@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "internal/graph/planner/realtime/MediaPreparedRtpCreditPlanner.h"
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
@@ -389,7 +390,17 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
     if (!projected) return ::media::Status::failure(projected.error());
     if (auto status = validateMediaInitialSourceClockAvailability(
             m_plan.lifecycleMode, false,
-            projected.value().readiness, projected.value().discontinuity); !status) return status;
+            projected.value().readiness, projected.value().discontinuity); !status) {
+        if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State))
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
+                "prepared_rtp_initial_clock_rejected session=" + std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
+                " state=" + std::to_string(static_cast<int>(snapshot.value().state)) +
+                " readiness=" + std::to_string(static_cast<int>(projected.value().readiness)) +
+                " generation=" + std::to_string(projected.value().generation) +
+                " discontinuity=" + std::to_string(projected.value().discontinuity) +
+                " observed_ns=" + std::to_string(now));
+        return status;
+    }
     if (snapshot.value().state == MediaRtpClockGroupState::Locked) {
         if (auto status = validateMediaInitialClockGeneration(
                 snapshot.value().groupGeneration, m_plan.initialGeneration); !status) return status;
@@ -576,14 +587,20 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
             if (!controlReady(s)) return ::media::Status::success();
             auto prepared = s.protocol->prepareDiscontinuity(generation);
             if (!prepared) return ::media::Status::failure(prepared.error());
-            if (auto status = commitControl(s, std::move(prepared).value(), now, &discontinuity); !status) return status;
+            // Record the attempted transition before commit can fail initial admission.
+            if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State))
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
-                "rtp_discontinuity stream=" + std::string(s.plan.depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio") +
+                "rtp_discontinuity phase=before_commit session=" + std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
+                " stream=" + std::string(s.plan.depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio") +
                 " reason=" + std::to_string(static_cast<int>(discontinuity.reason)) +
                 " first_missing=" + std::to_string(discontinuity.firstMissingSequence) +
                 " resumed=" + std::to_string(discontinuity.resumedSequence) +
                 " generation_before=" + std::to_string(generation) +
-                " generation_after=" + std::to_string(s.protocol->generation()));
+                " generation_target=" + std::to_string(prepared.value().tracker.state.generation) +
+                " window_packets=" + std::to_string(s.plan.reorder.windowPackets) +
+                " maximum_delay_ns=" + std::to_string(s.plan.reorder.maximumDelay.count()) +
+                " observed_ns=" + std::to_string(now));
+            if (auto status = commitControl(s, std::move(prepared).value(), now, &discontinuity); !status) return status;
 
         }
         s.protocol->consumeFront();

@@ -66,3 +66,5 @@ cli-maps核实FFmpeg/MPP确实为新prefix，GCC运行库正确。MPP仍打印c0
 记录后精确清理清单：远端rk410内runner.log、source0/1/2.out、source0/1/2.log、cli-error.log、monitor.log、result.txt、pids.txt、run.sh、cli.log、cli-maps.txt；依赖目录project-configure-lineage.log、project-build-lineage.log、project-build-lineage-2.log、project-build-lineage-3.log。本机composition-rk410-source3.out、composition-rk410-source3.log、composition-rk410-vlc.log。指定源、隔离库、对象缓存及回退产物保留。
 
 清理终态：远端14项测试文件及4项构建日志已逐项删除，rk410目录为空；本机3项日志已删除，本轮前缀无残留。精确测试/构建PID均不存在，指定120秒源仍为124427809字节。首次远端清理因Python无Path.is_relative_to在删除前失败，改用commonpath核界后成功。reason=0源码确认为SequenceGap；现有日志无法区分window超限/等待期限到期及归属源，下一步只补可关联诊断后原规格复验，不放宽门禁。
+
+诊断改动：沿现有RTP事件观测方式补source→session关联；将prepared discontinuity日志移至commitControl前，明确before_commit和目标generation，并记录实际规划window/delay。publish门禁失败记录同session的snapshot state、readiness及discontinuity。保持策略、参数与错误返回不变；本步只定位源和触发事件，尚未细分window超限与deadline到期，不以诊断改动宣称修复。
