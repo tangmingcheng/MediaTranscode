@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 
 #include <algorithm>
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -51,6 +52,12 @@ MediaRtpReorderBuffer::MediaRtpReorderBuffer(MediaRtpReorderConfig config)
     if (!m_pending.empty()) {
         const auto nearest = nearestPending();
         if (m_pending.size() > m_config.windowPackets) {
+            if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State))
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
+                    "rtp_reorder_gap cause=window_exceeded ssrc=" + std::to_string(*m_ssrc) +
+                    " first_missing=" + std::to_string(*m_expected) + " resumed=" + std::to_string(nearest->first) +
+                    " pending=" + std::to_string(m_pending.size()) + " window=" + std::to_string(m_config.windowPackets) +
+                    " observed_ns=" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(receivedAt.time_since_epoch()).count()));
             result.discontinuities.push_back(MediaRtpDiscontinuity{
                 MediaRtpDiscontinuityReason::SequenceGap, *m_expected, nearest->first});
             m_expected = nearest->first;
@@ -98,6 +105,13 @@ std::optional<std::chrono::steady_clock::time_point> MediaRtpReorderBuffer::next
         return ::media::Result<MediaRtpReorderResult>::success(std::move(result));
     }
     const auto nearest = nearestPending();
+    if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State))
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtp_reorder_gap cause=deadline_expired ssrc=" + std::to_string(*m_ssrc) +
+            " first_missing=" + std::to_string(*m_expected) + " resumed=" + std::to_string(nearest->first) +
+            " pending=" + std::to_string(m_pending.size()) + " window=" + std::to_string(m_config.windowPackets) +
+            " observed_ns=" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count()) +
+            " deadline_ns=" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(deadline->time_since_epoch()).count()));
     result.discontinuities.push_back(MediaRtpDiscontinuity{
         MediaRtpDiscontinuityReason::SequenceGap, *m_expected, nearest->first});
     m_expected = nearest->first;

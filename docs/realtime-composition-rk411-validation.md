@@ -61,3 +61,5 @@ D:/VideoLAN/VLC/vlc.exe --no-one-instance --verbose=2 --network-caching=1000 --f
 清理清单：远端acceptance/rk411的runner.log、source0/1/2.out、source0/1/2.log、cli-error.log、monitor.log、result.txt、pids.txt、run.sh、cli.log、cli-maps.txt；out/dependency-work/project-build-rk411.log；本机out/rk411-run.sh、out/acceptance/composition-rk411-source3.out、composition-rk411-source3.log、composition-rk411-vlc.log。指定源、构建缓存、隔离库及回退副本保留。
 
 清理终态：远端14个测试文件及1个构建日志已精确删除，rk411目录为空，列出的本轮构建/测试PID均不存在；本机4个临时文件删除后prefix无残留。指定源保留124427809字节。
+
+后续诊断设计：window64源于共享MediaRtpReceiveGeometry的socket/预算/最大datagram容量并受batch completion上限约束，MediaRtpIngressPlan将descriptor容量直接用作reorder window；Windows同算法，不能归为RK专属。下一轮仅在push窗口超限与expire期限到期两分支记录cause/SSRC/seq/pending/window/时间，保持类型、策略和阈值不变。配合/proc/<CLI>/net/udp的socket inode、rx_queue、drops及/proc/net/snmp UDP前后计数；后者是命名空间总量，不能直接归因单个socket。现有pressure_failures仅引擎槽位，不替代UDP drop证据。
