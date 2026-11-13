@@ -217,7 +217,10 @@ namespace {
         retention->audio = audioRetention;
         if (auto valid = retention->validate(); !valid) return Result::failure(valid.error());
     } else {
-        auto identity = MediaCanonicalIdentity::copy(request.mediaId);
+        if (!policy.value().videoInput.identity)
+            return Result::failure(::media::ErrorInfo::notInitialized(
+                "Prepared presentation requires planned video stream identity"));
+        auto identity = MediaCanonicalIdentity::copy(*policy.value().videoInput.identity);
         if (!identity || identity.value().empty()) return Result::failure(identity
             ? ::media::ErrorInfo::invalidArgument("Prepared presentation requires source identity") : identity.error());
         videoTiming = {MediaRtpVideoTimingProduct::SourcePresentation, std::move(identity).value()};
