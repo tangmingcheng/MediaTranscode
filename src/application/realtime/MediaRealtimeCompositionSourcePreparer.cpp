@@ -211,7 +211,7 @@ MediaRealtimeCompositionSourcePreparer::prepare(
                 continue;
             }
             auto goal = MediaRtpSourceProbeGoalPlanner::plan(facts.timing,
-                facts.request.mediaId, snapshot.value().packets, storageScope.root);
+                captured.session->plan().video.binder.videoTiming, snapshot.value().packets, storageScope.root);
             if (!goal) return Result::failure(goal.error());
             const auto policy = std::holds_alternative<MediaH264SignalingFacts>(
                 captured.observation.signaling.facts)
