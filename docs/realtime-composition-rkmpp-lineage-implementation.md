@@ -38,7 +38,7 @@
 
 ## 当前进度
 
-已完成基线核验与两独立源码副本创建；MPP和FFmpeg负责人正在对齐接口并实施。尚无新增库、项目构建或媒体验收通过结论。原Windows与RKMPP安装保持原样。
+隔离 MPP 与 FFmpeg 依赖已完成实现、双独立源码审查、构建及安装，版本和实际加载身份已核验。项目正在使用新依赖增量构建，原规格实时媒体验收仍待执行；不得将依赖完成视为合屏完成。原 Windows 与 RKMPP 安装保持原样。
 
 回退CLI已实际复制至项目out/dependency-work/rollback-75a83c7e/media_transcode_realtime_video_cli，源/副本SHA256一致：adb299c6c8f3a2a5ff47aafa55dfeeef8cfbb6d0040282d194fece193e709bd2；同目录manifest.json记录源码与依赖路径。该备份验证仅为字节一致，不代表已执行回退后的媒体验收。
 
@@ -61,3 +61,31 @@ FFmpeg首段PID2275937/2275938超时退出124；保留对象续编PID2311656退�
 目标项目5个opaque合同源码已在检查旧hash后同步dee00de1，写后hash全部一致；目标目录无.git。初次SSH命令因Windows长度限制未启动，改为临时同步脚本执行退出0。本机out/dependency-sync-command.txt、out/dependency-sync.py和远端out/dependency-work/project-source-sync.py已按精确路径清理。
 
 两名独立审查者对4文件identity与证据文字更新明确SOURCE PASS；其他5个RKMPP能力合同继续有效。新props不引用输入packet.buf，其opaque引用由新增合同覆盖，不重复加入压缩输入槽位；后端malloc不宣称属于引擎PMR预算。原rk-release需刷新FFMPEG_*、pkgcfg_lib_FFMPEG_*、__pkg_config_*FFMPEG缓存再增量构建。新依赖媒体验收仍未开始。
+
+## 隔离 FFmpeg 构建最终证据（2026-11-13）
+
+原依赖源码树没有可复用的 `rkmppdec.o`；隔离树首次建立对象缓存，后续均保留对象增量编译。所有构建与安装仅位于 `/home/tang/MediaTranscode-composition-09093919/out/dependency-work`，未写入原 FFmpeg 安装或 `/usr/local`。
+
+| 阶段 | 精确 PID | 实际命令及退出结果 |
+| --- | --- | --- |
+| configure | 2265961 | `timeout 300 ./configure ...`，退出 0 |
+| 首段全目标 | 2275937；timeout 子进程 2275938 | `timeout 300 make -j8 all`，退出 124；300 秒到期终止，未见编译 error，不能记为成功 |
+| 保留对象续编 | 2311656 | `timeout 300 make -j8 all`，退出 0，ffmpeg/ffprobe 链接完成 |
+| 提交后的版本增量 | 2327082 | `timeout 300 make -j8 all`，退出 0 |
+| 隔离安装 | 2330856 | `timeout 300 make -j8 install`，退出 0 |
+
+首段超时后已确认原 PID 和 PGID 2275938 无残留才续编；最终确认上述 PID 全部退出。源码提交仅发生在隔离 FFmpeg 树，revision 为 `92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696`，工作树干净。生成的 `libavutil/ffversion.h`、隔离 `ffmpeg -version`、Python ctypes 直接调用隔离 libavutil 的 `av_version_info()` 均返回 `92aec19`。
+
+configure 沿实际旧安装功能配置：GPL、version3、libdrm、gnutls、rkmpp、rkrga、shared、pic，保留 `--disable-static`；只将安装前缀改为上述目录的 `prefix-ffmpeg`，并将 `prefix-mpp/include`、`prefix-mpp/lib` 放在原 `/usr/local` include/lib 搜索路径之前。编译环境为 `source /opt/mt-tools/mtenv.sh; mtenv on`（GCC 12.4.0）。`pkg-config --variable=prefix rockchip_mpp` 实际返回隔离 `prefix-mpp`。
+
+运行核验使用 `LD_LIBRARY_PATH` 顺序：隔离 `prefix-ffmpeg/lib`、`prefix-mpp/lib`、`/opt/mt-tools/gcc-12.4-native/lib64`。对隔离 `prefix-ffmpeg/bin/ffmpeg` 执行 `ldd`：avcodec、avutil、avfilter 均解析至隔离 `prefix-ffmpeg/lib`，`librockchip_mpp.so.1` 解析至隔离 `prefix-mpp/lib`，无 `not found`。库版本为 avcodec 62.28.102、avutil 60.26.102、avfilter 11.14.102。
+
+| 实际库 | 新隔离库 SHA256 | 原安装库 SHA256（安装前后相同） |
+| --- | --- | --- |
+| libavcodec.so.62 | `c24ac984faba646fd2c143c70b24895927350bd121b4d5d474df201d3e7e4673` | `7e81d6b42ccd8b70f32a59889c2ccb410c5ef7b67ae204eb12551e32cd91a591` |
+| libavutil.so.60 | `53326bc4ea6cfa1e36ed38b128894a0a8b6069c37ccdecb8dcd316518a51e2a5` | `0948c93b18d042bb4d6d5ac5698151c9d95c6290f8067d5dd3f034e14b0af907` |
+| libavfilter.so.11 | `e4de2d8efad2540fc491d38ea455acf2a8d9d24d88d1e3b9108bcbab7eb17c9b` | `35db0197f8f55ee4b3f7c871fef786439c74725935f8903696d9b6ceca5f42e5` |
+| librockchip_mpp.so.1 | `92d29267a7b07311261973ecfa985c25be0b554f5b9b5e75621f6dd144bb21af` | `a5235b4d60afdaef44574c68569eb5b39969e43db1b1c6c9a7b4ef98c90c480b` |
+
+原 FFmpeg 库路径为 `/home/tang/ffmpeg-ab1e61a/lib`，原 MPP 路径为 `/usr/local/lib/librockchip_mpp.so.1`。只读版本调用仍输出 `mpp_platform: client 12 driver is not ready!`；此次没有启动解码，不能据此判定硬件解码失败或通过。以上只证明依赖构建、安装及加载身份，不代表实时合屏验收完成。
+清理记录：主线程与 MPP 作者确认无需继续读取后，已逐项删除本轮 14 个远端临时文本：`ffmpeg-configure`、`ffmpeg-build-1`、`ffmpeg-build-2`、`ffmpeg-build-version`、`ffmpeg-install` 各自的 `.log`/`.exit`，以及 `ffmpeg-version.txt`、`ffmpeg-ldd.txt`、`dependency-sha256.txt`、`original-dependency-sha256-after.txt`。清理后精确清单残留为零；源码、对象缓存、隔离安装、rollback 与两份 patch 均保留，未触碰项目 rk-release 构建日志。
