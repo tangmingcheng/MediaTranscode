@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <limits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -17,6 +18,43 @@ bool ntpLess(const MediaRtcpNtpTimestamp& left, const MediaRtcpNtpTimestamp& rig
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(message));
 }
 
+::media::Result<MediaRtcpClockEvidence> evidenceForState(
+    const MediaRtcpTrackerState& state, const MediaRtcpSenderReportTrackerConfig& config,
+    const MediaRtcpBytes::Allocator& allocator, int64_t observedAtNs)
+{
+    auto missing = [](const char* message) {
+        return ::media::Result<MediaRtcpClockEvidence>::failure(
+            ::media::ErrorInfo::notInitialized(message));
+    };
+    if (config.senderReportTimeoutNs <= 0 || config.cnameTimeoutNs <= 0) {
+        return ::media::Result<MediaRtcpClockEvidence>::failure(
+            ::media::ErrorInfo::invalidArgument("RTCP evidence timeouts must be positive"));
+    }
+    if (!state.mediaSsrc) return missing("RTP media SSRC has not been observed");
+    if (config.requireSenderReports) {
+        if (!state.senderReport || state.senderReport->ssrc != *state.mediaSsrc) {
+            return missing("Matching RTCP sender report is unavailable");
+        }
+        if (observedAtNs < state.reportAtNs ||
+            observedAtNs - state.reportAtNs > config.senderReportTimeoutNs) {
+            return missing("RTCP sender report has expired");
+        }
+    }
+    if (config.requireCname) {
+        if (state.cname.empty()) return missing("Matching RTCP CNAME is unavailable");
+        if (observedAtNs < state.cnameAtNs ||
+            observedAtNs - state.cnameAtNs > config.cnameTimeoutNs) {
+            return missing("RTCP CNAME has expired");
+        }
+    }
+    if (!state.senderReport) return missing("Clock evidence requires an RTCP sender report");
+    return ::media::Result<MediaRtcpClockEvidence>::success(MediaRtcpClockEvidence{
+        *state.mediaSsrc, state.senderReport->ssrc, *state.mediaSsrc,
+        state.senderReport->ntp, state.senderReport->rtpTimestamp, MediaRtcpBytes{state.cname, allocator},
+        state.reportAtNs, state.cnameAtNs, state.generation});
+}
+
+
 } // namespace
 
 MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
@@ -29,16 +67,17 @@ MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReport
 {
 }
 
-void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc)
+::media::Status MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc)
 {
+    if (auto status = advanceRevision(); !status) return status;
     if (m_mediaSsrc && *m_mediaSsrc != ssrc) {
-        invalidate();
+        if (auto status = invalidate(); !status) return status;
     }
     m_mediaSsrc = ssrc;
-    if (!m_pendingSource) return;
+    if (!m_pendingSource) return ::media::Status::success();
     if (m_pendingSource->senderReport.ssrc != ssrc) {
         m_pendingSource.reset();
-        return;
+        return ::media::Status::success();
     }
     m_senderReport = m_pendingSource->senderReport;
     m_lastAcceptedNtp = m_senderReport->ntp;
@@ -50,73 +89,17 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc)
     // media SSRC completes pending evidence regardless of cross-channel arrival
     // order; takeEvidenceUpdate evaluates age against its supplied clock.
     m_evidenceUpdatePending = true;
+    return ::media::Status::success();
 }
 
-void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
+::media::Status MediaRtcpSenderReportTracker::observeContinuityLoss()
 {
-    invalidate();
+    return invalidate();
 }
 
-::media::Result<MediaRtcpObservation> MediaRtcpSenderReportTracker::observe(
-    const MediaRtcpPackets& packets, int64_t observedAtNs)
+::media::Result<MediaRtcpClockEvidence> MediaRtcpSenderReportTracker::evidence(int64_t observedAtNs) const
 {
-    using Result = ::media::Result<MediaRtcpObservation>;
-    if (!m_mediaSsrc) {
-        auto pending = observePendingSource(packets, observedAtNs);
-        return pending ? Result::success(MediaRtcpObservationAccepted{})
-                       : Result::failure(pending.error());
-    }
-    for (const MediaRtcpPacket& packet : packets) {
-        if (packet.kind == MediaRtcpPacketKind::SenderReport && packet.senderReport) {
-            if (auto status = observeSenderReport(*packet.senderReport, observedAtNs); !status) return Result::failure(status.error());
-        } else if (packet.kind == MediaRtcpPacketKind::SourceDescription) {
-            for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
-                if (auto status = observeSdes(chunk, observedAtNs); !status) return Result::failure(status.error());
-            }
-        } else if (packet.kind == MediaRtcpPacketKind::Bye && m_mediaSsrc &&
-                   std::find(packet.byeSources.begin(), packet.byeSources.end(), *m_mediaSsrc) !=
-                       packet.byeSources.end()) {
-            invalidate();
-            return Result::success(MediaRtpClockInvalidation{
-                m_generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs});
-        }
-    }
-    return Result::success(MediaRtcpObservationAccepted{});
-}
-
-::media::Result<MediaRtcpClockEvidence> MediaRtcpSenderReportTracker::evidence(
-    int64_t observedAtNs) const
-{
-    auto missing = [](const char* message) {
-        return ::media::Result<MediaRtcpClockEvidence>::failure(
-            ::media::ErrorInfo::notInitialized(message));
-    };
-    if (m_config.senderReportTimeoutNs <= 0 || m_config.cnameTimeoutNs <= 0) {
-        return ::media::Result<MediaRtcpClockEvidence>::failure(
-            ::media::ErrorInfo::invalidArgument("RTCP evidence timeouts must be positive"));
-    }
-    if (!m_mediaSsrc) return missing("RTP media SSRC has not been observed");
-    if (m_config.requireSenderReports) {
-        if (!m_senderReport || m_senderReport->ssrc != *m_mediaSsrc) {
-            return missing("Matching RTCP sender report is unavailable");
-        }
-        if (observedAtNs < m_senderReportObservedAtNs ||
-            observedAtNs - m_senderReportObservedAtNs > m_config.senderReportTimeoutNs) {
-            return missing("RTCP sender report has expired");
-        }
-    }
-    if (m_config.requireCname) {
-        if (m_cname.empty()) return missing("Matching RTCP CNAME is unavailable");
-        if (observedAtNs < m_cnameObservedAtNs ||
-            observedAtNs - m_cnameObservedAtNs > m_config.cnameTimeoutNs) {
-            return missing("RTCP CNAME has expired");
-        }
-    }
-    if (!m_senderReport) return missing("Clock evidence requires an RTCP sender report");
-    return ::media::Result<MediaRtcpClockEvidence>::success(MediaRtcpClockEvidence{
-        *m_mediaSsrc, m_senderReport->ssrc, *m_mediaSsrc,
-        m_senderReport->ntp, m_senderReport->rtpTimestamp, m_cname,
-        m_senderReportObservedAtNs, m_cnameObservedAtNs, m_generation});
+    return evidenceForState(state(), m_config, m_cname.get_allocator(), observedAtNs);
 }
 
 ::media::Result<std::optional<MediaRtcpClockEvidence>>
@@ -135,6 +118,8 @@ MediaRtcpSenderReportTracker::takeEvidenceUpdate(int64_t observedAtNs)
         return ::media::Result<std::optional<MediaRtcpClockEvidence>>::failure(
             current.error());
     }
+    if (auto status = advanceRevision(); !status)
+        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::failure(status.error());
     m_evidenceUpdatePending = false;
     return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
         std::move(current).value());
@@ -145,116 +130,159 @@ uint64_t MediaRtcpSenderReportTracker::generation() const noexcept
     return m_generation;
 }
 
-void MediaRtcpSenderReportTracker::reset() noexcept
+::media::Status MediaRtcpSenderReportTracker::advanceRevision()
 {
-    invalidate();
+    if (m_revision == std::numeric_limits<uint64_t>::max())
+        return invalidEvidence("RTCP tracker mutation revision exhausted");
+    ++m_revision;
+    return ::media::Status::success();
 }
 
-void MediaRtcpSenderReportTracker::invalidate() noexcept
+::media::Status MediaRtcpSenderReportTracker::reset() { return invalidate(); }
+
+::media::Status MediaRtcpSenderReportTracker::invalidate()
 {
+    if (m_generation == std::numeric_limits<uint64_t>::max())
+        return invalidEvidence("RTCP tracker generation exhausted");
+    if (auto status = advanceRevision(); !status) return status;
     ++m_generation;
-    m_mediaSsrc.reset();
-    m_pendingSource.reset();
-    m_senderReport.reset();
-    m_cname.clear();
-    m_lastAcceptedNtp.reset();
-    m_senderReportObservedAtNs = 0;
-    m_cnameObservedAtNs = 0;
+    m_mediaSsrc.reset(); m_pendingSource.reset(); m_senderReport.reset();
+    m_cname.clear(); m_lastAcceptedNtp.reset();
+    m_senderReportObservedAtNs = 0; m_cnameObservedAtNs = 0;
     m_evidenceUpdatePending = false;
+    return ::media::Status::success();
 }
 
-::media::Status MediaRtcpSenderReportTracker::observePendingSource(
-    const MediaRtcpPackets& packets,
-    int64_t observedAtNs)
+MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
 {
-    std::optional<MediaRtcpSenderReport> report;
-    for (const MediaRtcpPacket& packet : packets) {
-        if (packet.kind == MediaRtcpPacketKind::SenderReport &&
-            packet.senderReport) {
-            report = packet.senderReport;
-            break;
-        }
-    }
-    if (!report) return ::media::Status::success();
+    MediaRtcpTrackerState result{m_mediaSsrc, std::nullopt, m_senderReport, m_lastAcceptedNtp,
+        m_cname.view(), m_senderReportObservedAtNs, m_cnameObservedAtNs, m_generation, m_evidenceUpdatePending};
+    if (m_pendingSource) result.pending.emplace(MediaRtcpTrackerState::Pending{
+        m_pendingSource->senderReport, m_pendingSource->cname.view(), m_pendingSource->observedAtNs});
+    return result;
+}
 
-    std::optional<std::span<const uint8_t>> cname;
-    for (const MediaRtcpPacket& packet : packets) {
-        if (packet.kind != MediaRtcpPacketKind::SourceDescription) continue;
-        for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
-            if (chunk.ssrc != report->ssrc) continue;
-            const auto item = std::find_if(
-                chunk.items.begin(), chunk.items.end(),
-                [](const MediaRtcpSdesItem& value) { return value.type == 1; });
-            if (item == chunk.items.end()) continue;
-            if ((*item).value.empty()) {
-                invalidate();
-                return invalidEvidence("RTCP CNAME must not be empty");
+::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::prepare(
+    const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs) const try
+{
+    using Result = ::media::Result<MediaRtcpPreparedObservation>;
+    if (m_revision == std::numeric_limits<uint64_t>::max())
+        return Result::failure(::media::ErrorInfo::invalidArgument("RTCP tracker mutation revision exhausted"));
+    MediaRtcpPreparedObservation result{this, m_revision, state(), {}, {}, {}, {}, false};
+    auto& next = result.state;
+    auto invalidateState = [&]() -> ::media::Status {
+        if (next.generation == std::numeric_limits<uint64_t>::max())
+            return invalidEvidence("RTCP tracker generation exhausted");
+        const auto generation = next.generation + 1;
+        next = {}; next.generation = generation; result.invalidated = true;
+        return ::media::Status::success();
+    };
+    auto reject = [&](const char* message) -> ::media::Status {
+        auto status = invalidateState();
+        if (!status) return status;
+        result.rejection = ::media::ErrorInfo::invalidArgument(message);
+        return ::media::Status::success();
+    };
+    if (!next.mediaSsrc) {
+        std::optional<MediaRtcpSenderReport> report;
+        for (const auto packet : packets) if (packet.kind == MediaRtcpPacketKind::SenderReport && packet.senderReport) {
+            report = packet.senderReport; break;
+        }
+        if (report) {
+            std::optional<std::span<const uint8_t>> cname;
+            for (const auto packet : packets) {
+                if (packet.kind != MediaRtcpPacketKind::SourceDescription) continue;
+                for (const auto chunk : packet.sdesChunks) {
+                    if (chunk.ssrc != report->ssrc) continue;
+                    const auto item = std::find_if(chunk.items.begin(), chunk.items.end(),
+                        [](const auto& value) { return value.type == 1; });
+                    if (item == chunk.items.end()) continue;
+                    if ((*item).value.empty()) {
+                        if (auto status = reject("RTCP CNAME must not be empty"); !status) return Result::failure(status.error());
+                        break;
+                    }
+                    cname = (*item).value; break;
+                }
+                if (cname || result.rejection) break;
             }
-            cname = (*item).value;
-            break;
+            if (!result.rejection && (cname || !m_config.requireCname)) {
+                if (next.pending && next.pending->report.ssrc == report->ssrc &&
+                    ntpLess(report->ntp, next.pending->report.ntp)) {
+                    if (auto status = reject("Pending RTCP sender report NTP timestamp regressed"); !status) return Result::failure(status.error());
+                } else if (next.pending && next.pending->report.ssrc == report->ssrc &&
+                    next.pending->report.ntp == report->ntp && next.pending->report.rtpTimestamp != report->rtpTimestamp) {
+                    if (auto status = reject("Pending RTCP sender report changed RTP timestamp at the same NTP instant"); !status) return Result::failure(status.error());
+                } else next.pending.emplace(MediaRtcpTrackerState::Pending{*report, cname.value_or(std::span<const uint8_t>{}), observedAtNs});
+            }
         }
-        if (cname) break;
+    } else {
+        for (const auto packet : packets) {
+            if (packet.kind == MediaRtcpPacketKind::SenderReport && packet.senderReport) {
+                const auto& report = *packet.senderReport;
+                if (report.ssrc != *next.mediaSsrc) continue;
+                if (next.lastNtp && ntpLess(report.ntp, *next.lastNtp)) {
+                    if (auto status = reject("RTCP sender report NTP timestamp regressed"); !status) return Result::failure(status.error());
+                } else if (next.senderReport && next.senderReport->ssrc == report.ssrc &&
+                    next.senderReport->ntp == report.ntp && next.senderReport->rtpTimestamp != report.rtpTimestamp) {
+                    if (auto status = reject("RTCP sender report changed RTP timestamp at the same NTP instant"); !status) return Result::failure(status.error());
+                } else {
+                    next.senderReport = report; next.lastNtp = report.ntp; next.reportAtNs = observedAtNs;
+                    if (!m_config.requireCname) next.cnameAtNs = observedAtNs;
+                    next.evidencePending = true;
+                }
+            } else if (packet.kind == MediaRtcpPacketKind::SourceDescription) {
+                for (const auto chunk : packet.sdesChunks) {
+                    const auto item = std::find_if(chunk.items.begin(), chunk.items.end(), [](const auto& value) { return value.type == 1; });
+                    if (item == chunk.items.end() || chunk.ssrc != *next.mediaSsrc) continue;
+                    if ((*item).value.empty()) {
+                        if (auto status = reject("RTCP CNAME must not be empty"); !status) return Result::failure(status.error());
+                    } else if (!next.cname.empty() && !std::ranges::equal(next.cname, (*item).value)) {
+                        if (auto status = reject("RTCP CNAME changed for active source"); !status) return Result::failure(status.error());
+                    } else { next.cname = (*item).value; next.cnameAtNs = observedAtNs; next.evidencePending = true; }
+                    if (result.rejection) break;
+                }
+            } else if (packet.kind == MediaRtcpPacketKind::Bye &&
+                std::find(packet.byeSources.begin(), packet.byeSources.end(), *next.mediaSsrc) != packet.byeSources.end()) {
+                if (auto status = invalidateState(); !status) return Result::failure(status.error());
+                result.output = MediaRtpClockInvalidation{next.generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs};
+                break;
+            }
+            if (result.rejection) break;
+        }
     }
-    if (!cname && m_config.requireCname) return ::media::Status::success();
-    if (m_pendingSource && m_pendingSource->senderReport.ssrc == report->ssrc &&
-        ntpLess(report->ntp, m_pendingSource->senderReport.ntp)) {
-        invalidate();
-        return invalidEvidence("Pending RTCP sender report NTP timestamp regressed");
+    if (!result.invalidated && next.evidencePending) {
+        auto evidence = evidenceForState(next, m_config, m_cname.get_allocator(), evaluationAtNs);
+        if (evidence) {
+            result.output = std::move(evidence).value();
+            next.evidencePending = false;
+        } else if (evidence.error().code != ::media::ErrorCode::NotInitialized)
+            result.rejection = evidence.error();
     }
-    if (m_pendingSource && m_pendingSource->senderReport.ssrc == report->ssrc &&
-        m_pendingSource->senderReport.ntp == report->ntp &&
-        m_pendingSource->senderReport.rtpTimestamp != report->rtpTimestamp) {
-        invalidate();
-        return invalidEvidence(
-            "Pending RTCP sender report changed RTP timestamp at the same NTP instant");
-    }
-    m_pendingSource = PendingRtcpSource{
-        *report, MediaRtcpBytes{cname.value_or(std::span<const uint8_t>{}), m_cname.get_allocator()}, observedAtNs};
-    return ::media::Status::success();
+    if (next.cname.data() != m_cname.view().data() || next.cname.size() != m_cname.size())
+        result.cname.emplace(next.cname, m_cname.get_allocator());
+    if (next.pending && (!m_pendingSource || next.pending->cname.data() != m_pendingSource->cname.view().data() ||
+        next.pending->cname.size() != m_pendingSource->cname.size()))
+        result.pendingCname.emplace(next.pending->cname, m_cname.get_allocator());
+    return Result::success(std::move(result));
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaRtcpPreparedObservation>::failure(
+        ::media::ErrorInfo::allocationFailed("RTP clock observation allocation failed"));
 }
 
-::media::Status MediaRtcpSenderReportTracker::observeSenderReport(
-    const MediaRtcpSenderReport& report, int64_t observedAtNs)
+::media::Status MediaRtcpSenderReportTracker::commit(MediaRtcpPreparedObservation&& prepared)
 {
-    if (m_mediaSsrc && report.ssrc != *m_mediaSsrc) return ::media::Status::success();
-    if (m_lastAcceptedNtp && ntpLess(report.ntp, *m_lastAcceptedNtp)) {
-        invalidate();
-        return invalidEvidence("RTCP sender report NTP timestamp regressed");
-    }
-    if (m_senderReport && m_senderReport->ssrc == report.ssrc &&
-        m_senderReport->ntp == report.ntp && m_senderReport->rtpTimestamp != report.rtpTimestamp) {
-        invalidate();
-        return invalidEvidence("RTCP sender report changed RTP timestamp at the same NTP instant");
-    }
-    m_senderReport = report;
-    m_lastAcceptedNtp = report.ntp;
-    m_senderReportObservedAtNs = observedAtNs;
-    if (!m_config.requireCname) {
-        m_cnameObservedAtNs = observedAtNs;
-    }
-    m_evidenceUpdatePending = true;
-    return ::media::Status::success();
-}
-
-::media::Status MediaRtcpSenderReportTracker::observeSdes(
-    const MediaRtcpSdesChunk& chunk, int64_t observedAtNs)
-{
-    const auto cname = std::find_if(chunk.items.begin(), chunk.items.end(), [](const MediaRtcpSdesItem& item) {
-        return item.type == 1;
-    });
-    if (cname == chunk.items.end()) return ::media::Status::success();
-    if (!m_mediaSsrc || chunk.ssrc != *m_mediaSsrc) return ::media::Status::success();
-    if ((*cname).value.empty()) {
-        invalidate();
-        return invalidEvidence("RTCP CNAME must not be empty");
-    }
-    if (!m_cname.empty() && !m_cname.matches((*cname).value)) {
-        invalidate();
-        return invalidEvidence("RTCP CNAME changed for active source");
-    }
-    m_cname = MediaRtcpBytes{(*cname).value, m_cname.get_allocator()};
-    m_cnameObservedAtNs = observedAtNs;
-    m_evidenceUpdatePending = true;
+    if (prepared.owner != this || prepared.revision != m_revision)
+        return invalidEvidence("RTCP prepared observation no longer matches tracker revision");
+    if (auto status = advanceRevision(); !status) return status;
+    const auto& next = prepared.state;
+    m_mediaSsrc = next.mediaSsrc; m_senderReport = next.senderReport; m_lastAcceptedNtp = next.lastNtp;
+    m_senderReportObservedAtNs = next.reportAtNs; m_cnameObservedAtNs = next.cnameAtNs;
+    m_generation = next.generation; m_evidenceUpdatePending = next.evidencePending;
+    if (prepared.cname) m_cname = std::move(*prepared.cname);
+    if (!next.pending) m_pendingSource.reset();
+    else if (prepared.pendingCname) m_pendingSource.emplace(PendingRtcpSource{
+        next.pending->report, std::move(*prepared.pendingCname), next.pending->observedAtNs});
+    else { m_pendingSource->senderReport = next.pending->report; m_pendingSource->observedAtNs = next.pending->observedAtNs; }
     return ::media::Status::success();
 }
 

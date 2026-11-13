@@ -52,8 +52,8 @@ public:
     bool hasPending() const noexcept;
     const PendingItem& pendingFront() const;
     void consumeFront();
-    void observeDiscontinuity(MediaRtpDiscontinuityReason reason,
-        std::uint64_t generationBefore) noexcept;
+    ::media::Status observeDiscontinuity(MediaRtpDiscontinuityReason reason,
+        std::uint64_t generationBefore);
     ::media::Result<MediaRtpPacketPreparation> preparePacket(
         const MediaRtpPacket& packet, std::size_t heldReservations) const;
     ::media::Status commitPacketRejection(const MediaRtpPacketRejection& rejection);
@@ -64,8 +64,12 @@ public:
     void releasePayloadState() noexcept;
     void resetAssembly() noexcept;
     void requireKeyframe() noexcept;
-    ::media::Result<MediaRtcpObservation> observeRtcp(
-        std::span<const std::uint8_t> bytes, std::int64_t observedAtNs);
+    // Prepare, output materialization and commit share the caller's source lock
+    // (or sole Raw owner thread). Never retain this product across a wait;
+    // tracker identity/revision rejects stale state, pending RTP is not copied.
+    ::media::Result<MediaRtpPreparedRtcpObservation> prepareRtcp(
+        std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
+    ::media::Status commitRtcp(MediaRtpPreparedRtcpObservation&& prepared);
     ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(std::int64_t now);
     ::media::Result<std::optional<MediaRtpClockSessionTransition>> transition(std::int64_t now);
     ::media::Result<int> receiveTimeoutMs(std::chrono::steady_clock::time_point reorderNow,

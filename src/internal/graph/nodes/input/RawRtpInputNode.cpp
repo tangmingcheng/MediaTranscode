@@ -19,6 +19,7 @@
 #include <chrono>
 #include <algorithm>
 #include <new>
+#include <limits>
 #include <string>
 #include <utility>
 #include <tuple>
@@ -38,6 +39,20 @@ const char* discontinuityReasonName(
         return "payload_type_changed";
     }
     return "unknown";
+}
+
+using RtpEvidenceDiagnostic = std::tuple<std::uint64_t, std::uint32_t, std::int64_t>;
+
+void logRtpClockEvidence(MediaStreamKind stream, const RtpEvidenceDiagnostic& facts,
+    std::int64_t observedAtNs)
+{
+    const auto& [generation, ssrc, reportAtNs] = facts;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_clock_evidence stream=" + std::string(stream == MediaStreamKind::Video ? "video" : "audio") +
+            " generation=" + std::to_string(generation) + " ssrc=" + std::to_string(ssrc) +
+            " age_ms=" + std::to_string(observedAtNs >= reportAtNs
+                ? (observedAtNs - reportAtNs) / 1'000'000 : -1));
 }
 
 } // namespace
@@ -691,7 +706,7 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
                     "RTP source identity changed; shared playback session requires replanning"));
             }
         }
-        m_protocol->observeDiscontinuity(discontinuity.reason, generationBeforeObservation);
+        if (auto status = m_protocol->observeDiscontinuity(discontinuity.reason, generationBeforeObservation); !status) return status;
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -823,19 +838,40 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
             ::media::ErrorInfo::invalidArgument(
                 "RawRtpInputNode requires a monotonic RTCP arrival time"));
     }
-    auto observation = m_protocol->observeRtcp(datagram, observedAtNs);
+    const auto evaluationAtNs = mediaSteadyClockNowNs();
+    auto observation = m_protocol->prepareRtcp(datagram, observedAtNs, evaluationAtNs);
     if (!observation) return ::media::Status::failure(observation.error());
-    if (const auto* invalidation =
-            std::get_if<MediaRtpClockInvalidation>(&observation.value())) {
-        discardUnassembledPackets();
-        if (context.findOutputChannel(nodeId(), "event")) {
-            m_events.emplace_back("event",
-                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    *invalidation, nextIngressSequence()));
-        }
-        return ::media::Status::success();
+    auto prepared = std::move(observation).value();
+    auto rejection = std::move(prepared.tracker.rejection);
+    const bool invalidated = prepared.tracker.invalidated;
+    const bool selectedClock = std::holds_alternative<MediaRtcpClockEvidence>(prepared.tracker.output);
+    std::optional<RtpEvidenceDiagnostic> diagnostic;
+    if (const auto* evidence = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
+        diagnostic.emplace(evidence->generation, evidence->observedMediaSsrc, evidence->senderReportObservedAtNs);
+    const char* port = selectedClock ? "clock" : "event";
+    const bool queued = !std::holds_alternative<std::monostate>(prepared.tracker.output) &&
+        context.findOutputChannel(nodeId(), port);
+    if (queued) {
+        if (m_nextIngressSequence == 0 || m_nextIngressSequence == std::numeric_limits<std::uint64_t>::max())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RTP ingress sequence exhausted"));
+        MediaBufferRef output;
+        if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
+            output = makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(*value), m_nextIngressSequence);
+        else
+            output = makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                std::get<MediaRtpClockInvalidation>(prepared.tracker.output), m_nextIngressSequence);
+        m_events.emplace_back(port, std::move(output));
     }
-    return queueClockEvidence(context, mediaSteadyClockNowNs());
+    auto committed = m_protocol->commitRtcp(std::move(prepared));
+    if (!committed) {
+        if (queued) m_events.pop_back();
+        return committed;
+    }
+    if (invalidated) m_pendingPayloadReservations.clear();
+    if (rejection) return ::media::Status::failure(std::move(*rejection));
+    if (queued) ++m_nextIngressSequence;
+    if (diagnostic) logRtpClockEvidence(m_config.streamKind, *diagnostic, evaluationAtNs);
+    return ::media::Status::success();
 }
 
 ::media::Status RawRtpInputNode::queueClockEvidence(
@@ -846,19 +882,8 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
     if (!update) return ::media::Status::failure(update.error());
     if (!update.value()) return ::media::Status::success();
     const MediaRtcpClockEvidence& evidence = *update.value();
-    mediaGraphDiagnosticLog(
-        MediaGraphDiagnosticLevel::State,
-        MediaGraphDiagnosticPhase::RuntimeNode,
-        "rtp_clock_evidence stream=" +
-            std::string(m_config.streamKind == MediaStreamKind::Video
-                ? "video" : "audio") +
-            " generation=" + std::to_string(evidence.generation) +
-            " ssrc=" + std::to_string(evidence.observedMediaSsrc) +
-            " age_ms=" + std::to_string(
-                observedAtNs >= evidence.senderReportObservedAtNs
-                    ? (observedAtNs - evidence.senderReportObservedAtNs) /
-                        1'000'000
-                    : -1));
+    logRtpClockEvidence(m_config.streamKind,
+        {evidence.generation, evidence.observedMediaSsrc, evidence.senderReportObservedAtNs}, observedAtNs);
     if (context.findOutputChannel(nodeId(), "clock")) {
         m_events.emplace_back(
             "clock",

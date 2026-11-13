@@ -24,6 +24,7 @@ public:
         return *this;
     }
     const Allocator& get_allocator() const noexcept { return m_allocator; }
+    std::span<const std::uint8_t> view() const noexcept { return m_bytes.view(); }
     std::size_t size() const noexcept { return m_bytes.size(); }
     bool empty() const noexcept { return m_bytes.empty(); }
     void clear() noexcept { m_bytes = MediaOwnedByteStorage(*m_allocator.resource(), 0); }

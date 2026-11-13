@@ -57,10 +57,11 @@ MediaRtpInputProtocolSession::MediaRtpInputProtocolSession(
         ::media::ErrorInfo::invalidArgument(
             "RTP protocol observation requires a positive arrival time and drained pending items"));
     const auto generationBefore = m_clock.observeMedia(packet.ssrc);
+    if (!generationBefore) return ::media::Status::failure(generationBefore.error());
     auto reordered = m_reorder->push(std::move(packet),
         std::chrono::steady_clock::time_point(std::chrono::nanoseconds(observedAtNs)));
     if (!reordered) return ::media::Status::failure(reordered.error());
-    return enqueueReordered(std::move(reordered).value(), generationBefore);
+    return enqueueReordered(std::move(reordered).value(), generationBefore.value());
 }
 
 ::media::Status MediaRtpInputProtocolSession::expire(std::chrono::steady_clock::time_point now)
@@ -96,13 +97,14 @@ const MediaRtpInputProtocolSession::PendingItem& MediaRtpInputProtocolSession::p
 { return m_pending->front(); }
 void MediaRtpInputProtocolSession::consumeFront() { m_pending->pop_front(); }
 
-void MediaRtpInputProtocolSession::observeDiscontinuity(
-    MediaRtpDiscontinuityReason reason, std::uint64_t generationBefore) noexcept
+::media::Status MediaRtpInputProtocolSession::observeDiscontinuity(
+    MediaRtpDiscontinuityReason reason, std::uint64_t generationBefore)
 {
-    m_clock.observeDiscontinuity(generationBefore);
+    if (auto status = m_clock.observeDiscontinuity(generationBefore); !status) return status;
     m_depacketizer->discontinuity(reason);
     requireKeyframe();
     releasePayloadState();
+    return ::media::Status::success();
 }
 
 ::media::Result<MediaRtpPacketPreparation> MediaRtpInputProtocolSession::preparePacket(
@@ -206,17 +208,23 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
     releasePayloadState();
 }
 
-::media::Result<MediaRtcpObservation> MediaRtpInputProtocolSession::observeRtcp(
-    std::span<const std::uint8_t> bytes, std::int64_t observedAtNs)
+::media::Result<MediaRtpPreparedRtcpObservation> MediaRtpInputProtocolSession::prepareRtcp(
+    std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const
 {
-    if (hasPending()) return ::media::Result<MediaRtcpObservation>::failure(
-        ::media::ErrorInfo::invalidArgument("RTCP observation requires drained pending RTP items"));
-    auto observation = m_clock.observeRtcp(bytes, observedAtNs);
-    if (observation && std::holds_alternative<MediaRtpClockInvalidation>(observation.value())) {
+    return m_clock.prepareRtcp(bytes, observedAtNs, evaluationAtNs);
+}
+
+::media::Status MediaRtpInputProtocolSession::commitRtcp(MediaRtpPreparedRtcpObservation&& prepared)
+{
+    const bool invalidated = prepared.tracker.invalidated;
+    const bool evidence = prepared.evidencePublished;
+    if (auto status = m_clock.commitRtcp(std::move(prepared)); !status) return status;
+    if (invalidated) {
         m_waitingForClockEvidence = true;
         requireKeyframe();
-    }
-    return observation;
+        resetAssembly();
+    } else if (evidence) m_waitingForClockEvidence = false;
+    return ::media::Status::success();
 }
 
 ::media::Result<std::optional<MediaRtcpClockEvidence>>

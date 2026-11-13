@@ -191,13 +191,49 @@ try {
             // still progress without waiting for another SR or completed AU.
             if (auto status = evidence(s, evaluationAtNs); !status) return status;
         } else {
-            auto observation = s.protocol->observeRtcp(bytes, observedAtNs);
+            auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs);
             if (!observation) return ::media::Status::failure(observation.error());
-            if (const auto* value = std::get_if<MediaRtpClockInvalidation>(&observation.value())) {
-                s.protocol->resetAssembly(); s.pending.clear();
-                if (auto status = event(s, std::allocate_shared<MediaRtpIngressEventBuffer>(
-                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()}, *value, s.nextSequence++), false, evaluationAtNs); !status) return status;
-            } else if (auto status = evidence(s, evaluationAtNs); !status) return status;
+            auto prepared = std::move(observation).value();
+            auto rejection = std::move(prepared.tracker.rejection);
+            const bool invalidated = prepared.tracker.invalidated;
+            const bool selectedClock = std::holds_alternative<MediaRtcpClockEvidence>(prepared.tracker.output);
+            MediaBufferRef output;
+            if (!std::holds_alternative<std::monostate>(prepared.tracker.output)) {
+                if (s.nextSequence == 0 || s.nextSequence == std::numeric_limits<std::uint64_t>::max())
+                    return invalid("Prepared RTP ingress sequence exhausted");
+                if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
+                    output = std::allocate_shared<MediaRtpIngressEventBuffer>(
+                        std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
+                        std::move(*value), s.nextSequence);
+                else
+                    output = std::allocate_shared<MediaRtpIngressEventBuffer>(
+                        std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
+                        std::get<MediaRtpClockInvalidation>(prepared.tracker.output), s.nextSequence);
+            }
+            // The session lock keeps this reserved FIFO tail invisible until
+            // the protocol delta commits. No output allocation follows commit.
+            const auto previousHighWater = s.outputHighWater;
+            const bool queued = m_frozen && output;
+            if (queued) {
+                if (auto status = event(s, output, selectedClock, evaluationAtNs); !status) return status;
+            }
+            auto committed = s.protocol->commitRtcp(std::move(prepared));
+            if (!committed) {
+                if (queued) {
+                    s.outputBytes -= s.controls.back().admissionBytes;
+                    s.controls.pop_back();
+                    s.outputHighWater = previousHighWater;
+                }
+                return committed;
+            }
+            if (invalidated) s.pending.clear();
+            if (rejection) return ::media::Status::failure(std::move(*rejection));
+            if (output) {
+                ++s.nextSequence;
+                if (!queued) {
+                    if (auto status = event(s, std::move(output), selectedClock, evaluationAtNs); !status) return status;
+                }
+            }
         }
         s.ordinal = ordinal;
         if (m_bootstrap) m_bootstrapObservedAtNs = observedAtNs;
@@ -451,7 +487,7 @@ try {
                 (!m_frozen || m_plan.lifecycleMode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
                 return ::media::Status::failure(::media::ErrorInfo::unsupported(
                     "RTP source identity changed before an authorized runtime generation transition"));
-            s.protocol->observeDiscontinuity(discontinuity.reason, generation);
+            if (auto status = s.protocol->observeDiscontinuity(discontinuity.reason, generation); !status) return status;
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
                 "rtp_discontinuity stream=" + std::string(s.plan.depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio") +
                 " reason=" + std::to_string(static_cast<int>(discontinuity.reason)) +

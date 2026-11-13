@@ -53,8 +53,11 @@ namespace media::ffmpeg::graph {
     owners = add(owners, queued);
     // Source mutex serializes callbacks. Publication overlaps its event owner,
     // local snapshot (members+group CNAME), and one copy-assignment replacement.
-    // The other stages need at most one tracker replacement or three owners
-    // (event, returned calibration, validator evidence replacement).
+    // RTCP prepare overlaps at most two temporary CNAME owners: one tracker
+    // replacement (active and pending are exclusive paths), and one evidence
+    // event. Commit moves the replacement before group publication. Other
+    // stages need at most three owners (event, returned calibration, validator
+    // evidence replacement), which still dominates the two-owner transaction.
     const auto publication = add(add(streams, 1), 2);
     owners = add(owners, (std::max)(std::uint64_t{3}, publication));
     auto allocation = MediaPreparationMemoryResource::allocationFootprint(cnameBytes, alignof(std::uint8_t));
