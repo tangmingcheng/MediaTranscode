@@ -39,7 +39,7 @@ public:
     const MediaPreparedRtpDatagramAllocationFacts& entryAllocationFacts() const noexcept;
     MediaPreparedRtpStorageReservation storageReservation() const;
     ::media::Status fail(::media::ErrorInfo error);
-    ::media::Status sealPreflight();
+    ::media::Status sealPreflight(std::optional<MediaRawRtpRuntimeStoragePlan> runtimeStorage);
     ::media::Status requireSealed() const;
     ::media::Status validate() const;
     MediaRawRtpPreparedByteBudgetSnapshot snapshot() const noexcept;

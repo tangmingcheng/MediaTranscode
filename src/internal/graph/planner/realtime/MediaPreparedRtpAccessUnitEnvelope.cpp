@@ -6,6 +6,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/utils/MediaAsciiStringUtils.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <array>
@@ -291,6 +292,50 @@ h264ProfileScale(std::uint8_t profileIdc)
 }
 
 } // namespace
+
+// RFC 3640 complete-packet bytes and fragment completion are different
+// transactions. Object and byte maxima need not occur in the same packet.
+::media::Result<std::uint64_t> MediaPreparedRtpAccessUnitEnvelopePlanner::transactionStorageBytes(
+    const MediaPreparedRtpAccessUnitEnvelope& envelope, std::uint64_t maximumDatagramBytes)
+{
+    using R = ::media::Result<std::uint64_t>;
+    if (auto valid = envelope.validate(); !valid) return R::failure(valid.error());
+    auto single = preparedMediaPacketStorageBytes(envelope.maximumAccessUnitBytes,
+        MediaPacketStorageExtent::Payload);
+    if (!single) return R::failure(single.error());
+    if (envelope.codecName != "aac") {
+        if (envelope.maximumAccessUnitsPerPush != 1)
+            return R::failure(::media::ErrorInfo::unsupported(
+                "RTP transaction requires an authoritative multi-unit geometry"));
+        return R::success(single.value());
+    }
+    using Layout = MediaAacRtpAuHeaderLayout;
+    if (envelope.streamKind != MediaStreamKind::Audio ||
+        envelope.maximumAccessUnitBytes != Layout::MaximumAuBytes)
+        return R::failure(::media::ErrorInfo::invalidArgument("AAC transaction requires the negotiated AU-size envelope"));
+    if (maximumDatagramBytes <= RtpHeaderBytes)
+        return R::failure(::media::ErrorInfo::invalidArgument("AAC transaction lacks RTP payload capacity"));
+    const auto payload = maximumDatagramBytes - RtpHeaderBytes;
+    const auto count = Layout::maximumCompleteAccessUnits(payload);
+    auto overhead = preparedMediaPacketStorageBytes(0, MediaPacketStorageExtent::Payload);
+    if (!overhead) return R::failure(overhead.error());
+    if (!count || count != envelope.maximumAccessUnitsPerPush || overhead.value() <= Layout::HeaderBytes)
+        return R::failure(::media::ErrorInfo::invalidArgument("AAC transaction geometry differs from its envelope"));
+    auto headers = MediaCheckedArithmetic::multiply(count, Layout::HeaderBytes, "AAC transaction headers");
+    auto declared = MediaCheckedArithmetic::multiply(count, Layout::MaximumAuBytes, "AAC transaction AU bytes");
+    auto objects = MediaCheckedArithmetic::multiply(count, overhead.value(), "AAC transaction packet headers");
+    if (!headers) return R::failure(headers.error());
+    if (!declared) return R::failure(declared.error());
+    if (!objects) return R::failure(objects.error());
+    if (payload < Layout::LengthBytes || headers.value() > payload - Layout::LengthBytes)
+        return R::failure(::media::ErrorInfo::invalidArgument("AAC transaction headers exceed payload"));
+    const auto bytes = (std::min)(payload - Layout::LengthBytes - headers.value(), declared.value());
+    auto complete = MediaCheckedArithmetic::add(bytes, objects.value(), "AAC complete transaction storage");
+    if (!complete) return complete;
+    // Header overhead exceeds each extra AU header: the complete-packet maximum
+    // is monotonic in count. A fragmented AU still reserves its declared size.
+    return R::success((std::max)(complete.value(), static_cast<std::uint64_t>(single.value())));
+}
 
 ::media::Status MediaPreparedRtpAccessUnitEnvelope::validate() const
 {

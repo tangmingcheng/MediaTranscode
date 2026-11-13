@@ -358,3 +358,49 @@ RTCP 事务 10 文件已获两名独立审查者完整 SOURCE PASS：保留原 c
 
 
 RTCP 构建终态：552eb76b 对应 RKMPP 八核增量 45/45，PID 1527764 已结束，退出码 0，realtime CLI 链接成功。记录后删除本轮专属 log／exit；同步包本机和远端均已删除。本批无媒体测试，不计合屏验收通过。
+
+
+### 完整 WaitingCredit 批次接口与实施分工（待交叉审查）
+
+本批一次贯通规划、封存与生产泵，不先合入降费。共享内部 `MediaPreparedRtpCreditPlan` 每 stream 保存 `heldPayloadBytes / fixedAssemblyBytes / maximumTransactionBytes / guaranteedPayloadBytes`（H/F/T/Pmin）、`maximumTransactionUnits`，以及独立 packet/control 对象和字节容量。Pmin=max(H,F+2T)；candidate 的原 fixed 已含 F，因此新增 compressed 费为 Pmin−F，不能再重复加整个 Pmin。metadata 为原总费用扣除已归 payload 的分项；freeze scratch 仍属 metadata 的真实 held，封存后实际释放才退账。candidate、sealed 独立读回和最终 session 使用同一类型化产品，失败不发布。
+
+`consume` 返回 `Result<MediaPreparedRtpIngressProgress>`：`AcceptedReady`、`AcceptedWaitingCredit`、`NotAcceptedWaitingControl`；等待原因独立枚举 PayloadBytes／PacketObjects／ControlObjects。已接受的 RTP 即使其 drain 因控制槽不足而停顿，也必须是 AcceptedWaitingCredit，不能重放 observe。`resumeDrain(stream, evaluationNow)` 仅推进已接受的 pending，不接受 datagram、不重计 ordinal。capture worker 在 observe 前记录 wakeup sequence；accepted 后立即提交一次 frontier／collector cursor，然后保持当前 batch lease 与下一 entry cursor，释放 delivery、buffer、session 全部锁后 wait。NotAccepted 保留当前 entry 且不改 frontier，唤醒后重新 prepare，绝不保存 wire span 事务跨 wait。每 channel 仍只有原 arena 的一个在途 batch，无额外媒体复制或线程。
+
+每次 depacketizer pending-front 是原子载荷事务：先合法 prepare、checked 求和所有 `preparedMediaPacketStorageBytes`、核 packet 槽与序号、一次 `payloadBudget.reserve(sum,Backpressure)`，再用 Lease::split 形成各 AU 租约。新增每 stream 一个已计费的待提交 lease 容器，与原 pending 容器最多同时各持 maximumPendingLeases；wrapper 物化及输出槽预留完成后才 commit。`releaseExisting` 不在预约前修改旧 assembly／lease；提交时按原协议清理旧状态并交换容器，任何预约失败保持 pending-front 与原 deadline。完整 AU attachGraphCredit 后释放 prep lease，继续复用现有跨域所有权操作。
+
+控制对象与媒体对象分开硬限额。control 最小槽数从单次共同控制事务最大输出数推导（现 RTCP／evidence／expiry／discontinuity 均为 0 或 1）；其字节上界为既有 event wrapper＋最大合法 CNAME owning geometry。packet 容量须独立覆盖 maximumTransactionUnits，不能用媒体填满控制保证。队列总费用由两个真实 deque 峰值和各自容量相加；控制 FIFO 满时预判不提交、不覆盖旧项。`takeOutput` 释放对象槽必须通知生产者，而 payload 释放沿同 root notification 唤醒；二者不得互相假定会触发。
+
+tick 必须进入共同预判／提交：`prepareClockProgress(now)` 基于现 tracker／schedule 形成独立 scalar delta 与 0／1 输出，预留控制槽后提交；不先推进 schedule 再等槽。已有 RTP pending 时不调用要求 drained 的 reorder.expire；先服务独立 clock 控制，再尝试 resumeDrain，只有 pending 已空才做 reorder expiry。RTCP channel 保持独立接收／tick；RTP 等信用不持任何共享锁。所有 wait 使用原准备或协议时钟 deadline 和 stop notification，不另开超时、不把取消作为信用唤醒。bootstrap 不启 WaitingCredit，仍保留原预算不足失败，因 DAG 尚不能释放 prefix。
+
+root 从创建起安装不可变 release notifier，其 weak targets 指向 root 初始化事务内先计费、再构造的独立接收信用 wakeup；wakeup 本体和 notifier 容器按真实几何计费且生命周期覆盖 worker。worker 停止先 interrupt credit wakeup 及各 receiver，再 join，最后释放 source/budget。未注册 notifier 的预算不得启 Backpressure。独立 RTCP 等控制槽时仍以原 deadline 唤醒检查取消／终止；控制链保留先前已审 Binder/Gate 与有序 StartupClock／Coordinator，不增加异步控制通道。
+
+分工：主智能体负责上述 planner 成本、typed credit 产品、Pmin/seal、root notifier 构造与源创建传参；runtime 子智能体负责 SourceSession 的共同控制事务、AU reserve/split、队列信用通知及 RawRtpPreparedInputBuffer 的 accepted/cursor/wait 接线。接口定稿与两审通过后并行实施；两组整体冻结后双审；按用户最新指示，本机修改和提交，直接 RKMPP 八核增量 all-target 构建，暂不编译 Windows，Windows 共享链路影响仍须审查。当前本节是待审设计，尚未降费、封存生产信用或证明 2 GiB 验收通过。
+
+
+本轮进度：已接通 root targets 到逐源 RTP／RTCP 独立 wakeup，校验完整且不重复的 channel 映射；bootstrap 显式要求 AcceptedReady。事务备用 lease 目录及替换控制块已纳入候选费用，AAC 单事务字节界已实现为 envelope planner 方法，尚未接 Pmin 降费与最终 seal。通知器源码独立审查发现标准 vector 几何原先仅支持 MSVC，正在补 RKMPP 精确构造能力证据；当前代码未构建、未运行媒体，不能计为验收通过。
+
+
+### 本轮封存接线与整批审查
+
+候选已接 H/F/T/Pmin 产品，固定部分保留 F、动态 payload 仅计 Pmin−F；第六个批量临时数组保存各 child 的保证额度并计入 scratch。全部 source 锁内复算后原子 sealPartition，随后无失败地发布 runtimeCredit；sealed 读回另核实际 payload guarantee。packet 最小槽按单 pending-front 最大 AU 数计算，control 独立计费并保留历史高水。全 src 核验 freezeBatch 唯一调用来自 CompositionPreparer 且必带 solver，因此接口改为必需引用，移除无消费者的无 solver 封存分支。
+
+两名独立审查者本轮判定 FAIL，未构建、未计实流通过：一是 root 共用 pressureArmed 被临时 metadata 释放触发，可能自激重试；二是普通接收器的最后报文可能跨越 continuous 安装／freeze，不能假定 AcceptedReady。前者已改为 sealed child 对应信用域通知，待复审；后者正在按共同 typed 接收语义修复。
+
+RKMPP 通知器精确 vector 目录已获局部复审 PASS，但通用 PMR deque/vector 仍有平台门禁。已在目标机读取 `/opt/mt-tools/gcc-12.4-native/include/c++/12.4.0/bits/` 的实际实现；后续适配依据 [GCC 12.4 stl_vector.h](https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.4.0/libstdc%2B%2B-v3/include/bits/stl_vector.h)、[stl_deque.h](https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.4.0/libstdc%2B%2B-v3/include/bits/stl_deque.h) 和同版本 deque.tcc。仅调整仓库标准库费用 adapter，不修改任何外部依赖。两次 SSH 只读核验均退出 0，未产生测试日志、抓包或媒体产物。
+
+
+GCC 通用容器 adapter 设计已获独立 DESIGN PASS，源码已实现待复审：严格锁定 GCC 12.4/C++20/非 debug；vector 使用实际倍增和 max_size，deque 按默认空容器、逐元素 push/pop/clear 的生命周期高水规划 block/map 及增长交叠。该边界覆盖当前调用点，不覆盖任意 range insert/resize。通知器目录现复用共同 exact vector 几何，删除此前局部重复 adapter。Windows 原分配递推保留。尚未构建或实流验收。
+
+
+GCC adapter 实施已获独立 SOURCE PASS；按信用域通知修复已获两名独立审查者 SOURCE PASS。审查同时发现 apply 对 Stream::plan 的冗余写入：该成员是 m_plan 的 const 引用，已删除重复赋值，仅更新原有可写 plan，引用自动可见。整批仍等待 ordinary handoff 修复与复审；没有构建或实流通过结论。
+
+
+最后复审确认另一项预算缺口：raw child 尚未保证 future adapter/arena 分配，ordinary receive 跨 freeze 时可被 source 封存占用其余量。正在按既有接收几何补事前保证，当前整批仍 FAIL。原 38 文件同步包（SHA256 34d22eab9235f27de38c37f6cfd1ef154f4cff1cc119639e7838c2f2e325777b）仅上传，未应用、未启动构建；远端已按路径/hash核对删除，退出 0。本机重封包 SHA256 4aded4d37a794541fff6f82a98fef52b6912a163cf3ab331f49d4c127cc5d53f 未上传，记录后删除。
+
+
+GCC 容器 adapter 已本机独立提交 `c7a38df1`（双审 SOURCE PASS，未推送）。deque max_size 精度修正保留实际 vendor 上限，尚待下一轮复编。为并行发现接口错误，已对此前冻结的 38 文件快照进行 RKMPP 八核增量构建，PID 1756950，300 秒上限；同步包 SHA256 294ad676e0702c409b8aed40e2ac9190046b59225c957e2a09898f2d87e99b26，写前／写后哈希均通过，远端包已删除。日志／退出标记为项目根 `composition-build-credit-20261113.log/.exit`。最近观测 124/488、进程存活且无已报告编译错误；该快照不含 raw future 保证，不能代表最终批次或媒体验收。
+
+
+最终 raw future 保证 9 文件及整批信用机制已获两名未参与实现的独立审查者明确 SOURCE PASS。包含锁内 actual-held 与未来接收费用、共享 A/V 一次保证、原预算硬界、按域通知、typed handoff、原 deadline 和取消语义；仅源码通过。
+
+首轮冻结快照 RKMPP 构建终态：PID 1756950 已不存在，300 秒上限触发，退出码 124，完成至 215/488，日志未见编译 error；不能计构建成功。保留已有对象继续增量，不做 clean。最终 10 文件增量包 SHA256 ea7dd0b1962855dc988a88a50604be9eef05383c8b6b13d6440116c9899f12b8 已上传待应用，包含 raw future 保证及 deque max_size 精度修正。记录后删除首轮专属 log／exit 和本机首轮包；不删除对象、测试源或其它产物。

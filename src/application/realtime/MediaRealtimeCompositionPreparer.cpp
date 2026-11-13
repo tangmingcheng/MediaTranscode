@@ -150,13 +150,14 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
             "Composition requires complete grid, selected audio, output geometry and cadence"));
     auto plannedInputs = MediaRealtimeCompositionInputPlanner::plan(*request.composition);
     if (!plannedInputs) return PreparedResult::failure(plannedInputs.error());
-    auto preparationBudget = MediaPreparationStorageBudget::create(
-        plannedInputs.value().storageLimitBytes, MediaStandalonePreparationStorage{}, MediaStorageReleaseUnobserved{});
+    auto preparationBudget = MediaPreparationStorageBudget::createObservedRoot(
+        plannedInputs.value().storageLimitBytes, plannedInputs.value().creditWakeupCount);
     if (!preparationBudget) return PreparedResult::failure(preparationBudget.error());
-    const MediaSharedPreparationStorage storageScope{preparationBudget.value()};
+    const MediaSharedPreparationStorage storageScope{preparationBudget.value().root};
     auto masterClock = std::make_shared<MediaSteadyMasterClock>(MediaRunningTime::fromNanoseconds(0));
     auto captured = MediaRealtimeCompositionInputPreparer::prepare(
-        request, plannedInputs.value().inputs, masterClock, runControl.stopToken(), storageScope);
+        request, plannedInputs.value().inputs, masterClock, runControl.stopToken(), storageScope,
+        preparationBudget.value().targets);
     if (!captured) return PreparedResult::failure(captured.error());
     auto captures = std::move(captured).value();
     auto deadline = captures.front().deadline;
@@ -182,7 +183,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     if (!audio.value().resolvedOutput || !audio.value().preparedEmission)
         return PreparedResult::failure(::media::ErrorInfo::notInitialized(
             "Composition audio output lacks the unique prepared encoder readback"));
-    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value());
+    auto planningResource = MediaPreparationMemoryResource::create(preparationBudget.value().root);
     if (!planningResource) return PreparedResult::failure(planningResource.error());
     auto sourceAudio = MediaCompositionSourceAudioPlanner::prepare(
         facts, selected, audio.value(), *planningResource.value(), control);
@@ -340,7 +341,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     MediaCompositionBatchAdmissionSolver solver(fixedRequests.view(), fixedSources, output.value(),
         prepared->geometry.geometry, cadence, selected, emission.value(), deployment.value().encode().latency,
         planningResource.value(), control);
-    if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, &solver); !frozen)
+    if (auto frozen = MediaPreparedRtpSourceSession::freezeBatch(rtpSources, solver); !frozen)
         return PreparedResult::failure(frozen.error());
     auto* workspace = solver.workspace();
     if (!workspace) return PreparedResult::failure(::media::ErrorInfo::notInitialized(
@@ -481,7 +482,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     threading.mode = MediaThreadingMode::PerNodeWorker;
     threading.priority = MediaThreadPriority::High;
     threading.collectWorkerMetrics = true;
-    const auto preparationStorage = preparationBudget.value()->snapshot();
+    const auto preparationStorage = preparationBudget.value().root->snapshot();
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::PlannerCapability,
         "composition_preparation_storage stage=graph_bound scope=shared_reservations capacity=" +
         std::to_string(preparationStorage.capacity) + " actual_retained_bytes=" +

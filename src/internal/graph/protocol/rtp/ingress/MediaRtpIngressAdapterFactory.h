@@ -12,6 +12,8 @@ namespace media::ffmpeg::graph {
 
 class MediaRtpIngressAdapterFactory final {
 public:
+    static ::media::Result<std::size_t> preparationStorageBytes(
+        const MediaRtpReceiveGeometry& geometry);
     static ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>> create(
         std::shared_ptr<MediaRtpUdpTransport> transport,
         const MediaRtpReceiveGeometry& plan,

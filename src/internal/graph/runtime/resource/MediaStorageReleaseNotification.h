@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -15,6 +16,12 @@ namespace media::ffmpeg::graph {
 // alive; notification never re-enters protocol/global state or executes work.
 class MediaStorageReleaseNotification final {
 public:
+    // Caller reserves the exact allocation geometry before entering this factory.
+    static std::shared_ptr<const MediaStorageReleaseNotification> createAdmitted(
+        std::span<const std::shared_ptr<MediaNodeWakeup>> targets)
+    {
+        return std::shared_ptr<const MediaStorageReleaseNotification>(new MediaStorageReleaseNotification(targets));
+    }
     static ::media::Result<std::shared_ptr<const MediaStorageReleaseNotification>> create(
         std::vector<std::weak_ptr<MediaNodeWakeup>> targets)
     {
@@ -42,6 +49,8 @@ public:
     }
 
 private:
+    explicit MediaStorageReleaseNotification(std::span<const std::shared_ptr<MediaNodeWakeup>> targets)
+        : m_targets(targets.begin(), targets.end()) {}
     explicit MediaStorageReleaseNotification(
         std::vector<std::weak_ptr<MediaNodeWakeup>> targets) noexcept
         : m_targets(std::move(targets)) {}

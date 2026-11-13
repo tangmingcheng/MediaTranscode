@@ -52,8 +52,9 @@ public:
     bool hasPending() const noexcept;
     const PendingItem& pendingFront() const;
     void consumeFront();
-    ::media::Status observeDiscontinuity(MediaRtpDiscontinuityReason reason,
-        std::uint64_t generationBefore);
+    ::media::Result<MediaRtpPreparedClockObservation> prepareDiscontinuity(std::uint64_t generationBefore) const;
+    ::media::Status commitDiscontinuity(MediaRtpDiscontinuityReason reason,
+        MediaRtpPreparedClockObservation prepared);
     ::media::Result<MediaRtpPacketPreparation> preparePacket(
         const MediaRtpPacket& packet, std::size_t heldReservations) const;
     ::media::Status commitPacketRejection(const MediaRtpPacketRejection& rejection);
@@ -67,13 +68,14 @@ public:
     // Prepare, output materialization and commit share the caller's source lock
     // (or sole Raw owner thread). Never retain this product across a wait;
     // tracker identity/revision rejects stale state, pending RTP is not copied.
-    ::media::Result<MediaRtpPreparedRtcpObservation> prepareRtcp(
+    ::media::Result<MediaRtpPreparedClockObservation> prepareRtcp(
         std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
-    ::media::Status commitRtcp(MediaRtpPreparedRtcpObservation&& prepared);
-    ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(std::int64_t now);
-    ::media::Result<std::optional<MediaRtpClockSessionTransition>> transition(std::int64_t now);
+    ::media::Result<MediaRtpPreparedClockObservation> prepareEvidence(std::int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtpPreparedClockObservation> prepareClockTransition(std::int64_t evaluationAtNs) const;
+    ::media::Status commitClockObservation(MediaRtpPreparedClockObservation&& prepared);
     ::media::Result<int> receiveTimeoutMs(std::chrono::steady_clock::time_point reorderNow,
         std::int64_t clockNowNs, int plannedMaximumMs) const;
+    std::optional<std::int64_t> nextClockDeadlineNs() const noexcept;
     std::uint64_t generation() const noexcept;
     const MediaRtpInputClockSessionConfig& clockConfig() const noexcept;
 

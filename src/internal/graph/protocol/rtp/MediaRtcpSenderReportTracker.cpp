@@ -69,10 +69,11 @@ MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReport
 
 ::media::Status MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc)
 {
-    if (auto status = advanceRevision(); !status) return status;
     if (m_mediaSsrc && *m_mediaSsrc != ssrc) {
-        if (auto status = invalidate(); !status) return status;
-    }
+        auto prepared = prepareContinuityChange(true);
+        if (!prepared) return ::media::Status::failure(prepared.error());
+        if (auto status = commit(std::move(prepared).value()); !status) return status;
+    } else if (auto status = advanceRevision(); !status) return status;
     m_mediaSsrc = ssrc;
     if (!m_pendingSource) return ::media::Status::success();
     if (m_pendingSource->senderReport.ssrc != ssrc) {
@@ -87,42 +88,9 @@ MediaRtcpSenderReportTracker::MediaRtcpSenderReportTracker(MediaRtcpSenderReport
     m_pendingSource.reset();
     // RTP and RTCP can be delivered by independent receivers. Matching the
     // media SSRC completes pending evidence regardless of cross-channel arrival
-    // order; takeEvidenceUpdate evaluates age against its supplied clock.
+    // order; prepareEvidence evaluates age against its supplied clock.
     m_evidenceUpdatePending = true;
     return ::media::Status::success();
-}
-
-::media::Status MediaRtcpSenderReportTracker::observeContinuityLoss()
-{
-    return invalidate();
-}
-
-::media::Result<MediaRtcpClockEvidence> MediaRtcpSenderReportTracker::evidence(int64_t observedAtNs) const
-{
-    return evidenceForState(state(), m_config, m_cname.get_allocator(), observedAtNs);
-}
-
-::media::Result<std::optional<MediaRtcpClockEvidence>>
-MediaRtcpSenderReportTracker::takeEvidenceUpdate(int64_t observedAtNs)
-{
-    if (!m_evidenceUpdatePending) {
-        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
-            std::nullopt);
-    }
-    auto current = evidence(observedAtNs);
-    if (!current) {
-        if (current.error().code == ::media::ErrorCode::NotInitialized) {
-            return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
-                std::nullopt);
-        }
-        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::failure(
-            current.error());
-    }
-    if (auto status = advanceRevision(); !status)
-        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::failure(status.error());
-    m_evidenceUpdatePending = false;
-    return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
-        std::move(current).value());
 }
 
 uint64_t MediaRtcpSenderReportTracker::generation() const noexcept
@@ -135,21 +103,6 @@ uint64_t MediaRtcpSenderReportTracker::generation() const noexcept
     if (m_revision == std::numeric_limits<uint64_t>::max())
         return invalidEvidence("RTCP tracker mutation revision exhausted");
     ++m_revision;
-    return ::media::Status::success();
-}
-
-::media::Status MediaRtcpSenderReportTracker::reset() { return invalidate(); }
-
-::media::Status MediaRtcpSenderReportTracker::invalidate()
-{
-    if (m_generation == std::numeric_limits<uint64_t>::max())
-        return invalidEvidence("RTCP tracker generation exhausted");
-    if (auto status = advanceRevision(); !status) return status;
-    ++m_generation;
-    m_mediaSsrc.reset(); m_pendingSource.reset(); m_senderReport.reset();
-    m_cname.clear(); m_lastAcceptedNtp.reset();
-    m_senderReportObservedAtNs = 0; m_cnameObservedAtNs = 0;
-    m_evidenceUpdatePending = false;
     return ::media::Status::success();
 }
 
@@ -170,15 +123,8 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
         return Result::failure(::media::ErrorInfo::invalidArgument("RTCP tracker mutation revision exhausted"));
     MediaRtcpPreparedObservation result{this, m_revision, state(), {}, {}, {}, {}, false};
     auto& next = result.state;
-    auto invalidateState = [&]() -> ::media::Status {
-        if (next.generation == std::numeric_limits<uint64_t>::max())
-            return invalidEvidence("RTCP tracker generation exhausted");
-        const auto generation = next.generation + 1;
-        next = {}; next.generation = generation; result.invalidated = true;
-        return ::media::Status::success();
-    };
     auto reject = [&](const char* message) -> ::media::Status {
-        auto status = invalidateState();
+        auto status = invalidatePrepared(result);
         if (!status) return status;
         result.rejection = ::media::ErrorInfo::invalidArgument(message);
         return ::media::Status::success();
@@ -243,14 +189,52 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
                 }
             } else if (packet.kind == MediaRtcpPacketKind::Bye &&
                 std::find(packet.byeSources.begin(), packet.byeSources.end(), *next.mediaSsrc) != packet.byeSources.end()) {
-                if (auto status = invalidateState(); !status) return Result::failure(status.error());
+                if (auto status = invalidatePrepared(result); !status) return Result::failure(status.error());
                 result.output = MediaRtpClockInvalidation{next.generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs};
                 break;
             }
             if (result.rejection) break;
         }
     }
-    if (!result.invalidated && next.evidencePending) {
+    return materialize(std::move(result), evaluationAtNs, true);
+} catch (const std::bad_alloc&) {
+    return ::media::Result<MediaRtcpPreparedObservation>::failure(
+        ::media::ErrorInfo::allocationFailed("RTP clock observation allocation failed"));
+}
+
+::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::prepareEvidence(int64_t now) const
+{
+    return materialize({this, m_revision, state(), {}, {}, {}, {}, false}, now, true);
+}
+
+::media::Status MediaRtcpSenderReportTracker::invalidatePrepared(MediaRtcpPreparedObservation& result)
+{
+    if (result.state.generation == std::numeric_limits<uint64_t>::max())
+        return invalidEvidence("RTCP tracker generation exhausted");
+    const auto generation = result.state.generation + 1;
+    result.state = {}; result.state.generation = generation; result.invalidated = true;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::prepareContinuityChange(bool invalidate) const
+{
+    using Result = ::media::Result<MediaRtcpPreparedObservation>;
+    MediaRtcpPreparedObservation result{this, m_revision, state(), {}, {}, {}, {}, false};
+    if (invalidate) {
+        if (auto status = invalidatePrepared(result); !status) return Result::failure(status.error());
+    }
+    // This delta has no evidence evaluation or wire capture time.
+    return materialize(std::move(result), 0, false);
+}
+
+::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::materialize(
+    MediaRtcpPreparedObservation result, int64_t evaluationAtNs, bool evaluateEvidence) const try
+{
+    using Result = ::media::Result<MediaRtcpPreparedObservation>;
+    if (result.owner != this || result.revision != m_revision || m_revision == std::numeric_limits<uint64_t>::max())
+        return Result::failure(::media::ErrorInfo::invalidArgument("RTCP tracker mutation revision exhausted or stale"));
+    auto& next = result.state;
+    if (evaluateEvidence && !result.invalidated && next.evidencePending) {
         auto evidence = evidenceForState(next, m_config, m_cname.get_allocator(), evaluationAtNs);
         if (evidence) {
             result.output = std::move(evidence).value();

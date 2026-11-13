@@ -59,6 +59,8 @@ private:
     ::media::Status processPendingRtpPacket(
         MediaGraphExecutionContext& context,
         const MediaRtpPacket& packet);
+    ::media::Status publishClockObservation(MediaGraphExecutionContext& context,
+        MediaRtpPreparedClockObservation prepared, std::int64_t evaluationAtNs, const MediaRtpDiscontinuity* discontinuity);
     ::media::Status queueClockEvidence(MediaGraphExecutionContext& context,
                                        std::int64_t observedAtNs);
     ::media::Status queueClockTransition(MediaGraphExecutionContext& context,

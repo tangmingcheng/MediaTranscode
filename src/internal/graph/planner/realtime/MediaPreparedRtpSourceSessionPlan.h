@@ -1,5 +1,8 @@
 #pragma once
 #include "internal/graph/planner/realtime/MediaPreparedRtpStorageAdmission.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpCreditPlan.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include <array>
 #include "internal/graph/planner/realtime/MediaRtcpPreparationStoragePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeCompositionSourceFactsPlanner.h"
@@ -27,6 +30,9 @@ struct MediaPreparedRtpSourceSessionStreamPlan final {
     MediaPreparedRtpContainerStoragePlan containerStorage;
     // Residual legacy protocol owners; actual migrated requests are excluded.
     MediaRtpProtocolStorageCosts unmigratedProtocolStorage{};
+    // One waiter per fixed channel; a platform wakeup is not a broadcast gate.
+    std::array<std::shared_ptr<MediaNodeWakeup>, 2> creditWakeups;
+    std::optional<MediaPreparedRtpCreditPlan> runtimeCredit;
 };
 
 struct MediaPreparedRtpSourceSessionPlan final {

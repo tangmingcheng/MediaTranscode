@@ -10,6 +10,36 @@
 
 namespace media::ffmpeg::graph {
 
+::media::Result<MediaRawRtpRuntimeStoragePlan>
+MediaRawRtpPreparationStoragePlanner::runtimeStorage(
+    std::span<const std::array<MediaRtpReceiveGeometry, 2>* const> streams)
+{
+    using Result = ::media::Result<MediaRawRtpRuntimeStoragePlan>;
+    using Cost = MediaPreparedAllocationCost;
+    if (streams.empty()) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "RTP runtime storage requires original transport geometries"));
+    std::size_t total = 0;
+    for (const auto* channels : streams) {
+        if (!channels || (*channels)[0].channel() != MediaRtpUdpChannel::Rtp ||
+            (*channels)[1].channel() != MediaRtpUdpChannel::Rtcp ||
+            (*channels)[0].maximumDatagramBytes() != (*channels)[1].maximumDatagramBytes())
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP runtime storage requires paired channel geometries"));
+        // Mixed receive may still be outside the Buffer lock at the handoff.
+        // Cover both its lazy scratch and its one returned owned datagram,
+        // without assuming either allocation was already present in held bytes.
+        auto ordinary = MediaPreparationMemoryResource::allocationFootprint(
+            (*channels)[0].maximumDatagramBytes(), alignof(std::uint8_t));
+        auto next = Cost::sum({::media::Result<std::size_t>::success(total), ordinary, ordinary,
+            Cost::shared<MediaRtpUdpTransport>(),
+            MediaRtpIngressAdapterFactory::preparationStorageBytes((*channels)[0]),
+            MediaRtpIngressAdapterFactory::preparationStorageBytes((*channels)[1])});
+        if (!next) return Result::failure(next.error());
+        total = next.value();
+    }
+    return Result::success({total, streams.size()});
+}
+
 ::media::Result<MediaRawRtpPreparationStoragePlan>
 MediaRawRtpPreparationStoragePlanner::plan(std::size_t wireBytes,
     std::span<const std::size_t> maximumDatagramBytes)

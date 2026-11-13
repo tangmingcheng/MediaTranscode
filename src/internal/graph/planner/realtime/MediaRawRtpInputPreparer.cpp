@@ -517,7 +517,7 @@ catch (const std::bad_alloc&) {
             if (auto status = prepared.audio.finishRawRtpPreflightCapture(); !status)
                 return status;
         }
-        return prepared.byteBudget->sealPreflight();
+        return prepared.byteBudget->sealPreflight(std::nullopt);
     }, probe);
 }
 

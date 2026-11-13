@@ -59,21 +59,13 @@ template<class T>
     if (packets.value() != stream.workingSet.maximumReorderedPackets)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Prepared completion differs from protocol working set"));
-    // Pending may contain N packets AND N discontinuities. Each packet can
-    // publish A access units plus one evidence event. tickLocked can then
-    // publish one clock invalidation. takeOutput uses the same source mutex.
-    auto perPacket = MediaCheckedArithmetic::add(stream.envelope.maximumAccessUnitsPerPush, 2,
-        "Prepared completion AU, evidence and discontinuity objects");
-    if (!perPacket) return Result::failure(perPacket.error());
-    auto objects = MediaCheckedArithmetic::multiply(packets.value(), perPacket.value(),
-        "Prepared serialized completion objects");
-    if (!objects) return Result::failure(objects.error());
-    objects = MediaCheckedArithmetic::add(objects.value(), 1, "Prepared completion clock expiry");
-    if (!objects) return Result::failure(objects.error());
-    if (objects.value() > (std::numeric_limits<std::size_t>::max)())
+    // The receiver retains the pending batch and pauses between atomic fronts.
+    // Only one depacketizer transaction must fit; control has separate credit.
+    const auto objects = stream.envelope.maximumAccessUnitsPerPush;
+    if (objects > (std::numeric_limits<std::size_t>::max)())
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "Prepared completion exceeds addressable object count"));
-    return Result::success(static_cast<std::size_t>(objects.value()));
+    return Result::success(static_cast<std::size_t>(objects));
 }
 
 ::media::Result<MediaPreparedRtpContainerBounds> MediaPreparedRtpSourceStoragePlanner::minimumBounds(
@@ -130,6 +122,7 @@ template<class T>
         static_cast<std::size_t>(outputStorage.value()), acquiring.value().peakBytes, prefix.value().peakBytes,
         pending.value().peakBytes, static_cast<std::size_t>(controls.value()),
         snapshot ? references.value().peakBytes : 0, 0};
+    result.sparePendingPeakBytes = pending.value().peakBytes;
     if (snapshot) {
         auto owner = resourceOwnerBytes();
         if (!owner) return R::failure(owner.error());
@@ -193,7 +186,7 @@ template<class T>
     for (auto bytes : {result.outputPeakBytes, result.acquiringPeakBytes, result.prefixPeakBytes,
         result.pendingPeakBytes, result.pendingLeaseControlBytes, result.snapshotBytes,
         result.protocolPendingPeakBytes, result.protocolRequestPeakBytes, result.completionPeakBytes,
-        result.aacHeaderPeakBytes}) {
+        result.aacHeaderPeakBytes, result.sparePendingPeakBytes}) {
         auto sum = MediaCheckedArithmetic::add(result.peakBytes, bytes, "Prepared container candidate envelope");
         if (!sum || sum.value() > (std::numeric_limits<std::size_t>::max)())
             return R::failure(::media::ErrorInfo::allocationFailed("Prepared container candidate envelope overflow"));

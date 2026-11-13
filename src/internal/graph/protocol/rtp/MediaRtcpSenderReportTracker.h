@@ -54,15 +54,12 @@ public:
     explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
         MediaLineageAllocationScope allocation);
     ::media::Status observeMedia(uint32_t ssrc);
-    ::media::Status observeContinuityLoss();
     ::media::Result<MediaRtcpPreparedObservation> prepare(
         const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareEvidence(int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareContinuityChange(bool invalidate) const;
     ::media::Status commit(MediaRtcpPreparedObservation&& prepared);
-    ::media::Status advanceRevision();
-    ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;
-    ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(int64_t observedAtNs);
     uint64_t generation() const noexcept;
-    ::media::Status reset();
 private:
     struct PendingRtcpSource final {
         MediaRtcpSenderReport senderReport;
@@ -70,7 +67,10 @@ private:
         int64_t observedAtNs;
     };
     MediaRtcpTrackerState state() const noexcept;
-    ::media::Status invalidate();
+    static ::media::Status invalidatePrepared(MediaRtcpPreparedObservation& prepared);
+    ::media::Result<MediaRtcpPreparedObservation> materialize(
+        MediaRtcpPreparedObservation result, int64_t evaluationAtNs, bool evaluateEvidence) const;
+    ::media::Status advanceRevision();
     MediaRtcpSenderReportTrackerConfig m_config;
     std::optional<uint32_t> m_mediaSsrc;
     std::optional<PendingRtcpSource> m_pendingSource;

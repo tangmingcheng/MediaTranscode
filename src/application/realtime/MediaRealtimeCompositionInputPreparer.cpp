@@ -14,7 +14,8 @@ MediaRealtimeCompositionInputPreparer::prepare(
     std::span<const MediaRealtimeCompositionInputPlan> inputs,
     const std::shared_ptr<MediaMasterClock>& masterClock,
     std::stop_token cancellation,
-    const MediaSharedPreparationStorage& storage)
+    const MediaSharedPreparationStorage& storage,
+        std::span<const std::shared_ptr<MediaNodeWakeup>> creditWakeups)
 {
     using Captured = MediaRealtimeCompositionCapturedSource;
     using SourceResult = ::media::Result<Captured>;
@@ -22,6 +23,7 @@ MediaRealtimeCompositionInputPreparer::prepare(
     if (!masterClock || !storage.root || inputs.size() < 2 || inputs.size() > 4)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Composition requires two through four prepared RTP sources"));
+    std::size_t nextWakeup = 0;
     for (const auto& input : inputs) {
         if (input.input.type != RealtimeInputType::RtpPort ||
             !input.input.openTimeoutMs || *input.input.openTimeoutMs <= 0 ||
@@ -30,6 +32,23 @@ MediaRealtimeCompositionInputPreparer::prepare(
              input.members != MediaTranscodeStreamSet::AudioVideo))
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Composition source requires explicit RTP input, positive open timeout and input latency"));
+        const std::size_t expected = input.members == MediaTranscodeStreamSet::AudioVideo ? 4 : 2;
+        if (input.creditWakeupOffset != nextWakeup || input.creditWakeupCount != expected ||
+            nextWakeup > creditWakeups.size() || expected > creditWakeups.size() - nextWakeup)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Composition credit notification mapping differs from its stream members"));
+        nextWakeup += expected;
+    }
+    if (nextWakeup != creditWakeups.size())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Composition credit notification target count differs from its plan"));
+    for (std::size_t i = 0; i < creditWakeups.size(); ++i) {
+        if (!creditWakeups[i]) return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Composition credit notification target is missing"));
+        for (std::size_t j = 0; j < i; ++j)
+            if (creditWakeups[i] == creditWakeups[j])
+                return Result::failure(::media::ErrorInfo::invalidArgument(
+                    "Composition transport workers require distinct credit notification targets"));
     }
     std::stop_source stop;
     std::stop_callback relay(cancellation, [&] { stop.request_stop(); });
@@ -78,7 +97,8 @@ MediaRealtimeCompositionInputPreparer::prepare(
                     }
                     // Each source transfers its raw prefix as soon as its own
                     // protocol facts are ready, before waiting for other sources.
-                    auto session = capture.value().installContinuousSession(facts.value(), masterClock, stop.get_token());
+                    auto session = capture.value().installContinuousSession(facts.value(), masterClock, stop.get_token(),
+                        creditWakeups.subspan(source->creditWakeupOffset, source->creditWakeupCount));
                     if (!session) {
                         stop.request_stop();
                         promise.set_value(SourceResult::failure(session.error()));

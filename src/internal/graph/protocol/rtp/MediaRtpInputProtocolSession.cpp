@@ -97,10 +97,14 @@ const MediaRtpInputProtocolSession::PendingItem& MediaRtpInputProtocolSession::p
 { return m_pending->front(); }
 void MediaRtpInputProtocolSession::consumeFront() { m_pending->pop_front(); }
 
-::media::Status MediaRtpInputProtocolSession::observeDiscontinuity(
-    MediaRtpDiscontinuityReason reason, std::uint64_t generationBefore)
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareDiscontinuity(
+    std::uint64_t generationBefore) const
+{ return m_clock.prepareDiscontinuity(generationBefore); }
+
+::media::Status MediaRtpInputProtocolSession::commitDiscontinuity(
+    MediaRtpDiscontinuityReason reason, MediaRtpPreparedClockObservation prepared)
 {
-    if (auto status = m_clock.observeDiscontinuity(generationBefore); !status) return status;
+    if (auto status = m_clock.commitClockObservation(std::move(prepared)); !status) return status;
     m_depacketizer->discontinuity(reason);
     requireKeyframe();
     releasePayloadState();
@@ -208,17 +212,23 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
     releasePayloadState();
 }
 
-::media::Result<MediaRtpPreparedRtcpObservation> MediaRtpInputProtocolSession::prepareRtcp(
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareRtcp(
     std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const
 {
     return m_clock.prepareRtcp(bytes, observedAtNs, evaluationAtNs);
 }
 
-::media::Status MediaRtpInputProtocolSession::commitRtcp(MediaRtpPreparedRtcpObservation&& prepared)
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareEvidence(std::int64_t now) const
+{ return m_clock.prepareEvidence(now); }
+
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareClockTransition(std::int64_t now) const
+{ return m_clock.prepareClockTransition(now); }
+
+::media::Status MediaRtpInputProtocolSession::commitClockObservation(MediaRtpPreparedClockObservation&& prepared)
 {
-    const bool invalidated = prepared.tracker.invalidated;
+    const bool invalidated = prepared.tracker.invalidated || prepared.retireAssembly;
     const bool evidence = prepared.evidencePublished;
-    if (auto status = m_clock.commitRtcp(std::move(prepared)); !status) return status;
+    if (auto status = m_clock.commitClockObservation(std::move(prepared)); !status) return status;
     if (invalidated) {
         m_waitingForClockEvidence = true;
         requireKeyframe();
@@ -227,38 +237,20 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
     return ::media::Status::success();
 }
 
-::media::Result<std::optional<MediaRtcpClockEvidence>>
-MediaRtpInputProtocolSession::takeEvidenceUpdate(std::int64_t now)
-{
-    auto evidence = m_clock.takeEvidenceUpdate(now);
-    if (evidence && evidence.value()) m_waitingForClockEvidence = false;
-    return evidence;
-}
-
-::media::Result<std::optional<MediaRtpClockSessionTransition>>
-MediaRtpInputProtocolSession::transition(std::int64_t now)
-{
-    auto result = m_clock.transition(now);
-    if (result && result.value() &&
-        (clockConfig().lossPolicy == MediaRtpClockLossPolicy::WaitForEvidence ||
-         clockConfig().lossPolicy == MediaRtpClockLossPolicy::InvalidateAndWait)) {
-        m_waitingForClockEvidence = true;
-        requireKeyframe();
-    }
-    return result;
-}
-
 ::media::Result<int> MediaRtpInputProtocolSession::receiveTimeoutMs(
     std::chrono::steady_clock::time_point reorderNow, std::int64_t clockNowNs,
     int plannedMaximumMs) const
 {
-    if (const auto deadline = m_reorder->nextDeadline()) {
+    if (const auto deadline = hasPending() ? std::nullopt : m_reorder->nextDeadline()) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - reorderNow);
         plannedMaximumMs = std::min(plannedMaximumMs,
             remaining.count() > 0 ? static_cast<int>(remaining.count()) : 1);
     }
     return m_clock.receiveTimeoutMs(clockNowNs, plannedMaximumMs);
 }
+std::optional<std::int64_t> MediaRtpInputProtocolSession::nextClockDeadlineNs() const noexcept
+{ return m_clock.nextDeadlineNs(); }
+
 std::uint64_t MediaRtpInputProtocolSession::generation() const noexcept { return m_clock.generation(); }
 const MediaRtpInputClockSessionConfig& MediaRtpInputProtocolSession::clockConfig() const noexcept
 { return m_clock.config(); }

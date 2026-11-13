@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
+#include "internal/graph/runtime/resource/MediaPreparedAllocationCost.h"
 
+#include <array>
 #include <memory>
 #include <new>
 #include <string>
@@ -65,7 +67,7 @@ MediaLineageAllocationScope MediaRawRtpPreparedByteBudget::allocationScope() con
 
 MediaPreparedRtpStorageReservation MediaRawRtpPreparedByteBudget::storageReservation() const
 {
-    return {m_storage, m_plan.maximumAllocationBytes, m_plan.streamCount,
+    return {m_storage, m_storage->snapshot().capacity, m_plan.streamCount,
         "prepared-raw-rtp-exact-allocation-capacity"};
 }
 
@@ -95,7 +97,8 @@ void MediaRawRtpPreparedByteBudget::releaseProbe() noexcept
     m_probeActive = false;
 }
 
-::media::Status MediaRawRtpPreparedByteBudget::sealPreflight()
+::media::Status MediaRawRtpPreparedByteBudget::sealPreflight(
+    std::optional<MediaRawRtpRuntimeStoragePlan> runtimeStorage)
 {
     std::scoped_lock lock(m_mutex);
     if (m_error) return ::media::Status::failure(*m_error);
@@ -106,6 +109,22 @@ void MediaRawRtpPreparedByteBudget::releaseProbe() noexcept
     if (m_probeActive) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "raw RTP preflight cannot seal while a probe snapshot is retained"));
+    }
+    if (runtimeStorage) {
+        if (!runtimeStorage->futureAllocationBytes || runtimeStorage->streamCount != m_plan.streamCount)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Raw RTP runtime storage does not cover its shared transport set"));
+        // The caller holds every Buffer lock. The planner also covers the lazy
+        // scratch and owned result of each ordinary receive outside those locks.
+        // Preserve all held prefix/worker backing until its actual destruction.
+        auto capacity = MediaPreparedAllocationCost::sum({
+            ::media::Result<std::size_t>::success(m_storage->snapshot().actualRetainedBytes),
+            ::media::Result<std::size_t>::success(runtimeStorage->futureAllocationBytes)});
+        if (!capacity) return ::media::Status::failure(capacity.error());
+        const std::array children{m_storage};
+        const std::array capacities{capacity.value()};
+        if (auto sealed = MediaPreparationStorageBudget::sealPartition(children, capacities); !sealed)
+            return sealed;
     }
     m_phase = MediaRawRtpPreparationPhase::Sealed;
     return ::media::Status::success();

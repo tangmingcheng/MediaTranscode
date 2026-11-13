@@ -28,6 +28,9 @@ public:
         const MediaRtpDepacketizerConfig& depacketizer,
         std::uint64_t maximumDatagramBytes);
 
+    static ::media::Result<std::uint64_t> transactionStorageBytes(
+        const MediaPreparedRtpAccessUnitEnvelope& envelope, std::uint64_t maximumDatagramBytes);
+
 private:
     MediaPreparedRtpAccessUnitEnvelopePlanner() = delete;
 };

@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/resource/MediaPreparedRtpSourceBudgets.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpContainerStoragePlan.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAdmissionPlan.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpCreditPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
 #include "internal/graph/model/MediaStartupRoutePlan.h"
@@ -23,6 +24,9 @@ struct MediaPreparedRtpStreamStorageSnapshot final {
     std::size_t outputObjects;
     // Observed successful-push high water, never the configured ceiling.
     MediaPreparedRtpContainerBounds history;
+    std::size_t controlObjects;
+    std::size_t controlHighWater;
+    std::size_t spareCapacity;
 };
 struct MediaPreparedRtpBudgetRoles final {
     std::size_t metadata;
@@ -56,6 +60,7 @@ struct MediaPreparedRtpStreamStorageAdmission final {
     MediaPreparedRtpAdmissionStream compressed;
     MediaPreparedRtpContainerBounds bounds;
     MediaPreparedRtpContainerStoragePlan storage;
+    MediaPreparedRtpCreditPlan credit;
 };
 struct MediaPreparedRtpStorageAdmission final {
     // Root-charged ordinary backing survives transfer into the sealed source.

@@ -21,6 +21,7 @@ MediaRealtimeCompositionInputPlanner::plan(const MediaRealtimeCompositionConfig&
             "Composition requires two through four inputs and a valid selected audio source"));
     std::vector<MediaRealtimeCompositionInputPlan> plans;
     plans.reserve(composition.inputs.size());
+    std::size_t creditWakeupCount = 0;
     for (const auto& input : composition.inputs) {
         if (input.type != RealtimeInputType::RtpPort ||
             !input.openTimeoutMs || *input.openTimeoutMs <= 0 ||
@@ -34,14 +35,17 @@ MediaRealtimeCompositionInputPlanner::plan(const MediaRealtimeCompositionConfig&
             auto descriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, audio);
             if (!descriptor) return Result::failure(descriptor.error());
         }
+        const std::size_t sourceWakeups = hasAudio ? 4 : 2;
         plans.push_back({input, hasAudio ? MediaTranscodeStreamSet::AudioVideo
-                                        : MediaTranscodeStreamSet::VideoOnly});
+                                        : MediaTranscodeStreamSet::VideoOnly,
+            creditWakeupCount, sourceWakeups});
+        creditWakeupCount += sourceWakeups;
     }
     if (plans[composition.audioSource].members != MediaTranscodeStreamSet::AudioVideo)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Selected composition audio source has no actual audio stream"));
     return Result::success({std::move(plans),
-        static_cast<std::size_t>(composition.preparationStorageLimitBytes)});
+        static_cast<std::size_t>(composition.preparationStorageLimitBytes), creditWakeupCount});
 }
 
 } // namespace media::ffmpeg::graph

@@ -1,3 +1,4 @@
+#include "internal/graph/planner/realtime/MediaPreparedRtpCreditPlanner.h"
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpBatchStoragePlanner.h"
@@ -121,6 +122,8 @@ try {
         auto binder = MediaRtpPacketClockSession::create(p.binder, MediaPreparedLineageAllocation{resource.value()});
         if (!binder) return R::failure(binder.error());
         auto s = makeMediaLineageUnique<Stream>(MediaPreparedLineageAllocation{resource.value()}, p, resource.value(), payload);
+        s->pending.reserve(p.containerStorage.maximumPendingLeases);
+        s->spareLeases.reserve(p.containerStorage.maximumPendingLeases);
         s->protocol = makeMediaLineageUnique<MediaRtpInputProtocolSession>(
             MediaPreparedLineageAllocation{resource.value()}, std::move(protocol).value());
         s->binder = makeMediaLineageUnique<MediaRtpPacketClockSession>(
@@ -159,15 +162,21 @@ try {
     return ::media::Result<Stream*>::success(result);
 }
 
-::media::Status MediaPreparedRtpSourceSession::consume(MediaStreamKind kind,
+::media::Result<MediaPreparedRtpIngressProgress> MediaPreparedRtpSourceSession::consume(MediaStreamKind kind,
     MediaRtpUdpChannel channel, std::span<const std::uint8_t> bytes,
     std::int64_t observedAtNs, std::uint64_t ordinal)
 try {
+    using Result = ::media::Result<MediaPreparedRtpIngressProgress>;
     std::scoped_lock lock(m_mutex);
-    if (m_error) return ::media::Status::failure(*m_error);
+    if (m_error) return Result::failure(*m_error);
     auto selected = stream(kind);
-    if (!selected) return ::media::Status::failure(selected.error());
+    if (!selected) return Result::failure(selected.error());
     auto& s = *selected.value();
+    if (m_frozen && !s.plan.runtimeCredit)
+        return Result::failure(::media::ErrorInfo::notInitialized("Prepared RTP ingress lacks its sealed credit product"));
+    if (channel == MediaRtpUdpChannel::Rtcp && !controlReady(s))
+        return Result::success({MediaPreparedRtpIngressState::NotAcceptedWaitingControl, MediaPreparedRtpCreditBlocker::ControlObjects});
+    s.waitingCredit.reset();
     const auto consume = [&]() -> ::media::Status {
         if (observedAtNs <= 0 || ordinal == 0 || ordinal <= s.ordinal ||
             (!m_bootstrap && ordinal - s.ordinal != 1) ||
@@ -189,51 +198,13 @@ try {
             if (auto status = drain(s, evaluationAtNs); !status) return status;
             // A matching first RTP packet may remain in reorder; evidence must
             // still progress without waiting for another SR or completed AU.
-            if (auto status = evidence(s, evaluationAtNs); !status) return status;
+            if (!s.waitingCredit) {
+                if (auto status = evidence(s, evaluationAtNs); !status) return status;
+            }
         } else {
             auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs);
             if (!observation) return ::media::Status::failure(observation.error());
-            auto prepared = std::move(observation).value();
-            auto rejection = std::move(prepared.tracker.rejection);
-            const bool invalidated = prepared.tracker.invalidated;
-            const bool selectedClock = std::holds_alternative<MediaRtcpClockEvidence>(prepared.tracker.output);
-            MediaBufferRef output;
-            if (!std::holds_alternative<std::monostate>(prepared.tracker.output)) {
-                if (s.nextSequence == 0 || s.nextSequence == std::numeric_limits<std::uint64_t>::max())
-                    return invalid("Prepared RTP ingress sequence exhausted");
-                if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
-                    output = std::allocate_shared<MediaRtpIngressEventBuffer>(
-                        std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
-                        std::move(*value), s.nextSequence);
-                else
-                    output = std::allocate_shared<MediaRtpIngressEventBuffer>(
-                        std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
-                        std::get<MediaRtpClockInvalidation>(prepared.tracker.output), s.nextSequence);
-            }
-            // The session lock keeps this reserved FIFO tail invisible until
-            // the protocol delta commits. No output allocation follows commit.
-            const auto previousHighWater = s.outputHighWater;
-            const bool queued = m_frozen && output;
-            if (queued) {
-                if (auto status = event(s, output, selectedClock, evaluationAtNs); !status) return status;
-            }
-            auto committed = s.protocol->commitRtcp(std::move(prepared));
-            if (!committed) {
-                if (queued) {
-                    s.outputBytes -= s.controls.back().admissionBytes;
-                    s.controls.pop_back();
-                    s.outputHighWater = previousHighWater;
-                }
-                return committed;
-            }
-            if (invalidated) s.pending.clear();
-            if (rejection) return ::media::Status::failure(std::move(*rejection));
-            if (output) {
-                ++s.nextSequence;
-                if (!queued) {
-                    if (auto status = event(s, std::move(output), selectedClock, evaluationAtNs); !status) return status;
-                }
-            }
+            if (auto status = commitControl(s, std::move(observation).value(), evaluationAtNs, nullptr); !status) return status;
         }
         s.ordinal = ordinal;
         if (m_bootstrap) m_bootstrapObservedAtNs = observedAtNs;
@@ -246,19 +217,39 @@ try {
         if (notify && notify->controlWakeup) notify->controlWakeup->notify();
     }
     m_ready.notify_all();
-    return status;
+    if (!status) return Result::failure(status.error());
+    return Result::success({s.waitingCredit ? MediaPreparedRtpIngressState::AcceptedWaitingCredit
+        : MediaPreparedRtpIngressState::AcceptedReady, s.waitingCredit});
 } catch (const std::bad_alloc&) {
     auto error = ::media::ErrorInfo::allocationFailed("Prepared RTP receive allocation failed");
     fail(error);
-    return ::media::Status::failure(std::move(error));
+    return ::media::Result<MediaPreparedRtpIngressProgress>::failure(std::move(error));
+}
+
+bool MediaPreparedRtpSourceSession::controlReady(Stream& s)
+{
+    if (!m_frozen) return true;
+    if (!s.plan.runtimeCredit) return false;
+    if (s.controls.size() < s.plan.runtimeCredit->maximumControlObjects) return true;
+    s.waitingCredit = MediaPreparedRtpCreditBlocker::ControlObjects;
+    return false;
+}
+
+void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
+{
+    for (const auto& wakeup : s.plan.creditWakeups) if (wakeup) wakeup->notify();
 }
 
 ::media::Status MediaPreparedRtpSourceSession::queue(Stream& s, MediaPreparedRtpOutputPort port, MediaBufferRef buffer)
 {
     if (!mediaPreparedRtpOutputPortName(port))
         return invalid("Prepared RTP output has an unknown protocol port");
-    // Object count and bytes are independently bounded by the typed handoff plan.
-    if ((s.packets.size() + s.controls.size()) >= s.plan.maximumProtocolOutputObjects)
+    const bool packetOutput = port == MediaPreparedRtpOutputPort::Packet;
+    auto& output = packetOutput ? s.packets : s.controls;
+    if (m_frozen && !s.plan.runtimeCredit) return invalid("Prepared output lacks its sealed credit product");
+    const auto objects = m_frozen ? (packetOutput ? s.plan.runtimeCredit->maximumPacketObjects
+        : s.plan.runtimeCredit->maximumControlObjects) : s.plan.maximumProtocolOutputObjects;
+    if ((m_frozen ? output.size() : s.packets.size() + s.controls.size()) >= objects)
         return invalid("Prepared RTP output object admission exhausted");
     std::uint64_t bytes = sizeof(MediaPreparedRtpOutput);
     if (const auto* e = dynamic_cast<const MediaRtpIngressEventBuffer*>(buffer.get())) {
@@ -271,13 +262,18 @@ try {
             return invalid("Prepared RTP output lacks representable payload footprint");
         bytes += *payload + packetBytes;
     }
-    if (bytes > s.plan.maximumProtocolOutputBytes ||
-        s.outputBytes > s.plan.maximumProtocolOutputBytes - bytes)
+    const auto maximumBytes = m_frozen ? (packetOutput ? s.plan.runtimeCredit->maximumPacketBytes
+        : s.plan.runtimeCredit->maximumControlBytes) : s.plan.maximumProtocolOutputBytes;
+    auto& classBytes = packetOutput ? s.packetBytes : s.controlBytes;
+    if (bytes > maximumBytes ||
+        (m_frozen ? classBytes : s.outputBytes) > maximumBytes - bytes)
         return invalid("Prepared RTP output byte admission exhausted");
-    auto& output = port == MediaPreparedRtpOutputPort::Packet ? s.packets : s.controls;
     output.push_back({port, std::move(buffer), static_cast<std::size_t>(bytes)});
     s.outputHighWater = (std::max)(s.outputHighWater, (s.packets.size() + s.controls.size()));
     s.outputBytes += static_cast<std::size_t>(bytes);
+    classBytes += static_cast<std::size_t>(bytes);
+    auto& classHighWater = packetOutput ? s.packetHighWater : s.controlHighWater;
+    classHighWater = (std::max)(classHighWater, output.size());
     return ::media::Status::success();
 }
 
@@ -323,13 +319,66 @@ try {
     return publish(consumed.value().observationTimeNs);
 }
 
+::media::Status MediaPreparedRtpSourceSession::commitControl(
+    Stream& s, MediaRtpPreparedClockObservation prepared, std::int64_t now, const MediaRtpDiscontinuity* discontinuity)
+{
+    auto rejection = std::move(prepared.tracker.rejection);
+    const bool invalidated = prepared.tracker.invalidated || prepared.retireAssembly || discontinuity;
+    const bool selectedClock = std::holds_alternative<MediaRtcpClockEvidence>(prepared.tracker.output);
+    MediaBufferRef output;
+    if (discontinuity || !std::holds_alternative<std::monostate>(prepared.tracker.output)) {
+        if (s.nextSequence == 0 || s.nextSequence == std::numeric_limits<std::uint64_t>::max())
+            return invalid("Prepared RTP ingress sequence exhausted");
+        if (discontinuity)
+            output = std::allocate_shared<MediaRtpIngressEventBuffer>(
+                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
+                *discontinuity, prepared.tracker.state.generation, s.nextSequence);
+        else if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
+            output = std::allocate_shared<MediaRtpIngressEventBuffer>(
+                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
+                std::move(*value), s.nextSequence);
+        else
+            output = std::allocate_shared<MediaRtpIngressEventBuffer>(
+                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
+                std::get<MediaRtpClockInvalidation>(prepared.tracker.output), s.nextSequence);
+    }
+    // The session lock keeps this reserved FIFO tail invisible until
+    // the protocol delta commits. No output allocation follows commit.
+    const auto previousHighWater = s.outputHighWater;
+    const auto previousControlHighWater = s.controlHighWater;
+    const bool queued = m_frozen && output;
+    if (queued) {
+        if (auto status = event(s, output, selectedClock, now); !status) return status;
+    }
+    auto committed = discontinuity ? s.protocol->commitDiscontinuity(discontinuity->reason, std::move(prepared))
+        : s.protocol->commitClockObservation(std::move(prepared));
+    if (!committed) {
+        if (queued) {
+            s.outputBytes -= s.controls.back().admissionBytes;
+            s.controlBytes -= s.controls.back().admissionBytes;
+            s.controls.pop_back();
+            s.outputHighWater = previousHighWater;
+            s.controlHighWater = previousControlHighWater;
+        }
+        return committed;
+    }
+    if (invalidated) s.pending.clear();
+    if (rejection) return ::media::Status::failure(std::move(*rejection));
+    if (output) {
+        ++s.nextSequence;
+        if (!queued) {
+            if (auto status = event(s, std::move(output), selectedClock, now); !status) return status;
+        }
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status MediaPreparedRtpSourceSession::evidence(Stream& s, std::int64_t now)
 {
-    auto value = s.protocol->takeEvidenceUpdate(now);
-    if (!value) return ::media::Status::failure(value.error());
-    if (!value.value()) return ::media::Status::success();
-    return event(s, std::allocate_shared<MediaRtpIngressEventBuffer>(
-                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()}, std::move(*value.value()), s.nextSequence++), true, now);
+    if (!controlReady(s)) return ::media::Status::success();
+    auto prepared = s.protocol->prepareEvidence(now);
+    if (!prepared) return ::media::Status::failure(prepared.error());
+    return commitControl(s, std::move(prepared).value(), now, nullptr);
 }
 
 ::media::Status MediaPreparedRtpSourceSession::publish(std::int64_t now)
@@ -382,6 +431,7 @@ try {
         const auto& item = s.protocol->pendingFront();
         if (const auto* packet = std::get_if<MediaRtpPacket>(&item)) {
             if (auto status = evidence(s, now); !status) return status;
+            if (s.waitingCredit) return ::media::Status::success();
             auto action = s.protocol->preparePacket(*packet, s.pending.size());
             if (!action) return ::media::Status::failure(action.error());
             if (const auto* rejected = std::get_if<MediaRtpPacketRejection>(&action.value())) {
@@ -391,20 +441,56 @@ try {
             }
             const auto& allocation = std::get<MediaRtpPacketAllocationAction>(action.value());
             if (!allocation.drop) {
-                if (allocation.releaseExisting) { s.pending.clear(); s.protocol->releasePayloadState(); }
-                if (s.pending.empty()) {
-                    if (allocation.reserveBytes.size() > s.plan.containerStorage.maximumPendingLeases)
-                        return invalid("Prepared protocol pending leases exceed planned container capacity");
+                const auto expectedUnits = allocation.reserveBytes.empty() ? s.pending.size() : allocation.reserveBytes.size();
+                if (expectedUnits > s.plan.containerStorage.maximumPendingLeases)
+                    return invalid("Prepared protocol pending leases exceed planned container capacity");
+                if (!s.nextSequence || expectedUnits > std::numeric_limits<std::uint64_t>::max() - s.nextSequence)
+                    return invalid("Prepared RTP transaction ingress sequence exhausted");
+                if (m_frozen) {
+                    if (!s.plan.runtimeCredit || expectedUnits > s.plan.runtimeCredit->maximumTransactionUnits)
+                        return invalid("Prepared RTP transaction exceeds sealed object product");
+                    if (s.packets.size() > s.plan.runtimeCredit->maximumPacketObjects)
+                        return invalid("Prepared RTP packet FIFO exceeds sealed object product");
+                    if (expectedUnits > s.plan.runtimeCredit->maximumPacketObjects - s.packets.size()) {
+                        s.waitingCredit = MediaPreparedRtpCreditBlocker::PacketObjects;
+                        return ::media::Status::success();
+                    }
+                }
+                if (s.pending.empty() || allocation.releaseExisting) {
+                    std::size_t total = 0;
                     for (auto bytes : allocation.reserveBytes) {
                         auto storage = preparedMediaPacketStorageBytes(bytes, MediaPacketStorageExtent::Payload);
                         if (!storage) return ::media::Status::failure(storage.error());
-                        auto lease = s.payloadBudget->reserve(storage.value(), MediaStorageAdmission::RequiredAllocation);
-                        if (!lease) return ::media::Status::failure(lease.error());
-                        s.pending.push_back(std::allocate_shared<MediaPreparationStorageLease>(
-                            std::pmr::polymorphic_allocator<MediaPreparationStorageLease>{s.resource.get()}, std::move(lease).value()));
+                        if (storage.value() > std::numeric_limits<std::size_t>::max() - total)
+                            return invalid("Prepared RTP transaction storage sum overflows");
+                        total += storage.value();
                     }
+                    if (!total) return invalid("Prepared RTP transaction lacks its payload reservation");
+                    if (m_frozen && total > s.plan.runtimeCredit->maximumTransactionBytes)
+                        return invalid("Prepared RTP transaction exceeds sealed byte product");
+                    auto reserved = s.payloadBudget->reserve(total, m_frozen
+                        ? MediaStorageAdmission::Backpressure : MediaStorageAdmission::RequiredAllocation);
+                    if (!reserved) {
+                        if (m_frozen && reserved.error().code == ::media::ErrorCode::WouldBlock) {
+                            s.waitingCredit = MediaPreparedRtpCreditBlocker::PayloadBytes;
+                            return ::media::Status::success();
+                        }
+                        return ::media::Status::failure(reserved.error());
+                    }
+                    s.spareLeases.clear();
+                    for (auto bytes : allocation.reserveBytes) {
+                        auto storage = preparedMediaPacketStorageBytes(bytes, MediaPacketStorageExtent::Payload);
+                        if (!storage) return ::media::Status::failure(storage.error());
+                        auto split = reserved.value().split(storage.value());
+                        if (!split) return ::media::Status::failure(split.error());
+                        s.spareLeases.push_back(std::allocate_shared<MediaPreparationStorageLease>(
+                            std::pmr::polymorphic_allocator<MediaPreparationStorageLease>{s.resource.get()}, std::move(split).value()));
+                    }
+                    if (allocation.releaseExisting) s.protocol->releasePayloadState();
+                    s.pending.swap(s.spareLeases);
                 }
                 auto completion = s.protocol->commitPacket(*packet, s.pending.size());
+                s.spareLeases.clear();
                 if (!completion) return ::media::Status::failure(completion.error());
                 auto& units = completion.value().media.accessUnits;
                 for (std::size_t i = 0; i < units.size(); ++i) {
@@ -487,7 +573,10 @@ try {
                 (!m_frozen || m_plan.lifecycleMode != MediaAvSourceLifecycleMode::PreserveActivatedOutput))
                 return ::media::Status::failure(::media::ErrorInfo::unsupported(
                     "RTP source identity changed before an authorized runtime generation transition"));
-            if (auto status = s.protocol->observeDiscontinuity(discontinuity.reason, generation); !status) return status;
+            if (!controlReady(s)) return ::media::Status::success();
+            auto prepared = s.protocol->prepareDiscontinuity(generation);
+            if (!prepared) return ::media::Status::failure(prepared.error());
+            if (auto status = commitControl(s, std::move(prepared).value(), now, &discontinuity); !status) return status;
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State, MediaGraphDiagnosticPhase::RuntimeNode,
                 "rtp_discontinuity stream=" + std::string(s.plan.depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio") +
                 " reason=" + std::to_string(static_cast<int>(discontinuity.reason)) +
@@ -495,10 +584,7 @@ try {
                 " resumed=" + std::to_string(discontinuity.resumedSequence) +
                 " generation_before=" + std::to_string(generation) +
                 " generation_after=" + std::to_string(s.protocol->generation()));
-            s.pending.clear();
-            if (auto status = event(s, std::allocate_shared<MediaRtpIngressEventBuffer>(
-                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()}, discontinuity,
-                    s.protocol->generation(), s.nextSequence++), false, now); !status) return status;
+
         }
         s.protocol->consumeFront();
     }
@@ -515,34 +601,42 @@ try {
         if (!running) return ::media::Status::failure(running.error());
         if (auto status = s.binder->m_acquisitionDeadline->preflight(running.value()); !status) return status;
     }
-    if (auto status = s.protocol->expire(std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now))); !status) return status;
-    if (auto status = drain(s, now); !status) return status;
+    s.waitingCredit.reset();
     if (auto status = evidence(s, now); !status) return status;
-    auto transition = s.protocol->transition(now);
+    if (s.waitingCredit) return ::media::Status::success();
+    if (!controlReady(s)) return ::media::Status::success();
+    auto transition = s.protocol->prepareClockTransition(now);
     if (!transition) return ::media::Status::failure(transition.error());
-    if (transition.value()) {
+    const bool clockExpired = transition.value().age.has_value();
+    if (auto status = commitControl(s, std::move(transition).value(), now, nullptr); !status) return status;
+    if (clockExpired) {
         const auto loss = s.protocol->clockConfig().lossPolicy;
         if (loss != MediaRtpClockLossPolicy::WaitForEvidence && loss != MediaRtpClockLossPolicy::InvalidateAndWait)
             return ::media::Status::failure(::media::ErrorInfo::ioFailure("Prepared RTP source clock evidence expired"));
-        s.protocol->resetAssembly(); s.pending.clear();
-        if (transition.value()->invalidation) {
-            if (auto status = event(s, std::allocate_shared<MediaRtpIngressEventBuffer>(
-                std::pmr::polymorphic_allocator<MediaRtpIngressEventBuffer>{s.resource.get()},
-                    *transition.value()->invalidation, s.nextSequence++), false, now); !status) return status;
-        }
+    }
+    // An accepted pending front is resumed, never observed or expired again.
+    // Clock progress above remains independent of payload credit.
+    if (auto status = drain(s, now); !status) return status;
+    if (s.waitingCredit) return ::media::Status::success();
+    if (!s.protocol->hasPending()) {
+        if (auto status = s.protocol->expire(std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now))); !status) return status;
+        if (auto status = drain(s, now); !status) return status;
     }
     return m_frozen ? ::media::Status::success() : publish(now);
 }
 
-::media::Status MediaPreparedRtpSourceSession::tick(MediaStreamKind kind, std::int64_t now)
+::media::Result<MediaPreparedRtpIngressProgress> MediaPreparedRtpSourceSession::tick(MediaStreamKind kind, std::int64_t now)
 try
 {
+    using Result = ::media::Result<MediaPreparedRtpIngressProgress>;
     std::scoped_lock lock(m_mutex);
-    if (m_error) return ::media::Status::failure(*m_error);
+    if (m_error) return Result::failure(*m_error);
     auto selected = stream(kind);
-    if (!selected) return ::media::Status::failure(selected.error());
-    if (now <= 0) return invalid("Prepared RTP timer requires positive observation");
-    if (m_bootstrap) return invalid("Prepared RTP live timer precedes bootstrap handoff");
+    if (!selected) return Result::failure(selected.error());
+    if (m_frozen && !selected.value()->plan.runtimeCredit)
+        return Result::failure(::media::ErrorInfo::notInitialized("Prepared RTP timer lacks its sealed credit product"));
+    if (now <= 0) return Result::failure(::media::ErrorInfo::invalidArgument("Prepared RTP timer requires positive observation"));
+    if (m_bootstrap) return Result::failure(::media::ErrorInfo::invalidArgument("Prepared RTP live timer precedes bootstrap handoff"));
     auto status = tickLocked(*selected.value(), mediaSteadyClockNowNs());
     if (!status) m_error = status.error();
     for (auto* notify : {m_video.get(), m_audio.get()}) {
@@ -550,11 +644,13 @@ try
         if (notify && notify->controlWakeup) notify->controlWakeup->notify();
     }
     m_ready.notify_all();
-    return status;
+    if (!status) return Result::failure(status.error());
+    return Result::success({selected.value()->waitingCredit ? MediaPreparedRtpIngressState::AcceptedWaitingCredit
+        : MediaPreparedRtpIngressState::AcceptedReady, selected.value()->waitingCredit});
 } catch (const std::bad_alloc&) {
     auto error = ::media::ErrorInfo::allocationFailed("Prepared RTP timer allocation failed");
     fail(error);
-    return ::media::Status::failure(std::move(error));
+    return ::media::Result<MediaPreparedRtpIngressProgress>::failure(std::move(error));
 }
 
 void MediaPreparedRtpSourceSession::fail(::media::ErrorInfo error)
@@ -564,8 +660,17 @@ void MediaPreparedRtpSourceSession::fail(::media::ErrorInfo error)
     for (auto* s : {m_video.get(), m_audio.get()}) {
         if (s && s->wakeup) s->wakeup->notify();
         if (s && s->controlWakeup) s->controlWakeup->notify();
+        if (s) notifyCredit(*s);
     }
     m_ready.notify_all();
+}
+
+::media::Result<MediaPreparedRtpIngressProgress> MediaPreparedRtpSourceSession::resumeDrain(
+    MediaStreamKind kind, std::int64_t now)
+{
+    // Same serialized clock/deadline and pending-front progression as a timer;
+    // no datagram or ingress ordinal is supplied by the retry path.
+    return tick(kind, now);
 }
 
 ::media::Status MediaPreparedRtpSourceSession::status() const
@@ -640,9 +745,11 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     std::erase_if(s.packets, [&](const auto& item) {
         if (item.port != MediaPreparedRtpOutputPort::Packet) return false;
         s.outputBytes -= item.admissionBytes;
+        s.packetBytes -= item.admissionBytes;
         return true;
     });
     s.protocol->resetAssembly(); s.pending.clear(); s.protocol->requireKeyframe();
+    notifyCredit(s);
     return R::success(s.nextSequence - 1);
 }
 
@@ -655,6 +762,33 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     if (!selected) return ::media::Result<int>::failure(selected.error());
     return selected.value()->protocol->receiveTimeoutMs(
         std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now)), now, maximum);
+}
+
+::media::Result<std::optional<std::chrono::nanoseconds>> MediaPreparedRtpSourceSession::creditWaitTimeout(
+    MediaStreamKind kind, std::int64_t now)
+{
+    using Result = ::media::Result<std::optional<std::chrono::nanoseconds>>;
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return Result::failure(*m_error);
+    auto selected = stream(kind);
+    if (!selected) return Result::failure(selected.error());
+    if (now <= 0) return Result::failure(::media::ErrorInfo::invalidArgument("Prepared RTP credit wait requires a positive clock"));
+    if (!m_frozen) {
+        const auto deadline = std::chrono::duration_cast<std::chrono::nanoseconds>(m_plan.deadline.time_since_epoch()).count();
+        if (now >= deadline) return Result::failure(::media::ErrorInfo::ioFailure("Prepared RTP source reached its original open deadline"));
+        return Result::success(std::chrono::nanoseconds(deadline - now));
+    }
+    auto& s = *selected.value();
+    const auto deadline = s.protocol->nextClockDeadlineNs();
+    if (!deadline) return Result::success(std::nullopt);
+    if (*deadline <= now) {
+        // Expiry is still uncommitted when its control FIFO is full. Its exact
+        // slot release and cancellation notifications resume the same deadline.
+        if (s.waitingCredit == MediaPreparedRtpCreditBlocker::ControlObjects &&
+            !s.controls.empty()) return Result::success(std::nullopt);
+        return Result::success(std::chrono::nanoseconds::zero());
+    }
+    return Result::success(std::chrono::nanoseconds(*deadline - now));
 }
 
 ::media::Result<MediaPreparedRtpAccessUnitSnapshot> MediaPreparedRtpSourceSession::probeSnapshot() const
@@ -714,8 +848,9 @@ void MediaPreparedRtpSourceSession::deactivateControl(
         return MediaPreparedRtpStreamStorageSnapshot{
             stream.admittedUnits, stream.prefix->packets.size(), binder.m_acquiringPackets->size(),
             static_cast<std::size_t>(!!binder.m_videoLookahead) + static_cast<std::size_t>(!!binder.m_pendingTerminal),
-            stream.pending.size(), stream.pending.capacity(), (stream.packets.size() + stream.controls.size()),
-            {stream.admittedUnits, binder.m_acquiringHighWater, stream.outputHighWater}};
+            stream.pending.size(), stream.pending.capacity(), stream.packets.size(),
+            {stream.admittedUnits, binder.m_acquiringHighWater, stream.packetHighWater},
+            stream.controls.size(), stream.controlHighWater, stream.spareLeases.capacity()};
     };
     using R = ::media::Result<MediaPreparedRtpStorageSnapshot>;
     const std::array owners{m_budgets.metadata, m_budgets.videoPayload, m_budgets.audioPayload};
@@ -766,6 +901,25 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     if (m_audio) {
         if (auto status = validateBounds(*product.audio, *snapshot.audio, *m_plan.audio); !status) return status;
     }
+    if (!m_plan.rtcpStorage) return invalid("Storage credit lacks RTCP facts");
+    const auto validateCredit = [&](const MediaPreparedRtpStreamStorageAdmission& value,
+        const MediaPreparedRtpSourceSessionStreamPlan& plan,
+        const MediaPreparedRtpStreamStorageSnapshot& held, std::size_t payloadBytes) -> ::media::Status {
+        auto expected = MediaPreparedRtpCreditPlanner::plan(plan, payloadBytes,
+            value.bounds.outputObjects,
+            (std::max)({std::size_t{1}, held.controlObjects, held.controlHighWater}),
+            m_plan.rtcpStorage->maximumCnameBytes);
+        if (!expected) return ::media::Status::failure(expected.error());
+        if (value.credit != expected.value()) return invalid("Storage credit differs from locked payload facts");
+        return ::media::Status::success();
+    };
+    if (auto status = validateCredit(product.video, m_plan.video, snapshot.video,
+            snapshot.budgets.videoPayload.actualRetainedBytes); !status) return status;
+    if (m_audio) {
+        if (!snapshot.budgets.audioPayload) return invalid("Audio storage credit snapshot is missing");
+        if (auto status = validateCredit(*product.audio, *m_plan.audio, *snapshot.audio,
+                snapshot.budgets.audioPayload->actualRetainedBytes); !status) return status;
+    }
     if (product.startup.audioUnits.has_value() != static_cast<bool>(m_audio) ||
         product.startup.audioBytes.has_value() != static_cast<bool>(m_audio) ||
         product.startup.audioUnitBytes.has_value() != static_cast<bool>(m_audio) ||
@@ -777,13 +931,16 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     const auto preserveBacking = [](const MediaPreparedRtpSourceSessionStreamPlan& plan,
         const MediaPreparedRtpStreamStorageSnapshot& held,
         const MediaPreparedRtpContainerStoragePlan& candidate, bool probe) -> ::media::Status {
-        auto history = MediaPreparedRtpSourceStoragePlanner::containers(plan, held.history, probe);
+        auto historyBounds = held.history;
+        historyBounds.outputObjects = (std::max)(historyBounds.outputObjects, held.controlHighWater);
+        auto history = MediaPreparedRtpSourceStoragePlanner::containers(plan, historyBounds, probe);
         if (!history) return ::media::Status::failure(history.error());
         const auto& prior = history.value();
         if (candidate.outputPeakBytes < prior.outputPeakBytes ||
             candidate.acquiringPeakBytes < prior.acquiringPeakBytes ||
             candidate.prefixPeakBytes < prior.prefixPeakBytes ||
             candidate.pendingPeakBytes < prior.pendingPeakBytes ||
+            candidate.sparePendingPeakBytes < prior.sparePendingPeakBytes ||
             candidate.pendingLeaseControlBytes < prior.pendingLeaseControlBytes ||
             candidate.protocolPendingPeakBytes < prior.protocolPendingPeakBytes ||
             candidate.protocolRequestPeakBytes < prior.protocolRequestPeakBytes ||
@@ -812,6 +969,7 @@ void MediaPreparedRtpSourceSession::applyStorageAdmissionLocked(MediaPreparedRtp
         plan.binder.acquiringCapacity = value.bounds.acquiringObjects;
         plan.maximumProtocolOutputObjects = value.bounds.outputObjects;
         plan.containerStorage = value.storage;
+        plan.runtimeCredit = value.credit;
         stream.binder->m_acquiringCapacity = value.bounds.acquiringObjects;
     };
     // No allocations or fallible operations after this publication point.
@@ -823,7 +981,7 @@ void MediaPreparedRtpSourceSession::applyStorageAdmissionLocked(MediaPreparedRtp
 
 ::media::Status MediaPreparedRtpSourceSession::freezeBatch(
     std::span<const std::shared_ptr<MediaPreparedRtpSourceSession>> sources,
-    const MediaPreparedRtpBatchAdmissionSolver* solver)
+    const MediaPreparedRtpBatchAdmissionSolver& solver)
 try {
     if (sources.empty()) return invalid("Prepared freeze requires source owners");
     for (std::size_t i = 0; i < sources.size(); ++i) {
@@ -842,7 +1000,7 @@ try {
     }
     auto resource = sources.front()->m_ownerResource;
     std::optional<MediaPreparedRtpBatchStoragePlan> batchStorage;
-    if (solver) {
+    {
         auto planned = MediaPreparedRtpBatchStoragePlanner::plan(sources.size(), childCount, resource);
         if (!planned) return ::media::Status::failure(planned.error());
         batchStorage.emplace(std::move(planned).value());
@@ -858,8 +1016,6 @@ try {
     }
     for (auto* source : ordered) locks.push_back(std::unique_lock<std::mutex>{source->m_mutex});
     for (const auto& source : sources) {
-        if (!solver && !source->m_plan.canonicalRuntimeRetention)
-            return invalid("Source presentation batch requires complete storage admission");
         if (auto status = source->prepareFreezeLocked(); !status) return status;
     }
     for (const auto& source : sources) {
@@ -868,9 +1024,10 @@ try {
         snapshots.push_back({&source->m_plan, std::move(snapshot).value()});
     }
     std::optional<MediaFixedCapacityStorage<MediaPreparedRtpStorageAdmission>> admissions;
-    if (solver) {
+    {
         MediaFixedCapacityStorage<std::shared_ptr<MediaPreparationStorageBudget>> budgets(childCount, *resource);
         MediaFixedCapacityStorage<MediaPreparationStorageSnapshot> budgetSnapshots(childCount, *resource);
+        MediaFixedCapacityStorage<std::size_t> guarantees(childCount, *resource);
         for (std::size_t i = 0; i < sources.size(); ++i) {
             const auto& owners = sources[i]->m_budgets;
             auto& roles = snapshots[i].snapshot.roles;
@@ -885,7 +1042,7 @@ try {
         if (!partition) return ::media::Status::failure(partition.error());
         for (std::size_t i = 0; i < sources.size(); ++i)
             snapshots[i].snapshot.budgets = budgetView.source(snapshots[i].snapshot.roles);
-        auto solved = solver->solve(snapshots.view(), budgetView, *batchStorage);
+        auto solved = solver.solve(snapshots.view(), budgetView, *batchStorage);
         if (!solved) return ::media::Status::failure(solved.error());
         if (solved.value().size() != batchStorage->sourceCount ||
             solved.value().capacity() != batchStorage->sourceCount ||
@@ -913,15 +1070,31 @@ try {
             if ((*admissions)[i].totalBytes > capacity - total)
                 return invalid("Batch source storage exceeds shared deployment capacity");
             total += (*admissions)[i].totalBytes;
+            const auto& admission = (*admissions)[i];
+            const auto videoBytes = static_cast<std::size_t>(admission.video.credit.guaranteedPayloadBytes);
+            const auto audioBytes = admission.audio
+                ? static_cast<std::size_t>(admission.audio->credit.guaranteedPayloadBytes) : 0;
+            if (videoBytes > admission.totalBytes || audioBytes > admission.totalBytes - videoBytes)
+                return invalid("Payload guarantees exceed source admission");
+            auto metadataBytes = admission.totalBytes - videoBytes - audioBytes;
+            if (i == 0) {
+                if (batchStorage->totalBytes > capacity - metadataBytes)
+                    return invalid("Batch metadata guarantee overflows deployment capacity");
+                metadataBytes += batchStorage->totalBytes;
+            }
+            guarantees.push_back(metadataBytes);
+            guarantees.push_back(videoBytes);
+            if (admission.audio) guarantees.push_back(audioBytes);
         }
-    }
-    // Check all deadlines before the first no-throw state publication.
-    for (const auto& source : sources)
-        if (std::chrono::steady_clock::now() >= source->m_plan.deadline)
-            return invalid("Prepared batch admission exceeded an original source deadline");
-    if (admissions)
+        // All fallible checks precede atomic guarantees and no-throw publication.
+        for (const auto& source : sources)
+            if (std::chrono::steady_clock::now() >= source->m_plan.deadline)
+                return invalid("Prepared batch admission exceeded an original source deadline");
+        if (auto status = MediaPreparationStorageBudget::sealPartition(budgets.view(), guarantees.view()); !status)
+            return status;
         for (std::size_t i = 0; i < sources.size(); ++i)
             sources[i]->applyStorageAdmissionLocked(std::move((*admissions)[i]));
+    }
     for (const auto& source : sources) source->m_frozen = true;
     for (const auto& source : sources) source->m_ready.notify_all();
     return ::media::Status::success();
@@ -1030,6 +1203,9 @@ try {
     if (queue.empty()) return R::success(std::nullopt);
     auto output = std::move(queue.front()); queue.pop_front();
     selected.value()->outputBytes -= output.admissionBytes;
+    auto& classBytes = outputClass == MediaPreparedRtpOutputClass::Packet ? stream.packetBytes : stream.controlBytes;
+    classBytes -= output.admissionBytes;
+    notifyCredit(stream);
     return R::success(std::move(output));
 }
 

@@ -8,6 +8,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
 
 #include <chrono>
+#include <span>
 #include <optional>
 #include <utility>
 
@@ -19,6 +20,7 @@ struct MediaPreparedInputRetentionPlan;
 struct MediaPreparedInputRetentionStream;
 class MediaPreparedRtpSourceSession;
 class MediaMasterClock;
+class MediaNodeWakeup;
 struct MediaPreparedRtpStorageAdmission;
 
 struct MediaRtpSourceObservation final {
@@ -97,7 +99,8 @@ public:
         std::stop_token cancellation);
     ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>> installContinuousSession(
         const MediaRealtimeCompositionSourceFacts& facts,
-        const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation);
+        const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation,
+        std::span<const std::shared_ptr<MediaNodeWakeup>> creditWakeups);
     ::media::Result<MediaContinuousRtpIngressView> continuousIngress() const;
     ::media::Status validateContinuousPreparation(
         const std::shared_ptr<MediaPreparedRtpSourceSession>& source) const;

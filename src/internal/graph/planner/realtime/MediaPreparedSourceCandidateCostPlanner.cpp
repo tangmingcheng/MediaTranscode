@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaCompositionSourceRegistryPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedSourceCandidateCostPlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRtpCreditPlanner.h"
 #include <new>
 #include "internal/graph/planner/realtime/MediaPreparedRtpSourceStoragePlanner.h"
 #include "internal/graph/planner/realtime/MediaCompositionProducerResidencePlanner.h"
@@ -90,6 +91,7 @@ template<bool Updating> ::media::Status streamCosts(
     const MediaPreparedRtpSourceSessionStreamPlan& stream,
     const MediaPreparedRtpStreamStorageSnapshot& held,
     const MediaPreparedStreamCandidateCostFacts& facts, bool snapshot,
+    std::size_t heldPayloadBytes, std::size_t maximumCnameBytes,
     const MediaPreparedSourceCandidateCostFacts& source, MediaStreamKind streamKind,
     MediaPreparedStreamCandidateCosts& costs)
 {
@@ -104,8 +106,12 @@ template<bool Updating> ::media::Status streamCosts(
         facts.containers.outputObjects < floor.value().outputObjects)
         return R::failure(::media::ErrorInfo::invalidArgument(
             "Candidate cannot discard live preparation owners or serialized completion capacity"));
-    auto candidate = MediaPreparedRtpSourceStoragePlanner::containers(stream, facts.containers, snapshot);
-    auto history = MediaPreparedRtpSourceStoragePlanner::containers(stream, held.history, snapshot);
+    auto allocationBounds = facts.containers;
+    allocationBounds.outputObjects = (std::max)({allocationBounds.outputObjects, held.controlObjects, held.controlHighWater});
+    auto historyBounds = held.history;
+    historyBounds.outputObjects = (std::max)(historyBounds.outputObjects, held.controlHighWater);
+    auto candidate = MediaPreparedRtpSourceStoragePlanner::containers(stream, allocationBounds, snapshot);
+    auto history = MediaPreparedRtpSourceStoragePlanner::containers(stream, historyBounds, snapshot);
     if (!candidate) return R::failure(candidate.error());
     if (!history) return R::failure(history.error());
     auto& result = candidate.value();
@@ -119,14 +125,17 @@ template<bool Updating> ::media::Status streamCosts(
         &MediaPreparedRtpContainerStoragePlan::protocolPendingPeakBytes,
         &MediaPreparedRtpContainerStoragePlan::protocolRequestPeakBytes,
         &MediaPreparedRtpContainerStoragePlan::completionPeakBytes,
-        &MediaPreparedRtpContainerStoragePlan::aacHeaderPeakBytes};
+        &MediaPreparedRtpContainerStoragePlan::aacHeaderPeakBytes,
+        &MediaPreparedRtpContainerStoragePlan::sparePendingPeakBytes};
     for (auto field : fields) result.*field = (std::max)(result.*field, history.value().*field);
-    // Session pending starts empty and only push_back/clear are used; its future
-    // growth follows the same from-zero recurrence in containers(). Existing
-    // backing survives clear and is also checked against the actual snapshot.
-    if (held.pendingCapacity) {
+    // Both reserved directories survive clear/swap. Preserve each observed
+    // allocation separately even when an allocator reserves excess capacity.
+    for (const auto& [capacity, field] : std::array{
+            std::pair{held.pendingCapacity, &MediaPreparedRtpContainerStoragePlan::pendingPeakBytes},
+            std::pair{held.spareCapacity, &MediaPreparedRtpContainerStoragePlan::sparePendingPeakBytes}}) {
+        if (!capacity) continue;
         using Reference = std::shared_ptr<MediaPreparationStorageLease>;
-        auto size = checked(MediaCheckedArithmetic::multiply(held.pendingCapacity, sizeof(Reference), "Held pending backing"));
+        auto size = checked(MediaCheckedArithmetic::multiply(capacity, sizeof(Reference), "Held pending backing"));
         if (!size) return R::failure(size.error());
         auto backing = MediaPreparationMemoryResource::allocationFootprint(size.value(), alignof(Reference));
         auto proxy = MediaPmrContainerGeometry::proxyBytes();
@@ -134,7 +143,7 @@ template<bool Updating> ::media::Status streamCosts(
         if (!proxy) return R::failure(proxy.error());
         auto total = add(backing.value(), proxy.value());
         if (!total) return R::failure(total.error());
-        result.pendingPeakBytes = (std::max)(result.pendingPeakBytes, total.value());
+        result.*field = (std::max)(result.*field, total.value());
     }
     result.peakBytes = 0;
     for (auto field : fields) {
@@ -153,8 +162,10 @@ template<bool Updating> ::media::Status streamCosts(
         Root{Kind::Outputs, facts.containers.outputObjects},
         Root{Kind::ProtocolPending, stream.envelope.maximumAccessUnitsPerPush},
         Root{Kind::RawInputCreditWait, 1}, // RawRtpInputNode::m_preparedPendingPacket
-        Root{Kind::BinderCreditWait, 1}}; // RtpPacketClockBinderNode::m_pendingPublication
-    // Protocol construction is inside the bounded pending batch. Before freeze,
+        Root{Kind::BinderCreditWait, 1}, // RtpPacketClockBinderNode::m_pendingPublication
+        Root{Kind::ProtocolReplacement, stream.envelope.maximumAccessUnitsPerPush}};
+    // Pending and replacement directories coexist until commit; each is bounded
+    // by the negotiated completion envelope. Before freeze,
     // binding drains acquiring serially under the session mutex, so its removed
     // slot covers the in-flight control until prefix publication. Snapshot copies
     // alias the same monotonic prefix. Moves and wrapper replacement create no
@@ -183,18 +194,19 @@ template<bool Updating> ::media::Status streamCosts(
     auto packet = preparedMediaPacketStorageBytes(stream.envelope.maximumAccessUnitBytes,
         MediaPacketStorageExtent::Payload);
     if (!packet) return R::failure(packet.error());
-    auto payload = checked(MediaCheckedArithmetic::multiply(packet.value(), liveControls,
-        "Candidate live preparation payload reservations"));
-    if (!payload) return R::failure(payload.error());
-    // The same roots bound live leases and their retained payload reservation.
-    // Fragment assembly is already in the ordinary protocol storage component.
-    // Snapshot aliases do not create another payload; graph-credit attachment
-    // ends the preparation lease, so graph-owned payload is a separate domain.
+    auto credit = MediaPreparedRtpCreditPlanner::plan(stream, heldPayloadBytes,
+        facts.containers.outputObjects,
+        (std::max)({std::size_t{1}, held.controlObjects, held.controlHighWater}), maximumCnameBytes);
+    if (!credit) return R::failure(credit.error());
+    // Fixed ordinary protocol storage already includes F. Charge only Pmin-F
+    // here; the sealed payload child owns the full Pmin guarantee.
+    const auto payloadBytes = credit.value().guaranteedPayloadBytes - credit.value().fixedAssemblyBytes;
     costs.containers = result;
     costs.containerBytes = result.peakBytes - result.pendingLeaseControlBytes;
     costs.leaseControlsBytes = leases.value();
     costs.leaseControlRoots = roots;
-    costs.payload = {liveControls, packet.value(), payload.value()};
+    costs.payload = {liveControls, packet.value(), static_cast<std::size_t>(payloadBytes)};
+    costs.credit = credit.value();
     return R::success();
 }
 
@@ -226,11 +238,15 @@ template<bool Updating> ::media::Status computeCosts(
         if (result.audio.has_value() != audio || !result.lineage || result.lineage->sourceIndex != facts.sourceIndex)
             return R::failure(::media::ErrorInfo::invalidArgument("Candidate cost catalog membership changed"));
     } else if (audio) result.audio.emplace();
+    if (!session.rtcpStorage) return R::failure(::media::ErrorInfo::invalidArgument(
+        "Candidate credit requires authoritative RTCP storage facts"));
     if (auto status = streamCosts<Updating>(session.video, held.video, facts.video, true,
-            facts, MediaStreamKind::Video, result.video); !status) return status;
+            held.budgets.videoPayload.actualRetainedBytes, session.rtcpStorage->maximumCnameBytes, facts, MediaStreamKind::Video, result.video); !status) return status;
     if (audio) {
+        if (!held.budgets.audioPayload) return R::failure(::media::ErrorInfo::invalidArgument(
+            "Candidate audio credit lacks its payload snapshot"));
         if (auto status = streamCosts<Updating>(*session.audio, *held.audio, *facts.audio, false,
-                facts, MediaStreamKind::Audio, *result.audio); !status) return status;
+                held.budgets.audioPayload->actualRetainedBytes, session.rtcpStorage->maximumCnameBytes, facts, MediaStreamKind::Audio, *result.audio); !status) return status;
     }
     auto index = MediaAvStartupIndexStoragePlanner::preparedIndex(facts.startupVideoUnits,
         MediaVideoStartupReadiness::DecodedPresentationSpan);
@@ -263,8 +279,8 @@ template<bool Updating> ::media::Status computeCosts(
     if (!frames) return R::failure(frames.error());
     const std::array<std::size_t, 2> datagrams{session.video.workingSet.maximumDatagramBytes,
         audio ? session.audio->workingSet.maximumDatagramBytes : 0};
-    auto queued = add(facts.video.containers.outputObjects,
-        audio ? facts.audio->containers.outputObjects : 0);
+    auto queued = add(result.video.credit.maximumControlObjects,
+        audio ? result.audio->credit.maximumControlObjects : 0);
     if (!queued) return R::failure(queued.error());
     auto sourceClock = MediaRtcpPreparationStoragePlanner::plan(
         std::span<const std::size_t>{datagrams.data(), audio ? 2u : 1u},

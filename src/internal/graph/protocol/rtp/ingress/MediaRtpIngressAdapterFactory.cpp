@@ -7,6 +7,28 @@
 
 namespace media::ffmpeg::graph {
 
+::media::Result<std::size_t> MediaRtpIngressAdapterFactory::preparationStorageBytes(
+    const MediaRtpReceiveGeometry& geometry)
+{
+    using Result = ::media::Result<std::size_t>;
+    if (auto status = geometry.validateProduct(); !status)
+        return Result::failure(status.error());
+    auto adapter = [&]() -> Result {
+        switch (geometry.adapterKind()) {
+        case MediaRtpIngressAdapterKind::LinuxReceiveMultipleMessages:
+            return MediaLinuxRtpIngressAdapter::preparationStorageBytes(geometry.descriptorCapacity());
+        case MediaRtpIngressAdapterKind::WindowsOverlappedCompletionQueue:
+            return MediaWindowsRtpIngressAdapter::preparationStorageBytes(geometry.descriptorCapacity());
+        default:
+            return Result::failure(::media::ErrorInfo::unsupported(
+                "RTP runtime storage requires an implemented ingress adapter"));
+        }
+    }();
+    return MediaPreparedAllocationCost::sum({adapter,
+        MediaRtpIngressStorage::preparationStorageBytes(geometry.batchByteCapacity(),
+            geometry.descriptorCapacity(), geometry.requiredBufferAlignmentBytes())});
+}
+
 ::media::Result<std::size_t> MediaRtpIngressAdapterFactory::maximumPreparationStorageBytes(
     std::size_t wireCapacity, std::size_t maximumDatagramBytes)
 {

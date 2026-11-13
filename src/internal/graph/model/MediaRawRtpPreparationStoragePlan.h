@@ -4,6 +4,11 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaRawRtpRuntimeStoragePlan final {
+    std::size_t futureAllocationBytes;
+    std::size_t streamCount;
+};
+
 struct MediaPreparedRtpDatagramAllocationFacts final {
     std::size_t bytes;
     std::size_t alignment;

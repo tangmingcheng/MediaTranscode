@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpIngressPlanner.h"
+#include "internal/graph/planner/realtime/MediaRawRtpPreparationStoragePlanner.h"
 
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
 #include "internal/graph/runtime/resource/MediaPreparationControl.h"
@@ -141,7 +142,8 @@ MediaRtpSourcePreflight::MediaRtpSourcePreflight(MediaRtpSourcePreflight&& other
 ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>>
 MediaRtpSourcePreflight::installContinuousSession(
     const MediaRealtimeCompositionSourceFacts& facts,
-    const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation) try
+    const std::shared_ptr<MediaMasterClock>& masterClock, std::stop_token cancellation,
+    std::span<const std::shared_ptr<MediaNodeWakeup>> creditWakeups) try
 {
     using Result = ::media::Result<std::shared_ptr<MediaPreparedRtpSourceSession>>;
     const MediaPreparationControl control{m_deadline, cancellation};
@@ -211,6 +213,21 @@ MediaRtpSourcePreflight::installContinuousSession(
             m_audioCandidate ? &*m_audioCandidate : nullptr, videoBound.value(), audioBound,
             m_deadline, observedNow, shared->root->snapshot().capacity);
         if (!plan) return Result::failure(plan.error());
+        const std::size_t expectedWakeups = plan.value().audio ? 4 : 2;
+        if (creditWakeups.size() != expectedWakeups)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Continuous RTP source requires one credit target per transport worker"));
+        for (std::size_t i = 0; i < creditWakeups.size(); ++i) {
+            if (!creditWakeups[i]) return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Continuous RTP credit target is missing"));
+            for (std::size_t j = 0; j < i; ++j)
+                if (creditWakeups[i] == creditWakeups[j])
+                    return Result::failure(::media::ErrorInfo::invalidArgument(
+                        "Continuous RTP transport workers cannot share a credit target"));
+        }
+        plan.value().video.creditWakeups = {creditWakeups[0], creditWakeups[1]};
+        if (plan.value().audio)
+            plan.value().audio->creditWakeups = {creditWakeups[2], creditWakeups[3]};
         auto budget = MediaPreparedRtpSourceBudgets::create(plan.value().storageBytes, m_storageScope, plan.value().audio.has_value());
         if (!budget) return Result::failure(budget.error());
         auto source = MediaPreparedRtpSourceSession::create(std::move(plan).value(), std::move(budget).value(), masterClock);
@@ -229,18 +246,31 @@ MediaRtpSourcePreflight::installContinuousSession(
             const auto& entry = takeVideo ? videoPrefix[videoIndex++] : audio->m_prepared->datagrams[audioIndex++];
             if (!entry) return Result::failure(::media::ErrorInfo::notInitialized(
                 "Continuous RTP prefix lost datagram ownership"));
-            if (auto consumed = source.value()->consume(takeVideo ? MediaStreamKind::Video : MediaStreamKind::Audio,
-                    entry->datagram.channel, entry->datagram.bytes, entry->observedAtNs, entry->ordinal); !consumed)
-                return Result::failure(consumed.error());
+            auto consumed = source.value()->consume(takeVideo ? MediaStreamKind::Video : MediaStreamKind::Audio,
+                entry->datagram.channel, entry->datagram.bytes, entry->observedAtNs, entry->ordinal);
+            if (!consumed) return Result::failure(consumed.error());
+            if (consumed.value().state != MediaPreparedRtpIngressState::AcceptedReady)
+                return Result::failure(::media::ErrorInfo::internalError(
+                    "Continuous RTP bootstrap cannot wait for runtime credit"));
         }
         if (auto completed = source.value()->finishBootstrap(video->m_prepared->ingressFrontier,
                 audio ? std::optional{audio->m_prepared->ingressFrontier} : std::nullopt); !completed)
             return Result::failure(completed.error());
         if (auto status = control.check("continuous RTP bootstrap publication"); !status)
             return Result::failure(status.error());
+        if (video->m_runtimeIngress || video->m_rtcpIngress ||
+            (audio && (audio->m_runtimeIngress || audio->m_rtcpIngress)))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Continuous RTP storage handoff requires uninstalled runtime receivers"));
+        const std::array<const std::array<MediaRtpReceiveGeometry, 2>*, 2> geometries{
+            &video->m_prepared->receiveGeometries,
+            audio ? &audio->m_prepared->receiveGeometries : nullptr};
+        auto runtimeStorage = MediaRawRtpPreparationStoragePlanner::runtimeStorage(
+            std::span{geometries}.first(audio ? 2 : 1));
+        if (!runtimeStorage) return Result::failure(runtimeStorage.error());
         video->m_continuousIngressPlan = m_videoCandidate->plan;
         if (audio) audio->m_continuousIngressPlan = m_audioCandidate->plan;
-        if (auto sealed = video->m_prepared->byteBudget->sealPreflight(); !sealed)
+        if (auto sealed = video->m_prepared->byteBudget->sealPreflight(runtimeStorage.value()); !sealed)
             return Result::failure(sealed.error());
         video->m_prepared->datagrams.clear();
         video->m_bufferedBytes = 0;

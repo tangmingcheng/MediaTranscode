@@ -44,7 +44,7 @@ namespace {
 MediaPreparedRtpStreamStorageAdmission stream(const MediaPreparedRtpContainerBounds& bounds,
     const MediaPreparedStreamCandidateCosts& costs, std::size_t bytes) noexcept
 {
-    return {{bounds.prefixObjects, bytes}, bounds, costs.containers};
+    return {{bounds.prefixObjects, bytes}, bounds, costs.containers, costs.credit};
 }
 
 bool sameHolder(const MediaCompositionStreamHolderFacts& left,

@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/resource/MediaByteReservationCounter.h"
 #include "internal/graph/runtime/resource/MediaStorageReleaseNotification.h"
 #include "internal/graph/runtime/resource/MediaBudgetBootstrapAllocator.h"
+#include "internal/graph/runtime/resource/MediaObservedRootStorageGeometry.h"
 #include "media_transcode/Result.h"
 
 #include <algorithm>
@@ -60,6 +61,23 @@ private:
 };
 
 template <typename Domain>
+struct MediaObservedStorageRoot final {
+    MediaObservedStorageRoot(MediaStorageLease<Domain> lease,
+        std::shared_ptr<MediaStorageBudget<Domain>> budget,
+        std::unique_ptr<std::vector<std::shared_ptr<MediaNodeWakeup>>> directory) noexcept
+        : backing(std::move(lease)), root(std::move(budget)), targets(*directory), storage(std::move(directory)) {}
+    MediaObservedStorageRoot(MediaObservedStorageRoot&&) noexcept = default;
+    MediaObservedStorageRoot& operator=(MediaObservedStorageRoot&&) = delete;
+    MediaObservedStorageRoot(const MediaObservedStorageRoot&) = delete;
+    // Reverse destruction releases the directory before its already charged lease.
+    MediaStorageLease<Domain> backing;
+    std::shared_ptr<MediaStorageBudget<Domain>> root;
+    std::span<const std::shared_ptr<MediaNodeWakeup>> targets;
+private:
+    std::unique_ptr<std::vector<std::shared_ptr<MediaNodeWakeup>>> storage;
+};
+
+template <typename Domain>
 struct MediaStorageSnapshot final {
     std::size_t capacity;
     // Actual lease reservations, including any fromReservation backing lease.
@@ -93,6 +111,8 @@ class MediaStorageBudget final
     };
 public:
     ~MediaStorageBudget() noexcept;
+    static ::media::Result<MediaObservedStorageRoot<Domain>> createObservedRoot(
+        std::size_t capacity, std::size_t targetCount);
     using BootstrapAllocator = MediaBudgetBootstrapAllocator<MediaStorageBudget<Domain>,
         MediaStorageBudget<Domain>, MediaStorageLease<Domain>>;
     // Public only for allocator_traits; the private key restricts creation.
@@ -123,6 +143,26 @@ public:
 
 private:
     friend class MediaStorageLease<Domain>;
+    using WakeupDirectory = std::unique_ptr<std::vector<std::shared_ptr<MediaNodeWakeup>>>;
+    MediaStorageBudget(std::size_t capacity, std::size_t targetCount,
+        const MediaObservedRootStorageGeometry& geometry, WakeupDirectory& targets)
+        : m_parent(nullptr), m_storage(capacity),
+          m_releaseNotification(initializeObservedRoot(targetCount, geometry, targets)) {}
+    std::shared_ptr<const MediaStorageReleaseNotification> initializeObservedRoot(
+        std::size_t targetCount, const MediaObservedRootStorageGeometry& geometry, WakeupDirectory& targets)
+    {
+        if (!m_storage.retain(geometry.totalBytes)) throw MediaBudgetBootstrapFailure(
+            ::media::ErrorInfo::allocationFailed("Observed root storage exceeds deployment capacity"));
+        updateHighWaterLocked();
+        try {
+            targets = std::make_unique<std::vector<std::shared_ptr<MediaNodeWakeup>>>(targetCount);
+            for (auto& target : *targets) target = std::make_shared<MediaNodeWakeup>();
+            return MediaStorageReleaseNotification::createAdmitted(*targets);
+        } catch (...) {
+            targets.reset();
+            throw;
+        }
+    }
     MediaStorageBudget(std::size_t capacity,
         std::shared_ptr<MediaStorageBudget<Domain>> parent,
         std::shared_ptr<const MediaStorageReleaseNotification> notification) noexcept;
@@ -241,6 +281,40 @@ MediaStorageBudget<Domain>::MediaStorageBudget(
 }
 
 template <typename Domain>
+::media::Result<MediaObservedStorageRoot<Domain>>
+MediaStorageBudget<Domain>::createObservedRoot(std::size_t capacity, std::size_t targetCount)
+{
+    using Result = ::media::Result<MediaObservedStorageRoot<Domain>>;
+    auto geometry = MediaObservedRootStorageGeometry::plan(targetCount);
+    if (!geometry) return Result::failure(geometry.error());
+    if (!capacity || geometry.value().totalBytes > capacity)
+        return Result::failure(::media::ErrorInfo::allocationFailed("Observed root storage exceeds deployment capacity"));
+    WakeupDirectory targets;
+    try {
+        auto owned = std::unique_ptr<MediaStorageBudget<Domain>>(
+            new MediaStorageBudget<Domain>(capacity, targetCount, geometry.value(), targets));
+        std::shared_ptr<MediaStorageBudget<Domain>> root;
+        try {
+            root = std::shared_ptr<MediaStorageBudget<Domain>>(std::move(owned));
+        } catch (...) {
+            // shared_ptr(unique_ptr&&) leaves the unique owner unchanged on
+            // failure. Drop exported strong targets while its ledger still lives.
+            targets.reset();
+            throw;
+        }
+        // Adopt the initial charge; no second reserve and no root-owned self lease.
+        MediaStorageLease<Domain> backing(root, geometry.value().temporaryBytes);
+        return Result::success(MediaObservedStorageRoot<Domain>{std::move(backing), std::move(root), std::move(targets)});
+    } catch (const MediaBudgetBootstrapFailure& failure) {
+        targets.reset();
+        return Result::failure(failure.error);
+    } catch (const std::bad_alloc&) {
+        targets.reset();
+        return Result::failure(::media::ErrorInfo::allocationFailed("Observed root allocation failed"));
+    }
+}
+
+template <typename Domain>
 ::media::Result<std::shared_ptr<MediaStorageBudget<Domain>>>
 MediaStorageBudget<Domain>::create(std::size_t capacity,
     const MediaStorageScope<Domain>& scope,
@@ -330,7 +404,8 @@ MediaStorageBudget<Domain>::~MediaStorageBudget() noexcept
         assert(m_parent->m_guaranteedBytes >= m_guaranteedBytes);
         m_parent->m_unusedGuaranteedBytes -= m_unusedGuaranteedBytes;
         m_parent->m_guaranteedBytes -= m_guaranteedBytes;
-        if (std::exchange(m_parent->m_pressureArmed, false))
+        // A zero guarantee returns no usable root credit.
+        if (m_unusedGuaranteedBytes && std::exchange(m_parent->m_pressureArmed, false))
             notification = m_parent->m_releaseNotification;
     }
     if (notification) notification->notify();
@@ -387,6 +462,9 @@ template <typename Domain>
                 auto& child = *children[i];
                 child.m_guaranteedBytes = capacities[i];
                 child.m_unusedGuaranteedBytes = capacities[i] - child.m_storage.retainedBytes();
+                // Preserve a pre-seal shared-pool waiter when its child's
+                // releases switch to a private guaranteed-credit domain.
+                child.m_pressureArmed = child.m_pressureArmed || root->m_pressureArmed;
                 child.m_sealed = true;
                 child.updateHighWaterLocked();
             }
@@ -425,7 +503,11 @@ MediaStorageBudget<Domain>::reserve(std::size_t bytes, MediaStorageAdmission adm
             else if (oversize) failure = Failure::Oversize;
             else if (!root.m_releaseNotification) failure = Failure::Unobserved;
             else {
-                root.m_pressureArmed = true;
+                // A sealed child's returned bytes become its unused guarantee,
+                // not available root credit. Unrelated metadata releases must
+                // not consume this waiter's notification or wake it in a loop.
+                auto& pressureDomain = m_sealed && m_parent ? *this : root;
+                pressureDomain.m_pressureArmed = true;
                 failure = Failure::Pressure;
             }
         } else {
@@ -479,9 +561,10 @@ void MediaStorageBudget<Domain>::release(std::size_t bytes) noexcept
             }
         }
         auto& root = m_parent ? *m_parent : *this;
-        // Also notify when sealed release leaves root charged bytes unchanged:
-        // that child's blocked producer may now have usable credit.
-        if (std::exchange(root.m_pressureArmed, false))
+        // Sealed release increases only this child's usable credit. All other
+        // releases reduce root charged bytes and may wake shared-pool waiters.
+        auto& pressureDomain = m_sealed && m_parent ? *this : root;
+        if (bytes && std::exchange(pressureDomain.m_pressureArmed, false))
             notification = root.m_releaseNotification;
     }
     if (notification) notification->notify();

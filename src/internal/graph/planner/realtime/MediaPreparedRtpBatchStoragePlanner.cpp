@@ -34,13 +34,14 @@ template<class T> ::media::Result<std::size_t> request(std::size_t count)
     if (!count || !childCount || !owner)
         return Result::failure(::media::ErrorInfo::invalidArgument("Prepared batch storage requires count and owner"));
     MediaPreparedRtpBatchStoragePlan result{count, childCount, std::move(owner), 0, 0, 0};
-    // freezeBatch uses five distinct exact-capacity arrays. Each request has
+    // freezeBatch uses six distinct exact-capacity arrays. Each request has
     // its own resource header/alignment, even though they share one owner.
     for (auto bytes : {request<MediaPreparedRtpSourceSession*>(count),
              request<std::unique_lock<std::mutex>>(count),
              request<MediaPreparedRtpStorageSourceSnapshot>(count),
              request<std::shared_ptr<MediaPreparationStorageBudget>>(childCount),
-             request<MediaPreparationStorageSnapshot>(childCount)}) {
+             request<MediaPreparationStorageSnapshot>(childCount),
+             request<std::size_t>(childCount)}) {
         if (!bytes) return Result::failure(bytes.error());
         if (auto status = add(result.scratchBytes, bytes.value()); !status) return Result::failure(status.error());
     }

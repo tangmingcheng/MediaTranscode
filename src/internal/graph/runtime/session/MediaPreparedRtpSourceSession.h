@@ -20,6 +20,14 @@ namespace media::ffmpeg::graph {
 
 enum class MediaPreparedRtpOutputClass { Packet, Control };
 
+enum class MediaPreparedRtpCreditBlocker { PayloadBytes, PacketObjects, ControlObjects };
+enum class MediaPreparedRtpIngressState { AcceptedReady, AcceptedWaitingCredit, NotAcceptedWaitingControl };
+struct MediaPreparedRtpIngressProgress final {
+    MediaPreparedRtpIngressState state;
+    std::optional<MediaPreparedRtpCreditBlocker> blocker;
+};
+
+
 struct MediaPreparedRtpOutput final {
     MediaPreparedRtpOutputPort port;
     MediaBufferRef buffer;
@@ -89,18 +97,19 @@ public:
         MediaPreparedRtpSourceSessionPlan plan,
         MediaPreparedRtpSourceBudgets budgets,
         std::shared_ptr<MediaMasterClock> clock);
-    ::media::Status consume(MediaStreamKind stream, MediaRtpUdpChannel channel,
+    ::media::Result<MediaPreparedRtpIngressProgress> consume(MediaStreamKind stream, MediaRtpUdpChannel channel,
         std::span<const std::uint8_t> bytes, std::int64_t observedAtNs,
         std::uint64_t ordinal);
     ::media::Status finishBootstrap(std::uint64_t videoFrontier,
         std::optional<std::uint64_t> audioFrontier);
-    ::media::Status tick(MediaStreamKind stream, std::int64_t observedAtNs);
+    ::media::Result<MediaPreparedRtpIngressProgress> tick(MediaStreamKind stream, std::int64_t observedAtNs);
+    ::media::Result<MediaPreparedRtpIngressProgress> resumeDrain(MediaStreamKind stream, std::int64_t now);
     ::media::Result<MediaPreparedRtpAccessUnitSnapshot> probeSnapshot() const;
     ::media::Status waitForAccessUnits(std::uint64_t revision,
         std::chrono::steady_clock::time_point deadline, std::stop_token stop);
     static ::media::Status freezeBatch(
         std::span<const std::shared_ptr<MediaPreparedRtpSourceSession>> sources,
-        const MediaPreparedRtpBatchAdmissionSolver* solver);
+        const MediaPreparedRtpBatchAdmissionSolver& solver);
     bool isFrozen() const;
     ::media::Result<std::optional<MediaPreparedRtpOutput>> takeOutput(
         MediaStreamKind stream, MediaPreparedRtpOutputClass outputClass);
@@ -108,6 +117,8 @@ public:
     void deactivateControl(MediaStreamKind stream, const std::shared_ptr<MediaNodeWakeup>& wakeup) noexcept;
     ::media::Result<int> receiveTimeoutMs(MediaStreamKind stream, std::int64_t now,
         int plannedMaximumMs);
+    ::media::Result<std::optional<std::chrono::nanoseconds>> creditWaitTimeout(
+        MediaStreamKind stream, std::int64_t now);
     ::media::Status activateStream(MediaStreamKind stream,
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
     ::media::Result<std::uint64_t> purgeMedia(MediaStreamKind stream);
@@ -131,7 +142,7 @@ private:
         Stream(const MediaPreparedRtpSourceSessionStreamPlan& value,
             std::shared_ptr<MediaPreparationMemoryResource> owner,
             std::shared_ptr<MediaPreparationStorageBudget> payload)
-            : resource(std::move(owner)), payloadBudget(std::move(payload)), plan(value), pending(resource.get()),
+            : resource(std::move(owner)), payloadBudget(std::move(payload)), plan(value), pending(resource.get()), spareLeases(resource.get()),
               protocol(nullptr, MediaLineageObjectDeleter<MediaRtpInputProtocolSession>{MediaPreparedLineageAllocation{resource}}),
               binder(nullptr, MediaLineageObjectDeleter<MediaRtpPacketClockSession>{MediaPreparedLineageAllocation{resource}}),
               prefix(makeMediaLineageUnique<MediaPreparedRtpPrefix>(MediaPreparedLineageAllocation{resource}, resource)),
@@ -142,6 +153,7 @@ private:
         const MediaPreparedRtpSourceSessionStreamPlan& plan;
         // Pending payload fees outlive the protocol assembly they cover.
         std::pmr::vector<std::shared_ptr<MediaPreparationStorageLease>> pending;
+        std::pmr::vector<std::shared_ptr<MediaPreparationStorageLease>> spareLeases;
         MediaLineageUniquePtr<MediaRtpInputProtocolSession> protocol;
         MediaLineageUniquePtr<MediaRtpPacketClockSession> binder;
         MediaLineageUniquePtr<MediaPreparedRtpPrefix> prefix;
@@ -155,10 +167,18 @@ private:
         std::size_t admittedUnits = 0;
         std::size_t outputBytes = 0;
         std::size_t outputHighWater = 0;
+        std::size_t packetBytes = 0;
+        std::size_t controlBytes = 0;
+        std::size_t packetHighWater = 0;
+        std::size_t controlHighWater = 0;
+        std::optional<MediaPreparedRtpCreditBlocker> waitingCredit;
     };
     ::media::Result<Stream*> stream(MediaStreamKind kind);
+    bool controlReady(Stream& stream);
+    void notifyCredit(Stream& stream) noexcept;
     ::media::Status drain(Stream& stream, std::int64_t now);
     ::media::Status evidence(Stream& stream, std::int64_t now);
+    ::media::Status commitControl(Stream& stream, MediaRtpPreparedClockObservation prepared, std::int64_t now, const MediaRtpDiscontinuity* discontinuity);
     ::media::Status event(Stream& stream, MediaBufferRef event,
         bool selectedClock, std::int64_t now);
     ::media::Status queue(Stream& stream, MediaPreparedRtpOutputPort port, MediaBufferRef buffer);

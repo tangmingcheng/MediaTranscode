@@ -34,7 +34,8 @@ public:
         std::span<const MediaRealtimeCompositionInputPlan> inputs,
         const std::shared_ptr<MediaMasterClock>& masterClock,
         std::stop_token cancellation,
-        const MediaSharedPreparationStorage& storage);
+        const MediaSharedPreparationStorage& storage,
+        std::span<const std::shared_ptr<MediaNodeWakeup>> creditWakeups);
 };
 
 } // namespace media::ffmpeg::graph

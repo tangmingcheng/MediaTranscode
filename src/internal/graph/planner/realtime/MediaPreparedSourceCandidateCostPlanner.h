@@ -27,7 +27,8 @@ struct MediaPreparedSourceCandidateCostFacts final {
     MediaRtpControlDelivery controlDelivery;
 };
 enum class MediaPreparedPayloadLeaseRootKind {
-    Prefix, Acquiring, Outputs, ProtocolPending, RawInputCreditWait, BinderCreditWait, Count
+    Prefix, Acquiring, Outputs, ProtocolPending, RawInputCreditWait, BinderCreditWait,
+    ProtocolReplacement, Count
 };
 struct MediaPreparedPayloadLeaseRoot final {
     MediaPreparedPayloadLeaseRootKind kind;
@@ -48,6 +49,7 @@ struct MediaPreparedStreamCandidateCosts final {
     std::array<MediaPreparedPayloadLeaseRoot,
         static_cast<std::size_t>(MediaPreparedPayloadLeaseRootKind::Count)> leaseControlRoots;
     MediaPreparedPayloadStoragePlan payload;
+    MediaPreparedRtpCreditPlan credit;
 };
 struct MediaPreparedIngressEventStoragePlan final {
     std::size_t maximumLiveWrappers;

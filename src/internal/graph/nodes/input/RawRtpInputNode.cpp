@@ -706,7 +706,9 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
                     "RTP source identity changed; shared playback session requires replanning"));
             }
         }
-        if (auto status = m_protocol->observeDiscontinuity(discontinuity.reason, generationBeforeObservation); !status) return status;
+        auto prepared = m_protocol->prepareDiscontinuity(generationBeforeObservation);
+        if (!prepared) return ::media::Status::failure(prepared.error());
+        if (auto status = publishClockObservation(context, std::move(prepared).value(), mediaSteadyClockNowNs(), &discontinuity); !status) return status;
         mediaGraphDiagnosticLog(
             MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -722,13 +724,6 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
                 std::to_string(generationBeforeObservation) +
                 " generation_after=" +
                 std::to_string(m_protocol->generation()));
-        m_pendingPayloadReservations.clear();
-        if (context.findOutputChannel(nodeId(), "event")) {
-            m_events.emplace_back(
-                "event",
-                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    discontinuity, m_protocol->generation(), nextIngressSequence()));
-        }
         m_protocol->consumeFront();
     }
     return queueClockEvidence(context, mediaSteadyClockNowNs());
@@ -841,28 +836,37 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
     const auto evaluationAtNs = mediaSteadyClockNowNs();
     auto observation = m_protocol->prepareRtcp(datagram, observedAtNs, evaluationAtNs);
     if (!observation) return ::media::Status::failure(observation.error());
-    auto prepared = std::move(observation).value();
+    return publishClockObservation(context, std::move(observation).value(), evaluationAtNs, nullptr);
+}
+
+::media::Status RawRtpInputNode::publishClockObservation(MediaGraphExecutionContext& context,
+    MediaRtpPreparedClockObservation prepared, std::int64_t evaluationAtNs, const MediaRtpDiscontinuity* discontinuity)
+{
     auto rejection = std::move(prepared.tracker.rejection);
-    const bool invalidated = prepared.tracker.invalidated;
+    const bool invalidated = prepared.tracker.invalidated || prepared.retireAssembly || discontinuity;
     const bool selectedClock = std::holds_alternative<MediaRtcpClockEvidence>(prepared.tracker.output);
     std::optional<RtpEvidenceDiagnostic> diagnostic;
     if (const auto* evidence = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
         diagnostic.emplace(evidence->generation, evidence->observedMediaSsrc, evidence->senderReportObservedAtNs);
     const char* port = selectedClock ? "clock" : "event";
-    const bool queued = !std::holds_alternative<std::monostate>(prepared.tracker.output) &&
+    const bool queued = (discontinuity || !std::holds_alternative<std::monostate>(prepared.tracker.output)) &&
         context.findOutputChannel(nodeId(), port);
     if (queued) {
         if (m_nextIngressSequence == 0 || m_nextIngressSequence == std::numeric_limits<std::uint64_t>::max())
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RTP ingress sequence exhausted"));
         MediaBufferRef output;
-        if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
+        if (discontinuity)
+            output = makeMediaBufferRef<MediaRtpIngressEventBuffer>(*discontinuity,
+                prepared.tracker.state.generation, m_nextIngressSequence);
+        else if (auto* value = std::get_if<MediaRtcpClockEvidence>(&prepared.tracker.output))
             output = makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(*value), m_nextIngressSequence);
         else
             output = makeMediaBufferRef<MediaRtpIngressEventBuffer>(
                 std::get<MediaRtpClockInvalidation>(prepared.tracker.output), m_nextIngressSequence);
         m_events.emplace_back(port, std::move(output));
     }
-    auto committed = m_protocol->commitRtcp(std::move(prepared));
+    auto committed = discontinuity ? m_protocol->commitDiscontinuity(discontinuity->reason, std::move(prepared))
+        : m_protocol->commitClockObservation(std::move(prepared));
     if (!committed) {
         if (queued) m_events.pop_back();
         return committed;
@@ -874,48 +878,31 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
     return ::media::Status::success();
 }
 
-::media::Status RawRtpInputNode::queueClockEvidence(
-    MediaGraphExecutionContext& context,
-    std::int64_t observedAtNs)
+::media::Status RawRtpInputNode::queueClockEvidence(MediaGraphExecutionContext& context, std::int64_t now)
 {
-    auto update = m_protocol->takeEvidenceUpdate(observedAtNs);
-    if (!update) return ::media::Status::failure(update.error());
-    if (!update.value()) return ::media::Status::success();
-    const MediaRtcpClockEvidence& evidence = *update.value();
-    logRtpClockEvidence(m_config.streamKind,
-        {evidence.generation, evidence.observedMediaSsrc, evidence.senderReportObservedAtNs}, observedAtNs);
-    if (context.findOutputChannel(nodeId(), "clock")) {
-        m_events.emplace_back(
-            "clock",
-            makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                std::move(*update.value()), nextIngressSequence()));
-    }
-    return ::media::Status::success();
+    auto prepared = m_protocol->prepareEvidence(now);
+    if (!prepared) return ::media::Status::failure(prepared.error());
+    return publishClockObservation(context, std::move(prepared).value(), now, nullptr);
 }
 
 ::media::Status RawRtpInputNode::queueClockTransition(
-    MediaGraphExecutionContext&,
+    MediaGraphExecutionContext& context,
     std::int64_t observedAtNs)
 {
-    auto transition = m_protocol->transition(observedAtNs);
+    auto transition = m_protocol->prepareClockTransition(observedAtNs);
     if (!transition) return ::media::Status::failure(transition.error());
-    if (!transition.value()) return ::media::Status::success();
+    const auto ageTransition = transition.value().age;
+    if (auto status = publishClockObservation(context, std::move(transition).value(), observedAtNs, nullptr); !status) return status;
+    if (!ageTransition) return ::media::Status::success();
     const char* stream = m_config.streamKind == MediaStreamKind::Video
         ? "video"
         : "audio";
-    const char* age = transition.value()->age == MediaRtpClockAgeTransition::Degraded
+    const char* age = *ageTransition == MediaRtpClockAgeTransition::Degraded
         ? "degraded"
         : "expired";
     const auto& clockConfig = m_protocol->clockConfig();
     if (clockConfig.lossPolicy == MediaRtpClockLossPolicy::WaitForEvidence ||
         clockConfig.lossPolicy == MediaRtpClockLossPolicy::InvalidateAndWait) {
-        if (transition.value()->invalidation) {
-            m_events.emplace_back("event",
-                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    *transition.value()->invalidation,
-                    nextIngressSequence()));
-        }
-        discardUnassembledPackets();
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
             std::string("rtp_recovery state=waiting_for_clock_evidence stream=") + stream);

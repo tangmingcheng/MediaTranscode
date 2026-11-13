@@ -16,18 +16,15 @@ struct MediaRtpInputClockSessionConfig final {
     MediaRtcpCompositionMode compositionMode;
 };
 
-struct MediaRtpClockSessionTransition final {
-    MediaRtpClockAgeTransition age;
-    std::optional<MediaRtpClockInvalidation> invalidation;
-};
-
-struct MediaRtpPreparedRtcpObservation final {
+struct MediaRtpPreparedClockObservation final {
     MediaRtcpPreparedObservation tracker;
     MediaRtpClockObservationSchedule schedule;
     bool evidencePublished;
+    std::optional<MediaRtpClockAgeTransition> age;
+    bool retireAssembly;
 };
 
-// One receiver owns and orders media, continuity and RTCP observations. This
+// One serialized source owner orders media, continuity and RTCP observations. This
 // component retains the existing tracker/schedule semantics; event delivery,
 // packet retirement and recovery gating remain with the input node.
 class MediaRtpInputClockSession final {
@@ -40,20 +37,20 @@ public:
     MediaRtpInputClockSession& operator=(MediaRtpInputClockSession&&) = default;
 
     ::media::Result<std::uint64_t> observeMedia(std::uint32_t ssrc);
-    ::media::Status observeDiscontinuity(std::uint64_t generationBefore);
-    ::media::Result<MediaRtpPreparedRtcpObservation> prepareRtcp(
+    ::media::Result<MediaRtpPreparedClockObservation> prepareDiscontinuity(std::uint64_t generationBefore) const;
+    ::media::Result<MediaRtpPreparedClockObservation> prepareRtcp(
         std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
-    ::media::Status commitRtcp(MediaRtpPreparedRtcpObservation&& prepared);
-    ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(
-        std::int64_t observedAtNs);
+    ::media::Result<MediaRtpPreparedClockObservation> prepareEvidence(std::int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtpPreparedClockObservation> prepareClockTransition(std::int64_t evaluationAtNs) const;
+    ::media::Status commitClockObservation(MediaRtpPreparedClockObservation&& prepared);
     ::media::Result<int> receiveTimeoutMs(std::int64_t observedAtNs,
         int plannedMaximumMs) const noexcept;
-    ::media::Result<std::optional<MediaRtpClockSessionTransition>> transition(
-        std::int64_t observedAtNs);
+    std::optional<std::int64_t> nextDeadlineNs() const noexcept;
     std::uint64_t generation() const noexcept;
     const MediaRtpInputClockSessionConfig& config() const noexcept;
 
 private:
+    ::media::Result<MediaRtpPreparedClockObservation> materializeObservation(MediaRtcpPreparedObservation prepared) const;
     MediaRtpInputClockSession(MediaRtpInputClockSessionConfig config,
         MediaRtpClockObservationSchedule schedule, MediaLineageAllocationScope allocation);
     MediaLineageAllocationScope m_allocation;

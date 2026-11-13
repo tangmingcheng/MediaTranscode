@@ -128,6 +128,11 @@ private:
     static void runRuntimeWorker(void* owner, std::stop_token token, std::size_t index) noexcept;
     void capture(std::stop_token stopToken) noexcept;
     ::media::Status installRuntimeIngressLocked(const MediaRtpIngressPlan& plan);
+    ::media::Status startContinuousChannelsLocked(std::size_t currentChannel);
+    ::media::Status deliverContinuousDatagram(
+        const std::shared_ptr<class MediaPreparedRtpSourceSession>& source, MediaStreamKind stream,
+        MediaRtpUdpChannel channel, std::span<const std::uint8_t> bytes,
+        std::int64_t observedAtNs, std::stop_token stopToken);
     ::media::Status captureRuntimeBatch(std::stop_token stopToken, std::size_t channelIndex);
     void captureRuntime(std::stop_token stopToken, std::size_t channelIndex) noexcept;
 
@@ -141,7 +146,7 @@ private:
     mutable std::mutex m_mutex;
     std::condition_variable m_ready;
     std::jthread m_captureThread;
-    std::jthread m_rtcpCaptureThread;
+    std::jthread m_secondaryCaptureThread;
     std::mutex m_deliveryMutex;
     std::array<std::optional<MediaRtpIngressBatch>, 2> m_readyBatches;
     std::optional<MediaRawRtpPreparedReplayEpoch> m_replayEpoch;

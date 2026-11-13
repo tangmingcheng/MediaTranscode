@@ -27,6 +27,9 @@ struct MediaPreparedRtpContainerStoragePlan final {
     std::size_t protocolRequestPeakBytes = 0;
     std::size_t completionPeakBytes = 0;
     std::size_t aacHeaderPeakBytes = 0;
+    // Independently preallocated transaction directory; old partial owners remain
+    // in pending until the complete replacement reservation is materialized.
+    std::size_t sparePendingPeakBytes = 0;
     // Candidate envelope only; other protocol owners are separate products.
     std::size_t peakBytes = 0;
     bool operator==(const MediaPreparedRtpContainerStoragePlan&) const = default;
