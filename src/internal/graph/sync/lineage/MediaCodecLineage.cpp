@@ -14,7 +14,8 @@ namespace media::ffmpeg::graph {
             if (auto status = validateMediaCanonicalLineage(*value.canonical); !status)
                 return status;
             if (value.presentationProgress &&
-                value.presentationProgress->followingFramesLowerBound < value.canonical->presentation)
+                (!value.completionOrder || *value.completionOrder == 0 ||
+                 value.presentationProgress->followingFramesLowerBound < value.canonical->presentation))
                 return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "Video encode producer progress precedes its carrying frame"));
             return ::media::Status::success();

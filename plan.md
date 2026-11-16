@@ -946,3 +946,7 @@ e127a744诊断源码按VS2026技能300秒上限全核心clean-first all-target�
 ## 2026-11-16：编码完整输出能力合同阶段1
 
 新增MediaVideoEncoderCompletionContract与只读adapter，prepared readback记录受限NVENC逐帧/单视图/零重排/完整packet能力；CPB及公开参数不一致保持未授权。未启用scheduler放行，RKMPP未授权，r440未修复。两独立智能体均阶段SOURCE PASS。Release按现有技能300秒上限全核心clean-first all-target构建成功，观察24个cl并行，configure/build exit0、四必需产物齐全；realtime CLI SHA256 9948C8CE2CE2C91F4755A3D7B68503DAE819DA9A82A059D221D026506D08F2E4（7569920字节）。未运行local测试，本阶段尚未实流验证；接通有序进度与生命周期后执行原规格realtime复验。未改Windows或目标FFmpeg。详见docs/realtime-composition-encoded-progress-plan.md。
+
+## 2026-11-16：共享编码进度接线完成待实流
+
+prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递canonical同轴下界，scheduler在成功commit后更新且只严格小于放行，flush/purge重校验后恢复代次能力。两独立审查发现的头声明及跨代授权问题已修复，两者重新SOURCE PASS。Release全核心clean-first all-target构建exit0，观察24cl并行，四产物存在；CLI SHA256 935C4CB53A8CFBE4750B7657D31B06DAF07DA747595F3F05A6D10BB3E1D2D064。尚未实流通过，r440/rk427未关闭，RKMPP后端仍未授权进度；下一轮r443原规格复验。

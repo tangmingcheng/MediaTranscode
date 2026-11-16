@@ -7,6 +7,7 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
+#include "internal/graph/nodes/video/MediaVideoEncodedProgressState.h"
 
 #include "internal/graph/diagnostics/MediaVideoEncoderExecutionObservation.h"
 
@@ -35,6 +36,8 @@ public:
     ::media::ffmpeg::FramePtr pendingFrame;
     std::shared_ptr<MediaGraphPayloadCreditLease> pendingPayloadCredit;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    std::optional<MediaVideoPresentationProgress> pendingPresentationProgress;
+    MediaVideoEncodedProgressState encodedProgress;
     std::set<std::uint64_t> lineageGenerations;
     AVBufferRef* pendingSubmissionLineage = nullptr;
     std::deque<AVBufferRef*> submissionOrderLineage;

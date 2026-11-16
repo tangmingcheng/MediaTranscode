@@ -3,14 +3,39 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/opt.h>
 
 }
 
-
 #include <cstring>
 
-
 namespace media::ffmpeg::graph {
+namespace {
+std::optional<MediaVideoEncoderCompletionConfiguration> configuration(const AVCodecContext& c)
+{
+    std::int64_t delay = 0, zeroLatency = 0, lookahead = 0;
+    if (!c.priv_data || av_opt_get_int(c.priv_data, "delay", 0, &delay) < 0 ||
+        av_opt_get_int(c.priv_data, "zerolatency", 0, &zeroLatency) < 0 ||
+        av_opt_get_int(c.priv_data, "rc-lookahead", 0, &lookahead) < 0) return {};
+    return MediaVideoEncoderCompletionConfiguration{{
+        c.codec_id, c.codec_type, c.profile, c.width, c.height, c.pix_fmt, c.sw_pix_fmt,
+        c.time_base.num, c.time_base.den, c.framerate.num, c.framerate.den,
+        c.sample_aspect_ratio.num, c.sample_aspect_ratio.den,
+        c.bit_rate, c.rc_max_rate, c.rc_buffer_size, c.gop_size,
+        c.max_b_frames, c.has_b_frames, c.flags, c.flags2, c.field_order,
+        delay, zeroLatency, lookahead}};
+}
+}
+
+::media::Status MediaEncoderCompletionAdapter::validateUnchanged(
+    const AVCodecContext& encoder, const MediaVideoEncoderCompletionContract& prepared)
+{
+    const auto current = configuration(encoder);
+    if (!current || *current != prepared.configuration)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Encoded progress prepared configuration changed"));
+    return ::media::Status::success();
+}
 
 std::optional<MediaVideoEncoderCompletionContract>
 MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
@@ -51,6 +76,8 @@ MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
 
     if (!MediaEncoderOpenContractAdapter::verifyOutputBuffering(
             encoder, MediaEncoderOutputBuffering::Immediate)) return {};
+    const auto snapshot = configuration(encoder);
+    if (!snapshot) return {};
 
     // Full locked surface -> one AVPacket; zero-delay timestamp FIFO and
     // inputDuration/outputDuration slot transport establish completion/identity.
@@ -60,6 +87,7 @@ MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
         {encoder.time_base.num, encoder.time_base.den},
         {encoder.framerate.num, encoder.framerate.den},
         MediaEncoderCompletionLifetime::UnchangedPreparedContextUntilReset,
+        *snapshot,
         "audited-nvenc-full-surface-packet-zero-reorder-opaque-slot"};
 }
 

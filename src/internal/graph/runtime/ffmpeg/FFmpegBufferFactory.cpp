@@ -74,7 +74,8 @@ namespace media::ffmpeg::graph {
         makeMediaBufferRef<FFmpegFormatContextBuffer>(context));
 }
 
-::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapCodecContext(::media::ffmpeg::CodecContextPtr context)
+::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapCodecContext(::media::ffmpeg::CodecContextPtr context,
+    std::optional<MediaVideoEncoderCompletionContract> preparedEncoder)
 {
     if (!context) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -82,7 +83,7 @@ namespace media::ffmpeg::graph {
     }
 
     return ::media::Result<MediaBufferRef>::success(
-        makeMediaBufferRef<FFmpegCodecContextBuffer>(std::move(context)));
+        makeMediaBufferRef<FFmpegCodecContextBuffer>(std::move(context), std::move(preparedEncoder)));
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::borrowCodecContext(AVCodecContext* context)

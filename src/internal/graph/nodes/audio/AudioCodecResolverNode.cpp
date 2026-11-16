@@ -450,7 +450,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
                                                          const char* portName,
                                                          ::media::ffmpeg::CodecContextPtr codecContext)
 {
-    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(codecContext));
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(codecContext), std::nullopt);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }

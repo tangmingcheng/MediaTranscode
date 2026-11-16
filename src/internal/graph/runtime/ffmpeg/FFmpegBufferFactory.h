@@ -32,7 +32,8 @@ public:
     static ::media::Result<MediaBufferRef> wrapOutputFormatContext(::media::ffmpeg::OutputFormatContextPtr context);
     static ::media::Result<MediaBufferRef> borrowFormatContext(AVFormatContext* context);
 
-    static ::media::Result<MediaBufferRef> wrapCodecContext(::media::ffmpeg::CodecContextPtr context);
+    static ::media::Result<MediaBufferRef> wrapCodecContext(::media::ffmpeg::CodecContextPtr context,
+        std::optional<MediaVideoEncoderCompletionContract> preparedEncoder);
     static ::media::Result<MediaBufferRef> borrowCodecContext(AVCodecContext* context);
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const AVStream* stream);
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const FFmpegInputStreamSnapshot& stream);

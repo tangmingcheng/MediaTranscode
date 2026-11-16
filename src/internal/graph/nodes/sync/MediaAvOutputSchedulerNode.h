@@ -33,6 +33,7 @@ private:
         std::optional<MediaAvSchedulerHead> audioHead;
         MediaBufferRef terminal;
         std::optional<MediaAvSchedulerPendingCommit> pendingCommit;
+        std::optional<MediaAvSchedulerVideoProgress> videoProgress;
         std::optional<MediaNodeProcessResult> completedCommitResult;
         bool videoEof = false;
         bool audioEof = false;
@@ -127,6 +128,9 @@ private:
         const MediaAvReacquisitionSnapshot& reacquisition,
         const MediaAvEpochTransitionSnapshot& epoch);
     ::media::Result<std::optional<Input>> selectMediaHead() const;
+    ::media::Result<bool> audioPrecedesVideoProgress() const;
+    ::media::Result<std::optional<MediaAvSchedulerVideoProgress>> prepareVideoProgress(
+        const MediaCanonicalAccessUnitBuffer& unit) const;
     ::media::Result<MediaNodeProcessResult> processSelected(
         MediaGraphExecutionContext& context, Input input);
     ::media::Result<MediaNodeProcessResult> processMedia(

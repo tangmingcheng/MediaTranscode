@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/nodes/sync/MediaAvSchedulerVideoProgress.h"
 
 #include <optional>
 #include <cstdint>
@@ -16,6 +17,7 @@ struct MediaAvSchedulerPendingCommit final {
     bool terminalFinishes = false;
     std::optional<std::uint64_t> generation;
     std::optional<MediaRunningTime> scheduledAt;
+    std::optional<MediaAvSchedulerVideoProgress> videoProgress;
 };
 
 } // namespace media::ffmpeg::graph

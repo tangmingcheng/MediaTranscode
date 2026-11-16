@@ -16,21 +16,23 @@ MediaCanonicalAccessUnitSequence MediaCanonicalLineage::canonicalSequence() cons
     }, identity);
 }
 
-bool sameMediaCanonicalTimeline(const MediaCanonicalLineage& left,
-                                const MediaCanonicalLineage& right) noexcept
+bool sameMediaCanonicalTimelineIdentity(const MediaCanonicalAccessUnitIdentity& left,
+                                        const MediaCanonicalAccessUnitIdentity& right) noexcept
 {
-    if (left.generation != right.generation || left.identity.index() != right.identity.index()) {
-        return false;
-    }
-    if (const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&left.identity)) {
-        return source->sourceIdentity ==
-            std::get<MediaSourceAccessUnitIdentity>(right.identity).sourceIdentity;
-    }
-    const auto& output = std::get<MediaOutputAccessUnitIdentity>(left.identity);
-    const auto& other = std::get<MediaOutputAccessUnitIdentity>(right.identity);
+    if (left.index() != right.index()) return false;
+    if (const auto* source = std::get_if<MediaSourceAccessUnitIdentity>(&left))
+        return source->sourceIdentity == std::get<MediaSourceAccessUnitIdentity>(right).sourceIdentity;
+    const auto& output = std::get<MediaOutputAccessUnitIdentity>(left);
+    const auto& other = std::get<MediaOutputAccessUnitIdentity>(right);
     return output.outputIdentity == other.outputIdentity && output.stream == other.stream;
 }
 
+bool sameMediaCanonicalTimeline(const MediaCanonicalLineage& left,
+                                const MediaCanonicalLineage& right) noexcept
+{
+    return left.generation == right.generation &&
+        sameMediaCanonicalTimelineIdentity(left.identity, right.identity);
+}
 ::media::Status validateMediaCanonicalLineage(
     const MediaCanonicalLineage& lineage) noexcept
 {

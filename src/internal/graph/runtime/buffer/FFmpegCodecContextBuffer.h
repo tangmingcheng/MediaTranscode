@@ -2,6 +2,8 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/model/MediaVideoEncoderCompletionContract.h"
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -12,7 +14,8 @@ enum class FFmpegCodecContextOwnership {
 
 class FFmpegCodecContextBuffer final : public MediaBuffer {
 public:
-    explicit FFmpegCodecContextBuffer(::media::ffmpeg::CodecContextPtr context);
+    FFmpegCodecContextBuffer(::media::ffmpeg::CodecContextPtr context,
+        std::optional<MediaVideoEncoderCompletionContract> preparedEncoder);
     explicit FFmpegCodecContextBuffer(AVCodecContext* borrowedContext);
 
     MediaBufferType type() const noexcept override;
@@ -22,11 +25,14 @@ public:
 
     FFmpegCodecContextOwnership ownership() const noexcept;
     ::media::ffmpeg::CodecContextPtr takeContext() noexcept;
+    const std::optional<MediaVideoEncoderCompletionContract>& preparedEncoder() const noexcept
+    { return m_preparedEncoder; }
 
 private:
     FFmpegCodecContextOwnership m_ownership = FFmpegCodecContextOwnership::Borrowed;
     ::media::ffmpeg::CodecContextPtr m_context;
     AVCodecContext* m_borrowedContext = nullptr;
+    const std::optional<MediaVideoEncoderCompletionContract> m_preparedEncoder;
 };
 
 } // namespace media::ffmpeg::graph

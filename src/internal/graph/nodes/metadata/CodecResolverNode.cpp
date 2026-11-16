@@ -286,7 +286,7 @@ MediaBufferRef CodecResolverNode::timestampSource() const
         std::lock_guard lock(m_snapshotMutex);
         m_decoderRuntimeFacts = std::move(decoder.runtimeFacts);
     }
-    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(decoder.context));
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(decoder.context), std::nullopt);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
@@ -304,7 +304,7 @@ MediaBufferRef CodecResolverNode::timestampSource() const
         timestampContext->time_base = timestampContext->pkt_timebase;
         timestampContext->codec_type = AVMEDIA_TYPE_VIDEO;
         auto timestampBuffer = FFmpegBufferFactory::wrapCodecContext(
-            std::move(timestampContext));
+            std::move(timestampContext), std::nullopt);
         if (!timestampBuffer) return ::media::Status::failure(timestampBuffer.error());
         {
             std::lock_guard lock(m_snapshotMutex);
@@ -359,7 +359,7 @@ MediaBufferRef CodecResolverNode::timestampSource() const
         m_encoderReadback = std::move(readback).value();
         m_encoderParametersSnapshot = std::move(snapshot).value();
     }
-    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderBuild.context));
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderBuild.context), std::nullopt);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }

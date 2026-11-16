@@ -13,6 +13,7 @@
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 #include "internal/graph/runtime/ffmpeg/MediaFfmpegPayloadOwnership.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
@@ -71,6 +72,7 @@ void VideoEncodeLineageState::bindCodec(
 
 void VideoEncodeLineageState::resetCodecBinding() noexcept
 {
+    encodedProgress.revoke();
     m_codecContext = nullptr;
     m_codecOwner.reset();
 }
@@ -86,6 +88,8 @@ void VideoEncodeLineageState::clearOwnedLineage(
 
 void VideoEncodeLineageState::clearLineageStorage() noexcept
 {
+    encodedProgress.suspendForReset();
+    pendingPresentationProgress.reset();
     av_buffer_unref(&pendingSubmissionLineage);
     for (AVBufferRef* opaque : submissionOrderLineage) {
         av_buffer_unref(&opaque);
@@ -318,7 +322,10 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoEncodeNode requires canonical input lineage"));
     }
-    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
+    auto encoded = m_lineageState->encodedProgress.prepare(
+        m_lineageState->pendingLineage, m_lineageState->pendingPresentationProgress);
+    if (!encoded) return ::media::Status::failure(encoded.error());
+    auto token = m_lineageRegistry->submit(std::move(encoded).value());
     if (!token) return ::media::Status::failure(token.error());
     auto opaque = makeMediaFfmpegCodecOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
@@ -337,6 +344,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             m_lineageState->pendingLineage->generation);
     }
     m_lineageState->pendingLineage.reset();
+    m_lineageState->pendingPresentationProgress.reset();
     m_lineageState->pendingPayloadCredit.reset();
     return ::media::Status::success();
 }
@@ -346,6 +354,11 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     if (hasCodecContext() && !codecMetadataPublished())
         return processProgress(publishCodecMetadata(context));
     auto lineageLock = m_lineageState->lock();
+    // Purge has already retired registry entries and flushed/cleared the old
+    // generation under this same owner lock. Revalidate retained evidence only
+    // at this explicit lifecycle boundary, never from prepare()/complete().
+    if (auto status = m_lineageState->encodedProgress.resumeAfterReset(); !status)
+        return ::media::Result<MediaNodeProcessResult>::failure(status.error());
     if (m_lineageState->flushPending) {
         return continueFlush(context);
     }
@@ -376,6 +389,11 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     const MediaBufferRef& buffer = *input.value();
     if (tryBindCodecContext(buffer)) {
         m_lineageState->bindCodec(buffer, codecContext());
+        const auto* metadata = dynamic_cast<const FFmpegCodecContextBuffer*>(buffer.get());
+        const auto* prepared = metadata && metadata->preparedEncoder()
+            ? &*metadata->preparedEncoder() : nullptr;
+        if (auto status = m_lineageState->encodedProgress.bind(prepared, *codecContext()); !status)
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         const AVCodecContext* encoder = codecContext();
         encodeLog(MediaGraphDiagnosticLevel::State,
                   std::string("bind_encoder codec=") + codecName(encoder) +
@@ -493,6 +511,9 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_lineageState->pendingFrame = std::move(pendingFrame);
     m_lineageState->pendingPayloadCredit = inputPayloadCredit;
     m_lineageState->pendingLineage = std::move(pendingLineage);
+    const auto* canonicalFrame = dynamic_cast<const MediaCanonicalVideoFrameBuffer*>(buffer.get());
+    m_lineageState->pendingPresentationProgress = canonicalFrame
+        ? canonicalFrame->presentationProgress() : std::nullopt;
 
     return submitPendingFrame(context);
 }
@@ -501,6 +522,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     MediaGraphExecutionContext& context)
 {
     AVFrame* frame = m_lineageState->pendingFrame.get();
+    if (auto status = m_lineageState->encodedProgress.validateConfiguration(*codecContext()); !status)
+        return ::media::Result<MediaNodeProcessResult>::failure(status.error());
     if (m_lineageRegistry) {
         if (!m_forceGenerationStartKeyFrame) {
             return processProgress(::media::Status::failure(
@@ -690,6 +713,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         }
 
         std::shared_ptr<const MediaCanonicalLineage> lineage;
+        std::optional<MediaVideoDecodeProgress> decodeProgress;
         std::optional<MediaCodecTokenObservation> tokenObservation;
         if (m_lineageRegistry && mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
             tokenObservation.emplace();
@@ -711,13 +735,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
                 lineageOpaque = m_lineageState->submissionOrderLineage.front();
                 m_lineageState->submissionOrderLineage.pop_front();
             }
-            auto resolved = m_lineageRegistry->resolveOutput<MediaCanonicalLineage>(
+            auto resolved = m_lineageRegistry->resolveOutput<MediaVideoEncodeLineage>(
                 lineageOpaque, tokenObservation ? &*tokenObservation : nullptr);
             if (lineageOpaque != packet->opaque_ref) {
                 av_buffer_unref(&lineageOpaque);
             }
             if (!resolved) return ::media::Result<bool>::failure(resolved.error());
-            if (resolved.value()) lineage = std::move(*resolved.value());
+            if (resolved.value()) {
+                if (auto valid = m_lineageState->encodedProgress.validateConfiguration(*codecContext()); !valid)
+                    return ::media::Result<bool>::failure(valid.error());
+                auto progress = m_lineageState->encodedProgress.complete(*resolved.value());
+                if (!progress) return ::media::Result<bool>::failure(progress.error());
+                decodeProgress = progress.value();
+                lineage = std::move(resolved.value()->canonical);
+            }
             av_buffer_unref(&packet->opaque_ref);
             if (!lineage) continue;
         }
@@ -761,7 +792,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             if (receiveBegin && receiveEnd && *receiveBegin >= 0 && *receiveEnd >= *receiveBegin)
                 receiveObservation = MediaCodecReceiveObservation{*receiveBegin, *receiveEnd, tokenObservation};
             auto canonical = MediaCanonicalAccessUnitBuffer::create(
-                MediaRuntimeLineageAllocation{}, output, std::move(lineage), std::nullopt, {}, receiveObservation);
+                MediaRuntimeLineageAllocation{}, output, std::move(lineage), std::nullopt, {}, receiveObservation, decodeProgress);
             if (!canonical) return ::media::Result<bool>::failure(canonical.error());
             output = std::move(canonical).value();
         }
@@ -795,7 +826,10 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     if (!drainResult.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
-    if (!m_lineageState->flushIsEof) m_codecApi->flushBuffers(codecContext());
+    if (!m_lineageState->flushIsEof) {
+        m_lineageState->encodedProgress.suspendForReset();
+        m_codecApi->flushBuffers(codecContext());
+    }
 
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
@@ -803,6 +837,11 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             if (!finished) return processProgress(std::move(finished));
         }
         m_lineageState->lineageGenerations.clear();
+    }
+
+    if (!m_lineageState->flushIsEof) {
+        if (auto status = m_lineageState->encodedProgress.resumeAfterReset(); !status)
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
     }
 
     const bool eof = m_lineageState->flushIsEof;

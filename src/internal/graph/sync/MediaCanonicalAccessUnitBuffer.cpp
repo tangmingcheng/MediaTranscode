@@ -11,7 +11,8 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(ConstructionKey,
     std::shared_ptr<const MediaCanonicalLineage> lineage,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
     MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions,
-    std::optional<MediaCodecReceiveObservation> codecReceiveObservation)
+    std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+    std::optional<MediaVideoDecodeProgress> decodeProgress)
     : m_media(std::move(media))
     , m_stream(stream)
     , m_lineage(std::move(lineage))
@@ -19,6 +20,7 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(ConstructionKey,
     , m_audioContributions(std::move(audioContributions))
     , m_diagnosticCreatedSteadyNs(mediaAccessUnitObservationNow())
     , m_codecReceiveObservation(codecReceiveObservation)
+    , m_decodeProgress(decodeProgress)
 {
     setPayloadKind(MediaPayloadKind::Packet);
     setStreamKind(stream == MediaScheduledStream::Video
@@ -30,7 +32,8 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(ConstructionKey,
     MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage,
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
     std::vector<MediaCanonicalAudioContribution> audioContributions,
-    std::optional<MediaCodecReceiveObservation> codecReceiveObservation)
+    std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+    std::optional<MediaVideoDecodeProgress> decodeProgress)
 try {
     if (!media || !lineage || !AllocationAllocator{allocation}.resource()) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -55,6 +58,12 @@ try {
             ::media::ErrorInfo::invalidArgument(
                 "Canonical output identity stream does not match media"));
     }
+    if (decodeProgress && (stream != MediaScheduledStream::Video ||
+        lineage->decodeOrder != MediaDecodeOrderMode::PresentationOrderNoReorder ||
+        (lineage->decode && *lineage->decode != lineage->presentation) ||
+        decodeProgress->followingAccessUnitsLowerBound < lineage->presentation))
+        return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::invalidArgument(
+            "Canonical encoded progress differs from its carrying video AU"));
     const bool audio = media->streamKind() == MediaStreamKind::Audio;
     if (audio != audioInterval.has_value()) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -101,7 +110,7 @@ try {
         std::allocate_shared<MediaCanonicalAccessUnitBuffer>(
             AllocationAllocator{allocation}, ConstructionKey{},
             std::move(media), stream, std::move(lineage),
-            std::move(audioInterval), std::move(storage).value(), codecReceiveObservation));
+            std::move(audioInterval), std::move(storage).value(), codecReceiveObservation, decodeProgress));
 } catch (const std::bad_alloc&) {
     return ::media::Result<MediaBufferRef>::failure(
         ::media::ErrorInfo::allocationFailed("Canonical access unit allocation failed"));

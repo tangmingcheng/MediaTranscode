@@ -2,11 +2,21 @@
 
 #include "internal/graph/model/MediaGraphTypes.h"
 #include <string_view>
+#include <array>
+#include <cstdint>
 
 namespace media::ffmpeg::graph {
 
 enum class MediaEncoderCompletionLifetime {
     UnchangedPreparedContextUntilReset
+};
+
+// Fixed-size opened-context readback; adapter owns field ordering. No media,
+// vector/string allocation, or dependency ownership is retained here.
+struct MediaVideoEncoderCompletionConfiguration final {
+    std::array<std::int64_t, 25> fields;
+    friend bool operator==(const MediaVideoEncoderCompletionConfiguration&,
+                           const MediaVideoEncoderCompletionConfiguration&) = default;
 };
 
 // A source-audited semantic contract, not a wall-clock completion bound.
@@ -19,9 +29,8 @@ enum class MediaEncoderCompletionLifetime {
 struct MediaVideoEncoderCompletionContract final {
     MediaRational inputTimeBase;
     MediaRational inputCadence;
-    // The enclosing MediaVideoEncoderReadback stores the actual public-field
-    // snapshot. This requirement is deliberately not a runtime authorization.
     MediaEncoderCompletionLifetime lifetime;
+    MediaVideoEncoderCompletionConfiguration configuration;
     // Implementation identity is checked by the audited dependency delivery
     // gate. This label documents source semantics; it is not a runtime hash.
     std::string_view authority;

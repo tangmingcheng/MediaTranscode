@@ -118,7 +118,7 @@ MediaCanonicalInputNode::canonicalize(
     }
     auto created = MediaCanonicalAccessUnitBuffer::create(
         allocation, std::move(encodedAccessUnit), std::move(lineage).value(),
-        std::move(audioInterval), {}, std::nullopt);
+        std::move(audioInterval), {}, std::nullopt, std::nullopt);
     if (!created) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             created.error());

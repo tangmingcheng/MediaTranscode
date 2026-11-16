@@ -437,7 +437,7 @@ PreparedResult MediaRealtimeCompositionPreparer::prepare(
     MediaPreparedRealtimeEmissionSet actualOutputEmission{
         actualEncoder.value().emission, emission.value().audio,
         emission.value().audioFrames, emission.value().hardwareMemory};
-    auto wrappedEncoder = FFmpegBufferFactory::wrapCodecContext(std::move(actualEncoder.value().context));
+    auto wrappedEncoder = FFmpegBufferFactory::wrapCodecContext(std::move(actualEncoder.value().context), actualEncoder.value().readback.completion);
     if (!wrappedEncoder) return PreparedResult::failure(wrappedEncoder.error());
     auto bound = MediaRealtimeCompositionGraphBuilder::bind(std::move(topology).value(), deployment.value().encode().latency,
         {std::move(decoders), std::move(wrappedEncoder).value(), std::move(canvas).value(),

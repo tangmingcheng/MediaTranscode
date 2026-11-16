@@ -64,4 +64,7 @@ struct MediaOutputAccessUnitIdentity final {
 using MediaCanonicalAccessUnitIdentity = std::variant<
     MediaSourceAccessUnitIdentity, MediaOutputAccessUnitIdentity>;
 
+bool sameMediaCanonicalTimelineIdentity(const MediaCanonicalAccessUnitIdentity& left,
+                                        const MediaCanonicalAccessUnitIdentity& right) noexcept;
+
 } // namespace media::ffmpeg::graph

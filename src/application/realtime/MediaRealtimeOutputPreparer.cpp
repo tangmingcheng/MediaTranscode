@@ -164,7 +164,7 @@ namespace media::ffmpeg::graph {
         request.sourceGeneration, request.sessionPlan.sourceTimeBase,
         source.frameRate, encoder.value().readback);
     if (!encodingContract) return Result::failure(encodingContract.error());
-    auto wrapped = FFmpegBufferFactory::wrapCodecContext(std::move(encoder).value().context);
+    auto wrapped = FFmpegBufferFactory::wrapCodecContext(std::move(encoder.value().context), encoder.value().readback.completion);
     if (!wrapped) return Result::failure(wrapped.error());
     auto join = MediaRealtimeVideoEncodingGroupContractPlanner::joinPlan(planned.value().videoPlan);
     if (!join) return Result::failure(join.error());

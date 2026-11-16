@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaVideoEncoderCompletionContract.h"
 #include <optional>
+#include "media_transcode/Result.h"
 
 struct AVCodecContext;
 
@@ -13,6 +14,9 @@ public:
     // leave the optimization unauthorized without changing encoder behavior.
     static std::optional<MediaVideoEncoderCompletionContract> readAfterOpen(
         const AVCodecContext& encoder);
+    // Validation only: never selects or revokes a planner-authorized strategy.
+    static ::media::Status validateUnchanged(const AVCodecContext& encoder,
+        const MediaVideoEncoderCompletionContract& prepared);
 
     MediaEncoderCompletionAdapter() = delete;
 };

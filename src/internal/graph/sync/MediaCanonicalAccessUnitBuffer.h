@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaCanonicalAudioContribution.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitIdentity.h"
+#include "internal/graph/sync/MediaVideoDecodeProgress.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -33,8 +34,11 @@ public:
         std::shared_ptr<const MediaCanonicalLineage> lineage,
         std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
         std::vector<MediaCanonicalAudioContribution> audioContributions,
-        std::optional<MediaCodecReceiveObservation> codecReceiveObservation);
+        std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+        std::optional<MediaVideoDecodeProgress> decodeProgress);
 
+    const std::optional<MediaVideoDecodeProgress>& decodeProgress() const noexcept
+    { return m_decodeProgress; }
     MediaBufferType type() const noexcept override;
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     const MediaBufferRef& media() const noexcept { return m_media; }
@@ -68,7 +72,8 @@ public:
         std::shared_ptr<const MediaCanonicalLineage> lineage,
         std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
         MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions,
-        std::optional<MediaCodecReceiveObservation> codecReceiveObservation);
+        std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+        std::optional<MediaVideoDecodeProgress> decodeProgress);
 private:
     MediaBufferRef m_media;
     MediaScheduledStream m_stream;
@@ -77,6 +82,7 @@ private:
     MediaImmutableArray<MediaCanonicalAudioContribution> m_audioContributions;
     const std::optional<std::int64_t> m_diagnosticCreatedSteadyNs;
     const std::optional<MediaCodecReceiveObservation> m_codecReceiveObservation;
+    const std::optional<MediaVideoDecodeProgress> m_decodeProgress;
 };
 
 } // namespace media::ffmpeg::graph

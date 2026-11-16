@@ -35,7 +35,8 @@ namespace {
     const auto* canonical = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(source.get());
     return MediaCanonicalAccessUnitBuffer::create(
         MediaRuntimeLineageAllocation{}, std::move(output), std::move(lineage), std::nullopt, {},
-        canonical ? canonical->codecReceiveObservation() : std::nullopt);
+        canonical ? canonical->codecReceiveObservation() : std::nullopt,
+        canonical ? canonical->decodeProgress() : std::nullopt);
 }
 } // namespace
 
