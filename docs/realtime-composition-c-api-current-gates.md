@@ -23,3 +23,9 @@ CMakeLists.txt 将 beta 构建为 STATIC，故本项检查 archive 链接符号�
 ```
 
 同目录 realtime_beta_c.exe/obj 时间仍为2026-09-01，不是当前版本，未执行且未据此报告通过。此次未生成临时产物。后续重建后须以新产物继续验收，符号存在不证明布局、回调或真实媒体正确。
+
+## 2026-11-16 当前源码与下一项实流
+
+核对 git diff 038f069c HEAD -- include/media_transcode_beta/realtime.h：相对合屏前头文件，只有独立合屏类型、入口以及 snapshot 注释新增；旧类型字段和既有函数声明未改。这证明源码声明保持，不替代目标 ABI 布局实测或旧消费者运行。
+
+rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用，不能关闭本页 C 入口门禁。下一项 rk430 使用目标机临时 C11 消费者，链接当前 beta archive，直接调用 start_composition；双路 H264/AAC 与 HEVC 使用原120秒源，start 返回后擦除并释放调用方配置，保留 callback 上下文至外部 release 完成。观察异构 UNKNOWN、实际出流、停止及释放；准备/编译不计运行通过。临时消费者不纳入版本库，完整内容与结果写入本轮记录后清理。
