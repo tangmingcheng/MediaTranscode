@@ -150,6 +150,14 @@ MediaDatagramPacingController::reserve(
                 << " queue_wire_bytes=" << job.queue.wireBytes
                 << " average_queue_residence_ns="
                 << job.queue.averageResidence.nanoseconds();
+        // Report existing owner-thread state without per-packet logs. The observed
+        // time may come from a successful reservation, not a physical submit.
+        if (m_lastSubmittedSequence)
+            message << " previous_submitted_sequence=" << *m_lastSubmittedSequence;
+        if (m_lastObservedTime)
+            message << " last_observed_ns=" << m_lastObservedTime->nanoseconds();
+        if (m_theoreticalArrivalTime)
+            message << " theoretical_arrival_ns=" << m_theoreticalArrivalTime->nanoseconds();
         return Result::failure(::media::ErrorInfo::ioFailure(message.str()));
     }
     if (m_telemetry.reservedDatagrams ==
