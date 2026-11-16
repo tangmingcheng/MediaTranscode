@@ -918,3 +918,7 @@ rk430直接C合屏入口使用原120秒双路H264/AAC与HEVC→MPEG-TS/UDP HEVC1
 ## 2026-11-16：Windows最新共享源码回归
 
 Release全核心clean-first all-target重建exit0；r436原四路H264/H264/H264+AAC/HEVC→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR、AAC192kbps，四格→全失源黑屏→所选AV源完整120秒generation2重入→再次全黑，均经VLC原生快照检查。五次源均完整3600帧exit0，CLI caller_stop/exit0、workers/errors0、账本322785预约释放平衡归零。17项临时产物与七PID清理完成。本机FFmpeg未修改，未运行local CLI。该证据关闭本次共享修复的上述Windows回归，不关闭rk427偶发时限、内容级A/V、线端交付与整体最终审查。
+
+## 2026-11-16：r437内容时序诊断收尾
+
+原四源120秒、HEVC720p30/8Mbps CBR与AAC192kbps输出旁路抓包恢复完整TS，输出视频4338帧解码0错误。音频四窗口相关系数>0.9988；视频源存在248帧重复内容，官方signature的候选区间不足以唯一确定时差。30/60/90秒最佳像素候选与音频相差约15.692ms，仅为采样证据，不关闭startup/p95/p99/长稳门禁。CLI caller_stop/exit0、errors0、内部账本归零；输入HEVC启动警告完整记录。30临时文件清理、7PID无残留。详见docs/realtime-composition-r437-content-validation.md。继续rk427时限故障证据补全与可靠性工作，本机FFmpeg不修改。

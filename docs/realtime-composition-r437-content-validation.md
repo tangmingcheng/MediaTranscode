@@ -1,6 +1,6 @@
 # r437：原始输出内容时序取证
 
-状态：真实流已结束，正在核对离线内容时间轴；同步验收尚未通过。复用r436已构建Windows产物与四路原120秒源，输出1280×720/30fps HEVC8Mbps CBR、AAC192kbps；本机FFmpeg不变。真实链路仍FFmpeg→realtime CLI→VLC，dumpcap仅旁路抓取Loopback接口udp dst port62024；不增加FFmpeg实时监控，不修改源参数。
+状态：实流与离线诊断结束；取得有限内容匹配证据，完整同步验收未通过。复用r436已构建Windows产物与四路原120秒源，输出1280×720/30fps HEVC8Mbps CBR、AAC192kbps；本机FFmpeg不变。真实链路仍FFmpeg→realtime CLI→VLC，dumpcap仅旁路抓取Loopback接口udp dst port62024；不增加FFmpeg实时监控，不修改源参数。
 
 目的为测量所选source2内容相对原源的音频与视频位移，不以内部相位差当作内容同步。输出UDP载荷离线按捕获顺序恢复TS，保留原PES PTS/DTS，避免VLC重封装。须核抓包丢失、TS连续计数、解码错误和时间戳；无法证明时间轴完整时不得推导精确同步。
 
@@ -35,8 +35,64 @@ $p=Start-Process -FilePath 'D:/VideoLAN/VLC/vlc.exe' -ArgumentList '--no-one-ins
 
 音频统一解码为44100Hz单声道float32，使用SciPy correlate(valid,fft)并以两个窗口L2范数归一化。输出10/30/60/90秒起各2秒窗口匹配原源16.984308390/36.984308390/66.984308390/96.984308390秒，相关系数分别0.998894335/0.999075250/0.998846216/0.999561534。110秒窗口RMS为0，不纳入匹配。输出音频6227帧、首PTS0，按nb_samples检查相邻PTS最大舍入差约8.955微秒；原源5168帧、首PTS0，最大舍入差约0.955微秒。
 
-视频签名与音频匹配当前推导出的偏移不一致：视频点为-15.266666秒，音频为-6.984308390秒。必须继续核验选中格、匹配点和时间基，不能将差异直接定性为引擎缺陷，也不能声明同步通过。保留本轮临时文件用于这一未完成分析，分析完成后按清单清理。
+视频签名与音频匹配当前推导出的偏移不一致：视频点为-15.266666秒，音频为-6.984308390秒。必须继续核验选中格、匹配点和时间基，不能将差异直接定性为引擎缺陷，也不能声明同步通过。后续诊断见下文；该歧义已记录，分析产物已清理。
 
 原始stderr还存在输入range由unknown变tv提示，以及HEVC启动阶段Could not find ref with POC、Error constructing the frame RPS和Skipping invalid undecodable NALU；不得以最终errors=0掩盖这些输入解码警告。
 
 进一步排查：两视频输入统一settb=1/90000后signature仍得到同一匹配点；debug给出参考帧865/输出帧407、ratio=1、offset=-8、3142帧。几何planner按index%2和index/2布局，source2确为左下格。独立SSIM比较参考帧865与输出帧407左下格得All=0.976970；此命令有timebase差异提示，仍需统一时间基复验，不作为最终通过证据。以上均为离线分析，未修改产品和依赖。
+
+## 离线诊断结论与边界
+
+160×90灰度像素均方差全源帧搜索（仅离线诊断，实际链路仍1280×720/30fps）发现重复内容：输出帧900/1800/2700的最佳参考帧均为输出帧+210，即视频内容偏移约7秒；MSE分别1.546736/1.563333/1.551319。输出帧300存在多个相近候选：1254、2990、262、2246、510；这些位置相隔248帧的整数倍。视频签名给出的458帧差恰为210+248。因此其15.266667秒结果存在重复内容匹配歧义，不能据此推断8.282秒音画失同步。
+
+输出60秒起2秒的官方SSIM比较：参考67秒区间All=0.975074，参考75.266667秒区间All=0.971467，均统一settb=1/90000、重置片段PTS。此结果也不能消除全部重复内容歧义。按30/60/90秒最佳视频候选计算，视频+7秒与音频+6.984308390秒相差15.691610毫秒；这是三个采样点的候选内容偏差，不能当作startup、p95/p99或长时漂移门禁通过。不存在已确证的8秒失同步根因，禁止据此修改生产核心或Windows FFmpeg。
+
+视频诊断实际使用Python subprocess调用两条FFmpeg命令（stdout直接作为内存rawvideo，不写新媒体文件）：
+~~~text
+D:/mabs/local64/bin-video/ffmpeg.exe -v error -nostdin -i D:/Code/MyCode/MediaTranscode/out/acceptance/test-continuous-120s.mp4 -an -vf scale=160:90 -pix_fmt gray -f rawvideo pipe:1
+D:/mabs/local64/bin-video/ffmpeg.exe -v error -nostdin -i D:/Code/MyCode/MediaTranscode/out/acceptance/composition-r437-output.ts -an -vf crop=640:360:0:360,scale=160:90 -pix_fmt gray -f rawvideo pipe:1
+~~~
+两者exit0且stderr空；numpy uint8解码reshape(-1,14400)，参考转float32，对输出索引300/900/1800/2700分别计算mean((reference-output_frame)**2,axis=1)，argsort取前5，未设置通过阈值。官方signature debug同时确认参考3600帧、输出4338帧均0 decode errors。
+
+音频解码实际命令分别为：
+~~~text
+D:/mabs/local64/bin-video/ffmpeg.exe -hide_banner -nostdin -y -i D:/Code/MyCode/MediaTranscode/out/acceptance/composition-r437-output.ts -map 0:a:0 -vn -ac 1 -c:a pcm_f32le -f f32le D:/Code/MyCode/MediaTranscode/out/acceptance/composition-r437-output.f32
+D:/mabs/local64/bin-video/ffmpeg.exe -hide_banner -nostdin -y -i D:/Code/MyCode/MediaTranscode/out/acceptance/test-continuous-120s.mp4 -map 0:a:0 -vn -ac 1 -c:a pcm_f32le -f f32le D:/Code/MyCode/MediaTranscode/out/acceptance/composition-r437-reference.f32
+~~~
+两者exit0。numpy.fromfile(dtype='<f4')，fs=44100、n=88200；输出t=10/30/60/90/110秒窗口与完整参考做scipy.signal.correlate(reference,window,mode='valid',method='fft')，除以参考滑动窗口和所选窗口L2范数，argmax定位。仅非零能量窗口有效。音频时间戳核验使用ffprobe -v error -select_streams a:0 -show_frames -show_entries frame=best_effort_timestamp_time,nb_samples -of json，逐相邻帧比较PTS差与nb_samples/44100。
+
+末次内部av_drift_trace：generation1、sequence4707、raw_phase_ns11337、filtered_phase_ns11339、frequency/integral/stretch ppm均0；这不是内容级同步测量。原始输入stderr计数：Could not find ref with POC 45次、Error constructing the frame RPS 45次、Skipping invalid undecodable NALU 45次、Changing video frame properties 8次，均保留为验收边界。实际输出解码0错误不能删除输入警告事实。
+
+本轮仅Windows，无新增远程测试产物。精确PID37000/37972/13468/38588/38744/604/11520复查均不存在。下面是分析结束后的逐项清理清单，保留原120秒源和正式构建产物：
+- composition-r437-capture.log
+- composition-r437-capture.out
+- composition-r437-cli-error.log
+- composition-r437-cli.log
+- composition-r437-extract.log
+- composition-r437-native-2026-11-16-14h21m25s198.png
+- composition-r437-output-audio.log
+- composition-r437-output.f32
+- composition-r437-output.pcapng
+- composition-r437-output.ts
+- composition-r437-reference-audio.log
+- composition-r437-reference.f32
+- composition-r437-signature-debug.log
+- composition-r437-signature-reordered.log
+- composition-r437-signature-timebase.log
+- composition-r437-signature.log
+- composition-r437-signature.out
+- composition-r437-source0.log
+- composition-r437-source0.out
+- composition-r437-source1.log
+- composition-r437-source1.out
+- composition-r437-source2.log
+- composition-r437-source2.out
+- composition-r437-source3.log
+- composition-r437-source3.out
+- composition-r437-ssim-67.log
+- composition-r437-ssim-75.266667.log
+- composition-r437-ssim-anchor.log
+- composition-r437-ssim-audiooffset.log
+- composition-r437-vlc.log
+
+清理执行结果：上述30项逐文件删除成功，composition-r437-*残留0，原test-continuous-120s.mp4存在。本轮不标记完整同步门禁通过。
