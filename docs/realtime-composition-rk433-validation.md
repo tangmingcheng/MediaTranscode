@@ -73,3 +73,7 @@ RUN_FINISHED=1
 ```
 
 清理清单：旧头、realtime_beta_c.c、consumer.o、consumer、build-commands.txt、run.sh及本轮基础日志；归档后精确删除。远端18项文件已精确删除，两个空头目录移除，rk433目录为空、四PID无残留；会话SDP临时路径/tmp/media-transcode-beta-oWu00a已由release删除，核验不存在。
+
+## 独立源码复核
+
+对照038f069c基线，RunController中无输入活跃且无输出进展触发ProgressTimeout、Beta将运行阶段失败映射RUNTIME_FAILURE的行为均已存在，当前没有ABI破坏证据。SOURCE_LOSS枚举当前没有Beta生产路径；缺少权威EOF/BYE/失源分类证据时不能将所有进度超时改为SOURCE_LOSS。合屏复用同一watchdog，但全失源黑屏/静音持续输出会维持进展，因此单源超时不能否定已观察的合屏全失源持续输出。自然终态仍保留失败，旧头实流兼容和失败分类分开评价。
