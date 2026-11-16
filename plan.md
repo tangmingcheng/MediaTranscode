@@ -926,3 +926,7 @@ Release全核心clean-first all-target重建exit0；r436原四路H264/H264/H264+
 ## 2026-11-16：rk438规划来源诊断原规格复验
 
 e127a744有界provenance双独立源码PASS并RKMPP8核增量44项构建成功后，四路H264/H264/H264+AAC/HEVC RTP→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR、AAC192kbps实流完成。四源完整120秒exit0，VLC原生四格及全失源黑屏确认；caller_stop/exit0、worker/errors0、payload预约释放211778平衡归零。最坏成功包日志完整关联本次planning快照、publication、materialized和sender序号，无重复key。rk427未复现但未关闭，RTP leading SR实流和Windows共享回归仍待验证；输入MPP/HEVC启动告警、pressure2、delivery not_proven均保留。远端18项/本机6项临时产物及全部PID清理完成。详见docs/realtime-composition-rk438-validation.md。
+
+## 2026-11-16：rk439 MPEG-TS/RTP诊断复验
+
+四路原120秒H264/H264/H264+AAC/HEVC RTP→HEVC1280×720/30fps/8Mbps CBR、AAC192kbps MPEG-TS/RTP完成；全部源exit0，VLC原生四格与全黑确认，CLI caller_stop/exit0、errors0、payload215159预约释放平衡。媒体106313/控制38数据报已提交，新增publication身份及物化时间校验通过、字段无重复。pressure2和delivery not_proven保留，rk427未复现不等于修复。19远端/6本机临时文件和全部PID清理。详见docs/realtime-composition-rk439-validation.md。

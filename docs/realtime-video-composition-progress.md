@@ -1,4 +1,15 @@
 # 固定实时视频合屏实施记录
+
+## 2026-11-16：最新状态（下文旧阶段结论保留为历史）
+
+合屏核心、独立C入口已实现，整体目标仍未完成。RKMPP 2/3/4路异构、黑屏与重入见rk422–425；音频近静音与恢复见rk426；C配置释放、负例、ABI、旧头实流及启动回调边界见rk430–434。Windows四源/重入回归见r436。不要用下文9月FAIL42推断当前仍未实现。
+
+e127a744新增固定大小planning provenance，经双独立源码PASS、RKMPP8核增量构建；rk438 TS/UDP、rk439 TS/RTP四源原规格实流完成，均VLC四格→全黑、caller-stop退出0、payload账本归零。RTP媒体及控制实际提交，产物全部按清单清理。本机FFmpeg不修改；本次共享源码Windows Release回归正在推进。
+
+未关闭：rk427真实发送期限失败因果及修复；原计划输出编码/RC/协议矩阵确切缺格；内容级A/V与持续运行/线端证据；公开C契约的有限残项；最终双独立整体审查及质量评分更新。r437为重复画面匹配歧义，不能误称已证明AV失同步。动态布局、动态输入、混音和跨源拍摄时刻同步不属于本次目标。
+
+最新逐轮证据与进度以[plan.md](../plan.md)、[rk438](realtime-composition-rk438-validation.md)、[rk439](realtime-composition-rk439-validation.md)为准；具体限制保留在对应记录中。
+
 ## 2026-09-28：输出音频FIFO容量
 
 源校正块上界由原校正planner形成，FIFO纯容量只依赖prepared格式和输入块事实；合屏builder核验aggregate固定块合同。6源码双独立阶段PASS；首次Release超时清理后重试全量成功。r36原规格120秒源exit0、VLC有画面，CLI仍无进展自然exit1/4对象，无新增FIFO错误；5项临时文件和进程清理完成。完整合屏仍未完成，见[FIFO记录](realtime-video-composition-audio-fifo.md)。
