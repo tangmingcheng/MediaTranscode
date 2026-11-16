@@ -2,26 +2,26 @@
 
 ## 当前独立阶段评分：2026-11-16，84/100，完整交付门禁未通过
 
-审查基线：生产源码 ce71265d、归档 HEAD 38469e5f。沿用本文件2026-10-04的六维合屏评分体系和权重；这是当前合屏范围的独立阶段评分，不替代项目全域审计或最终双独立整体审查。75→84反映已落实的多源、双平台及C入口证据，不表示生产就绪。r449 Windows回归运行中，尚未计入结果。
+审查基线：生产源码 ce71265d、归档 HEAD 4b4fe970（含Windows d8b34dc5及RKMPP活动输出回归）。沿用本文件2026-10-04的六维合屏评分体系和权重；这是当前合屏范围的独立阶段评分，不替代项目全域审计；当前冻结合屏源码已获两位未参与实现者整体SOURCE PASS，源码结论不替代剩余实证。75→84反映已落实的多源、双平台及C入口证据，不表示生产就绪。r449与rk450最新共享版本活动输出及调用方停止已通过有限回归；本次更新证据，保留84分，不据单轮成功追加评分。
 
 | 维度 | 满分 | 当前得分 | 当前证据及扣分边界 |
 |---|---:|---:|---|
-| DAG复用与多源绑定 | 20 | 19 | 2/3/4源异构、固定网格、指定音源与独立C入口已接通；NVENC/RKMPP复用进度状态、registry和scheduler，后端仅能力adapter不同。最终全范围交叉审查未完成。 |
+| DAG复用与多源绑定 | 20 | 19 | 2/3/4源异构、固定网格、指定音源与独立C入口已接通；NVENC/RKMPP复用进度状态、registry和scheduler，后端仅能力adapter不同。当前冻结合屏范围已获双独立整体SOURCE PASS，尚不等于完整实证交付。 |
 | 多源时钟与合成来源 | 20 | 17 | 同canonical时间轴、逐源代次、连续输出及完整AU进度合同已实现；rk445实际授权/首AU/成功commit后水位放行成立。内部漂移不证明内容音画同步，r437重复画面匹配歧义仍未闭合。 |
-| 逐源断流和恢复 | 20 | 18 | rk422–425及rk445覆盖黑格、全黑、同CLI重入；rk426有近静音/恢复，r443有Windows完整重入。rk448证明RUNNING早停及外部release，但encoded0，不代替最新版本已激活输出收尾。 |
+| 逐源断流和恢复 | 20 | 18 | rk422–425及rk445覆盖黑格、全黑、同CLI重入；rk426有近静音/恢复，r443有Windows完整重入。rk448证明RUNNING早停及外部release，encoded0边界保留；r449/rk450补齐最新版本活动输出正常停止，rk450本轮无重入。 |
 | 线程、背压和资源边界 | 20 | 14 | 同owner有序水位、有限registry、取消先发布停止状态、未激活mux准备取消均经源码双审；rk445账本353683平衡归零。rk427期限故障仍开放，压力6保留；普通owner分配并非全进程硬预算，有限RSS采样不是长稳证明。 |
-| 双平台合成能力证据 | 10 | 8 | Windows r436/r443与RKMPP rk422–445已有真实合屏；rk445实际RKMPP配置和水位正例成立。ce71265d之后共享Windows回归及已激活停止仍待完成；本机FFmpeg保持不改。 |
-| 合屏观测与真实验收 | 10 | 8 | 命令/PID/警告/失败/清理可追溯；rk430–434有C配置寿命、负例、目标ABI及旧头实流边界，rk446预算不足、rk448回调早停补齐。当前内容A/V、线端交付及最终整体审查尚缺；不以单次未复现关闭历史故障。 |
+| 双平台合成能力证据 | 10 | 8 | Windows r436/r443与RKMPP rk422–445已有真实合屏；rk445实际RKMPP配置和水位正例成立。ce71265d的r449四源及选中源完整重入、rk450四源120秒与活动输出停止已通过；本机FFmpeg保持不改。 |
+| 合屏观测与真实验收 | 10 | 8 | 命令/PID/警告/失败/清理可追溯；rk430–434有C配置寿命、负例、目标ABI及旧头实流边界，rk446预算不足、rk448回调早停补齐。当前内容A/V、线端交付与持续运行可靠性仍缺充分实证；不以单次未复现关闭历史故障。 |
 | **合计** | **100** | **84** | **核心合屏及有限生命周期已有实流证据；完整交付仍未通过。** |
 
 ### 收尾风险与必要门禁
 
-1. 完成最新共享源码Windows原规格realtime回归及已激活输出停止；r449未取得结果，不能提前记PASS。rk448早停只关闭精准C回调边界，不证明出流、ledger或全部内存归零。
-2. 收敛rk427原期限失败并补持续运行可靠性；保留rk445压力和HEVC解码警告，不能由errors0抹去。接收端内容A/V与线端交付仍需证据；r437匹配多解不是已证实产品故障。
+1. 最新共享源码Windows r449与RKMPP rk450原规格realtime活动输出/停止已完成：caller_stop/exit0，账本分别329191和208140平衡归零。r449含完整选中源重入，rk450未做本轮重入；rk448早停本身仍不证明出流或ledger。
+2. 收敛rk427原期限失败并补持续运行可靠性；保留rk445/rk450压力6/5及HEVC解码警告，不能由errors0抹去。接收端内容A/V与线端交付仍需证据；r437匹配多解不是已证实产品故障。
 3. 维持全部失源持续黑场/静音；raw RTP BYE不是永久EOF。内部全部sealed终止逻辑不等于公开RTP入口已有可信永久结束事实，不新增超时自动退出规则。
-4. 依赖能力受实际版本、配置和交付hash约束；RKMPP隔离补丁有回退，本机FFmpeg不修改。最终冻结后仍需双独立整体审查；不扩充H264/HEVC×CBR/VBR×协议的全排列门禁。
+4. 依赖能力受实际版本、配置和交付hash约束；RKMPP隔离补丁有回退，本机FFmpeg不修改。当前冻结源码双独立整体SOURCE PASS已取得；后续功能修复仍须重新双审；不扩充H264/HEVC×CBR/VBR×协议的全排列门禁。
 
-依据：[当前矩阵](docs/realtime-composition-current-acceptance-matrix.md)、[共享进度合同](docs/realtime-composition-encoded-progress-plan.md)、[rk445](docs/realtime-composition-rk445-validation.md)、[r443](docs/realtime-composition-r443-windows-validation.md)、[C门禁](docs/realtime-composition-c-api-current-gates.md)、[rk448](docs/realtime-composition-rk448-c-callback.md)。本次独立审查复用已逐项完成的源码审核与最新归档复核，没有重新运行已清理的测试。
+依据：[当前矩阵](docs/realtime-composition-current-acceptance-matrix.md)、[共享进度合同](docs/realtime-composition-encoded-progress-plan.md)、[rk445](docs/realtime-composition-rk445-validation.md)、[r443](docs/realtime-composition-r443-windows-validation.md)、[C门禁](docs/realtime-composition-c-api-current-gates.md)、[rk448](docs/realtime-composition-rk448-c-callback.md)、[r449](docs/realtime-composition-r449-windows-validation.md)、[rk450](docs/realtime-composition-rk450-validation.md)。本次独立审查复用已逐项完成的源码审核与最新归档复核，没有重新运行已清理的测试。
 
 ## 历史评分与当时证据（以下不代表当前缺项）
 
