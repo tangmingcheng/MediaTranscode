@@ -954,3 +954,7 @@ prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递c
 ## 2026-11-16：r443 Windows四源H264 VBR/RTP完整重入回归
 
 9cac2eb0原四源120秒→H2641280×720/30fps VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP，选中source2再完整120秒重入，全部源exit0。四格/全黑/左下恢复/再全黑VLC原生观察完成，CLI caller_stop/exit0、errors/pressure/deadline_misses0，payload348326平衡归零。两独立源码审查及全量Release成功后本轮功能回归通过；无专门水位放行计数，长期可靠性/内容A-V/RKMPP进度授权未完成。18临时项及七PID清理，详见docs/realtime-composition-r443-windows-validation.md。
+
+## 2026-11-16：rk445 完成合同实际接入验证
+
+50993608经双独立SOURCE PASS，目标8核增量构建exit0。四路原120秒H264/H264/H264+AAC/HEVC RTP→H2641280×720/30fps VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP，选中源完整120秒重入，VLC原生四格/全黑/左下恢复/再全黑确认。RKMPP实际只读配置授权、首完整AU匹配、成功水位放行正例成立；CLI caller_stop/exit0、errors0，payload353683平衡归零，sender期限失败0。压力6、HEVC解码警告及delivery not_proven保留；22远端/8本机临时文件与全部PID清理。本机FFmpeg未改；后续当前共享Windows回归、内容A/V、rk427、C残项和最终双审仍待完成。

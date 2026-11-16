@@ -97,3 +97,7 @@ RKMPP读取同一post-SET GET_CFG事务的readonly `split_state_known`、`effect
 
 定长增长涉及完成合同的backend variant、registry内encoderInputPts、两个首事件标志及pending commit标志；registry依旧按EntryValue真实sizeof规划，没有复制媒体或records。最终ABI字节数待构建核查，既有普通new/delete owner边界不扩大为全进程硬预算承诺。
 2026-11-16：两位未参与实现的审查者均明确 SOURCE PASS，覆盖 typed lineage、同事务只读事实、正常 FIFO/异常拒绝、实际 PTS/DTS 与提交输入匹配、生命周期及成功提交后首次水位诊断；不等于实际 opened 授权或实流通过。rk445 同步包 SHA256 4c8cab3edeaf01e36dcc39dd958cbeb01d96e90a51dc951d38893a425ca4a29e，35 个源文件逐项匹配目标 e127a744 基线后应用；目标 out/rollback/rk445 保存源码、旧 CLI 和 manifest。旧 SCP PID33784 身份核对后清理，重新传输 exit0。目标现有 Release 目录以 8 核增量构建，PID2006489，结果待核验。本机 FFmpeg 保持不变；用户明确其限制来自已有 Windows 正常验证，不能将目标适配问题归因于本机 FFmpeg。
+
+目标rk445增量构建508项exit0，CLI SHA256 0d95cbf3a32d82d51eb602ed7f5548143677af4eb2bf6cc689c37e4d84293222；ldd实际选择已校验隔离FFmpeg/MPP。原规格四源及选中源完整重入完成，实际prepared授权、首AU匹配、成功水位放行均记录，caller_stop/exit0、errors0、ledger353683归零；压力6及解码警告保留。详见realtime-composition-rk445-validation.md。当前共享Windows复验及整体剩余门禁尚未完成。
+
+构建日志原始告警汇总：AVCodec::sample_fmts deprecated 15、supported_samplerates deprecated 6、pix_fmts deprecated 12；error行0。rk445构建/传输临时文件清单为目标out/dependency-work/rk445-source.tar、rk445-build.log、rk445-build.exit及本机out/dependency-work/rk445-source.tar；结果已记录后按清单删除，源码和回退保留。
