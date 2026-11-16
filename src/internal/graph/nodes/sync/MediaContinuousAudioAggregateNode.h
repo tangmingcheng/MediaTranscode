@@ -42,6 +42,7 @@ private:
     ::media::Result<std::int64_t> audioOffset(const MediaAudioPlaybackOrigin& source) const;
     void clear() noexcept;
     void logSummary(const char* reason) noexcept;
+    void logSourcePurge(const MediaAvGenerationPurge& request) const noexcept;
 
     MediaContinuousAudioAggregateDependencies m_dependencies;
     std::shared_ptr<MediaOwnerThreadGenerationPurge> m_purge;

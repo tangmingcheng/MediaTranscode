@@ -89,6 +89,7 @@ void MediaContinuousAudioAggregateNode::abort(MediaGraphExecutionContext& contex
 {
     const auto request = m_purge->pending();
     if (!request) return ::media::Status::success();
+    logSourcePurge(*request);
     if (m_pending && m_pending->sourceGenerations[plan().audioSource] != 0 &&
         m_pending->sourceGenerations[plan().audioSource] <= request->oldGeneration) {
         cancelPendingOutputTransfer();

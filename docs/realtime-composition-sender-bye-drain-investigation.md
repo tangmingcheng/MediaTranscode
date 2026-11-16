@@ -46,3 +46,11 @@ rk456 输入 AAC 共 5168 AU；aggregate 最终 `real_samples=5226496`，相当�
 - 各 owner purge 完成及残留计数；不逐帧打印、不复制媒体、不改变调度或失败结果。
 
 这些证据应闭合输入 AU → 绑定 → 解码 → aggregate 真实提交的尾部差额，再实施已有授权范围内的最小修复。源码方向可进入设计审查；固定时长推迟 purge 不成立。当前仍不能宣称根因完全证明或修复完成。
+
+## 本轮实施：只增加 purge 边界取证
+
+在 continuous audio aggregate owner 执行 source purge、取消 pending 和清除候选之前，输出一条关联 source/generation/transition 的摘要。记录实际候选数量、owner 已有样本账本、同旧代候选样本 sum 及原始/映射输出区间 min/max 包络、下一输出样本、pending 真实贡献 sum/包络与已提交真实总量。包络不声称连续；pending 与候选可能重叠，不相加作为丢失总数。映射复用 audioOffset；算术或映射不可用标记 incomplete，日志异常完全隔离，不影响核心返回值。无持久计数、队列、媒体复制或新增公共参数；该记录不覆盖输入 channel、解码器或其他 owner 中的媒体。
+
+冻结后独立源码交叉审查：pacing_diagnostic_review 与 remaining_acceptance_audit 均最终 SOURCE PASS。确认日志关闭时入口直接返回、owner线程取证、映射/溢出与异常隔离、不覆盖channel/解码残留、包络非连续、pending可能重叠；诊断开销不是零。该结论不代表BYE根因已证明或修复通过。目标原CLI及两原文件已保留out/rollback/rk457；本机FFmpeg及目标依赖均不变。
+
+RKMPP原构建目录8核增量构建成功，8项、exit0；包含新诊断编译单元。尚未实流取证，不宣称修复尾部。
