@@ -47,3 +47,9 @@ rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用
 ## rk433 旧消费者运行边界
 
 旧头038f069c编译原realtime_beta_c.c并链接当前库，完整120秒H264720p30→MPEG-TS/RTP HEVC720p30/8Mbps CBR实际出图，VLC原生快照确认。但源结束约10秒后controller报告ProgressTimeout，消费者FAILED/RUNTIME_FAILURE、exit1；不是SOURCE_LOSS或正常完成，不能记整项通过。旧头调用/真实输出兼容已观察，自然终态行为须独立审查，不能仅由此推断ABI破坏。所有临时文件和精确PID均清理，详见rk433记录。
+
+## rk434 启动回调边界
+
+两个无媒体源补充会话实际验证STARTING回调内request_stop，以及回调内release防误用拒绝后request_stop。两次请求返回OK，后者局部句柄保持不变；外部release后句柄为空。两次均观察当前既有准备前取消语义：FAILED、REQUESTED_STOP，恰一CANCELLED/STOP错误事件，未编码、无worker错误。消费者检查进程均exit0只表示该精确边界符合预期，不代表媒体会话正常COMPLETED。
+
+合屏固定输出不支持以remove_output触发回调；该假设方案已在执行前撤销，未改生产代码。运行期间回调、准备压力及完整可靠性门禁仍未闭合，详见rk434记录。
