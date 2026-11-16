@@ -922,3 +922,7 @@ Release全核心clean-first all-target重建exit0；r436原四路H264/H264/H264+
 ## 2026-11-16：r437内容时序诊断收尾
 
 原四源120秒、HEVC720p30/8Mbps CBR与AAC192kbps输出旁路抓包恢复完整TS，输出视频4338帧解码0错误。音频四窗口相关系数>0.9988；视频源存在248帧重复内容，官方signature的候选区间不足以唯一确定时差。30/60/90秒最佳像素候选与音频相差约15.692ms，仅为采样证据，不关闭startup/p95/p99/长稳门禁。CLI caller_stop/exit0、errors0、内部账本归零；输入HEVC启动警告完整记录。30临时文件清理、7PID无残留。详见docs/realtime-composition-r437-content-validation.md。继续rk427时限故障证据补全与可靠性工作，本机FFmpeg不修改。
+
+## 2026-11-16：rk438规划来源诊断原规格复验
+
+e127a744有界provenance双独立源码PASS并RKMPP8核增量44项构建成功后，四路H264/H264/H264+AAC/HEVC RTP→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR、AAC192kbps实流完成。四源完整120秒exit0，VLC原生四格及全失源黑屏确认；caller_stop/exit0、worker/errors0、payload预约释放211778平衡归零。最坏成功包日志完整关联本次planning快照、publication、materialized和sender序号，无重复key。rk427未复现但未关闭，RTP leading SR实流和Windows共享回归仍待验证；输入MPP/HEVC启动告警、pressure2、delivery not_proven均保留。远端18项/本机6项临时产物及全部PID清理完成。详见docs/realtime-composition-rk438-validation.md。
