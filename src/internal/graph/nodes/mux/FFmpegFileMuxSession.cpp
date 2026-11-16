@@ -189,10 +189,29 @@ bool FFmpegFileMuxSession::bindingsReady() const noexcept
     return writePendingPacketsIfReady();
 }
 
-::media::Status FFmpegFileMuxSession::finish(MediaGraphExecutionContext&)
+::media::Status FFmpegFileMuxSession::finish(MediaGraphExecutionContext&,
+    MediaMuxCompletionIntent intent)
 {
     if (m_terminalFailure) return terminalStatus();
+    if (m_preparationCancelled) return intent == MediaMuxCompletionIntent::RequestedStop
+        ? ::media::Status::success()
+        : preserve(::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "FFmpeg mux EOF cannot finish cancelled preparation")));
     if (m_finished) return ::media::Status::success();
+    if (intent == MediaMuxCompletionIntent::RequestedStop && !m_headerWritten) {
+        // Close only the IO this session owns, and retain a real close failure.
+        // avio_closep clears pb, so the RAII deleter cannot close it twice.
+        int closed = 0;
+        if (m_outputContextOwner && m_outputContextOwner->oformat &&
+            !(m_outputContextOwner->oformat->flags & AVFMT_NOFILE) && m_outputContextOwner->pb)
+            closed = avio_closep(&m_outputContextOwner->pb);
+        release();
+        m_preparationCancelled = true;
+        m_finished = true;
+        if (closed < 0) return preserve(FFmpegGraphError::statusFromCode(
+            closed, "avio_closep(cancel mux preparation)"));
+        return ::media::Status::success();
+    }
     if (!m_outputContext) {
         return preserve(::media::Status::failure(
             ::media::ErrorInfo::notInitialized(

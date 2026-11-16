@@ -63,6 +63,8 @@ ProjectMpegTsGenerationSessionState::
 void ProjectMpegTsGenerationSessionState::
     resetForGenerationPurge() noexcept
 {
+    // Requested-stop cancellation is a terminal owner state, not a new epoch.
+    if (state == State::CancelledBeforeActivation) return;
     if (session) session->abort();
     session.reset();
     outputPlan.reset();
@@ -829,12 +831,36 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
 }
 
 ::media::Status ProjectMpegTsMuxSessionAdapter::finish(
-    MediaGraphExecutionContext& context)
+    MediaGraphExecutionContext& context, MediaMuxCompletionIntent intent)
 {
     std::optional<MediaProtocolOutputSessionKey> plannedSession;
+    std::optional<::media::ErrorInfo> preparationFailure;
+    bool cancelPreparation = false;
     {
         auto mutation = m_generationState->reserveSessionMutation();
+        if (m_failure) return ::media::Status::failure(*m_failure);
+        if (m_state == State::Poisoned) {
+            preparationFailure = invalid("Poisoned project MPEG-TS session has no recorded failure");
+        } else if (m_state == State::CancelledBeforeActivation) {
+            if (intent == MediaMuxCompletionIntent::RequestedStop) return ::media::Status::success();
+            preparationFailure = invalid("Project MPEG-TS EOF cannot finish cancelled preparation");
+        } else if (intent == MediaMuxCompletionIntent::RequestedStop && m_state == State::Acquiring) {
+            // A formal generation purge aborts the retired mux and clears all
+            // emission state before returning to this dormant preparation state.
+            if (m_session || m_timelineState != TimelineState::Dormant ||
+                m_nextTransportDeadline || m_latestAcceptedEmission) {
+                preparationFailure = invalid("Project MPEG-TS preparation retains active emission state");
+            } else {
+                m_state = State::CancelledBeforeActivation;
+                cancelPreparation = true;
+            }
+        }
         plannedSession = m_plannedSession;
+    }
+    if (preparationFailure) return fail(std::move(*preparationFailure));
+    if (cancelPreparation) {
+        auto closed = closeOwnedResources();
+        return closed ? closed : fail(closed.error());
     }
     if (!plannedSession) {
         return fail(::media::ErrorInfo::notInitialized(
@@ -902,7 +928,7 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
         if (!m_failure) m_failure = std::move(error);
         m_state = State::Poisoned;
     }
-    closeOwnedResources();
+    (void)closeOwnedResources();
     return terminalStatus();
 }
 
@@ -917,27 +943,27 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
     return ::media::Status::failure(*m_failure);
 }
 
-void ProjectMpegTsMuxSessionAdapter::closeOwnedResources() noexcept
+::media::Status ProjectMpegTsMuxSessionAdapter::closeOwnedResources() noexcept
 {
     std::unique_ptr<MediaTsMuxSession> session;
     std::unique_ptr<MediaOutputByteSink> sink;
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        if (m_resourcesClosed) return;
+        if (m_resourcesClosed) return ::media::Status::success();
         m_resourcesClosed = true;
         session = std::move(m_session);
         sink = std::move(m_sink);
     }
     if (session) session->abort();
-    if (sink) (void)sink->close();
+    return sink ? sink->close() : ::media::Status::success();
 }
 
 void ProjectMpegTsMuxSessionAdapter::abort() noexcept
 {
-    closeOwnedResources();
+    (void)closeOwnedResources();
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        if (m_state != State::Finished && !m_failure) {
+        if (m_state != State::Finished && m_state != State::CancelledBeforeActivation && !m_failure) {
             m_failure = mediaCleanupError(::media::ErrorCode::Cancelled,
                 "project MPEG-TS mux session aborted", 0);
             m_state = State::Poisoned;

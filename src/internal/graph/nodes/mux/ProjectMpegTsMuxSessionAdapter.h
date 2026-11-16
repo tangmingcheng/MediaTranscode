@@ -35,7 +35,8 @@ private:
         Acquiring,
         Active,
         Finished,
-        Poisoned
+        Poisoned,
+        CancelledBeforeActivation
     };
     enum class TimelineState : std::uint8_t {
         Dormant,
@@ -105,7 +106,8 @@ public:
     bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
-    ::media::Status finish(MediaGraphExecutionContext& context) override;
+    ::media::Status finish(MediaGraphExecutionContext& context,
+        MediaMuxCompletionIntent intent) override;
     void abort() noexcept override;
 
 private:
@@ -122,7 +124,7 @@ private:
         const MediaBufferRef& buffer) const;
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status terminalStatus() const;
-    void closeOwnedResources() noexcept;
+    ::media::Status closeOwnedResources() noexcept;
 
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;

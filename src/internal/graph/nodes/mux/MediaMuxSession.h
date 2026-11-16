@@ -10,6 +10,8 @@ namespace media::ffmpeg::graph {
 
 class MediaGraphExecutionContext;
 
+enum class MediaMuxCompletionIntent { EndOfInput, RequestedStop };
+
 struct MediaMuxSessionPollResult final {
     bool progressed;
     std::optional<MediaNodeProcessResult::DeadlineWait> nextWait;
@@ -31,7 +33,10 @@ public:
     virtual bool hasPendingOutput() const noexcept = 0;
     virtual bool bindingsReady() const noexcept = 0;
     virtual ::media::Status flush(MediaGraphExecutionContext& context) = 0;
-    virtual ::media::Status finish(MediaGraphExecutionContext& context) = 0;
+    // EOF requires a complete active mux. Requested stop may cancel only clean
+    // unactivated preparation; neither intent may erase a recorded failure.
+    virtual ::media::Status finish(MediaGraphExecutionContext& context,
+        MediaMuxCompletionIntent intent) = 0;
     virtual void abort() noexcept = 0;
 };
 

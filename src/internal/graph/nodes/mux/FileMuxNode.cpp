@@ -173,8 +173,11 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 ::media::Status FileMuxNode::stop(MediaGraphExecutionContext& context)
 {
     if (m_generationPurge) m_generationPurge->stop();
-    ::media::Status status = ensureSession(context);
-    if (status) status = remember(m_session->finish(context));
+    ::media::Status status = m_terminalFailure
+        ? ::media::Status::failure(*m_terminalFailure) : ::media::Status::success();
+    // Stopping never starts a mux or turns incomplete preparation into EOF.
+    if (status && m_session)
+        status = remember(m_session->finish(context, MediaMuxCompletionIntent::RequestedStop));
     if (status) status = FFmpegNodeRuntime::stop(context);
     releaseSession();
     return status;
@@ -361,7 +364,7 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
             ? processProgress(forwardIfOutputsExist(context, terminalBuffer))
             : processProgress();
     }
-    auto finished = m_session->finish(context);
+    auto finished = m_session->finish(context, MediaMuxCompletionIntent::EndOfInput);
     if (!finished && m_generationPurge && finished.error().code == ::media::ErrorCode::WouldBlock) {
         // The protocol adapter emits WouldBlock only for a revoked finish
         // permit. Keep EOF tracking until the owner-thread purge resets it;
