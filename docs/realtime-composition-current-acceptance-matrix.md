@@ -28,3 +28,7 @@ Windows新共享版本四源H264 VBR/RTP已执行，首轮约93秒因audio等待
 ## rk441更新
 
 H264 VBR目标8/范围8–12Mbps、720p30 MPEG-TS/RTP四源、全黑和选中源完整120秒重入已取得RKMPP功能证据，CLI caller_stop/exit0、errors0。pressure19、系统UDP错误增量及delivery not_proven保留，不判整体可靠性通过。见[记录](realtime-composition-rk441-validation.md)。
+
+## r443共享进度回归
+
+9cac2eb0 Release四源H264720p30 VBR目标8/范围8–12Mbps MPEG-TS/RTP及选中源完整120秒重入功能回归通过，四张VLC原生图确认，CLI caller_stop/exit0，errors/pressure/deadline_misses0、账本348326归零。r440原参数本轮通过，但无专门水位放行计数，不宣称已穷尽原失败所有时序；rk427、内容A/V、长稳及RKMPP进度授权仍未闭合。18临时文件与七PID已清理。见[r443](realtime-composition-r443-windows-validation.md)。

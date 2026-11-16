@@ -950,3 +950,7 @@ e127a744诊断源码按VS2026技能300秒上限全核心clean-first all-target�
 ## 2026-11-16：共享编码进度接线完成待实流
 
 prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递canonical同轴下界，scheduler在成功commit后更新且只严格小于放行，flush/purge重校验后恢复代次能力。两独立审查发现的头声明及跨代授权问题已修复，两者重新SOURCE PASS。Release全核心clean-first all-target构建exit0，观察24cl并行，四产物存在；CLI SHA256 935C4CB53A8CFBE4750B7657D31B06DAF07DA747595F3F05A6D10BB3E1D2D064。尚未实流通过，r440/rk427未关闭，RKMPP后端仍未授权进度；下一轮r443原规格复验。
+
+## 2026-11-16：r443 Windows四源H264 VBR/RTP完整重入回归
+
+9cac2eb0原四源120秒→H2641280×720/30fps VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP，选中source2再完整120秒重入，全部源exit0。四格/全黑/左下恢复/再全黑VLC原生观察完成，CLI caller_stop/exit0、errors/pressure/deadline_misses0，payload348326平衡归零。两独立源码审查及全量Release成功后本轮功能回归通过；无专门水位放行计数，长期可靠性/内容A-V/RKMPP进度授权未完成。18临时项及七PID清理，详见docs/realtime-composition-r443-windows-validation.md。
