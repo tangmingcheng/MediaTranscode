@@ -20,3 +20,7 @@ r437不是已证实AV故障；rk433旧单源ProgressTimeout不是已证实ABI破
 依据：[原计划](realtime-video-composition-plan.md)、[r131/r133历史记录](realtime-video-composition-wiring-runtime.md)、[rk438](realtime-composition-rk438-validation.md)、[rk439](realtime-composition-rk439-validation.md)、[C门禁](realtime-composition-c-api-current-gates.md)、[总进度](../plan.md)。
 
 独立审查确认矩阵范围与证据表述PASS；可信结束要求已按审查补回。
+
+## r440新增失败（2026-11-16）
+
+Windows新共享版本四源H264 VBR/RTP已执行，首轮约93秒因audio等待缺失video144ms导致原deadline过期而exit1；最新回归为FAIL，不覆盖旧r131/r133的有限通过。优先核共享AV scheduler排序证明合同，不能把该失败误记为rk427 sender失败或FFmpeg问题。RKMPP该编码矩阵可继续取得独立平台证据，整体仍未完成。见[r440](realtime-composition-r440-windows-validation.md)。
