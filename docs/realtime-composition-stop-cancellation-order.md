@@ -12,3 +12,5 @@
 
 待双独立源码复审及同规格RUNNING早停、正常完成、真实失败保留验证。该代码Windows/RKMPP共用，修复不能只凭目标机增量构建通过关闭Windows回归门禁。
 2026-11-16：两独立审查者均核最终Idle/Stopped补充分支后SOURCE PASS。同步包SHA256 7b5f6d6fe4dcb5b0f12213ef88e9c4f93ff6e241f286a811769c6375ca2178cd；两源码逐项验证目标50993608基线，out/rollback/rk447保存源码、旧CLI和manifest，再应用。初始候选传输在认证前主动取消exit1，重新打包最终冻结版本后传输exit0；不是构建/媒体失败。目标8核增量构建PID2255207，结果待检查。
+
+8a6f8af1目标增量5项exit0。rk447同一RUNNING回调复验workerErrors0，原credit取消误判不再出现；后续mux未绑定finish报SHUTDOWN_FAILURE，整项仍FAIL。详见realtime-composition-rk447-c-callback.md。Windows旧50993608重建通过不覆盖本停止修复，待最终共享版本复验。

@@ -962,3 +962,7 @@ prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递c
 ## 2026-11-16：rk446 C边界与共享早停竞态
 
 有效正准备预算不足的早期拒绝/ERROR回调读取/外部释放补充边界通过；RUNNING回调请求停止实际失败，首错为graph payload credit waiters were cancelled，workerErrors5、encoded0、consumer exit1。根因调查指向共享生命周期取消资源早于worker停止意图，修复不吞真实错误并同步检查abort/failure supervisor。Windows50993608全量Release构建exit0、24cl并行、四产物齐全，但新的停止修复后仍需重新验证。rk446全部临时项已清理，整体验收未完成。
+
+## 2026-11-16：rk447 早停顺序修复及后续mux边界
+
+8a6f8af1经双独立SOURCE PASS并目标5项增量构建exit0。原RUNNING回调复验workerErrors0，credit取消误判消失；随后尚未绑定的mux错误执行finish，FAILED/SHUTDOWN_FAILURE、encoded0，整项仍FAIL。继续修复共享mux停止生命周期，不吞已激活会话finish错误；Windows最终共享版本回归仍待完成。证据与清理见docs/realtime-composition-rk447-c-callback.md。

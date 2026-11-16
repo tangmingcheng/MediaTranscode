@@ -57,3 +57,7 @@ rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用
 ## rk446：正预算不足通过，RUNNING回调停止失败
 
 正预算1字节实际触发root准备存储准入错误；ERROR回调读取FAILED快照成功，外部release句柄为空，修正临时消费者漏识别精确错误文本后复验exit0。仅关闭早期容量不足边界，非深层部分准备回滚。RUNNING回调内get_snapshot/request_stop均成功，但共享stop先取消credit、后发布worker停止标志，导致Cancelled误计首错，FAILED/REQUESTED_STOP、workerErrors5、encoded0、exit1。该门禁仍FAIL，不能改判据接受失败。详见realtime-composition-rk446-c-boundaries.md；临时产物已清理。
+
+## rk447 早停复验仍FAIL
+
+8a6f8af1修复后RUNNING回调内两API成功，workerErrors0，原credit竞态未复现；但未绑定mux在stop时被要求正常finish，进入FAILED/SHUTDOWN_FAILURE、encoded0、exit1。需区分未激活准备取消与已激活严格收尾，不能以未绑定判成功掩盖原错。详见realtime-composition-rk447-c-callback.md；本轮临时项与进程已清理。
