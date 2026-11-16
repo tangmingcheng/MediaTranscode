@@ -323,7 +323,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             "VideoEncodeNode requires canonical input lineage"));
     }
     auto encoded = m_lineageState->encodedProgress.prepare(
-        m_lineageState->pendingLineage, m_lineageState->pendingPresentationProgress);
+        m_lineageState->pendingLineage, m_lineageState->pendingPresentationProgress,
+        m_lineageState->pendingFrame->pts);
     if (!encoded) return ::media::Status::failure(encoded.error());
     auto token = m_lineageRegistry->submit(std::move(encoded).value());
     if (!token) return ::media::Status::failure(token.error());
@@ -392,7 +393,10 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         const auto* metadata = dynamic_cast<const FFmpegCodecContextBuffer*>(buffer.get());
         const auto* prepared = metadata && metadata->preparedEncoder()
             ? &*metadata->preparedEncoder() : nullptr;
-        if (auto status = m_lineageState->encodedProgress.bind(prepared, *codecContext()); !status)
+        const auto propagation = !m_copyOpaqueLineage ? MediaVideoLineagePropagation::Unknown
+            : *m_copyOpaqueLineage ? MediaVideoLineagePropagation::CodecCopyOpaque
+                                 : MediaVideoLineagePropagation::SubmissionOrder;
+        if (auto status = m_lineageState->encodedProgress.bind(prepared, *codecContext(), propagation); !status)
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         const AVCodecContext* encoder = codecContext();
         encodeLog(MediaGraphDiagnosticLevel::State,
@@ -744,7 +748,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             if (resolved.value()) {
                 if (auto valid = m_lineageState->encodedProgress.validateConfiguration(*codecContext()); !valid)
                     return ::media::Result<bool>::failure(valid.error());
-                auto progress = m_lineageState->encodedProgress.complete(*resolved.value());
+                auto progress = m_lineageState->encodedProgress.complete(*resolved.value(), *packet);
                 if (!progress) return ::media::Result<bool>::failure(progress.error());
                 decodeProgress = progress.value();
                 lineage = std::move(resolved.value()->canonical);

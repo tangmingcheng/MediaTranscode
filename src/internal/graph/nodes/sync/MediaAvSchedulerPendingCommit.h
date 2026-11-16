@@ -18,6 +18,7 @@ struct MediaAvSchedulerPendingCommit final {
     std::optional<std::uint64_t> generation;
     std::optional<MediaRunningTime> scheduledAt;
     std::optional<MediaAvSchedulerVideoProgress> videoProgress;
+    bool usedVideoProgress = false;
 };
 
 } // namespace media::ffmpeg::graph

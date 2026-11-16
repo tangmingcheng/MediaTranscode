@@ -1,8 +1,32 @@
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include <sstream>
 
 namespace media::ffmpeg::graph {
+void MediaAvOutputSchedulerNode::observeVideoProgressRelease() noexcept
+{
+    if (m_generationData->firstVideoProgressReleaseObserved) return;
+    m_generationData->firstVideoProgressReleaseObserved = true;
+    try {
+        const auto& progress = m_generationData->videoProgress;
+        const auto& audio = m_generationData->audioHead;
+        if (!progress || !audio) return;
+        const auto dispatch = audio->canonicalDispatchTime();
+        if (!dispatch) return;
+        std::ostringstream out;
+        out << "av_scheduler_video_progress_release node=" << nodeId().value
+            << " generation=" << progress->generation
+            << " audio_sequence=" << audio->canonical()->canonicalSequence().value()
+            << " audio_canonical_dispatch_ns=" << dispatch.value().nanoseconds()
+            << " video_canonical_lower_bound_ns=" << progress->followingAccessUnitsLowerBound.nanoseconds()
+            << " observed_after_output_commit=1";
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode, out.str());
+    } catch (...) {}
+}
+
 ::media::Result<bool> MediaAvOutputSchedulerNode::audioPrecedesVideoProgress() const
 {
     using Result = ::media::Result<bool>;

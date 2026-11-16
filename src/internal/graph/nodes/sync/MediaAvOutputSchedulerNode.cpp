@@ -664,7 +664,8 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!output) return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     return emitWithCommit(context, output.value(), MediaAvSchedulerPendingCommit{
         input == Input::Video ? MediaAvSchedulerCommitKind::Video : MediaAvSchedulerCommitKind::Audio,
-        false, std::nullopt, now.value(), std::move(progress).value()});
+        false, std::nullopt, now.value(), std::move(progress).value(),
+        input == Input::Audio && !m_generationData->videoHead && !m_generationData->videoEof});
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -884,6 +885,7 @@ MediaNodeProcessResult MediaAvOutputSchedulerNode::applyCommit(
         m_generationData->videoHead.reset();
         m_generationData->nextEqualTimeVideo = false;
     } else if (commit.kind == MediaAvSchedulerCommitKind::Audio) {
+        if (commit.usedVideoProgress) observeVideoProgressRelease();
         m_generationData->audioHead.reset();
         m_generationData->nextEqualTimeVideo = true;
     } else {
@@ -974,6 +976,7 @@ void MediaAvOutputSchedulerNode::clearSchedulingState() noexcept
     m_generationData->nextEqualTimeVideo = false;
     m_generationData->firstVideoHeadDiagnosticEmitted = false;
     m_generationData->firstAudioHeadDiagnosticEmitted = false;
+    m_generationData->firstVideoProgressReleaseObserved = false;
     m_generationData->missingMediaWait.reset();
 }
 

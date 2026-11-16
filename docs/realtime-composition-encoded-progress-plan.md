@@ -84,3 +84,16 @@ NVENC谓词检查native encoder身份、H264/HEVC、COPY_OPAQUE、无INTERLACED_
 - 不新增线程/队列/媒体引用；仅固定配置、序号、时间值及现有不可变timeline identity引用。registry tree按真实`EntryValue`几何计费，新增completionOrder自然计入；canonical AU的prepared allocator按真实sizeof分配。现有runtime AU、codec metadata及encoder/scheduler owner使用普通new/delete域，本轮不声称它们已进入全进程硬预算；新增定长字段的实际ABI sizeof待构建核验，不能把payload credit当owner内存计费。
 - 诊断沿既有scheduler提交日志增加`committed_video_progress_ns`及`carrying_video_progress_ns`，不是新失败路径。Windows原r440规格、失源重入与RKMPP共享链路仍待真实复验；未知RKMPP完成能力不生成水位。
 双审修正：显式前置声明AVCodecContext；区分suspendForReset与revoke。noexcept purge hook只撤销本代状态，owner下一次onProcess在既有锁内完成受控重验证；普通非EOF flush在drain、flushBuffers及finishGeneration完成后重验证，失败直接返回错误。没有新metadata也可在同codec进入新代，旧水位不跨代保留。
+
+## RKMPP复用完成合同（双独立源码审查通过，目标构建/实流待完成）
+
+新增`MediaRkmppEncoderCompletionAdapter`，只承担真实backend读值；所有平台继续使用同一`MediaVideoEncodedProgressState`、registry、canonical AU和scheduler。合同显式携带既有`MediaVideoLineagePropagation`：NVENC为CodecCopyOpaque，RKMPP为SubmissionOrder；node bind必须与planner既有传播模式相符。固定快照为22项公共参数加backend variant，NVENC的原有Immediate/CPB授权谓词不变。
+
+RKMPP读取同一post-SET GET_CFG事务的readonly `split_state_known`、`effective_split_mode/arg/out`、`effective_low_delay`及`effective_rc_drop_mode`、`effective_fps_in/out_flex/num/denom`。最低授权要求known、split-none、禁RC丢帧、输入输出固定且与prepared cadence等价；未知保持明确未授权。split-none使split_arg/out/low_delay不启用已审partition路径，但仍冻结实际值。目标依赖的空/partition错误失败与正常FIFO/EOF证明由既有交付门禁绑定；这些运行参数不能单独证明任意同名库的语义。RC/fps谓词用于避免会失败的可用性组合，不能以丢帧恢复替代错误语义。
+
+实际`rkmppenc.h`使用微秒PTS传输；adapter以checked乘法验证encoder时间tick至少1µs，保证可表示整数PTS的最近舍入往返；不把时间精度条件当canonical时间换算。registry额外保存实际提交的encoderInputPts，正常完整AU必须同时满足完成序号及packet PTS/DTS均等于该输入，再沿原canonical lineage发布下界。这对两个后端使用同一验证路径，异常明确失败，不重写时间戳、不跳过token。
+
+有界观测新增`encoder_completion_prepared`（每次prepared读回一次，含授权/原因及实际RKMPP事实；不在每帧验证中输出）、`encoder_completion_first_au`（每codec绑定首个正常完整AU，含identity/order/packet PTS/DTS/canonical）、`av_scheduler_video_progress_release`（每代首次实际输出提交后的watermark放行）。没有每帧诊断或新增测试框架；此前不存在专用watermark放行计数，本次选择首事件证据而非宣称已有计数。后续通过原规格生产CLI实际open及完整重入验证正例，并复核NVENC；当前不声称已运行。
+
+定长增长涉及完成合同的backend variant、registry内encoderInputPts、两个首事件标志及pending commit标志；registry依旧按EntryValue真实sizeof规划，没有复制媒体或records。最终ABI字节数待构建核查，既有普通new/delete owner边界不扩大为全进程硬预算承诺。
+2026-11-16：两位未参与实现的审查者均明确 SOURCE PASS，覆盖 typed lineage、同事务只读事实、正常 FIFO/异常拒绝、实际 PTS/DTS 与提交输入匹配、生命周期及成功提交后首次水位诊断；不等于实际 opened 授权或实流通过。rk445 同步包 SHA256 4c8cab3edeaf01e36dcc39dd958cbeb01d96e90a51dc951d38893a425ca4a29e，35 个源文件逐项匹配目标 e127a744 基线后应用；目标 out/rollback/rk445 保存源码、旧 CLI 和 manifest。旧 SCP PID33784 身份核对后清理，重新传输 exit0。目标现有 Release 目录以 8 核增量构建，PID2006489，结果待核验。本机 FFmpeg 保持不变；用户明确其限制来自已有 Windows 正常验证，不能将目标适配问题归因于本机 FFmpeg。

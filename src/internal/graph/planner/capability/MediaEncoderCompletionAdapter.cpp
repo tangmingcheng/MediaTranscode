@@ -1,5 +1,7 @@
 #include "internal/graph/planner/capability/MediaEncoderCompletionAdapter.h"
 #include "internal/graph/planner/capability/MediaEncoderOpenContractAdapter.h"
+#include "internal/graph/planner/capability/MediaRkmppEncoderCompletionAdapter.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -8,37 +10,53 @@ extern "C" {
 }
 
 #include <cstring>
+#include <sstream>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 namespace {
-std::optional<MediaVideoEncoderCompletionConfiguration> configuration(const AVCodecContext& c)
+std::array<std::int64_t, 22> publicConfiguration(const AVCodecContext& c)
 {
-    std::int64_t delay = 0, zeroLatency = 0, lookahead = 0;
-    if (!c.priv_data || av_opt_get_int(c.priv_data, "delay", 0, &delay) < 0 ||
-        av_opt_get_int(c.priv_data, "zerolatency", 0, &zeroLatency) < 0 ||
-        av_opt_get_int(c.priv_data, "rc-lookahead", 0, &lookahead) < 0) return {};
-    return MediaVideoEncoderCompletionConfiguration{{
-        c.codec_id, c.codec_type, c.profile, c.width, c.height, c.pix_fmt, c.sw_pix_fmt,
+    return {c.codec_id, c.codec_type, c.profile, c.width, c.height, c.pix_fmt, c.sw_pix_fmt,
         c.time_base.num, c.time_base.den, c.framerate.num, c.framerate.den,
         c.sample_aspect_ratio.num, c.sample_aspect_ratio.den,
         c.bit_rate, c.rc_max_rate, c.rc_buffer_size, c.gop_size,
-        c.max_b_frames, c.has_b_frames, c.flags, c.flags2, c.field_order,
-        delay, zeroLatency, lookahead}};
+        c.max_b_frames, c.has_b_frames, c.flags, c.flags2, c.field_order};
+}
+std::optional<MediaNvencCompletionConfiguration> nvencConfiguration(const AVCodecContext& c)
+{
+    MediaNvencCompletionConfiguration facts{};
+    if (!c.priv_data || av_opt_get_int(c.priv_data, "delay", 0, &facts.delay) < 0 ||
+        av_opt_get_int(c.priv_data, "zerolatency", 0, &facts.zeroLatency) < 0 ||
+        av_opt_get_int(c.priv_data, "rc-lookahead", 0, &facts.lookahead) < 0) return {};
+    return facts;
 }
 }
 
 ::media::Status MediaEncoderCompletionAdapter::validateUnchanged(
     const AVCodecContext& encoder, const MediaVideoEncoderCompletionContract& prepared)
 {
-    const auto current = configuration(encoder);
-    if (!current || *current != prepared.configuration)
+    const bool privateMatch = std::visit([&](const auto& expected) {
+        using Configuration = std::decay_t<decltype(expected)>;
+        if constexpr (std::is_same_v<Configuration, MediaNvencCompletionConfiguration>) {
+            if (prepared.lineagePropagation != MediaVideoLineagePropagation::CodecCopyOpaque) return false;
+            const auto actual = nvencConfiguration(encoder);
+            return actual && *actual == expected;
+        } else {
+            if (prepared.lineagePropagation != MediaVideoLineagePropagation::SubmissionOrder) return false;
+            const auto actual = MediaRkmppEncoderCompletionAdapter::configuration(encoder);
+            return actual && *actual == expected;
+        }
+    }, prepared.configuration.backend);
+    if (!privateMatch || publicConfiguration(encoder) != prepared.configuration.fields)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Encoded progress prepared configuration changed"));
     return ::media::Status::success();
 }
 
+namespace {
 std::optional<MediaVideoEncoderCompletionContract>
-MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
+readNvencAfterOpen(const AVCodecContext& encoder)
 {
     if (!encoder.codec || !encoder.codec->name || !encoder.priv_data ||
         !avcodec_is_open(const_cast<AVCodecContext*>(&encoder)) ||
@@ -76,7 +94,7 @@ MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
 
     if (!MediaEncoderOpenContractAdapter::verifyOutputBuffering(
             encoder, MediaEncoderOutputBuffering::Immediate)) return {};
-    const auto snapshot = configuration(encoder);
+    const auto snapshot = nvencConfiguration(encoder);
     if (!snapshot) return {};
 
     // Full locked surface -> one AVPacket; zero-delay timestamp FIFO and
@@ -87,8 +105,54 @@ MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
         {encoder.time_base.num, encoder.time_base.den},
         {encoder.framerate.num, encoder.framerate.den},
         MediaEncoderCompletionLifetime::UnchangedPreparedContextUntilReset,
-        *snapshot,
+        MediaVideoLineagePropagation::CodecCopyOpaque,
+        {publicConfiguration(encoder), *snapshot},
         "audited-nvenc-full-surface-packet-zero-reorder-opaque-slot"};
 }
 
+} // namespace
+
+std::optional<MediaVideoEncoderCompletionContract>
+MediaEncoderCompletionAdapter::readAfterOpen(const AVCodecContext& encoder)
+{
+    std::optional<MediaVideoEncoderCompletionContract> result;
+    std::string_view reason = "unrecognized_opened_encoder";
+    const std::string_view name = encoder.codec && encoder.codec->name ? encoder.codec->name : "";
+    const bool native = encoder.codec && encoder.codec->name && encoder.priv_data &&
+        avcodec_is_open(const_cast<AVCodecContext*>(&encoder)) &&
+        encoder.codec_type == AVMEDIA_TYPE_VIDEO &&
+        encoder.codec == avcodec_find_encoder_by_name(encoder.codec->name);
+    const bool rkmpp = (name == "h264_rkmpp" && encoder.codec_id == AV_CODEC_ID_H264) ||
+        (name == "hevc_rkmpp" && encoder.codec_id == AV_CODEC_ID_HEVC);
+    if (native && rkmpp) {
+        result = MediaRkmppEncoderCompletionAdapter::readAfterOpen(
+            encoder, publicConfiguration(encoder), reason);
+    } else if (native && (name == "h264_nvenc" || name == "hevc_nvenc")) {
+        result = readNvencAfterOpen(encoder);
+        reason = result ? "authorized" : "nvenc_prepared_contract_unproven";
+    }
+    // One observation per preparation/readback, never from per-frame validation.
+    // A diagnostic failure must not change capability or production errors.
+    try {
+        if (mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)) {
+            std::ostringstream out;
+            out << "encoder_completion_prepared codec=" << name
+                << " authorized=" << static_cast<bool>(result) << " reason=" << reason;
+            if (result) out << " lineage=" << mediaVideoLineagePropagationName(result->lineagePropagation)
+                << " time_base=" << result->inputTimeBase.num << '/' << result->inputTimeBase.den
+                << " cadence=" << result->inputCadence.num << '/' << result->inputCadence.den;
+            if (rkmpp) {
+                const auto facts = MediaRkmppEncoderCompletionAdapter::configuration(encoder);
+                if (facts) out << " split_known=" << facts->known << " split_mode=" << facts->splitMode
+                    << " split_arg=" << facts->splitArgument << " split_out=" << facts->splitOutput
+                    << " low_delay=" << facts->lowDelay << " drop_mode=" << facts->dropMode
+                    << " fps_in_flex=" << facts->inputFlexible << " fps_in=" << facts->inputNumerator << '/' << facts->inputDenominator
+                    << " fps_out_flex=" << facts->outputFlexible << " fps_out=" << facts->outputNumerator << '/' << facts->outputDenominator;
+            }
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::PlannerCapability, out.str());
+        }
+    } catch (...) {}
+    return result;
+}
 } // namespace media::ffmpeg::graph

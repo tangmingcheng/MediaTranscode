@@ -10,6 +10,7 @@ struct MediaVideoEncodeLineage final {
     std::shared_ptr<const MediaCanonicalLineage> canonical;
     std::optional<MediaVideoPresentationProgress> presentationProgress;
     std::optional<std::uint64_t> completionOrder;
+    std::optional<std::int64_t> encoderInputPts;
 };
 
 } // namespace media::ffmpeg::graph

@@ -40,6 +40,7 @@ private:
         bool nextEqualTimeVideo = false;
         bool firstVideoHeadDiagnosticEmitted = false;
         bool firstAudioHeadDiagnosticEmitted = false;
+        bool firstVideoProgressReleaseObserved = false;
         std::optional<MediaAvSchedulerInput> missingMediaWait;
     };
 
@@ -129,6 +130,7 @@ private:
         const MediaAvEpochTransitionSnapshot& epoch);
     ::media::Result<std::optional<Input>> selectMediaHead() const;
     ::media::Result<bool> audioPrecedesVideoProgress() const;
+    void observeVideoProgressRelease() noexcept;
     ::media::Result<std::optional<MediaAvSchedulerVideoProgress>> prepareVideoProgress(
         const MediaCanonicalAccessUnitBuffer& unit) const;
     ::media::Result<MediaNodeProcessResult> processSelected(
