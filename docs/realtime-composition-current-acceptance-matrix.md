@@ -7,7 +7,7 @@
 | 2/3/4源、异构、黑屏、重入 | r436四源及选中源重入，早期源数记录保留 | rk422–425已覆盖 | 不重做全部源数排列 |
 | HEVC CBR 8Mbps、TS/UDP | r436最新功能修复，早于e127a744诊断 | rk438同诊断源码通过 | Windows共享诊断回归 |
 | HEVC CBR 8Mbps、TS/RTP | r243等历史三源有限证据 | rk439四源120秒、四格/全黑、正常停止，媒体/控制已提交 | rk439不重复宣称重入已测 |
-| H264 VBR目标8Mbps、范围8–12Mbps、TS/RTP | r131/r133双路有限证据，非最新共享版本 | 尚无合屏实流记录 | 优先补RKMPP及对应最新Windows回归 |
+| H264 VBR目标8Mbps、范围8–12Mbps、TS/RTP | r131/r133双路有限证据，非最新共享版本 | rk441四源及选中源完整重入，功能检查通过 | Windows r440共享调度FAIL仍待修复 |
 | 选中音频失源/恢复 | 既有记录；r437内容关联仍有重复画面歧义 | rk426近静音与恢复 | 内容级A/V及持续运行收敛 |
 | C公共入口 | 已实现；跨平台共享适配仍需最终审查 | rk430–434配置寿命、负例、ABI、旧头实流和启动回调边界 | 按公开契约补运行回调/压力等有限残项 |
 
@@ -24,3 +24,7 @@ r437不是已证实AV故障；rk433旧单源ProgressTimeout不是已证实ABI破
 ## r440新增失败（2026-11-16）
 
 Windows新共享版本四源H264 VBR/RTP已执行，首轮约93秒因audio等待缺失video144ms导致原deadline过期而exit1；最新回归为FAIL，不覆盖旧r131/r133的有限通过。优先核共享AV scheduler排序证明合同，不能把该失败误记为rk427 sender失败或FFmpeg问题。RKMPP该编码矩阵可继续取得独立平台证据，整体仍未完成。见[r440](realtime-composition-r440-windows-validation.md)。
+
+## rk441更新
+
+H264 VBR目标8/范围8–12Mbps、720p30 MPEG-TS/RTP四源、全黑和选中源完整120秒重入已取得RKMPP功能证据，CLI caller_stop/exit0、errors0。pressure19、系统UDP错误增量及delivery not_proven保留，不判整体可靠性通过。见[记录](realtime-composition-rk441-validation.md)。

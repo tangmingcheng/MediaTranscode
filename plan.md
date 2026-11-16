@@ -938,3 +938,7 @@ e127a744诊断源码按VS2026技能300秒上限全核心clean-first all-target�
 ## 2026-11-16：r440 Windows H264 VBR共享回归失败
 
 新Release四路原规格H264 VBR目标8/范围8–12Mbps、720p30 MPEG-TS/RTP出画后，在首轮约93秒CLI自行exit1；未执行失源/重入门禁。audio3672等待缺失video2559约144ms，超原dispatch24.44ms后提交，mux ready超24.91ms，TS accepted-work拒绝未发布AU；sender deadline_misses0。共享AV scheduler无跨支路未来AU下界，缺head时无限等待；不得无排序证明提前输出或放宽deadline。已安排只读审查encoder/cadence/lineage能否形成权威watermark。canvas同轮75.56ms wall/71.3165ms GPU事件仅是相关证据，不归因本机FFmpeg。四源完整120秒均exit0，CLI账本159204平衡归零仍不算通过；13临时项及六PID清理。详见docs/realtime-composition-r440-windows-validation.md。继续独立RKMPP输出矩阵，Windows共享回归保持FAIL未关闭。
+
+## 2026-11-16：rk441四源H264 VBR/RTP与完整重入
+
+原规格四源120秒→H264720p30 VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP；选中source2再完整120秒重入，VLC原生四格/全黑/单格恢复/再次全黑确认，CLI显式停止exit0、errors0、账本374096平衡归零。pressure19、系统UDP接收错误+19042（已采样输入socket drop0）、线端交付未证明如实保留，整体验收未完成。22远端/8本机临时项与测试PID清理。Windows r440共享调度与rk427可靠性仍未关闭。详见docs/realtime-composition-rk441-validation.md。
