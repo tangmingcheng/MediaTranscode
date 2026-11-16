@@ -990,3 +990,7 @@ EndGeneration及固定关闭状态、frontier/成员完成、SourceDrained强校
 ## 2026-11-16：rk460 startup整组屏障
 
 源成员代内关闭复用原startup/release FIFO，收齐实际成员且held/前序pending已提交后发唯一组标记，不永久EOF；冻结代次关系显式验证。四文件双SOURCE PASS，RKMPP8核增量27项exit0。完整BYE接线及实流尚未通过。
+
+## 2026-11-16：rk461重采样及补偿旁路排空
+
+EndGeneration覆盖音频/补偿双边原子发布，窗口执行与Swr排空持续推进，真实exhaustion及尾样本提交后发下游，等待原purge；原EOF/Flush保持。七文件双SOURCE PASS，目标8核增量10项exit0。无媒体验收成功声明，剩余接收端和aggregate接线继续。

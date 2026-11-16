@@ -49,6 +49,8 @@ public:
     std::optional<MediaCanonicalAudioContribution> lastOutputContribution;
     MediaInputTerminalTracker terminals { { "frame" } };
     bool eofEmitted = false;
+    bool correctionGenerationClosed = false;
+    bool generationDrained = false;
 
     void resetForLifecycle() noexcept;
 

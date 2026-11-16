@@ -3,6 +3,8 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaRtpInputIdentitySuffix.h"
 #include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
+#include "internal/graph/nodes/audio/AudioResampleLineageState.h"
+#include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include <limits>
 #include <string_view>
 
@@ -66,6 +68,9 @@ try {
             raw.audioAccessUnitEnvelope ? &*raw.audioAccessUnitEnvelope : nullptr);
     }
     if (audio && raw.audio) {
+        // One persistent resampler lineage owner and correction owner per audio source.
+        sum.add(::media::Result<std::size_t>::success(sizeof(AudioResampleLineageState)));
+        sum.add(::media::Result<std::size_t>::success(sizeof(MediaAudioDriftControllerState)));
         // Canonicalization transforms its input copy in place. All replacement
         // aliases in canonicalCodecName fit both audited inline string buffers.
         sum.copy(raw.audio->codecName);

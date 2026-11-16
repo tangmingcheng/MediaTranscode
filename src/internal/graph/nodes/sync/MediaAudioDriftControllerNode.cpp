@@ -6,6 +6,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
@@ -374,6 +375,7 @@ MediaAudioDriftControllerNode::onProcess(MediaGraphExecutionContext& context)
     bool hasPending = false;
     {
         auto stateLock = m_state->lock();
+        if (m_state->generationDrained) return processWaiting();
         hasPending = m_state->pending.has_value();
     }
     if (hasPending) {
@@ -404,6 +406,20 @@ MediaAudioDriftControllerNode::onProcess(MediaGraphExecutionContext& context)
                 *input.value()); !authorized) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 authorized.error());
+        }
+        const auto endGeneration = mediaEndGeneration(*input.value());
+        if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+        if (endGeneration.value()) {
+            if (!m_state->synchronized()) return processProgress(::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("Generation drain requires synchronized audio correction")));
+            const auto* audio = context.findOutputChannel(nodeId(), "audio");
+            const auto* correction = context.findOutputChannel(nodeId(), "correction");
+            if (!audio || !correction || !MediaAtomicOutputPolicyContract::accepts(audio->policy()) ||
+                !MediaAtomicOutputPolicyContract::accepts(correction->policy()))
+                return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Generation drain requires the planned atomic audio/correction outputs")));
+            m_state->generationDrained = true;
+            return processProgress(broadcastControlToAllOutputs(context, *input.value()));
         }
         auto status = emitOutput(context, "audio", *input.value());
         return control->controlKind() == MediaControlBufferKind::Eof ||

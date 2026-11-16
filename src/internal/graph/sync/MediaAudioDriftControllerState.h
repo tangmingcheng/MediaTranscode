@@ -28,6 +28,7 @@ public:
     std::optional<MediaAudioPlaybackOrigin> origin;
     std::optional<PendingTransaction> pending;
     std::uint64_t nextSequence = 1;
+    bool generationDrained = false;
 
 protected:
     void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
