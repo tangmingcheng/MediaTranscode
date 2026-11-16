@@ -226,7 +226,8 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
           !startup.maximumAudioUnitBytes && !startup.audioByteCapacity &&
           !startup.audioIdentity && startup.trimAudioToCommonStart == false;
     if (!startup.videoReadiness || !encodeMediaVideoStartupReadiness(*startup.videoReadiness) ||
-        !startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
+        !startup.requireVideoKeyFrame ||
+        startup.requireVideoKeyFrame != mediaVideoStartupKeyFrameRequirement(*startup.videoReadiness) ||
         !startup.trimAudioToCommonStart || !validAudioStartup ||
         !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
         !positive(startup.keyFrameWaitNs) ||

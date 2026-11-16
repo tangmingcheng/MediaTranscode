@@ -11,3 +11,7 @@
 两名独立审查后8核增量all及原规格realtime；失败保留原错误、CPU/RSS/A-V/输出计数，归档后清临时产物。实现与验证未完成。
 
 实施状态：五文件实现完成。初审发现wrapHardwareFrame旧构造遗漏，已改为校验真实硬件帧后统一复用wrapFrame；两名独立审查者重新读取最终版本均明确SOURCE PASS。UTF-8无BOM/CRLF及diff检查通过，尚待目标构建与原规格实流。
+
+后续风险：只读审查发现CanonicalVideoFrameBuffer/CanonicalAudioSamplesBuffer仍未转发footprint，但当前合屏对应frame边仅有对象数量限制，未启用字节硬限制，也不经过本次decoded startup门禁；未将其标为已复现故障。未来为这些边启用字节硬限制时须同步补齐两种wrapper合同。本轮不扩大修改范围。
+
+后续验证：6a03ad4f目标增量all 50/50 exit0，rk421真实链路越过payload envelope失败点，进入源0启动窗口后因关键帧等待超时失败；未产生编码输出，完整合屏尚未通过。

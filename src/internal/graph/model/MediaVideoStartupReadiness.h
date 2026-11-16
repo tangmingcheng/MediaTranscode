@@ -2,10 +2,21 @@
 
 #include "media_transcode/Result.h"
 #include <string_view>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
 enum class MediaVideoStartupReadiness { IntervalCoverage, DecodedPresentationSpan };
+
+inline constexpr std::optional<bool> mediaVideoStartupKeyFrameRequirement(
+    MediaVideoStartupReadiness readiness) noexcept
+{
+    switch (readiness) {
+    case MediaVideoStartupReadiness::IntervalCoverage: return true;
+    case MediaVideoStartupReadiness::DecodedPresentationSpan: return false;
+    }
+    return std::nullopt;
+}
 
 inline ::media::Result<std::string_view> encodeMediaVideoStartupReadiness(
     MediaVideoStartupReadiness value)

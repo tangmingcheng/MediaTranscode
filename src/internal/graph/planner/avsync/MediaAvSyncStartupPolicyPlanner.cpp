@@ -23,7 +23,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 ::media::Result<MediaAvSyncStartupPolicy> makePolicy(
     const MediaRealtimeMediaCapacityPlan& capacity,
     std::optional<MediaRunningTime> outputLead,
-    MediaTranscodeStreamSet members)
+    MediaTranscodeStreamSet members, MediaVideoStartupReadiness readiness)
 {
     const bool hasAudio = members == MediaTranscodeStreamSet::AudioVideo;
     if ((members != MediaTranscodeStreamSet::VideoOnly && !hasAudio) ||
@@ -39,7 +39,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     }
 
     auto fixed = MediaAvSyncStartupPolicyPlanner::prepare(members,
-        MediaVideoStartupReadiness::IntervalCoverage, outputLead);
+        readiness, outputLead);
     if (!fixed) return ::media::Result<MediaAvSyncStartupPolicy>::failure(fixed.error());
     MediaAvSyncStartupPolicy startup;
     static_cast<MediaAvSyncStartupFixedPolicy&>(startup) = std::move(fixed).value();
@@ -79,7 +79,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
             "Startup fixed policy requires explicit members and readiness"));
     MediaAvSyncStartupFixedPolicy startup;
     startup.videoReadiness = readiness;
-    startup.requireVideoKeyFrame = true;
+    startup.requireVideoKeyFrame = mediaVideoStartupKeyFrameRequirement(readiness);
     startup.trimAudioToCommonStart = hasAudio;
     startup.maximumWaitNs = runningTime(10 * Second);
     startup.prerollNs = runningTime(500 * Millisecond);
@@ -109,12 +109,12 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     auto route=MediaStartupRoutePlanner::bind(capacity.route.shape,capacity.route.metadata,capacity.route.atomicMetadata);
     if(!route)return Result::failure(route.error());
     auto policy = makePolicy(capacity.startup,
-        deployment.encode().transportTiming.senderTransportLead, *members);
+        deployment.encode().transportTiming.senderTransportLead, *members,
+        capacity.route.shape.readiness);
     if (!policy) return policy;
     if (policy.value().maximumWaitNs != capacity.acquisitionWindow)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Decoded source capacity differs from the startup acquisition window"));
-    policy.value().videoReadiness = MediaVideoStartupReadiness::DecodedPresentationSpan;
     return policy;
 }
 
@@ -155,7 +155,8 @@ MediaAvSyncStartupPolicyPlanner::plan(
         retention.audio ? std::optional{retention.audio->maximumUnitBytes} : std::nullopt,
         retention.audio ? std::optional{retention.audio->maximumBytes} : std::nullopt,
         capacity.value().maximumGap},
-        deployment.encode().transportTiming.senderTransportLead, *members);
+        deployment.encode().transportTiming.senderTransportLead, *members,
+        MediaVideoStartupReadiness::IntervalCoverage);
     if (policy && policy.value().maximumWaitNs != retention.acquisitionWindow) {
         return ::media::Result<MediaAvSyncStartupPolicy>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -219,7 +220,7 @@ MediaAvSyncStartupPolicyPlanner::planInputPreflight(
         hasAudio ? std::optional<std::size_t>{MediaAvStartupPreflightUnitCapacity} : std::nullopt,
         hasAudio ? std::optional{perStreamBudget} : std::nullopt,
         hasAudio ? std::optional{perStreamBudget} : std::nullopt,
-        maximumGap}, std::nullopt, *members);
+        maximumGap}, std::nullopt, *members, MediaVideoStartupReadiness::IntervalCoverage);
 }
 
 } // namespace media::ffmpeg::graph

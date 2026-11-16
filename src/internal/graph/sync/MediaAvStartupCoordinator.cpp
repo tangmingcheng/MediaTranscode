@@ -143,7 +143,8 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         !encodeMediaVideoStartupReadiness(config.videoReadiness) ||
         (config.videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan) != (prepared != nullptr) ||
         (prepared && !prepared->resource) ||
-        !config.requireVideoKeyFrame || config.allowDegradedClock ||
+        std::optional<bool>{config.requireVideoKeyFrame} !=
+            mediaVideoStartupKeyFrameRequirement(config.videoReadiness) || config.allowDegradedClock ||
         config.maximumWait <= Zero || config.preroll <= Zero ||
         config.keyFrameWait <= Zero || config.maximumGap <= Zero ||
         config.outputLead <= Zero || config.maximumGap >= config.preroll ||
@@ -626,7 +627,8 @@ try {
     if (!expiry) return Result::success(std::nullopt);
     auto error = startupError(*expiry, "poll", nullptr,
         *expiry == MediaAvSyncErrorCode::StartupTimeout
-            ? "startup timeout" : "video key frame wait timeout");
+            ? "startup timeout" : m_config.requireVideoKeyFrame
+                ? "video key frame wait timeout" : "decoded video frame wait timeout");
     auto waiting = m_state.transition(MediaAvSyncEvent::AttemptExpired, *m_state.generation());
     if (!waiting) return Result::failure(waiting.error());
     auto purged = purge({}, std::nullopt);
