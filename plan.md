@@ -970,3 +970,7 @@ prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递c
 ## 2026-11-16：rk448 C早停门禁通过
 
 ce71265d统一mux完成意图：未激活准备取消、已激活严格finish、原错误保留；双独立SOURCE PASS，目标9项增量构建exit0。原C消费者RUNNING回调读取/停止成功，COMPLETED/REQUESTED_STOP、workerErrors/event_errors0、外部release句柄为空、exit0。encoded0，不冒充持续播放或全账本验证。12远端/5本机测试项与传输构建临时项清理。下一步最终共享版本Windows realtime回归及已激活正常停止，继续内容A/V、rk427与最终整体审查。详见docs/realtime-composition-rk448-c-callback.md。
+
+## 2026-11-16：RKMPP内容取证与两个未闭合失败边界
+
+rk454复现sender期限冲突及失败后不退出，证据归档；rk455临时脚本CRLF错误中止，非生产依赖问题。rk456原规格四源H264/HEVC RTP→H2641280×720/30fps VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP完成120秒及全失源黑场，正常caller_stop/exit0。输入联合SR与110秒相关、112–118秒留出段消歧取得有限内容对应PASS，基准扣除后残差2.791–2.812ms；另发现约1.267秒音频尾部未体现，BYE立即purge为待证共享路径。Windows FFmpeg不变，53项临时文件/9个PID清理。下一步核清BYE已接受媒体边界，保留rk454真实失败并继续原计划单源与动态多输出回归；整体目标未完成。
