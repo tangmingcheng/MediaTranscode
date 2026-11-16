@@ -74,7 +74,7 @@ PID：目标wrapper2919428，source0/1=2919435/2919436，CLI2919438，monitor291
 [CLI] final runtime report: queued=0, peakQueued=1598, threads=102, processThreads=148, workers=0, workerProgress=374395, workerProcessCalls=1767438, workerWaits=1393024, workerWakeups=1370909, workerErrors=0, errors=0, stalledIntervals=0, cpuSamples=659, logicalProcessors=8, averageSystemMachineCpuPercent=36.012713, averageProcessMachineCpuPercent=16.681658, peakProcessMachineCpuPercent=43.979058, averageProcessSingleCoreCpuPercent=133.453268, peakProcessSingleCoreCpuPercent=351.832461, initialWorkingSetBytes=68403200, workingSetBytes=81543168, peakWorkingSetBytes=81543168, totalPushed=337251, totalPopped=337038, droppedBuffers=0, encodedPacketsPushed=55671, encodedPacketsPopped=55671, backpressureItems=147, graphPayloadCurrentBytes=0, graphPayloadHighWaterBytes=15921662, graphPayloadCurrentObjects=0, graphPayloadHighWaterObjects=832, graphPayloadReservations=185099, graphPayloadReleases=185099, graphPayloadPressureFailures=8, lastInputReceivedAtNs=26528128326161
 ~~~
 
-## 内容候选与输入时钟（尚待独立消歧）
+## 内容候选与输入时钟（后续消歧见下一节）
 
 输出PTS 1/10/30/60/90/105秒的左下标记分别为frame30/300/900/1800/2700/3150，即视频源PTS与输出PTS在这六点相同。六个一秒音频窗口最高候选均为源时间领先输出213.582766ms；110秒完整窗口全参考valid搜索最高峰0.998854044（源起点1.213582766），但9.480249433秒另有0.995999697近峰，不能仅依最高峰宣称无歧义。
 
