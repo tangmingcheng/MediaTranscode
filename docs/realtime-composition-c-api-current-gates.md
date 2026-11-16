@@ -43,3 +43,7 @@ rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用
 ## rk432 目标ABI布局
 
 以038f069c旧头与当前头，在同一aarch64/GCC12.4上实际编译运行：13旧struct与13enum的大小/对齐、132字段路径偏移/大小、73枚举值共231行一致；10旧函数精确指针赋值严格编译通过。完整覆盖与命令见rk432记录，临时头/源码/对象/可执行文件已清理。这关闭该目标、该基线的布局声明对照，不替代旧头消费者链接当前库后的真实媒体运行，也不外推Windows ABI。
+
+## rk433 旧消费者运行边界
+
+旧头038f069c编译原realtime_beta_c.c并链接当前库，完整120秒H264720p30→MPEG-TS/RTP HEVC720p30/8Mbps CBR实际出图，VLC原生快照确认。但源结束约10秒后controller报告ProgressTimeout，消费者FAILED/RUNTIME_FAILURE、exit1；不是SOURCE_LOSS或正常完成，不能记整项通过。旧头调用/真实输出兼容已观察，自然终态行为须独立审查，不能仅由此推断ABI破坏。所有临时文件和精确PID均清理，详见rk433记录。
