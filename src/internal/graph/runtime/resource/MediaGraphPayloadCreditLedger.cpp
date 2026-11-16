@@ -685,9 +685,10 @@ MediaGraphPayloadCreditLedger::tryReserveOrArm(
     {
         std::lock_guard lock(account->mutex);
         AggregatePublication publication(*account);
-        if (account->cancelled)
-            return ::media::Status::failure(::media::ErrorInfo::cancelled(
-                "Payload producer retirement requires an active account"));
+        // Account cancellation already clears all waiters under this mutex.
+        // Retiring a validated producer remains idempotent during node teardown;
+        // cancellation still forbids new reservations.
+        if (account->cancelled) return ::media::Status::success();
         auto waiter = std::find_if(account->waiters.begin(), account->waiters.end(),
             [producer](const auto& pending) { return pending.producer == producer; });
         if (waiter == account->waiters.end()) return ::media::Status::success();
