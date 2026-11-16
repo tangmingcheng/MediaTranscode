@@ -958,3 +958,7 @@ prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递c
 ## 2026-11-16：rk445 完成合同实际接入验证
 
 50993608经双独立SOURCE PASS，目标8核增量构建exit0。四路原120秒H264/H264/H264+AAC/HEVC RTP→H2641280×720/30fps VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP，选中源完整120秒重入，VLC原生四格/全黑/左下恢复/再全黑确认。RKMPP实际只读配置授权、首完整AU匹配、成功水位放行正例成立；CLI caller_stop/exit0、errors0，payload353683平衡归零，sender期限失败0。压力6、HEVC解码警告及delivery not_proven保留；22远端/8本机临时文件与全部PID清理。本机FFmpeg未改；后续当前共享Windows回归、内容A/V、rk427、C残项和最终双审仍待完成。
+
+## 2026-11-16：rk446 C边界与共享早停竞态
+
+有效正准备预算不足的早期拒绝/ERROR回调读取/外部释放补充边界通过；RUNNING回调请求停止实际失败，首错为graph payload credit waiters were cancelled，workerErrors5、encoded0、consumer exit1。根因调查指向共享生命周期取消资源早于worker停止意图，修复不吞真实错误并同步检查abort/failure supervisor。Windows50993608全量Release构建exit0、24cl并行、四产物齐全，但新的停止修复后仍需重新验证。rk446全部临时项已清理，整体验收未完成。

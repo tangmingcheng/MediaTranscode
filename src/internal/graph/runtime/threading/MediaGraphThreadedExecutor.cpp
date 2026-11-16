@@ -74,7 +74,6 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         if (!started) return fail(started.error());
         m_failureSupervisor.arm({this, &context, [](void* owner, void* state) noexcept {
             auto& context = *static_cast<MediaGraphExecutionContext*>(state);
-            context.cancelSessionPayloadWaiters();
             static_cast<MediaGraphThreadedExecutor*>(owner)->requestStop(context);
         }});
         auto launched = m_startup.launch(m_workers.view());
@@ -95,6 +94,10 @@ void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context
     m_startup.cancel();
     std::lock_guard owners(m_workersMutex);
     for (auto& worker : m_workers) if (worker) worker->requestStop();
+    // Publish coordinated stop to every worker before cancellation can wake a
+    // payload waiter with Cancelled. Otherwise it can become a false primary
+    // failure while its owner's stop flag is still clear.
+    context.cancelSessionPayloadWaiters();
     for (auto& worker : m_workers) if (worker) worker->interrupt();
     context.interruptNodeWakeups();
 }
@@ -106,6 +109,9 @@ void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context
     std::lock_guard lifecycle(m_lifecycleMutex);
     if (m_state == MediaGraphThreadedExecutorState::Stopped ||
         m_state == MediaGraphThreadedExecutorState::Idle) {
+        // No running worker remains in either state, but first-time teardown
+        // must still withdraw session demands when no worker was launched.
+        context.cancelSessionPayloadWaiters();
         m_state = MediaGraphThreadedExecutorState::Stopped;
         return ::media::Status::success();
     }
@@ -152,6 +158,7 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
 {
     m_startup.cancel();
     std::lock_guard lifecycle(m_lifecycleMutex);
+    requestStop(context);
     for (auto& worker : m_workers) {
         if (worker) {
             worker->abort();

@@ -142,7 +142,6 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 ::media::Status MediaGraphRuntimeLifecycleExecutor::synchronizeThreadedState(MediaGraphRuntime& runtime)
 {
     if (runtime.m_state != MediaGraphRuntimeState::ThreadedRunning || !runtime.m_threadedExecutor.failed()) return ::media::Status::success();
-    runtime.m_context.cancelSessionPayloadWaiters();
     const auto primaryFailure = runtime.m_threadedExecutor.primaryFailure();
     runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
@@ -165,7 +164,10 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("MediaGraphRuntime stop failed: runtime is not running"));
     }
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.begin");
-    runtime.m_context.cancelSessionPayloadWaiters();
+    // Threaded cancellation is sequenced by requestStop inside the executor.
+    // The synchronous scheduler has no concurrent worker flags to publish.
+    if (runtime.m_state != MediaGraphRuntimeState::ThreadedRunning)
+        runtime.m_context.cancelSessionPayloadWaiters();
     auto schedulerStatus = runtime.m_state == MediaGraphRuntimeState::ThreadedRunning
         ? runtime.m_threadedExecutor.stop(runtime.m_context, runtime.m_scheduler)
         : runtime.m_scheduler.stop(runtime.m_context);
@@ -201,11 +203,13 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     } catch (...) {
         // Diagnostics must not prevent cancellation or owner reclamation.
     }
-    runtime.m_context.cancelSessionPayloadWaiters();
     if (runtime.m_state == MediaGraphRuntimeState::ThreadedRunning ||
         runtime.m_threadedExecutor.state() != MediaGraphThreadedExecutorState::Idle)
         runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
-    else runtime.m_scheduler.abort(runtime.m_context);
+    else {
+        runtime.m_context.cancelSessionPayloadWaiters();
+        runtime.m_scheduler.abort(runtime.m_context);
+    }
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();

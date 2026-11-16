@@ -121,3 +121,88 @@ int main(int argc,char** argv){
 }
 
 ```
+
+## running 实际失败
+
+命令`/home/tang/MediaTranscode-composition-09093919/acceptance/rk446/consumer running`，stdout/stderr为running.out/log。wrapper2208761，consumer2208762，远端H264/AAC源2208760；Windows HEVC源34576、VLC20148。consumer约5.3秒自行exit1；回调snapshot_status0/state2、encoded0，request_stop status0。最终FAILED/REQUESTED_STOP，workerErrors5，event_errors1，release_null1，pass0。未形成播放或持续A/V证据。
+
+```text
+mpp[2208762]: mpp_platform: client 12 driver is not ready!
+start_status=0 handle_nonnull=1 config_destroyed=1
+event type=1 state=1 output=0 output_state=0 error=0 stage=0 completion=0 native=0 detail=
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+snapshot state=1 completion=0 backend=0 codec=0 elapsed=0 encoded=0 errors=0 rss=0 cpu=0.000000
+[in @ 0x7f940ad7e0] Changing video frame properties on the fly is not supported by all filters.
+[in @ 0x7f940ad7e0] filter context - w: 1280 h: 720 fmt: 178 csp: unknown range: unknown alpha: unspecified, incoming frame - w: 1280 h: 720 fmt: 178 csp: unknown range: tv alpha: unspecified pts_time: 17481.550856
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+[in @ 0x7f940afca0] Changing video frame properties on the fly is not supported by all filters.
+[in @ 0x7f940afca0] filter context - w: 1280 h: 720 fmt: 178 csp: unknown range: unknown alpha: unspecified, incoming frame - w: 1280 h: 720 fmt: 178 csp: unknown range: tv alpha: unspecified pts_time: 79.617333
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+mpp[2208762]: mpp_enc: set prep cfg w:h [1280:720] stride [1280:768] fmt 0 rotate 0 mirror 0
+mpp[2208762]: mpp_enc: set rc cbr bps [8000000:8500000:7500000] fps [30:1:fix] - [30:1:fix] gop 60
+mpp[2208762]: mpp_enc: mode cbr bps [7500000:8000000:8500000] fps fix [30/1] -> fix [30/1] gop i [60] v [0]
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+mpp[2208762]: mpp_enc: set prep cfg w:h [1280:720] stride [1280:768] fmt 0 rotate 0 mirror 0
+mpp[2208762]: mpp_enc: set rc cbr bps [8000000:8500000:7500000] fps [30:1:fix] - [30:1:fix] gop 60
+mpp[2208762]: mpp_enc: mode cbr bps [7500000:8000000:8500000] fps fix [30/1] -> fix [30/1] gop i [60] v [0]
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+mpp[2208762]: mpp_info: mpp version: c08762ebf author: Herman Chen  2026-08-11 docs: Update 1.1.0 CHANGELOG.md
+event type=5 state=0 output=1 output_state=2 error=0 stage=0 completion=0 native=0 detail=
+event type=1 state=2 output=0 output_state=0 error=0 stage=0 completion=0 native=0 detail=
+callback_action mode=0 snapshot_status=0 snapshot_state=2 encoded=0 stop_called=1 stop_status=0
+mpp[2208762]: h264d_sei: seq_parameter_set_id 0 may be invalid
+mpp[2208762]: h264d_sei: seq_parameter_set_id 0 may be invalid
+mpp[2208762]: h264d_sei: seq_parameter_set_id 0 may be invalid
+mpp[2208762]: h265d: h265d_decode_nal_sei ret -1006
+mpp[2208762]: h265d: pps: invalid pps id 0
+mpp[2208762]: h265d: nal: parse unit #1 failed ret -1004
+mpp[2208762]: H265d: current stream is no right skip it (nil)
+[aac @ 0x7f2c000b80] Qavg: nan
+event type=5 state=0 output=1 output_state=6 error=7 stage=9 completion=0 native=0 detail=graph payload credit waiters were cancelled
+event type=5 state=0 output=1 output_state=5 error=7 stage=9 completion=0 native=0 detail=graph payload credit waiters were cancelled
+event type=3 state=0 output=0 output_state=0 error=7 stage=7 completion=0 native=0 detail=graph payload credit waiters were cancelled
+event type=1 state=5 output=0 output_state=0 error=0 stage=0 completion=0 native=0 detail=
+event type=4 state=0 output=0 output_state=0 error=0 stage=0 completion=2 native=0 detail=
+snapshot state=5 completion=2 backend=6 codec=0 elapsed=5321 encoded=0 errors=5 rss=44457984 cpu=0.000000
+final mode=0 action_done=1 once=1 action_ok=1 event_errors=1 pressure_errors=0 release_null=1 pass=0
+
+```
+
+外部CPU/RSS采样（PID/秒/单核CPU%/RSS KiB）：
+```text
+2208762       0  0.0  7596
+2208762       1 21.0 21548
+2208762       2 18.0 29116
+2208762       3 16.6 30940
+2208762       4 18.2 33312
+2208762       5 23.0 40780
+
+```
+
+独立源码调查：MediaGraphRuntimeLifecycleExecutor.stop先cancelSessionPayloadWaiters，后threadedExecutor.stop发布worker停止标志；ledger唤醒返回Cancelled期间，worker可能尚无stop标志，故记录首错。rk429仅修重复退役幂等，未覆盖该窗口。需统一停止意图→解除等待→interrupt/join顺序，并同步检查abort/failure-supervisor；不能吞非Cancelled真实错误或既有首错。Windows共享代码亦有潜在影响。
+
+## running源实际命令
+
+目标原120秒H264/AAC源：
+```bash
+/home/tang/MediaTranscode-composition-09093919/out/dependency-work/prefix-ffmpeg/bin/ffmpeg -hide_banner -nostdin -re -i /home/tang/test-continuous-120s.mp4 -map 0:v:0 -an -c:v copy -bsf:v h264_mp4toannexb -f rtp -payload_type 96 -rtpflags send_bye 'rtp://127.0.0.1:61020?rtcpport=61021&pkt_size=1200' -map 0:a:0 -vn -c:a copy -f rtp -payload_type 97 -rtpflags send_bye 'rtp://127.0.0.1:61022?rtcpport=61023&pkt_size=1200'
+```
+Windows原120秒HEVC源，单条绝对路径命令：
+```powershell
+& 'D:/mabs/local64/bin-video/ffmpeg.exe' -hide_banner -nostdin -re -i 'D:/Code/MyCode/MediaTranscode/out/acceptance/test-continuous-120s.mp4' -map 0:v:0 -an -c:v hevc_nvenc -rc cbr -b:v 8000k -g 60 -f rtp -payload_type 96 -rtpflags send_bye 'rtp://192.168.130.229:61050?rtcpport=61051&pkt_size=1200&localaddr=192.168.96.122'
+```
+VLC实际另加 --verbose=2 --file-logging --logfile=D:/Code/MyCode/MediaTranscode/out/acceptance/composition-rk446-vlc.log --extraintf=rc --rc-host=127.0.0.1:42120 --rc-quiet：
+```powershell
+& 'D:/VideoLAN/VLC/vlc.exe' --no-one-instance --network-caching=1000 'udp://@:62024'
+```
+
+远端源输出为source.out/log，Windows源输出为composition-rk446-source1.out/log；两源最终3600帧并exit0，只证明发送器完整，不覆盖提前失败的consumer。VLC RC quit退出；未据其窗口声称出图通过。
+
+清理清单：远端consumer、consumer.c、consumer.o、monitor.log、running-evidence.json、running-pid.txt、running-result.txt、running.log、running.out、source-pid.txt、source.log、source.out；本机out/acceptance的composition-rk446-source1.out/log及composition-rk446-vlc.log；本机out/dependency-work/rk446-callback-preparation的consumer.c、README.md、running-evidence.json。源码与诊断已归档，随后逐项清理，保留原120秒源与正式构建产物。
+
+清理复核完成：首轮及pressure2各4远端文件、running12远端文件、本机6临时文件均按清单删除，目标目录为空；全部本轮PID已退出。临时消费者源码仅作为本页执行记录保留，不保留测试代码/可执行程序。

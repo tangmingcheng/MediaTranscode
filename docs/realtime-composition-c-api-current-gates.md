@@ -53,3 +53,7 @@ rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用
 两个无媒体源补充会话实际验证STARTING回调内request_stop，以及回调内release防误用拒绝后request_stop。两次请求返回OK，后者局部句柄保持不变；外部release后句柄为空。两次均观察当前既有准备前取消语义：FAILED、REQUESTED_STOP，恰一CANCELLED/STOP错误事件，未编码、无worker错误。消费者检查进程均exit0只表示该精确边界符合预期，不代表媒体会话正常COMPLETED。
 
 合屏固定输出不支持以remove_output触发回调；该假设方案已在执行前撤销，未改生产代码。运行期间回调、准备压力及完整可靠性门禁仍未闭合，详见rk434记录。
+
+## rk446：正预算不足通过，RUNNING回调停止失败
+
+正预算1字节实际触发root准备存储准入错误；ERROR回调读取FAILED快照成功，外部release句柄为空，修正临时消费者漏识别精确错误文本后复验exit0。仅关闭早期容量不足边界，非深层部分准备回滚。RUNNING回调内get_snapshot/request_stop均成功，但共享stop先取消credit、后发布worker停止标志，导致Cancelled误计首错，FAILED/REQUESTED_STOP、workerErrors5、encoded0、exit1。该门禁仍FAIL，不能改判据接受失败。详见realtime-composition-rk446-c-boundaries.md；临时产物已清理。
