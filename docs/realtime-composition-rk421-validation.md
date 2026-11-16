@@ -64,3 +64,6 @@ Windows源29600、VLC8472、dumpcap26136，父会话54547；源最后2709帧90.2
 
 远端待清理18项：原17项run.sh/runner.log/pids.txt/result.txt/cli.log/cli-error.log/cli-maps.txt/monitor.log/socket-monitor.log/source0、1、2各.log和.out/udp-before.txt/udp-after.txt，另threads.txt；再加project-build-rk421.log。当前SSH暂时无响应，尚未删除，不宣称清理完成。
 本机6项临时产物已逐项删除，rk421前缀无残留。目标SSH后续默认连接被关闭；ssh -b192.168.96.122 -tt -oConnectTimeout=8到192.168.130.229:22亦8.41秒超时，未进入认证。远端18项测试产物（原17+threads.txt）及project-build-rk421.log尚待恢复连接后逐项清理；未宣称已完成该清理。
+
+
+连接恢复后清理完成：18项测试临时文件及project-build-rk421.log共19项已精确删除，rk421目录为空，六旧PID均不存在。此前SSH失败为历史事实，指定源/依赖/回退CLI保持。
