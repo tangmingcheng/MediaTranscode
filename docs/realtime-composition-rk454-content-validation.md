@@ -60,7 +60,7 @@ Windows FFmpeg 保持不变：Windows 既有验证正常，本轮证据仅表明
 
 序号 45337 的 not_before 比 not_after 晚 96359 ns；规划时已提交序号 45258，失败时实际提交已推进至 45336。不能把两个不同服务进度的快照差异直接当成 planner 错误，尚需核对期间的服务时间和背压。有效期限 66666668 ns，未放宽任何预算。
 
-源 0/1/2/3 均输出 3600 帧，完整 120 秒；抓包 159735 包、接口丢包 0。已有 VLC 原生快照显示四格画面，但本轮失败，不能记为内容时差验收通过。源结束后 CLI 仍存活超过 337 秒，未产生 result.txt；45 个存活线程的 wchan 均为 futex_wait_queue_me。目标机未发现 gdb，未取得用户态线程栈，不能据此确定具体锁环。后续精确 PID 清理属于强制中止，不是自然退出。
+源 0/1/2/3 均输出 3600 帧，完整 120 秒；抓包 159735 包、接口丢包 0。已有 VLC 原生快照显示四格画面，但本轮失败，不能记为内容时差验收通过。源结束后 CLI 仍存活超过 337 秒，未产生 result.txt；45 个存活线程的 wchan 均为 futex_wait_queue_me。当时仅在 PATH 中未找到 gdb，未取得用户态线程栈，不能据此确定具体锁环。后续已发现工具链 gdb：`/opt/mt-tools/arm-gnu-toolchain-15.2.rel1-aarch64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gdb`；这不补足本轮已清理进程的栈证据。后续精确 PID 清理属于强制中止，不是自然退出。
 
 目标 stderr 保留诊断：client 12 driver is not ready；滤镜 range 从 unknown 变为 tv 的 Changing video frame properties 警告；编码器 readback 为 VBR 8000000/12000000、固定 30 fps、GOP 60。没有证据证明这些警告导致本次发送期限失败。
 
@@ -78,3 +78,12 @@ CLI 精确 PID 2807676 强制清理后退出 137；source0/1 退出 0，wrapper/
 
 本机逐项清理清单：composition-rk454-capture.log, composition-rk454-capture.out, composition-rk454-cli.log, composition-rk454-native-2026-11-16-18h31m14s446.png, composition-rk454-output.pcapng, composition-rk454-source2.log, composition-rk454-source2.out, composition-rk454-source3.log, composition-rk454-source3.out, composition-rk454-vlc.log。
 远端 rk454 逐项清理清单：cli-error.log, cli-maps.txt, cli.log, launcher.log, monitor.log, output.sdp, pids.txt, result.txt, run.sh, socket-monitor.log, source0.log, source0.out, source1.log, source1.out, thread-wchan.txt, udp-after.txt, udp-before.txt。保留原始 120 秒源及所有构建和回退目录。
+### 独立因果复核与下一步
+
+确证：规划消费 seq45258，而失败前已提交至 seq45336，二者不是同一快照。前包实际完成 67589620558 ns 加 serviceDuration 216960 ns，恰等于 sender TAT 与 scope frontier 67589837518 ns；下一包最晚开始 67589741159 ns，已超出 96359 ns，因此本次预约拒绝符合原硬期限。失败包未进入 wait/submit，不能称为该包等待超时。
+
+`MediaScheduledDatagramSenderNode.cpp` 的 activateNextWireBatch 记录整批 activation，逐包预约保留该记录。因此 activation_completed 到失败 permit_started 的约 41.964 ms 包含前序数据包处理，不是已证实的一次单包或 OS 停顿。seq45258 至 seq45336 实际完成间隔 44.716508 ms；规划 projected frontier 至协议 deadline 尚有 44.508798 ms，但现有记录不能分解后续等待、提交和其他运行开销，不能据此证明 planner 漏算或部署规格必然不可满足。
+
+[WebRTC 官方 PacingController](https://webrtc.googlesource.com/src/+/c52e627c831ace2e6e6b0738715a51d851cd4865/modules/pacing/pacing_controller.cc)同样根据真实发送更新服务债务并随时间消减。其允许突发、债务截断及队列提速，与本项目不可变期限和硬速率上限不同，不能直接移植来绕过失败，也不增加经验裕量。
+
+下一原规格轮次仅补取已有 batch observation 的 last_completed/active 两行及失败收尾线程栈，不新增生产诊断。当前 sender 在 emitDiagnostics 已输出这两行，waitUntil 已累计批次等待；本轮未归档且原日志已按清单删除，不能恢复或猜造。期限拒绝原因仍属证据不足；失败后长期不退出则是独立已复现的生命周期问题，需用已发现的 gdb 栈定位。保留原失败，不以后续成功反推已修复；Windows FFmpeg 不变。
