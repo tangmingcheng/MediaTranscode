@@ -17,10 +17,12 @@ struct MediaOwnedVideoFrame final {
 };
 class FFmpegFrameBuffer : public MediaBuffer {
 public:
-    explicit FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame);
+    FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame, std::uint64_t logicalPayloadBytes);
 
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
 
+    // Geometry is immutable after wrapping; geometry changes require a new wrapper.
     AVFrame* frame() noexcept;
     const AVFrame* frame() const noexcept;
     MediaOwnedVideoFrame takeFrame() noexcept;
@@ -31,6 +33,9 @@ public:
 protected:
     std::optional<MediaVideoFrameReadiness> m_readiness;
     ::media::ffmpeg::FramePtr m_frame;
+
+private:
+    const std::uint64_t m_logicalPayloadBytes;
 };
 
 } // namespace media::ffmpeg::graph

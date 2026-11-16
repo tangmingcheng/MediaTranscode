@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 
 #include <cstring>
 #include <utility>
@@ -223,6 +224,8 @@ namespace media::ffmpeg::graph {
     if (const auto* prepared = std::get_if<MediaPreparedLineageAllocation>(&allocation); prepared && !prepared->resource)
         return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::invalidArgument("Frame allocation resource missing"));
     try {
+        auto footprint = MediaFramePayloadFootprint::logicalBytes(*frame, streamKind);
+        if (!footprint) return ::media::Result<MediaBufferRef>::failure(footprint.error());
         const bool hardware = frame->hw_frames_ctx != nullptr;
         MediaBufferRef buffer;
 
@@ -230,9 +233,9 @@ namespace media::ffmpeg::graph {
             MediaHardwareDescriptor hw;
             hw.frameKind = MediaHardwareFrameKind::Hardware;
             hw.zeroCopyPreferred = true;
-            buffer = std::allocate_shared<HardwareFrameBuffer>(MediaLineageAllocator<HardwareFrameBuffer>(allocation), std::move(frame), std::move(hw));
+            buffer = std::allocate_shared<HardwareFrameBuffer>(MediaLineageAllocator<HardwareFrameBuffer>(allocation), std::move(frame), std::move(hw), footprint.value());
         } else {
-            buffer = std::allocate_shared<FFmpegFrameBuffer>(MediaLineageAllocator<FFmpegFrameBuffer>(allocation), std::move(frame));
+            buffer = std::allocate_shared<FFmpegFrameBuffer>(MediaLineageAllocator<FFmpegFrameBuffer>(allocation), std::move(frame), footprint.value());
         }
 
         const auto* frameBuffer = dynamic_cast<const FFmpegFrameBuffer*>(buffer.get());
@@ -301,22 +304,13 @@ namespace media::ffmpeg::graph {
                                                                        MediaHardwareDescriptor hardware,
                                                                        MediaStreamKind streamKind)
 {
-    if (!frame) {
+    if (!frame || !frame->hw_frames_ctx)
         return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument("wrapHardwareFrame failed: frame is null"));
-    }
-
-    auto buffer = makeMediaBufferRef<HardwareFrameBuffer>(std::move(frame), std::move(hardware));
-    buffer->setStreamKind(streamKind);
-    buffer->setPayloadKind(MediaPayloadKind::Frame);
-    if (const auto* frameBuffer = dynamic_cast<const HardwareFrameBuffer*>(buffer.get())) {
-        if (const AVFrame* avFrame = frameBuffer->frame()) {
-            buffer->setTimestamps(avFrame->pts, avFrame->pkt_dts, avFrame->duration);
-            buffer->setFormatDescriptor(FFmpegDescriptorMapper::fromFrame(avFrame, streamKind));
-        }
-    }
-
-    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+            ::media::ErrorInfo::invalidArgument("wrapHardwareFrame requires a hardware frame"));
+    auto wrapped = wrapFrame(std::move(frame), streamKind, MediaRuntimeLineageAllocation{});
+    if (!wrapped) return wrapped;
+    wrapped.value()->setHardwareDescriptor(std::move(hardware));
+    return wrapped;
 }
 
 } // namespace media::ffmpeg::graph

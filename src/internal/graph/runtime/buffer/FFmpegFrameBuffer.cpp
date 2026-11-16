@@ -4,8 +4,9 @@
 
 namespace media::ffmpeg::graph {
 
-FFmpegFrameBuffer::FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame)
+FFmpegFrameBuffer::FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame, std::uint64_t logicalPayloadBytes)
     : m_frame(std::move(frame))
+    , m_logicalPayloadBytes(logicalPayloadBytes)
 {
     setPayloadKind(MediaPayloadKind::Frame);
     if (m_frame && (m_frame->flags & AV_FRAME_FLAG_KEY)) {
@@ -16,6 +17,11 @@ FFmpegFrameBuffer::FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame)
 MediaBufferType FFmpegFrameBuffer::type() const noexcept
 {
     return MediaBufferType::Frame;
+}
+
+std::optional<std::uint64_t> FFmpegFrameBuffer::payloadFootprintBytes() const noexcept
+{
+    return m_frame ? std::optional<std::uint64_t>{m_logicalPayloadBytes} : std::nullopt;
 }
 
 AVFrame* FFmpegFrameBuffer::frame() noexcept

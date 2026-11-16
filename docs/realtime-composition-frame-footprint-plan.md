@@ -1,0 +1,13 @@
+# 解码帧逻辑payload合同修复
+
+证据：rk420源2 node58 decoded startup已收到匹配的VideoDecodeBuffer/FFmpegFrameBuffer及lineage，但envelope要求payloadFootprintBytes非零失败。FFmpegFrameBuffer未覆盖基类恒nullopt接口；VideoDecodeBuffer只转发。不是已证实的DRM分配大小错误。
+
+权威依据：[FFmpeg AVHWFramesContext](https://ffmpeg.org/doxygen/trunk/structAVHWFramesContext.html)以sw_format描述硬件表面的软件格式；[FFmpeg图像工具](https://ffmpeg.org/doxygen/trunk/group__lavu__picture.html)提供av_image_get_buffer_size。本项目复用现有MediaFramePayloadFootprint::logicalBytes，硬件owner实际分配/stride/显存/RSS仍由各自合同计价，不能混同。
+
+实施：唯一factory在wrapFrame时从真实AVFrame和明确stream kind计算逻辑字节，失败原样传播；作为必需内部构造参数传软件/硬件wrapper并缓存，payloadFootprintBytes在仍持有frame时返回，takeFrame后nullopt。保留envelope强检查，不从reservation容量猜测。包装后几何不可变；现有writable消费者只改时间戳/duration，几何变更必须重新包装。对象geometry按真实类型sizeof自动计价。
+
+不新增公共参数、线程、队列、背压、硬件adapter或处理链；既有RAII不变，不增加媒体拷贝。Windows/CUDA/软件路径共享修复，按当前要求先RKMPP构建，Windows影响待后续同规格验证。
+
+两名独立审查后8核增量all及原规格realtime；失败保留原错误、CPU/RSS/A-V/输出计数，归档后清临时产物。实现与验证未完成。
+
+实施状态：五文件实现完成。初审发现wrapHardwareFrame旧构造遗漏，已改为校验真实硬件帧后统一复用wrapFrame；两名独立审查者重新读取最终版本均明确SOURCE PASS。UTF-8无BOM/CRLF及diff检查通过，尚待目标构建与原规格实流。

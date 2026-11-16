@@ -7,7 +7,8 @@ namespace media::ffmpeg::graph {
 
 class HardwareFrameBuffer final : public FFmpegFrameBuffer {
 public:
-    HardwareFrameBuffer(::media::ffmpeg::FramePtr frame, MediaHardwareDescriptor hardware);
+    HardwareFrameBuffer(::media::ffmpeg::FramePtr frame, MediaHardwareDescriptor hardware,
+                        std::uint64_t logicalPayloadBytes);
 
     MediaBufferType type() const noexcept override;
 };
