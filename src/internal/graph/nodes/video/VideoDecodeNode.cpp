@@ -2,6 +2,7 @@
 #include "internal/graph/runtime/ffmpeg/MediaDecodedVideoTimeBase.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
 
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -253,6 +254,8 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
     if (m_lineageState->flushPending) return continueFlush(context);
+    // A completed generation drain remains closed until the owning purge resets it.
+    if (m_lineageState->flushSent) return processWaiting();
     if (m_lineageState->receivePending) {
         auto receiveResult = receiveFrames(context);
         if (!receiveResult) return processProgress(::media::Status::failure(receiveResult.error()));
@@ -315,7 +318,16 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
-    if (buffer->isEof() || buffer->isFlush()) {
+    const auto endGeneration = mediaEndGeneration(buffer);
+    if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+    if (endGeneration.value()) {
+        if (!m_lineageState->synchronized())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "EndGeneration requires a planned synchronized decoder lineage")));
+        if (auto freshness = m_lineageState->authorizeRetainedControl(buffer); !freshness)
+            return processProgress(std::move(freshness));
+    }
+    if (buffer->isEof() || buffer->isFlush() || endGeneration.value()) {
         const bool eof = buffer->isEof();
         if (eof && m_lineageState->eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
@@ -619,7 +631,9 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     auto drain = receiveFrames(context);
     if (!drain) return processProgress(::media::Status::failure(drain.error()));
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-    m_codecApi->flushBuffers(codecContext());
+    const auto endGeneration = mediaEndGeneration(m_lineageState->flushBuffer);
+    if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+    if (!endGeneration.value()) m_codecApi->flushBuffers(codecContext());
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
@@ -631,7 +645,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     MediaBufferRef terminal = std::move(m_lineageState->flushBuffer);
     m_lineageState->flushPending = false;
     m_lineageState->flushIsEof = false;
-    m_lineageState->flushSent = false;
+    m_lineageState->flushSent = endGeneration.value().has_value();
     if (eof) {
         m_lineageState->terminals.markEof("packet");
         m_lineageState->eofEmitted = true;

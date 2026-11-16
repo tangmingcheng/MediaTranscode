@@ -982,3 +982,7 @@ rk454复现sender期限冲突及失败后不退出，证据归档；rk455临时�
 ## 2026-11-16：rk458源组排空基础接口
 
 EndGeneration及固定关闭状态、frontier/成员完成、SourceDrained强校验、owner实际sizeof准入计费已完成基础切片双SOURCE PASS；RKMPP8核增量303项exit0。源码核验区分ingress/clock-group/playback三域，并沿原单transaction通道采用上游整组有序屏障、下游成员独立排空确认。生产BYE尚未启用，尾媒体修复仍待完整接线和双平台实流，不新增验收成功声明。回退保留，Windows FFmpeg未改。
+
+## 2026-11-16：rk459解码器代内排空
+
+音视频decoder新增EndGeneration按原send-null/receive EOF排空后等待owner purge，保持末帧/标记提交顺序且不永久EOF。修复双审发现的非同步实例无purge等待问题后，两者复审SOURCE PASS；目标8核增量5项exit0。控制尚未接入生产BYE，尾媒体完整修复及原规格实流仍待完成，不改Windows FFmpeg。

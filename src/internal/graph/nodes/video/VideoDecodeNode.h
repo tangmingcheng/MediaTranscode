@@ -30,6 +30,8 @@ public:
     bool receivePending = false;
     bool flushPending = false;
     bool flushIsEof = false;
+    // True after send-null. With !flushPending, EndGeneration has drained the codec;
+    // input remains closed until generation purge/reset clears this state.
     bool flushSent = false;
     MediaBufferRef flushBuffer;
     ::media::ffmpeg::PacketPtr pendingPacket;
