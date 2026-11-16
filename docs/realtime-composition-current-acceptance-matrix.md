@@ -52,3 +52,9 @@ rk454复现不可变期限失败seq45337，随后CLI未退出，强制清理exit
 rk456输入SR基准偏差210.771–210.791ms；六点内容偏差213.583ms。110秒相关存在周期近峰，但未参与拟合的112–118秒留出段相关0.998944463，另一候选要求不存在的120.480–126.480秒输入，故有限内容对应/SR归因PASS，残差2.791–2.812ms。该范围非全程统计。输出末非零118.518980秒，按映射约末1.267秒源音频未体现；BYE在18:46:19.441触发共享clock invalidation/purge是待证候选，不能直接认定全部64AU差额归于purge。Windows同类共享路径需审查，本机FFmpeg保持不变。
 
 详见[rk454](realtime-composition-rk454-content-validation.md)、[rk455](realtime-composition-rk455-validation.md)、[rk456](realtime-composition-rk456-validation.md)。
+
+## rk457：尾音清除路径已由owner实证确认
+
+13a7d57c仅增加purge前有界取证，经最终双独立SOURCE PASS、RKMPP8核增量8项exit0。原规格四源完整120秒及全黑/正常caller_stop通过，sender无失败，不关闭rk454。BYE触发purge时实际有55个旧代候选/56320样本，mapped5225635..5281955，next_output5226496，pending_cancelled0，证实已绑定待播放尾媒体被清；头部可能部分消费，不把全部56320计成丢失。已保存原始行，38项临时文件/9PID清理。修复尚未实施。
+
+设计范围经两独立复核：源组整体closing/drain/purge/reacquire符合原各源独立要求；不新增同一A/V源成员独立重建能力。实施前明确实际FIFO全holder控制、最后视频提交终点与旧新代有界交接。Windows FFmpeg不变，共享修复后做同规格Windows回归。见[rk457](realtime-composition-rk457-validation.md)、[BYE排空调查](realtime-composition-sender-bye-drain-investigation.md)。
