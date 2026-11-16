@@ -1,6 +1,12 @@
 # 当前任务：固定实时视频合屏
 
-## 当前进度：2026-10-28 r367
+## 当前进度：2026-11-16 rk423
+
+当前RKMPP产物已完成四路RTP H264/H264/H264+AAC/HEVC → HEVC CBR8Mbps、1280×720/30、AAC192kbps → MPEG-TS/UDP真实出画、单路及全失源黑屏持续输出；同一CLI中H264+AAC和HEVC重入generation2后两格恢复，再次失源全黑。原源及重入均完整120秒；generation2内部A/V约2268ns、0ppm，RSS重入前后77,688,832B稳定，errors0。详见[docs/realtime-composition-rk422-validation.md](docs/realtime-composition-rk422-validation.md)与[rk423](docs/realtime-composition-rk423-validation.md)。本轮产物及进程已清理；观测结束SIGTERM退出不代表caller-stop门禁通过。
+
+下一步补当前产物双路/三路矩阵及选定音频恢复。剩余门禁：接收端静音/恢复与内容级A/V、直接C API及旧ABI、最新共享代码Windows同规格回归、失败退出/caller-stop及多轮可靠性。不得把四路已证明的出画/恢复重新记为未实现，也不能用一次恢复覆盖所有门禁。Windows FFmpeg保持不动；当前按授权先RKMPP增量验证，本机修改和提交，不推送/合并。目标机依赖变更仅限有证据的阻塞且保留回退。
+
+## 历史进度：2026-10-28 r367
 
 PreparedPush显式分配域与reservation常驻费用已贯通，均双独立源码PASS；Release91686 configure/build均0（755项），realtime6602752 bytes、18:58:39。r365完成三格→黑→重入左下恢复→黑四张VLC原生快照，四源exit0、CLI caller_stop0，payload224456匹配回零，errors/pressure/deadline_misses均0。外部CPU均值2.025%、WS峰269271040，内部raw_phase绝对最大13606ns；VLC错误/警告已保留，不能据此判完整目标通过或旧间歇故障修复。16项产物及六PID已清理，详docs/realtime-composition-r365-validation.md。
 

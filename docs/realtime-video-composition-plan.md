@@ -1,7 +1,13 @@
 # 固定实时视频合屏实施计划
 
+## 当前进度：2026-11-16 rk423
 
-## 当前进度：2026-10-28（最近实流 r367）
+当前RKMPP产物已完成四路RTP H264/H264/H264+AAC/HEVC → HEVC CBR8Mbps、1280×720/30、AAC192kbps → MPEG-TS/UDP真实出画、单路及全失源黑屏持续输出；同一CLI中H264+AAC和HEVC重入generation2后两格恢复，再次失源全黑。原源及重入均完整120秒；generation2内部A/V约2268ns、0ppm，RSS重入前后77,688,832B稳定，errors0。详见[realtime-composition-rk422-validation.md](realtime-composition-rk422-validation.md)与[rk423](realtime-composition-rk423-validation.md)。本轮产物及进程已清理；观测结束SIGTERM退出不代表caller-stop门禁通过。
+
+下一步补当前产物双路/三路矩阵及选定音频恢复。剩余门禁：接收端静音/恢复与内容级A/V、直接C API及旧ABI、最新共享代码Windows同规格回归、失败退出/caller-stop及多轮可靠性。不得把四路已证明的出画/恢复重新记为未实现，也不能用一次恢复覆盖所有门禁。Windows FFmpeg保持不动；当前按授权先RKMPP增量验证，本机修改和提交，不推送/合并。目标机依赖变更仅限有证据的阻塞且保留回退。
+
+
+## 历史进度：2026-10-28（最近实流 r367）
 
 按代际首AU/解码/过滤/真实发布/aggregate诊断已完成双独立复审；修复缺少MediaNodeId头依赖后，Release63158全量构建成功（757项）。r367原规格三源H.264/AAC → HEVC CBR8000kbps、1280×720/30、AAC CBR192kbps → MPEG-TS/UDP，四张VLC原生快照覆盖三格→全黑→左下重入→全黑且截图前后CLI存活。四次源完整120秒/3600帧exit0，CLI caller_stop0、errors0、payload246709预约/释放匹配归零；16项产物及六PID已清理。详见 [r367记录](realtime-composition-r367-validation.md)。
 
