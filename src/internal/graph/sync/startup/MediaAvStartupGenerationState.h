@@ -40,6 +40,7 @@ public:
     void erase(const MediaAvStartupIds& ids) noexcept;
     ::media::Status purge(const MediaAvGenerationPurge& purge);
     void reset() noexcept;
+    bool hasRetainedMedia() const noexcept { return !m_payloads.empty(); }
 
     const MediaAvSyncGroupKey& groupKey() const noexcept { return m_groupKey; }
     const std::optional<int>& audioSampleRate() const noexcept { return m_audioSampleRate; }

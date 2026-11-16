@@ -612,9 +612,33 @@ MediaAvStartupCoordinatorNode::processControl(
     MediaBufferRef output = *pending;
     MediaAvSyncStatus terminalStatus = MediaAvSyncStatus::success();
     bool publishTerminal = false;
-    if (control.controlKind() == MediaControlBufferKind::Eof) {
-        terminalStatus = m_coordinator->endOfStream(stream);
-        publishTerminal = terminalStatus && m_coordinator->terminalEofReached();
+    const bool endGeneration = control.controlKind() == MediaControlBufferKind::EndGeneration;
+    if (endGeneration) {
+        auto classified = mediaEndGeneration(output);
+        if (!classified) return processProgress(::media::Status::failure(classified.error()));
+        const auto group = context.findAvSyncGroup(m_generationState->groupKey());
+        const auto closing = group ? group->sourceDrainSnapshot() : std::nullopt;
+        const auto& sourceGeneration = m_coordinator->generation();
+        const auto& epoch = m_coordinator->playbackEpoch();
+        const auto* member = closing ? (input == PendingInput::Video ? &closing->video :
+            closing->audio ? &*closing->audio : nullptr) : nullptr;
+        // tryRelease constructs this epoch from the source generation. Validate that
+        // frozen binding, never borrow a later activation to identify this control.
+        if (!group || !group->preservesActivatedOutput() || !closing || !member ||
+            !member->acceptedFrontier || !sourceGeneration ||
+            classified.value() != sourceGeneration || !epoch ||
+            epoch->generation != *sourceGeneration ||
+            epoch->generation != closing->request.playbackGeneration ||
+            m_generationState->hasRetainedMedia())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Startup generation boundary requires sealed input and its fully released frozen epoch")));
+    }
+    if (control.controlKind() == MediaControlBufferKind::Eof || endGeneration) {
+        auto sealed = m_coordinator->sealMember(stream,
+            endGeneration ? MediaAvStartupMemberClosure::EndGeneration : MediaAvStartupMemberClosure::Eof,
+            control.generation());
+        if (!sealed) terminalStatus = MediaAvSyncStatus::failure(sealed.error());
+        publishTerminal = sealed && sealed.value();
     } else {
         terminalStatus = m_coordinator->fail(
             control.controlKind() == MediaControlBufferKind::Abort
@@ -631,7 +655,7 @@ MediaAvStartupCoordinatorNode::processControl(
         if (m_terminalControlCommitted) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MediaAvStartupCoordinatorNode rejects duplicate terminal control"));
+                    "MediaAvStartupCoordinatorNode rejects duplicate group boundary"));
         }
         m_terminalControlCommitted = true;
         auto emitted = emitOutput(context, "release", output);

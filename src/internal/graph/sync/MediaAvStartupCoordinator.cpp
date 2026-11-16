@@ -367,9 +367,8 @@ try {
             {m_allocation, MediaAvStartupDisposition::DroppedNotReady, std::nullopt, std::move(purged)});
     }
 
-    const bool streamEnded = unit.stream == MediaAvStartupStream::Video
-        ? m_videoEof
-        : m_audioEof;
+    const bool streamEnded = (unit.stream == MediaAvStartupStream::Video
+        ? m_videoClosure : m_audioClosure) != MediaAvStartupMemberClosure::Open;
     if (streamEnded) {
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
             MediaAvSyncErrorCode::StartupInvalidTransition,
@@ -671,25 +670,42 @@ MediaAvSyncStatus MediaAvStartupCoordinator::resumeAfterEvidence(MediaRunningTim
     return resumed;
 }
 
-MediaAvSyncStatus MediaAvStartupCoordinator::endOfStream(MediaAvStartupStream stream)
+MediaAvSyncResult<bool> MediaAvStartupCoordinator::sealMember(
+    MediaAvStartupStream stream, MediaAvStartupMemberClosure closure,
+    std::optional<std::uint64_t> generation)
 {
+    using Result = MediaAvSyncResult<bool>;
     if ((stream != MediaAvStartupStream::Video && stream != MediaAvStartupStream::Audio) ||
         (stream == MediaAvStartupStream::Audio && !m_config.audio))
-        return MediaAvSyncStatus::failure(startupError(
+        return Result::failure(startupError(
             MediaAvSyncErrorCode::SourceIdentityMismatch, "end_of_stream", nullptr,
-            "startup EOF is not a planned stream member"));
+            "startup boundary is not a planned stream member"));
+    if ((closure != MediaAvStartupMemberClosure::Eof &&
+         closure != MediaAvStartupMemberClosure::EndGeneration) ||
+        (closure == MediaAvStartupMemberClosure::EndGeneration &&
+         (!generation || *generation == 0 || generation != m_state.generation())))
+        return Result::failure(startupError(
+            MediaAvSyncErrorCode::StartupInvalidTransition, "seal_member", nullptr,
+            "startup generation boundary requires the exact current source generation"));
     if (m_state.state() == MediaAvSyncState::Running) {
-        bool& ended = stream == MediaAvStartupStream::Video ? m_videoEof : m_audioEof;
-        if (ended) {
-            return MediaAvSyncStatus::failure(startupError(
+        auto& ended = stream == MediaAvStartupStream::Video ? m_videoClosure : m_audioClosure;
+        const auto other = stream == MediaAvStartupStream::Video ? m_audioClosure : m_videoClosure;
+        if (ended != MediaAvStartupMemberClosure::Open ||
+            (other != MediaAvStartupMemberClosure::Open && other != closure)) {
+            return Result::failure(startupError(
                 MediaAvSyncErrorCode::StartupInvalidTransition,
-                "end_of_stream", nullptr, "duplicate stream EOF"));
+                "seal_member", nullptr, "duplicate or incompatible startup member boundary"));
         }
-        ended = true;
-        return MediaAvSyncStatus::success();
+        if (!m_video->empty() || (m_audio && !m_audio->empty()))
+            return Result::failure(startupError(
+                MediaAvSyncErrorCode::StartupInvalidTransition, "seal_member", nullptr,
+                "running startup boundary still owns unreleased media"));
+        ended = closure;
+        return Result::success(m_videoClosure == closure && (!m_audio || m_audioClosure == closure));
     }
-    return markFailed(MediaAvSyncErrorCode::EofBeforeRelease,
+    auto failed = markFailed(MediaAvSyncErrorCode::EofBeforeRelease,
                       "end of stream before atomic startup release");
+    return Result::failure(failed.error());
 }
 
 MediaAvSyncStatus MediaAvStartupCoordinator::fail(std::string reason)
@@ -742,11 +758,6 @@ const std::optional<MediaPlaybackEpoch>& MediaAvStartupCoordinator::playbackEpoc
     return m_epoch;
 }
 
-bool MediaAvStartupCoordinator::terminalEofReached() const noexcept
-{
-    return m_videoEof && (!m_audio || m_audioEof);
-}
-
 MediaAvStartupIds MediaAvStartupCoordinator::purge(
     std::span<const MediaAvStartupUnitId> prior, std::optional<MediaAvStartupUnitId> trailing)
 {
@@ -771,8 +782,8 @@ void MediaAvStartupCoordinator::clearBufferedState() noexcept
     m_videoBytes = 0;
     m_audioBytes = 0;
     m_epoch.reset();
-    m_videoEof = false;
-    m_audioEof = false;
+    m_videoClosure = MediaAvStartupMemberClosure::Open;
+    m_audioClosure = MediaAvStartupMemberClosure::Open;
     m_lastAttemptSelectionWork = {};
     m_cumulativeSelectionWork = {};
 }

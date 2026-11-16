@@ -986,3 +986,7 @@ EndGeneration及固定关闭状态、frontier/成员完成、SourceDrained强校
 ## 2026-11-16：rk459解码器代内排空
 
 音视频decoder新增EndGeneration按原send-null/receive EOF排空后等待owner purge，保持末帧/标记提交顺序且不永久EOF。修复双审发现的非同步实例无purge等待问题后，两者复审SOURCE PASS；目标8核增量5项exit0。控制尚未接入生产BYE，尾媒体完整修复及原规格实流仍待完成，不改Windows FFmpeg。
+
+## 2026-11-16：rk460 startup整组屏障
+
+源成员代内关闭复用原startup/release FIFO，收齐实际成员且held/前序pending已提交后发唯一组标记，不永久EOF；冻结代次关系显式验证。四文件双SOURCE PASS，RKMPP8核增量27项exit0。完整BYE接线及实流尚未通过。

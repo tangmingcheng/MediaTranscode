@@ -153,6 +153,8 @@ struct MediaAvStartupDeadlines final {
     { return keyFrame && *keyFrame < acquisition ? *keyFrame : acquisition; }
 };
 
+enum class MediaAvStartupMemberClosure : std::uint8_t { Open, Eof, EndGeneration };
+
 class MediaAvStartupCoordinator final {
 public:
     static MediaAvSyncResult<MediaAvStartupCoordinator> create(MediaAvStartupConfig config,
@@ -171,7 +173,8 @@ public:
     MediaAvSyncResult<std::optional<MediaAvStartupDeadlines>> deadlines() const;
     MediaAvSyncStatus resumeAfterEvidence(MediaRunningTime observedAt);
     MediaAvSyncStatus retireGeneration(const MediaAvGenerationPurge& purge);
-    MediaAvSyncStatus endOfStream(MediaAvStartupStream stream);
+    MediaAvSyncResult<bool> sealMember(MediaAvStartupStream stream,
+        MediaAvStartupMemberClosure closure, std::optional<std::uint64_t> generation);
     MediaAvSyncStatus fail(std::string reason);
     void stop() noexcept;
     void abort() noexcept;
@@ -185,7 +188,6 @@ public:
     MediaAvSyncState state() const noexcept;
     const std::optional<std::uint64_t>& generation() const noexcept;
     const std::optional<MediaPlaybackEpoch>& playbackEpoch() const noexcept;
-    bool terminalEofReached() const noexcept;
 
 private:
     friend struct MediaAvStartupCoordinatorTestAccess;
@@ -225,8 +227,8 @@ private:
     std::uint64_t m_videoBytes = 0;
     std::uint64_t m_audioBytes = 0;
     std::optional<MediaPlaybackEpoch> m_epoch;
-    bool m_videoEof = false;
-    bool m_audioEof = false;
+    MediaAvStartupMemberClosure m_videoClosure = MediaAvStartupMemberClosure::Open;
+    MediaAvStartupMemberClosure m_audioClosure = MediaAvStartupMemberClosure::Open;
 };
 
 } // namespace media::ffmpeg::graph

@@ -1,0 +1,17 @@
+# rk460：startup整组有序关闭屏障
+
+状态：四文件切片双SOURCE PASS，RKMPP8核增量27项完成、退出0。尚未启用生产BYE，不作为媒体验收成功。
+
+## 行为与证据
+
+沿原DAG：startup成员状态由两bool改为Open/Eof/EndGeneration；统一sealMember拒绝重复、混合边界及封闭成员后续媒体，另一成员继续。EndGeneration同时验证源generation、既有冻结epoch、关闭事务playback generation、成员接收frontier及held payload为空。tryRelease原实现直接用源generation构造epoch，恒等映射有源码依据，未从新activation补身份。
+
+全部实际成员封闭后只发一次组标记；前序release由原runtime pending先提交，WouldBlock保留原交易。EndGeneration不结束节点，purge清理成员状态；EOF原行为保持。上游屏障发布不等于下游真实贡献完成。pacing_diagnostic_review与remaining_acceptance_audit均SOURCE PASS，参照GStreamer有序EOS聚合模型及现有FIFO/atomic合同。
+
+## 构建、回退及清理
+
+基于dcb9fef5，仅StartupCoordinator.h/.cpp、StartupCoordinatorNode.cpp、StartupGenerationState.h。目标构建PID3330937，wait=0，27/27完成；CLI13057000字节，SHA256=66a2df12b52bb2f2b8c82631433afcd851c76653e960ca09dd4d06845734ae0b。原CLI（4efcd8c404d3d8384434760af641e01b67887f1bd5e515b2413adfb1122483e6）、四文件源码及清单保留在目标out/rollback/rk460。
+
+没有运行CLI/FFmpeg/VLC媒体链路或local CLI；Windows FFmpeg未改。临时清单为本机out/acceptance/rk460-source.tar、目标同名tar及rk460-build.log；归档结果后逐项删除。完整接收截止、holder/aggregate确认和原规格实流仍待完成，rk454失败退出风险保留。
+
+清理完成：3项临时文件均按清单删除，目标/本机无rk460临时项，构建PID已结束；回退与正式构建保留。
