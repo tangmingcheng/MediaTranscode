@@ -58,3 +58,9 @@ planner切片r323实流完成：84905数据报发布/提交一致，错误0，pa
 后续完整周期审查确认：只枚举AU deadline前事件不充分。须包含mux待发布、FileMux/protocol edge、materializer未预约、global未提交及sender等待工作，按身份去重；现有global字节/包数缺release/deadline/service，不能恢复全时序。须定义已接受工作快照或累计服务合同，并依据busy-period/响应时间分析证明有限horizon；不能直接扩展两个next数组即宣称闭合。shared scope其他成员影响仍需合同证明。
 
 已接受工作覆盖与周期闭合的调查及下一阶段契约见 realtime-composition-accepted-work-plan.md。已有series/global身份可复用，但目前无统一覆盖映射；设计尚未冻结，未将调查记为实现完成。
+
+## 2026-11-16 rk427 复核与证据缺口
+
+rk427发送器预约失败时，not_before比not_after晚87414ns；预约前失败，没有进入wait/submit，不能据activation与permit之间间隔归因OS。当前4aef532e诊断已输出previous_submitted_sequence、last_observed与theoretical_arrival；last_observed也会在预约成功时更新，不能当作上一包提交完成时间。下一原规格复验rk435优先关联终态sender lastSubmittedService的真实完成时间、duration与scope frontier。
+
+独立源码复核：acceptedWorkObservation局部wire snapshot包含提交事实；AcceptedWorkPlanner核序号后max(observedNow,sender,scope)，但返回产品只有availableAt，publication descriptor没有当时消费的序号和frontier来源。因此不能拿失败时global latest反推规划时观察。若现有诊断仍不足，需要沿现有publication holder保存有界只读关联，覆盖普通AU与maintenance，不另造调度状态、不放宽deadline或速率上限；该扩展尚未实现。WebRTC发送债务与队列速率调整可供对照，但其突发/债务限制不等价本项目不可变deadline，不能直接移植为绕过失败的方案。rk429/430有限成功不关闭rk427。
