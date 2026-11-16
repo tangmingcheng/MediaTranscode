@@ -29,3 +29,9 @@ CMakeLists.txt 将 beta 构建为 STATIC，故本项检查 archive 链接符号�
 核对 git diff 038f069c HEAD -- include/media_transcode_beta/realtime.h：相对合屏前头文件，只有独立合屏类型、入口以及 snapshot 注释新增；旧类型字段和既有函数声明未改。这证明源码声明保持，不替代目标 ABI 布局实测或旧消费者运行。
 
 rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用，不能关闭本页 C 入口门禁。下一项 rk430 使用目标机临时 C11 消费者，链接当前 beta archive，直接调用 start_composition；双路 H264/AAC 与 HEVC 使用原120秒源，start 返回后擦除并释放调用方配置，保留 callback 上下文至外部 release 完成。观察异构 UNKNOWN、实际出流、停止及释放；准备/编译不计运行通过。临时消费者不纳入版本库，完整内容与结果写入本轮记录后清理。
+
+## rk430 正向实流结果
+
+当前目标库的临时C消费者已直接调用合屏入口：624字节调用方配置在start成功后以volatile逐字节覆盖并释放，随后双路原120秒H264/AAC与HEVC实流正常输出；快照RKMPP、异构UNKNOWN，VLC原生快照确认双画面、单格失源黑屏及全失源黑屏，编码在全失源后继续增长。外部request_stop成功，最终COMPLETED/REQUESTED_STOP，release后句柄为空、事件/worker错误0。详细命令、源码和结果见rk430两份记录。
+
+这关闭正向入口、调用方配置所有权、异构快照和本轮外部停止/释放证据缺口；不覆盖旧ABI实流、无效声明、准备压力失败、立即停止、回调内调用、重入或内容级A/V。公共snapshot没有ledger字段，本轮不宣称直接验证内部账本归零。
