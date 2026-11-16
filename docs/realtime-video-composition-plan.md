@@ -770,3 +770,8 @@ r132失败13件、r133实际20件产物已记录后清理，各六PID无残留�
 当前Release三源V/V/AV、原120秒、HEVC CBR8Mbps/720p30、AAC192kbps→MPEG-TS/RTP于输出scheduler约334ms晚到时报缺source coordinator，CLIexit1；三源均完整3600帧exit0，重入未执行、截图被遮挡。连续输出错误复用显示/源恢复策略，不能补source coordinator、调阈值或丢HEVC参考包规避。需typed encoded-AU调度合同复用现emit=dispatch-transportLead及下游真实deadline，查实际迟到来源后原规格复验。12项临时产物清理完成（两占用文件重试后成功），六PID无残留，原源保留。
 
 用户已明确批准独立C合屏入口与音频协议事实，以及后续最小audio_bitrate_bps目标字段（正值、精确kbps、无默认，不称CBR）。Beta接线实施中，旧ABI及全部原验收门禁保持。整体75/FAIL不变，Windows完整通过前不进入RKMPP；无外部FFmpeg改动、无提交/推送/部署。
+
+
+## 停止证据更正：rk422—rk426
+
+这些轮次的SIGTERM由RealtimeStopSignal桥接到requestStop，并非直接强杀；exit1由main中的失败outcome返回。此前“清理退出”仅说明发起时机，不能解释为正常停止成功。RunController的continuous drain、runtime completion或fixed output finish仍可能失败。既有出画/恢复证据保留，停止门禁保持未通过；历史日志已按清理要求删除，不能补造具体错误。rk427按原四路完整源重现，保留停止阶段完整stderr、end_reason、final report及资源释放，以实际错误驱动修复。
