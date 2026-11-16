@@ -914,3 +914,7 @@ Windows r392/r393原规格四路H264/H264/H264+AAC/HEVC→HEVC CBR8000kbps、128
 rk430直接C合屏入口使用原120秒双路H264/AAC与HEVC→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR，AAC目标192kbps：调用方配置擦除释放后正常出流，异构UNKNOWN、RKMPP快照正确；VLC原生快照双画面→单格黑→全黑，外部停止与释放exit0（4d189958）。本轮公共C快照不能证明内部账本归零。当前推进非法配置与旧ABI证据，完整C生命周期仍未关闭。
 
 未完成：rk427发送时限失败根因与可靠性、旧消费者真实兼容、回调/压力边界、内容级音画同步与线端证据、最新共享改动的Windows回归及整体双审。按用户最新指示优先RKMPP增量构建，本机FFmpeg保持不变；此前Windows正常不等于后续共享修改自动通过。全部阶段临时产物均按各轮清单清理，整体目标仍未完成，不推送/合并/部署。
+
+## 2026-11-16：Windows最新共享源码回归
+
+Release全核心clean-first all-target重建exit0；r436原四路H264/H264/H264+AAC/HEVC→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR、AAC192kbps，四格→全失源黑屏→所选AV源完整120秒generation2重入→再次全黑，均经VLC原生快照检查。五次源均完整3600帧exit0，CLI caller_stop/exit0、workers/errors0、账本322785预约释放平衡归零。17项临时产物与七PID清理完成。本机FFmpeg未修改，未运行local CLI。该证据关闭本次共享修复的上述Windows回归，不关闭rk427偶发时限、内容级A/V、线端交付与整体最终审查。
