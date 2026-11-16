@@ -906,3 +906,11 @@ rk391 原规格三路 RTP H.264/AAC→MPEG-TS/UDP HEVC CBR8000kbps、1280×720/3
 ## 2026-11-05：四路异构准备门禁失败已定位
 
 Windows r392/r393原规格四路H264/H264/H264+AAC/HEVC→HEVC CBR8000kbps、1280×720/30、AAC192kbps准备失败。r393诊断Release全量exit0，双独立源码审查PASS；实流仍FAIL。源3 RTP marker实际有-3000/-6000 tick重排，共享MediaRtpVideoFrameRateObserver无符号差值产生11250/536870537fps，28秒未来窗口仅增1 AU，前缀60/60即耗尽。根因是cadence事实推导，不是部署2GiB不足；诊断提交ccde1aa4，不含功能修复。见docs/realtime-composition-r393-validation.md，全部临时抓包/日志清理。下一步基于真实码流/解码器权威事实修复节奏规划及重排lineage，原规格Windows后RKMPP；不得关闭B帧、扩经验容量或改外部依赖。此前RKMPP三路失源/重入有限证据仍成立，四路异构、C API与完整可靠性目标未完成。
+
+## 2026-11-16：RKMPP 2–4路异构与C入口阶段进度
+
+当前分支codex/realtime-composition-progress，最新生产修复5b5565d4。rk422–rk425已形成2/3/4路异构合屏、失源黑屏及重入的有限实流证据；rk426有选中音频近静音与恢复证据，不能替代内容级A/V。rk428暴露caller-stop取消等待者重复退休错误，修复经双独立源码审查后，rk429原四路120秒复验caller_stop/exit0、错误0、内部账本归零（44cb0aa1）。
+
+rk430直接C合屏入口使用原120秒双路H264/AAC与HEVC→MPEG-TS/UDP HEVC1280×720/30fps/8Mbps CBR，AAC目标192kbps：调用方配置擦除释放后正常出流，异构UNKNOWN、RKMPP快照正确；VLC原生快照双画面→单格黑→全黑，外部停止与释放exit0（4d189958）。本轮公共C快照不能证明内部账本归零。当前推进非法配置与旧ABI证据，完整C生命周期仍未关闭。
+
+未完成：rk427发送时限失败根因与可靠性、旧消费者真实兼容、回调/压力边界、内容级音画同步与线端证据、最新共享改动的Windows回归及整体双审。按用户最新指示优先RKMPP增量构建，本机FFmpeg保持不变；此前Windows正常不等于后续共享修改自动通过。全部阶段临时产物均按各轮清单清理，整体目标仍未完成，不推送/合并/部署。
