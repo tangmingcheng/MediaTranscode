@@ -1,5 +1,6 @@
 #include "internal/graph/planner/capability/MediaVideoEncoderReadback.h"
 #include "internal/graph/planner/capability/MediaEncoderRandomAccessAdapter.h"
+#include "internal/graph/planner/capability/MediaEncoderCompletionAdapter.h"
 #include "internal/graph/protocol/codec/MediaVideoParameterSetFacts.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -19,6 +20,7 @@ namespace media::ffmpeg::graph {
     if (result.effectiveColorRange) result.effectiveColorRange->encoderInput =
         MediaVideoEncoderColorInput{c.color_range, c.pix_fmt, c.sw_pix_fmt};
     result.randomAccess = std::move(randomAccess).value();
+    result.completion = MediaEncoderCompletionAdapter::readAfterOpen(c);
     result.fields = {
         {"codec_id", c.codec_id},
         {"codec_type", c.codec_type},

@@ -942,3 +942,7 @@ e127a744诊断源码按VS2026技能300秒上限全核心clean-first all-target�
 ## 2026-11-16：rk441四源H264 VBR/RTP与完整重入
 
 原规格四源120秒→H264720p30 VBR目标8/范围8–12Mbps、AAC192kbps MPEG-TS/RTP；选中source2再完整120秒重入，VLC原生四格/全黑/单格恢复/再次全黑确认，CLI显式停止exit0、errors0、账本374096平衡归零。pressure19、系统UDP接收错误+19042（已采样输入socket drop0）、线端交付未证明如实保留，整体验收未完成。22远端/8本机临时项与测试PID清理。Windows r440共享调度与rk427可靠性仍未关闭。详见docs/realtime-composition-rk441-validation.md。
+
+## 2026-11-16：编码完整输出能力合同阶段1
+
+新增MediaVideoEncoderCompletionContract与只读adapter，prepared readback记录受限NVENC逐帧/单视图/零重排/完整packet能力；CPB及公开参数不一致保持未授权。未启用scheduler放行，RKMPP未授权，r440未修复。两独立智能体均阶段SOURCE PASS。Release按现有技能300秒上限全核心clean-first all-target构建成功，观察24个cl并行，configure/build exit0、四必需产物齐全；realtime CLI SHA256 9948C8CE2CE2C91F4755A3D7B68503DAE819DA9A82A059D221D026506D08F2E4（7569920字节）。未运行local测试，本阶段尚未实流验证；接通有序进度与生命周期后执行原规格realtime复验。未改Windows或目标FFmpeg。详见docs/realtime-composition-encoded-progress-plan.md。

@@ -54,3 +54,24 @@
 ## 判定与剩余风险
 
 当前判定：直接按上一DTS加帧长放行 **FAIL**；上述显式进度方向 **双独立设计PASS，阶段1仅Windows受限SOURCE PASS、RKMPP证据不足FAIL**，不是实现PASS。r440事后到达的视频2559不能倒推此前已具备该证明。零重排本身仍不自动证明一输入一AU或立即可用；合法时间排序也不能消除编码执行超时、线程调度延迟及发送侧rk427可靠性问题。
+
+## RKMPP有效配置读回：实际源码补查
+
+当前隔离依赖的MPP `mpp/codec/mpp_enc_v2.c:378–388`在encoder锁内执行`copy_enc_cfg(param, enc->cfg_obj)`，GET_CFG读取有效配置。`mpp_enc_impl.c:241–283`中low_delay_part_mode及low_delay_output两条路径均以非零split_mode为必要条件；后者还要求split_out的LOWDELAY位。FFmpeg `rkmppenc.c:1204`只在设置编码参数之前GET_CFG，`:378/631`两处SET_CFG后未读回，`rkmppenc.h`没有公开split/low-delay只读AVOption。因此现有公共接口无法取得实际prepared状态；不得复制私有RKMPPEncContext布局强转访问。
+
+最小候选为目标机wrapper在SET_CFG成功后GET_CFG，读取split:mode/arg/out与base:low_delay并暴露只读事实；frame prep更新同样刷新或验证。此候选尚待独立审查及完整输出路径、身份/顺序/EOF核验，不代表已授权RKMPP水位，也未实际修改依赖。若采用，保留目标隔离前缀和源码/二进制回退，仓库保存改动与证据；本机FFmpeg保持不改。官方命令定义参见https://github.com/rockchip-linux/mpp/blob/develop/inc/rk_mpi_cmd.h，实际行为以上述固定目标源码为准。
+
+依赖身份由既有交付门禁和实测加载库hash核验；本任务不新增运行时DLL加密授权框架。实现配置readback与受审源码语义需分别标明，替换依赖后必须重新核验这些能力，不能把版本字符串本身当作二进制行为证明。
+
+## 阶段1内部能力实现（待双审，未构建）
+
+新增`src/internal/graph/model/MediaVideoEncoderCompletionContract.h`与`planner/capability/MediaEncoderCompletionAdapter.{h,cpp}`，仅接入`MediaVideoEncoderReadback::completion`，未接scheduler或授权任何运行水位。实际实现身份由本轮DLL哈希和既有依赖交付门禁承担；库更换必须重新审查，不新增运行时版本名单或公开参数。合同区分受审源码语义与opened参数readback；任何缺失/不符均返回未授权，不改变原生产错误或编码行为。
+
+NVENC谓词检查native encoder身份、H264/HEVC、COPY_OPAQUE、无INTERLACED_DCT、最终非多视图profile、显式GOP与零有效重排，并复用现有Immediate校验。零重排包含全I的frameIntervalP=0，不硬判等于1。实际`nvenc.c:2025–2027`的CPB side data提供初始化maxBitRate/VBV；正值公开配置须与之相等，从而避免首次send因未收敛配置触发reset。首帧reconfig确在upload/encode/入FIFO前，不会推翻尚不存在的水位；但reconfigure失败仅记录日志，不能假设其必然成功收敛，因此本阶段采用CPB一致这一充分条件，未知保持未授权。
+
+合同有效期限定同prepared context、配置不变且未flush/reset/reopen；这些条件不是一次readback可以永久保证的事实。后续接入前必须由现有owner/代次路径落实生命周期校验及撤销，才能消费完整AU的下界。此次仅增加值类型和静态authority字符串视图，没有新线程、队列、媒体引用或每包字段；readback对象sizeof增长尚未实编测量，不宣称内存全局预算已闭合。RKMPP仍未授权，目标post-SET GET_CFG及完整AU证明由主线程继续核验。
+## 阶段1源码复审与后续时间域接线
+
+两个未参与实现的智能体均明确阶段1 SOURCE PASS，仅覆盖能力产品与readback；未批准实际scheduler放行。新模型/adapter与MediaVideoEncoderReadback使用现有CMake递归收集。生命周期及配置快照消费检查仍必须接通，不能把该阶段当作r440修复。
+
+独立核验当前VideoEncodeNode沿用原canonical lineage，不以编码packet DTS重建canonical decode；NoReorder的AU dispatch等于canonical presentation。aggregate的nextCursor下界已处于同一canonical时间轴。因此后续应依据完整AU/零重排/同代身份合同提升下界语义，避免再做ns→编码tick→ns重复量化。scheduler对音频dispatch及视频下界均复用mapCanonicalToMaster后严格比较。av_rescale_q使用NEAR_INF，而checkedFromTicks截断向零，不能将两者当无误差逆映射；packet PTS/DTS用于合同验证，不能凭当前差值修正水位。

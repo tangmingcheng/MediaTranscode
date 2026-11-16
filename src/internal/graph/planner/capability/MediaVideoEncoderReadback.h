@@ -1,5 +1,6 @@
 #pragma once
 #include "internal/graph/model/MediaPreparedVideoRandomAccessEnvelope.h"
+#include "internal/graph/model/MediaVideoEncoderCompletionContract.h"
 #include <optional>
 #include "internal/graph/model/MediaVideoColorRangeFact.h"
 
@@ -24,6 +25,7 @@ struct MediaVideoEncoderReadback final {
     std::vector<MediaVideoEncoderReadbackField> fields;
     std::vector<std::uint8_t> extraData;
     std::optional<MediaPreparedVideoRandomAccessEnvelope> randomAccess;
+    std::optional<MediaVideoEncoderCompletionContract> completion;
     // Capture only before publication, on the codec's single owning thread.
     static ::media::Result<MediaVideoEncoderReadback> capture(AVCodecContext& encoder);
     friend bool operator==(const MediaVideoEncoderReadback&,
