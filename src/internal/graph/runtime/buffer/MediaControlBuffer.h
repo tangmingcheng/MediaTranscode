@@ -13,7 +13,8 @@ enum class MediaControlBufferKind {
     Unknown,
     Eof,
     Flush,
-    Abort
+    Abort,
+    EndGeneration
 };
 
 enum class MediaControlBufferFlow {
@@ -48,5 +49,9 @@ struct MediaControlBufferClassification final {
 
 ::media::Result<MediaControlBufferClassification>
 classifyMediaControlBuffer(const MediaBufferRef& buffer);
+
+// Empty for non-EndGeneration buffers; malformed matching controls fail.
+::media::Result<std::optional<std::uint64_t>>
+mediaEndGeneration(const MediaBufferRef& buffer);
 
 } // namespace media::ffmpeg::graph

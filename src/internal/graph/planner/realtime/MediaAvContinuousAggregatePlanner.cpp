@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/storage/MediaAvAggregateStorage.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 
 #include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
@@ -69,6 +70,9 @@ template<bool Updating> ::media::Status compileAggregate(
     plan.maximumAudioCandidateSamples = static_cast<std::int64_t>(samples.value);
     Size fixed, retained, objects;
     if (!fixed.add(sizeof(MediaAvContinuousAggregateNode)) ||
+        // Runtime bootstrap creates one epoch owner per source and one for output.
+        !fixed.add(sources.size(), sizeof(MediaAvEpochTransitionService)) ||
+        !fixed.add(sizeof(MediaAvEpochTransitionService)) ||
         !fixed.add(sizeof(MediaContinuousAudioAggregateNode) + sizeof(MediaOwnerThreadGenerationPurge)) ||
         !fixed.add(sizeof(MediaAvAggregateCoordination)) ||
         !fixed.add(sources.size(), sizeof(MediaAvAggregateSourceCompletion)) ||

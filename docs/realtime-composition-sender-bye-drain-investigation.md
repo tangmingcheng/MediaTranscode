@@ -1,6 +1,6 @@
 # RTCP BYE 与合屏尾媒体排空调查
 
-状态：排空功能设计待双独立审查，功能未实施；有界purge取证已实施并运行。原始实测证据及命令见 [rk456 验证记录](realtime-composition-rk456-validation.md)。
+状态：设计及基础接口切片已获双独立审查通过；BYE接线和尾媒体排空尚未完成，有界purge取证已实施并运行。原始实测证据及命令见 [rk456 验证记录](realtime-composition-rk456-validation.md)。
 
 ## 已证实与待证边界
 
@@ -55,7 +55,7 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 | 同SSRC重启/身份不明 | 复用已有ingress重启判据；不能仅凭BYE后到包猜新代。同关闭窗口旧包不得误升新代 |
 | 错误、强失效、显式取消 | 原取消/Poisoned优先，保留错误；不为了尾排空放宽deadline |
 
-关闭身份采用既有source group上下文、控制buffer的playback generation和原成员边。关闭成员记录仅保留stream、原SSRC/ingress generation、原因(SenderLeft或GroupClose)、frontier/完成位，不生成成员子代。截止只从已授权input_latency产品checked推导；各成员用对应prepared等待事实，无经验常量。
+关闭事务采用既有source group上下文、旧playback generation和原成员边；控制buffer的generation必须遵守所在边的代次域，不能全图直接填playback generation。关闭成员记录仅保留stream、原SSRC/ingress generation、原因(SenderLeft或GroupClose)、frontier/完成位，不生成成员子代。截止只从已授权input_latency产品checked推导；各成员用对应prepared等待事实，无经验常量。
 
 ### 表二：实际原图逐边holder排空条件
 
@@ -67,7 +67,7 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 | protocol binder → VideoGate/AudioGate | acquiring旧代包、video lookahead、pending输出按原映射全部结算；最后lookahead必须走已有可靠终止处理，不能造duration；gate保留旧关闭身份的授权 |
 | VideoGate → VideoDecode → decoded VideoStartup（或原interval路由） | send-null/receive排空、registry/retained input完成；新代不能进入该drained codec |
 | AudioGate → AudioStartup；两路startup → coordinator | 原startup held/release交易完成后转发成员关闭事实；组已同时关闭两成员，不等待永远不存在的永久EOF |
-| coordinator → PlaybackEpochBinder → ActivationReleaseSequencer → BoundReleaseExtractor | 旧activation、原子release、pending多边交易先成功提交后再发布标记；不得先撤销旧播放许可 |
+| coordinator → PlaybackEpochBinder → ActivationReleaseSequencer → BoundReleaseExtractor | coordinator收齐成员关闭并完成held/release后，形成整组屏障；复用单transaction FIFO及extractor原子成员广播。旧activation、pending多边交易先成功提交；不得先撤销旧播放许可 |
 | released audio → AudioDecode → AudioStartupTrim | 原decoder drain与lineage/discard-padding结算；trim缓冲完成；metadata端不伪造媒体EOS |
 | trim → AudioDriftController → AudioResample | 原pending correction交易及样本完成；SWResample drain发完内部延迟；停止为封闭旧代产生新补偿命令后再转发 |
 | decoded video/preparation → optional filter/frame-rate → video aggregate | 各frame/pending holder完成后转发；末显示帧复用 `MediaAvContinuousAggregateNode.cpp:445–456`：最后decodedSequence等于lastDisplayCommit才移除并sealDisplayInput，不造末帧duration |
@@ -95,10 +95,16 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 
 ### 控制载体与代次不变量
 
-不新增平行身份/边界类。采用现有 `MediaControlBuffer` 追加 EndGeneration 枚举，并复用其已有 generation；source group 来自节点既有绑定上下文，成员来自承载标记的原输入port/edge。`MediaControlBuffer::initialize` 与 `classifyMediaControlBuffer` 均要求 streamKind=Control，不能把它直接改为Audio/Video来偷带成员身份。
+不新增平行身份/边界类。采用现有 `MediaControlBuffer` 追加 EndGeneration 枚举，并复用其已有 generation（表示当前边的媒体代次域）；source group 来自节点既有绑定上下文，成员来自承载标记的原输入port/edge。`MediaControlBuffer::initialize` 与 `classifyMediaControlBuffer` 均要求 streamKind=Control，不能把它直接改为Audio/Video来偷带成员身份。
 
 成立条件由现有源协调owner强制：一个已发布source playback generation最多发生一次Active→Closing；首次记录固定首BYE时刻/截止，重复通知幂等；只有完成该代drain和原purge后才能进入更高generation。由此 `(既有group, buffer.generation, 原member edge)` 足以标识关闭，不需要给每个control添加closeSequence或新成员子代。
 
-关闭观察时刻、截止、成员frontier与完成位只在现有源协调owner保留一个固定状态记录；复用既有MediaRtpIngressBinding与frontier布局，不新建平行身份框架。旧控制进入FIFO时固定generation，下游必须与被持有的旧关闭记录核对；不得在消费时从可变的新activation补回旧身份。实际需要扩容的只有这份owner状态及现有frontier合同，按真实sizeof计费；普通MediaControlBuffer对象大小无需增长。若现有聚合release控制需要跨多member携带，保持原port对应逐成员标记，不合成失去成员来源的无类型标记。
+关闭观察时刻、截止、成员frontier与完成位只在现有源协调owner保留一个固定状态记录；复用既有MediaRtpIngressBinding与frontier布局，不新建平行身份框架。旧控制进入FIFO时固定generation，下游必须与被持有的旧关闭记录核对；不得在消费时从可变的新activation补回旧身份。实际需要扩容的只有这份owner状态及现有frontier合同，按真实sizeof计费；普通MediaControlBuffer对象大小无需增长。实际startup coordinator之后只有单release/transaction通道：coordinator须收齐实际成员的有序关闭并确认全部held/release已提交，才形成唯一整组EndGeneration；extractor沿既有原子广播恢复各成员控制。组屏障证明所有上游成员前序完成，不等同下游aggregate已提交，也不伪造成员BYE。
 
 最终设计交叉审查：pacing_diagnostic_review、remaining_acceptance_audit 均 DESIGN PASS，可按切片开始实现。实施核查接收代与播放代身份、固定截止与真实receivedAt、全holder成功提交后的串行标记、旧purge对新代前置数据的cutoff、代内完成而非永久EOF、停止/首错优先。设计通过不代表代码或验收完成。
+
+### 基础接口实施与代次核验
+
+基础切片新增非永久EndGeneration、每源单一关闭状态、不可变frontier、逐成员完成确认和SourceDrained回收校验。强失效与取消仍清除关闭状态；尚无生产入口发出新标记。完整Epoch owner实际sizeof按源数加输出域计入既有aggregate固定准入费用，不宣称覆盖全进程RSS或所有分配器开销。两位独立审查均给出基础切片SOURCE PASS；构建与实流结论另行记录。
+
+源码核验纠正全程playback身份假设：MediaRtpPacketClockProjector返回snapshot.groupGeneration，PacketClockSession将其写入SourceAccessUnit lineage，前置VideoDecode registry因此属于clock-group域；成员ingress generation另与calibration核对。EndGeneration在绑定前沿用当前边clock-group代次，在原startup/activation/bound-release边界依据被冻结的关系转换为旧playback代次，之后才使用playback generation。禁止假设三域数字相等，或放宽retained-control精确校验。此项是后续接线必需条件，当前基础未启用BYE。

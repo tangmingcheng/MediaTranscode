@@ -370,6 +370,13 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
 
     const std::uint64_t activeGeneration =
         active.playbackEpoch()->generation;
+    if (request.reason == MediaAvReacquisitionReason::SourceDrained) {
+        const auto drained = m_transitionService->sourceDrainSnapshot();
+        if (!drained || drained->request.playbackGeneration != activeGeneration ||
+            request.observedGeneration != activeGeneration || !drained->complete())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Source-drained reacquisition requires completed drain of the exact active generation"));
+    }
     const bool future =
         request.reason == MediaAvReacquisitionReason::FutureGeneration;
     if (future && request.observedGeneration <= activeGeneration) {
@@ -467,6 +474,9 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         origin = MediaAvPublishedGeneration{oldGeneration};
     } else {
         const bool future = request.reason == MediaAvReacquisitionReason::FutureGeneration;
+        if (request.reason == MediaAvReacquisitionReason::SourceDrained)
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "Source-drained reacquisition cannot retire an unpublished generation"));
         if (!preservesActivatedOutput() || !m_transition || active.poisoned ||
             active.outputPermitted || !active.playbackEpoch() ||
             (future ? request.observedGeneration <= m_transition->nextGeneration

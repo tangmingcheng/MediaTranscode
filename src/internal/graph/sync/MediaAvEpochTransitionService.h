@@ -3,6 +3,7 @@
 #include "internal/graph/sync/MediaPlaybackActivation.h"
 #include "internal/graph/sync/MediaAvGenerationTransitionCoordinator.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/sync/MediaAvSourceDrain.h"
 
 #include <memory>
 #include <mutex>
@@ -71,6 +72,11 @@ public:
     ::media::Result<MediaAvActivatedOutputPermitReservation>
     reserveActivatedOutput() const;
     const MediaAvGenerationTransitionPlan* transitionPlan() const noexcept;
+    ::media::Status beginSourceDrain(MediaAvSourceDrainRequest request);
+    ::media::Status sealSourceDrainInput(std::uint64_t generation, MediaStreamKind stream,
+        std::uint64_t ingressGeneration, std::uint64_t acceptedFrontier);
+    ::media::Result<bool> acknowledgeSourceDrained(std::uint64_t generation, MediaStreamKind stream);
+    std::optional<MediaAvSourceDrainSnapshot> sourceDrainSnapshot() const noexcept;
 
 private:
     friend class MediaAvReacquisitionCoordinator;
@@ -98,6 +104,7 @@ private:
     std::optional<MediaPlaybackActivation> m_activation;
     std::optional<std::uint64_t> m_completedTransitionSequence;
     std::optional<::media::ErrorInfo> m_firstError;
+    std::optional<MediaAvSourceDrainSnapshot> m_sourceDrain;
 };
 
 } // namespace media::ffmpeg::graph

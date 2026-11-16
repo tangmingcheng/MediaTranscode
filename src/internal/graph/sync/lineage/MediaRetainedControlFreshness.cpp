@@ -5,9 +5,10 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-bool isExactTerminalControl(
+bool isExactRetainedControl(
     const MediaBufferRef& buffer,
-    MediaStreamKind expectedStream) noexcept
+    MediaStreamKind expectedStream,
+    std::uint64_t generation) noexcept
 {
     const auto* control =
         dynamic_cast<const MediaControlBuffer*>(buffer.get());
@@ -16,6 +17,11 @@ bool isExactTerminalControl(
         (buffer->streamKind() != expectedStream &&
          buffer->streamKind() != MediaStreamKind::Control)) {
         return false;
+    }
+    if (control->controlKind() == MediaControlBufferKind::EndGeneration) {
+        return buffer->streamKind() == MediaStreamKind::Control &&
+               control->flow() == MediaControlBufferFlow::Continue &&
+               control->generation() == generation;
     }
     if (control->controlKind() == MediaControlBufferKind::Eof) {
         return buffer->isEof() && !buffer->isFlush();
@@ -48,9 +54,9 @@ bool MediaRetainedControlFreshness::isCandidate(
     if (generation == 0 || expectedStream == MediaStreamKind::Control ||
         expectedStream == MediaStreamKind::Unknown ||
         expectedStream == MediaStreamKind::Any ||
-        !isExactTerminalControl(buffer, expectedStream)) {
+        !isExactRetainedControl(buffer, expectedStream, generation)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Retained terminal requires exact stream control and observed generation"));
+            "Retained control requires exact stream control and observed generation"));
     }
     m_buffer = buffer;
     m_generation = generation;
@@ -65,7 +71,7 @@ bool MediaRetainedControlFreshness::matches(
     const auto retained = m_buffer.lock();
     return generation != 0 && generation == m_generation && retained &&
            retained == buffer &&
-           isExactTerminalControl(buffer, expectedStream);
+           isExactRetainedControl(buffer, expectedStream, generation);
 }
 
 void MediaRetainedControlFreshness::clear() noexcept

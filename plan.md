@@ -978,3 +978,7 @@ rk454复现sender期限冲突及失败后不退出，证据归档；rk455临时�
 ## 2026-11-16：rk457确认尾媒体purge缺陷
 
 13a7d57c有界owner诊断双审通过、目标8核增量成功；四源原120秒→H264720p30 VBR8–12Mbps/AAC192 TS/RTP运行正常。BYE清理前55候选56320样本仍映射到下一输出之后，证明尾音被源代purge清除。38临时项/9PID清理，rk457回退保留。修复保持原A/V源组语义，补有序代内关闭/排空后原purge与自动重入；不扩组内成员独立重建，不改Windows FFmpeg。发送失败及旧链路回归仍待闭合。
+
+## 2026-11-16：rk458源组排空基础接口
+
+EndGeneration及固定关闭状态、frontier/成员完成、SourceDrained强校验、owner实际sizeof准入计费已完成基础切片双SOURCE PASS；RKMPP8核增量303项exit0。源码核验区分ingress/clock-group/playback三域，并沿原单transaction通道采用上游整组有序屏障、下游成员独立排空确认。生产BYE尚未启用，尾媒体修复仍待完整接线和双平台实流，不新增验收成功声明。回退保留，Windows FFmpeg未改。

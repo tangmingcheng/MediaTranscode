@@ -109,6 +109,7 @@ MediaAvEpochTransitionService::beginReacquisition(
     }
     auto purge = m_coordinator->begin(std::move(origin), nextGeneration);
     if (!purge) return purge;
+    m_sourceDrain.reset();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
     return purge;
 }
@@ -199,6 +200,7 @@ MediaAvEpochTransitionService::beginReacquisition(
         m_firstError = std::move(error);
     }
     m_aborted = true;
+    m_sourceDrain.reset();
     if (m_coordinator) m_coordinator->abort();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
     return ::media::Status::failure(*m_firstError);
@@ -208,6 +210,7 @@ void MediaAvEpochTransitionService::abort() noexcept
 {
     std::lock_guard lock(m_mutex);
     m_aborted = true;
+    m_sourceDrain.reset();
     if (m_coordinator) m_coordinator->abort();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
 }

@@ -228,6 +228,10 @@ bool isStreamCompatibleControlBuffer(
     case MediaControlBufferKind::Flush:
     case MediaControlBufferKind::Abort:
         return true;
+    case MediaControlBufferKind::EndGeneration:
+        return buffer->type() == MediaBufferType::Control &&
+               buffer->streamKind() == MediaStreamKind::Control &&
+               control->flow() == MediaControlBufferFlow::Continue;
     case MediaControlBufferKind::Unknown:
         return false;
     }

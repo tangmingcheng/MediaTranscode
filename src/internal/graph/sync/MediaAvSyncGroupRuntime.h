@@ -43,6 +43,12 @@ public:
     }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
+    ::media::Status beginSourceDrain(MediaAvSourceDrainRequest request);
+    ::media::Status sealSourceDrainInput(std::uint64_t generation, MediaStreamKind stream,
+        std::uint64_t ingressGeneration, std::uint64_t acceptedFrontier);
+    ::media::Result<bool> acknowledgeSourceDrained(std::uint64_t generation, MediaStreamKind stream);
+    std::optional<MediaAvSourceDrainSnapshot> sourceDrainSnapshot() const noexcept;
+    ::media::Status completeSourceDrain(std::uint64_t generation);
     bool preservesActivatedOutput() const noexcept;
     ::media::Status observeClockEvidence(std::uint64_t generation, std::uint64_t revision);
     std::optional<MediaAvSourceClockEvidence> clockEvidence() const noexcept;

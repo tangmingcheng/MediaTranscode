@@ -8,7 +8,8 @@ enum class MediaAvReacquisitionReason {
     FutureGeneration,
     HardDiscontinuity,
     Flush,
-    RecoveryBudgetExhausted
+    RecoveryBudgetExhausted,
+    SourceDrained
 };
 
 struct MediaAvReacquisitionRequest final {
