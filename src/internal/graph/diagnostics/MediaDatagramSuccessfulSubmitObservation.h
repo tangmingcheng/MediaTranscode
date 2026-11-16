@@ -32,15 +32,14 @@ struct MediaDatagramSuccessfulSubmitObservation final {
                 << " pacing_lateness_ns=" << pacingLatenessNs
                 << " matches_pacing_worst=" << (telemetry.worstLateGlobalSequence == sequence &&
                     telemetry.maximumSubmitLatenessNanoseconds == pacingLatenessNs)
-                << " materialized_master_ns=unavailable enqueued_master_ns=unavailable"
+                << " enqueued_master_ns=unavailable"
                 << " submit_interval_scope=pre_transport_checks_and_transport"
                 << " socket_only_ns=unavailable";
             appendMediaDiagnosticMasterTime(out, "release", release);
             appendMediaDiagnosticMasterTime(out, "deadline", deadline);
-            appendMediaDiagnosticMasterTime(out, "original_protocol_deadline",
-                protocolDeadline ? std::optional{protocolDeadline->originalDeadline} : std::nullopt);
-            appendMediaDiagnosticMasterTime(out, "prefix_completion_limit",
-                protocolDeadline ? std::optional{protocolDeadline->prefixCompletionLimit} : std::nullopt);
+            if (!protocolDeadline)
+                appendMediaDiagnosticMasterTime(out, "materialized", std::nullopt);
+            appendMediaWireProtocolDeadlineDiagnostic(out, protocolDeadline);
             appendMediaDiagnosticMasterTime(out, "reserved_at", reservedAt);
             appendMediaDiagnosticMasterTime(out, "not_before", pacing.notBefore);
             appendMediaDiagnosticMasterTime(out, "not_after", pacing.notAfter);

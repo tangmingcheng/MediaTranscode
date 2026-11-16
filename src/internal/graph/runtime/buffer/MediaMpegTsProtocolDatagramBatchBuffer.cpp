@@ -222,7 +222,8 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     MediaRunningTime canonicalDeadline,
     MediaWireMediaBoundary finalBoundary,
     std::size_t maximumReservationDatagrams,
-    MediaRunningTime completionLimit)
+    MediaRunningTime completionLimit,
+    const MediaTsAcceptedWorkObservation& acceptedWork)
 {
     using Result = ::media::Result<
         std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>;
@@ -306,6 +307,8 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     output->m_series->transaction.emplace(std::move(transaction).value());
     output->m_series->reservationEnd = reservedEntries;
     output->m_series->reservationIdentity = identity;
+    output->m_publicationObservation = MediaTsPublicationObservation{acceptedWork,
+        identity->cursorIdentity, identity->cursorRevision, identity->publicationIdentity, 0, reservedEntries, std::nullopt};
     return Result::success(std::move(output));
 }
 
@@ -405,6 +408,9 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
     m_series->reservationBegin = m_materializedDatagrams;
     m_series->reservationEnd = m_materializedDatagrams + count;
     m_series->reservationIdentity = identity;
+    m_publicationObservation = MediaTsPublicationObservation{window.acceptedWorkObservation,
+        identity->cursorIdentity, identity->cursorRevision, identity->publicationIdentity,
+        m_series->reservationBegin, m_series->reservationEnd, std::nullopt};
     return ::media::Status::success();
 }
 
@@ -424,12 +430,24 @@ MediaMpegTsProtocolDatagramBatchBuffer::create(
         m_materializedDatagrams > m_series->reservationEnd ||
         count > m_series->reservationEnd - m_materializedDatagrams ||
         count > m_endDatagram - m_materializedDatagrams) return failure();
+    if (!m_publicationObservation ||
+        m_publicationObservation->acceptedWork.generation != m_generation ||
+        m_publicationObservation->cursorIdentity != m_series->reservationIdentity->cursorIdentity ||
+        m_publicationObservation->cursorRevision != m_series->reservationIdentity->cursorRevision ||
+        m_publicationObservation->publicationIdentity != m_series->reservationIdentity->publicationIdentity ||
+        m_publicationObservation->protocolBegin != m_series->reservationBegin ||
+        m_publicationObservation->protocolEnd != m_series->reservationEnd) return failure();
     const auto& first = inputs[leadingControlDatagrams];
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         const auto& input = inputs[index];
         const auto& entry = entries[index];
         if (input.endpointId != entry.endpointId || input.bytes.size() != entry.payloadBytes ||
             !entry.payloadBytes || entry.materializedAt != entries.front().materializedAt)
+            return failure();
+        if (!input.protocolDeadlineObservation ||
+            input.protocolDeadlineObservation->materializedAt != entry.materializedAt ||
+            input.protocolDeadlineObservation->publication != m_publicationObservation ||
+            input.protocolDeadlineObservation->protectsMediaPublication != (index < leadingControlDatagrams))
             return failure();
         if (index < leadingControlDatagrams) continue;
         const auto& source = m_series->datagrams.view()[m_materializedDatagrams + index - leadingControlDatagrams];
@@ -588,6 +606,7 @@ MediaMpegTsProtocolDatagramBatchBuffer::takePrefixView(
                 MediaSharedAllocationAdmitted{m_series->resource,
                     m_series->batchOwnerGeometry, &allocation}}, ConstructionKey{}, m_generation);
         view->m_series = m_series;
+        view->m_publicationObservation = m_publicationObservation;
         view->m_beginDatagram = m_materializedDatagrams;
         view->m_materializedDatagrams = m_materializedDatagrams;
         view->m_endDatagram = m_materializedDatagrams + count;

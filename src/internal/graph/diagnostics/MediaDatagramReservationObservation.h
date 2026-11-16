@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaDiagnosticMasterClock.h"
 #include "internal/graph/diagnostics/MediaDatagramWaitObservation.h"
+#include "internal/graph/diagnostics/MediaWireProtocolDeadlineDiagnostic.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramDescriptor.h"
 
 #include <sstream>
@@ -54,10 +55,7 @@ struct MediaDatagramReservationObservation final {
                 << " endpoint=" << endpoint << " sequence=" << sequence;
             appendMediaDiagnosticMasterTime(out, "release", release);
             appendMediaDiagnosticMasterTime(out, "deadline", deadline);
-            if (protocolDeadline) {
-                appendMediaDiagnosticMasterTime(out, "original_protocol_deadline", protocolDeadline->originalDeadline);
-                appendMediaDiagnosticMasterTime(out, "prefix_completion_limit", protocolDeadline->prefixCompletionLimit);
-            }
+            appendMediaWireProtocolDeadlineDiagnostic(out, protocolDeadline);
             append(out);
             out << " original_error=\"" << error.describe() << '\"';
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,

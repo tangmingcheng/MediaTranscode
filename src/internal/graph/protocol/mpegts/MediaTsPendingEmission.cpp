@@ -94,7 +94,7 @@ MediaTsPendingEmission::MediaTsPendingEmission(
             generation, std::move(m_cursor),
             static_cast<std::uint16_t>(m_maximumPacketsPerDatagram),
             m_notBefore, window.release, window.accessUnitDeadline,
-            m_finalBoundary, prefix.datagramCount, window.completionLimit);
+            m_finalBoundary, prefix.datagramCount, window.completionLimit, window.acceptedWorkObservation);
         if (!created) return Result::failure(created.error());
         m_series = std::move(created).value();
     } else {

@@ -91,7 +91,7 @@ MediaTsPrefixPublicationPlanner::plan(
     // This checks conservative serialization demand, not scheduling delays.
     // Sender completion must still be checked against both recorded limits.
     return Result::success(MediaTsPrefixPublicationWindow{
-        prefixRelease, accessUnitDeadline, limit});
+        prefixRelease, accessUnitDeadline, limit, publishedWork.observation});
 }
 
 ::media::Result<MediaTsPrefixBatchDecision>

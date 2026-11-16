@@ -33,6 +33,14 @@ MediaWireDatagramLayoutValidator::MediaWireDatagramLayoutValidator(
 
     if (descriptor.protocolDeadlineObservation) {
         const auto& observation = *descriptor.protocolDeadlineObservation;
+        if (observation.publication) {
+            const auto& publication = *observation.publication;
+            if (publication.acceptedWork.generation != descriptor.generation ||
+                !publication.cursorIdentity || !publication.publicationIdentity ||
+                publication.protocolBegin >= publication.protocolEnd)
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "Wire publication observation differs from its generation or protocol range"));
+        }
         if (observation.prefixCompletionLimit <= descriptor.canonicalRelease ||
             observation.originalDeadline < observation.prefixCompletionLimit ||
             descriptor.canonicalDeadline > observation.prefixCompletionLimit)

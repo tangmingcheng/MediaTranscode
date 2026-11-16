@@ -84,7 +84,8 @@ private:
     ::media::Result<std::size_t> writeCursorThrough(
         MediaTsPacketCursor& cursor,
         MediaRunningTime availableThrough,
-        MediaRunningTime completionLimit);
+        MediaRunningTime completionLimit,
+        const MediaTsAcceptedWorkObservation& acceptedWork);
     ::media::Result<AdvanceResult> emitPendingThrough(
         MediaRunningTime masterNow);
     ::media::Result<std::size_t> preparePendingPrefix(

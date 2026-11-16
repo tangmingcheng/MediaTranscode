@@ -28,6 +28,7 @@ struct MediaTsPrefixPublicationWindow final {
     MediaRunningTime release;
     MediaRunningTime accessUnitDeadline;
     MediaRunningTime completionLimit;
+    MediaTsAcceptedWorkObservation acceptedWorkObservation;
 };
 
 struct MediaTsMaintenancePublicationBoundary final {

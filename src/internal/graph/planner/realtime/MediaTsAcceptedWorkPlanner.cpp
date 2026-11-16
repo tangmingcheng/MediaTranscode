@@ -137,7 +137,8 @@ namespace {
             duration.value(), "protocol_conservative_possible_report_allowance", publication);
         if (!status) return Result::failure(status.error());
     }
-    return Result::success(MediaTsPublishedWorkService{available});
+    return Result::success(MediaTsPublishedWorkService{available,
+        {generation, observedNow, wire.lastCommittedSequence, wire.lastSubmittedService, available}});
 }
 
 ::media::Status MediaTsAcceptedWorkPlanner::validateTail(const MediaTsUnpublishedTail& tail,

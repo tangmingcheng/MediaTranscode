@@ -1,4 +1,5 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxSession.h"
+#include "internal/graph/diagnostics/MediaDiagnosticMasterClock.h"
 #include "internal/graph/diagnostics/MediaOutputPreparationObservation.h"
 #include "internal/graph/planner/realtime/MediaTsAcceptedWorkPlanner.h"
 #include "internal/graph/protocol/mpegts/MediaTsTransportPacketBuilder.h"
@@ -222,7 +223,8 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
 ::media::Result<std::size_t> MediaTsMuxSession::writeCursorThrough(
     MediaTsPacketCursor& cursor,
     MediaRunningTime availableThrough,
-    MediaRunningTime completionLimit)
+    MediaRunningTime completionLimit,
+    const MediaTsAcceptedWorkObservation& acceptedWork)
 {
     if (!m_emissionSchedule) {
         return ::media::Result<std::size_t>::failure(
@@ -252,7 +254,8 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
         m_activation.generation, std::move(cursor),
         m_plan.parameters().maximumPacketsPerDatagram,
-        availableThrough, release, deadline, MediaWireMediaBoundary::None, maximumReservationDatagrams, completionLimit);
+        availableThrough, release, deadline, MediaWireMediaBoundary::None, maximumReservationDatagrams,
+        completionLimit, acceptedWork);
     if (!batch) {
         return ::media::Result<std::size_t>::failure(
             poison(batch.error()).error());
@@ -263,6 +266,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         return ::media::Result<std::size_t>::failure(
             poison(committed.error()).error());
     }
+    batch.value()->observeMuxPublicationReady(mediaDiagnosticMasterClockNow(*m_masterClock));
     m_protocolBatches.push_back(std::move(batch).value());
     m_protocolBatchBytes += batchBytes;
     logEmissionProgress();
@@ -459,13 +463,13 @@ MediaTsMuxSession::maintenanceObligations(
             poison(status.error()).error());
     }
     std::size_t packetsWritten = 0;
-    const auto writeMaintenanceCursor = [this, availableThrough, publicationLimit, &packetsWritten](
+    const auto writeMaintenanceCursor = [this, availableThrough, publicationLimit, &accepted, &packetsWritten](
         ::media::Result<MediaTsPacketCursor> cursorResult) -> ::media::Status {
         if (!cursorResult) {
             return ::media::Status::failure(cursorResult.error());
         }
         MediaTsPacketCursor cursor = std::move(cursorResult).value();
-        auto written = writeCursorThrough(cursor, availableThrough, publicationLimit);
+        auto written = writeCursorThrough(cursor, availableThrough, publicationLimit, accepted.value().observation);
         if (!written) {
             return ::media::Status::failure(written.error());
         }
@@ -671,6 +675,8 @@ MediaTsMuxSession::emitPendingThrough(MediaRunningTime masterNow)
     auto batch = m_pendingEmission->materializePrefix(
         m_activation.generation, *m_emissionSchedule, prefix);
     if (!batch) return Result::failure(batch.error());
+    std::static_pointer_cast<MediaMpegTsProtocolDatagramBatchBuffer>(batch.value())
+        ->observeMuxPublicationReady(mediaDiagnosticMasterClockNow(*m_masterClock));
     m_protocolBatches.push_back(std::move(batch).value());
     // Session serialization prevents takeScheduledBatch before this stamp.
     m_pendingEmission->recordPublished();

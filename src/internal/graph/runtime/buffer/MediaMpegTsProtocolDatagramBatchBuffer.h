@@ -76,7 +76,8 @@ public:
            MediaRunningTime canonicalDeadline,
            MediaWireMediaBoundary finalBoundary,
            std::size_t maximumReservationDatagrams,
-           MediaRunningTime completionLimit);
+           MediaRunningTime completionLimit,
+           const MediaTsAcceptedWorkObservation& acceptedWork);
 
     MediaBufferType type() const noexcept override
     {
@@ -84,8 +85,13 @@ public:
     }
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     std::uint64_t generation() const noexcept { return m_generation; }
+    const std::optional<MediaTsPublicationObservation>& publicationObservation() const noexcept
+    { return m_publicationObservation; }
     // Diagnostic observation set by the mux owner before publication.
     void observeMuxDequeued(MediaRunningTime time) noexcept { m_muxDequeuedAt = time; }
+    // Sampled after construction/continuity commit, immediately before mux enqueue.
+    void observeMuxPublicationReady(std::optional<MediaRunningTime> time) noexcept
+    { if (m_publicationObservation) m_publicationObservation->muxPublicationReadyAt = time; }
     std::optional<MediaRunningTime> muxDequeuedAt() const noexcept { return m_muxDequeuedAt; }
     std::size_t materializedDatagrams() const noexcept { return m_materializedDatagrams - m_beginDatagram; }
     std::span<const MediaMpegTsProtocolDatagram> datagrams() const noexcept;
@@ -121,6 +127,7 @@ private:
     std::uint64_t m_payloadBytes = 0;
     std::size_t m_materializedDatagrams = 0;
     std::optional<MediaRunningTime> m_muxDequeuedAt;
+    std::optional<MediaTsPublicationObservation> m_publicationObservation;
     struct PreparedRegistration final {
         MediaTsPacketReservationIdentity identity;
         std::size_t protocolBegin;

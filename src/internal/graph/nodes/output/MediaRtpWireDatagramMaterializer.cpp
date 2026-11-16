@@ -152,7 +152,7 @@ MediaRtpWireDatagramMaterializer::prepareBatch(
             rtcpDeadline = std::move(protectedDeadline);
         reportDeadlineObservation.emplace(MediaWireProtocolDeadlineObservation{
             protocolBatch->datagrams()[0].canonicalDeadline(),
-            protocolBatch->datagrams()[0].completionLimit()});
+            protocolBatch->datagrams()[0].completionLimit(), materializedAt, protocolBatch->publicationObservation(), true});
     }
 
     struct PreparedDatagram {
@@ -330,7 +330,7 @@ MediaRtpWireDatagramMaterializer::prepareBatch(
                 datagrams.timing(index).canonicalRelease, rtpDeadlines[index], datagrams.timing(index).mediaBoundary,
                 protocolBatch ? std::optional<MediaWireProtocolDeadlineObservation>(MediaWireProtocolDeadlineObservation{
                     protocolBatch->datagrams()[index].canonicalDeadline(),
-                    protocolBatch->datagrams()[index].completionLimit()}) : std::nullopt});
+                    protocolBatch->datagrams()[index].completionLimit(), materializedAt, protocolBatch->publicationObservation(), false}) : std::nullopt});
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed("RTP output layout workspace"));
     }

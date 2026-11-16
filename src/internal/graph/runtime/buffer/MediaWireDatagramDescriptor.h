@@ -2,6 +2,8 @@
 
 #include "internal/graph/time/MediaRunningTime.h"
 
+#include "internal/graph/diagnostics/MediaTsPublicationObservation.h"
+
 #include <cstdint>
 #include <optional>
 
@@ -16,6 +18,10 @@ enum class MediaWireMediaBoundary : std::uint8_t {
 struct MediaWireProtocolDeadlineObservation final {
     MediaRunningTime originalDeadline;
     MediaRunningTime prefixCompletionLimit;
+    MediaRunningTime materializedAt;
+    std::optional<MediaTsPublicationObservation> publication;
+    // A leading RTP report protects this media publication; these are not its own protocol deadlines.
+    bool protectsMediaPublication;
     friend bool operator==(const MediaWireProtocolDeadlineObservation&,
                            const MediaWireProtocolDeadlineObservation&) = default;
 };

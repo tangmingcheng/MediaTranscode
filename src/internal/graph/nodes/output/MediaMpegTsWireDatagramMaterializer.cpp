@@ -124,7 +124,8 @@ MediaMpegTsUdpWireDatagramMaterializer::create(
             static_cast<std::uint64_t>(datagram.bytes().size()), materializedAt});
         workspace.value().outputInputs.push_back({MediaByteSerializationView::fromBytes(datagram.bytes()),
             m_config.endpointId, datagram.canonicalRelease(), deadline.value(), datagram.mediaBoundary(),
-            MediaWireProtocolDeadlineObservation{datagram.canonicalDeadline(), datagram.completionLimit()}});
+            MediaWireProtocolDeadlineObservation{datagram.canonicalDeadline(), datagram.completionLimit(), materializedAt,
+                protocolBatch->publicationObservation(), false}});
     }
     auto storage = MediaWireCommitPreparation::fromReservation(m_config.globalSequence,
         workspace.value().outputInputs.view(), m_config.batchPlan, std::move(lease).value());

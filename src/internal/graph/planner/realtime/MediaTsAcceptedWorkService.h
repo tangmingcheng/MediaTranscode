@@ -1,5 +1,6 @@
 #pragma once
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/diagnostics/MediaTsPublicationObservation.h"
 #include <cstddef>
 
 namespace media::ffmpeg::graph {
@@ -7,6 +8,7 @@ namespace media::ffmpeg::graph {
 // Neither a submission observation nor a guarantee of service availability.
 struct MediaTsPublishedWorkService final {
     MediaRunningTime availableAt;
+    MediaTsAcceptedWorkObservation observation;
 };
 
 struct MediaTsUnpublishedTail final {

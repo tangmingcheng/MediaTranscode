@@ -18,6 +18,9 @@ struct MediaDatagramSubmittedService final {
     // members may advance the scope immediately afterwards; this is no lease.
     std::optional<MediaRunningTime> scopeAvailableAt;
 
+    friend bool operator==(const MediaDatagramSubmittedService&,
+                           const MediaDatagramSubmittedService&) = default;
+
     ::media::Result<MediaRunningTime> serviceAvailableAt() const noexcept
     {
         if (submittedAt.nanoseconds() < 0 || serviceDuration.nanoseconds() <= 0)
