@@ -1,6 +1,6 @@
 # RKMPP编码完整输出：配置读回与错误边界
 
-状态：候选补丁已在本机仓库准备，未应用到目标依赖，未构建或实流验证。Windows FFmpeg不修改。
+状态：三个补丁已双独立源码审查并应用目标项目隔离依赖，8核增量构建成功；尚未实流验证或授权RKMPP编码进度。Windows FFmpeg不修改。
 
 ## 官方方案与实际差异
 
@@ -10,12 +10,24 @@
 
 ## 配置读回候选
 
-3rds/rkmpp-lineage/ffmpeg-encoder-split-readback.patch在两处SET_CFG成功后GET_CFG，读取split:mode/arg/out（u32）与base:low_delay（s32），通过只读AVOption暴露事实；不设置split，不新增调用方输入，不授权scheduler。读取开始撤销known，全部成功才发布；失败记录原MPP返回码并返回AVERROR_EXTERNAL，临时配置对象始终释放。u32用int64字段避免截断。两个未参与实现的智能体均给出仅readback功能SOURCE PASS。CRLF补丁直接检查LF源失败，先转换为LF后，针对下载的精确c/h执行严格git apply --check成功（未加忽略空白选项）；未实际应用，仍需目标dry-run及编译。
+3rds/rkmpp-lineage/ffmpeg-encoder-split-readback.patch在两处SET_CFG成功后GET_CFG，读取split:mode/arg/out（u32）与base:low_delay（s32），通过只读AVOption暴露事实；不设置split，不新增调用方输入，不授权scheduler。读取开始撤销known，全部成功才发布；失败记录原MPP返回码并返回AVERROR_EXTERNAL，临时配置对象始终释放。u32用int64字段避免截断。两个未参与实现的智能体均给出仅readback功能SOURCE PASS。CRLF补丁直接检查LF源失败，先转换为LF后，针对下载的精确c/h执行严格git apply --check成功（未加忽略空白选项）；当时尚未应用；后续目标dry-run及编译结果见下节。
 
 正常/EOF顺序已由独立智能体直接查目标源码：hal_task从状态队列头取、变更入尾；正常任务和空EOS均进入TASK_PROCESSING，等待头任务后将完成packet放输出尾。同步线程单任务执行。禁split可排除两条partition路径，但不能单独证明错误完成也是正常AU。
 
-## 尚未实现的错误完成边界
+## 错误完成边界及保留限制
 
-try_get_async_task的非零ret调用async_task_terminate，后者可能保留非零header长度并提前放入输出队列。必须明确该项为错误完成，不能通过SubmissionOrder消费或推进水位。最小候选是沿既有enc_async_wait_task失败长度归零语义处理terminate，并复用官方wrapper拒绝非EOS空包的行为；若要跨库保留原始MPP错误码，须另外使用权威错误元数据，不能声称日志和零长包等价于完整错误传递。该切片尚待设计/实现/双审，不能用配置读回PASS替代。
+try_get_async_task的非零ret调用async_task_terminate，后者可能保留非零header长度并提前放入输出队列。必须明确该项为错误完成，不能通过SubmissionOrder消费或推进水位。最小候选是沿既有enc_async_wait_task失败长度归零语义处理terminate，并复用官方wrapper拒绝非EOS空包的行为；若要跨库保留原始MPP错误码，须另外使用权威错误元数据，不能声称日志和零长包等价于完整错误传递。该切片已按下节独立实现、双审并构建；实流与错误路径运行证据仍待补齐，不能用配置读回PASS替代。
 
 应用前需保留目标隔离依赖源码和二进制回退；候选只应用于项目内隔离构建，禁止覆盖系统库及本机FFmpeg。现有split候选、共享调度接线、错误完成修复需要分别审查，再以原四源120秒规格验证，不能降低规格。
+
+## rk442隔离依赖构建检查点
+
+错误完成另存mpp-encoder-error-completion.patch与ffmpeg-encoder-output-validation.patch：唯一ret!=0 terminate传入并日志记录原始MPP返回码，长度归零；wrapper在EOS处理之后、身份成功处理之前拒绝空size/data及partition，返回AVERROR_EXTERNAL。两独立SOURCE PASS限当前FFmpeg→MPP路径；不外推全部MPP消费者，不声称结构化原错误跨库传递。正常EOS仍在有序任务队列，不被该错误保护吞掉。
+
+应用前原源码和完整prefix-ffmpeg/prefix-mpp已备份到目标out/rollback/rk442-dependency，manifest.json记录三个源码hash及两个HEAD。三个补丁原始CRLF传输SHA256依次为readback 7ecd3c08aee7c15c53b73b43f6befd81f6a56dc7f9888a4c92dbed79e302a051、wrapper验证 bd93be3b0e83e383967603bf7e6ac5f170fe62b19b2d914a29f48b7b2963244c、MPP错误完成 df329f850d79941ada293b8e0c46b7b5c0413054672060deb32d5301228bc4a2。目标逐项核hash，转LF，全部严格dry-run通过后应用；diff --check通过。第一次统计输出被git pager阻塞并SIGPIPE，随后--no-pager复核成功；该观察错误不是应用或构建失败。
+
+构建PID1792212，复用现有Release Makefiles/FFmpeg配置，以8核增量编译并安装到既有项目隔离prefix，DEPENDENCY_BUILD_EXIT=0，PID已结束。新libavcodec.so.62.28.102 SHA256 6d7c9d2488db57070047080f0b77d1aba69a59db6e89fdb358a64639ea07a533；librockchip_mpp.so.1 SHA256 2f6f34046ab9601e7c9938d6e2f3e306424a9b02ab5d1ee765f1d4d2779587c8。以显式LD_LIBRARY_PATH运行ldd确认CLI选择上述两个隔离库，未见not found。
+
+实际执行隔离ffmpeg -hide_banner -h encoder=h264_rkmpp，确认五个只读选项可见；这仅证明接口存在，列表默认unknown并非opened encoder真实值。后续必须用实际prepared读回取得split状态，再接通既有共享合同；未运行local测试，未降低源规格，未覆盖系统依赖。
+
+临时文件清单：目标out/dependency-work/rk442-patches内build.log及三份原CRLF、三份LF补丁，共7项；本机out/dependency-work/rkmpp-encoder-completion内rkmppenc.c、rkmppenc.h、mpp_enc_impl.c、readback.lf.patch、ffmpeg-encoder-output-validation.lf.patch、mpp-encoder-error-completion.lf.patch、libavcodec/rkmppenc.c、libavcodec/rkmppenc.h、mpp/codec/mpp_enc_impl.c共9项。记录完成后逐项清理，不清空其他目录；保留正式仓库补丁、目标构建源码/隔离产物和rk442-dependency回退副本。已逐项删除目标7项、本机9项，复查无上述临时文件残留。
