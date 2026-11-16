@@ -11,3 +11,5 @@
 
 未增加公开参数、线程、队列或平台分支；只调整生命周期意图与准备取消终态。待双独立审查后复验原RUNNING早停、已激活严格停止、EOF正常完成及失败保留，并核Windows共享路径；构建成功不能替代真实链路。
 2026-11-16：两位未参与实现的独立审查者均给最终六文件SOURCE PASS；FFmpeg header前pendingPackets属于未发布准备，允许RequestedStop释放，不宣称EOF或已发布媒体drain。同步包SHA256 91830b6ccd346875908f0d6e1e1b91d171a534fe438ae6894f14afbbe7134fe2；目标六源码逐项基线核验，out/rollback/rk448保存源码、旧CLI与manifest后应用。8核增量构建已启动，实际结果待检查。
+
+ce71265d目标9项增量构建exit0；rk448原RUNNING回调早停COMPLETED/REQUESTED_STOP、errors0、release_null1、consumer exit0，encoded0。仅未激活取消实际验证通过，已激活严格停止/EOF、Windows及真实故障保留的完整回归尚未闭合，详见realtime-composition-rk448-c-callback.md。

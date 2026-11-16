@@ -61,3 +61,7 @@ rk429 已验证共享 DAG 的 caller-stop 修复，但仍由 realtime CLI 调用
 ## rk447 早停复验仍FAIL
 
 8a6f8af1修复后RUNNING回调内两API成功，workerErrors0，原credit竞态未复现；但未绑定mux在stop时被要求正常finish，进入FAILED/SHUTDOWN_FAILURE、encoded0、exit1。需区分未激活准备取消与已激活严格收尾，不能以未绑定判成功掩盖原错。详见realtime-composition-rk447-c-callback.md；本轮临时项与进程已清理。
+
+## rk448 RUNNING回调早停通过
+
+ce71265d经双独立SOURCE PASS、目标增量构建成功，同一C消费者/原双源声明复验：RUNNING回调读取与request_stop成功，COMPLETED/REQUESTED_STOP、workerErrors0/event_errors0、release句柄为空、exit0。encoded0，仅关闭运行状态早停边界，非持续出流后停止或内容A/V。rk446预算不足边界与本项已补齐；共享Windows、已激活输出停止及整体可靠性仍待最新版本复验。详见realtime-composition-rk448-c-callback.md，临时消费者及日志已清理。

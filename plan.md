@@ -966,3 +966,7 @@ prepared定长合同沿原metadata传递；完整AU依既有有界lineage传递c
 ## 2026-11-16：rk447 早停顺序修复及后续mux边界
 
 8a6f8af1经双独立SOURCE PASS并目标5项增量构建exit0。原RUNNING回调复验workerErrors0，credit取消误判消失；随后尚未绑定的mux错误执行finish，FAILED/SHUTDOWN_FAILURE、encoded0，整项仍FAIL。继续修复共享mux停止生命周期，不吞已激活会话finish错误；Windows最终共享版本回归仍待完成。证据与清理见docs/realtime-composition-rk447-c-callback.md。
+
+## 2026-11-16：rk448 C早停门禁通过
+
+ce71265d统一mux完成意图：未激活准备取消、已激活严格finish、原错误保留；双独立SOURCE PASS，目标9项增量构建exit0。原C消费者RUNNING回调读取/停止成功，COMPLETED/REQUESTED_STOP、workerErrors/event_errors0、外部release句柄为空、exit0。encoded0，不冒充持续播放或全账本验证。12远端/5本机测试项与传输构建临时项清理。下一步最终共享版本Windows realtime回归及已激活正常停止，继续内容A/V、rk427与最终整体审查。详见docs/realtime-composition-rk448-c-callback.md。
