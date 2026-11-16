@@ -31,3 +31,13 @@ try_get_async_task的非零ret调用async_task_terminate，后者可能保留非
 实际执行隔离ffmpeg -hide_banner -h encoder=h264_rkmpp，确认五个只读选项可见；这仅证明接口存在，列表默认unknown并非opened encoder真实值。后续必须用实际prepared读回取得split状态，再接通既有共享合同；未运行local测试，未降低源规格，未覆盖系统依赖。
 
 临时文件清单：目标out/dependency-work/rk442-patches内build.log及三份原CRLF、三份LF补丁，共7项；本机out/dependency-work/rkmpp-encoder-completion内rkmppenc.c、rkmppenc.h、mpp_enc_impl.c、readback.lf.patch、ffmpeg-encoder-output-validation.lf.patch、mpp-encoder-error-completion.lf.patch、libavcodec/rkmppenc.c、libavcodec/rkmppenc.h、mpp/codec/mpp_enc_impl.c共9项。记录完成后逐项清理，不清空其他目录；保留正式仓库补丁、目标构建源码/隔离产物和rk442-dependency回退副本。已逐项删除目标7项、本机9项，复查无上述临时文件残留。
+
+## rk444：补齐cadence/drop实际事实
+
+ffmpeg-encoder-cadence-readback.patch以rk442已应用状态为基线：c SHA256 43d29cc646f22df04295a70c2f5c1f2594a265a478ea374f34037be56cf12c2b，h SHA256 9470db7c4e65671ebbaf6187f156699413543fd7107bea198e07d8e434b13c93。在同一次GET_CFG事务增加rc:drop_mode（u32→int64）及fps_in/out的flex/num/denom（s32→int）7事实；实际MPP声明denom为denorm别名。所有11项成功后known才为1，失败仍明确返回，不新增用户参数或改变编码策略。两位独立智能体限定SOURCE PASS。
+
+原始CRLF补丁SHA256 569f3e6eedd8a50013076c3f0e5e8fa8510af04860902bb68dc052111fd68956双端匹配；转LF后本机和目标严格dry-run成功。应用前目标out/rollback/rk444-cadence保存两源码、完整两prefix和manifest。以8核复用现有FFmpeg目录增量编译/隔离安装，PID1933929已结束、CADENCE_BUILD_EXIT=0。新libavcodec.so.62.28.102 SHA256 cbe8b3562f95af8286a3756c5683e995df8e616531cfa8f90b9c0d4de7d340fd；MPP未再修改。
+
+实际隔离ffmpeg -hide_banner -h encoder=h264_rkmpp确认7项只读接口；默认unknown不是实际open值。仍待生产CLI的prepared配置读取与原规格合屏运行，不以选项列表冒充能力授权。本轮仅目标依赖编译，无Windows构建或local测试。
+
+临时清单：目标out/dependency-work/rk444-cadence的ffmpeg-encoder-cadence-readback.patch、cadence.lf.patch、build.log共3项；本机同名目录的rkmppenc.c、rkmppenc.h、libavcodec/rkmppenc.c、libavcodec/rkmppenc.h、cadence.lf.patch共5项。已逐项删除目标3项、本机5项并复查无文件残留，回退与正式patch保留。

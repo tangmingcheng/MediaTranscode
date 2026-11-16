@@ -13,3 +13,5 @@
 新增候选ffmpeg-encoder-split-readback.patch基于实际隔离FFmpeg HEAD 92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696，仅暴露编码器有效split配置，双独立限定源码审查通过；尚未应用/构建，不代表完整编码进度能力。先将CRLF转LF再严格dry-run。证据及错误完成缺口见[编码完成调查](../../docs/realtime-composition-rkmpp-encoder-completion.md)。
 
 错误完成另分为mpp-encoder-error-completion.patch（实际MPP HEAD 560734e83e7d3d8a0a2a337d07108f04f4030caa）及ffmpeg-encoder-output-validation.patch（上述FFmpeg HEAD）。两项与split读回已双审并在目标项目隔离prefix增量构建，源码/二进制回退及新hash见编码完成调查；尚未以实流证明完整能力，不是上游已合入补丁。
+
+ffmpeg-encoder-cadence-readback.patch须在split-readback与output-validation之后应用；它补齐同事务只读drop/fps事实，已双审并在隔离prefix增量构建，实际open值与运行验收仍待完成。不能单独应用到原始FFmpeg基线。
