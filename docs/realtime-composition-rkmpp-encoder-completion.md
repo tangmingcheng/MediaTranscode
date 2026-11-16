@@ -1,0 +1,21 @@
+# RKMPP编码完整输出：配置读回与错误边界
+
+状态：候选补丁已在本机仓库准备，未应用到目标依赖，未构建或实流验证。Windows FFmpeg不修改。
+
+## 官方方案与实际差异
+
+[FFmpeg官方rkmppenc](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/rkmppenc.c)的rkmpp_output_pkt明确拒绝非EOS的空size/data，但没有split事实读回。目标使用另一wrapper实现，不能把官方master视为当前部署代码，也不能因存在官方编码器就直接替换整个RGA/MPP依赖链。[Rockchip官方MPP](https://raw.githubusercontent.com/rockchip-linux/mpp/develop/mpp/codec/mpp_enc_impl.c)的async_task_terminate仍使用hal_task->length；本次检索未找到可确认直接修复该具体错误完成边界的issue，不据搜索空缺声称官方没有issue。
+
+实际FFmpeg HEAD 92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696；rkmppenc.c SHA256 fbfddacec9439a457830c68c3bcbeca7fe8cdcf254a3cbec9287be958f561957，rkmppenc.h SHA256 40448d3c4bf2062fa2bc861f86c5468bfa20b0bb4113ab710fb885aef168fd2e。目标下载与本机SHA256一致。实际MPP HEAD 560734e83e7d3d8a0a2a337d07108f04f4030caa。
+
+## 配置读回候选
+
+3rds/rkmpp-lineage/ffmpeg-encoder-split-readback.patch在两处SET_CFG成功后GET_CFG，读取split:mode/arg/out（u32）与base:low_delay（s32），通过只读AVOption暴露事实；不设置split，不新增调用方输入，不授权scheduler。读取开始撤销known，全部成功才发布；失败记录原MPP返回码并返回AVERROR_EXTERNAL，临时配置对象始终释放。u32用int64字段避免截断。两个未参与实现的智能体均给出仅readback功能SOURCE PASS。CRLF补丁直接检查LF源失败，先转换为LF后，针对下载的精确c/h执行严格git apply --check成功（未加忽略空白选项）；未实际应用，仍需目标dry-run及编译。
+
+正常/EOF顺序已由独立智能体直接查目标源码：hal_task从状态队列头取、变更入尾；正常任务和空EOS均进入TASK_PROCESSING，等待头任务后将完成packet放输出尾。同步线程单任务执行。禁split可排除两条partition路径，但不能单独证明错误完成也是正常AU。
+
+## 尚未实现的错误完成边界
+
+try_get_async_task的非零ret调用async_task_terminate，后者可能保留非零header长度并提前放入输出队列。必须明确该项为错误完成，不能通过SubmissionOrder消费或推进水位。最小候选是沿既有enc_async_wait_task失败长度归零语义处理terminate，并复用官方wrapper拒绝非EOS空包的行为；若要跨库保留原始MPP错误码，须另外使用权威错误元数据，不能声称日志和零长包等价于完整错误传递。该切片尚待设计/实现/双审，不能用配置读回PASS替代。
+
+应用前需保留目标隔离依赖源码和二进制回退；候选只应用于项目内隔离构建，禁止覆盖系统库及本机FFmpeg。现有split候选、共享调度接线、错误完成修复需要分别审查，再以原四源120秒规格验证，不能降低规格。
