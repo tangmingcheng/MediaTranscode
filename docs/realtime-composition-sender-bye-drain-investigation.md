@@ -82,7 +82,7 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 |---|---|---|
 | ingress预分配datagram/重组、prepared ingress budget、原edge policy | 保存窗口内已接受媒体到frontier完成 | 同一容量，不复制第二套；新身份不得覆盖仍需排空的旧重组状态。以现有待处理数据报/压缩AU槽承接，容量满沿原明确背压/失败合同，不默默丢包 |
 | `MediaRtpPacketClockSession::m_acquiringPackets` / `m_acquiringCapacity` | 旧未绑定包先完成；已绑定包已在原FIFO | 旧集合排空前不拿同槽伪装新队列。由binder以关闭身份隔离，旧包移出后同容量承接已确认新代压缩AU；总数同上限，无第二容器 |
-| decoder preparedInputRetention、codec内部输出、lineage registry | 仅一套旧codec与在途工作 | 旧组全部成员drain确认后原purge/reset释放；再reprepare并允许新AU进入。禁止并行decoder/双resampler |
+| decoder preparedInputRetention、codec内部输出、lineage registry | 仅一套旧codec与在途工作 | decoder已真实EOF且pending输出交付后可提前reset释放内部引用并严格校验lineage；新代准入仍待旧组全部成员drain确认后的原purge/reset，再reprepare。禁止并行decoder/双resampler |
 | startup held/release、sequencer/extractor pending、各edge queue | 完成旧组原子交易与控制标记 | 持有新AU的前置gate暂不发布到旧startup；旧purge完成后才调用原startup/reprepare；不越过atomic提交 |
 | trim/drift/resample/correction既有sourceBounds | 完成旧样本与命令 | 旧事务确认、原组purge归零，然后复用同owner新状态 |
 | aggregate m_audio / maximumAudioCandidates与maximumAudioCandidateSamples | 消耗旧尾部；pending可能与候选重叠 | 确认真实提交后旧组回收；新代只能经新activation进入同候选容器 |

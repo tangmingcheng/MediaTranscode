@@ -1,0 +1,35 @@
+# 解码器排尽与 lineage 收尾设计
+
+状态：双独立DESIGN PASS后完成最小共享实现，待双独立SOURCE复审及真实链路验证；未声称构建或实流通过。
+
+## 证据与工业契约
+
+rk488原规格四源120秒均exit0，CLI自然exit1；12:29:07.221 VideoDecodeNode90在EndGeneration收尾报`Codec flush left live lineage leases`，输入输出队列均为0。完整证据见[验收记录](realtime-composition-rk488-validation.md)。队列为空不证明codec内部引用为空。
+
+[FFmpeg drain契约](https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html)要求发送NULL并接收至AVERROR_EOF；drain不等于释放全部内部引用。[avcodec_flush_buffers契约](https://ffmpeg.org/doxygen/trunk/group__lavc__misc.html)明确解码器释放内部引用，调用方已有输出引用保持有效。应用准入状态应独立于codec内部reset状态。
+
+VideoDecodeNode::continueFlush目前仅非EndGeneration调用flushBuffers，随即对全部lineageGenerations执行严格finishGeneration。原[关闭设计](realtime-composition-sender-bye-drain-investigation.md)将内部释放留到整组drain后的purge，但EndGeneration发出之前即要求零lease，释放与校验顺序冲突。finishGeneration不得放宽。
+
+目标固定FFmpeg [92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696/rkmppdec.c](https://github.com/nyanmisaka/ffmpeg-rockchip/blob/92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696/libavcodec/rkmppdec.c)由主线程现场核验：625/631复制packet属性进入mpp_user_data；745输出buffer持MppFrame，但767–779复制opaque后已清除MppFrame user_data，避免像素owner额外持有lineage。1375附近flush回调在mapi->reset成功后清运行标志并av_packet_unref(last_pkt)，失败仅日志。不能用master替代此固定版本证据，也不能由现有日志断言某个具体内部holder就是唯一剩余者。
+
+主线程补充现场核验：固定FFmpeg avcodec.c:381的avcodec_flush_buffers依次调用ff_decode_flush_buffers、unref buffer_frame/buffer_pkt和codec flush；decode.c:2328释放last_pkt_props/in_pkt并av_bsf_flush。目标MPP HEAD为560734e83e7d3d8a0a2a337d07108f04f4030caa，mpp_frame.c:106/265/385与mpp_packet.c:233/346/742使用mpp_user_data_unref。这证明公开flush覆盖的内部属性持有路径，不证明现场全部剩余槽的身份或驱动reset必然成功。
+
+本仓库receiveFrames先解析typed lineage，再解除frame->opaque_ref，随后发布输出；payload ownership只保留像素buffer/hw_frames_ctx。非COPY_OPAQUE路径逐输出弹出submissionOrderLineage并unref；该路径未消费的提交不得在收尾时直接清除以假造成功。
+
+## 最小共享改动
+
+1. 保留发送NULL、循环receiveFrames、输出背压与真实AVERROR_EOF门禁。公共FFmpegNodeRuntime先完成pending output transfer，才再次进入节点；不得丢弃尚未提交输出。
+2. continueFlush在真实EOF之后，对EOF、Flush、EndGeneration统一调用既有codecApi.flushBuffers，再执行原finishGeneration。仅取消EndGeneration对此调用的排除，不调用clearLineageStorage、不清registry或提交顺序队列、不销毁已交付输出。
+3. EndGeneration完成后仍保留flushSent=true，onProcess继续拒绝新输入。codec内部reset不授权下一代；原精确purge持lineage mutex核对旧代及transitionSequence，才清节点gate并推进代次。正常收尾在同一节点owner及lineage锁内执行；不新增跨线程flush入口。
+4. 原purge再次flush沿用既有幂等reset职责；不合并正常排尽和强失效，不移动整组确认点。终止授权、原FIFO、容量与对象边界不变，无新增队列、线程或公共参数。
+
+## 失败与验证边界
+
+flushBuffers是既有void接口，目标底层reset失败仅日志，不能宣称直接传播驱动错误；严格finishGeneration仍检测未释放lease并保留失败。不得扩API或伪造成功。即使内部lease全释放，也不证明驱动reset所有故障可观测，此限制独立记录。
+
+这是Windows/RKMPP共享节点修正；官方引用契约适用于共享实现，Windows同规格链路仍须验证。双独立审查后实施，再由主线程执行RKMPP原规格四源真实结束链路，检查首错、自然退出、尾帧与原有发送期限证据；构建或旧滤镜错误消失均不能代替验收。若仍有lease，继续定位真实holder，不能删除严格校验。
+实施补充：真实EOF后显式拒绝pendingPacket、pendingSubmissionLineage、pendingPayloadCredit、pendingLineage、pendingObservation、receivePending及公共pendingOutputBuffer残留。receivePending只由非flush输出背压设置，onProcess在读取terminal之前完成该接收并清除；flush内背压由flushPending承接，因此不把合法flushSent/flushPending作为残留。submissionOrderLineage不清除，仍由原finishGeneration发现未消费lease。已同步旧关闭设计的内部引用释放时点，保持新代准入归原purge所有。
+
+## 验证进度
+
+两位独立审查均明确DESIGN PASS及SOURCE PASS。RKMPP 8核增量构建PID3490673，exit0，4/4目标完成；未运行local CLI。realtime CLI SHA256为4f1249bd8958e13bc87715ae3bc744caeffe3da6a7fc6a51e558ca6d23bd68f4。回退源码与CLI保留于目标out/rollback/rk489。实流及Windows共享回归尚未通过。本轮传输tar及构建日志记录结果后按清单清理。

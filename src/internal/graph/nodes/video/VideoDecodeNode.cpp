@@ -633,7 +633,16 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     const auto endGeneration = mediaEndGeneration(m_lineageState->flushBuffer);
     if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
-    if (!endGeneration.value()) m_codecApi->flushBuffers(codecContext());
+    if (m_lineageState->pendingPacket || m_lineageState->pendingSubmissionLineage ||
+        m_lineageState->pendingPayloadCredit || m_lineageState->pendingLineage ||
+        m_lineageState->pendingObservation || m_lineageState->receivePending ||
+        pendingOutputBuffer()) {
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video decoder terminal retains uncommitted input or output")));
+    }
+    // Drain EOF proves output completion, not release of internal packet references.
+    // The node's flushSent gate keeps EndGeneration closed until the owning purge.
+    m_codecApi->flushBuffers(codecContext());
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
