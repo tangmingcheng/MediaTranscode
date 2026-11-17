@@ -1002,3 +1002,7 @@ EndGeneration覆盖音频/补偿双边原子发布，窗口执行与Swr排空持
 ## 2026-11-17：rk463启动裁剪代内关闭
 
 trim接入EndGeneration、精确授权后转发并等待purge，实际owner sizeof计费。三文件双SOURCE PASS，RKMPP8核增量6项exit0。生产BYE尚未接通，不构成实流通过。
+
+## 2026-11-17：rk464 RTP binder代内关闭
+
+EndGeneration明确clock-group域，检查成员关闭身份并在实际提交时持代次授权。修复clock fanout先到竞态、移除重复sizeof计费，三文件双SOURCE PASS；目标最终8核增量5项exit0。raw生产BYE未接通，不新增实流成功声明。

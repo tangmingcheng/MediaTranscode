@@ -137,6 +137,7 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
         cancelPendingOutputTransfer();
         if (m_preparedPrefix) m_preparedPrefix->packets.clear();
         m_pendingPublication.reset();
+        m_generationEnd.reset();
         m_clockSession->invalidateClockProjection();
         m_clockSession->m_acquiringPackets->clear();
         m_clockSession->m_acquisitionDeadline->clear();
@@ -250,6 +251,7 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
             ? processFinished(emitOutput(context, "packet", terminal))
             : processProgress(emitOutput(context, "packet", terminal));
     }
+    if (m_generationEnd) return processWaiting();
 
     if (!m_clockSession->m_acquiringPackets->empty()) {
         auto disposition = m_clockSession->classifyPacket(m_clockSession->m_acquiringPackets->front());
@@ -275,6 +277,14 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
                 *m_syncGroupKey, *m_clockSession->m_acquisitionDeadline->deadline()));
     }
 
+    // Clock fanout may revoke the projection before the source lifecycle
+    // consumer revokes publication authority. Keep the ordered boundary in
+    // its existing input queue until the old closing mapping or retirement
+    // is authoritative; do not interpret that delivery skew as bad identity.
+    if (const auto closing = m_syncGroup->sourceDrainSnapshot(); closing &&
+        (!m_clockSession->m_lockedSnapshot ||
+         m_clockSession->m_lockedSnapshot->groupGeneration != closing->request.playbackGeneration))
+        return processWaiting();
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());
@@ -288,6 +298,9 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
         return processWaiting();
     }
     MediaBufferRef input = std::move(*packet.value());
+    auto generationEnd = mediaEndGeneration(input);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    if (generationEnd.value()) return processProgress(endGeneration(context, std::move(input)));
     if (input->isEof() || input->isFlush()) {
         return processProgress(finishPacketInput(context, std::move(input)));
     }
@@ -463,6 +476,26 @@ MediaRtpPacketClockBinderNode::generationPurgeTarget() const noexcept
 MediaRtpPacketClockBinderNode::reserveOutputCommit(const MediaBufferRef& buffer) const
 {
     using Result = ::media::Result<MediaOutputCommitReservation>;
+    auto generationEnd = mediaEndGeneration(buffer);
+    if (!generationEnd) return Result::failure(generationEnd.error());
+    if (generationEnd.value()) {
+        if (!m_syncGroup || buffer != m_generationEnd)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP binder generation end lacks its retained closing identity"));
+        auto arbitration = m_syncGroup->reserveGenerationArbitration();
+        if (!arbitration) return Result::failure(arbitration.error());
+        auto disposition = classifyMediaAvGenerationEvidence(arbitration.value().reacquisition(),
+            arbitration.value().epoch(), *generationEnd.value());
+        if (!disposition) return Result::failure(disposition.error());
+        if (disposition.value() == MediaAvGenerationEvidenceDisposition::Retired)
+            return Result::failure(::media::ErrorInfo::cancelled("RTP binder retires old generation end"));
+        if (disposition.value() != MediaAvGenerationEvidenceDisposition::Target ||
+            !arbitration.value().epoch().outputPermitted)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "RTP binder generation end requires its published closing epoch"));
+        return Result::success(MediaOutputCommitReservation::hold(
+            std::move(arbitration).value().retainPublicationAuthority()));
+    }
     if (dynamic_cast<const MediaControlBuffer*>(buffer.get()))
         return FFmpegNodeRuntime::reserveOutputCommit(buffer);
     const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get());
@@ -576,6 +609,7 @@ void MediaRtpPacketClockBinderNode::resetState() noexcept
     if (m_preparedPrefix) m_preparedPrefix->packets.clear();
     m_pendingPublication.reset();
     m_syncGroupKey.reset();
+    m_generationEnd.reset();
     m_syncGroup.reset();
     m_initialGeneration = 0;
     m_configured = false;

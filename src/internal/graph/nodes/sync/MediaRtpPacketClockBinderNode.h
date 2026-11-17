@@ -48,6 +48,7 @@ private:
                                MediaBufferRef buffer);
     ::media::Status finishPacketInput(MediaGraphExecutionContext& context,
                                       MediaBufferRef terminal);
+    ::media::Status endGeneration(MediaGraphExecutionContext& context, MediaBufferRef terminal);
     void resetState() noexcept;
     ::media::Status releasePendingPublication(MediaGraphExecutionContext& context);
     ::media::Status emitPacket(MediaGraphExecutionContext& context, MediaBufferRef buffer);
@@ -63,6 +64,7 @@ private:
         nullptr, MediaLineageObjectDeleter<MediaPreparedRtpPrefix>{MediaRuntimeLineageAllocation{}}};
     // One first-publication owner, shared by graph-credit and authority waits.
     MediaBufferRef m_pendingPublication;
+    MediaBufferRef m_generationEnd;
     std::uint64_t m_initialGeneration = 0;
     bool m_configured = false;
 };
