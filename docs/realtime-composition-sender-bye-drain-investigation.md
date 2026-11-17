@@ -70,7 +70,7 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 | coordinator → PlaybackEpochBinder → ActivationReleaseSequencer → BoundReleaseExtractor | coordinator收齐成员关闭并完成held/release后，形成整组屏障；复用单transaction FIFO及extractor原子成员广播。旧activation、pending多边交易先成功提交；不得先撤销旧播放许可 |
 | released audio → AudioDecode → AudioStartupTrim | 原decoder drain与lineage/discard-padding结算；trim缓冲完成；metadata端不伪造媒体EOS |
 | trim → AudioDriftController → AudioResample | 原pending correction交易及样本完成；SWResample drain发完内部延迟；停止为封闭旧代产生新补偿命令后再转发 |
-| decoded video/preparation → optional filter/frame-rate → video aggregate | 各frame/pending holder完成后转发；末显示帧复用 `MediaAvContinuousAggregateNode.cpp:445–456`：最后decodedSequence等于lastDisplayCommit才移除并sealDisplayInput，不造末帧duration |
+| decoded video/preparation → optional filter/frame-rate → video aggregate | 各frame/pending holder完成后转发；末显示帧复用 `MediaAvContinuousAggregateNode.cpp:445–456`：最后decodedSequence等于lastDisplayCommit才移除并确认本代drained，不永久sealDisplayInput，不造末帧duration |
 | resample → selected audio aggregate | 标记只封闭当前源代；候选消费、pending真实贡献提交后ack，不调用永久输入EOF；未选中音频由原discard消费者确认前序释放 |
 | source aggregate → composition encoder/scheduler/mux | 源标记不成为输出EOF。source完成以aggregate提交为界，已提交合屏包由原输出FIFO继续排空；其他源与输出时钟持续 |
 
@@ -108,3 +108,20 @@ rk457 已在原规格实流确认：BYE purge 前 aggregate 持有同旧代 55 �
 基础切片新增非永久EndGeneration、每源单一关闭状态、不可变frontier、逐成员完成确认和SourceDrained回收校验。强失效与取消仍清除关闭状态；尚无生产入口发出新标记。完整Epoch owner实际sizeof按源数加输出域计入既有aggregate固定准入费用，不宣称覆盖全进程RSS或所有分配器开销。两位独立审查均给出基础切片SOURCE PASS；构建与实流结论另行记录。
 
 源码核验纠正全程playback身份假设：MediaRtpPacketClockProjector返回snapshot.groupGeneration，PacketClockSession将其写入SourceAccessUnit lineage，前置VideoDecode registry因此属于clock-group域；成员ingress generation另与calibration核对。EndGeneration在绑定前沿用当前边clock-group代次，在原startup/activation/bound-release边界依据被冻结的关系转换为旧playback代次，之后才使用playback generation。禁止假设三域数字相等，或放宽retained-control精确校验。此项是后续接线必需条件，当前基础未启用BYE。
+
+### 2026-11-17：生产接收入口核验（尚未接线）
+
+rk462 已完成聚合器确认；本节仅记录继续实施所需的当前代码证据，不代表 BYE 修复完成。
+
+- `MediaRawRtpPreparedInputBuffer::captureRuntimeBatch` 的 RTP/RTCP 两个线程都调用 tick；`m_deliveryMutex` 只序列化单数据报准入，不覆盖整批。RTCP 超时或批后 tick 不能证明另一线程的 RTP 批次已交付，credit retry 也不能封 frontier。关闭边界必须由本成员 RTP 接收 owner 提交；跨截止批次需要在逐项准入前处理边界，避免首个新代数据报等待 purge、而 purge 又等待批后封口的环形等待。
+- Linux adapter 在 recvmmsg 返回后给整批标注同一用户态观察时间；Windows adapter 在 IOCP completion/同步 recv 取得数据后逐项标注。现有 observedAtNanoseconds 不是内核到包时间，不得声称保全截止前已到网卡但尚未被 adapter 观察的数据。两平台复用同一截止算法，仅接收 adapter 不同。
+- prepared source candidate 明确要求 DeclaredInputLatency；`MediaRtpInputWaitPlan::finalNanoseconds` 对该模式保持调用方等待期限，源 stream 的 reorder.maximumDelay 来自该产品。关闭期限可以追溯到已授权部署事实，不能替换成读取超时或出口预算。
+- tracker 的 prepareRtcp 是尚未提交的破坏性 delta；BYE 分流必须发生在 commitControl 前。该函数会提交协议失效并清 pending，后续 clockGroup invalidation 会清双成员 mapper，binder 又会清 lookahead。只在 binder 忽略 BYE 无法恢复已丢状态。
+- prepared source 在 takeClockGroup 后已不再拥有 clockGroup；其 mutex 内不得直接调用 graph/coordinator。需要冻结旧成员协议事实，通过明确交接传给现有源组生命周期 owner；不能保存 borrowed prepared transaction 跨等待。
+- EndGeneration 必须进入原 packet FIFO，位于已接受 AU 后，且控制对象费用纳入原容量合同。现有 packets/controls 分队列，控制队列先消费不能充当媒体屏障。
+- `purgeMedia` 当前删除全部 Packet 项并 resetAssembly；新代若提前塞入同一队列会被误清。必须先明确新数据报在原 receiver arena 中等待的状态、唤醒及失败期限，再开放新代准入；不得新增无界队列或第二套 codec。
+- binder 目前只接 EOF/Flush；trim 也只识别这两种控制，须补 EndGeneration。binder 的既有 interval 尾包处理使用 lastPositiveVideoDelta，不能将该历史间隔称为真实末帧 duration；SourceDisplayPoint 与 interval 合同需分别核对。
+
+依据：[GStreamer 串行 EOS 与非串行事件](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/events.html)、[RFC 3550 BYE](https://www.rfc-editor.org/rfc/rfc3550.html#section-6.6)。RFC BYE 本身不提供跨 RTP/RTCP socket 的已消费媒体 frontier。source_drain_review_b 对整体方向 PASS，但明确上述代次、锁序、截止、容量与交接约束未落实前不能判入口实施完成；接收边界细节继续由 source_drain_review_a 复核。
+
+source_drain_review_a 已完成边界复核：采用 observedAt < 截止准入旧代，首个 observedAt >= 截止的项在等待之前封口；无未处理批次的 RTP owner 批末/接收超时/下次接收前亦可提供边界。封口不等于排空，pending、重组和输出交易结算后才发布 EndGeneration。时间单调性由 MediaRtpIngressStorage::commitReceivedSlot 校验，原 batch lease 持有待交接项，无新增媒体队列。
