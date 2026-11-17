@@ -1037,3 +1037,6 @@ source consume/resumeDrain移出receiver mutex，delivery单项顺序及Accepted
 
 ### rk473：实流发现并修复重入授权回归
 原规格四屏实流FAIL：source1合法generation2重入被HardwareTransfer错误套用initial preparation身份拒绝。已按实际Initial/Next发布合同修复，双独立SOURCE PASS。CLI失败退出另卡在RKMPP取帧，已取得符号栈并按精确PID清理，未宣称解决。rk473临时产物清理完毕，rk474增量构建4/4退出0，实流复验待完成。详见docs/realtime-composition-rk473-validation.md。
+
+### rk474：原规格复验启动环境失败
+CLI在30秒参数集探测超时，Windows源匹配RTP包为0，未进入四屏运行；自然exit1，无重入修复有效性结论。已记录命令、PID、CPU/RSS并逐项清理；下一轮在桌面网络执行环境启动全部本机媒体进程，保持原规格。详见docs/realtime-composition-rk474-validation.md。
