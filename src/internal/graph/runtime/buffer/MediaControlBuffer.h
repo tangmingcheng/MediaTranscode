@@ -30,6 +30,7 @@ public:
         std::uint64_t generation);
 
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     MediaControlBufferKind controlKind() const noexcept;
     std::optional<MediaControlBufferFlow> flow() const noexcept;
     std::optional<std::uint64_t> generation() const noexcept;

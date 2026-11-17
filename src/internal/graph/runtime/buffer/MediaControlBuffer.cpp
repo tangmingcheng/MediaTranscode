@@ -34,6 +34,16 @@ MediaBufferType MediaControlBuffer::type() const noexcept
     return MediaBufferType::Control;
 }
 
+std::optional<std::uint64_t> MediaControlBuffer::payloadFootprintBytes() const noexcept
+{
+    // These typed signals own no media payload. Their fixed object storage and
+    // FIFO slot remain charged separately by the existing owner/queue contracts.
+    // Unknown or malformed controls must not gain admission through this fact.
+    if (payloadKind() != MediaPayloadKind::ControlSignal || streamKind() != MediaStreamKind::Control || !flow())
+        return std::nullopt;
+    return std::uint64_t{0};
+}
+
 MediaControlBufferKind MediaControlBuffer::controlKind() const noexcept
 {
     return m_kind;
