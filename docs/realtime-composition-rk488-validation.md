@@ -76,3 +76,5 @@ VLC原生快照composition-rk488-native-2026-11-17-12h28m15s095.png已人工查�
 外部监控119样本，CPU最大159%（单核口径），RSS最大75004KiB。清理清单：本机composition-rk488-native-2026-11-17-12h28m15s095.png、composition-rk488-source2.log/.out、composition-rk488-source3.log/.out、composition-rk488-vlc.log、rk488-cli.log、rk488-run.sh；远端acceptance/rk488中的socket-monitor.log、udp-after.txt、output.sdp、source0.out、cli-error.log、monitor.log、result.txt、pids.txt、launcher.log、run.sh、cli.log、source1.out、source0.log、udp-before.txt、source1.log、cli-maps.txt及out/acceptance/rk488-run.sh。远端记录PID均已结束；本机源进程自然exit0，VLC测试结束后清理，不算自然退出。
 
 清理复核：上述两侧临时文件清单及本轮PID均无残留，复用源和回退产物保留。
+
+更正（rk489现场核验）：此前普通工具环境没有看见真实VLC29180，其无残留判断不成立。rk489以可见真实进程的提权环境核对rk488命令行后已精确清理29180；不影响四路FFmpeg/CLI退出码，但此前清理声明作废，以此更正为准。
