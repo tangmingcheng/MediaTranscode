@@ -764,10 +764,10 @@ void MediaPreparedRtpSourceSession::deactivateControl(
         selected->controlWakeup.reset();
 }
 
-::media::Result<std::uint64_t> MediaPreparedRtpSourceSession::purgeMedia(MediaStreamKind kind)
+::media::Result<std::optional<std::uint64_t>> MediaPreparedRtpSourceSession::purgeMedia(MediaStreamKind kind)
 {
     std::scoped_lock lock(m_mutex);
-    using R = ::media::Result<std::uint64_t>;
+    using R = ::media::Result<std::optional<std::uint64_t>>;
     auto selected = stream(kind);
     if (!selected) return R::failure(selected.error());
     if (!m_frozen) return R::failure(::media::ErrorInfo::invalidArgument("Prepared RTP purge precedes handoff"));
@@ -1236,6 +1236,10 @@ try {
     auto& classBytes = outputClass == MediaPreparedRtpOutputClass::Packet ? stream.packetBytes : stream.controlBytes;
     classBytes -= output.admissionBytes;
     notifyCredit(stream);
+    // Raw also produces retirement controls during owner-thread purge. Ordinary
+    // SR consumption can release its credit without a retirement receipt.
+    if (outputClass == MediaPreparedRtpOutputClass::Control && stream.wakeup)
+        stream.wakeup->notify();
     return R::success(std::move(output));
 }
 

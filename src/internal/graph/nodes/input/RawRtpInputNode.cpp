@@ -150,6 +150,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             if (m_preparedSource) {
                 auto cutoff = m_preparedSource->purgeMedia(m_config.streamKind);
                 if (!cutoff) status = ::media::Status::failure(cutoff.error());
+                else if (!cutoff.value()) return processWaiting();
                 else continuousCutoff = cutoff.value();
             } else discardUnassembledPackets();
             // Retain the already planned batch lease for ordered RTCP processing.
@@ -160,7 +161,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             if (status) {
                 if (!m_preparedSource) m_protocol->requireKeyframe();
                 status = m_syncGroup->rtpIngressFrontiers()->publish(
-                    m_ingressBinding->stream, *purge, continuousCutoff.value_or(m_nextIngressSequence - 1));
+                    m_ingressBinding->stream, *purge,
+                    m_preparedSource ? *continuousCutoff : m_nextIngressSequence - 1);
             }
             if (status) {
                 mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,

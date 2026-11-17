@@ -1049,3 +1049,6 @@ CLI在30秒参数集探测超时，Windows源匹配RTP包为0，未进入四屏�
 
 ### rk477：RTP owner捕获顺序边界
 exclusive-before水位由原RTP owner推进，背压等待不越过未处理batch，bootstrap排除；双独立DESIGN/SOURCE PASS，RKMPP8核增量exit0。尚无关闭gate或实流通过；下一行为改动须一次接齐Opening/截止/EndGeneration/退休消费屏障，详见docs/realtime-composition-rk477-validation.md。
+
+### rk478：purge等待接口与控制容量唤醒
+Raw支持pending purge且不提前ack，控制FIFO释放同时通知Raw；双SOURCE PASS，RKMPP8核增量exit0。当前source尚无empty返回生产路径，未宣称退休屏障完成。详见docs/realtime-composition-rk478-validation.md。

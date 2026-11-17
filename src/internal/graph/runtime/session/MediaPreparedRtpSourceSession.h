@@ -125,7 +125,8 @@ public:
         MediaStreamKind stream, std::int64_t now);
     ::media::Status activateStream(MediaStreamKind stream,
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
-    ::media::Result<std::uint64_t> purgeMedia(MediaStreamKind stream);
+    // Empty means the same purge still owns work; callers must not acknowledge it.
+    ::media::Result<std::optional<std::uint64_t>> purgeMedia(MediaStreamKind stream);
     ::media::Status bindRuntimeGroup(const std::shared_ptr<MediaAvSyncGroupRuntime>& group);
     ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
     ::media::Status observeConsumedRetirement(MediaStreamKind stream,
