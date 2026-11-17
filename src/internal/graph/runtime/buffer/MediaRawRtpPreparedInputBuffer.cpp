@@ -884,7 +884,7 @@ catch (const std::bad_alloc&) {
             // Exactly one entry admission/frontier publication is ordered.
             // Socket receive and credit waits never retain either lock.
             std::scoped_lock delivery(m_deliveryMutex);
-            std::scoped_lock lock(m_mutex);
+            std::unique_lock lock(m_mutex);
             if (m_stopped || stopToken.stop_requested()) return ::media::Status::success();
             if (channel != m_prepared->receiveGeometries[channelIndex].channel())
                 return ::media::Status::failure(::media::ErrorInfo::internalError("RTP receiver produced a datagram for another channel"));
@@ -899,13 +899,22 @@ catch (const std::bad_alloc&) {
                     observed = true;
                 }
                 const auto ordinal = m_prepared->ingressFrontier + 1;
+                // The batch remains owned by this worker; stop joins it before
+                // destroying receiver state. Source work may take generation
+                // arbitration, so do not carry the receiver lock into it.
+                lock.unlock();
                 auto consumed = source->consume(stream, channel, bytes, observedAtNs, ordinal);
                 if (!consumed) return ::media::Status::failure(consumed.error());
                 progress = consumed.value();
                 accepted = progress.state == MediaPreparedRtpIngressState::AcceptedReady ||
                     progress.state == MediaPreparedRtpIngressState::AcceptedWaitingCredit;
+                lock.lock();
+                // Commit the observed acceptance even if stop arrived while
+                // source work was running. A committed datagram is never replayed.
                 if (accepted) { m_prepared->ingressFrontier = ordinal; m_ready.notify_all(); }
+                if (m_stopped || stopToken.stop_requested()) return ::media::Status::success();
             } else {
+                lock.unlock();
                 auto resumed = source->resumeDrain(stream, mediaSteadyClockNowNs());
                 if (!resumed) return ::media::Status::failure(resumed.error());
                 progress = resumed.value();

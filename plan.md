@@ -1031,3 +1031,6 @@ VideoFilter/VideoFrameRate 的 EndGeneration、purge 复位、提交与清理互
 
 ### rk471：关闭所需协议残留事实
 只读reorder/pending/assembly状态查询与显式Accepted判据已实现，双独立SOURCE PASS，RKMPP增量161/161退出0。未运行实流，关闭入口仍未启用。事务及锁序约束已补充到sender-bye调查，详见rk471验证记录。
+
+### rk472：receiver与source事务锁边界
+source consume/resumeDrain移出receiver mutex，delivery单项顺序及Accepted frontier提交保持，停止竞态不重放。双独立SOURCE PASS，RKMPP增量4/4退出0；尚未进行实流。详见docs/realtime-composition-rk472-validation.md。
