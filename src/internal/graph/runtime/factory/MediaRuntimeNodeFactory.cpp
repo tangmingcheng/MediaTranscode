@@ -1083,6 +1083,12 @@ std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
 {
+    if (auto* transfer = dynamic_cast<HardwareTransferNode*>(&runtime);
+        transfer && transfer->generationPurgeTarget()) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            MediaAvGenerationParticipant::CanonicalLineage,
+            {std::string(HardwareTransferNode::generationPurgeIdentity()), transfer->generationPurgeTarget()}};
+    }
     if (auto* raw = dynamic_cast<RawRtpInputNode*>(&runtime);
         raw && raw->generationPurgeTarget()) {
         return MediaRuntimeGenerationPurgeRegistration{

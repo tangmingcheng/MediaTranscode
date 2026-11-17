@@ -1025,3 +1025,6 @@ prepared owner复制runtime clock身份标量；协议新增严格身份退休�
 
 ### rk469：视频贡献节点代内排空
 VideoFilter/VideoFrameRate 的 EndGeneration、purge 复位、提交与清理互斥已实现，双独立 SOURCE PASS，RKMPP 增量 9/9 退出 0。未跑实流，HardwareTransfer 与接收关闭入口仍待完成。详见 docs/realtime-composition-rk469-validation.md。
+
+### rk470：HardwareTransfer 代次生命周期
+源组/准备身份绑定、提交仲裁、owner purge与旧FIFO标记退休分类已实现，双独立 SOURCE PASS，RKMPP增量8/8退出0。尚无实流结论，接收端关闭入口仍待接通。详见 docs/realtime-composition-rk470-validation.md。

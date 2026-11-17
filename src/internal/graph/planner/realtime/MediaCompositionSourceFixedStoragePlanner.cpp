@@ -7,6 +7,7 @@
 #include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 #include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include <limits>
@@ -63,6 +64,9 @@ try {
     const auto& raw = request.raw;
     const bool audio = request.sourceRequest.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
     StorageSum sum;
+    sum.add(::media::Result<std::size_t>::success(sizeof(HardwareTransferNode)));
+    sum.add(::media::Result<std::size_t>::success(sizeof(MediaOwnerThreadGenerationPurge)));
+    sum.add(::media::Result<std::size_t>::success(sizeof(MediaVideoReferenceLineageState)));
     sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
     if (audio) sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
     if (request.video.filterActive)

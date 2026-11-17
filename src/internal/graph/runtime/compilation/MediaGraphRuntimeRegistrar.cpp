@@ -14,6 +14,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
+#include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/input/MediaRtpControlOutputNode.h"
 #include "internal/graph/runtime/resource/MediaSourceReferenceAllocation.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
@@ -252,6 +253,9 @@ namespace media::ffmpeg::graph {
                 auto group = context.findAvSyncGroup(owner->groupKey);
                 if (!group) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
                     "Source frame processor has no registered source group"));
+                if (auto* transfer = dynamic_cast<HardwareTransferNode*>(runtimeNode.value().get())) {
+                    if (auto status = transfer->bindSourceGroup(group, owner->preparation); !status) return status;
+                }
                 if (!owner->rtpSource && group->plan().startup.videoReadiness ==
                         MediaVideoStartupReadiness::DecodedPresentationSpan)
                     return ::media::Status::failure(::media::ErrorInfo::notInitialized(

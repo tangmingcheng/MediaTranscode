@@ -24,6 +24,7 @@ template<class Visitor> void visitProcessingChildren(
     visit("startup_generation_state");
     visit("video_decode");
     visit("video_preparation");
+    visit("hardware_transfer");
     if (videoReadiness == MediaVideoStartupReadiness::IntervalCoverage)
         visit("video_frame_rate");
     else if (videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan)
