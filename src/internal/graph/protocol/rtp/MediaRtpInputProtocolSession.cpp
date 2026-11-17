@@ -213,9 +213,10 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
 }
 
 ::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareRtcp(
-    std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const
+    std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs,
+    MediaRtpByeHandling byeHandling) const
 {
-    return m_clock.prepareRtcp(bytes, observedAtNs, evaluationAtNs);
+    return m_clock.prepareRtcp(bytes, observedAtNs, evaluationAtNs, byeHandling);
 }
 
 ::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareEvidence(std::int64_t now) const

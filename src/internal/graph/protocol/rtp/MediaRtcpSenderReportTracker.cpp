@@ -116,9 +116,13 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
 }
 
 ::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::prepare(
-    const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs) const try
+    const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs,
+    MediaRtpByeHandling byeHandling) const try
 {
     using Result = ::media::Result<MediaRtcpPreparedObservation>;
+    if (byeHandling != MediaRtpByeHandling::InvalidateMember &&
+        byeHandling != MediaRtpByeHandling::PreserveMemberForDrain)
+        return Result::failure(::media::ErrorInfo::invalidArgument("RTCP requires an explicit BYE disposition"));
     if (m_revision == std::numeric_limits<uint64_t>::max())
         return Result::failure(::media::ErrorInfo::invalidArgument("RTCP tracker mutation revision exhausted"));
     MediaRtcpPreparedObservation result{this, m_revision, state(), {}, {}, {}, {}, false, {}};
@@ -190,9 +194,11 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
             } else if (packet.kind == MediaRtcpPacketKind::Bye &&
                 std::find(packet.byeSources.begin(), packet.byeSources.end(), *next.mediaSsrc) != packet.byeSources.end()) {
                 const MediaRtpSenderDeparture departure{next.generation, *next.mediaSsrc, observedAtNs};
-                if (auto status = invalidatePrepared(result); !status) return Result::failure(status.error());
+                if (byeHandling == MediaRtpByeHandling::InvalidateMember) {
+                    if (auto status = invalidatePrepared(result); !status) return Result::failure(status.error());
+                    result.output = MediaRtpClockInvalidation{next.generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs};
+                }
                 result.senderDeparture = departure;
-                result.output = MediaRtpClockInvalidation{next.generation, MediaRtpSourceUnavailableReason::SenderLeft, observedAtNs};
                 break;
             }
             if (result.rejection) break;
@@ -279,17 +285,23 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
         return invalidEvidence("RTCP prepared observation no longer matches tracker revision");
     const auto* invalidation = std::get_if<MediaRtpClockInvalidation>(&prepared.output);
     const bool senderLeft = invalidation && invalidation->reason == MediaRtpSourceUnavailableReason::SenderLeft;
-    if (senderLeft != prepared.senderDeparture.has_value())
+    if (senderLeft && !prepared.senderDeparture)
         return invalidEvidence("RTCP sender departure must accompany its exact BYE invalidation");
     if (prepared.senderDeparture) {
         const auto& departure = *prepared.senderDeparture;
-        if (!prepared.invalidated || !m_mediaSsrc || departure.ssrc != *m_mediaSsrc ||
-            departure.ingressGeneration != m_generation ||
-            m_generation == std::numeric_limits<uint64_t>::max() ||
-            prepared.state.generation != m_generation + 1 ||
-            invalidation->generation != prepared.state.generation ||
-            departure.observedAtNs != invalidation->observedAtNs)
+        if (!m_mediaSsrc || departure.ssrc != *m_mediaSsrc ||
+            departure.ingressGeneration != m_generation)
             return invalidEvidence("RTCP sender departure changed its pre-invalidation member identity");
+        if (prepared.invalidated) {
+            if (!senderLeft || m_generation == std::numeric_limits<uint64_t>::max() ||
+                prepared.state.generation != m_generation + 1 ||
+                invalidation->generation != prepared.state.generation ||
+                departure.observedAtNs != invalidation->observedAtNs)
+                return invalidEvidence("RTCP retired departure lacks its paired invalidation");
+        } else if (invalidation || prepared.state.generation != m_generation ||
+            prepared.state.mediaSsrc != m_mediaSsrc) {
+            return invalidEvidence("RTCP deferred departure must preserve its current protocol member");
+        }
     }
     if (auto status = advanceRevision(); !status) return status;
     const auto& next = prepared.state;

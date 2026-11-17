@@ -58,7 +58,8 @@ MediaRtpInputClockSession::MediaRtpInputClockSession(
 }
 
 ::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputClockSession::prepareRtcp(
-    std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const try
+    std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs,
+    MediaRtpByeHandling byeHandling) const try
 {
     using Result = ::media::Result<MediaRtpPreparedClockObservation>;
     if (observedAtNs <= 0) return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -66,7 +67,7 @@ MediaRtpInputClockSession::MediaRtpInputClockSession(
     auto packets = MediaRtcpCompoundParser::parse(datagram,
         MediaRtcpCompoundPolicy{m_config.compositionMode, m_config.tracker.requireCname});
     if (!packets) return Result::failure(packets.error());
-    auto prepared = m_tracker.prepare(packets.value(), observedAtNs, evaluationAtNs);
+    auto prepared = m_tracker.prepare(packets.value(), observedAtNs, evaluationAtNs, byeHandling);
     if (!prepared) return Result::failure(prepared.error());
     return materializeObservation(std::move(prepared).value());
 }

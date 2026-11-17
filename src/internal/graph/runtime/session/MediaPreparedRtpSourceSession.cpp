@@ -204,7 +204,8 @@ try {
                 if (auto status = evidence(s, evaluationAtNs); !status) return status;
             }
         } else {
-            auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs);
+            auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs,
+                MediaRtpByeHandling::InvalidateMember);
             if (!observation) return ::media::Status::failure(observation.error());
             if (auto status = commitControl(s, std::move(observation).value(), evaluationAtNs, nullptr); !status) return status;
         }

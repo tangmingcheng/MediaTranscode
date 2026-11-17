@@ -58,7 +58,8 @@ public:
         MediaLineageAllocationScope allocation);
     ::media::Status observeMedia(uint32_t ssrc);
     ::media::Result<MediaRtcpPreparedObservation> prepare(
-        const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs) const;
+        const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs,
+        MediaRtpByeHandling byeHandling) const;
     ::media::Result<MediaRtcpPreparedObservation> prepareEvidence(int64_t evaluationAtNs) const;
     ::media::Result<MediaRtcpPreparedObservation> prepareContinuityChange(bool invalidate) const;
     ::media::Result<MediaRtcpPreparedObservation> prepareMemberRetirement(

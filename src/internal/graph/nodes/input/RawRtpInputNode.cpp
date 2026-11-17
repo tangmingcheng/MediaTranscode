@@ -847,7 +847,8 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
                 "RawRtpInputNode requires a monotonic RTCP arrival time"));
     }
     const auto evaluationAtNs = mediaSteadyClockNowNs();
-    auto observation = m_protocol->prepareRtcp(datagram, observedAtNs, evaluationAtNs);
+    auto observation = m_protocol->prepareRtcp(datagram, observedAtNs, evaluationAtNs,
+        MediaRtpByeHandling::InvalidateMember);
     if (!observation) return ::media::Status::failure(observation.error());
     return publishClockObservation(context, std::move(observation).value(), evaluationAtNs, nullptr);
 }

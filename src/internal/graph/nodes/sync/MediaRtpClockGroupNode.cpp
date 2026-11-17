@@ -237,6 +237,14 @@ MediaRtpClockGroupNode::processStream(
          event->discontinuityGeneration(), event->clockObservation(), event->clockInvalidation()},
         streamKind, selectedClock, mediaSteadyClockNowNs());
     if (!consumed) return ::media::Result<StreamProcessOutcome>::failure(consumed.error());
+    if (m_preparedSource && !consumed.value().rejected && !selectedClock && event->clockInvalidation()) {
+        const auto& invalidation = *event->clockInvalidation();
+        if (invalidation.reason == MediaRtpSourceUnavailableReason::SenderLeft ||
+            invalidation.reason == MediaRtpSourceUnavailableReason::GroupClosed) {
+            auto receipt = m_preparedSource->observeConsumedRetirement(streamKind, event->sequence(), invalidation);
+            if (!receipt) return ::media::Result<StreamProcessOutcome>::failure(receipt.error());
+        }
+    }
     if (selectedClock && event->kind() == MediaRtpIngressEventKind::ClockEvidence && event->clockEvidence()) {
         const auto& evidence = *event->clockEvidence();
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,

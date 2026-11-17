@@ -123,6 +123,8 @@ public:
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
     ::media::Result<std::uint64_t> purgeMedia(MediaStreamKind stream);
     ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
+    ::media::Status observeConsumedRetirement(MediaStreamKind stream,
+        std::uint64_t sequence, const MediaRtpClockInvalidation& invalidation);
     void fail(::media::ErrorInfo error);
     ::media::Status status() const;
     ::media::Status validatePreparationPhase() const;
@@ -175,6 +177,8 @@ private:
         std::optional<MediaPreparedRtpCreditBlocker> waitingCredit;
         std::optional<std::uint64_t> runtimeIngressGeneration;
         std::optional<std::uint32_t> runtimeSsrc;
+        std::optional<std::uint64_t> consumedRetirementSequence;
+        std::optional<MediaRtpClockInvalidation> consumedRetirement;
     };
     ::media::Result<Stream*> stream(MediaStreamKind kind);
     bool controlReady(Stream& stream);

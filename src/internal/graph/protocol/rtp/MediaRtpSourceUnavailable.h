@@ -4,6 +4,8 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRtpByeHandling { InvalidateMember, PreserveMemberForDrain };
+
 enum class MediaRtpSourceUnavailableReason : std::uint8_t {
     ClockEvidenceExpired,
     SenderLeft,

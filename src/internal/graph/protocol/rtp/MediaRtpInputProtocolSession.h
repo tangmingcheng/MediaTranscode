@@ -69,7 +69,8 @@ public:
     // (or sole Raw owner thread). Never retain this product across a wait;
     // tracker identity/revision rejects stale state, pending RTP is not copied.
     ::media::Result<MediaRtpPreparedClockObservation> prepareRtcp(
-        std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
+        std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::int64_t evaluationAtNs,
+        MediaRtpByeHandling byeHandling) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareEvidence(std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareClockTransition(std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareMemberRetirement(

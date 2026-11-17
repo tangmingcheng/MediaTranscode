@@ -39,7 +39,8 @@ public:
     ::media::Result<std::uint64_t> observeMedia(std::uint32_t ssrc);
     ::media::Result<MediaRtpPreparedClockObservation> prepareDiscontinuity(std::uint64_t generationBefore) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareRtcp(
-        std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
+        std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs,
+        MediaRtpByeHandling byeHandling) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareEvidence(std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareClockTransition(std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareMemberRetirement(
