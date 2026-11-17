@@ -998,3 +998,7 @@ EndGeneration覆盖音频/补偿双边原子发布，窗口执行与Swr排空持
 ## 2026-11-17：rk462聚合器代内排空
 
 三个成员入口接通Closing/Retired，待实际贡献提交后确认排空，由视频owner完成整源关闭；修正跨快照退休竞态。七文件双SOURCE PASS，RKMPP8核增量12项exit0。尚未启用生产BYE，无媒体验收成功声明。接收截止、新代交接、完整回归及失败退出继续。
+
+## 2026-11-17：rk463启动裁剪代内关闭
+
+trim接入EndGeneration、精确授权后转发并等待purge，实际owner sizeof计费。三文件双SOURCE PASS，RKMPP8核增量6项exit0。生产BYE尚未接通，不构成实流通过。
