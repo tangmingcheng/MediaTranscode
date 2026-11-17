@@ -78,8 +78,8 @@ namespace media::ffmpeg::graph {
     // must be acquired outside this mutex before a closing transaction begins.
     return ::media::Status::success();
 }
-::media::Status MediaPreparedRtpSourceSession::observeConsumedRetirement(
-    MediaStreamKind kind, std::uint64_t sequence, const MediaRtpClockInvalidation& invalidation)
+::media::Status MediaPreparedRtpSourceSession::observeConsumedControl(
+    MediaStreamKind kind, std::uint64_t sequence, const std::optional<MediaRtpClockInvalidation>& invalidation)
 {
     std::scoped_lock lock(m_mutex);
     if (m_error) return ::media::Status::failure(*m_error);
@@ -87,15 +87,19 @@ namespace media::ffmpeg::graph {
     if (!selected) return ::media::Status::failure(selected.error());
     auto& s = *selected.value();
     if (!m_frozen || m_group || sequence == 0 || sequence >= s.nextSequence ||
-        (s.consumedRetirementSequence && sequence <= *s.consumedRetirementSequence) ||
-        invalidation.generation == 0 || invalidation.observedAtNs <= 0 ||
-        (invalidation.reason != MediaRtpSourceUnavailableReason::SenderLeft &&
-            invalidation.reason != MediaRtpSourceUnavailableReason::GroupClosed))
+        !s.lastControlSequence || sequence > *s.lastControlSequence ||
+        (s.consumedControlSequence && sequence <= *s.consumedControlSequence) ||
+        (invalidation && (invalidation->generation == 0 || invalidation->observedAtNs <= 0)))
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Prepared RTP retirement receipt requires an ordered consumed member invalidation"));
-    s.consumedRetirementSequence = sequence;
-    s.consumedRetirement = invalidation;
-    // Both source members may be waiting for the last retirement consumption.
+            "Prepared RTP control receipt requires its successfully consumed ordered event"));
+    s.consumedControlSequence = sequence;
+    if (invalidation && (invalidation->reason == MediaRtpSourceUnavailableReason::SenderLeft ||
+        invalidation->reason == MediaRtpSourceUnavailableReason::GroupClosed)) {
+        s.consumedRetirementSequence = sequence;
+        s.consumedRetirement = *invalidation;
+    }
+    finishRetirementsLocked();
+    // A real control consumption can release a closing barrier on either member.
     for (auto* member : {m_video.get(), m_audio.get()}) {
         if (!member) continue;
         notifyCredit(*member);

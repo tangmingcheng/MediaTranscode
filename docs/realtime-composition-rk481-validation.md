@@ -11,3 +11,5 @@
 本轮临时清单：本机out/acceptance/rk481-source.tar、rk481-run.sh；远端out/acceptance同名两文件及rk481-build.log、rk481-build-retry.log。运行尚未开始。
 
 重试26/26退出0，CLI SHA256 da522e12a64bb6de2659ebd7c6d181ec7e55d1fe1adfd44c1888f40af143ed72。Closing第四稿同时获得双SOURCE PASS，下一轮rk482叠加后进行原规格实流；rk481仅完成源码审查及构建，不宣称真实链路通过。
+
+本轮未启动媒体进程；记录后按上述清单清理构建日志、传输tar和未执行脚本，保留回退与正式二进制。

@@ -12,6 +12,8 @@
 #include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
 #include "internal/graph/model/MediaPreparedRtpOutputPort.h"
 #include "internal/graph/runtime/storage/MediaLineageUniquePtr.h"
+#include "internal/graph/sync/MediaAvSourceDrain.h"
+#include "internal/graph/sync/MediaAvGenerationTransition.h"
 #include <condition_variable>
 #include <mutex>
 #include <stop_token>
@@ -23,7 +25,7 @@ class MediaAvSyncGroupRuntime;
 enum class MediaPreparedRtpOutputClass { Packet, Control };
 
 enum class MediaPreparedRtpCreditBlocker { PayloadBytes, PacketObjects, ControlObjects };
-enum class MediaPreparedRtpIngressState { AcceptedReady, AcceptedWaitingCredit, NotAcceptedWaitingControl };
+enum class MediaPreparedRtpIngressState { AcceptedReady, AcceptedWaitingCredit, NotAcceptedWaitingControl, NotAcceptedWaitingGeneration };
 struct MediaPreparedRtpIngressProgress final {
     MediaPreparedRtpIngressState state;
     std::optional<MediaPreparedRtpCreditBlocker> blocker;
@@ -126,11 +128,11 @@ public:
     ::media::Status activateStream(MediaStreamKind stream,
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
     // Empty means the same purge still owns work; callers must not acknowledge it.
-    ::media::Result<std::optional<std::uint64_t>> purgeMedia(MediaStreamKind stream);
+    ::media::Result<std::optional<std::uint64_t>> purgeMedia(MediaStreamKind stream, const MediaAvGenerationPurge& purge);
     ::media::Status bindRuntimeGroup(const std::shared_ptr<MediaAvSyncGroupRuntime>& group);
     ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
-    ::media::Status observeConsumedRetirement(MediaStreamKind stream,
-        std::uint64_t sequence, const MediaRtpClockInvalidation& invalidation);
+    ::media::Status observeConsumedControl(MediaStreamKind stream,
+        std::uint64_t sequence, const std::optional<MediaRtpClockInvalidation>& invalidation);
     void fail(::media::ErrorInfo error);
     ::media::Status status() const;
     ::media::Status validatePreparationPhase() const;
@@ -147,6 +149,18 @@ public:
     const std::shared_ptr<MediaPreparationMemoryResource>& videoReferenceResource() const noexcept
     { return m_video->resource; }
 private:
+    struct ClosingMember final {
+        bool endQueued = false;
+        std::optional<std::uint64_t> frontier;
+        std::optional<std::uint64_t> retirementSequence;
+        std::optional<MediaRtpClockInvalidation> retirement;
+        std::optional<std::uint64_t> purgeSequence;
+    };
+    struct Closing final {
+        MediaAvSourceDrainRequest request;
+        bool opening = true;
+        bool cancelled = false;
+    };
     struct Stream final {
         Stream(const MediaPreparedRtpSourceSessionStreamPlan& value,
             std::shared_ptr<MediaPreparationMemoryResource> owner,
@@ -183,14 +197,29 @@ private:
         std::optional<MediaPreparedRtpCreditBlocker> waitingCredit;
         std::optional<std::uint64_t> runtimeIngressGeneration;
         std::optional<std::uint32_t> runtimeSsrc;
+        std::optional<std::uint64_t> lastControlSequence;
+        std::optional<std::uint64_t> consumedControlSequence;
         std::optional<std::uint64_t> consumedRetirementSequence;
         std::optional<MediaRtpClockInvalidation> consumedRetirement;
         // Exclusive user-space capture fence, not an accepted packet frontier.
         std::optional<std::int64_t> rtpCaptureExclusiveBeforeNs;
+        ClosingMember closing;
+        std::optional<MediaAvGenerationPurge> lastPurge;
+        std::optional<std::uint64_t> purgeFrontier;
     };
     ::media::Result<Stream*> stream(MediaStreamKind kind);
     ::media::Status advanceRtpCaptureBoundary(Stream& stream, std::int64_t observedAtNs);
+    ::media::Status validateIngressLocked(const Stream& stream, std::span<const std::uint8_t> bytes,
+        std::int64_t observedAtNs, std::uint64_t ordinal) const;
     bool controlReady(Stream& stream);
+    bool controlFits(const Stream& stream, const MediaRtpPreparedClockObservation& prepared) const;
+    ::media::Result<std::optional<MediaPreparedRtpIngressProgress>> consumeDeparture(
+        MediaStreamKind kind, std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::uint64_t ordinal);
+    ::media::Status progressClosing(MediaStreamKind kind, std::int64_t now);
+    const MediaAvSourceDrainMember& closingMember(const Stream& stream) const;
+    bool finishRetirementsLocked();
+    ::media::Status progressRetirementsLocked(std::int64_t now);
+    bool generationBlocked(const Stream& stream, MediaRtpUdpChannel channel, std::int64_t observedAtNs) const;
     void notifyCredit(Stream& stream) noexcept;
     ::media::Status drain(Stream& stream, std::int64_t now);
     ::media::Status evidence(Stream& stream, std::int64_t now);
@@ -220,6 +249,8 @@ private:
     std::optional<std::uint64_t> m_runtimeClockGeneration;
     bool m_runtimeClockLocked = false;
     std::optional<std::weak_ptr<MediaAvSyncGroupRuntime>> m_runtimeGroup;
+    std::optional<Closing> m_closing;
+    bool m_committingRetirement = false;
     std::optional<::media::ErrorInfo> m_error;
     std::uint64_t m_revision = 0;
     bool m_frozen = false;

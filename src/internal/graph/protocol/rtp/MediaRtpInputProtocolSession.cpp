@@ -257,6 +257,13 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
 std::optional<std::int64_t> MediaRtpInputProtocolSession::nextClockDeadlineNs() const noexcept
 { return m_clock.nextDeadlineNs(); }
 
+std::optional<std::int64_t> MediaRtpInputProtocolSession::nextReorderDeadlineNs() const noexcept
+{
+    const auto deadline = hasPending() ? std::nullopt : m_reorder->nextDeadline();
+    return deadline ? std::optional(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        deadline->time_since_epoch()).count()) : std::nullopt;
+}
+
 std::uint64_t MediaRtpInputProtocolSession::generation() const noexcept { return m_clock.generation(); }
 MediaRtpInputDrainSnapshot MediaRtpInputProtocolSession::drainSnapshot() const noexcept
 {

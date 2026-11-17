@@ -164,39 +164,70 @@ try {
     return ::media::Result<Stream*>::success(result);
 }
 
+::media::Status MediaPreparedRtpSourceSession::validateIngressLocked(const Stream& s,
+    std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::uint64_t ordinal) const
+{
+    if (m_frozen && !s.plan.runtimeCredit)
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized("Prepared RTP ingress lacks its sealed credit product"));
+    if (observedAtNs <= 0 || ordinal == 0 || ordinal <= s.ordinal ||
+        (!m_bootstrap && ordinal - s.ordinal != 1) ||
+        (m_bootstrap && observedAtNs < m_bootstrapObservedAtNs) ||
+        bytes.empty() || bytes.size() > s.plan.workingSet.maximumDatagramBytes)
+        return invalid("Prepared RTP ingress requires ordered bootstrap or contiguous live ordinal and admitted datagram");
+    if (!m_frozen && std::chrono::steady_clock::now() >= m_plan.deadline)
+        return invalid("Prepared RTP session exceeded its original open deadline");
+    return ::media::Status::success();
+}
+
 ::media::Result<MediaPreparedRtpIngressProgress> MediaPreparedRtpSourceSession::consume(MediaStreamKind kind,
     MediaRtpUdpChannel channel, std::span<const std::uint8_t> bytes,
     std::int64_t observedAtNs, std::uint64_t ordinal)
 try {
     using Result = ::media::Result<MediaPreparedRtpIngressProgress>;
+    {
+        std::scoped_lock lock(m_mutex);
+        if (m_error) return Result::failure(*m_error);
+        auto selected = stream(kind);
+        if (!selected) return Result::failure(selected.error());
+        if (auto status = validateIngressLocked(*selected.value(), bytes, observedAtNs, ordinal); !status)
+            return Result::failure(status.error());
+        if (!m_bootstrap && channel == MediaRtpUdpChannel::Rtp) {
+            if (auto status = advanceRtpCaptureBoundary(*selected.value(), observedAtNs); !status)
+                return Result::failure(status.error());
+        }
+    }
+    if (auto status = progressClosing(kind, mediaSteadyClockNowNs()); !status) {
+        fail(status.error());
+        return Result::failure(status.error());
+    }
+    if (channel == MediaRtpUdpChannel::Rtcp) {
+        auto departure = consumeDeparture(kind, bytes, observedAtNs, ordinal);
+        if (!departure) { fail(departure.error()); return Result::failure(departure.error()); }
+        if (departure.value()) return Result::success(*departure.value());
+    }
     std::scoped_lock lock(m_mutex);
     if (m_error) return Result::failure(*m_error);
     auto selected = stream(kind);
     if (!selected) return Result::failure(selected.error());
     auto& s = *selected.value();
-    if (m_frozen && !s.plan.runtimeCredit)
-        return Result::failure(::media::ErrorInfo::notInitialized("Prepared RTP ingress lacks its sealed credit product"));
+    if (auto status = validateIngressLocked(s, bytes, observedAtNs, ordinal); !status)
+        return Result::failure(status.error());
+    if (generationBlocked(s, channel, observedAtNs)) {
+        if (auto status = tickLocked(s, mediaSteadyClockNowNs()); !status) {
+            m_error = status.error();
+            return Result::failure(status.error());
+        }
+        return Result::success({MediaPreparedRtpIngressState::NotAcceptedWaitingGeneration, s.waitingCredit});
+    }
     if (channel == MediaRtpUdpChannel::Rtcp && !controlReady(s))
         return Result::success({MediaPreparedRtpIngressState::NotAcceptedWaitingControl, MediaPreparedRtpCreditBlocker::ControlObjects});
     s.waitingCredit.reset();
     const auto consume = [&]() -> ::media::Status {
-        if (observedAtNs <= 0 || ordinal == 0 || ordinal <= s.ordinal ||
-            (!m_bootstrap && ordinal - s.ordinal != 1) ||
-            (m_bootstrap && observedAtNs < m_bootstrapObservedAtNs) ||
-            bytes.empty() || bytes.size() > s.plan.workingSet.maximumDatagramBytes)
-            return invalid("Prepared RTP ingress requires ordered bootstrap or contiguous live ordinal and admitted datagram");
-        if (!m_frozen && std::chrono::steady_clock::now() >= m_plan.deadline)
-            return invalid("Prepared RTP session exceeded its original open deadline");
         // Preserve capture time for reorder, activity and SR/CNAME provenance.
         // Live evidence is evaluated at processing time, independently of the
         // order in which the two channel workers acquired the session lock.
         const auto evaluationAtNs = m_bootstrap ? observedAtNs : mediaSteadyClockNowNs();
         if (channel == MediaRtpUdpChannel::Rtp) {
-            // The current entry is still owned by the receiver. Earlier entries
-            // have been admitted; this one is not included in the fence.
-            if (!m_bootstrap) {
-                if (auto status = advanceRtpCaptureBoundary(s, observedAtNs); !status) return status;
-            }
             auto packet = MediaRtpPacketParser::parse(bytes);
             if (!packet) return ::media::Status::failure(packet.error());
             if (s.activity && packet.value().payloadType == s.plan.depacketizer.payloadType)
@@ -210,7 +241,7 @@ try {
             }
         } else {
             auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs,
-                MediaRtpByeHandling::InvalidateMember);
+                m_closing ? MediaRtpByeHandling::PreserveMemberForDrain : MediaRtpByeHandling::InvalidateMember);
             if (!observation) return ::media::Status::failure(observation.error());
             if (auto status = commitControl(s, std::move(observation).value(), evaluationAtNs, nullptr); !status) return status;
         }
@@ -376,9 +407,13 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
         }
         return committed;
     }
-    if (invalidated) s.pending.clear();
+    if (invalidated) {
+        s.pending.clear();
+        if (m_closing && !m_committingRetirement) m_closing->cancelled = true;
+    }
     if (rejection) return ::media::Status::failure(std::move(*rejection));
     if (output) {
+        if (m_frozen) s.lastControlSequence = s.nextSequence;
         ++s.nextSequence;
         if (!queued) {
             if (auto status = event(s, std::move(output), selectedClock, now); !status) return status;
@@ -623,43 +658,63 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
 
 ::media::Status MediaPreparedRtpSourceSession::tickLocked(Stream& s, std::int64_t now)
 {
-    if (now <= 0) return invalid("Prepared RTP tick requires positive observed time");
-    if (!m_frozen) {
-        if (std::chrono::steady_clock::now() >= m_plan.deadline)
-            return invalid("Prepared RTP tick exceeded its original open deadline");
-        auto running = m_clock->now();
-        if (!running) return ::media::Status::failure(running.error());
-        if (auto status = s.binder->m_acquisitionDeadline->preflight(running.value()); !status) return status;
-    }
-    s.waitingCredit.reset();
-    if (auto status = evidence(s, now); !status) return status;
-    if (s.waitingCredit) return ::media::Status::success();
-    if (!controlReady(s)) return ::media::Status::success();
-    auto transition = s.protocol->prepareClockTransition(now);
-    if (!transition) return ::media::Status::failure(transition.error());
-    const bool clockExpired = transition.value().age.has_value();
-    if (auto status = commitControl(s, std::move(transition).value(), now, nullptr); !status) return status;
-    if (clockExpired) {
-        const auto loss = s.protocol->clockConfig().lossPolicy;
-        if (loss != MediaRtpClockLossPolicy::WaitForEvidence && loss != MediaRtpClockLossPolicy::InvalidateAndWait)
-            return ::media::Status::failure(::media::ErrorInfo::ioFailure("Prepared RTP source clock evidence expired"));
-    }
-    // An accepted pending front is resumed, never observed or expired again.
-    // Clock progress above remains independent of payload credit.
-    if (auto status = drain(s, now); !status) return status;
-    if (s.waitingCredit) return ::media::Status::success();
-    if (!s.protocol->hasPending()) {
-        if (auto status = s.protocol->expire(std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now))); !status) return status;
+    const auto packetsBefore = s.packets.size();
+    const auto controlsBefore = s.controls.size();
+    const auto revisionBefore = m_revision;
+    const auto progress = [&]() -> ::media::Status {
+        if (now <= 0) return invalid("Prepared RTP tick requires positive observed time");
+        if (!m_frozen) {
+            if (std::chrono::steady_clock::now() >= m_plan.deadline)
+                return invalid("Prepared RTP tick exceeded its original open deadline");
+            auto running = m_clock->now();
+            if (!running) return ::media::Status::failure(running.error());
+            if (auto status = s.binder->m_acquisitionDeadline->preflight(running.value()); !status) return status;
+        }
+        s.waitingCredit.reset();
+        if (auto status = evidence(s, now); !status) return status;
+        if (s.waitingCredit) return ::media::Status::success();
+        if (!controlReady(s)) return ::media::Status::success();
+        auto transition = s.protocol->prepareClockTransition(now);
+        if (!transition) return ::media::Status::failure(transition.error());
+        const bool clockExpired = transition.value().age.has_value();
+        if (auto status = commitControl(s, std::move(transition).value(), now, nullptr); !status) return status;
+        if (clockExpired) {
+            const auto loss = s.protocol->clockConfig().lossPolicy;
+            if (loss != MediaRtpClockLossPolicy::WaitForEvidence && loss != MediaRtpClockLossPolicy::InvalidateAndWait)
+                return ::media::Status::failure(::media::ErrorInfo::ioFailure("Prepared RTP source clock evidence expired"));
+        }
+        // An accepted pending front is resumed, never observed or expired again.
+        // Clock progress above remains independent of payload credit.
         if (auto status = drain(s, now); !status) return status;
+        if (s.waitingCredit) return ::media::Status::success();
+        if (!s.protocol->hasPending()) {
+            if (auto status = s.protocol->expire(std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now))); !status) return status;
+            if (auto status = drain(s, now); !status) return status;
+        }
+        return m_frozen ? ::media::Status::success() : publish(now);
+    };
+    const auto status = progress();
+    if (!status) {
+        for (auto* member : {m_video.get(), m_audio.get()}) {
+            if (!member) continue;
+            if (member->wakeup) member->wakeup->notify();
+            if (member->controlWakeup) member->controlWakeup->notify();
+            notifyCredit(*member);
+        }
+    } else {
+        if (s.packets.size() != packetsBefore && s.wakeup) s.wakeup->notify();
+        if (s.controls.size() != controlsBefore && s.controlWakeup) s.controlWakeup->notify();
     }
-    return m_frozen ? ::media::Status::success() : publish(now);
+    if (!status || s.packets.size() != packetsBefore || s.controls.size() != controlsBefore ||
+        m_revision != revisionBefore) m_ready.notify_all();
+    return status;
 }
 
 ::media::Result<MediaPreparedRtpIngressProgress> MediaPreparedRtpSourceSession::tick(MediaStreamKind kind, std::int64_t now)
 try
 {
     using Result = ::media::Result<MediaPreparedRtpIngressProgress>;
-    std::scoped_lock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     if (m_error) return Result::failure(*m_error);
     auto selected = stream(kind);
     if (!selected) return Result::failure(selected.error());
@@ -669,12 +724,13 @@ try
     if (m_bootstrap) return Result::failure(::media::ErrorInfo::invalidArgument("Prepared RTP live timer precedes bootstrap handoff"));
     auto status = tickLocked(*selected.value(), mediaSteadyClockNowNs());
     if (!status) m_error = status.error();
-    for (auto* notify : {m_video.get(), m_audio.get()}) {
-        if (notify && notify->wakeup) notify->wakeup->notify();
-        if (notify && notify->controlWakeup) notify->controlWakeup->notify();
-    }
-    m_ready.notify_all();
     if (!status) return Result::failure(status.error());
+    lock.unlock();
+    if (auto closing = progressClosing(kind, mediaSteadyClockNowNs()); !closing) {
+        fail(closing.error());
+        return Result::failure(closing.error());
+    }
+    lock.lock();
     return Result::success({selected.value()->waitingCredit ? MediaPreparedRtpIngressState::AcceptedWaitingCredit
         : MediaPreparedRtpIngressState::AcceptedReady, selected.value()->waitingCredit});
 } catch (const std::bad_alloc&) {
@@ -764,25 +820,6 @@ void MediaPreparedRtpSourceSession::deactivateControl(
         selected->controlWakeup.reset();
 }
 
-::media::Result<std::optional<std::uint64_t>> MediaPreparedRtpSourceSession::purgeMedia(MediaStreamKind kind)
-{
-    std::scoped_lock lock(m_mutex);
-    using R = ::media::Result<std::optional<std::uint64_t>>;
-    auto selected = stream(kind);
-    if (!selected) return R::failure(selected.error());
-    if (!m_frozen) return R::failure(::media::ErrorInfo::invalidArgument("Prepared RTP purge precedes handoff"));
-    auto& s = *selected.value();
-    std::erase_if(s.packets, [&](const auto& item) {
-        if (item.port != MediaPreparedRtpOutputPort::Packet) return false;
-        s.outputBytes -= item.admissionBytes;
-        s.packetBytes -= item.admissionBytes;
-        return true;
-    });
-    s.protocol->resetAssembly(); s.pending.clear(); s.protocol->requireKeyframe();
-    notifyCredit(s);
-    return R::success(s.nextSequence - 1);
-}
-
 ::media::Result<int> MediaPreparedRtpSourceSession::receiveTimeoutMs(MediaStreamKind kind,
     std::int64_t now, int maximum)
 {
@@ -790,6 +827,13 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     if (m_error) return ::media::Result<int>::failure(*m_error);
     auto selected = stream(kind);
     if (!selected) return ::media::Result<int>::failure(selected.error());
+    if (m_closing && !m_closing->cancelled && !selected.value()->closing.frontier) {
+        const auto deadline = closingMember(*selected.value()).closeDeadlineNs;
+        if (deadline > now) {
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(std::chrono::nanoseconds(deadline - now)).count();
+            if (remaining < maximum) maximum = static_cast<int>(remaining);
+        }
+    }
     return selected.value()->protocol->receiveTimeoutMs(
         std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now)), now, maximum);
 }
@@ -809,16 +853,24 @@ void MediaPreparedRtpSourceSession::deactivateControl(
         return Result::success(std::chrono::nanoseconds(deadline - now));
     }
     auto& s = *selected.value();
-    const auto deadline = s.protocol->nextClockDeadlineNs();
-    if (!deadline) return Result::success(std::nullopt);
-    if (*deadline <= now) {
-        // Expiry is still uncommitted when its control FIFO is full. Its exact
-        // slot release and cancellation notifications resume the same deadline.
-        if (s.waitingCredit == MediaPreparedRtpCreditBlocker::ControlObjects &&
-            !s.controls.empty()) return Result::success(std::nullopt);
-        return Result::success(std::chrono::nanoseconds::zero());
+    std::optional<std::int64_t> deadline;
+    const auto include = [&](std::optional<std::int64_t> candidate) {
+        if (candidate && (!deadline || *candidate < *deadline)) deadline = candidate;
+    };
+    const auto clockDeadline = s.protocol->nextClockDeadlineNs();
+    // A due transition blocked by exact FIFO credit resumes on credit release.
+    if (!clockDeadline || *clockDeadline > now ||
+        s.waitingCredit != MediaPreparedRtpCreditBlocker::ControlObjects || s.controls.empty())
+        include(clockDeadline);
+    if (!s.waitingCredit) include(s.protocol->nextReorderDeadlineNs());
+    if (m_closing && !m_closing->cancelled && !s.closing.frontier) {
+        const auto cutoff = closingMember(s).closeDeadlineNs;
+        // Past capture cutoff is not a timer. Only its RTP owner can prove it;
+        // owner/credit/retirement notifications resume the wait after this point.
+        if (cutoff > now) include(cutoff);
     }
-    return Result::success(std::chrono::nanoseconds(*deadline - now));
+    if (!deadline) return Result::success(std::nullopt);
+    return Result::success(std::chrono::nanoseconds(*deadline > now ? *deadline - now : 0));
 }
 
 ::media::Result<MediaPreparedRtpAccessUnitSnapshot> MediaPreparedRtpSourceSession::probeSnapshot() const

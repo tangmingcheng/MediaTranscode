@@ -148,7 +148,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             m_generationEnded = false;
             std::optional<std::uint64_t> continuousCutoff;
             if (m_preparedSource) {
-                auto cutoff = m_preparedSource->purgeMedia(m_config.streamKind);
+                auto cutoff = m_preparedSource->purgeMedia(m_config.streamKind, *purge);
                 if (!cutoff) status = ::media::Status::failure(cutoff.error());
                 else if (!cutoff.value()) return processWaiting();
                 else continuousCutoff = cutoff.value();

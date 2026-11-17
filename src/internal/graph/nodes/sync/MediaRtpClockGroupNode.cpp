@@ -237,13 +237,12 @@ MediaRtpClockGroupNode::processStream(
          event->discontinuityGeneration(), event->clockObservation(), event->clockInvalidation()},
         streamKind, selectedClock, mediaSteadyClockNowNs());
     if (!consumed) return ::media::Result<StreamProcessOutcome>::failure(consumed.error());
-    if (m_preparedSource && !consumed.value().rejected && !selectedClock && event->clockInvalidation()) {
-        const auto& invalidation = *event->clockInvalidation();
-        if (invalidation.reason == MediaRtpSourceUnavailableReason::SenderLeft ||
-            invalidation.reason == MediaRtpSourceUnavailableReason::GroupClosed) {
-            auto receipt = m_preparedSource->observeConsumedRetirement(streamKind, event->sequence(), invalidation);
-            if (!receipt) return ::media::Result<StreamProcessOutcome>::failure(receipt.error());
-        }
+    if (m_preparedSource) {
+        // Success includes explicitly rejected stale evidence: the event has
+        // been consumed in order and cannot invalidate a later member mapping.
+        auto receipt = m_preparedSource->observeConsumedControl(
+            streamKind, event->sequence(), event->clockInvalidation());
+        if (!receipt) return ::media::Result<StreamProcessOutcome>::failure(receipt.error());
     }
     if (selectedClock && event->kind() == MediaRtpIngressEventKind::ClockEvidence && event->clockEvidence()) {
         const auto& evidence = *event->clockEvidence();

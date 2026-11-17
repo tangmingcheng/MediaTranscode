@@ -86,6 +86,7 @@ public:
     ::media::Result<int> receiveTimeoutMs(std::chrono::steady_clock::time_point reorderNow,
         std::int64_t clockNowNs, int plannedMaximumMs) const;
     std::optional<std::int64_t> nextClockDeadlineNs() const noexcept;
+    std::optional<std::int64_t> nextReorderDeadlineNs() const noexcept;
     std::uint64_t generation() const noexcept;
     const MediaRtpInputClockSessionConfig& clockConfig() const noexcept;
 
