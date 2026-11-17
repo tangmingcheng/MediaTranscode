@@ -1040,3 +1040,6 @@ source consume/resumeDrain移出receiver mutex，delivery单项顺序及Accepted
 
 ### rk474：原规格复验启动环境失败
 CLI在30秒参数集探测超时，Windows源匹配RTP包为0，未进入四屏运行；自然exit1，无重入修复有效性结论。已记录命令、PID、CPU/RSS并逐项清理；下一轮在桌面网络执行环境启动全部本机媒体进程，保持原规格。详见docs/realtime-composition-rk474-validation.md。
+
+### rk475：四屏真实画面及发送期限失败
+桌面网络权限下四路出图，VLC原生快照确认四格；四源完整120秒exit0。约112秒sender sequence106554超过最后提交时间29521ns，CLI自然exit1。未覆盖全黑和重入，不能标记整项通过；共享发送等待/期限合同继续调查，不放宽预算。本轮临时文件与进程已清理，详见docs/realtime-composition-rk475-validation.md。
