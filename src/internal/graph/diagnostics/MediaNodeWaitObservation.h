@@ -18,6 +18,10 @@ struct MediaNodeWaitObservation final {
     std::optional<std::uint32_t> windowsProcessId;
     std::optional<std::uint32_t> windowsThreadId;
     std::optional<std::int64_t> windowsQpcFrequency;
+    std::optional<std::int64_t> linuxThreadId;
+    std::optional<int> linuxSchedulerPolicy;
+    std::optional<std::int64_t> linuxTimerSlackNs;
+    std::optional<int> linuxTimerSlackError;
 };
 
 class MediaNodeWaitObservationScope final {

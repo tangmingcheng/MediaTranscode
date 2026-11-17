@@ -120,6 +120,10 @@ struct MediaDatagramWaitObservation final {
         field("worst_wait_windows_pid", s.wait.windowsProcessId);
         field("worst_wait_windows_tid", s.wait.windowsThreadId);
         field("worst_wait_windows_qpc_frequency_hz", s.wait.windowsQpcFrequency);
+        field("worst_wait_linux_tid", s.wait.linuxThreadId);
+        field("worst_wait_linux_scheduler_policy", s.wait.linuxSchedulerPolicy);
+        field("worst_wait_linux_timer_slack_ns", s.wait.linuxTimerSlackNs);
+        field("worst_wait_linux_timer_slack_error", s.wait.linuxTimerSlackError);
         field("worst_wait_next_master_ns", s.nextMasterNs);
         field("worst_wait_next_steady_ns", s.nextSteadyNs);
         out << " worst_wait_outcome=";

@@ -10,6 +10,12 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#elif defined(__linux__)
+#include <cerrno>
+#include <sched.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 namespace media::ffmpeg::graph {
@@ -180,6 +186,19 @@ void MediaNodeWakeup::notify() noexcept
     return ::media::Result<WaitOutcome>::success(
         WaitOutcome::Deadline);
 #else
+    // Read the actual calling worker's platform facts. These observations do
+    // not change its scheduling policy or replace a wait failure.
+#if defined(__linux__)
+    if (observation) {
+        const auto tid = syscall(SYS_gettid);
+        if (tid > 0) observation->linuxThreadId = tid;
+        const int policy = sched_getscheduler(0);
+        if (policy >= 0) observation->linuxSchedulerPolicy = policy;
+        const auto slack = syscall(SYS_prctl, PR_GET_TIMERSLACK, 0UL, 0UL, 0UL, 0UL);
+        if (slack >= 0) observation->linuxTimerSlackNs = slack;
+        else observation->linuxTimerSlackError = errno;
+    }
+#endif
     std::unique_lock<std::mutex> lock(m_mutex);
     const auto changedPredicate = [&] {
         return m_interrupted ||
@@ -188,11 +207,13 @@ void MediaNodeWakeup::notify() noexcept
     };
     m_activeWaitPolicy = wakePolicy;
     bool changed = true;
+    if (observation) observation->apiBefore = mediaSteadyClockNowNs();
     if (timeout) {
         changed = m_condition.wait_for(lock, *timeout, changedPredicate);
     } else {
         m_condition.wait(lock, changedPredicate);
     }
+    if (observation) observation->apiReturned = mediaSteadyClockNowNs();
     m_activeWaitPolicy.reset();
     if (m_interrupted) {
         return ::media::Result<WaitOutcome>::success(
