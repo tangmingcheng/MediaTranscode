@@ -133,3 +133,13 @@ source_drain_review_a 建议由 clockGroup publish 通过 observeRuntimeClockGro
 source_drain_review_b 对最终协议退休方向 DESIGN PASS：Tracker 增加 prepareMemberRetirement(expectedIngressGeneration, expectedSsrc, reason, observedAtNs)，复用 prepareContinuityChange(true) 和原 commitControl 原子预留/提交；InputClockSession、ProtocolSession 只转发。原因仅 SenderLeft 与追加 GroupClosed；后者不伪造 BYE 或 SSRC 变化。SenderLeft 由原departure事实产生，GroupClosed使用组关闭真实时刻。
 
 purgeMedia 需要显式表达尚未完成（例如 optional frontier）：control FIFO 对象或字节信用不足时不提交、不确认purge；重新准备而非跨等待保存borrowed事务。每成员退休位防重复递增，双成员都提交invalidation前不放行新媒体。各成员新证据排在原FIFO退休事件后，不能清controls或另建旁路。只resetAssembly不会推进tracker或清clockGroup，不能作为新代交接完成证据。身份已被强失效改变时须按原退休/取消授权处理，不能假装正常关闭成功。
+
+### 2026-11-17：生产接线复核补充（消费屏障尚待实施）
+
+source_drain_review_a 确认锁顺序必须是 publication arbitration → source mutex。复制weak group后先解source锁，再取arbitration；source锁内登记完整不可续期关闭意图，锁外begin/seal，重入锁后核事务和首错。未激活保持原BYE行为；已激活但映射未匹配不能一概当启动期。任何borrowed prepared delta不得跨解锁/等待保存。
+
+source_drain_review_b 对“退休事件只要两路入队即可放行”的候选实现判DESIGN FAIL：两成员控制边没有全局FIFO，音频迟到的退休失效可能清掉已建立的视频新映射。修正约束为每成员记录退休事件精确ingress sequence及新ingress generation，由clockGroup成功消费对应失效后回执；两路消费回执齐全才释放新代门。非Locked snapshot不能替代精确回执。旧控制积压继续沿原序消费，不能清空或停止control endpoint。本项尚未实现，不得报告生产关闭方案已完全通过。
+
+receiver新增generation-wait状态时，accepted必须显式匹配AcceptedReady/AcceptedWaitingCredit，不再用“非WaitingControl”判断；否则ordinal错误推进。未接受数据报保持原batch，telemetry不重复。等待仍推进原clock expiry、截止和取消，避免过期deadline零超时自旋。RTP owner的capture边界与已接受媒体排空分开；截止处不完整AU须明确处理。
+
+BYE compound可能含此前SR/CNAME更新；延迟整个delta前必须优先处理rejection，并明确这些更新的保留语义，不能无意丢失强校验。purge需区分退休已提交、失效已消费和最终完成，信用不足不ack；所有状态固定双成员，不新增媒体队列。
