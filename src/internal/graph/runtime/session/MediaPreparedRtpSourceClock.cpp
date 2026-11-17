@@ -1,6 +1,23 @@
 #include "internal/graph/runtime/session/MediaPreparedRtpSourceSession.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
+::media::Status MediaPreparedRtpSourceSession::bindRuntimeGroup(
+    const std::shared_ptr<MediaAvSyncGroupRuntime>& group)
+{
+    // Only immutable group facts are inspected while holding the source lock.
+    // Runtime arbitration must always be acquired outside this mutex.
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return ::media::Status::failure(*m_error);
+    if (!m_frozen || m_runtimeGroup || m_runtimeClockGeneration || !group ||
+        group->clock() != m_clock || !group->plan().members ||
+        *group->plan().members != m_plan.video.binder.members)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Prepared RTP runtime group requires a single sealed binding with matching clock and members"));
+    m_runtimeGroup.emplace(group);
+    return ::media::Status::success();
+}
+
 ::media::Status MediaPreparedRtpSourceSession::observeRuntimeClockGroup(
     const MediaRtpClockGroupSnapshot& snapshot)
 {

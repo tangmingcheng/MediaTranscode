@@ -18,6 +18,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaAvSyncGroupRuntime;
+
 enum class MediaPreparedRtpOutputClass { Packet, Control };
 
 enum class MediaPreparedRtpCreditBlocker { PayloadBytes, PacketObjects, ControlObjects };
@@ -122,6 +124,7 @@ public:
     ::media::Status activateStream(MediaStreamKind stream,
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
     ::media::Result<std::uint64_t> purgeMedia(MediaStreamKind stream);
+    ::media::Status bindRuntimeGroup(const std::shared_ptr<MediaAvSyncGroupRuntime>& group);
     ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
     ::media::Status observeConsumedRetirement(MediaStreamKind stream,
         std::uint64_t sequence, const MediaRtpClockInvalidation& invalidation);
@@ -210,6 +213,7 @@ private:
     MediaLineageUniquePtr<Stream> m_video, m_audio;
     std::optional<std::uint64_t> m_runtimeClockGeneration;
     bool m_runtimeClockLocked = false;
+    std::optional<std::weak_ptr<MediaAvSyncGroupRuntime>> m_runtimeGroup;
     std::optional<::media::ErrorInfo> m_error;
     std::uint64_t m_revision = 0;
     bool m_frozen = false;

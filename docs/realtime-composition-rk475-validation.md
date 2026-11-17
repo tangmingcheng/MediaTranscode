@@ -61,3 +61,5 @@ CPU/RSS外部105样本：单核口径CPU最大166%，RSS最大61788KiB。最终�
 清理清单：本机composition-rk475-source2.log/out、source3.log/out、vlc.log、rk475-run.sh及两张composition-rk475-native-2026-11-17-10h40m09s409.png、10h41m44s688.png；远端acceptance/rk475内socket-monitor.log、udp-after.txt、output.sdp、source0.out、cli-error.log、monitor.log、result.txt、pids.txt、launcher.log、run.sh、cli.log、source1.out、source0.log、udp-before.txt、source1.log、cli-maps.txt，另out/acceptance/rk475-run.sh。
 
 清理完成：本机8项及远端17项逐项删除，远端所有本轮PID查询为空，本机三媒体PID查询为空。共享源码复核：beginSubmitGroup将pacing.notAfter赋给m_groupDeadline；waitUntil只等待notBefore，随后TrySubmit检查原notAfter。故29521ns是最后可提交时间的越界，不应称为已证明的物理线发送超时。下一次需要保留失败时reservation/wait分段诊断摘要后再清理，以区分调度迟醒、锁等待和原始期限压力。
+
+独立审查补充：前包submitCompleted112350535412 + serviceDuration216960 = 本包notBefore112350752372；release到reserve已耗32831352ns。TrySubmit错误早于当前包socket调用，不能归咎其syscall。WebRTC债务/有限burst与本项目每包硬截止不等价（https://webrtc.googlesource.com/src/+/refs/heads/main/modules/pacing/g3doc/index.md）；不应直接把实际完成递推改为理想时间递推。需补当前reservation/wait、前序提交及原canonicalDeadline分段证据。Windows使用共享pacer/sender，后续公共修复必须同规格回归。

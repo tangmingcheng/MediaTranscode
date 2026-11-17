@@ -284,6 +284,9 @@ namespace media::ffmpeg::graph {
                 auto* raw = dynamic_cast<RawRtpInputNode*>(runtimeNode.value().get());
                 if (!raw) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "Prepared RTP registration does not name a raw input"));
+                if (node.id == rtp.videoRaw) {
+                    if (auto status = source.rtpSource->bindRuntimeGroup(group); !status) return status;
+                }
                 if (auto status = raw->bindPreparedSession(source.rtpSource); !status) return status;
             } else if ((rtp.videoControl && node.id == *rtp.videoControl) ||
                        (rtp.audioControl && node.id == *rtp.audioControl)) {

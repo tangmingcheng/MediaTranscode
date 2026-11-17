@@ -1043,3 +1043,6 @@ CLI在30秒参数集探测超时，Windows源匹配RTP包为0，未进入四屏�
 
 ### rk475：四屏真实画面及发送期限失败
 桌面网络权限下四路出图，VLC原生快照确认四格；四源完整120秒exit0。约112秒sender sequence106554超过最后提交时间29521ns，CLI自然exit1。未覆盖全黑和重入，不能标记整项通过；共享发送等待/期限合同继续调查，不放宽预算。本轮临时文件与进程已清理，详见docs/realtime-composition-rk475-validation.md。
+
+### rk476：prepared source同步组绑定
+一次性weak group绑定及原时钟/成员校验已实现，双独立SOURCE PASS，RKMPP8核增量exit0。未启用BYE，capture截止和完整退休屏障仍待接通；实流未验证。详见docs/realtime-composition-rk476-validation.md。
