@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRtcpReportingPolicyPlanner.h"
 
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
+#include "internal/graph/protocol/rtp/MediaRtcpInterval.h"
 
 #include <algorithm>
 #include <limits>
@@ -14,10 +15,6 @@ constexpr std::uint64_t RtcpBandwidthPercent = 5;
 constexpr std::uint64_t SenderBandwidthPercent = 25;
 constexpr std::int64_t InitialMinimumIntervalNs = 2'500'000'000;
 constexpr std::int64_t SteadyMinimumIntervalNs = 5'000'000'000;
-constexpr std::uint64_t RandomizationLowerNumerator = 500'000;
-constexpr std::uint64_t RandomizationDenominator = 1'000'000;
-constexpr std::uint64_t CompensationNumerator = 100'000;
-constexpr std::uint64_t CompensationDenominator = 121'828;
 constexpr const char* RfcAuthority =
     "RFC 3550 sections 6.2 and 6.3.1";
 
@@ -71,30 +68,14 @@ MediaRtcpReportingPolicyPlanner::plan(
         nominal, MediaRunningTime::fromNanoseconds(InitialMinimumIntervalNs));
     const auto steady = (std::max)(
         nominal, MediaRunningTime::fromNanoseconds(SteadyMinimumIntervalNs));
-    auto randomizedLower = MediaCheckedArithmetic::ceilScale(
-        static_cast<std::uint64_t>(initial.nanoseconds()),
-        RandomizationLowerNumerator, RandomizationDenominator,
-        "RTCP initial randomization lower bound");
-    auto compensatedLower = randomizedLower
-        ? MediaCheckedArithmetic::ceilScale(
-              randomizedLower.value(), CompensationNumerator,
-              CompensationDenominator,
-              "RTCP interval compensation lower bound")
-        : randomizedLower;
-    if (!compensatedLower || compensatedLower.value() == 0 ||
-        compensatedLower.value() > static_cast<std::uint64_t>(
-            (std::numeric_limits<std::int64_t>::max)())) {
-        return ::media::Result<MediaRtcpReportingPolicy>::failure(
-            !compensatedLower ? compensatedLower.error() :
-            ::media::ErrorInfo::invalidArgument(
-                "RTCP admission interval exceeds running-time range"));
-    }
+    auto compensatedLower = mediaRtcpIntervalForFactor(initial, MediaRtcpRandomFactorMinimum);
+    if (!compensatedLower)
+        return ::media::Result<MediaRtcpReportingPolicy>::failure(compensatedLower.error());
     return MediaRtcpReportingPolicy::create(
         {members, 1, sessionBandwidthBytesPerSecond, compoundPacketBytes,
          std::move(membershipAuthority), std::move(bandwidthAuthority)},
         initial, steady,
-        MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(compensatedLower.value())),
+        compensatedLower.value(),
         RfcAuthority);
 }
 

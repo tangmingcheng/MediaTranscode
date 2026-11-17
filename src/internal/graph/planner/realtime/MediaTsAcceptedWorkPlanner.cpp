@@ -130,8 +130,11 @@ namespace {
             std::size_t{188}, "TS accepted protocol suffix bytes");
         if (!bytes || bytes.value() > (std::numeric_limits<std::size_t>::max)())
             return Result::failure(!bytes ? bytes.error() : ::media::ErrorInfo::invalidArgument("TS protocol suffix overflows"));
-        auto duration = service.durationForPayload(static_cast<std::size_t>(bytes.value()),
-            service.materializationBatches(end - next));
+        // All datagrams in this published reservation share protocol.release.
+        // Keep a possible first report even when an earlier prepared segment
+        // already charged one; separate segment bounds intentionally overcount.
+        auto duration = service.durationForReleaseRange(static_cast<std::size_t>(bytes.value()),
+            end - next, protocol.release, protocol.release);
         if (!duration) return Result::failure(duration.error());
         auto status = advanceService(available, protocol.release, protocolLimit,
             duration.value(), "protocol_conservative_possible_report_allowance", publication);
@@ -144,9 +147,11 @@ namespace {
 ::media::Status MediaTsAcceptedWorkPlanner::validateTail(const MediaTsUnpublishedTail& tail,
     MediaRunningTime availableAt, const MediaTsPrefixServicePlan& service)
 {
-    // PendingEmission publishes one datagram per prefix, hence one possible SR
-    // per remaining datagram. This allowance is not actual report traffic.
-    auto duration = service.durationForPayload(tail.payloadBytes, tail.datagramCount);
+    // The emission schedule keeps all remaining prefix releases monotone and
+    // within the original AU deadline. RTCP prepare uses canonical release,
+    // not availableAt; published media is excluded from this unpublished tail.
+    auto duration = service.durationForReleaseRange(tail.payloadBytes, tail.datagramCount,
+        tail.release, tail.deadline);
     if (!duration) return ::media::Status::failure(duration.error());
     return advanceService(availableAt, tail.release, tail.deadline, duration.value(),
         "unpublished_AU_conservative_possible_report_allowance", 0);

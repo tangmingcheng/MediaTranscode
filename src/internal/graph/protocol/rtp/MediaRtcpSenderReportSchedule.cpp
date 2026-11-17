@@ -1,15 +1,13 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 
+#include "internal/graph/protocol/rtp/MediaRtcpInterval.h"
+
 #include <limits>
 #include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-constexpr std::uint64_t RandomFactorMinimum = 500000;
-constexpr std::uint64_t RandomFactorRange = 1000001;
-constexpr std::uint64_t CompensationDivisor = 1218280;
 
 ::media::ErrorInfo invalidSchedule(std::string message)
 {
@@ -30,39 +28,13 @@ std::uint64_t nextRandomState(std::uint64_t state) noexcept
 }
 
 ::media::Result<MediaRunningTime> randomizedInterval(
-    MediaRunningTime base,
-    std::uint64_t randomState) noexcept
+    MediaRunningTime base, std::uint64_t randomState) noexcept
 {
-    if (base.nanoseconds() <= 0 || randomState == 0) {
+    if (!randomState)
         return ::media::Result<MediaRunningTime>::failure(
-            invalidSchedule("RTCP random interval requires a positive base and non-zero state"));
-    }
-    const auto baseNs = static_cast<std::uint64_t>(base.nanoseconds());
-    const auto factor = RandomFactorMinimum +
-        randomState % RandomFactorRange;
-    const auto quotient = baseNs / CompensationDivisor;
-    const auto remainder = baseNs % CompensationDivisor;
-    if (quotient > static_cast<std::uint64_t>(
-                       std::numeric_limits<std::int64_t>::max()) /
-                       factor) {
-        return ::media::Result<MediaRunningTime>::failure(
-            invalidSchedule("RTCP randomized interval overflow"));
-    }
-    const auto whole = quotient * factor;
-    const auto fractional = remainder * factor / CompensationDivisor;
-    if (whole > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int64_t>::max()) - fractional) {
-        return ::media::Result<MediaRunningTime>::failure(
-            invalidSchedule("RTCP randomized interval overflow"));
-    }
-    const auto intervalNs = whole + fractional;
-    if (intervalNs == 0) {
-        return ::media::Result<MediaRunningTime>::failure(
-            invalidSchedule("RTCP randomized interval rounded to zero"));
-    }
-    return ::media::Result<MediaRunningTime>::success(
-        MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(intervalNs)));
+            invalidSchedule("RTCP random interval requires non-zero state"));
+    return mediaRtcpIntervalForFactor(base,
+        MediaRtcpRandomFactorMinimum + randomState % MediaRtcpRandomFactorRange);
 }
 
 } // namespace

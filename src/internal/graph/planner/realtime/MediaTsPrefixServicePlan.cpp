@@ -2,6 +2,7 @@
 #include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace media::ffmpeg::graph {
@@ -61,6 +62,8 @@ namespace {
     auto reportDuration = MediaRunningTime::fromNanoseconds(0);
     std::optional<Endpoint> controlEndpoint;
     if (report) {
+        if (report->minimumReportInterval.nanoseconds() <= 0)
+            return Result::failure(::media::ErrorInfo::invalidArgument("TS prefix report interval is absent"));
         const auto* control = shaping.endpoint(report->endpointId);
         auto payload = MediaRtcpWireGeometry::compoundPayloadBytes(report->cnameBytes);
         if (!control || !payload)
@@ -83,7 +86,8 @@ namespace {
     return Result::success(MediaTsPrefixServicePlan(rate, emission.maximumPayloadBytes(),
         emission.packetSizeBytes(), overhead.value(), reportDuration,
         Endpoint{mediaEndpointId, network.value(), endpoint->maximumDatagramBytes},
-        controlEndpoint, static_cast<std::size_t>(shaping.batch().maximumDatagrams)));
+        controlEndpoint, static_cast<std::size_t>(shaping.batch().maximumDatagrams),
+        report ? std::optional{report->minimumReportInterval} : std::nullopt));
 }
 
 ::media::Result<MediaRunningTime> MediaTsPrefixServicePlan::durationForPayload(
@@ -98,13 +102,42 @@ namespace {
     const auto count = full + (tail != 0);
     if (batches < materializationBatches(count) || batches > count)
         return Result::failure(::media::ErrorInfo::invalidArgument("TS service requires explicit materialization batch bounds"));
+    return durationWithReports(payloadBytes, batches);
+}
+
+::media::Result<MediaRunningTime> MediaTsPrefixServicePlan::durationForReleaseRange(
+    std::size_t payloadBytes, std::size_t possiblePrefixes,
+    MediaRunningTime firstRelease, MediaRunningTime lastRelease) const
+{
+    using Result = ::media::Result<MediaRunningTime>;
+    if (!payloadBytes || payloadBytes % m_packetBytes || !possiblePrefixes ||
+        possiblePrefixes != (payloadBytes - 1) / m_maximumPayload + 1 ||
+        firstRelease.nanoseconds() < 0 || lastRelease < firstRelease)
+        return Result::failure(::media::ErrorInfo::invalidArgument("TS report release range is invalid"));
+    std::size_t reports = 0;
+    if (m_minimumReportInterval) {
+        // First transaction may already be due. Later reports are separated by
+        // at least the shared runtime interval, independent of capacity splits.
+        const auto span = static_cast<std::uint64_t>(lastRelease.nanoseconds() - firstRelease.nanoseconds());
+        const auto bound = 1 + span / static_cast<std::uint64_t>(m_minimumReportInterval->nanoseconds());
+        reports = static_cast<std::size_t>((std::min)(static_cast<std::uint64_t>(possiblePrefixes), bound));
+    }
+    return durationWithReports(payloadBytes, reports);
+}
+
+::media::Result<MediaRunningTime> MediaTsPrefixServicePlan::durationWithReports(
+    std::size_t payloadBytes, std::size_t reports) const
+{
+    using Result = ::media::Result<MediaRunningTime>;
+    const auto tail = payloadBytes % m_maximumPayload;
+    const auto count = payloadBytes / m_maximumPayload + (tail != 0);
     auto media = datagramDuration(m_maximumPayload, tail ? tail : m_maximumPayload,
         count, m_overhead, m_rate);
     if (!media) return Result::failure(media.error());
-    auto reports = MediaCheckedArithmetic::multiply(batches, static_cast<std::uint64_t>(m_reportDuration.nanoseconds()),
+    auto reportService = MediaCheckedArithmetic::multiply(reports, static_cast<std::uint64_t>(m_reportDuration.nanoseconds()),
         "TS future report allowance");
-    if (!reports) return Result::failure(reports.error());
-    auto total = MediaCheckedArithmetic::add(static_cast<std::uint64_t>(media.value().nanoseconds()), reports.value(),
+    if (!reportService) return Result::failure(reportService.error());
+    auto total = MediaCheckedArithmetic::add(static_cast<std::uint64_t>(media.value().nanoseconds()), reportService.value(),
         "TS prefix media and associated RTCP duration");
     if (!total) return Result::failure(total.error());
     if (total.value() > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))

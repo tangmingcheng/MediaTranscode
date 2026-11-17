@@ -40,7 +40,8 @@ MediaProjectMpegTsRuntimePlanBuffer::create(
     if (rtp) {
         auto endpoint = transportPlan.endpointId(MediaDatagramProtocolEndpointRole::MpegTsRtcp);
         if (!endpoint) return ::media::Result<MediaBufferRef>::failure(endpoint.error());
-        report.emplace(MediaTsPrefixReportFacts{endpoint.value(), rtp->cname().size()});
+        report.emplace(MediaTsPrefixReportFacts{endpoint.value(), rtp->cname().size(),
+            rtp->rtcpReporting().minimumAdmissionInterval()});
     }
     auto service = MediaTsPrefixServicePlan::create(outputPlan->emission,
         transportPlan.plan().shaping, mediaEndpoint.value(), report);
