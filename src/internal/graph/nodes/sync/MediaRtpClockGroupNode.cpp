@@ -346,6 +346,9 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
     auto observed = m_session->snapshot(observedAtNs);
     if (!observed) return ::media::Status::failure(observed.error());
     MediaRtpClockGroupSnapshot snapshot = std::move(observed).value();
+    if (m_preparedSource) {
+        if (auto status = m_preparedSource->observeRuntimeClockGroup(snapshot); !status) return status;
+    }
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,

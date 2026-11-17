@@ -122,6 +122,7 @@ public:
     ::media::Status activateStream(MediaStreamKind stream,
         std::shared_ptr<MediaNodeWakeup> wakeup, std::shared_ptr<MediaInputActivity> activity);
     ::media::Result<std::uint64_t> purgeMedia(MediaStreamKind stream);
+    ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
     void fail(::media::ErrorInfo error);
     ::media::Status status() const;
     ::media::Status validatePreparationPhase() const;
@@ -172,6 +173,8 @@ private:
         std::size_t packetHighWater = 0;
         std::size_t controlHighWater = 0;
         std::optional<MediaPreparedRtpCreditBlocker> waitingCredit;
+        std::optional<std::uint64_t> runtimeIngressGeneration;
+        std::optional<std::uint32_t> runtimeSsrc;
     };
     ::media::Result<Stream*> stream(MediaStreamKind kind);
     bool controlReady(Stream& stream);
@@ -201,6 +204,8 @@ private:
     std::shared_ptr<MediaPreparationMemoryResource> m_ownerResource;
     MediaLineageUniquePtr<MediaRtpClockGroupSession> m_group;
     MediaLineageUniquePtr<Stream> m_video, m_audio;
+    std::optional<std::uint64_t> m_runtimeClockGeneration;
+    bool m_runtimeClockLocked = false;
     std::optional<::media::ErrorInfo> m_error;
     std::uint64_t m_revision = 0;
     bool m_frozen = false;

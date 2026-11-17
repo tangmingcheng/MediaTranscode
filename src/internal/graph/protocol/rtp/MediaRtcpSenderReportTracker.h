@@ -61,6 +61,9 @@ public:
         const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs) const;
     ::media::Result<MediaRtcpPreparedObservation> prepareEvidence(int64_t evaluationAtNs) const;
     ::media::Result<MediaRtcpPreparedObservation> prepareContinuityChange(bool invalidate) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareMemberRetirement(
+        uint64_t expectedIngressGeneration, uint32_t expectedSsrc,
+        MediaRtpSourceUnavailableReason reason, int64_t observedAtNs) const;
     ::media::Status commit(MediaRtcpPreparedObservation&& prepared);
     uint64_t generation() const noexcept;
 private:

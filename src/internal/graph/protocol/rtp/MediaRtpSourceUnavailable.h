@@ -7,7 +7,8 @@ namespace media::ffmpeg::graph {
 enum class MediaRtpSourceUnavailableReason : std::uint8_t {
     ClockEvidenceExpired,
     SenderLeft,
-    TransportDiscontinuity
+    TransportDiscontinuity,
+    GroupClosed
 };
 
 struct MediaRtpClockInvalidation final {

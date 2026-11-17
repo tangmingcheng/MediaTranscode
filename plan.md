@@ -1014,3 +1014,7 @@ EndGeneration明确clock-group域，检查成员关闭身份并在实际提交�
 ## 2026-11-17：rk466 raw有序关闭出口
 
 prepared packet FIFO接入EndGeneration容量计费，raw沿原边持授权发布、等待purge并取消旧pending。五文件双SOURCE PASS，RKMPP8核增量9项exit0。producer与接收截止/新代交接未完成，尚无新实流通过。
+
+## 2026-11-17：rk467映射观察与成员退休接口
+
+prepared owner复制runtime clock身份标量；协议新增严格身份退休接口，GroupClosed不伪造BYE。修正ingress初始0误套playback非零限制。11文件双SOURCE PASS、RKMPP8核增量38项exit0。producer未启用，完整实流仍待接线后执行。

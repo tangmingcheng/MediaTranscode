@@ -7,7 +7,9 @@ namespace {
 { return ::media::Status::failure(::media::ErrorInfo::invalidArgument(text)); }
 bool validMember(const MediaAvSourceDrainMember& member)
 {
-    return member.ingressGeneration != 0 && member.observedAtNs >= 0 &&
+    // Ingress trackers start at zero; playback/clock-group nonzero rules do not
+    // apply to this independently validated protocol identity.
+    return member.observedAtNs >= 0 &&
         member.closeDeadlineNs > member.observedAtNs &&
         (member.reason == MediaAvSourceCloseReason::SenderLeft ||
          member.reason == MediaAvSourceCloseReason::GroupClose);

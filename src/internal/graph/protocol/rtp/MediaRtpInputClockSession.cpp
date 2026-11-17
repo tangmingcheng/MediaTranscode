@@ -126,6 +126,15 @@ catch (const std::bad_alloc&) {
     return ::media::Status::success();
 }
 
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputClockSession::prepareMemberRetirement(
+    std::uint64_t expectedIngressGeneration, std::uint32_t expectedSsrc,
+    MediaRtpSourceUnavailableReason reason, std::int64_t observedAtNs) const
+{
+    auto prepared = m_tracker.prepareMemberRetirement(expectedIngressGeneration, expectedSsrc, reason, observedAtNs);
+    if (!prepared) return ::media::Result<MediaRtpPreparedClockObservation>::failure(prepared.error());
+    return materializeObservation(std::move(prepared).value());
+}
+
 ::media::Result<int> MediaRtpInputClockSession::receiveTimeoutMs(
     std::int64_t observedAtNs, int plannedMaximumMs) const noexcept
 {

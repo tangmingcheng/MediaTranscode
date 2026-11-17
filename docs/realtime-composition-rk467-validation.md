@@ -1,0 +1,17 @@
+# rk467：运行时映射交接与协议成员退休接口
+
+状态：11文件双独立 SOURCE PASS；RKMPP8核增量38/38、退出0。BYE关闭producer仍未启用，本轮不构成尾媒体实流通过。
+
+clockGroup publish把同一snapshot的groupGeneration及成员ingress generation/SSRC交给prepared owner。仅保存固定标量，同代禁止成员替换，非Locked撤销可用于新关闭的映射；不持有buffer、不复制CNAME。source mutex内没有graph调用。此观察不代表publication/activation完成，后续关闭必须另取代次授权；实际session/Stream sizeof已覆盖状态。
+
+prepareMemberRetirement跨tracker、clock、protocol三层复用原continuity delta与materialize schedule reset，严格核对期望旧成员及观察时间。只允许SenderLeft和追加到枚举末尾的GroupClosed；前者保留departure/invalidation配对，后者不伪造BYE或SSRC change。提交仍走原revision和assembly/keyframe/evidence流程，尚未由purge调用。
+
+修正此前基础切片的域混淆：tracker构造从ingress generation 0开始，首次同SSRC observe不递增，TimestampUnwrapper也接受0；因此source drain成员不应要求ingress非零。删除该错误限制，仍保留clock-group/playback非零及成员精确身份校验。
+
+source_drain_review_a、source_drain_review_b均SOURCE PASS；git diff --check通过。目标构建PID2684690，wait=0；CLI13088352字节，SHA256=6a7ab7d0e18c0e21c9569812c7166b4b48cc6e8618459e5546d00bda8ce7807f。原CLI、源码及incoming/existing清单保留于目标out/rollback/rk467；回退须移除差集新文件再恢复。
+
+未运行CLI/FFmpeg/VLC实流或local CLI；Windows FFmpeg未改。临时清单：本机out/acceptance/rk467-source.tar；目标同名tar与rk467-build.log，记录后逐项删除。
+
+下一步是生产关闭状态、接收owner截止、满FIFO等待与双成员退休交接。完整原规格Windows/RKMPP实流、发送失败退出及单路/动态输出回归仍未闭合。
+
+清理完成：3项临时文件逐项删除，本机/目标无rk467临时项，构建PID已结束。

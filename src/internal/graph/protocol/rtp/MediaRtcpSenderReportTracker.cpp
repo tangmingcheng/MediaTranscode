@@ -229,6 +229,24 @@ MediaRtcpTrackerState MediaRtcpSenderReportTracker::state() const noexcept
     return materialize(std::move(result), 0, false);
 }
 
+::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::prepareMemberRetirement(
+    uint64_t expectedIngressGeneration, uint32_t expectedSsrc,
+    MediaRtpSourceUnavailableReason reason, int64_t observedAtNs) const
+{
+    using Result = ::media::Result<MediaRtcpPreparedObservation>;
+    if (!m_mediaSsrc || *m_mediaSsrc != expectedSsrc || m_generation != expectedIngressGeneration ||
+        observedAtNs <= 0 || (reason != MediaRtpSourceUnavailableReason::SenderLeft &&
+            reason != MediaRtpSourceUnavailableReason::GroupClosed))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "RTP member retirement requires its exact frozen member and closing reason"));
+    auto prepared = prepareContinuityChange(true);
+    if (!prepared) return prepared;
+    prepared.value().output = MediaRtpClockInvalidation{prepared.value().state.generation, reason, observedAtNs};
+    if (reason == MediaRtpSourceUnavailableReason::SenderLeft)
+        prepared.value().senderDeparture = MediaRtpSenderDeparture{expectedIngressGeneration, expectedSsrc, observedAtNs};
+    return prepared;
+}
+
 ::media::Result<MediaRtcpPreparedObservation> MediaRtcpSenderReportTracker::materialize(
     MediaRtcpPreparedObservation result, int64_t evaluationAtNs, bool evaluateEvidence) const try
 {

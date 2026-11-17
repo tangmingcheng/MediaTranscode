@@ -224,6 +224,11 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
 ::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareClockTransition(std::int64_t now) const
 { return m_clock.prepareClockTransition(now); }
 
+::media::Result<MediaRtpPreparedClockObservation> MediaRtpInputProtocolSession::prepareMemberRetirement(
+    std::uint64_t expectedIngressGeneration, std::uint32_t expectedSsrc,
+    MediaRtpSourceUnavailableReason reason, std::int64_t observedAtNs) const
+{ return m_clock.prepareMemberRetirement(expectedIngressGeneration, expectedSsrc, reason, observedAtNs); }
+
 ::media::Status MediaRtpInputProtocolSession::commitClockObservation(MediaRtpPreparedClockObservation&& prepared)
 {
     const bool invalidated = prepared.tracker.invalidated || prepared.retireAssembly;

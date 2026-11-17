@@ -42,6 +42,9 @@ public:
         std::span<const std::uint8_t> datagram, std::int64_t observedAtNs, std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareEvidence(std::int64_t evaluationAtNs) const;
     ::media::Result<MediaRtpPreparedClockObservation> prepareClockTransition(std::int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtpPreparedClockObservation> prepareMemberRetirement(
+        std::uint64_t expectedIngressGeneration, std::uint32_t expectedSsrc,
+        MediaRtpSourceUnavailableReason reason, std::int64_t observedAtNs) const;
     ::media::Status commitClockObservation(MediaRtpPreparedClockObservation&& prepared);
     ::media::Result<int> receiveTimeoutMs(std::int64_t observedAtNs,
         int plannedMaximumMs) const noexcept;
