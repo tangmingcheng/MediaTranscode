@@ -1006,3 +1006,7 @@ trim接入EndGeneration、精确授权后转发并等待purge，实际owner size
 ## 2026-11-17：rk464 RTP binder代内关闭
 
 EndGeneration明确clock-group域，检查成员关闭身份并在实际提交时持代次授权。修复clock fanout先到竞态、移除重复sizeof计费，三文件双SOURCE PASS；目标最终8核增量5项exit0。raw生产BYE未接通，不新增实流成功声明。
+
+## 2026-11-17：rk465 BYE失效前成员事实
+
+匹配BYE在破坏性delta前保存owned旧ingress代次/SSRC/捕获时刻，commit验证双向配对；三文件双SOURCE PASS、RKMPP8核增量exit0。尚不改变生产BYE行为，下一步由prepared source接入关闭状态与交接。

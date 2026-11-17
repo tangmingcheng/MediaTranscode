@@ -47,6 +47,9 @@ struct MediaRtcpPreparedObservation final {
     MediaRtcpPreparedOutput output;
     std::optional<::media::ErrorInfo> rejection;
     bool invalidated;
+    // Owned scalar facts may be copied into a bounded closing transaction.
+    // The surrounding prepared delta must still never survive a source wait.
+    std::optional<MediaRtpSenderDeparture> senderDeparture;
 };
 
 class MediaRtcpSenderReportTracker final {
