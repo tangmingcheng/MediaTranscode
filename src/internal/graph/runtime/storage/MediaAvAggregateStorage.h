@@ -13,6 +13,10 @@ struct MediaAvAggregateSourceStorage final {
     std::shared_ptr<MediaOwnerThreadGenerationPurge> purge;
     std::uint64_t minimumGeneration = 0;
     bool videoEnded = false;
+    std::optional<std::uint64_t> videoClosingGeneration;
+    std::optional<std::uint64_t> discardedAudioClosingGeneration;
+    bool videoClosingRetired = false;
+    bool discardedAudioClosingRetired = false;
     bool displaySealed = false;
     std::uint64_t lastDisplaySequence = 0;
     std::optional<MediaRunningTime> lastDisplayPresentation;

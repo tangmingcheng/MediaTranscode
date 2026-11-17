@@ -42,6 +42,7 @@ private:
     const MediaAvContinuousAggregatePlan& plan() const noexcept;
     ::media::Status bindCodecs(MediaGraphExecutionContext& context);
     ::media::Status servicePurges(MediaGraphExecutionContext& context);
+    ::media::Status serviceSourceDrains();
     enum class CandidatePreparation { Ready, RetryProgress };
     ::media::Status consumeInputs(MediaGraphExecutionContext& context,
                                   CandidatePreparation& preparation);

@@ -994,3 +994,7 @@ EndGeneration及固定关闭状态、frontier/成员完成、SourceDrained强校
 ## 2026-11-16：rk461重采样及补偿旁路排空
 
 EndGeneration覆盖音频/补偿双边原子发布，窗口执行与Swr排空持续推进，真实exhaustion及尾样本提交后发下游，等待原purge；原EOF/Flush保持。七文件双SOURCE PASS，目标8核增量10项exit0。无媒体验收成功声明，剩余接收端和aggregate接线继续。
+
+## 2026-11-17：rk462聚合器代内排空
+
+三个成员入口接通Closing/Retired，待实际贡献提交后确认排空，由视频owner完成整源关闭；修正跨快照退休竞态。七文件双SOURCE PASS，RKMPP8核增量12项exit0。尚未启用生产BYE，无媒体验收成功声明。接收截止、新代交接、完整回归及失败退出继续。

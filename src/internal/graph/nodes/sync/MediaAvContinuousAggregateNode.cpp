@@ -1,3 +1,4 @@
+#include "internal/graph/nodes/sync/MediaAggregateSourceDrain.h"
 #include "internal/graph/sync/MediaAvAggregateCoordination.h"
 #include "internal/graph/runtime/storage/MediaAvAggregateMetadataBudget.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlanValidator.h"
@@ -122,6 +123,10 @@ void MediaAvContinuousAggregateNode::clear() noexcept
     for (auto& source : m_sources) {
         source.purge->stop();
         source.video.clear();
+        source.videoClosingGeneration.reset();
+        source.videoClosingRetired = false;
+        source.discardedAudioClosingGeneration.reset();
+        source.discardedAudioClosingRetired = false;
         source.displaySealed = false;
         source.lastDisplaySequence = 0;
         source.lastDisplayPresentation.reset();
@@ -175,6 +180,10 @@ void MediaAvContinuousAggregateNode::abort(MediaGraphExecutionContext& context) 
             m_pending.reset();
         }
         source.video.clear();
+        source.videoClosingGeneration.reset();
+        source.videoClosingRetired = false;
+        source.discardedAudioClosingGeneration.reset();
+        source.discardedAudioClosingRetired = false;
         source.displaySealed = false;
         source.lastDisplaySequence = 0;
         source.lastDisplayPresentation.reset();
@@ -281,12 +290,19 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
             } else if ((*event.value())->isEof()) source.epochEnded = true;
             else return invalid("Aggregate source epoch input is not an activation or trusted end");
         }
-        if (plan().sources[i].discardedAudioPort && !source.discardedAudioEnded) {
+        if (plan().sources[i].discardedAudioPort && !source.discardedAudioEnded && !source.discardedAudioClosingGeneration) {
             for (std::size_t consumed = 0; consumed < plan().maximumAudioCandidates; ++consumed) {
                 auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), *plan().sources[i].discardedAudioPort),
                     name(), *plan().sources[i].discardedAudioPort);
                 if (!input) return ::media::Status::failure(input.error());
                 if (!input.value()) break;
+                auto closing = mediaAggregateSourceDrain(*input.value(), *m_dependencies.sources[i].group, *source.purge, MediaStreamKind::Audio);
+                if (!closing) return ::media::Status::failure(closing.error());
+                if (closing.value()) {
+                    source.discardedAudioClosingGeneration = closing.value()->generation;
+                    source.discardedAudioClosingRetired = closing.value()->disposition == MediaAggregateSourceDrainBoundary::Disposition::Retired;
+                    break;
+                }
                 if ((*input.value())->isEof()) { source.discardedAudioEnded = true;
                     if (auto status = m_dependencies.coordination->sealInput(i, MediaStreamKind::Audio); !status) return status;
                     break; }
@@ -337,11 +353,18 @@ MediaAvContinuousAggregateNode::process(MediaGraphExecutionContext& context)
         bool observedEmpty = false;
         std::size_t consumed = 0;
         const auto capacity = plan().sources[i].maximumVideoCandidates;
-        for (; consumed < capacity && !source.videoEnded && source.video.size() < capacity; ++consumed) {
+        for (; consumed < capacity && !source.videoEnded && !source.videoClosingGeneration && source.video.size() < capacity; ++consumed) {
             auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), plan().sources[i].videoPort),
                 name(), plan().sources[i].videoPort);
             if (!input) return ::media::Status::failure(input.error());
             if (!input.value()) { observedEmpty = true; break; }
+            auto closing = mediaAggregateSourceDrain(*input.value(), *m_dependencies.sources[i].group, *source.purge, MediaStreamKind::Video);
+            if (!closing) return ::media::Status::failure(closing.error());
+            if (closing.value()) {
+                source.videoClosingGeneration = closing.value()->generation;
+                source.videoClosingRetired = closing.value()->disposition == MediaAggregateSourceDrainBoundary::Disposition::Retired;
+                break;
+            }
             if ((*input.value())->isEof()) { source.videoEnded = true;
                 if (!displayProduct)
                     if (auto status = m_dependencies.coordination->sealInput(i, MediaStreamKind::Video); !status) return status;
@@ -713,6 +736,7 @@ void MediaAvContinuousAggregateNode::logSummary(const char* reason) noexcept
         if (auto status = m_executionObservation.measure(ExecutionStage::Consume,
             {m_nextVideoFrame, std::nullopt}, [&] { return consumeInputs(context, preparation); }); !status)
             return processProgress(status);
+        if (auto status = serviceSourceDrains(); !status) return processProgress(status);
         if (preparation == CandidatePreparation::RetryProgress) return processProgress();
         if (!m_epoch) {
             auto activated = m_executionObservation.measure(ExecutionStage::Activate,

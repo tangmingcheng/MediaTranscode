@@ -1,3 +1,4 @@
+#include "internal/graph/nodes/sync/MediaAggregateSourceDrain.h"
 #include "internal/graph/runtime/storage/MediaAvAggregateMetadataBudget.h"
 #include "internal/graph/nodes/sync/MediaContinuousAudioAggregateNode.h"
 #include "internal/graph/planner/realtime/MediaAvContinuousAggregatePlanValidator.h"
@@ -55,6 +56,8 @@ void MediaContinuousAudioAggregateNode::clear() noexcept
     if (m_dependencies.coordination) m_dependencies.coordination->stop();
     m_purge->stop();
     m_audio.clear();
+    m_closingGeneration.reset();
+    m_closingRetired = false;
     m_audioCodec.reset();
     m_pending.reset();
     m_epoch.reset();
@@ -96,6 +99,8 @@ void MediaContinuousAudioAggregateNode::abort(MediaGraphExecutionContext& contex
         m_pending.reset();
     }
     m_audio.clear();
+    m_closingGeneration.reset();
+    m_closingRetired = false;
     m_audioCandidateSamples = 0;
     m_minimumGeneration = request->nextGeneration;
     auto* channel = context.findInputChannel(nodeId(), plan().audioPort);
@@ -145,6 +150,22 @@ void MediaContinuousAudioAggregateNode::abort(MediaGraphExecutionContext& contex
             }
         }
         if (auto status = consumeInputs(context); !status) return processProgress(status);
+        if (m_closingGeneration && !m_closingRetired && m_audio.empty() &&
+            (!m_pending || m_pending->sourceGenerations[plan().audioSource] != *m_closingGeneration)) {
+            const auto closing = m_dependencies.source->sourceDrainSnapshot();
+            if (!closing) {
+                if (!mediaAggregateSourceDrainRetired(*m_dependencies.source, *m_purge, *m_closingGeneration))
+                    return processProgress(invalid("Audio aggregate lost its closing generation"));
+            } else {
+                if (closing->request.playbackGeneration != *m_closingGeneration || !closing->audio)
+                    return processProgress(invalid("Audio aggregate closing generation changed identity"));
+                if (!closing->audio->drained) {
+                    auto completed = m_dependencies.source->acknowledgeSourceDrained(*m_closingGeneration, MediaStreamKind::Audio);
+                    if (!completed && !mediaAggregateSourceDrainRetired(*m_dependencies.source, *m_purge, *m_closingGeneration))
+                        return processProgress(::media::Status::failure(completed.error()));
+                }
+            }
+        }
         if (!m_epoch) {
             if (m_audioCodec && !m_audio.empty() && !m_dependencies.coordination->snapshot().audioReady) {
                 if (auto status = m_dependencies.coordination->publishAudioReady(
@@ -260,11 +281,18 @@ void MediaContinuousAudioAggregateNode::logSummary(const char* reason) noexcept
 
 ::media::Status MediaContinuousAudioAggregateNode::consumeInputs(MediaGraphExecutionContext& context)
 {
-    for (std::size_t consumed = 0; consumed < plan().maximumAudioCandidates && !m_audioEnded &&
+    for (std::size_t consumed = 0; consumed < plan().maximumAudioCandidates && !m_audioEnded && !m_closingGeneration &&
         m_audio.size() < plan().maximumAudioCandidates; ++consumed) {
         auto input = tryReadRequiredInput(context.findInputChannel(nodeId(), plan().audioPort), name(), plan().audioPort);
         if (!input) return ::media::Status::failure(input.error());
         if (!input.value()) break;
+        auto closing = mediaAggregateSourceDrain(*input.value(), *m_dependencies.source, *m_purge, MediaStreamKind::Audio);
+        if (!closing) return ::media::Status::failure(closing.error());
+        if (closing.value()) {
+            m_closingGeneration = closing.value()->generation;
+            m_closingRetired = closing.value()->disposition == MediaAggregateSourceDrainBoundary::Disposition::Retired;
+            break;
+        }
         if ((*input.value())->isEof()) { m_audioEnded = true; if (auto status = m_dependencies.coordination->sealInput(plan().audioSource, MediaStreamKind::Audio); !status) return status; break; }
         if ((*input.value())->isFlush()) continue;
         auto audio = std::dynamic_pointer_cast<MediaBoundCanonicalAudioBuffer>(*input.value());

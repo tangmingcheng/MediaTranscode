@@ -50,6 +50,8 @@ private:
     std::int64_t m_audioCandidateSamples = 0;
     std::uint64_t m_minimumGeneration = 0;
     bool m_audioEnded = false;
+    std::optional<std::uint64_t> m_closingGeneration;
+    bool m_closingRetired = false;
     MediaBufferRef m_audioCodec;
     std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;
