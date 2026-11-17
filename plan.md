@@ -1022,3 +1022,6 @@ prepared owner复制runtime clock身份标量；协议新增严格身份退休�
 ## 2026-11-17：rk468复合BYE与退休消费证据
 
 协议支持保留BYE前有效SR/CNAME，clockGroup回执精确已消费退休事件；12文件双SOURCE PASS，RKMPP8核增量37项exit0。producer未启用，新增全source DAG可选holder审计继续补遗漏，不计实流通过。
+
+### rk469：视频贡献节点代内排空
+VideoFilter/VideoFrameRate 的 EndGeneration、purge 复位、提交与清理互斥已实现，双独立 SOURCE PASS，RKMPP 增量 9/9 退出 0。未跑实流，HardwareTransfer 与接收关闭入口仍待完成。详见 docs/realtime-composition-rk469-validation.md。

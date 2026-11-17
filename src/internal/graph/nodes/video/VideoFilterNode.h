@@ -61,6 +61,7 @@ public:
     MediaBufferRef terminalBuffer;
     bool terminalPending = false;
     bool terminalIsEof = false;
+    bool generationDrained = false;
     std::set<std::uint64_t> lineageGenerations;
 
 protected:
@@ -84,6 +85,7 @@ public:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;

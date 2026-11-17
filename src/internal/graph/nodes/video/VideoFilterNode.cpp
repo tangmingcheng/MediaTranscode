@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/video/MediaVideoFrameReadinessBinding.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/planner/capability/MediaVideoSourceIsolationAdapter.h"
@@ -55,6 +56,7 @@ void VideoFilterLineageState::resetFilterGraph() noexcept
 void VideoFilterLineageState::clearOwnedLineage(
     const MediaAvGenerationPurge&) noexcept
 {
+    if (generationDrained || terminalPending) resetFilterGraph();
     clearGenerationLineage();
 }
 
@@ -65,6 +67,7 @@ void VideoFilterLineageState::clearGenerationLineage() noexcept
     terminalBuffer.reset();
     terminalPending = false;
     terminalIsEof = false;
+    generationDrained = false;
     pendingObservation.reset();
     pendingFrame.reset();
     pendingInputAllocations.reset();
@@ -238,12 +241,19 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_filterImplementation = MediaVideoFilterImplementation::Unknown;
 }
 
+::media::Result<MediaNodeProcessResult> VideoFilterNode::process(MediaGraphExecutionContext& context)
+{
+    auto lineageLock = m_lineageState->lock();
+    return FFmpegNodeRuntime::process(context);
+}
+
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto lineageLock = m_lineageState->lock();
     if (m_lineageState->terminalPending) {
         return continueTerminal(context);
     }
+    if (m_lineageState->generationDrained) return processWaiting();
     bool producedPendingFrame = false;
     auto pendingDrain = drainFrames(context, &producedPendingFrame);
     if (!pendingDrain) return processProgress(std::move(pendingDrain));
@@ -295,7 +305,15 @@ void VideoFilterNode::resetRuntimeState() noexcept
                       mediaGraphDiagnosticDescribeBuffer(frameBuffer));
         m_firstInputDiagnosticEmitted = true;
     }
-    if (frameBuffer->isEof() || frameBuffer->isFlush()) {
+    auto generationEnd = mediaEndGeneration(frameBuffer);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    if (frameBuffer->isEof() || frameBuffer->isFlush() || generationEnd.value()) {
+        if (generationEnd.value()) {
+            if (!m_lineageState->synchronized()) return processProgress(::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("Video filter generation end requires a synchronized purge owner")));
+            if (auto status = m_lineageState->authorizeRetainedControl(frameBuffer); !status)
+                return processProgress(status);
+        }
         const bool eof = frameBuffer->isEof();
         if (eof && m_lineageState->eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
@@ -320,7 +338,14 @@ void VideoFilterNode::resetRuntimeState() noexcept
     if (!flushStatus) return processProgress(std::move(flushStatus));
     auto drainStatus = drainFrames(context);
     if (!drainStatus) return processProgress(std::move(drainStatus));
-    if (!m_lineageState->filterEof) return processProgress();
+    if (m_lineageState->graphInitialized && !m_lineageState->filterEof)
+        return processProgress();
+    if (!m_lineageState->graphInitialized &&
+        (m_lineageState->pendingFrame || m_lineageState->pendingLineage ||
+         m_lineageState->pendingPayloadCredit || m_lineageState->pendingInputAllocations ||
+         !m_lineageState->lineageGenerations.empty()))
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video filter without a graph retains undrained generation data")));
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
@@ -331,9 +356,12 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
     const bool eof = m_lineageState->terminalIsEof;
     MediaBufferRef terminal = std::move(m_lineageState->terminalBuffer);
+    auto generationEnd = mediaEndGeneration(terminal);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    m_lineageState->generationDrained = generationEnd.value().has_value();
     m_lineageState->terminalPending = false;
     m_lineageState->terminalIsEof = false;
-    if (!eof) m_lineageState->resetFilterGraph();
+    if (!eof && !generationEnd.value()) m_lineageState->resetFilterGraph();
     if (eof) {
         m_lineageState->terminals.markEof("frame");
         m_lineageState->eofEmitted = true;

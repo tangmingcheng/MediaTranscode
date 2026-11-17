@@ -1,3 +1,4 @@
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -152,6 +153,12 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     m_firstOutputDiagnosticEmitted = false;
 }
 
+::media::Result<MediaNodeProcessResult> VideoFrameRateNode::process(MediaGraphExecutionContext& context)
+{
+    auto stateGuard = m_state->lock();
+    return FFmpegNodeRuntime::process(context);
+}
+
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto stateGuard = m_state->lock();
@@ -163,6 +170,7 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     auto pendingDrain = drainPending(context);
     if (!pendingDrain) return processProgress(std::move(pendingDrain));
     if (hadPendingOutput) return processProgress();
+    if (state.generationDrained) return processWaiting();
     if (state.terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
@@ -193,7 +201,15 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
                          mediaGraphDiagnosticDescribeBuffer(buffer));
         m_firstInputDiagnosticEmitted = true;
     }
-    if (buffer->isEof() || buffer->isFlush()) {
+    auto generationEnd = mediaEndGeneration(buffer);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    if (buffer->isEof() || buffer->isFlush() || generationEnd.value()) {
+        if (generationEnd.value()) {
+            if (!m_state->synchronized()) return processProgress(::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("Video frame-rate generation end requires a synchronized purge owner")));
+            if (auto status = m_state->authorizeRetainedControl(buffer); !status)
+                return processProgress(status);
+        }
         const bool eof = buffer->isEof();
         if (eof && state.eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
@@ -253,6 +269,9 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     auto& state = m_state->data();
     const bool eof = state.terminalIsEof;
     MediaBufferRef terminal = std::move(state.terminalBuffer);
+    auto generationEnd = mediaEndGeneration(terminal);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    state.generationDrained = generationEnd.value().has_value();
     state.terminalPending = false;
     state.terminalIsEof = false;
     if (eof) {

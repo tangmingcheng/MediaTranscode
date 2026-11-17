@@ -49,6 +49,7 @@ public:
         MediaBufferRef terminalBuffer;
         bool terminalPending = false;
         bool terminalIsEof = false;
+        bool generationDrained = false;
     };
 
     explicit MediaVideoFrameRateState(bool requireCanonicalLineage) noexcept;

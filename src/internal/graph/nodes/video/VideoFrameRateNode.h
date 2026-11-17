@@ -33,6 +33,7 @@ public:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;

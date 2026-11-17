@@ -6,6 +6,8 @@
 #include "internal/graph/nodes/audio/AudioResampleLineageState.h"
 #include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
+#include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 #include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include <limits>
 #include <string_view>
@@ -63,6 +65,10 @@ try {
     StorageSum sum;
     sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
     if (audio) sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
+    if (request.video.filterActive)
+        sum.add(::media::Result<std::size_t>::success(sizeof(VideoFilterLineageState)));
+    if (std::holds_alternative<MediaObservedVideoCadence>(request.timing))
+        sum.add(::media::Result<std::size_t>::success(sizeof(MediaVideoFrameRateState)));
     sum.input(request.sourceRequest, raw.videoUrl, raw.videoSdp,
         &raw.videoTransport, &raw.videoDepacketizer, &raw.videoAccessUnitEnvelope);
     if (raw.audio) {
