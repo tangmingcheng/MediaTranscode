@@ -287,16 +287,18 @@ void AudioResampleNode::observeTerminalStage(
                 !m_lineageState->correctionGenerationClosed) {
                 auto consumed = consumeCorrection(context);
                 if (!consumed) return processProgress(::media::Status::failure(consumed.error()));
-                if (consumed.value() || !m_correctionExecutor->canAccept()) {
-                    observeTerminalStage("drain_rearm", nullptr);
-                    // Drain accepted windows to free correction capacity, then read its serial close marker.
-                    m_drainingEof = m_swr != nullptr;
-                    if (!m_swr && !m_lineageState->correctionGenerationClosed)
-                        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                            "Closed bypass resampler has unexecutable correction commands")));
-                    return processProgress();
+                if (!m_lineageState->correctionGenerationClosed) {
+                    if (consumed.value() || !m_correctionExecutor->canAccept()) {
+                        observeTerminalStage("drain_rearm", nullptr);
+                        // Drain accepted windows to free correction capacity, then read its serial close marker.
+                        m_drainingEof = m_swr != nullptr;
+                        if (!m_swr)
+                            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                                "Closed bypass resampler has unexecutable correction commands")));
+                        return processProgress();
+                    }
+                    return processWaiting();
                 }
-                return processWaiting();
             }
             if (auto status = m_correctionExecutor->settleTerminal(); !status) return processProgress(std::move(status));
             MediaBufferRef terminal = std::move(m_pendingTerminal);
