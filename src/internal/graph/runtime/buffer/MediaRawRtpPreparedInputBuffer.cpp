@@ -955,6 +955,9 @@ catch (const std::bad_alloc&) {
         for (;;) {
             if (stopToken.stop_requested()) return ::media::Status::success();
             const auto sequence = wakeup->sequence();
+            // This RTP owner has not acquired its next batch. Never report
+            // processing time from inside a blocked entry's delivery loop.
+            if (auto status = source->observeRtpCaptureIdle(stream, mediaSteadyClockNowNs()); !status) return status;
             auto resumed = source->resumeDrain(stream, mediaSteadyClockNowNs());
             if (!resumed) return ::media::Status::failure(resumed.error());
             if (resumed.value().state == MediaPreparedRtpIngressState::AcceptedReady) break;
@@ -978,6 +981,9 @@ catch (const std::bad_alloc&) {
             return ::media::Status::failure(batch.error());
         if (!source) return ::media::Status::success();
         std::scoped_lock delivery(m_deliveryMutex);
+        if (channelIndex == 0) {
+            if (auto status = source->observeRtpCaptureIdle(stream, mediaSteadyClockNowNs()); !status) return status;
+        }
         auto ticked = source->tick(stream, mediaSteadyClockNowNs());
         return ticked ? ::media::Status::success() : ::media::Status::failure(ticked.error());
     }

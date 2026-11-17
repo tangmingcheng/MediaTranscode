@@ -106,6 +106,8 @@ public:
         std::optional<std::uint64_t> audioFrontier);
     ::media::Result<MediaPreparedRtpIngressProgress> tick(MediaStreamKind stream, std::int64_t observedAtNs);
     ::media::Result<MediaPreparedRtpIngressProgress> resumeDrain(MediaStreamKind stream, std::int64_t now);
+    // Called only by the RTP owner with no unprocessed batch or handoff datagram.
+    ::media::Status observeRtpCaptureIdle(MediaStreamKind stream, std::int64_t observedAtNs);
     ::media::Result<MediaPreparedRtpAccessUnitSnapshot> probeSnapshot() const;
     ::media::Status waitForAccessUnits(std::uint64_t revision,
         std::chrono::steady_clock::time_point deadline, std::stop_token stop);
@@ -182,8 +184,11 @@ private:
         std::optional<std::uint32_t> runtimeSsrc;
         std::optional<std::uint64_t> consumedRetirementSequence;
         std::optional<MediaRtpClockInvalidation> consumedRetirement;
+        // Exclusive user-space capture fence, not an accepted packet frontier.
+        std::optional<std::int64_t> rtpCaptureExclusiveBeforeNs;
     };
     ::media::Result<Stream*> stream(MediaStreamKind kind);
+    ::media::Status advanceRtpCaptureBoundary(Stream& stream, std::int64_t observedAtNs);
     bool controlReady(Stream& stream);
     void notifyCredit(Stream& stream) noexcept;
     ::media::Status drain(Stream& stream, std::int64_t now);

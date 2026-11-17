@@ -155,3 +155,6 @@ BYE compound可能含此前SR/CNAME更新；延迟整个delta前必须优先处�
 依据：RFC 6184 第5.8节 FU 组装、RFC 3640 第3.2.3.1节 AU 分片，以及既有 GStreamer 串行 EOS 模型。生产关闭入口仍未启用；此处是下一阶段接线约束，不是运行验收结果。
 
 锁序复核：continuous Raw purge不进入receiver discardReplayMedia；progressPurge在无activation仲裁锁时调用children，receiver stop在join前释放自身mutex，当前未发现反向等待。新增接线应持delivery排序锁但在receiver mutex外执行source.consume，随后重取receiver锁记录已提交Accepted frontier；期间停止也不能抹去接受事实或重放。原batch生命周期由调用栈及stop/join保证，禁止持组仲裁调用receiver stop/join。
+
+### rk476–477：接收owner事实接口已落地
+prepared source已绑定一次性weak runtime group；RTP owner独占推进exclusive-before观察水位，当前项未接受不计入水位之前。水位跨代连续，不等价于已接纳frontier或完整AU排空。后续不再单独启用局部BYE行为：Opening冻结、capture截止gate、原FIFO EndGeneration、pending purge与双成员精确退休消费屏障须作为一个行为闭环实现及验收。关闭等待必须把固定截止纳入receive/credit唤醒并防止过期零超时自旋；本次水位写入尚无通知消费者。

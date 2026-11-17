@@ -2,6 +2,29 @@
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
+::media::Status MediaPreparedRtpSourceSession::advanceRtpCaptureBoundary(
+    Stream& stream, std::int64_t observedAtNs)
+{
+    if (observedAtNs <= 0 || (stream.rtpCaptureExclusiveBeforeNs &&
+        observedAtNs < *stream.rtpCaptureExclusiveBeforeNs))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP capture boundary must preserve its owner's observation order"));
+    stream.rtpCaptureExclusiveBeforeNs = observedAtNs;
+    return ::media::Status::success();
+}
+
+::media::Status MediaPreparedRtpSourceSession::observeRtpCaptureIdle(
+    MediaStreamKind kind, std::int64_t observedAtNs)
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return ::media::Status::failure(*m_error);
+    if (m_bootstrap) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "RTP capture idle boundary precedes live owner handoff"));
+    auto selected = stream(kind);
+    if (!selected) return ::media::Status::failure(selected.error());
+    return advanceRtpCaptureBoundary(*selected.value(), observedAtNs);
+}
+
 ::media::Status MediaPreparedRtpSourceSession::bindRuntimeGroup(
     const std::shared_ptr<MediaAvSyncGroupRuntime>& group)
 {

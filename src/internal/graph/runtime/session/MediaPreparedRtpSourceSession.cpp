@@ -192,6 +192,11 @@ try {
         // order in which the two channel workers acquired the session lock.
         const auto evaluationAtNs = m_bootstrap ? observedAtNs : mediaSteadyClockNowNs();
         if (channel == MediaRtpUdpChannel::Rtp) {
+            // The current entry is still owned by the receiver. Earlier entries
+            // have been admitted; this one is not included in the fence.
+            if (!m_bootstrap) {
+                if (auto status = advanceRtpCaptureBoundary(s, observedAtNs); !status) return status;
+            }
             auto packet = MediaRtpPacketParser::parse(bytes);
             if (!packet) return ::media::Status::failure(packet.error());
             if (s.activity && packet.value().payloadType == s.plan.depacketizer.payloadType)

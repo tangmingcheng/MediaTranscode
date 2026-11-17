@@ -1046,3 +1046,6 @@ CLI在30秒参数集探测超时，Windows源匹配RTP包为0，未进入四屏�
 
 ### rk476：prepared source同步组绑定
 一次性weak group绑定及原时钟/成员校验已实现，双独立SOURCE PASS，RKMPP8核增量exit0。未启用BYE，capture截止和完整退休屏障仍待接通；实流未验证。详见docs/realtime-composition-rk476-validation.md。
+
+### rk477：RTP owner捕获顺序边界
+exclusive-before水位由原RTP owner推进，背压等待不越过未处理batch，bootstrap排除；双独立DESIGN/SOURCE PASS，RKMPP8核增量exit0。尚无关闭gate或实流通过；下一行为改动须一次接齐Opening/截止/EndGeneration/退休消费屏障，详见docs/realtime-composition-rk477-validation.md。
