@@ -15,6 +15,7 @@
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
 #include <limits>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -135,6 +136,28 @@ void AudioResampleNode::resetRuntimeState() noexcept
     return emitOutput(context, "frame", terminal);
 }
 
+void AudioResampleNode::observeTerminalStage(
+    const char* stage, const MediaAudioCompensationCommand* command) const
+{
+    if (!m_pendingTerminal || !m_correctionExecutor) return;
+    std::ostringstream out;
+    out << "audio_terminal_trace node=" << nodeId().value
+        << " stage=" << stage
+        << " generation=" << m_correctionExecutor->generation()
+        << " output_sample_index=" << m_outputSampleIndex
+        << " draining_eof=" << m_drainingEof
+        << " correction_closed=" << m_lineageState->correctionGenerationClosed
+        << " requires_next_window=" << m_correctionExecutor->requiresNextWindow();
+    if (command) {
+        out << " command_generation=" << command->generation()
+            << " command_sequence=" << command->sequence()
+            << " effective_output_sample_index=" << command->effectiveOutputSampleIndex()
+            << " compensation_distance=" << command->compensationDistance();
+    }
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeNode, out.str());
+}
+
 ::media::Result<bool> AudioResampleNode::consumeCorrection(
     MediaGraphExecutionContext& context)
 {
@@ -159,6 +182,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
         if (auto status = m_lineageState->authorizeRetainedControl(*input.value()); !status)
             return ::media::Result<bool>::failure(status.error());
         m_lineageState->correctionGenerationClosed = true;
+        observeTerminalStage("correction_close", nullptr);
         return ::media::Result<bool>::success(true);
     }
     const auto* correctionBuffer = dynamic_cast<const MediaAudioCorrectionBuffer*>(
@@ -171,6 +195,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
     auto disposition = m_lineageState->classifyObservation(command.generation());
     if (!disposition) return ::media::Result<bool>::failure(disposition.error());
     if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale) {
+        observeTerminalStage("stale_command", &command);
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
             MediaGraphDiagnosticPhase::RuntimeNode,
             "audio_correction_stale node=" + std::to_string(nodeId().value) +
@@ -183,6 +208,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
     if (!status) {
         return ::media::Result<bool>::failure(status.error());
     }
+    observeTerminalStage("command_enqueued", &command);
     return ::media::Result<bool>::success(true);
 }
 
@@ -262,6 +288,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
                 auto consumed = consumeCorrection(context);
                 if (!consumed) return processProgress(::media::Status::failure(consumed.error()));
                 if (consumed.value() || !m_correctionExecutor->canAccept()) {
+                    observeTerminalStage("drain_rearm", nullptr);
                     // Drain accepted windows to free correction capacity, then read its serial close marker.
                     m_drainingEof = m_swr != nullptr;
                     if (!m_swr && !m_lineageState->correctionGenerationClosed)
@@ -419,6 +446,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
     if (eof || flush || endGeneration.value()) {
         m_pendingTerminal = *frameInput.value();
         m_drainingEof = m_swr != nullptr;
+        observeTerminalStage("first_drain", nullptr);
         auto drainStatus = processEofDrainQuantum(context);
         if (!drainStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
@@ -756,6 +784,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
         auto correctionWindow = m_correctionExecutor->prepare(
             m_swr.get(), m_outputSampleIndex);
         if (!correctionWindow) {
+            observeTerminalStage("prepare_failed", nullptr);
             return ::media::Status::failure(correctionWindow.error());
         }
         maximumOutputSamples = correctionWindow.value().maximumOutputSamples;
@@ -772,6 +801,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
             return ::media::Status::failure(::media::ErrorInfo::internalError(
                 "AudioResampleNode zero drain lacks exhaustion proof"));
         }
+        observeTerminalStage("exhausted", nullptr);
         const auto endGeneration = mediaEndGeneration(m_pendingTerminal);
         if (!endGeneration) return ::media::Status::failure(endGeneration.error());
         const bool finalDrain = endGeneration.value().has_value() || m_drainingClosedInput ||
@@ -781,7 +811,9 @@ void AudioResampleNode::resetRuntimeState() noexcept
                 *converted.exhausted); !status) {
             return status;
         }
-        return settleLineageResidue(*converted.exhausted);
+        auto settled = settleLineageResidue(*converted.exhausted);
+        if (settled) observeTerminalStage("settled", nullptr);
+        return settled;
     }
     if (!correctionWindowRequired) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(

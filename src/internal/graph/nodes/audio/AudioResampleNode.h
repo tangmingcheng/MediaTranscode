@@ -49,6 +49,8 @@ private:
         const MediaBufferRef& terminal);
     ::media::Status bindEncoderContext(MediaGraphExecutionContext& context);
     ::media::Status configureCorrection(MediaGraphExecutionContext& context);
+    void observeTerminalStage(const char* stage,
+                              const MediaAudioCompensationCommand* command) const;
     ::media::Result<bool> consumeCorrection(MediaGraphExecutionContext& context);
     ::media::Status processFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status processPendingInputQuantum(MediaGraphExecutionContext& context);
