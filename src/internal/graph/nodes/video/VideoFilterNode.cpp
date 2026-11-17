@@ -346,6 +346,15 @@ void VideoFilterNode::resetRuntimeState() noexcept
          !m_lineageState->lineageGenerations.empty()))
         return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Video filter without a graph retains undrained generation data")));
+    if (m_lineageState->pendingFrame || m_lineageState->pendingLineage ||
+        m_lineageState->pendingPayloadCredit || m_lineageState->pendingInputAllocations ||
+        m_lineageState->acceptedInputOutputCount || pendingOutputBuffer())
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video filter terminal retains uncommitted input or output")));
+    // Sink EOF proves output drain, not destruction of cached input AVFrames.
+    // Release the graph on its owner before verifying the real opaque leases;
+    // generation and terminal facts remain intact in resetFilterGraph().
+    m_lineageState->resetFilterGraph();
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
@@ -361,7 +370,6 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_lineageState->generationDrained = generationEnd.value().has_value();
     m_lineageState->terminalPending = false;
     m_lineageState->terminalIsEof = false;
-    if (!eof && !generationEnd.value()) m_lineageState->resetFilterGraph();
     if (eof) {
         m_lineageState->terminals.markEof("frame");
         m_lineageState->eofEmitted = true;
