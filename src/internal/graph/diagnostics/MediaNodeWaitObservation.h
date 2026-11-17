@@ -22,6 +22,12 @@ struct MediaNodeWaitObservation final {
     std::optional<int> linuxSchedulerPolicy;
     std::optional<std::int64_t> linuxTimerSlackNs;
     std::optional<int> linuxTimerSlackError;
+    std::optional<std::int64_t> linuxSlackSetBefore;
+    std::optional<std::int64_t> linuxSlackSetAfter;
+    std::optional<std::int64_t> linuxSlackRestoreBefore;
+    std::optional<std::int64_t> linuxSlackRestoreAfter;
+    std::optional<int> linuxSlackSetError;
+    std::optional<int> linuxSlackRestoreError;
 };
 
 class MediaNodeWaitObservationScope final {

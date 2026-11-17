@@ -46,7 +46,7 @@ struct MediaDatagramWaitObservation final {
     std::uint64_t interrupted = 0;
     std::uint64_t unavailable = 0;
     bool incomplete = false;
-    MediaDatagramWaitMetric call, beforeCall, arm, api, afterCall, targetLateness;
+    MediaDatagramWaitMetric call, beforeCall, arm, api, afterCall, targetLateness, linuxSlackSet, linuxSlackRestore;
     std::optional<MediaDatagramWaitAttempt> worst;
 
     void observe(const MediaDatagramWaitAttempt& sample) noexcept
@@ -70,7 +70,9 @@ struct MediaDatagramWaitObservation final {
         };
         std::optional<std::int64_t> previous;
         for (const auto& time : std::array{sample.wait.entered, sample.wait.armBefore,
-                 sample.wait.armAfter, sample.wait.apiBefore, sample.wait.apiReturned, sample.wait.returned}) {
+                 sample.wait.armAfter, sample.wait.linuxSlackSetBefore, sample.wait.linuxSlackSetAfter,
+                 sample.wait.apiBefore, sample.wait.apiReturned, sample.wait.linuxSlackRestoreBefore,
+                 sample.wait.linuxSlackRestoreAfter, sample.wait.returned}) {
             if (!time) continue;
             if (*time < 0 || (previous && *time < *previous)) incomplete = true;
             previous = time;
@@ -80,6 +82,8 @@ struct MediaDatagramWaitObservation final {
         interval(beforeCall, sample.sampledSteadyNs, sample.wait.entered, true);
         interval(arm, sample.wait.armBefore, sample.wait.armAfter, false);
         interval(api, sample.wait.apiBefore, sample.wait.apiReturned, false);
+        interval(linuxSlackSet, sample.wait.linuxSlackSetBefore, sample.wait.linuxSlackSetAfter, false);
+        interval(linuxSlackRestore, sample.wait.linuxSlackRestoreBefore, sample.wait.linuxSlackRestoreAfter, false);
         interval(afterCall, sample.wait.returned, sample.nextSteadyNs, true);
         if (!sample.outcome || !sample.nextMasterNs || sample.targetMasterNs < 0 ||
             sample.sampledMasterNs < 0 || sample.timeoutNs <= 0 ||
@@ -96,6 +100,7 @@ struct MediaDatagramWaitObservation final {
             << " wait_interrupted_count=" << interrupted << " wait_unavailable_count=" << unavailable;
         call.append(out, "wait_call"); beforeCall.append(out, "wait_before_call");
         arm.append(out, "wait_arm"); api.append(out, "wait_api_wall");
+        linuxSlackSet.append(out, "wait_linux_slack_set"); linuxSlackRestore.append(out, "wait_linux_slack_restore");
         afterCall.append(out, "wait_return_to_next_clock"); targetLateness.append(out, "wait_target_lateness");
         if (!worst) return;
         const auto& s = *worst;
@@ -124,6 +129,12 @@ struct MediaDatagramWaitObservation final {
         field("worst_wait_linux_scheduler_policy", s.wait.linuxSchedulerPolicy);
         field("worst_wait_linux_timer_slack_ns", s.wait.linuxTimerSlackNs);
         field("worst_wait_linux_timer_slack_error", s.wait.linuxTimerSlackError);
+        field("worst_wait_linux_slack_set_before_ns", s.wait.linuxSlackSetBefore);
+        field("worst_wait_linux_slack_set_after_ns", s.wait.linuxSlackSetAfter);
+        field("worst_wait_linux_slack_restore_before_ns", s.wait.linuxSlackRestoreBefore);
+        field("worst_wait_linux_slack_restore_after_ns", s.wait.linuxSlackRestoreAfter);
+        field("worst_wait_linux_slack_set_error", s.wait.linuxSlackSetError);
+        field("worst_wait_linux_slack_restore_error", s.wait.linuxSlackRestoreError);
         field("worst_wait_next_master_ns", s.nextMasterNs);
         field("worst_wait_next_steady_ns", s.nextSteadyNs);
         out << " worst_wait_outcome=";
