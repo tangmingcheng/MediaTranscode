@@ -143,3 +143,15 @@ source_drain_review_b 对“退休事件只要两路入队即可放行”的候�
 receiver新增generation-wait状态时，accepted必须显式匹配AcceptedReady/AcceptedWaitingCredit，不再用“非WaitingControl”判断；否则ordinal错误推进。未接受数据报保持原batch，telemetry不重复。等待仍推进原clock expiry、截止和取消，避免过期deadline零超时自旋。RTP owner的capture边界与已接受媒体排空分开；截止处不完整AU须明确处理。
 
 BYE compound可能含此前SR/CNAME更新；延迟整个delta前必须优先处理rejection，并明确这些更新的保留语义，不能无意丢失强校验。purge需区分退休已提交、失效已消费和最终完成，信用不足不ack；所有状态固定双成员，不新增媒体队列。
+
+### rk471：关闭入口事务与协议尾部事实
+
+生产入口采用短 Opening 事务：先在 source mutex 内 Preserve prepare，复制 owned departure 后销毁 delta；释放 source 锁，取得 publication arbitration 再重新取 source 锁，对同一个 receiver batch 数据报重新 prepare、验证身份及信用。锁内原子提交 compound 的 SR/CNAME/evidence、冻结双成员 request/原截止并推进 ordinal；释放 source 锁但保留 arbitration，调用 beginSourceDrain；最后锁内核同一 Opening，成功转 Closing，失败保留首错并唤醒，不回滚已接受 compound 或重放 BYE。Opening 不跨信用等待，重复 BYE 不续期。接线前还须核 receiver delivery mutex 与组路径的锁序。
+
+关闭期间继续真实 expiry；SequenceGap、时钟失效或取消仍走强失效，不隐去错误。RTP owner 封捕获边界后，先 drain 原 protocol pending，再按真实时间 expire reorder 并继续 drain。不得传虚构未来时间强制排空。只有完整 AU 成功进入原 packet FIFO后，才检查尾部组装。
+
+新增只读 drainSnapshot 返回实际 reorder 数量、protocol pending 数量与 typed assembly Empty/Incomplete。H264/HEVC 检查 AU/timestamp 与 NAL fragment 状态，AAC 检查 fragmented AU，Opus 无跨包 holder。该事实不代表 receiver batch、信用 lease、输出 FIFO或下游已排空，也不证明历史未丢弃。残缺尾 AU 不自动拼成完整媒体，不通过 resetAssembly 清掉完整待发数据。最终关闭策略必须显式记录残缺结果，不能把残缺当无损排空。
+
+依据：RFC 6184 第5.8节 FU 组装、RFC 3640 第3.2.3.1节 AU 分片，以及既有 GStreamer 串行 EOS 模型。生产关闭入口仍未启用；此处是下一阶段接线约束，不是运行验收结果。
+
+锁序复核：continuous Raw purge不进入receiver discardReplayMedia；progressPurge在无activation仲裁锁时调用children，receiver stop在join前释放自身mutex，当前未发现反向等待。新增接线应持delivery排序锁但在receiver mutex外执行source.consume，随后重取receiver锁记录已提交Accepted frontier；期间停止也不能抹去接受事实或重放。原batch生命周期由调用栈及stop/join保证，禁止持组仲裁调用receiver stop/join。

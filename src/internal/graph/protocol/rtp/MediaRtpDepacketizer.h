@@ -38,11 +38,14 @@ struct MediaRtpDepacketizerResult final {
     MediaLineageVector<MediaRtpAccessUnit> accessUnits;
 };
 
+enum class MediaRtpAssemblyState { Empty, Incomplete };
+
 class MediaRtpDepacketizer {
 public:
     virtual ~MediaRtpDepacketizer() = default;
     virtual ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) = 0;
     virtual void discontinuity(MediaRtpDiscontinuityReason reason) noexcept = 0;
+    virtual MediaRtpAssemblyState assemblyState() const noexcept = 0;
 protected:
     explicit MediaRtpDepacketizer(MediaLineageAllocationScope allocation)
         : m_allocation(std::move(allocation)) {}

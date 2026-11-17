@@ -12,6 +12,11 @@
 #include <variant>
 
 namespace media::ffmpeg::graph {
+struct MediaRtpInputDrainSnapshot final {
+    std::size_t reorderedPackets;
+    std::size_t pendingItems;
+    MediaRtpAssemblyState assembly;
+};
 
 struct MediaRtpPacketAllocationAction final {
     bool drop;
@@ -50,6 +55,7 @@ public:
     ::media::Status observeRtp(MediaRtpPacket packet, std::int64_t observedAtNs);
     ::media::Status expire(std::chrono::steady_clock::time_point now);
     bool hasPending() const noexcept;
+    MediaRtpInputDrainSnapshot drainSnapshot() const noexcept;
     const PendingItem& pendingFront() const;
     void consumeFront();
     ::media::Result<MediaRtpPreparedClockObservation> prepareDiscontinuity(std::uint64_t generationBefore) const;

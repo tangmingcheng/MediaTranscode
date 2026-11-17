@@ -258,6 +258,10 @@ std::optional<std::int64_t> MediaRtpInputProtocolSession::nextClockDeadlineNs() 
 { return m_clock.nextDeadlineNs(); }
 
 std::uint64_t MediaRtpInputProtocolSession::generation() const noexcept { return m_clock.generation(); }
+MediaRtpInputDrainSnapshot MediaRtpInputProtocolSession::drainSnapshot() const noexcept
+{
+    return {m_reorder->bufferedPackets(), m_pending->size(), m_depacketizer->assemblyState()};
+}
 const MediaRtpInputClockSessionConfig& MediaRtpInputProtocolSession::clockConfig() const noexcept
 { return m_clock.config(); }
 

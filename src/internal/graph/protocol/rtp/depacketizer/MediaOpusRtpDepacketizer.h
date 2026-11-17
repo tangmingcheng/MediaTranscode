@@ -9,6 +9,7 @@ public:
     explicit MediaOpusRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
+    MediaRtpAssemblyState assemblyState() const noexcept override { return MediaRtpAssemblyState::Empty; }
 
 private:
     MediaRtpDepacketizerConfig m_config;

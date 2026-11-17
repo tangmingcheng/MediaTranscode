@@ -12,6 +12,8 @@ public:
     explicit MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig config, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
+    MediaRtpAssemblyState assemblyState() const noexcept override
+    { return m_fragmentedAccessUnit ? MediaRtpAssemblyState::Incomplete : MediaRtpAssemblyState::Empty; }
     ::media::Status commitRejection(const MediaRtpPacketRejection& rejection);
     MediaAacRtpPacketPreparation preparePacket(const MediaRtpPacket& packet,
         std::optional<std::uint64_t> maximumAccessUnits) const;

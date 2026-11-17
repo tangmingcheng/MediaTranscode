@@ -902,7 +902,8 @@ catch (const std::bad_alloc&) {
                 auto consumed = source->consume(stream, channel, bytes, observedAtNs, ordinal);
                 if (!consumed) return ::media::Status::failure(consumed.error());
                 progress = consumed.value();
-                accepted = progress.state != MediaPreparedRtpIngressState::NotAcceptedWaitingControl;
+                accepted = progress.state == MediaPreparedRtpIngressState::AcceptedReady ||
+                    progress.state == MediaPreparedRtpIngressState::AcceptedWaitingCredit;
                 if (accepted) { m_prepared->ingressFrontier = ordinal; m_ready.notify_all(); }
             } else {
                 auto resumed = source->resumeDrain(stream, mediaSteadyClockNowNs());

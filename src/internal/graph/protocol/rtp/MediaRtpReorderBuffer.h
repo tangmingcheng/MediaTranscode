@@ -50,6 +50,7 @@ public:
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const noexcept;
     ::media::Result<MediaRtpReorderResult> expire(std::chrono::steady_clock::time_point now);
     void reset() noexcept;
+    std::size_t bufferedPackets() const noexcept { return m_pending.size(); }
 
 private:
     void drainContiguous(MediaRtpReorderResult& result);

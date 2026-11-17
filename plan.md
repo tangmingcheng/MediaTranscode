@@ -1028,3 +1028,6 @@ VideoFilter/VideoFrameRate 的 EndGeneration、purge 复位、提交与清理互
 
 ### rk470：HardwareTransfer 代次生命周期
 源组/准备身份绑定、提交仲裁、owner purge与旧FIFO标记退休分类已实现，双独立 SOURCE PASS，RKMPP增量8/8退出0。尚无实流结论，接收端关闭入口仍待接通。详见 docs/realtime-composition-rk470-validation.md。
+
+### rk471：关闭所需协议残留事实
+只读reorder/pending/assembly状态查询与显式Accepted判据已实现，双独立SOURCE PASS，RKMPP增量161/161退出0。未运行实流，关闭入口仍未启用。事务及锁序约束已补充到sender-bye调查，详见rk471验证记录。
