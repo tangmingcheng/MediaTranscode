@@ -42,6 +42,7 @@ public:
 protected:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaOutputCommitReservation> reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void interrupt(MediaGraphExecutionContext& context) noexcept override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -78,6 +79,7 @@ private:
     std::shared_ptr<MediaRawRtpPreparedInputBuffer> m_preparedReceiver;
     std::shared_ptr<MediaPreparedRtpSourceSession> m_preparedSource;
     MediaBufferRef m_preparedPendingPacket;
+    bool m_generationEnded = false;
     std::optional<MediaRtpIngressBatch> m_runtimeIngressBatch;
     std::size_t m_runtimeIngressBatchIndex = 0;
     bool m_runtimeBatchMediaRetired = false;

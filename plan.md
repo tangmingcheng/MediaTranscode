@@ -1010,3 +1010,7 @@ EndGeneration明确clock-group域，检查成员关闭身份并在实际提交�
 ## 2026-11-17：rk465 BYE失效前成员事实
 
 匹配BYE在破坏性delta前保存owned旧ingress代次/SSRC/捕获时刻，commit验证双向配对；三文件双SOURCE PASS、RKMPP8核增量exit0。尚不改变生产BYE行为，下一步由prepared source接入关闭状态与交接。
+
+## 2026-11-17：rk466 raw有序关闭出口
+
+prepared packet FIFO接入EndGeneration容量计费，raw沿原边持授权发布、等待purge并取消旧pending。五文件双SOURCE PASS，RKMPP8核增量9项exit0。producer与接收截止/新代交接未完成，尚无新实流通过。

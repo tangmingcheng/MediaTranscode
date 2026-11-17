@@ -125,3 +125,11 @@ rk462 已完成聚合器确认；本节仅记录继续实施所需的当前代�
 依据：[GStreamer 串行 EOS 与非串行事件](https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/events.html)、[RFC 3550 BYE](https://www.rfc-editor.org/rfc/rfc3550.html#section-6.6)。RFC BYE 本身不提供跨 RTP/RTCP socket 的已消费媒体 frontier。source_drain_review_b 对整体方向 PASS，但明确上述代次、锁序、截止、容量与交接约束未落实前不能判入口实施完成；接收边界细节继续由 source_drain_review_a 复核。
 
 source_drain_review_a 已完成边界复核：采用 observedAt < 截止准入旧代，首个 observedAt >= 截止的项在等待之前封口；无未处理批次的 RTP owner 批末/接收超时/下次接收前亦可提供边界。封口不等于排空，pending、重组和输出交易结算后才发布 EndGeneration。时间单调性由 MediaRtpIngressStorage::commitReceivedSlot 校验，原 batch lease 持有待交接项，无新增媒体队列。
+
+### 2026-11-17：冻结映射与最终退休接口复核
+
+source_drain_review_a 建议由 clockGroup publish 通过 observeRuntimeClockGroup(snapshot) 向 prepared source 复制固定 groupGeneration 及各 Stream 的 ingress generation/SSRC。沿原 mutex 保护，现有 storageFacts 的实际 sizeof 覆盖；不保存整个 buffer 或 calibration（含 CNAME），不延长未计费分配生命周期。此接口仅证明观察到映射，不证明 graph 发布或 activation 已完成；关闭建立仍须在 source mutex 外取得 generation arbitration。非 Locked 清新关闭可用映射，已冻结事务不被覆盖；同代不能替换成员身份。
+
+source_drain_review_b 对最终协议退休方向 DESIGN PASS：Tracker 增加 prepareMemberRetirement(expectedIngressGeneration, expectedSsrc, reason, observedAtNs)，复用 prepareContinuityChange(true) 和原 commitControl 原子预留/提交；InputClockSession、ProtocolSession 只转发。原因仅 SenderLeft 与追加 GroupClosed；后者不伪造 BYE 或 SSRC 变化。SenderLeft 由原departure事实产生，GroupClosed使用组关闭真实时刻。
+
+purgeMedia 需要显式表达尚未完成（例如 optional frontier）：control FIFO 对象或字节信用不足时不提交、不确认purge；重新准备而非跨等待保存borrowed事务。每成员退休位防重复递增，双成员都提交invalidation前不放行新媒体。各成员新证据排在原FIFO退休事件后，不能清controls或另建旁路。只resetAssembly不会推进tracker或清clockGroup，不能作为新代交接完成证据。身份已被强失效改变时须按原退休/取消授权处理，不能假装正常关闭成功。

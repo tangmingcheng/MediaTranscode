@@ -9,6 +9,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 #include "internal/graph/runtime/lifecycle/MediaInputActivity.h"
 #include "internal/graph/time/MediaSteadyClock.h"
@@ -136,11 +137,15 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 const auto completed = m_ownerPurge->complete(*purge, status);
                 return processProgress(completed ? status : completed);
             }
-            if (const auto* pending = pendingOutputBuffer();
-                pending && pending->payloadKind() == MediaPayloadKind::Packet)
-                cancelPendingOutputTransfer();
+            if (const auto* pending = pendingOutputBuffer()) {
+                const auto* control = dynamic_cast<const MediaControlBuffer*>(pending);
+                if (pending->payloadKind() == MediaPayloadKind::Packet ||
+                    (control && control->controlKind() == MediaControlBufferKind::EndGeneration))
+                    cancelPendingOutputTransfer();
+            }
             m_packets.clear();
             m_preparedPendingPacket.reset();
+            m_generationEnded = false;
             std::optional<std::uint64_t> continuousCutoff;
             if (m_preparedSource) {
                 auto cutoff = m_preparedSource->purgeMedia(m_config.streamKind);
@@ -197,6 +202,7 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
     }
     if (m_preparedSource) {
         if (auto status = m_preparedReceiver->captureStatus(); !status) return processProgress(status);
+        if (m_generationEnded) return processWaiting();
         if (!m_preparedPendingPacket) {
             auto output = m_preparedSource->takeOutput(m_config.streamKind, MediaPreparedRtpOutputClass::Packet);
             if (!output) return processProgress(::media::Status::failure(output.error()));
@@ -208,6 +214,13 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
                 return processProgress(::media::Status::failure(::media::ErrorInfo::internalError(
                     "Prepared RTP packet endpoint returned control output")));
             m_preparedPendingPacket = std::move(output.value()->buffer);
+        }
+        auto generationEnd = mediaEndGeneration(m_preparedPendingPacket);
+        if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+        if (generationEnd.value()) {
+            m_generationEnded = true;
+            auto output = std::move(m_preparedPendingPacket);
+            return processProgress(emitOutput(context, "packet", output));
         }
         const auto bytes = m_preparedPendingPacket->payloadFootprintBytes();
         if (!bytes) return processProgress(::media::Status::failure(
@@ -974,6 +987,7 @@ void RawRtpInputNode::resetState() noexcept
     m_events.clear();
     m_preparedReceiver.reset();
     m_preparedPendingPacket.reset();
+    m_generationEnded = false;
     m_runtimeIngressBatch.reset();
     m_runtimeIngressBatchIndex = 0;
     m_runtimeBatchMediaRetired = false;

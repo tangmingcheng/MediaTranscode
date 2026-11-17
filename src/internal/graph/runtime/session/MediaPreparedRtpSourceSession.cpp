@@ -13,6 +13,7 @@
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/MediaPreparedPacketStorage.h"
 #include <limits>
@@ -256,6 +257,12 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
     if (const auto* e = dynamic_cast<const MediaRtpIngressEventBuffer*>(buffer.get())) {
         bytes += sizeof(MediaRtpIngressEventBuffer);
         if (e->clockEvidence()) bytes += e->clockEvidence()->cname.size();
+    } else if (dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+        auto generation = mediaEndGeneration(buffer);
+        if (!generation) return ::media::Status::failure(generation.error());
+        if (!packetOutput || !generation.value())
+            return invalid("Prepared RTP only admits generation end on the ordered packet FIFO");
+        bytes += sizeof(MediaControlBuffer);
     } else {
         const auto payload = buffer->payloadFootprintBytes();
         const auto packetBytes = storageFacts().packetBytes;

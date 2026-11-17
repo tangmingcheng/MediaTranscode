@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
 #include "internal/graph/nodes/audio/AudioResampleLineageState.h"
 #include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
+#include "internal/graph/nodes/input/RawRtpInputNode.h"
 #include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include <limits>
 #include <string_view>
@@ -60,6 +61,8 @@ try {
     const auto& raw = request.raw;
     const bool audio = request.sourceRequest.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
     StorageSum sum;
+    sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
+    if (audio) sum.add(::media::Result<std::size_t>::success(sizeof(RawRtpInputNode)));
     sum.input(request.sourceRequest, raw.videoUrl, raw.videoSdp,
         &raw.videoTransport, &raw.videoDepacketizer, &raw.videoAccessUnitEnvelope);
     if (raw.audio) {
