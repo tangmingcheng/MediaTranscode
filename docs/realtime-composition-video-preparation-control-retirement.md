@@ -1,0 +1,32 @@
+# 视频准备节点的旧代控制失效
+
+状态：仅低频诊断获DESIGN PASS并完成实施，待双SOURCE复审及实流；共享旧控制行为修正尚未获实施授权。
+
+## 证据及边界
+
+[rk491](realtime-composition-rk491-validation.md)两路video-only在12:59:12.497封口；17.502两组进入purging old1→next2，17.503节点25/44报控制类型或代次非法，输出队列各76。日志未记录具体control kind/generation及purge request reason，不能把五秒间隔直接认定为clock expiry，也不能证明本次一定是SourceDrained。应在原reacquisition日志补request reason、在原拒绝控制处补实际kind/flow/控制代次/节点代次/preparation代次及phase，保留原错误；这些是低频失败/转换事实，无新状态。
+
+VideoPreparationNode:160的失败条件为flow无效或控制代次不等于m_generation。MediaControlBuffer::flow已经支持合法非零EndGeneration，故不是缺少枚举分支。节点process先在owner调用servicePurge：精确lineage purge成功后取消pending输出，清本地pending/reservation，将m_generation更新到nextGeneration，然后进入原输入消费；该操作不清input FIFO。上游owner与该owner的purge服务时刻不同，旧代有序控制可尚在边上。旧媒体走classifyObservation并DropStale，旧控制却在授权之前直接整体失败，存在明确不对称。
+
+正常SourceDrained由aggregate消费EndGeneration且清完旧贡献后确认；因此若本次确为正常排尽，尚在prep前的旧边界来源还需核对。现有日志不足以排除强失效取消正常closing的路径，不能仅凭两组同时purge下结论。
+
+## 权威语义与最小候选修复
+
+[GStreamer事件设计](https://gstreamer.freedesktop.org/documentation/additional/design/events.html)要求EOS与数据有序，同时flush完成时清除旧EOS及pending消息。适用原则是已撤销代次的结束标记不得结束新代，也不应重新激活旧代；本仓库用精确generation purge和owner mailbox实现失效，不照搬跨线程codec操作。
+
+候选改为共享video lineage窄接口：仅接受经过classifyMediaControlBuffer验证的合法、显式非零EndGeneration，复用classifyObservation及原capture，返回明确Current/DropStale，不能让旧代以普通success伪装已授权。Preparation、Decode、Filter、FrameRate四入口统一使用；旧代只释放各自该控制，未来代失败，当前代仍受原阶段、代次和publication约束。EOF/Flush不扩大范围，不推测其代次。HardwareTransfer继续保留既有group arbitration对Retired的真实权限约束，不替换成局部代次判断。此方案待诊断证明现场控制身份并另行审查，当前不实施。
+不修改MediaRetainedControlFreshness：其capture和matches精确对象、stream及generation规则必须保持，purge清其weak引用。丢弃已退休输入控制与允许它提交是不同操作，不能以放宽matches让旧控制通过。公共pendingOutput也继续按原精确freshness和publication permit取消。
+
+线程与资源：沿现有单owner process/servicePurge顺序及lineage内部锁，无跨线程codec操作、不锁内调用group、不新增队列/状态/容量，不清其他任务数据；释放单个已失效控制引用。原phase错误、未来代错误、无效类型和无法授权的当前控制均保留。
+
+## 验证与不确定项
+
+先补足触发reason与实际失配身份或在独立审查中证明已覆盖的可达路径，再实施候选。若实际flow非法或代次不是已退休，必须定位生产者，不能用DropStale掩盖。共享Windows/RKMPP均受影响，修复后需原规格四源完整链路验证正常关闭、强失效和新代重入；rk491未覆盖所选音频结束，不能称音频修复已实测通过。
+## 本次诊断实现
+
+只修改VideoPreparationNode.cpp与MediaAvReacquisitionCoordinator.cpp。前者在原拒绝点追加node、kind、flow、control_generation、node_generation、preparation_generation、preparation_phase，缺失值输出unavailable，原错误不变。后者在同一state锁内、确认新transition产生时复制实际m_request.reason到栈上optional，与原began一起解锁后输出；不使用可能被合并或替换的调用入参reason，不新增成员状态。原purging日志已含old/next/transition，新增reason为枚举数值：0 FutureGeneration、1 HardDiscontinuity、2 Flush、3 RecoveryBudgetExhausted、4 SourceDrained。缺失request仅诊断unavailable，不改变行为。
+
+两处均为原转换/失败点，不新增逐帧日志、队列、计数或对外参数。源码自查及diff格式检查完成；尚未构建和实流，不能宣称根因已唯一确定或功能修复通过。
+## 诊断验证进度
+
+两位独立审查明确诊断DESIGN PASS与SOURCE PASS。RKMPP8核增量构建PID3638412，exit0，5/5目标完成，未运行local CLI。realtime CLI SHA256 a4f721516e57fd9818be4c4a10294c4034e1a05e72550baf0bf3764a52eea379。回退两源码与旧CLI位于目标out/rollback/rk492。本次不改控制行为，待真实流获取身份；新增reason仅覆盖request()新发起purge，不覆盖所有queued continuation日志。传输tar/构建日志记录后清理，诊断存在字符串与日志开销。

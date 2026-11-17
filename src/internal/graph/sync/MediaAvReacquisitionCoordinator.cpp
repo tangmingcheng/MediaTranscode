@@ -521,6 +521,7 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     MediaAvReacquisitionRequest request)
 {
     std::optional<MediaAvGenerationPurge> began;
+    std::optional<MediaAvReacquisitionReason> beganReason;
     {
         auto publicationLock = acquireActivationArbitration();
         std::lock_guard stateLock(m_mutex);
@@ -529,8 +530,10 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
         auto status = beginRequestLocked(request);
         if (!status) return status;
         if (m_phase == MediaAvReacquisitionPhase::Purging && m_transition &&
-            previousSequence != m_transition->transitionSequence)
+            previousSequence != m_transition->transitionSequence) {
             began = m_transition;
+            if (m_request) beganReason = m_request->reason;
+        }
     }
     if (began) {
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
@@ -538,7 +541,8 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
             "av_reacquisition group=" + m_groupKey.value() + " phase=purging old=" +
                 std::to_string(began->oldGeneration) + " next=" +
                 std::to_string(began->nextGeneration) + " transition=" +
-                std::to_string(began->transitionSequence));
+                std::to_string(began->transitionSequence) + " reason=" +
+                (beganReason ? std::to_string(static_cast<int>(*beganReason)) : "unavailable"));
         for (const auto& wakeup : m_domainWakeups) wakeup->notify();
     }
     return ::media::Status::success();

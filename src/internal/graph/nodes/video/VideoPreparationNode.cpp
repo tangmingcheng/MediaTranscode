@@ -4,7 +4,9 @@
 #include "internal/graph/sync/lineage/MediaVideoDisplayLineage.h"
 #include "internal/graph/sync/lineage/MediaVideoReferenceLineageState.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include <array>
+#include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -158,8 +160,18 @@ bool VideoPreparationNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) 
     if (MediaRetainedControlFreshness::isCandidate(m_pending)) {
         const auto* control = dynamic_cast<const MediaControlBuffer*>(m_pending.get());
         const auto flow = control ? control->flow() : std::nullopt;
-        if (!flow || (control->generation() && *control->generation() != m_generation))
+        if (!flow || (control->generation() && *control->generation() != m_generation)) {
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "video_preparation_control_rejected node=" + std::to_string(nodeId().value) +
+                " kind=" + (control ? std::to_string(static_cast<int>(control->controlKind())) : "unavailable") +
+                " flow=" + (flow ? std::to_string(static_cast<int>(*flow)) : "unavailable") +
+                " control_generation=" + (control && control->generation() ? std::to_string(*control->generation()) : "unavailable") +
+                " node_generation=" + std::to_string(m_generation) +
+                " preparation_generation=" + std::to_string(preparation.generation) +
+                " preparation_phase=" + std::to_string(static_cast<int>(preparation.phase)));
             return processProgress(invalid("Video preparation control kind or generation is invalid"));
+        }
         if (preparation.phase != MediaAvStartupVideoPreparationPhase::ReleaseCommitted)
             return processProgress(invalid("Video preparation terminal precedes activation"));
         if (auto status = m_lineage->authorizeRetainedControl(m_pending); !status) return processProgress(status);
