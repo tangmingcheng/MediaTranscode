@@ -1034,3 +1034,6 @@ VideoFilter/VideoFrameRate 的 EndGeneration、purge 复位、提交与清理互
 
 ### rk472：receiver与source事务锁边界
 source consume/resumeDrain移出receiver mutex，delivery单项顺序及Accepted frontier提交保持，停止竞态不重放。双独立SOURCE PASS，RKMPP增量4/4退出0；尚未进行实流。详见docs/realtime-composition-rk472-validation.md。
+
+### rk473：实流发现并修复重入授权回归
+原规格四屏实流FAIL：source1合法generation2重入被HardwareTransfer错误套用initial preparation身份拒绝。已按实际Initial/Next发布合同修复，双独立SOURCE PASS。CLI失败退出另卡在RKMPP取帧，已取得符号栈并按精确PID清理，未宣称解决。rk473临时产物清理完毕，rk474增量构建4/4退出0，实流复验待完成。详见docs/realtime-composition-rk473-validation.md。

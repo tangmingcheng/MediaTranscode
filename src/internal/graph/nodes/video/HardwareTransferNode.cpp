@@ -147,8 +147,6 @@ bool HardwareTransferNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) 
     const auto& transition = authority.value().reacquisition();
     const auto& epoch = authority.value().epoch();
     const auto preparation = m_preparation->snapshot();
-    if (preparation.phase == MediaAvStartupVideoPreparationPhase::Cancelled)
-        return Result::failure(::media::ErrorInfo::cancelled("Hardware transfer preparation was cancelled"));
     const bool initial = transition.phase == MediaAvReacquisitionPhase::Inactive &&
         !transition.transition && !epoch.poisoned && !epoch.activation &&
         epoch.readiness == MediaAvGenerationReadiness::Acquiring &&
@@ -162,18 +160,20 @@ bool HardwareTransferNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) 
             transition.phase == MediaAvReacquisitionPhase::Purging)
             return Result::failure(::media::ErrorInfo::wouldBlock("Hardware transfer awaits generation authority"));
     }
-    if (!value || preparation.groupKey != m_group->key() || preparation.generation != value ||
-        !preparation.releaseIdentity || preparation.releaseIdentity != m_releaseIdentity)
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Hardware transfer publication differs from its source preparation"));
-    if (initial || !epoch.outputPermitted) {
+    if (initial) {
+        if (preparation.phase == MediaAvStartupVideoPreparationPhase::Cancelled)
+            return Result::failure(::media::ErrorInfo::cancelled("Hardware transfer preparation was cancelled"));
+        if (!value || preparation.groupKey != m_group->key() || preparation.generation != value ||
+            !preparation.releaseIdentity || preparation.releaseIdentity != m_releaseIdentity)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Hardware transfer publication differs from its initial preparation"));
         if (preparation.phase != MediaAvStartupVideoPreparationPhase::Feeding &&
             preparation.phase != MediaAvStartupVideoPreparationPhase::OutputReady)
             return Result::failure(::media::ErrorInfo::invalidArgument(
                 "Hardware transfer has no active preparation feed"));
-    } else if (preparation.phase != MediaAvStartupVideoPreparationPhase::ReleaseCommitted) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Hardware transfer active generation has no committed preparation release"));
+    } else if (!epoch.outputPermitted) {
+        return Result::failure(::media::ErrorInfo::wouldBlock(
+            "Hardware transfer awaits publication of its reacquired epoch"));
     }
     if (end.value()) {
         const auto closing = m_group->sourceDrainSnapshot();
@@ -294,12 +294,9 @@ void HardwareTransferNode::logSummary() const
         }
         if (auto status = m_lineage->observe(*frameGeneration); !status) return processProgress(status);
         const auto preparation = m_preparation->snapshot();
-        if (preparation.generation != *frameGeneration || !preparation.releaseIdentity ||
-            (m_releaseIdentity && m_releaseIdentity != preparation.releaseIdentity))
-            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "Hardware transfer frame differs from its immutable preparation feed")));
         m_generation = *frameGeneration;
-        m_releaseIdentity = preparation.releaseIdentity;
+        if (!m_releaseIdentity && preparation.generation == *frameGeneration)
+            m_releaseIdentity = preparation.releaseIdentity;
     }
     m_pendingInput = buffer;
     auto transferStatus = transferOrForward(context, m_pendingInput);
