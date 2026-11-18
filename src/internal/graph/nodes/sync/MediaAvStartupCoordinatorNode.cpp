@@ -612,12 +612,39 @@ MediaAvStartupCoordinatorNode::processControl(
     MediaBufferRef output = *pending;
     MediaAvSyncStatus terminalStatus = MediaAvSyncStatus::success();
     bool publishTerminal = false;
+    std::optional<MediaAvGenerationArbitrationReservation> generationAuthority;
     const bool endGeneration = control.controlKind() == MediaControlBufferKind::EndGeneration;
     if (endGeneration) {
         auto classified = mediaEndGeneration(output);
         if (!classified) return processProgress(::media::Status::failure(classified.error()));
         const auto group = context.findAvSyncGroup(m_generationState->groupKey());
-        const auto closing = group ? group->sourceDrainSnapshot() : std::nullopt;
+        if (!group || !classified.value())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Startup generation boundary requires its source group and explicit generation")));
+        auto authority = group->reserveGenerationArbitration();
+        if (!authority) return processProgress(::media::Status::failure(authority.error()));
+        generationAuthority.emplace(std::move(authority).value());
+        auto disposition = classifyMediaAvGenerationEvidence(generationAuthority->reacquisition(),
+            generationAuthority->epoch(), *classified.value());
+        if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+        if (disposition.value() == MediaAvGenerationEvidenceDisposition::Retired) {
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "av_startup_retired_control node=" + std::to_string(nodeId().value) +
+                    " generation=" + std::to_string(*classified.value()));
+            pending.reset();
+            resetTerminalBarrier();
+            return processProgress();
+        }
+        if (disposition.value() != MediaAvGenerationEvidenceDisposition::Target)
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Startup generation boundary rejects a future source generation")));
+        const auto& authorityEpoch = generationAuthority->epoch();
+        if (!authorityEpoch.outputPermitted || !authorityEpoch.playbackEpoch() ||
+            authorityEpoch.playbackEpoch()->generation != *classified.value())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Startup generation boundary requires its published source epoch")));
+        const auto closing = group->sourceDrainSnapshot();
         const auto& sourceGeneration = m_coordinator->generation();
         const auto& epoch = m_coordinator->playbackEpoch();
         const auto* member = closing ? (input == PendingInput::Video ? &closing->video :
@@ -646,11 +673,9 @@ MediaAvStartupCoordinatorNode::processControl(
                 : "upstream flush/discontinuity");
         publishTerminal = true;
     }
+    generationAuthority.reset();
     pending.reset();
-    m_terminalBarrierActive = false;
-    m_videoTerminalBarrierRemaining = 0;
-    m_audioTerminalBarrierRemaining = 0;
-    m_clockTerminalBarrierRemaining = 0;
+    resetTerminalBarrier();
     if (publishTerminal) {
         if (m_terminalControlCommitted) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -729,10 +754,7 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_pendingVideo.reset();
     m_pendingAudio.reset();
     resetClockBarrier();
-    m_terminalBarrierActive = false;
-    m_videoTerminalBarrierRemaining = 0;
-    m_audioTerminalBarrierRemaining = 0;
-    m_clockTerminalBarrierRemaining = 0;
+    resetTerminalBarrier();
     m_lastVideoObservedAt.reset();
     m_lastAudioObservedAt.reset();
     m_lastClock.reset();
@@ -741,6 +763,14 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_keyTraceEmitted = false;
     m_lastReleasedGeneration.reset();
     m_deferredTerminalError.reset();
+}
+
+void MediaAvStartupCoordinatorNode::resetTerminalBarrier() noexcept
+{
+    m_terminalBarrierActive = false;
+    m_videoTerminalBarrierRemaining = 0;
+    m_audioTerminalBarrierRemaining = 0;
+    m_clockTerminalBarrierRemaining = 0;
 }
 
 MediaAvStartupCoordinatorNode::~MediaAvStartupCoordinatorNode()

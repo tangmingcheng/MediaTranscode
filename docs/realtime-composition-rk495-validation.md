@@ -61,7 +61,7 @@ launcher1126591；源0=1126595、源1=1126596、CLI=1126597、monitor=1126599；
 
 12:46:30.567 sender node102首错IoFailure: Datagram GBRA reservation misses its immutable completion deadline。sequence=107198、now_ns=123502446206、release_ns=123469518251、deadline_ns=123502849423、not_before_ns=123502653832、not_after_ns=123502632463、duration_ns=216960、rate=6250000、queue_wire_bytes=12016、average_queue_residence_ns=15103244；最早起点比最晚起点晚21369ns。previous_submitted_sequence=107197、last_observed_ns=123502436872。没有purging或preparation_control_rejected记录，故本轮不能证明旧代控制修复实流通过。
 
-四源日志均完成3600帧/120秒。本机源自然退出；远端源进程已无。CLI失败后仍存活，142秒RSS102180KiB，随后45线程均为futex_wait_queue_me；无gdb可用，不将该现象直接宣称已定位死锁根因。最后非final报告：平均机器CPU22.267648%、峰值46.464646%；RSS初始80416768/当时100474880；payload highwater21305971字节/1581对象，pressureFailures=2；末次drift11338ns、频率及stretch0。没有final report，不能宣称资源全部释放。
+四源日志均完成3600帧/120秒。本机源自然退出；远端源进程已无。CLI失败后仍存活，142秒RSS102180KiB，随后45线程均为futex_wait_queue_me；当时默认PATH及限定目录搜索未找到gdb（不代表目标机不存在），不将该现象直接宣称已定位死锁根因。最后非final报告：平均机器CPU22.267648%、峰值46.464646%；RSS初始80416768/当时100474880；payload highwater21305971字节/1581对象，pressureFailures=2；末次drift11338ns、频率及stretch0。没有final report，不能宣称资源全部释放。
 
 本轮判定FAIL并清理CLI1126597，不记自然退出；monitor1126599/launcher1126591随退出收尾。VLC36720按完整命令行核对后清理。清理清单：本机composition-rk495-source2.out/log、composition-rk495-source3.out/log、composition-rk495-vlc.log、composition-rk495-native-2026-11-18-12h45m52s616.png；远端acceptance/rk495/{socket-monitor.log,udp-after.txt,output.sdp,source0.out,cli-error.log,monitor.log,result.txt,pids.txt,launcher.log,run.sh,cli.log,source1.out,source0.log,udp-before.txt,source1.log,cli-maps.txt}。保留复用源和rollback。
 清理复核：CLI清理exit137（非自然结束），远端两源exit0；精确PID均不存在，远端本轮目录无文件；本机rk493/rk494/rk495临时清单为空。

@@ -36,3 +36,9 @@ VideoPreparationNode:160的失败条件为flow无效或控制代次不等于m_ge
 现场 reason=HardDiscontinuity、EndGeneration(1)、node_generation=2 确认已退休控制。新增 MediaVideoLineageState::admitGenerationEnd，在同一 lineage 锁内验证、分类并仅对 Current capture；四入口在 drain 或准备阶段校验前 DropStale。无平台分支，不改 EOF/Flush、HardwareTransfer 或 matches。两位独立审查均 SOURCE PASS；Windows 存在共享逻辑影响，后续需同规格回归。目标机回退位于 out/rollback/rk494，未修改外部 FFmpeg。
 
 rk494：源码466557ed，8核增量首次链接因环境未选择prefix-mpp库而失败（mpp_user_data_unref/mpp_frame_get_user_data/mpp_frame_set_user_data未定义）；补齐已有prefix-ffmpeg/prefix-mpp的LD_LIBRARY_PATH后剩余2个链接目标exit0。realtime CLI SHA256 94b3d203c81cba2e0855196f25f90414155fcbda8ff7687bdad2d1117fb783f7。未运行local CLI。清理本机rk494-source.tar，远端同名传输包及rk494-build.log/exit、rk494-rebuild.log/exit；rollback保留。
+
+## rk496：启动协调边界
+
+真实链路在HardDiscontinuity后StartupCoordinator node36报frozen boundary错误，CLI自然exit1，未复现sender期限错误。日志缺控制代次，不能宣称唯一现场根因；源码可证明owner purge不清FIFO，而且group强失效先于本地owner时也会清closing，因此只比较本地代次不足。
+
+沿用上述GStreamer flush清旧EOS原则和现有RtpPacketClockBinderSourceDrain的group arbitration算法。合法EndGeneration先按权威group分Retired/Target/Future；Retired只释放当前pending，结束本次terminal barrier，不清另一pending或clock barrier。Target须有同代已发布authority epoch，再执行原closing/source/frozen/retained检查；Future失败。仲裁持至sealMember，emit前释放，避免检查使用竞争及publication重入。复用原4字段清零为resetTerminalBarrier，不新增线程、状态、容量或外部参数，不改EOF/Flush；沿现有锁顺序及RAII。新增低频retired-control诊断用于复验身份。Windows/RKMPP共享实现，须保留Windows同规格回归。双独立设计PASS与SOURCE PASS；目标构建/实流待完成。

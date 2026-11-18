@@ -72,6 +72,7 @@ private:
         const MediaAvStartupEnvelopeBuffer& envelope);
     void erasePurged(const MediaAvStartupIds& purged) noexcept;
     void resetClockBarrier() noexcept;
+    void resetTerminalBarrier() noexcept;
     void clearTransientState() noexcept;
 
     MediaLineageAllocationScope m_allocation;
