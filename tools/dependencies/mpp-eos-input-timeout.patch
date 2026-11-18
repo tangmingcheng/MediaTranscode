@@ -1,0 +1,16 @@
+diff --git a/mpp/mpp.c b/mpp/mpp.c
+--- a/mpp/mpp.c
++++ b/mpp/mpp.c
+@@ -429,8 +429,10 @@ MPP_RET mpp_put_packet(Mpp *mpp, MppPacket packet)
+     /* non-jpeg mode - reserve extra task for incoming eos packet */
+     if (mpp->mInputTaskCount > 1) {
+         if (!mpp->mEosTask) {
+-            /* handle eos packet on block mode */
+-            ret = mpp_poll(mpp, MPP_PORT_INPUT, MPP_POLL_BLOCK);
++            /* No packet has been submitted here. Honor the configured input
++             * timeout while reserving EOS credit, just as for normal input.
++             * Post-submission zero-copy completion keeps its own contract. */
++            ret = mpp_poll(mpp, MPP_PORT_INPUT, timeout);
+             if (ret < 0)
+                 goto RET;
+ 
