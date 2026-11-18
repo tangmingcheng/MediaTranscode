@@ -12,11 +12,11 @@
 +
 +/* Private ABI v1: H.264/HEVC copied-input decode loops only. This does not
 + * promise interruption of MPP reset/destroy or a kernel/driver call. */
-+unsigned avcodec_rkmpp_interrupt_version(const AVCodecContext *avctx);
++unsigned avcodec_rkmpp_interrupt_version(AVCodecContext *avctx);
 +int avcodec_rkmpp_set_interrupt_callback(AVCodecContext *avctx, unsigned version,
 +                                       int (*callback)(void *), void *opaque);
 +
-+unsigned avcodec_rkmpp_interrupt_version(const AVCodecContext *avctx)
++unsigned avcodec_rkmpp_interrupt_version(AVCodecContext *avctx)
 +{
 +    if (!avctx || !avcodec_is_open(avctx) || !avctx->codec ||
 +        !avctx->codec->name || !avctx->priv_data ||
