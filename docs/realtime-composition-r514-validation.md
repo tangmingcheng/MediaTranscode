@@ -107,3 +107,7 @@ D:\Code\MyCode\MediaTranscode\out\acceptance\composition-r514-vlc.log
 后续只读能力核查：wpr -profiledetails GPU实际显示DxgKrnl、CSwitch、ReadyThread、SampledProfile；GeneralProfile还包含ReadyThread stack。默认GPU.Verbose.Memory共1608+1628个1024KiB buffer，不能忽略约3.16GiB预留及跟踪扰动。未启动跟踪，不计权限成功或GPU根因证据。
 
 更小的内置诊断配置已只读核实：wpr -profiledetails GPU.Light -filemode 包含DxgKrnl/CSwitch/ReadyThread，64+84个1024KiB buffers，约148MiB。xperf.exe与wpaexporter.exe位于C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit。未启动跟踪，待下轮独立诊断。
+
+实际尝试：C:/Windows/System32/wpr.exe -start GPU.Light -filemode -recordtempto D:/Code/MyCode/MediaTranscode/out/acceptance，exit1：0xc5585011 / Failed to enable the policy to profile system performance。工具已请求沙箱外执行，失败来自Windows性能跟踪权限，不是自动审批拒绝；未取得GPU跟踪，不修改权限/依赖。
+
+失败后复查WPR is not recording，验收目录未出现ETL。本次没有跟踪会话或产物需要删除；性能跟踪权限问题不能替代GPU根因结论。
