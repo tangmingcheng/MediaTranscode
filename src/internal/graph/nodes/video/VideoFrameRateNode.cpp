@@ -207,8 +207,10 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
         if (generationEnd.value()) {
             if (!m_state->synchronized()) return processProgress(::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Video frame-rate generation end requires a synchronized purge owner")));
-            if (auto status = m_state->authorizeRetainedControl(buffer); !status)
-                return processProgress(status);
+            auto disposition = m_state->admitGenerationEnd(buffer);
+            if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+            if (disposition.value() == MediaVideoLineageGenerationDisposition::DropStale)
+                return processProgress();
         }
         const bool eof = buffer->isEof();
         if (eof && state.eofEmitted) {

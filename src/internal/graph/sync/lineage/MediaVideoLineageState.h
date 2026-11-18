@@ -36,6 +36,8 @@ public:
     ::media::Status validateObservation(std::uint64_t generation) const;
     ::media::Status observe(std::uint64_t generation);
     ::media::Status authorizeRetainedControl(const MediaBufferRef& buffer);
+    ::media::Result<MediaVideoLineageGenerationDisposition>
+    admitGenerationEnd(const MediaBufferRef& buffer);
     [[nodiscard]] bool pendingOutputIsCurrent(
         const MediaBufferRef& buffer,
         std::optional<std::uint64_t> mediaGeneration) const noexcept;

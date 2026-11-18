@@ -324,8 +324,10 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         if (!m_lineageState->synchronized())
             return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "EndGeneration requires a planned synchronized decoder lineage")));
-        if (auto freshness = m_lineageState->authorizeRetainedControl(buffer); !freshness)
-            return processProgress(std::move(freshness));
+        auto disposition = m_lineageState->admitGenerationEnd(buffer);
+        if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+        if (disposition.value() == MediaVideoLineageGenerationDisposition::DropStale)
+            return processProgress();
     }
     if (buffer->isEof() || buffer->isFlush() || endGeneration.value()) {
         const bool eof = buffer->isEof();

@@ -158,6 +158,16 @@ bool VideoPreparationNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) 
         observedInput = true;
     }
     if (MediaRetainedControlFreshness::isCandidate(m_pending)) {
+        auto generationEnd = mediaEndGeneration(m_pending);
+        if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+        if (generationEnd.value()) {
+            auto disposition = m_lineage->admitGenerationEnd(m_pending);
+            if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+            if (disposition.value() == MediaVideoLineageGenerationDisposition::DropStale) {
+                m_pending.reset();
+                return processProgress();
+            }
+        }
         const auto* control = dynamic_cast<const MediaControlBuffer*>(m_pending.get());
         const auto flow = control ? control->flow() : std::nullopt;
         if (!flow || (control->generation() && *control->generation() != m_generation)) {
@@ -174,7 +184,9 @@ bool VideoPreparationNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) 
         }
         if (preparation.phase != MediaAvStartupVideoPreparationPhase::ReleaseCommitted)
             return processProgress(invalid("Video preparation terminal precedes activation"));
-        if (auto status = m_lineage->authorizeRetainedControl(m_pending); !status) return processProgress(status);
+        if (!generationEnd.value()) {
+            if (auto status = m_lineage->authorizeRetainedControl(m_pending); !status) return processProgress(status);
+        }
         const bool terminalFlow = *flow == MediaControlBufferFlow::Terminal;
         auto terminal = std::move(m_pending);
         auto status = emitOutput(context, "frame", terminal);

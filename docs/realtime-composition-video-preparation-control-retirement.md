@@ -1,6 +1,6 @@
 # 视频准备节点的旧代控制失效
 
-状态：仅低频诊断获DESIGN PASS并完成实施，待双SOURCE复审及实流；共享旧控制行为修正尚未获实施授权。
+状态：rk493 已确认强失效后旧代 EndGeneration；共享修复已实施并获两位独立 SOURCE PASS，待 RKMPP 增量构建及真实流复验。
 
 ## 证据及边界
 
@@ -14,7 +14,7 @@ VideoPreparationNode:160的失败条件为flow无效或控制代次不等于m_ge
 
 [GStreamer事件设计](https://gstreamer.freedesktop.org/documentation/additional/design/events.html)要求EOS与数据有序，同时flush完成时清除旧EOS及pending消息。适用原则是已撤销代次的结束标记不得结束新代，也不应重新激活旧代；本仓库用精确generation purge和owner mailbox实现失效，不照搬跨线程codec操作。
 
-候选改为共享video lineage窄接口：仅接受经过classifyMediaControlBuffer验证的合法、显式非零EndGeneration，复用classifyObservation及原capture，返回明确Current/DropStale，不能让旧代以普通success伪装已授权。Preparation、Decode、Filter、FrameRate四入口统一使用；旧代只释放各自该控制，未来代失败，当前代仍受原阶段、代次和publication约束。EOF/Flush不扩大范围，不推测其代次。HardwareTransfer继续保留既有group arbitration对Retired的真实权限约束，不替换成局部代次判断。此方案待诊断证明现场控制身份并另行审查，当前不实施。
+候选改为共享video lineage窄接口：仅接受经过classifyMediaControlBuffer验证的合法、显式非零EndGeneration，复用classifyObservation及原capture，返回明确Current/DropStale，不能让旧代以普通success伪装已授权。Preparation、Decode、Filter、FrameRate四入口统一使用；旧代只释放各自该控制，未来代失败，当前代仍受原阶段、代次和publication约束。EOF/Flush不扩大范围，不推测其代次。HardwareTransfer继续保留既有group arbitration对Retired的真实权限约束，不替换成局部代次判断。rk493 已证明现场控制身份，两位独立审查通过后按该边界实施。
 不修改MediaRetainedControlFreshness：其capture和matches精确对象、stream及generation规则必须保持，purge清其weak引用。丢弃已退休输入控制与允许它提交是不同操作，不能以放宽matches让旧控制通过。公共pendingOutput也继续按原精确freshness和publication permit取消。
 
 线程与资源：沿现有单owner process/servicePurge顺序及lineage内部锁，无跨线程codec操作、不锁内调用group、不新增队列/状态/容量，不清其他任务数据；释放单个已失效控制引用。原phase错误、未来代错误、无效类型和无法授权的当前控制均保留。
@@ -30,3 +30,7 @@ VideoPreparationNode:160的失败条件为flow无效或控制代次不等于m_ge
 ## 诊断验证进度
 
 两位独立审查明确诊断DESIGN PASS与SOURCE PASS。RKMPP8核增量构建PID3638412，exit0，5/5目标完成，未运行local CLI。realtime CLI SHA256 a4f721516e57fd9818be4c4a10294c4034e1a05e72550baf0bf3764a52eea379。回退两源码与旧CLI位于目标out/rollback/rk492。本次不改控制行为，待真实流获取身份；新增reason仅覆盖request()新发起purge，不覆盖所有queued continuation日志。传输tar/构建日志记录后清理，诊断存在字符串与日志开销。
+
+## rk493 后共享修复
+
+现场 reason=HardDiscontinuity、EndGeneration(1)、node_generation=2 确认已退休控制。新增 MediaVideoLineageState::admitGenerationEnd，在同一 lineage 锁内验证、分类并仅对 Current capture；四入口在 drain 或准备阶段校验前 DropStale。无平台分支，不改 EOF/Flush、HardwareTransfer 或 matches。两位独立审查均 SOURCE PASS；Windows 存在共享逻辑影响，后续需同规格回归。目标机回退位于 out/rollback/rk494，未修改外部 FFmpeg。

@@ -311,8 +311,10 @@ void VideoFilterNode::resetRuntimeState() noexcept
         if (generationEnd.value()) {
             if (!m_lineageState->synchronized()) return processProgress(::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Video filter generation end requires a synchronized purge owner")));
-            if (auto status = m_lineageState->authorizeRetainedControl(frameBuffer); !status)
-                return processProgress(status);
+            auto disposition = m_lineageState->admitGenerationEnd(frameBuffer);
+            if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+            if (disposition.value() == MediaVideoLineageGenerationDisposition::DropStale)
+                return processProgress();
         }
         const bool eof = frameBuffer->isEof();
         if (eof && m_lineageState->eofEmitted) {
