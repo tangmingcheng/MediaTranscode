@@ -54,7 +54,7 @@ MediaGraphWorker::~MediaGraphWorker()
     if (m_started) {
         return ::media::Status::success();
     }
-    if (m_stopRequested || m_aborted) {
+    if (stopRequested() || m_aborted) {
         if (!m_started) m_exitToken->m_cancelledBeforeStart.store(true, std::memory_order_release);
         return ::media::Status::failure(::media::ErrorInfo::cancelled(
             "MediaGraphWorker start was cancelled by coordinated failure"));
@@ -77,7 +77,7 @@ MediaGraphWorker::~MediaGraphWorker()
 void MediaGraphWorker::requestStop() noexcept
 {
     m_startup.cancel();
-    m_stopRequested = true;
+    if (m_exitToken) m_exitToken->m_stopRequested.store(true, std::memory_order_release);
     m_wakeup.interrupt();
 }
 
@@ -90,7 +90,7 @@ void MediaGraphWorker::abort() noexcept
 {
     m_startup.cancel();
     m_aborted = true;
-    m_stopRequested = true;
+    if (m_exitToken) m_exitToken->m_stopRequested.store(true, std::memory_order_release);
     m_wakeup.interrupt();
     interrupt();
 }
@@ -100,7 +100,7 @@ void MediaGraphWorker::join()
     if (m_thread.joinable()) {
         m_thread.join();
     }
-    if (m_exitToken && !m_started && (m_stopRequested || m_aborted))
+    if (m_exitToken && !m_started && (stopRequested() || m_aborted))
         m_exitToken->m_cancelledBeforeStart.store(true, std::memory_order_release);
 }
 
@@ -121,7 +121,7 @@ bool MediaGraphWorker::exited() const noexcept
 
 bool MediaGraphWorker::stopRequested() const noexcept
 {
-    return m_stopRequested;
+    return m_exitToken && m_exitToken->stopRequested();
 }
 
 bool MediaGraphWorker::aborted() const noexcept
@@ -208,13 +208,13 @@ void MediaGraphWorker::recordWaitOutcome(MediaNodeWakeup::WaitOutcome outcome)
         ++m_metrics.deadlines;
         break;
     case MediaNodeWakeup::WaitOutcome::Interrupted:
-        if (!m_stopRequested && !m_aborted) {
+        if (!stopRequested() && !m_aborted) {
             if (recordFailure(::media::ErrorInfo::cancelled(
                     "worker wakeup was interrupted outside its coordinated stop")) !=
                 FailureDisposition::CoordinatedCancellation) ++m_metrics.errors;
             m_aborted = true;
         }
-        m_stopRequested = true;
+        if (m_exitToken) m_exitToken->m_stopRequested.store(true, std::memory_order_release);
         break;
     }
 }
@@ -259,7 +259,7 @@ void MediaGraphWorker::run()
             return;
         }
         m_startup.ready();
-        if (!m_startup.awaitCommit() || m_stopRequested || m_aborted) return;
+        if (!m_startup.awaitCommit() || stopRequested() || m_aborted) return;
     } catch (...) {
         m_startup.cancel();
         recordFailure(MediaWorkerStartupGate::currentException(), MediaGraphWorkerFailurePhase::Preparation);
@@ -281,12 +281,12 @@ void MediaGraphWorker::run()
     m_running = true;
     m_wakeup.reset();
 
-    while (!m_stopRequested && !m_aborted) {
+    while (!stopRequested() && !m_aborted) {
         const MediaNodeWakeup::Sequence observedSequence = m_wakeup.sequence();
         ++m_metrics.processCalls;
         auto result = m_node.process(m_context);
 
-        const bool cancellationRequested = m_stopRequested || m_aborted;
+        const bool cancellationRequested = stopRequested() || m_aborted;
         const bool interruptedByCancellation =
             !result && result.error().code == ::media::ErrorCode::Cancelled;
         if (cancellationRequested && interruptedByCancellation) {
