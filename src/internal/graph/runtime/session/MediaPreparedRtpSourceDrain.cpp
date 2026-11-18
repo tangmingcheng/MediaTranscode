@@ -71,11 +71,15 @@ MediaPreparedRtpSourceSession::consumeDeparture(MediaStreamKind kind,
     if (!authority) return R::failure(authority.error());
     const auto clock = group->clockEvidence();
     const auto* epoch = authority.value().epoch().playbackEpoch();
-    // Only a never-published source uses startup BYE semantics.
+    // A source without a published epoch uses ordinary protocol BYE handling.
     if (!epoch) return R::success(std::nullopt);
     auto disposition = classifyMediaAvGenerationEvidence(authority.value().reacquisition(),
         authority.value().epoch(), epoch->generation);
     if (!disposition) return R::failure(disposition.error());
+    // A retained playback epoch is not authority to drain the acquiring member.
+    // Let consume() validate and commit its BYE through ordinary RTCP handling.
+    if (disposition.value() == MediaAvGenerationEvidenceDisposition::Retired)
+        return R::success(std::nullopt);
     std::unique_lock lock(m_mutex);
     if (m_error) return R::failure(*m_error);
     auto selected = stream(kind);
