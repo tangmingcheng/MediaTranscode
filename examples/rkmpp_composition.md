@@ -1,6 +1,6 @@
 # RKMPP 四路合屏 C 调用示例
 
-`rkmpp_composition.c`直接调用公共 C API，不调用 CLI，也不创建第二套媒体管线。示例已在RKMPP目标机以C11 -Wall -Wextra -Werror编译并与当前三静态库链接成功；完整实流及最终包验收仍待完成。
+`rkmpp_composition.c`直接调用公共 C API，不调用 CLI，也不创建第二套媒体管线。示例已在RKMPP目标机以C11 -Wall -Wextra -Werror编译并与合并静态库链接；rk512/rk513完成四源120秒、音频输出、全失源持续输出及调用停止exit0。rk513原始音视频TS解码无告警，开发验证版适用边界见随包VALIDATION.md；不代表内容音画同步、NIC出线或长稳通过。
 
 使用同一包的头文件和静态库，按现场修改 main 中的显式配置；这些数值是演示部署，不是库默认值。示例接受两个地址：本机 RTP 绑定地址、接收端输出地址，例如 `./bin/rkmpp_composition 192.168.130.229 192.168.96.122`。端口及其他字段在 main 中逐项可见，改后重新编译。不使用不同版本的头文件或 archive 混搭。
 
@@ -18,7 +18,7 @@
 
 | 字段 | 含义与单位 | 示例/来源 |
 |---|---|---|
-| video.bind_address | 本机接收网卡地址，不是发送方地址 | argv[1]，按路可不同 |
+| video.bind_address | 本机接收网卡单播地址，不是发送方地址；不接受0.0.0.0 | argv[1]，按路可不同 |
 | video.port | 正偶数RTP端口，RTCP使用相邻port+1 | 61030、61040、61020、61050；避免端口冲突 |
 | video.codec | 输入实际编码，H264或HEVC枚举 | 第四路HEVC，其余H264 |
 | video.payload_type | RTP PT（0–127），必须与发送端/SDP一致 | 96 |
