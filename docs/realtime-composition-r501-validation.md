@@ -46,3 +46,8 @@ CPU整机口径平均2.033666%、峰7.126437%（22核）；RSS起201502720、末
 清理清单：composition-r501-cli.log、cli-error.log、monitor.log、output.sdp、source0/source1/source2各.log/.out、vlc.log，以及native-2026-11-18-13h32m33s873.png，共12项；仅VLC37848仍待清理，指定源保留。
 
 清理完成：12项删除，五个精确PID无残留。
+
+## 下一定位边界（官方依据）
+
+[NVIDIA异步执行指南](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html)说明nonblocking只解除与默认stream的隐式同步，不提供延迟上限；当前adapter已经使用私有nonblocking stream，不能重复添加该开关宣称修复。[NVIDIA Nsight Systems分析指南](https://docs.nvidia.com/nsight-systems/AnalysisGuide/index.html)提供WDDM队列/调度观测；[Microsoft GPUView](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/using-gpuview)支持CPU/GPU及DMA处理关联。下一步采集同线程、context、stream的驱动时间线，以区分提交排队、GPU执行及host恢复；本机已发现Nsight Systems2024.6.2和wpr，尚未采集，不能先断言WDDM为根因。不更改本机FFmpeg，也不先修改TS准入。
+工具能力核验：Nsight2024.6.2 status --environment在普通及sandbox提权执行下均报告Administrator privileges: No、Sampling Environment: Fail。工具提权不等于Windows管理员token；目前不能声称WDDM/CPU采样已可用。CUDA API追踪是否可在关闭sampling/cpuctxsw下工作仍需独立验证，不据此阻塞RKMPP矩阵。
