@@ -18,6 +18,10 @@
 
 r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程统计报Thread32Next native0；r506同产物直接启动正常统计/出画/全黑/caller_stop0，限定为启动环境相关诊断，不计完整120秒验收。不能为追踪放宽生产校验，也未获得r501稳态GPU时间线。下一步先推进独立音频失源/恢复及接收端证据；Windows时间线等待可用的非干扰诊断途径，原期限问题保持开放。
 
+## 本轮交付要求与当前阻塞
+
+用户要求音频验证后在RKMPP出库，附调用示例及所有参数含义。examples/rkmpp_composition.c/.md已提交6ed50e3f，双独立SOURCE PASS且目标C11编译链接成功。rk508录制支持静音/恢复，但视频先退役、音频后BYE导致退出1；共享修复21fc6bb8已双复审并RKMPP增量构建成功，rk509正在复验。库包需包含匹配头/合并静态库/示例源码和编译运行方法/参数表/版本及依赖/完整SHA256SUMS；不能将未通过音频门禁的产物标记合格。正式包还需重新链接实际示例并实流调用，Windows共享修复回归随后完成。
+
 ## 历史进度：2026-11-16 rk423
 
 RKMPP四路HEVC CBR8Mbps MPEGTS/UDP曾完成出画、全失源及两路重入；记录见[rk422](realtime-composition-rk422-validation.md)和[rk423](realtime-composition-rk423-validation.md)。该证据保留，不用较新H264 VBR链路覆盖其不同输出范围。
