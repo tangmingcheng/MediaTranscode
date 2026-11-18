@@ -18,7 +18,7 @@ rk517完成三源H264/AAC→HEVC VBR8–12Mbps/720p30/AAC192kbps的三格、全�
 
 r514 Windows同规格四源在晚BYE前再次上游合成/编码迟到，exit1，详见r514；WPR GPU.Light.File已尝试启动，但Windows以0xc5585011拒绝，无有效跟踪。rk515 RKMPP双源H264/AAC→HEVC CBR8Mbps/720p30完成左右双格、全黑、右侧AV重入、再全黑及caller_stop0，pressure4和录制DTS告警保留；只补该有限门禁，不关闭Windows问题。
 
-当前沿本会话限定范围开发验证和本地提交；未推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
+当前按最新仓库指令开发验证、提交并推送本轮分支；PR保持草稿，未合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
 
 r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程统计报Thread32Next native0；r506同产物直接启动正常统计/出画/全黑/caller_stop0，限定为启动环境相关诊断，不计完整120秒验收。不能为追踪放宽生产校验，也未获得r501稳态GPU时间线。下一步先推进独立音频失源/恢复及接收端证据；Windows时间线等待可用的非干扰诊断途径，原期限问题保持开放。
 
@@ -26,7 +26,7 @@ r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程�
 
 rk516三源HEVC VBR在所选AV启动窗口超时，随后RKMPP解码send_packet内反复等待导致abort join无法完成；两份相隔约225秒的符号栈已归档，最终精确清理exit137，不计通过。下一步调查实际FFmpeg RKMPP/MPP有界等待及共享解码中断合同，分别定位首发启动超时与失败收尾；不调超时或跳过join。Windows WPR启动因0xc5585011性能跟踪权限失败，无跟踪会话/产物。详见rk516及r514记录。
 
-最新用户要求：完整验证功能后再按deployment.md打包。暂停后续打包；已有开发验证版不作为正式交付，不替代完整门禁。当前继续功能验证和缺陷修复，全部通过后重新按部署文档生成最终包。
+最新用户要求：完整验证功能后再按deployment.md打包。参照用户指定旧包`/home/tang/packages/media-transcode-beta-rkmpp-475eb8e2-20260910`，最终SDK与portable必须由仓库脚本生成，详见deployment.md。暂停后续打包；已有开发验证版不作为正式交付，不替代完整门禁。当前继续功能验证和缺陷修复，全部通过后重新按部署文档生成最终包。RKMPP退出阻塞的官方合同及未决接线见[取消调查](realtime-composition-rkmpp-decoder-cancellation-plan.md)。
 
 用户要求音频验证后在RKMPP出库，附调用示例及全部参数含义。共享晚BYE修复21fc6bb8已双独立源码PASS、RKMPP增量和Windows Release全量构建成功；rk510有限音频失源/恢复与晚BYE运行双审PASS。rk512/rk513随包C示例原四源120秒、全失源持续输出和调用stop/release exit0；rk513原始接收TS音视频DTS回退0/完整解码无告警，对应录像启动回退已用唯一AAC hash限定在VLC录制路径，双独立有限PASS。
 

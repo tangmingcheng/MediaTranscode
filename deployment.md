@@ -10,6 +10,18 @@
 
 ## Linux / RKMPP 交付
 
+### 当前合屏交付要求
+
+用户指定参考 `/home/tang/packages/media-transcode-beta-rkmpp-475eb8e2-20260910`。2026-11-18只读核验：该目录既有SDK包，也有`package_portable.sh`生成的`dist/*-portable-aarch64`及tar.gz/sha256；portable包含FFmpeg、MPP、RGA等动态依赖，不应以仅静态业务库包替代。
+
+完整功能验收通过后才执行打包。最终流程必须在仓库`tools/packaging/`脚本化维护：从同一构建生成SDK（库、匹配头文件、实时CLI、可编译C调用示例及逐参数说明），再生成portable运行包和归档，不能靠手工补文件完成交付。现有下述脚本仅实现SDK骨架，portable与完整文档生成尚待接入，不代表已经满足交付要求。
+
+- 保留旧包的`bin/lib/include/internal/examples`组织及README、VERSION；随包提供构建/打包入口、实际验收命令记录、`env.sh`、`run-in-sdk.sh`、`check_runtime.sh`。
+- 从当前验收产物与实际加载路径取得依赖、版本及SONAME，复制依赖闭包；不硬编码旧FFmpeg版本，不覆盖目标机安装前缀，不附带glibc/系统loader。
+- 只修改包内复制品的RUNPATH：bin使用`$ORIGIN/../lib`，共享库使用`$ORIGIN`；清除外部`LD_LIBRARY_PATH`后核对解析路径，缺库或错用系统同名媒体库必须失败。
+- 输出目录必须全新，保留旧包回退；记录源码提交、构建架构、依赖来源、脚本版本及产物哈希。生成覆盖全部正式文件的SHA256SUMS（清单自身除外），同时核验符号链接目标；执行`sha256sum -c`，再生成tar.gz和独立归档校验。
+- 正式交付前从新目录解包，编译同包C示例并执行真实realtime链路；不得把静态校验或旧包通过记录替代新包运行验证。仅本轮合屏必需示例和工具纳入包，不能因旧包存在其他二进制而混入不匹配旧产物。
+
 Linux 使用 pkg-config 查找 FFmpeg；aarch64 额外通过 [FFmpeg 发现逻辑](cmake/MediaTranscodeFFmpegDiscovery.cmake) 比对 PATH 中 FFmpeg 报告的六个库版本与开发包版本。项目关闭 RPATH，运行库选择由部署环境负责。版本匹配不代替实际加载路径和硬件链路验证；交付时核对 `ldd` 与运行进程的 `/proc/<pid>/maps`，确认 FFmpeg、MPP、RGA 动态库来自预期环境；头文件来源另通过构建缓存与实际编译命令中的包含路径核对。
 
 现有 [Beta 打包脚本](tools/packaging/package_media_transcode_beta.sh) 接收 `<release-build-dir> <package-dir>`；目标目录必须尚不存在。它读取构建缓存中的源码目录取得匹配头文件，并需要三个已构建 archive 和 realtime CLI：
