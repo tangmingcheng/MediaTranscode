@@ -1,6 +1,8 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 rk516失败，完整验证后再打包
+## 当前进度：2026-11-18 rk517有限观察完成，完整验证后再打包
+
+rk517完成三源H264/AAC→HEVC VBR8–12Mbps/720p30/AAC192kbps的三格、全黑、源0/2完整120秒重入、再次全黑及caller_stop0；pressure8和录制DTS告警保留。未复现rk516，不关闭旧故障。源码a2c3a15e已双审并推送codex/composition-startup-diagnostics，草稿PR#35保持不可合并；最新用户指令允许本轮提交推送，历史未推送说明仅为当时范围。详见[rk517](realtime-composition-rk517-validation.md)。
 
 四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
@@ -11,10 +13,10 @@
 | Windows共享回归 | r499已完成Release全量重建及同规格四源两轮生命周期，日志正常停止/errors0/pressure0/payload回零；未获取数值退出码，见r499记录；其他矩阵仍待 |
 | 双/三源矩阵 | r500双格HEVC CBR发送超期FAIL；r501三格H264 CBR同AU canvas/编码延迟导致TS接纳超期FAIL；rk502同规格RKMPP三格/全黑/所选源恢复/再次全黑/caller_stop0有限PASS，pressure7保留；Windows与RKMPP仍需补左右双格、三源四宫格空格黑，每源完整120秒；分配H264 CBR、HEVC CBR/VBR覆盖 |
 | 选定音频 | rk510已验证独立失音/恢复与晚BYE；rk513原始TS与录制对照限定启动回退于录制路径。内容级A/V和完整时序/失源矩阵仍待，不能仅凭内部drift |
-| C API/旧ABI | 已有rk430正向直接C调用、rk431负例、rk432 aarch64布局、rk434启动期回调证据；rk433旧消费者出画但源结束超时FAIL。补最新库回归、Windows x64 ABI和运行期回调stop；生命周期是release，无destroy |
+| C API/旧ABI | 已有rk430正向直接C调用、rk431负例、rk432 aarch64布局、rk434启动期回调证据；rk433旧消费者出画但源结束超时FAIL。rk512/rk513已补当前开发库有限生命周期证据；仍欠Windows x64 ABI、旧消费者失败回归和运行期回调stop；生命周期是release，无destroy |
 | 失败与可靠性 | 保留rk495/r500/r501不同阶段的期限失败、rk498 pressureFailures=9、异常退出、重复恢复/RSS和NIC出线证据，不用一次未复现关闭 |
 
-r514 Windows同规格四源在晚BYE前再次上游合成/编码迟到，exit1，详见r514；WPR GPU.Light.File能力已核实但尚未运行。rk515 RKMPP双源H264/AAC→HEVC CBR8Mbps/720p30完成左右双格、全黑、右侧AV重入、再全黑及caller_stop0，pressure4和录制DTS告警保留；只补该有限门禁，不关闭Windows问题。
+r514 Windows同规格四源在晚BYE前再次上游合成/编码迟到，exit1，详见r514；WPR GPU.Light.File已尝试启动，但Windows以0xc5585011拒绝，无有效跟踪。rk515 RKMPP双源H264/AAC→HEVC CBR8Mbps/720p30完成左右双格、全黑、右侧AV重入、再全黑及caller_stop0，pressure4和录制DTS告警保留；只补该有限门禁，不关闭Windows问题。
 
 当前沿本会话限定范围开发验证和本地提交；未推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
 
@@ -42,7 +44,7 @@ RKMPP四路HEVC CBR8Mbps MPEGTS/UDP曾完成出画、全失源及两路重入；
 
 当前回到完整存储准入闭环：补齐F/U/G实际backing与early/final共享holder事实，独立规划Cv/Ca与Nv/Na，并以真实消费者贯通SourcePresentation→DecodedPresentationSpan→Prepared；非cadence门禁仍保留，不用cadence测试替代该路径。worker High优先级未消费的确定契约缺口另有 [方案](realtime-worker-priority-contract-plan.md)，尚未实施或证明与发送失败有因果关系。
 
-完整Windows矩阵、内容级A/V与静音、直接C API/旧ABI、周期维护，以及Windows通过后的RKMPP仍未完成。详见 [统一预算计划](realtime-composition-full-storage-admission-plan.md) 与根目录plan.md。当前仅本地开发验证，不推送、合并或部署，不扩展外部FFmpeg修复。
+完整Windows矩阵、内容级A/V与静音、直接C API/旧ABI、周期维护，以及Windows通过后的RKMPP仍未完成。详见 [统一预算计划](realtime-composition-full-storage-admission-plan.md) 与根目录plan.md。当前仅本地开发验证，不合并或部署，不扩展外部FFmpeg修复。
 
 ## 历史进度：r312
 
@@ -400,7 +402,7 @@ r152沿用r148 Release完成三源realtime CLI原规格复验：三源120秒/360
 
 payload205107预约=释放、结束0B/0对象；账本背压尝试61660，encoded差1包、AAC关闭2帧、mux pending188B仍非完整drain。250次外部监控CPU均值2.171767%、WS峰265408512B。两独立有限证据PASS，整体75/FAIL不变。
 
-31件本轮产物记录后全部清理，原源和Release保留，宿主媒体/分析进程无残留。接下来推进真实C调用方的配置释放、事件/停止/取消与旧单源ABI运行门禁；恢复桌面后补现场验收，旧间歇期限仍待同规格证据定位。完整矩阵、内容AV、长稳及Windows后RKMPP保持开放，不推送、合并或部署。
+31件本轮产物记录后全部清理，原源和Release保留，宿主媒体/分析进程无残留。接下来推进真实C调用方的配置释放、事件/停止/取消与旧单源ABI运行门禁；恢复桌面后补现场验收，旧间歇期限仍待同规格证据定位。完整矩阵、内容AV、长稳及Windows后RKMPP保持开放，不合并或部署。
 
 ## 前次验证进度（2026-10-10，r144有限证据PASS／完整FAIL）
 
@@ -589,7 +591,7 @@ r92：原始RTP AU的SSRC/tracker代际/共用序号已贯通packet buffer；BYE
 
 ### 2026-10-05 r93：原规格诊断复验
 
-已完成binder稀疏状态边界日志、双独立审查PASS、Release全量重建exit0。四源V+V+V+AV（音源3）H264/AAC→HEVC VBR 8000/8000/12000kbps、1280×720/30、AAC CBR192kbps、MPEG-TS/RTP：初始四源及末位AV重入均完整120秒自然exit0，四格→全黑→仅右下恢复→全黑，输出持续、errors0。本轮未复现r91，不能视为确定修复或完整验收。仍待binder原始身份消费、全成员owner边界、首采/重采期限、音频线端验证、内存长稳、停止与C API、Windows通过后的RKMPP。实际命令与证据见wiring-runtime的r93；记录后清理14件产物和精确测试进程，保留源，不推送/合并/部署。
+已完成binder稀疏状态边界日志、双独立审查PASS、Release全量重建exit0。四源V+V+V+AV（音源3）H264/AAC→HEVC VBR 8000/8000/12000kbps、1280×720/30、AAC CBR192kbps、MPEG-TS/RTP：初始四源及末位AV重入均完整120秒自然exit0，四格→全黑→仅右下恢复→全黑，输出持续、errors0。本轮未复现r91，不能视为确定修复或完整验收。仍待binder原始身份消费、全成员owner边界、首采/重采期限、音频线端验证、内存长稳、停止与C API、Windows通过后的RKMPP。实际命令与证据见wiring-runtime的r93；记录后清理14件产物和精确测试进程，保留源，不合并/部署。
 
 ### 2026-10-05 r94：媒体owner屏障与预检遗漏修正
 
@@ -599,7 +601,7 @@ r92：原始RTP AU的SSRC/tracker代际/共用序号已贯通packet buffer；BYE
 
 19文件最终双审PASS、Release全量重建exit0。r95原四源V+V+V+AV及末位AV重入均完整120秒自然exit0；HEVC VBR 8000/8000/12000kbps、1280×720/30、AAC CBR192kbps、MPEG-TS/RTP，四格→全黑→右下恢复→全黑，两次owner/binder逐流cutoff一致、无expired、运行错误0。r96同规格单路HEVC CBR8000kbps播放正常，源exit0，BYE后CLI经既有ProgressTimeout自然exit1；payload最终0B/0对象、71903预留=释放，不能标为优雅结束成功。独立复核确认无证据将该既有退出归因本次修改。r95/r96共20件临时产物及精确进程已清理。
 
-剩余门禁：全部clock分支退休、已激活源的等待期限、端到端音频/同步、内存长稳、显式停止/可信EOF、C API及Windows通过后的RKMPP；本轮有限证据不等于合屏完成，不提高质量评分，不推送/合并/部署。
+剩余门禁：全部clock分支退休、已激活源的等待期限、端到端音频/同步、内存长稳、显式停止/可信EOF、C API及Windows通过后的RKMPP；本轮有限证据不等于合屏完成，不提高质量评分，不合并/部署。
 
 ### r97：已激活源等待音频SR的确定失败
 
@@ -627,7 +629,7 @@ r100双审修正：POSIX进程任意线程接收SIGINT/TERM会使网络poll返�
 
 四文件信号适配器最终双审PASS、Release全量重建exit0。r100四源120秒播放/黑场正常，但PTY Ctrl+C终止宿主，停止证据不通过；r101无源预检先超时，不算信号验证；r102独立控制台定向Ctrl+C得到CallerStop/Cancelled exit1，证明合屏准备取消。r103四源完整120秒自然exit0，四格→全黑持续→定向Ctrl+C后CLI exit0，69ms内部stop段，workers0、payload0B/0objects、120996预留=释放，双独立运行证据复核PASS。仅关闭Windows全失活后取消停止，不代表活动媒体中途停止、可信EOF排空、全堆/GPU泄漏审计或POSIX实测。stderr滤镜属性提示和AAC尾帧未排空已保留。完整命令、指标与26件临时产物清理见wiring-runtime。
 
-剩余：协议/playback非协议重采集映射、完整clock退休、线端静音/音频质量/同步、长稳、其他停止阶段、C API和Windows通过后的RKMPP。保持75/100及完整功能未通过，不推送/合并/部署。
+剩余：协议/playback非协议重采集映射、完整clock退休、线端静音/音频质量/同步、长稳、其他停止阶段、C API和Windows通过后的RKMPP。保持75/100及完整功能未通过，不合并/部署。
 
 
 ### r104失败与r105诊断
