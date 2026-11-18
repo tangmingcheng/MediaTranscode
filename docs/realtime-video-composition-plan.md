@@ -16,6 +16,8 @@
 
 当前沿本会话限定范围开发验证和本地提交；未推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
 
+r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程统计报Thread32Next native0；r506同产物直接启动正常统计/出画/全黑/caller_stop0，限定为启动环境相关诊断，不计完整120秒验收。不能为追踪放宽生产校验，也未获得r501稳态GPU时间线。下一步先推进独立音频失源/恢复及接收端证据；Windows时间线等待可用的非干扰诊断途径，原期限问题保持开放。
+
 ## 历史进度：2026-11-16 rk423
 
 RKMPP四路HEVC CBR8Mbps MPEGTS/UDP曾完成出画、全失源及两路重入；记录见[rk422](realtime-composition-rk422-validation.md)和[rk423](realtime-composition-rk423-validation.md)。该证据保留，不用较新H264 VBR链路覆盖其不同输出范围。
