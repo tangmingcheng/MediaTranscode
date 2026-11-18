@@ -1,6 +1,6 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 r501 / rk502
+## 当前进度：2026-11-18 rk513 / RKMPP开发验证版库
 
 四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
@@ -20,7 +20,9 @@ r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程�
 
 ## 本轮交付要求与当前阻塞
 
-用户要求音频验证后在RKMPP出库，附调用示例及所有参数含义。examples/rkmpp_composition.c/.md已提交6ed50e3f，双独立SOURCE PASS且目标C11编译链接成功。rk508录制支持静音/恢复，但视频先退役、音频后BYE导致退出1；共享修复21fc6bb8已双复审并RKMPP增量构建成功，rk509正在复验。库包需包含匹配头/合并静态库/示例源码和编译运行方法/参数表/版本及依赖/完整SHA256SUMS；不能将未通过音频门禁的产物标记合格。正式包还需重新链接实际示例并实流调用，Windows共享修复回归随后完成。
+用户要求音频验证后在RKMPP出库，附调用示例及全部参数含义。共享晚BYE修复21fc6bb8已双独立源码PASS、RKMPP增量和Windows Release全量构建成功；rk510有限音频失源/恢复与晚BYE运行双审PASS。rk512/rk513随包C示例原四源120秒、全失源持续输出和调用stop/release exit0；rk513原始接收TS音视频DTS回退0/完整解码无告警，对应录像启动回退已用唯一AAC hash限定在VLC录制路径，双独立有限PASS。
+
+开发验证版已在RKMPP生成匹配头/合并静态库/可执行示例/中文参数表、README、VERSION、依赖和SHA256SUMS，详见[库包交付记录](realtime-composition-rkmpp-library.md)。仍未宣称完整生产完成：内容级A/V、长稳、NIC出线、历史期限问题以及21fc6bb8的Windows真实流回归仍待；Windows本轮只完成重建。未更改本机FFmpeg，未推送、合并或系统部署。
 
 ## 历史进度：2026-11-16 rk423
 
