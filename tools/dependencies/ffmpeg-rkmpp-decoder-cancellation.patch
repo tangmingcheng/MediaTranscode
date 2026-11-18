@@ -1,0 +1,167 @@
+--- a/libavcodec/rkmppdec.c
++++ b/libavcodec/rkmppdec.c
+@@ -186,6 +186,52 @@
+
+         close(fd);
+     }
++}
++
++/* Keep the backend's existing pending-input wait cadence. This is a
++ * cooperative polling interval, not a media deadline or an EAGAIN escape. */
++#define RKMPP_PENDING_WAIT_MS 100
++
++/* Private ABI v1: H.264/HEVC copied-input decode loops only. This does not
++ * promise interruption of MPP reset/destroy or a kernel/driver call. */
++unsigned avcodec_rkmpp_interrupt_version(const AVCodecContext *avctx);
++int avcodec_rkmpp_set_interrupt_callback(AVCodecContext *avctx, unsigned version,
++                                       int (*callback)(void *), void *opaque);
++
++unsigned avcodec_rkmpp_interrupt_version(const AVCodecContext *avctx)
++{
++    if (!avctx || !avcodec_is_open(avctx) || !avctx->codec ||
++        !avctx->codec->name || !avctx->priv_data ||
++        (strcmp(avctx->codec->name, "h264_rkmpp") &&
++         strcmp(avctx->codec->name, "hevc_rkmpp")))
++        return 0;
++    return 1;
++}
++
++int avcodec_rkmpp_set_interrupt_callback(AVCodecContext *avctx, unsigned version,
++                                       int (*callback)(void *), void *opaque)
++{
++    RKMPPDecContext *r;
++    MppPollType input_timeout = MPP_POLL_NON_BLOCK;
++    if (version != 1 || avcodec_rkmpp_interrupt_version(avctx) != version)
++        return AVERROR(ENOSYS);
++    if (!callback || !opaque)
++        return AVERROR(EINVAL);
++    r = avctx->priv_data;
++    if (r->decode_started || r->interrupt_callback)
++        return AVERROR(EBUSY);
++    /* The paired MPP EOS-input patch makes the pre-enqueue EOS reservation
++     * obey this same input timeout. No accepted packet is retried here. */
++    if (r->mapi->control(r->mctx, MPP_SET_INPUT_TIMEOUT, &input_timeout) != MPP_OK)
++        return AVERROR_EXTERNAL;
++    r->interrupt_opaque = opaque;
++    r->interrupt_callback = callback;
++    return 0;
++}
++
++static int rkmpp_interrupted(const RKMPPDecContext *r)
++{
++    return r->interrupt_callback && r->interrupt_callback(r->interrupt_opaque);
+ }
+
+ static av_cold int rkmpp_decode_close(AVCodecContext *avctx)
+@@ -880,8 +926,14 @@
+     RKMPPDecContext *r = avctx->priv_data;
+     MppFrame mpp_frame = NULL;
+     int ret;
++    const int interruptible_wait = r->interrupt_callback &&
++        (timeout == MPP_TIMEOUT_BLOCK || timeout > RKMPP_PENDING_WAIT_MS);
++    if (interruptible_wait)
++        timeout = RKMPP_PENDING_WAIT_MS;
+
+ retry_output:
++    if (rkmpp_interrupted(r))
++        return AVERROR_EXIT;
+     /* should not provide any frame after EOS */
+     if (r->eof)
+         return AVERROR_EOF;
+@@ -910,7 +962,13 @@
+         }
+     }
+
++    if (rkmpp_interrupted(r)) {
++        ret = AVERROR_EXIT;
++        goto exit;
++    }
+     if (!mpp_frame) {
++        if (interruptible_wait)
++            goto retry_output;
+         if (timeout != MPP_TIMEOUT_NON_BLOCK)
+             av_log(avctx, AV_LOG_DEBUG, "Timeout getting decoded frame\n");
+         return AVERROR(EAGAIN);
+@@ -1018,6 +1076,8 @@
+         /* no more new pkts after EOS, retry to get frame */
+         if (r->draining) {
+             mpp_frame_deinit(&mpp_frame);
++            if (r->interrupt_callback)
++                goto retry_output;
+             return rkmpp_get_frame(avctx, frame, MPP_TIMEOUT_MAX);
+         }
+         ret = AVERROR(EAGAIN);
+@@ -1080,7 +1140,8 @@
+     }
+
+ exit:
+-    if ((avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) &&
++    if (((avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) ||
++         (r->interrupt_callback && r->draining)) &&
+         ret == AVERROR(EAGAIN) && mpp_frame) {
+         /* Discard/info-change is consumed output, not an empty output queue. */
+         mpp_frame_deinit(&mpp_frame);
+@@ -1108,6 +1169,9 @@
+     MppPacket mpp_pkt = NULL;
+     int ret;
+
++    if (rkmpp_interrupted(r))
++        return AVERROR_EXIT;
++
+     /* unlike other video codecs, MJPEG decoder's I/O is 1-in-1-out,
+      * there's no need to send EOS and drain internally enqueued frames */
+     if (avctx->codec_id == AV_CODEC_ID_MJPEG) {
+@@ -1298,6 +1362,10 @@
+     AVPacket *pkt = &r->last_pkt;
+     int ret;
+
++    r->decode_started = 1;
++    if (rkmpp_interrupted(r))
++        return AVERROR_EXIT;
++
+     if (r->info_change && !r->buf_group)
+         return AVERROR_EOF;
+
+@@ -1312,6 +1380,10 @@
+     }
+
+     while (1) {
++        if (rkmpp_interrupted(r)) {
++            ret = AVERROR_EXIT;
++            goto exit;
++        }
+         if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
+             /* Drain before every single submission. Continue within this call
+              * when needed to preserve libavcodec send/receive progress; never
+@@ -1330,7 +1402,7 @@
+                     /* Pending EOS still needs decoder input credit. Drain with
+                      * the same bounded wait as a pending media packet; never
+                      * block waiting for an EOS that has not been accepted. */
+-                    ret = rkmpp_get_frame(avctx, frame, 100);
++                    ret = rkmpp_get_frame(avctx, frame, RKMPP_PENDING_WAIT_MS);
+                     if (ret == AVERROR(EAGAIN))
+                         continue;
+                     goto exit;
+@@ -1352,7 +1424,7 @@
+             ret = rkmpp_send_packet(avctx, pkt);
+             if (ret == AVERROR(EAGAIN)) {
+                 /* some streams might need more packets to start returning frames */
+-                ret = rkmpp_get_frame(avctx, frame, 100);
++                ret = rkmpp_get_frame(avctx, frame, RKMPP_PENDING_WAIT_MS);
+                 if (ret != AVERROR(EAGAIN))
+                     goto exit;
+             } else if (ret < 0) {
+--- a/libavcodec/rkmppdec.h
++++ b/libavcodec/rkmppdec.h
+@@ -63,6 +63,11 @@
+     int            info_change;
+     int            got_frame;
+     int            use_rfbc;
++
++    /* Registered by the codec owner before the first decode call. */
++    int          (*interrupt_callback)(void *);
++    void          *interrupt_opaque;
++    int            decode_started;
+
+     int            deint;
+     int            afbc;
