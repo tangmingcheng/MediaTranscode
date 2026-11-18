@@ -2,26 +2,28 @@
 
 #include "internal/graph/model/MediaQueuePolicy.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/storage/MediaFixedCapacityStorage.h"
 #include "media_transcode/Result.h"
 
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
 #include <cstddef>
 #include <deque>
 #include <span>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
 class MediaBlockingQueueStorage final {
 public:
     using PreparationAllocator = void (*) (
-        std::vector<MediaBufferRef>& buffers,
-        std::size_t capacity);
+        MediaFixedCapacityStorage<MediaBufferRef>& buffers,
+        std::size_t capacity, std::pmr::memory_resource& resource);
 
     class PreparedPush final {
     public:
-        PreparedPush() = default;
+        explicit PreparedPush(MediaLineageAllocationScope allocation)
+            : m_allocation(std::move(allocation)) {}
         PreparedPush(PreparedPush&&) noexcept = default;
-        PreparedPush& operator=(PreparedPush&&) noexcept = default;
+        PreparedPush& operator=(PreparedPush&& other) noexcept;
         PreparedPush(const PreparedPush&) = delete;
         PreparedPush& operator=(const PreparedPush&) = delete;
 
@@ -31,15 +33,16 @@ public:
 
     private:
         friend class MediaBlockingQueueStorage;
-        std::vector<MediaBufferRef> m_buffers;
+        MediaLineageAllocationScope m_allocation;
+        MediaFixedCapacityStorage<MediaBufferRef> m_buffers;
     };
 
     MediaBlockingQueueStorage(const MediaQueuePolicy& policy,
                               PreparationAllocator preparationAllocator);
 
-    static void reserveWithDefaultAllocator(
-        std::vector<MediaBufferRef>& buffers,
-        std::size_t capacity);
+    static void allocatePreparedStorage(
+        MediaFixedCapacityStorage<MediaBufferRef>& buffers,
+        std::size_t capacity, std::pmr::memory_resource& resource);
 
     bool valid() const noexcept;
     bool supportsPreparedPush() const noexcept;
@@ -54,7 +57,7 @@ public:
     void clear() noexcept;
 
     ::media::Result<PreparedPush> prepare(
-        std::span<const MediaBufferRef> buffers) const;
+        std::span<const MediaBufferRef> buffers, MediaLineageAllocationScope allocation) const;
     void publish(PreparedPush& prepared) noexcept;
 
 private:
@@ -64,7 +67,7 @@ private:
     MediaQueueStorageMode m_mode = MediaQueueStorageMode::Unknown;
     PreparationAllocator m_preparationAllocator = nullptr;
     std::deque<MediaBufferRef> m_deque;
-    std::vector<MediaBufferRef> m_ring;
+    MediaFixedCapacityStorage<MediaBufferRef> m_ring;
     std::size_t m_ringHead = 0;
     std::size_t m_ringSize = 0;
 };

@@ -16,13 +16,19 @@ enum class MediaStartupReleaseTransactionKind {
 };
 
 class MediaStartupReleaseTransactionBuffer final : public MediaBuffer {
+    class ConstructionKey final {
+        friend class MediaStartupReleaseTransactionBuffer;
+        ConstructionKey() = default;
+    };
 public:
-    static ::media::Result<MediaBufferRef> create(MediaBufferRef release);
+    using AllocationAllocator = MediaLineageAllocator<MediaStartupReleaseTransactionBuffer>;
+    static ::media::Result<MediaBufferRef> create(
+        const MediaStartupSharedObjectPlan& storage, MediaBufferRef release);
     static ::media::Result<MediaBufferRef> reanchor(
         const MediaStartupReleaseTransactionBuffer& transaction,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
-    static ::media::Result<MediaBufferRef> createControl(MediaBufferRef control);
+        MediaPlaybackActivation activation);
+    static ::media::Result<MediaBufferRef> createControl(
+        const MediaStartupSharedObjectPlan& storage, MediaBufferRef control);
 
     MediaBufferType type() const noexcept override;
     MediaStartupReleaseTransactionKind transactionKind() const noexcept;
@@ -31,11 +37,17 @@ public:
     const MediaControlBuffer* control() const noexcept;
     std::uint64_t releaseIdentity() const noexcept;
 
-private:
     MediaStartupReleaseTransactionBuffer(
+        ConstructionKey,
+        MediaStartupSharedObjectPlan storage,
         MediaStartupReleaseTransactionKind transactionKind,
         MediaBufferRef payload,
         std::uint64_t releaseIdentity);
+private:
+    static ::media::Result<MediaBufferRef> allocateRelease(
+        const MediaStartupSharedObjectPlan& storage, MediaBufferRef release, std::uint64_t identity);
+
+    const MediaStartupSharedObjectPlan m_storage;
     const MediaStartupReleaseTransactionKind m_transactionKind;
     const MediaBufferRef m_payload;
     const std::uint64_t m_releaseIdentity;

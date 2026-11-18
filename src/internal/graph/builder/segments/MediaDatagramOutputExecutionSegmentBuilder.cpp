@@ -55,11 +55,13 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
     if (auto available = validateSessionAvailable(graph, options.sessionKey); !available) {
         return Result::failure(available.error());
     }
+    auto declaration=MediaOutputSegmentPlanner::execution(*options.edgePolicies, *std::pmr::new_delete_resource());
+    if(!declaration)return Result::failure(declaration.error());
     const MediaNodeId source = graph.addNode(
-        MediaNodeKind::DatagramTransportPlanSource,
+        *declaration.value().kind(MediaOutputSegmentRole::TransportPlan),
         options.prefix + ".transport.plan", "Activated datagram transport plan");
     const MediaNodeId sender = graph.addNode(
-        MediaNodeKind::ScheduledDatagramSender,
+        *declaration.value().kind(MediaOutputSegmentRole::Sender),
         options.prefix + ".transport.sender",
         "Common GCRA-paced nonblocking datagram sender");
     if (!source.isValid() || !sender.isValid()) {
@@ -98,42 +100,12 @@ MediaDatagramOutputExecutionSegmentBuilder::build(
         MediaEdgeKind::Metadata, MediaPayloadKind::DatagramTransportPlan,
         true, true);
     if (!output) return Result::failure(output.error());
-    auto connected = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, options.activation.node, options.activation.port,
-        source, "activation", "activation -> datagram transport plan",
-        options.edgePolicies->atomicMetadata);
-    if (!connected) return Result::failure(connected.error());
-    connected = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, source, "plan", sender, "plan",
-        "transport plan -> common sender", options.edgePolicies->atomicMetadata);
-    if (!connected) return Result::failure(connected.error());
-    return Result::success({source, sender});
-}
-
-::media::Status MediaDatagramOutputExecutionSegmentBuilder::connectWireSource(
-    MediaGraph& graph,
-    const MediaDatagramOutputExecutionSegmentResult& execution,
-    MediaEndpoint wireSource,
-    const MediaEdgePolicy& policy,
-    const char* label)
-{
-    return MediaGraphBuildSupport::connectChecked(
-        graph, Owner, wireSource.node, wireSource.port,
-        execution.sender, "batch", label, policy);
-}
-
-::media::Status
-MediaDatagramOutputExecutionSegmentBuilder::connectTransportConsumer(
-    MediaGraph& graph,
-    const MediaDatagramOutputExecutionSegmentResult& execution,
-    MediaNodeId consumer,
-    const char* port,
-    const MediaEdgePolicy& policy,
-    const char* label)
-{
-    return MediaGraphBuildSupport::connectChecked(
-        graph, Owner, execution.transportPlanSource, "plan",
-        consumer, port, label, policy);
+    MediaOutputSegmentBindings bindings{std::move(declaration).value(),{}};
+    bindings.endpoint(MediaOutputSegmentRole::Activation)=options.activation;
+    bindings.endpoint(MediaOutputSegmentRole::TransportPlan)={source,""};
+    bindings.endpoint(MediaOutputSegmentRole::Sender)={sender,""};
+    if(auto status=bindings.connect(graph,Owner);!status)return Result::failure(status.error());
+    return Result::success({source,sender,std::move(bindings)});
 }
 
 } // namespace media::ffmpeg::graph

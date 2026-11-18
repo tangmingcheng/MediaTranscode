@@ -19,25 +19,23 @@ public:
     MediaPlaybackEpochActivationCapability& operator=(
         const MediaPlaybackEpochActivationCapability&) = delete;
 
-    ::media::Status activateInitial(MediaPlaybackEpoch epoch,
-                                    MediaAudioPlaybackOrigin audioOrigin)
+    ::media::Status activateInitial(MediaPlaybackActivation activation)
     {
         auto transition = m_transition.lock();
         return transition
-            ? transition->activateInitial(epoch, audioOrigin)
+            ? transition->activateInitial(std::move(activation))
             : ::media::Status::failure(::media::ErrorInfo::cancelled(
                   "Playback epoch activation capability has expired"));
     }
 
     ::media::Status activateNext(
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin,
+        MediaPlaybackActivation activation,
         std::uint64_t completedTransitionSequence)
     {
         auto transition = m_transition.lock();
         return transition
             ? transition->activateNextAfter(completedTransitionSequence,
-                                            epoch, audioOrigin)
+                                            std::move(activation))
             : ::media::Status::failure(::media::ErrorInfo::cancelled(
                   "Playback epoch activation capability has expired"));
     }

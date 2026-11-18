@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 namespace media::ffmpeg::graph {
@@ -10,6 +11,7 @@ namespace {
 
 ::media::Status validateClassification(const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (auto status = MediaRtpInputWaitPlan::validateInput(request.input); !status) return status;
     if (!request.input.type || !request.output.streamLayout || !request.output.transport) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(

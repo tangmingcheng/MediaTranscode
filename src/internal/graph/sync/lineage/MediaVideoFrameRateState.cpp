@@ -59,6 +59,7 @@ void MediaVideoFrameRateState::clearLineageStorage() noexcept
     m_data.terminalBuffer.reset();
     m_data.terminalPending = false;
     m_data.terminalIsEof = false;
+    m_data.generationDrained = false;
 }
 
 ::media::Result<MediaVideoFrameRateGenerationDisposition>

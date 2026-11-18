@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 
 #include <string>
+#include <algorithm>
 
 namespace media::ffmpeg::graph {
 
@@ -10,12 +11,23 @@ MediaAvSyncGraphShape::MediaAvSyncGraphShape(
 {
 }
 
+MediaAvSyncGraphShape::MediaAvSyncGraphShape(
+    const MediaGraph& graph, std::span<const MediaNodeId> members) noexcept
+    : m_graph(graph), m_members(members)
+{
+}
+
+bool MediaAvSyncGraphShape::contains(MediaNodeId id) const noexcept
+{
+    return !m_members || std::find(m_members->begin(), m_members->end(), id) != m_members->end();
+}
+
 std::size_t MediaAvSyncGraphShape::count(
     MediaNodeKind kind) const noexcept
 {
     std::size_t result = 0;
     for (const MediaNode& node : m_graph.nodes()) {
-        if (node.kind == kind) ++result;
+        if (contains(node.id) && node.kind == kind) ++result;
     }
     return result;
 }
@@ -25,7 +37,7 @@ std::vector<const MediaNode*> MediaAvSyncGraphShape::nodes(
 {
     std::vector<const MediaNode*> result;
     for (const MediaNode& node : m_graph.nodes()) {
-        if (node.kind == kind) result.push_back(&node);
+        if (contains(node.id) && node.kind == kind) result.push_back(&node);
     }
     return result;
 }

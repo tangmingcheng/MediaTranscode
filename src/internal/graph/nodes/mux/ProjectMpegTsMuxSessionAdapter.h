@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/planner/realtime/MediaTsPrefixServicePlan.h"
 
 #include <memory>
 #include <optional>
@@ -16,6 +17,8 @@ class MediaOutputByteSink;
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
+class MediaNodeWakeup;
+class MediaWireGlobalSequenceState;
 struct MediaProjectMpegTsRuntimeOutputPlan;
 
 class ProjectMpegTsGenerationSessionState final
@@ -32,7 +35,8 @@ private:
         Acquiring,
         Active,
         Finished,
-        Poisoned
+        Poisoned,
+        CancelledBeforeActivation
     };
     enum class TimelineState : std::uint8_t {
         Dormant,
@@ -42,6 +46,8 @@ private:
     };
     State state = State::Acquiring;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
+    std::shared_ptr<MediaWireGlobalSequenceState> transport;
+    std::optional<MediaTsPrefixServicePlan> prefixService;
     std::optional<MediaProtocolOutputActivation> activation;
     std::optional<MediaProtocolOutputSessionKey> plannedSession;
     std::optional<MediaTranscodeStreamSet> streamSet;
@@ -82,7 +88,8 @@ private:
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
 public:
     explicit ProjectMpegTsMuxSessionAdapter(
-        ProjectMpegTsGenerationAuthority authority);
+        ProjectMpegTsGenerationAuthority authority,
+        std::shared_ptr<MediaNodeWakeup> producerWakeup);
     ~ProjectMpegTsMuxSessionAdapter() override;
 
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -99,13 +106,16 @@ public:
     bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
-    ::media::Status finish(MediaGraphExecutionContext& context) override;
+    ::media::Status finish(MediaGraphExecutionContext& context,
+        MediaMuxCompletionIntent intent) override;
     void abort() noexcept override;
 
 private:
     using State = ProjectMpegTsGenerationSessionState::State;
     using TimelineState =
         ProjectMpegTsGenerationSessionState::TimelineState;
+    ::media::Result<MediaMuxSessionPollResult> pollInternal(
+        MediaGraphExecutionContext& context, bool consumeOutput);
     ::media::Status bindRuntimePlan(MediaGraphExecutionContext& context,
                                     const MediaBufferRef& buffer);
     ::media::Status bindSink(const MediaBufferRef& buffer);
@@ -114,11 +124,12 @@ private:
         const MediaBufferRef& buffer) const;
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status terminalStatus() const;
-    void closeOwnedResources() noexcept;
+    ::media::Status closeOwnedResources() noexcept;
 
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_outputAuthority;
+    std::shared_ptr<MediaNodeWakeup> m_producerWakeup;
     std::optional<MediaProtocolOutputSessionKey>& m_plannedSession;
     std::optional<MediaTranscodeStreamSet>& m_streamSet;
     State& m_state;

@@ -6,6 +6,8 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncProtocolInputBuilder.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
+#include "internal/graph/planner/realtime/MediaStartupRoutePlanner.h"
+#include "internal/graph/planner/realtime/MediaSourceInputConnectionsPlanner.h"
 
 #include <string_view>
 #include <utility>
@@ -16,78 +18,76 @@ namespace {
 using Support = MediaRealtimeAvSyncInputGraphSupport;
 constexpr std::string_view Owner = "MediaRealtimeAvSyncInputSegmentBuilder";
 
-struct SharedNodes final {
-    MediaNodeId sourceClock;
-    MediaNodeId videoGenerationGate;
-    MediaNodeId audioGenerationGate;
-    MediaNodeId videoCanonical;
-    MediaNodeId audioCanonical;
-    MediaNodeId coordinator;
-    MediaNodeId startupClock;
-    MediaNodeId epochBinder;
-    MediaNodeId activationSequencer;
-    MediaNodeId releaseExtractor;
-};
-
-::media::Result<SharedNodes> addSharedNodes(
+::media::Result<MediaAvSyncSharedNodeBindings> addSharedNodes(
     MediaGraph& graph,
-    const std::string& prefix)
+    const std::string& prefix,
+    const MediaSourceInputNodeShape& declaration)
 {
+    const auto& route = declaration.startup;
+    const bool hasAudio = declaration.has(MediaSourceInputRole::AudioGate);
+    const bool decodedVideo = route.readiness == MediaVideoStartupReadiness::DecodedPresentationSpan;
     auto sourceClock = Support::addNode(
-        graph, MediaNodeKind::SourceClockStateFanout,
+        graph, *declaration.ownedKind(MediaSourceInputRole::SourceClock),
         prefix + ".source_clock", "Source clock state fanout");
     auto videoGenerationGate = Support::addNode(
-        graph, MediaNodeKind::LockedPacketGate,
+        graph, *declaration.ownedKind(MediaSourceInputRole::VideoGate),
         prefix + ".video.generation_gate",
         "Shared video generation gate");
-    auto audioGenerationGate = Support::addNode(
-        graph, MediaNodeKind::LockedPacketGate,
-        prefix + ".audio.generation_gate",
-        "Shared audio generation gate");
-    auto videoCanonical = Support::addNode(
-        graph, MediaNodeKind::CanonicalInput,
-        prefix + ".video.canonical_input", "Canonical video input");
-    auto audioCanonical = Support::addNode(
-        graph, MediaNodeKind::CanonicalInput,
-        prefix + ".audio.canonical_input", "Canonical audio input");
+    std::optional<MediaNodeId> audioGenerationGate;
+    if (hasAudio) {
+        auto added = Support::addNode(graph, *declaration.ownedKind(MediaSourceInputRole::AudioGate),
+            prefix + ".audio.generation_gate", "Shared audio generation gate");
+        if (!added) return ::media::Result<MediaAvSyncSharedNodeBindings>::failure(added.error());
+        audioGenerationGate = added.value();
+    }
+    auto videoStartup = Support::addNode(
+        graph, route.nodeKind(MediaStartupRouteRole::VideoInput),
+        prefix + (decodedVideo ? ".video.decoded_startup" : ".video.canonical_input"), "Video startup input");
+    std::optional<MediaNodeId> audioCanonical;
+    if (hasAudio) {
+        auto added = Support::addNode(graph, route.nodeKind(MediaStartupRouteRole::AudioInput),
+            prefix + ".audio.canonical_input", "Canonical audio input");
+        if (!added) return ::media::Result<MediaAvSyncSharedNodeBindings>::failure(added.error());
+        audioCanonical = added.value();
+    }
     auto coordinator = Support::addNode(
-        graph, MediaNodeKind::AvStartupCoordinator,
+        graph, route.nodeKind(MediaStartupRouteRole::Coordinator),
         prefix + ".startup.coordinator", "A/V startup coordinator");
     auto startupClock = Support::addNode(
-        graph, MediaNodeKind::AvStartupClock,
+        graph, *declaration.ownedKind(MediaSourceInputRole::StartupClock),
         prefix + ".startup.clock", "A/V startup master-clock tick");
     auto epochBinder = Support::addNode(
-        graph, MediaNodeKind::PlaybackEpochBinder,
+        graph, route.nodeKind(MediaStartupRouteRole::Binder),
         prefix + ".startup.epoch_binder", "Playback epoch binder");
     auto activationSequencer = Support::addNode(
-        graph, MediaNodeKind::ActivatedStartupReleaseSequencer,
+        graph, route.nodeKind(MediaStartupRouteRole::Sequencer),
         prefix + ".startup.activation_sequencer",
         "Activated startup release sequencer");
     auto releaseExtractor = Support::addNode(
-        graph, MediaNodeKind::AvBoundReleaseExtractor,
+        graph, route.nodeKind(MediaStartupRouteRole::Extractor),
         prefix + ".startup.release_extractor", "Atomic A/V release extractor");
-    if (!sourceClock || !videoGenerationGate || !audioGenerationGate ||
-        !videoCanonical || !audioCanonical || !coordinator || !startupClock ||
+    if (!sourceClock || !videoGenerationGate ||
+        !videoStartup || !coordinator || !startupClock ||
         !epochBinder || !activationSequencer || !releaseExtractor) {
-        return ::media::Result<SharedNodes>::failure(
+        return ::media::Result<MediaAvSyncSharedNodeBindings>::failure(
             ::media::ErrorInfo::internalError(
                 "Synchronized input segment failed to assemble shared nodes"));
     }
-    return ::media::Result<SharedNodes>::success(SharedNodes{
+    return ::media::Result<MediaAvSyncSharedNodeBindings>::success(MediaAvSyncSharedNodeBindings{
         sourceClock.value(), videoGenerationGate.value(),
-        audioGenerationGate.value(), videoCanonical.value(),
-        audioCanonical.value(), coordinator.value(), startupClock.value(),
+        audioGenerationGate, videoStartup.value(),
+        audioCanonical, coordinator.value(), startupClock.value(),
         epochBinder.value(), activationSequencer.value(),
         releaseExtractor.value()});
 }
 
 ::media::Result<void> addSharedPorts(
     MediaGraph& graph,
-    const SharedNodes& nodes,
+    const MediaAvSyncSharedNodeBindings& nodes,
     int videoStreamIndex,
     int audioStreamIndex,
     MediaEdgeKind videoEdgeKind,
-    MediaEdgeKind audioEdgeKind)
+    MediaEdgeKind audioEdgeKind, bool decodedVideo)
 {
     if (auto status = Support::addInput(
             graph, nodes.sourceClock, "clock", MediaStreamKind::Metadata,
@@ -95,39 +95,46 @@ struct SharedNodes final {
         return status;
     }
     for (const char* port : {"video", "audio", "startup"}) {
+        if (!nodes.audioGenerationGate && std::string_view(port) == "audio") continue;
         if (auto status = Support::addOutput(
                 graph, nodes.sourceClock, port, MediaStreamKind::Metadata,
                 MediaEdgeKind::Event, MediaPayloadKind::GraphEvent,
                 true, false); !status) return status;
     }
     for (const auto [node, stream] : {
-             std::pair{nodes.videoGenerationGate, MediaStreamKind::Video},
+             std::pair{std::optional<MediaNodeId>(nodes.videoGenerationGate), MediaStreamKind::Video},
              std::pair{nodes.audioGenerationGate, MediaStreamKind::Audio}}) {
+        if (!node) continue;
         if (auto status = Support::addInput(
-                graph, node, "packet", stream, MediaEdgeKind::InputPacket,
+                graph, *node, "packet", stream, MediaEdgeKind::InputPacket,
                 MediaPayloadKind::Packet); !status) return status;
         if (auto status = Support::addInput(
-                graph, node, "clock", MediaStreamKind::Metadata,
+                graph, *node, "clock", MediaStreamKind::Metadata,
                 MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
             return status;
         }
-        if (auto status = Support::addOutput(
-                graph, node, "packet", stream, MediaEdgeKind::InputPacket,
-                MediaPayloadKind::Packet); !status) return status;
+        if (auto status = MediaGraphBuildSupport::addOutputPortWithFormatDescriptorChecked(
+                graph, Owner, *node, "packet", stream, MediaEdgeKind::InputPacket,
+                MediaPayloadKind::Packet, true, false,
+                MediaGraphBuildSupport::streamIndexDescriptor(stream,
+                    stream == MediaStreamKind::Video ? videoStreamIndex : audioStreamIndex)); !status) return status;
     }
     for (const auto [node, stream] : {
-             std::pair{nodes.videoCanonical, MediaStreamKind::Video},
+             std::pair{std::optional<MediaNodeId>(nodes.videoStartup), MediaStreamKind::Video},
              std::pair{nodes.audioCanonical, MediaStreamKind::Audio}}) {
+        if (!node) continue;
         if (auto status = Support::addInput(
-                graph, node, "in", stream, MediaEdgeKind::InputPacket,
-                MediaPayloadKind::Packet); !status) return status;
+                graph, *node, decodedVideo && stream == MediaStreamKind::Video ? "frame" : "in", stream,
+                decodedVideo && stream == MediaStreamKind::Video ? MediaEdgeKind::RawFrame : MediaEdgeKind::InputPacket,
+                decodedVideo && stream == MediaStreamKind::Video ? MediaPayloadKind::Frame : MediaPayloadKind::Packet); !status) return status;
         if (auto status = Support::addOutput(
-                graph, node, "out", MediaStreamKind::Metadata,
+                graph, *node, "out", MediaStreamKind::Metadata,
                 MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
             return status;
         }
     }
     for (const char* port : {"video", "audio", "clock"}) {
+        if (!nodes.audioCanonical && std::string_view(port) == "audio") continue;
         if (auto status = Support::addInput(
                 graph, nodes.coordinator, port, MediaStreamKind::Metadata,
                 MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
@@ -189,10 +196,11 @@ struct SharedNodes final {
     if (auto status = MediaGraphBuildSupport::addOutputPortWithFormatDescriptorChecked(
             graph, Owner, nodes.releaseExtractor, "video",
             MediaStreamKind::Video, videoEdgeKind,
-            MediaPayloadKind::Packet, false, true,
+            decodedVideo ? MediaPayloadKind::Frame : MediaPayloadKind::Packet, false, true,
             MediaGraphBuildSupport::streamIndexDescriptor(
                 MediaStreamKind::Video, videoStreamIndex));
         !status) return status;
+    if (!nodes.audioCanonical) return ::media::Result<void>::success();
     return MediaGraphBuildSupport::addOutputPortWithFormatDescriptorChecked(
         graph, Owner, nodes.releaseExtractor, "audio",
         MediaStreamKind::Audio, audioEdgeKind,
@@ -203,8 +211,8 @@ struct SharedNodes final {
 
 ::media::Result<void> configureSharedNodes(
     MediaGraph& graph,
-    const SharedNodes& nodes,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaAvSyncSharedNodeBindings& nodes,
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
     if (auto status = MediaRealtimeAvSyncNodeConfigurator::
             configureLockedPacketGate(
@@ -212,20 +220,27 @@ struct SharedNodes final {
                 MediaStreamKind::Video, plan); !status) {
         return status;
     }
-    if (auto status = MediaRealtimeAvSyncNodeConfigurator::
-            configureLockedPacketGate(
-                graph, nodes.audioGenerationGate,
-                MediaStreamKind::Audio, plan); !status) {
-        return status;
+    if (nodes.audioGenerationGate) {
+        if (auto status = MediaRealtimeAvSyncNodeConfigurator::
+                configureLockedPacketGate(
+                    graph, *nodes.audioGenerationGate,
+                    MediaStreamKind::Audio, plan); !status) {
+            return status;
+        }
     }
-    if (auto status = MediaRealtimeAvSyncNodeConfigurator::
-            configureCanonicalInput(
-                graph, nodes.videoCanonical, MediaScheduledStream::Video,
-                plan); !status) return status;
-    if (auto status = MediaRealtimeAvSyncNodeConfigurator::
-            configureCanonicalInput(
-                graph, nodes.audioCanonical, MediaScheduledStream::Audio,
-                plan); !status) return status;
+    if (std::holds_alternative<MediaDecodedVideoAssemblyTiming>(plan.assembly.video.timing)) {
+        if (auto status = Support::setOption(graph, nodes.videoStartup,
+                "decoded_video_startup.source_identity", plan.assembly.video.sourceIdentity); !status) return status;
+        if (auto status = Support::setOption(graph, nodes.videoStartup,
+                "decoded_video_startup.initial_generation", std::to_string(plan.assembly.initialGeneration)); !status) return status;
+    } else if (auto status = MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
+            graph, nodes.videoStartup, MediaScheduledStream::Video, plan); !status) return status;
+    if (nodes.audioCanonical) {
+        if (auto status = MediaRealtimeAvSyncNodeConfigurator::
+                configureCanonicalInput(
+                    graph, *nodes.audioCanonical, MediaScheduledStream::Audio,
+                    plan); !status) return status;
+    }
     if (auto status = MediaRealtimeAvSyncNodeConfigurator::
             configureStartupCoordinator(graph, nodes.coordinator, plan);
         !status) return status;
@@ -247,101 +262,41 @@ struct SharedNodes final {
 
 ::media::Result<void> connectSharedTopology(
     MediaGraph& graph,
-    const SharedNodes& nodes,
-    const MediaRealtimeAvSyncProtocolInputEndpoints& protocol,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaAvSyncInputBindings& bindings,
+    const MediaRealtimeAvSourceRuntimePlan& plan,
+    const MediaStartupRoutePlan& route)
 {
-    const auto& metadata = plan.edgePolicies.metadata;
-    const auto& packet = plan.edgePolicies.synchronizedPacket;
-    const auto& atomicMetadata = plan.edgePolicies.atomicMetadata;
-    if (!plan.synchronization.sourceClockMode) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "Shared synchronized input requires its planned source clock mode"));
+    if (!plan.synchronization.sourceClockMode)
+        return ::media::Result<void>::failure(::media::ErrorInfo::notInitialized(
+            "Shared synchronized input requires its planned source clock mode"));
+    auto connections = MediaSourceInputConnectionsPlanner::plan(route.shape.members,
+        route.shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies, *std::pmr::new_delete_resource());
+    if (!connections) return ::media::Result<void>::failure(connections.error());
+    for (const auto& connection : connections.value()) {
+        if (connection.phase != MediaSourceInputConnectionPhase::Shared) continue;
+        auto from = bindings.endpoint(connection.from, {});
+        const auto to = bindings.endpoint(connection.to, {});
+        if (!connection.output.empty()) from.port = connection.output;
+        if (auto status = Support::connect(graph, from, to.node, std::string(connection.input),
+                std::string(connection.label), connection.policy); !status) return status;
     }
-    const bool demuxClock =
-        *plan.synchronization.sourceClockMode ==
-        MediaAvSyncSourceClockMode::DemuxTimestamps;
-    const auto& protocolClockPolicy =
-        demuxClock ? atomicMetadata : metadata;
-    const auto& protocolVideoPolicy =
-        demuxClock ? plan.edgePolicies.atomicVideoPacket : packet;
-    const auto& protocolAudioPolicy =
-        demuxClock ? plan.edgePolicies.atomicAudioPacket : packet;
-    if (auto status = Support::connect(
-            graph, protocol.sourceClock, nodes.sourceClock, "clock",
-            "protocol clock -> source clock fanout",
-            protocolClockPolicy); !status) {
-        return status;
+    const auto connectRoute = [&](const MediaStartupRouteConnection& connection) -> ::media::Result<void> {
+        const auto from = bindings.shared.routeNode(connection.from);
+        const auto to = bindings.shared.routeNode(connection.to);
+        if (!from || !to) return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "Startup route references a missing assembled role"));
+        return Support::connect(graph, *from, std::string(connection.output), *to,
+            std::string(connection.input), std::string(connection.label), route.policy(connection));
+    };
+    for (const auto& connection : route.shape.connections()) {
+        if (!route.shape.includes(connection) || connection.to != MediaStartupRouteRole::Coordinator) continue;
+        if (auto status = connectRoute(connection); !status) return status;
     }
-    if (auto status = Support::connect(
-            graph, nodes.sourceClock, "video", nodes.videoGenerationGate,
-            "clock", "source clock -> video generation gate", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.sourceClock, "audio", nodes.audioGenerationGate,
-            "clock", "source clock -> audio generation gate", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, protocol.video, nodes.videoGenerationGate, "packet",
-            "protocol video -> generation gate",
-            protocolVideoPolicy); !status) {
-        return status;
+    for (const auto& connection : route.shape.connections()) {
+        if (!route.shape.includes(connection) || connection.to == MediaStartupRouteRole::Coordinator) continue;
+        if (auto status = connectRoute(connection); !status) return status;
     }
-    if (auto status = Support::connect(
-            graph, protocol.audio, nodes.audioGenerationGate, "packet",
-            "protocol audio -> generation gate",
-            protocolAudioPolicy); !status) {
-        return status;
-    }
-    if (auto status = Support::connect(
-            graph, nodes.videoGenerationGate, "packet",
-            nodes.videoCanonical, "in",
-            "generation-bound video -> canonical input", packet); !status) {
-        return status;
-    }
-    if (auto status = Support::connect(
-            graph, nodes.audioGenerationGate, "packet",
-            nodes.audioCanonical, "in",
-            "generation-bound audio -> canonical input", packet); !status) {
-        return status;
-    }
-    if (auto status = Support::connect(
-            graph, nodes.videoCanonical, "out", nodes.coordinator,
-            "video", "canonical video -> startup coordinator", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.audioCanonical, "out", nodes.coordinator,
-            "audio", "canonical audio -> startup coordinator", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.sourceClock, "startup", nodes.startupClock,
-            "clock", "source clock -> startup clock", metadata); !status) {
-        return status;
-    }
-    if (auto status = Support::connect(
-            graph, nodes.startupClock, "tick", nodes.coordinator,
-            "clock", "master clock tick -> startup coordinator", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.coordinator, "release", nodes.epochBinder,
-            "release", "startup release -> epoch binder", metadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.epochBinder, "transaction",
-            nodes.activationSequencer, "transaction",
-            "epoch transaction -> activation sequencer", atomicMetadata);
-        !status) return status;
-    if (auto status = Support::connect(
-            graph, nodes.epochBinder, "preparation",
-            nodes.releaseExtractor, "preparation",
-            "epoch transaction -> video preparation extractor",
-            atomicMetadata);
-        !status) return status;
-    return Support::connect(
-        graph, nodes.activationSequencer, "bound_release",
-        nodes.releaseExtractor, "bound_release",
-        "activated release -> atomic extractor", atomicMetadata);
+    return ::media::Result<void>::success();
 }
 
 } // namespace
@@ -350,19 +305,34 @@ struct SharedNodes final {
 MediaRealtimeAvSyncInputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSourceRuntimePlan& plan)
 {
+    const bool hasAudio = plan.synchronization.members == MediaTranscodeStreamSet::AudioVideo;
+    const bool decodedVideo = std::holds_alternative<MediaDecodedVideoAssemblyTiming>(plan.assembly.video.timing);
+    if (decodedVideo != options.decodedVideo.has_value() ||
+        decodedVideo != (plan.synchronization.startup.videoReadiness ==
+            MediaVideoStartupReadiness::DecodedPresentationSpan) ||
+        (decodedVideo && (std::holds_alternative<MediaObservedVideoCadence>(options.decodedVideo->timing) ||
+            plan.synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution ||
+            plan.synchronization.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
+            options.decodedVideo->sourceStreamIndex != options.releasedVideoStreamIndex)))
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument("Decoded startup requires its source decoder plan and frame release"));
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
-        !options.sources.audioPacket.valid() ||
+        options.sources.audioPacket.valid() != hasAudio ||
         options.releasedVideoStreamIndex < 0 ||
-        options.releasedAudioStreamIndex < 0 ||
-        (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
-         options.releasedVideoEdgeKind != MediaEdgeKind::EncodedPacket) ||
-        options.releasedAudioEdgeKind !=
+        (hasAudio ? options.releasedAudioStreamIndex < 0 :
+            options.releasedAudioStreamIndex != invalidMediaStreamIndex) ||
+        (decodedVideo ? options.releasedVideoEdgeKind != MediaEdgeKind::RawFrame :
+            (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
+             options.releasedVideoEdgeKind != MediaEdgeKind::EncodedPacket)) ||
+        (hasAudio ? options.releasedAudioEdgeKind !=
             (plan.audioPipeline.branchMode == MediaBranchMode::CopyPacket
-                 ? MediaEdgeKind::EncodedPacket
-                 : MediaEdgeKind::InputPacket) ||
+                 ? MediaEdgeKind::EncodedPacket : MediaEdgeKind::InputPacket)
+            : options.releasedAudioEdgeKind != MediaEdgeKind::Unknown) ||
         !plan.groupKey.valid() ||
+        (plan.synchronization.domainRole != MediaAvSyncDomainRole::SharedSourceOutput &&
+         plan.synchronization.domainRole != MediaAvSyncDomainRole::SourceContribution) ||
         !MediaAvSyncPlanValidator::validateRuntime(plan.synchronization)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -371,9 +341,9 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
     if (!MediaAtomicOutputPolicyContract::accepts(
             plan.edgePolicies.atomicMetadata) ||
         !MediaAtomicOutputPolicyContract::accepts(
-            plan.edgePolicies.atomicVideoPacket) ||
-        !MediaAtomicOutputPolicyContract::accepts(
-            plan.edgePolicies.atomicAudioPacket)) {
+            decodedVideo ? plan.edgePolicies.preparedVideoFrame : plan.edgePolicies.atomicVideoPacket) ||
+        (hasAudio && !MediaAtomicOutputPolicyContract::accepts(
+            plan.edgePolicies.atomicAudioPacket))) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
             "Synchronized input release requires a complete planned atomic output policy"));
@@ -391,13 +361,20 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             ::media::ErrorInfo::invalidArgument(
                 "Synchronized protocol input requires its planned clock endpoint"));
     }
+    auto routeShape = MediaStartupRoutePlanner::describe(*plan.synchronization.members,
+        *plan.synchronization.startup.videoReadiness);
+    if (!routeShape) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(routeShape.error());
+    auto route = MediaStartupRoutePlanner::bind(routeShape.value(),
+        plan.edgePolicies.metadata, plan.edgePolicies.atomicMetadata);
+    if (!route) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(route.error());
     auto protocol = MediaRealtimeAvSyncProtocolInputBuilder::build(
         graph, options, plan);
     if (!protocol) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             protocol.error());
     }
-    auto nodes = addSharedNodes(graph, options.prefix);
+    auto nodes = addSharedNodes(graph, options.prefix,
+        {route.value().shape, *plan.synchronization.sourceClockMode});
     if (!nodes) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             nodes.error());
@@ -407,7 +384,7 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             options.releasedVideoStreamIndex,
             options.releasedAudioStreamIndex,
             options.releasedVideoEdgeKind,
-            options.releasedAudioEdgeKind); !status) {
+            options.releasedAudioEdgeKind, decodedVideo); !status) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }
@@ -416,16 +393,55 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }
+    MediaAvSyncInputBindings bindings{nodes.value(), std::move(protocol).value()};
     if (auto status = connectSharedTopology(
-            graph, nodes.value(), protocol.value(), plan); !status) {
+            graph, bindings, plan, route.value()); !status) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }
+    auto sourceMembers = bindings.protocol.sourceMembers;
+    std::optional<MediaVideoBranchBindings> decodedVideoBindings;
+    if (decodedVideo) {
+        auto decoderOptions = *options.decodedVideo;
+        decoderOptions.packetSourceNode = nodes.value().videoGenerationGate;
+        decoderOptions.packetSourcePort = "packet";
+        auto decoder = MediaVideoTranscodeBranchBuilder::buildSourceDecoder(
+            graph, decoderOptions, MediaVideoDecodeLineageProduct::SourceAccessUnit);
+        if (!decoder) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(decoder.error());
+        auto connections = MediaSourceInputConnectionsPlanner::plan(route.value().shape.members,
+            route.value().shape.readiness, *plan.synchronization.sourceClockMode, plan.edgePolicies, *std::pmr::new_delete_resource());
+        if (!connections) return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(connections.error());
+        for (const auto& connection : connections.value()) {
+            if (connection.phase != MediaSourceInputConnectionPhase::DecodedFrame) continue;
+            auto from = bindings.endpoint(connection.from, decoder.value().frame);
+            const auto to = bindings.endpoint(connection.to, decoder.value().frame);
+            if (!connection.output.empty()) from.port = connection.output;
+            if (auto status = Support::connect(graph, from, to.node,
+                    std::string(connection.input), std::string(connection.label), connection.policy); !status)
+                return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(status.error());
+        }
+        decodedVideoBindings = std::move(decoder.value().bindings);
+        sourceMembers.insert(sourceMembers.end(), decoder.value().processing.source.begin(),
+            decoder.value().processing.source.end());
+    }
+    const auto& shared = nodes.value();
+    sourceMembers.insert(sourceMembers.end(), {
+        shared.sourceClock, shared.videoGenerationGate,
+        shared.videoStartup, shared.coordinator,
+        shared.startupClock, shared.epochBinder, shared.activationSequencer,
+        shared.releaseExtractor});
+    if (shared.audioGenerationGate) sourceMembers.push_back(*shared.audioGenerationGate);
+    if (shared.audioCanonical) sourceMembers.push_back(*shared.audioCanonical);
     return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::success(
         MediaRealtimeAvSyncInputEndpoints{
             MediaEndpoint{nodes.value().releaseExtractor, "video"},
-            MediaEndpoint{nodes.value().releaseExtractor, "audio"},
-            MediaEndpoint{nodes.value().activationSequencer, "activated"}});
+            hasAudio ? MediaEndpoint{nodes.value().releaseExtractor, "audio"} : MediaEndpoint{},
+            MediaEndpoint{nodes.value().activationSequencer, "activated"},
+            MediaAvRuntimeInputRegistration{
+                nodes.value().epochBinder, nodes.value().activationSequencer,
+                nodes.value().releaseExtractor, bindings.protocol.demuxClock,
+                bindings.protocol.rtp ? std::optional{bindings.protocol.rtp->registered} : std::nullopt},
+            std::move(sourceMembers), std::move(decodedVideoBindings), std::move(bindings)});
 }
 
 } // namespace media::ffmpeg::graph

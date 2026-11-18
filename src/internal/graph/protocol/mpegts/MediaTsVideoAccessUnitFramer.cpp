@@ -9,6 +9,12 @@ namespace media::ffmpeg::graph {
 namespace {
 
 using FramedResult = ::media::Result<std::span<const std::uint8_t>>;
+constexpr std::size_t AnnexBOutputPrefixBytes = 4;
+
+std::size_t nalHeaderBytes(MediaTsVideoCodec codec) noexcept
+{
+    return codec == MediaTsVideoCodec::H264 ? 1U : 2U;
+}
 
 FramedResult invalid(const char* message)
 {
@@ -28,12 +34,11 @@ bool checkedAdd(std::size_t left,
 bool validNalHeader(std::span<const std::uint8_t> nal,
                     MediaTsVideoCodec codec) noexcept
 {
+    if (nal.size() < nalHeaderBytes(codec)) return false;
     if (codec == MediaTsVideoCodec::H264) {
-        if (nal.empty()) return false;
         const std::uint8_t type = nal[0] & 0x1F;
         return (nal[0] & 0x80) == 0 && type != 0 && type <= 23;
     }
-    if (nal.size() < 2) return false;
     const std::uint8_t type = (nal[0] >> 1) & 0x3F;
     return (nal[0] & 0x80) == 0 && type <= 47 &&
         (nal[1] & 0x07) != 0;
@@ -63,7 +68,7 @@ bool validNalHeader(std::span<const std::uint8_t> nal,
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS video NAL length or header is invalid"));
         }
-        if (!checkedAdd(outputSize, 4, outputSize) ||
+        if (!checkedAdd(outputSize, AnnexBOutputPrefixBytes, outputSize) ||
             !checkedAdd(outputSize, nalSize, outputSize)) {
             return ::media::Result<std::size_t>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -115,7 +120,58 @@ std::size_t writeParameterSets(
     return offset;
 }
 
+::media::Result<std::size_t> parameterSetBytes(
+    const MediaTsMaterializedVideoConfig& config, bool inject)
+{
+    std::size_t size = 0;
+    if (inject) {
+        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
+            if (!checkedAdd(size, parameterSet.size(), size)) {
+                return ::media::Result<std::size_t>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MPEG-TS video parameter-set size overflows"));
+            }
+        }
+    }
+    return ::media::Result<std::size_t>::success(size);
+}
+
 } // namespace
+
+::media::Result<std::size_t>
+MediaTsVideoAccessUnitFramer::maximumFramedPayloadBytes(
+    const MediaTsMaterializedVideoConfig& config,
+    std::size_t maximumInputPayloadBytes,
+    bool injectParameterSets)
+{
+    using Result = ::media::Result<std::size_t>;
+    if (maximumInputPayloadBytes == 0) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS video payload bound must be positive"));
+    }
+    std::size_t size = maximumInputPayloadBytes;
+    const auto& contract = config.contract();
+    if (contract.layout() == MediaTsNalLayout::LengthPrefixed) {
+        const std::size_t lengthBytes = contract.nalLengthBytes();
+        // Every accepted NAL consumes its length field and at least its header.
+        const std::size_t maximumNals = size /
+            (lengthBytes + nalHeaderBytes(contract.codec()));
+        const std::size_t growthPerNal = AnnexBOutputPrefixBytes - lengthBytes;
+        if (growthPerNal != 0 && maximumNals >
+                (std::numeric_limits<std::size_t>::max() - size) / growthPerNal) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "MPEG-TS converted video payload bound overflows"));
+        }
+        size += maximumNals * growthPerNal;
+    }
+    auto injection = parameterSetBytes(config, injectParameterSets);
+    if (!injection) return Result::failure(injection.error());
+    if (!checkedAdd(size, injection.value(), size)) {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS framed video payload bound overflows"));
+    }
+    return Result::success(size);
+}
 
 FramedResult MediaTsVideoAccessUnitFramer::frame(
     const MediaTsMuxPlan& plan,
@@ -133,15 +189,9 @@ FramedResult MediaTsVideoAccessUnitFramer::frame(
     const bool inject = randomAccess &&
         parameters.parameterSetPolicy ==
             MediaTsParameterSetPolicy::BeforeRandomAccess;
-    std::size_t injectionSize = 0;
-    if (inject) {
-        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
-            if (!checkedAdd(
-                    injectionSize, parameterSet.size(), injectionSize)) {
-                return invalid("MPEG-TS video parameter-set size overflows");
-            }
-        }
-    }
+    auto injection = parameterSetBytes(config, inject);
+    if (!injection) return FramedResult::failure(injection.error());
+    const std::size_t injectionSize = injection.value();
 
     if (parameters.video.layout() == MediaTsNalLayout::AnnexB) {
         const auto validatorCodec =

@@ -1,0 +1,9 @@
+# 会话取消后的等待项退役
+
+rk428真实停止失败：全源完成后SIGTERM经requestStop，约579ms返回Cancelled: Payload producer retirement requires an active account，worker errors0且账本归零。
+
+依据：[GStreamer状态转换](https://gstreamer.freedesktop.org/documentation/additional/design/states.html)在向下转换先解除等待、停止流线程再释放资源。本项目必须保持先cancelSessionPayloadWaiters再join，否则阻塞producer可能无法结束；其后节点退出还要释放本地引用。
+
+根因：cancelAccount持同一mutex设置cancelled、撤回未签发lease的granted费用并清空waiters；Binder::stop再次调用cancelProducerWaiter却要求active。修正撤销契约：accountForProducer身份验证之后，已cancelled账户的等待项撤销已完成，返回成功。未知producer/过期账户仍失败；新reserve仍拒绝取消账户。不是在节点吞Cancelled，不改变首错优先级。
+
+不新增线程、队列、参数、容量或adapter；持现有账户锁，活lease继续RAII释放。共享Windows/RKMPP代码：先按授权目标机增量复验完整四路120秒和caller_stop exit0、final账本归零，后续Windows同规格回归；本机FFmpeg不改。发送期限风险独立保留。当前单文件实现经两名未参与实现的独立审查者明确SOURCE PASS；真实运行仍待验证。

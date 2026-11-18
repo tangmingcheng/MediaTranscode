@@ -2,6 +2,7 @@
 
 #include <utility>
 #include <algorithm>
+#include <limits>
 
 namespace media::ffmpeg::graph {
 
@@ -14,6 +15,11 @@ void MediaGraph::removeNodes(std::span<const MediaNodeId> nodes)
         return selected(edge.from.nodeId) || selected(edge.to.nodeId);
     });
     std::erase_if(m_nodes, [&selected](const MediaNode& node) { return selected(node.id); });
+    std::erase_if(m_protocolGenerationStorage.instances, [&](const auto& instance) {
+        if (!selected(instance.owner)) return false;
+        m_protocolGenerationStorage.admittedBytes -= instance.geometry.totalBytes;
+        return true;
+    });
     if (m_payloadCreditPlan) {
         std::erase_if(m_payloadCreditPlan->producers,
             [&selected](const auto& producer) { return selected(producer.nodeId); });
@@ -26,9 +32,48 @@ void MediaGraph::clear()
     m_edges.clear();
     m_payloadCreditPlan.reset();
     m_payloadCreditMode.reset();
+    m_protocolGenerationStorage = {};
     m_nextNodeId = 1;
     m_nextPortId = 1;
     m_nextEdgeId = 1;
+}
+
+bool MediaGraph::appendProtocolGenerationStorage(MediaProtocolGenerationStoragePlan plan)
+{
+    std::uint64_t bytes = 0;
+    for (const auto& instance : plan.instances) {
+        const auto* node = findNode(instance.owner);
+        if (!node || node->kind != instance.kind ||
+            (instance.kind != MediaNodeKind::MpegTsDatagramMaterializer &&
+             instance.kind != MediaNodeKind::RtpDatagramMaterializer) ||
+            protocolGenerationStorageFor(instance.owner) ||
+            std::count_if(plan.instances.begin(), plan.instances.end(), [&](const auto& other) {
+                return other.owner == instance.owner;
+            }) != 1 || !instance.geometry.totalBytes ||
+            instance.geometry.totalBytes > (std::numeric_limits<std::uint64_t>::max)() - bytes)
+            return false;
+        bytes += instance.geometry.totalBytes;
+    }
+    if (bytes != plan.admittedBytes ||
+        bytes > (std::numeric_limits<std::uint64_t>::max)() - m_protocolGenerationStorage.admittedBytes)
+        return false;
+    m_protocolGenerationStorage.instances.insert(m_protocolGenerationStorage.instances.end(),
+        plan.instances.begin(), plan.instances.end());
+    m_protocolGenerationStorage.admittedBytes += bytes;
+    return true;
+}
+
+const MediaProtocolGenerationStoragePlan& MediaGraph::protocolGenerationStorage() const noexcept
+{
+    return m_protocolGenerationStorage;
+}
+
+const MediaProtocolGenerationStorageInstance* MediaGraph::protocolGenerationStorageFor(MediaNodeId owner) const noexcept
+{
+    const auto& instances = m_protocolGenerationStorage.instances;
+    const auto found = std::find_if(instances.begin(), instances.end(),
+        [owner](const auto& instance) { return instance.owner == owner; });
+    return found == instances.end() ? nullptr : &*found;
 }
 
 bool MediaGraph::setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan)

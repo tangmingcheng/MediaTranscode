@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaEncodedAudioCanonicalizerNode.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaEncodedAudioLineageBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
@@ -10,10 +11,11 @@
 namespace media::ffmpeg::graph {
 
 MediaEncodedAudioCanonicalizerNode::MediaEncodedAudioCanonicalizerNode(
-    MediaNodeId nodeId)
+    MediaNodeId nodeId, MediaAvSyncGroupKey outputGroup)
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaEncodedAudioCanonicalizerNode")
     , m_state(std::make_shared<MediaEncodedAudioCanonicalizerState>())
+    , m_outputGroup(std::move(outputGroup))
 {
 }
 
@@ -37,7 +39,8 @@ MediaNodeKind MediaEncodedAudioCanonicalizerNode::staticKind() noexcept
 ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
 MediaEncodedAudioCanonicalizerNode::canonicalize(
     const MediaBufferRef& encoded,
-    MediaSourceAccessUnitSequence sequence)
+    MediaOutputAccessUnitSequence sequence,
+    const MediaAvSyncGroupKey& outputGroup)
 {
     const auto* input = dynamic_cast<const MediaEncodedAudioLineageBuffer*>(
         encoded.get());
@@ -69,20 +72,34 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             presentation.error());
     }
-    auto lineage = createMediaCanonicalLineage(
+    auto lineage = createMediaCanonicalOutputLineage(
         presentation.value(), std::nullopt, duration.value(),
         MediaDecodeOrderMode::PresentationOrderNoReorder,
-        std::string(generationPurgeIdentity()), sequence,
+        outputGroup.value(), MediaScheduledStream::Audio, sequence,
         MediaTimeMappingConfidence::Locked,
-        origin.generation);
+        origin.generation, {});
     if (!lineage) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             lineage.error());
     }
+    std::vector<MediaCanonicalAudioContribution> contributions;
+    contributions.reserve(fragments.size());
+    for (const auto& fragment : fragments) {
+        if (!fragment.lineage || !validateMediaCanonicalLineage(*fragment.lineage)) {
+            return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Encoded audio contribution requires valid source lineage"));
+        }
+        if (!validMediaCanonicalAudioContribution(fragment.contribution)) {
+            return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument("Encoded audio requires explicit valid contributions"));
+        }
+        contributions.push_back(fragment.contribution);
+    }
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
-        input->media(), std::move(lineage).value(),
+        MediaRuntimeLineageAllocation{}, input->media(), std::move(lineage).value(),
         MediaCanonicalAudioSampleInterval{
-            begin, end, origin.outputSampleRate});
+            begin, end, origin.outputSampleRate}, std::move(contributions), std::nullopt, std::nullopt);
     if (!canonical) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             canonical.error());
@@ -102,6 +119,8 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
 ::media::Status MediaEncodedAudioCanonicalizerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_inputObservation.log(nodeId().value, "canonicalizer_input");
+    m_commitObservation.log(nodeId().value, "canonicalizer_committed");
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -109,12 +128,16 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
 void MediaEncodedAudioCanonicalizerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_inputObservation.log(nodeId().value, "canonicalizer_input");
+    m_commitObservation.log(nodeId().value, "canonicalizer_committed");
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
 
 void MediaEncodedAudioCanonicalizerNode::resetState() noexcept
 {
+    m_inputObservation = {};
+    m_commitObservation = {};
     m_state->resetForLifecycle();
 }
 
@@ -164,6 +187,8 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
         }
         const auto begin = encoded->fragments().front().interval.begin;
         const auto end = encoded->fragments().back().interval.end;
+        m_inputObservation.observe(encoded->audioOrigin().generation,
+            {begin, end, encoded->audioOrigin().outputSampleRate});
         auto disposition = m_state->classifyObservation(
             encoded->audioOrigin().generation);
         if (!disposition) {
@@ -181,7 +206,7 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
                     "Encoded audio canonicalizer rejects interval discontinuity"));
         }
         auto output = canonicalize(
-            *input.value(), MediaSourceAccessUnitSequence(m_state->nextSequence));
+            *input.value(), MediaOutputAccessUnitSequence(m_state->nextSequence), m_outputGroup);
         if (!output) {
             return ::media::Result<MediaNodeProcessResult>::failure(output.error());
         }
@@ -212,6 +237,8 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
         !observed) {
         return ::media::Result<MediaNodeProcessResult>::failure(observed.error());
     }
+    m_commitObservation.observe(m_state->pending->generation,
+        *m_state->pending->output->audioSampleInterval());
     m_state->expectedNextSample = m_state->pending->nextSample;
     m_state->nextSequence = m_state->pending->nextSequence;
     m_state->pending.reset();

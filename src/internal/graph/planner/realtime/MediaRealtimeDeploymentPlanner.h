@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaMpegTsProducerPlan.h"
 
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
@@ -17,7 +18,9 @@ struct MediaRealtimeDeploymentBasePlan final {
     std::optional<MediaRealtimeRtcpSessionCapability> rtcpSession;
     MediaWireTrafficEnvelope admittedWire;
     std::uint64_t provisionedWireCapacityBytesPerSecond = 0;
-    std::uint64_t endpointCount = 0;
+    MediaDatagramProtocolLayout protocolLayout = MediaDatagramProtocolLayout::Unknown;
+    std::vector<MediaRawRtpProducerPlan> rawRtpProducers;
+    std::optional<MediaMpegTsProducerPlan> mpegTsProducer;
 };
 
 class MediaRealtimeDeploymentPlanner final {

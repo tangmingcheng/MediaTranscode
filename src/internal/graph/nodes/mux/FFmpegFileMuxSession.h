@@ -28,7 +28,8 @@ public:
     bool hasPendingOutput() const noexcept override;
     bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
-    ::media::Status finish(MediaGraphExecutionContext& context) override;
+    ::media::Status finish(MediaGraphExecutionContext& context,
+        MediaMuxCompletionIntent intent) override;
     void abort() noexcept override;
 
 private:
@@ -53,6 +54,7 @@ private:
     bool m_headerWritten = false;
     bool m_trailerWritten = false;
     bool m_finished = false;
+    bool m_preparationCancelled = false;
     int m_videoStreamIndex = invalidMediaStreamIndex;
     int m_audioStreamIndex = invalidMediaStreamIndex;
     std::vector<MediaBufferRef> m_pendingStreamConfigs;

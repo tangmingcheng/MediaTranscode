@@ -1,0 +1,13 @@
+# r270：同次合屏源事件就绪观测
+
+依据NVIDIA cuEventQuery合同：https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__EVENT.html 。SUCCESS表示已记录工作完成，NOT_READY表示采样时未完成，其他错误不等价pending。未record的event不得作为就绪证据。
+
+沿已独立审查的方案，仅在现有State诊断开启且存在真实tile时查询原readiness事件；不创建事件、队列或线程，不等待GPU完成，不改result_。mutex及context push/pop可能耗时，计入独立query区间。错误状态与context恢复码均保留，观测不作为选择或丢弃源的条件；原enqueue wait和batch同步不变。
+
+每次compose采用固定大小的按状态记录（completed/ready/pending/unavailable/error），保存计数及各状态最长查询的tile、steady起止和native信息；整体只保留原有最长compose记录，不新增动态容器。全部源ready可排除采样时源event未完成；pending不能说明它占用整个长等待，仍须结合batch区间，不能宣称已找到GPU根因。Linux/RKMPP没有CUDA查询，公共同步合同不变。
+
+本项是诊断，不是修复或验收通过。需双独立审查、Release全量构建及原规格无Nsight实流。
+
+## 实施状态
+
+上述观测已实现并获双独立局部静态PASS。新增readiness函数指针由实际MediaLineageAllocator对象尺寸计费；compose固定记录无独立堆分配，但不代表canvas对象总账已闭合。query可能报告此前异步错误，不能归因当前tile；新增查询会扰动时序，不能宣称零影响。统计仅限同一次最长compose。Release全量重建58271进行中，尚无构建及实流结论。

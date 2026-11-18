@@ -106,7 +106,7 @@ public:
     ::media::Status open();
     ::media::Status sendAccessUnit(
         const AVPacket& packet,
-        MediaRunningTime presentationOnMaster);
+        MediaRunningTime presentationOnMaster, std::span<std::uint8_t> scratch);
     ::media::Result<ScheduledRtcpDispatchResult> dispatchSenderReport(
         MediaRunningTime now);
 

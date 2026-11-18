@@ -1,5 +1,7 @@
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressStorage.h"
 
+#include "internal/graph/runtime/resource/MediaPreparedAllocationCost.h"
+
 #include <algorithm>
 #include <limits>
 #include <new>
@@ -30,15 +32,20 @@ bool isKnownChannel(MediaRtpUdpChannel channel) noexcept
 
 } // namespace
 
+MediaRtpIngressStorageState::MediaRtpIngressStorageState(MediaLineageAllocationScope scope)
+    : allocation(std::move(scope)), entries(allocation.resource()),
+      entrySlotIndices(allocation.resource()), slotOwnership(allocation.resource()) {}
+
 MediaRtpIngressStorageState::~MediaRtpIngressStorageState()
 {
     if (arena) {
-        ::operator delete[](arena, std::align_val_t(alignmentBytes));
+        allocation.resource()->deallocate(arena, byteCapacity, alignmentBytes);
     }
 }
 
 void MediaRtpIngressStorageState::releaseBatch() noexcept
 {
+    std::lock_guard lock(leaseMutex);
     if (!leased) return;
     for (std::size_t index = 0; index < committedEntries; ++index) {
         const std::size_t slotIndex = entrySlotIndices[index];
@@ -50,6 +57,7 @@ void MediaRtpIngressStorageState::releaseBatch() noexcept
     }
     committedEntries = 0;
     leased = false;
+    leaseReleased.notify_all();
 }
 
 MediaRtpIngressStorage::MediaRtpIngressStorage(
@@ -62,9 +70,10 @@ MediaRtpIngressStorage::MediaRtpIngressStorage(
     std::size_t byteCapacity,
     std::size_t maximumDatagramBytes,
     std::size_t descriptorCapacity,
-    std::size_t alignmentBytes)
+    std::size_t alignmentBytes, MediaLineageAllocationScope allocation)
 {
-    if (byteCapacity == 0 || maximumDatagramBytes == 0 ||
+    if (!MediaLineageAllocator<std::byte>{allocation}.resource() ||
+        byteCapacity == 0 || maximumDatagramBytes == 0 ||
         descriptorCapacity == 0 || !isPowerOfTwo(alignmentBytes) ||
         alignmentBytes < alignof(std::max_align_t) ||
         descriptorCapacity >
@@ -76,28 +85,24 @@ MediaRtpIngressStorage::MediaRtpIngressStorage(
                 "RTP ingress storage requires exact bounded byte and descriptor geometry"));
     }
     try {
-        auto state = std::make_shared<MediaRtpIngressStorageState>();
+        auto state = std::allocate_shared<MediaRtpIngressStorageState>(
+            MediaLineageAllocator<MediaRtpIngressStorageState>{allocation}, allocation);
         if (descriptorCapacity > state->entries.max_size()) {
             return ::media::Result<MediaRtpIngressStorage>::failure(
                 invalidStorage(
                     "RTP ingress descriptor capacity exceeds the storage limit"));
         }
-        state->arena = static_cast<std::byte*>(::operator new[](
-            byteCapacity, std::align_val_t(alignmentBytes)));
+        state->arena = static_cast<std::byte*>(state->allocation.resource()->allocate(
+            byteCapacity, alignmentBytes));
         state->byteCapacity = byteCapacity;
         state->maximumDatagramBytes = maximumDatagramBytes;
         state->descriptorCapacity = descriptorCapacity;
         state->alignmentBytes = alignmentBytes;
-        state->entries = std::vector<MediaRtpIngressBatchEntry>(
-            descriptorCapacity,
-            MediaRtpIngressBatchEntry{
-                MediaRtpUdpChannel::Rtp, {}, 0});
-        state->entrySlotIndices = std::vector<std::size_t>(
-            descriptorCapacity, 0);
-        state->slotOwnership = std::vector<
-            MediaRtpIngressStorageState::SlotOwnership>(
-                descriptorCapacity,
-                MediaRtpIngressStorageState::SlotOwnership::Free);
+        state->entries.resize(descriptorCapacity,
+            MediaRtpIngressBatchEntry{MediaRtpUdpChannel::Rtp, {}, 0});
+        state->entrySlotIndices.resize(descriptorCapacity, 0);
+        state->slotOwnership.resize(descriptorCapacity,
+            MediaRtpIngressStorageState::SlotOwnership::Free);
         return ::media::Result<MediaRtpIngressStorage>::success(
             MediaRtpIngressStorage(std::move(state)));
     } catch (const std::bad_alloc&) {
@@ -105,6 +110,17 @@ MediaRtpIngressStorage::MediaRtpIngressStorage(
             ::media::ErrorInfo::notInitialized(
                 "RTP ingress storage allocation failed"));
     }
+}
+
+::media::Result<std::size_t> MediaRtpIngressStorage::preparationStorageBytes(
+    std::size_t byteCapacity, std::size_t descriptorCapacity, std::size_t alignmentBytes)
+{
+    using Cost = MediaPreparedAllocationCost;
+    return Cost::sum({Cost::shared<MediaRtpIngressStorageState>(),
+        MediaPreparationMemoryResource::allocationFootprint(byteCapacity, alignmentBytes),
+        Cost::fixedVector<MediaRtpIngressBatchEntry>(descriptorCapacity),
+        Cost::fixedVector<std::size_t>(descriptorCapacity),
+        Cost::fixedVector<MediaRtpIngressStorageState::SlotOwnership>(descriptorCapacity)});
 }
 
 std::byte* MediaRtpIngressStorage::data() noexcept
@@ -135,6 +151,8 @@ std::size_t MediaRtpIngressStorage::committedEntries() const noexcept
 ::media::Result<MediaRtpIngressWritableSlot>
 MediaRtpIngressStorage::acquireReceiveSlot()
 {
+    std::unique_lock<std::mutex> stateLock;
+    if (m_state) stateLock = std::unique_lock(m_state->leaseMutex);
     if (!m_state || !m_state->arena) {
         return ::media::Result<MediaRtpIngressWritableSlot>::failure(
             invalidStorage(
@@ -171,6 +189,8 @@ MediaRtpIngressStorage::acquireReceiveSlot()
 ::media::Status MediaRtpIngressStorage::releaseReceiveSlot(
     std::size_t slotIndex)
 {
+    std::unique_lock<std::mutex> stateLock;
+    if (m_state) stateLock = std::unique_lock(m_state->leaseMutex);
     if (!m_state || slotIndex >= m_state->descriptorCapacity ||
         m_state->slotOwnership[slotIndex] !=
             MediaRtpIngressStorageState::SlotOwnership::ReceiveOwned) {
@@ -190,6 +210,8 @@ MediaRtpIngressStorage::acquireReceiveSlot()
     std::size_t byteCount,
     std::int64_t observedAtNanoseconds)
 {
+    std::unique_lock<std::mutex> stateLock;
+    if (m_state) stateLock = std::unique_lock(m_state->leaseMutex);
     if (!m_state || m_state->leased ||
         slotIndex >= m_state->descriptorCapacity ||
         m_state->committedEntries >= m_state->descriptorCapacity ||
@@ -222,6 +244,8 @@ MediaRtpIngressStorage::acquireReceiveSlot()
 ::media::Result<MediaRtpIngressBatch>
 MediaRtpIngressStorage::seal(std::size_t entryCount)
 {
+    std::unique_lock<std::mutex> stateLock;
+    if (m_state) stateLock = std::unique_lock(m_state->leaseMutex);
     if (!m_state || m_state->leased || entryCount == 0 ||
         entryCount != m_state->committedEntries) {
         return ::media::Result<MediaRtpIngressBatch>::failure(
@@ -236,8 +260,24 @@ MediaRtpIngressStorage::seal(std::size_t entryCount)
                 m_state->entries.data(), entryCount)));
 }
 
+::media::Status MediaRtpIngressStorage::waitForBatchRelease(std::stop_token stopToken)
+{
+    if (!m_state) return ::media::Status::failure(invalidStorage("RTP ingress storage is unavailable"));
+    std::stop_callback cancelled(stopToken, [state = m_state] {
+        std::lock_guard lock(state->leaseMutex);
+        state->leaseReleased.notify_all();
+    });
+    std::unique_lock lock(m_state->leaseMutex);
+    m_state->leaseReleased.wait(lock, [&] { return !m_state->leased || stopToken.stop_requested(); });
+    if (stopToken.stop_requested()) return ::media::Status::failure(
+        ::media::ErrorInfo::cancelled("RTP ingress batch reuse was cancelled"));
+    return ::media::Status::success();
+}
+
 ::media::Status MediaRtpIngressStorage::reset()
 {
+    std::unique_lock<std::mutex> stateLock;
+    if (m_state) stateLock = std::unique_lock(m_state->leaseMutex);
     if (!m_state || !m_state->arena || m_state->leased) {
         return ::media::Status::failure(invalidStorage(
             "RTP ingress storage cannot reset while a batch lease is active"));

@@ -2,6 +2,15 @@
 
 namespace media::ffmpeg::graph {
 
+::media::Result<MediaRunningTime> MediaOutputSchedule::releaseTime(
+    MediaRunningTime emit, MediaRunningTime protocolPreparationLead)
+{
+    if (protocolPreparationLead.nanoseconds() <= 0)
+        return ::media::Result<MediaRunningTime>::failure(
+            ::media::ErrorInfo::invalidArgument("Encoded output requires positive protocol preparation lead"));
+    return emit.checkedSubtract(protocolPreparationLead);
+}
+
 ::media::Result<MediaOutputSchedule> MediaOutputSchedule::create(
     MediaRunningTime presentation,
     MediaRunningTime dispatch,

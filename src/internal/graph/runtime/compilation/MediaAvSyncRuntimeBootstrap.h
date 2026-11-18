@@ -4,6 +4,7 @@
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaSteadyMasterClock.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
+#include "internal/graph/sync/MediaOutputEpochActivationCapability.h"
 
 #include <media_transcode/Result.h>
 
@@ -39,9 +40,11 @@ public:
         MediaAvSyncClockSource& source);
 private:
     friend class MediaGraphRuntimeCompiler;
-    static ::media::Result<MediaPlaybackEpochActivationCapability>
+    using Activation = std::variant<MediaPlaybackEpochActivationCapability,
+                                    MediaOutputEpochActivationCapability>;
+    static ::media::Result<Activation>
     registerGroupAndIssueActivationCapability(
-        const MediaAvSyncRuntimeBinding& binding,
+        const MediaAvRuntimeDomainBinding& binding,
         MediaAvSyncClockBundle clocks,
         MediaGraphExecutionContext& context);
     static ::media::Result<MediaAvReacquisitionAssemblyDependencies>

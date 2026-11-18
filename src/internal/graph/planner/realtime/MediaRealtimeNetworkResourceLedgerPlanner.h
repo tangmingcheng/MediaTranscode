@@ -1,8 +1,11 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaWireProducerStoragePlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaDatagramShapingPlan.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
+#include "internal/graph/planner/realtime/MediaDatagramCommitStoragePlan.h"
+#include "internal/graph/planner/realtime/MediaRawRtpStoragePlanner.h"
 
 #include <cstdint>
 #include <string>
@@ -16,7 +19,14 @@ enum class MediaRealtimeNetworkAccountingGroup : std::uint8_t {
     BatchContainer = 3,
     EndpointPendingContainer = 4,
     EvidenceCorrelation = 5,
-    SocketKernelBuffer = 6
+    SocketKernelBuffer = 6,
+    GlobalSequenceRecords = 7,
+    RtpProtocolRecords = 8,
+    RtpInstanceTable = 9,
+    CommitControlBlocks = 10,
+    CommitReservationStorage = 11,
+    RawRtpOwnedStorage = 12,
+    MpegTsOwnedStorage = 13
 };
 
 struct MediaRealtimeNetworkResourceLedgerEntry final {
@@ -28,6 +38,8 @@ struct MediaRealtimeNetworkResourceLedgerEntry final {
 };
 
 struct MediaRealtimeNetworkResourceLedgerPlan final {
+    MediaDatagramProtocolLayout protocolLayout;
+    MediaDatagramCommitStoragePlan commitStorage;
     std::uint64_t maximumBacklogDatagrams;
     std::uint64_t maximumBacklogBytes;
     std::uint64_t maximumBatchDatagrams;
@@ -39,6 +51,11 @@ struct MediaRealtimeNetworkResourceLedgerPlan final {
     std::uint64_t admittedNetworkBytes;
     std::uint64_t admittedSocketBytes;
     std::vector<MediaRealtimeNetworkResourceLedgerEntry> entries;
+    bool commitBeforeNextReservation;
+    std::vector<MediaRawRtpProducerPlan> rawRtpProducers;
+    std::vector<MediaRawRtpStoragePlan> rawRtpStorage;
+    std::optional<MediaMpegTsProducerPlan> mpegTsProducer;
+    std::optional<MediaWireProducerStoragePlan> mpegTsStorage;
 };
 
 class MediaRealtimeNetworkResourceLedgerPlanner final {
@@ -48,7 +65,9 @@ public:
         const MediaRealtimeDeploymentObservationBudget& observation,
         const MediaWireTrafficEnvelope& wire,
         MediaIpAddressFamily addressFamily,
-        std::uint64_t endpointCount);
+        MediaDatagramProtocolLayout protocolLayout,
+        std::span<const MediaRawRtpProducerPlan> rawRtpProducers,
+        const std::optional<MediaMpegTsProducerPlan>& mpegTsProducer);
     static ::media::Status validate(
         const MediaRealtimeNetworkResourceLedgerPlan& ledger);
 

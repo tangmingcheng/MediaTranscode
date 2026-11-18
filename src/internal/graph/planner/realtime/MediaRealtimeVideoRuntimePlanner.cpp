@@ -225,7 +225,6 @@ planSeparateRtp(
             std::in_place_type<MediaMpegTsRtpOutputPlan>,
             std::move(rtp).value());
     }
-    outer.videoParameters.globalHeader = true;
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt,
         startup.byteCapacity,
@@ -234,11 +233,14 @@ planSeparateRtp(
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
             emission.error());
     }
+    auto series = MediaTsProtocolSeriesBoundsPlanner::plan(protocol.value().muxPlan(), preparedEmission);
+    if (!series) return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(series.error());
     return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::success(
         MediaProjectMpegTsRuntimeOutputPlan{
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
             std::move(emission).value(),
+            std::move(series).value(),
             outer.outputTransport == MediaOutputTransportKind::RtpAvp
                 ? startup.byteCapacity
                 : 0,
@@ -422,18 +424,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
 
     auto datagramTransport = std::visit(
         [&](const auto& plannedOutput) {
-            using Output = std::decay_t<decltype(plannedOutput)>;
-            if constexpr (std::is_same_v<
-                              Output,
-                              MediaProjectMpegTsRuntimeOutputPlan>) {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *outer.deployment, plannedOutput,
-                    outer.videoPlan, outputFrameRate, nullptr);
-            } else {
-                return MediaRealtimeDatagramTransportPlanner::plan(
-                    request.mediaId, *outer.deployment, plannedOutput,
-                    outer.videoPlan, outputFrameRate);
-            }
+            return MediaRealtimeDatagramTransportPlanner::plan(
+                request.mediaId, *outer.deployment, plannedOutput, preparedEmission);
         },
         *adapter);
     if (!datagramTransport) {

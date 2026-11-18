@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/protocol/rtp/MediaRtcpBytes.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -18,7 +20,7 @@ struct MediaRtcpClockEvidence final {
     uint32_t cnameSsrc;
     MediaRtcpNtpTimestamp ntp;
     uint32_t rtpTimestamp;
-    std::vector<uint8_t> cname;
+    MediaRtcpBytes cname{MediaLineageAllocator<std::uint8_t>{MediaRuntimeLineageAllocation{}}};
     int64_t senderReportObservedAtNs;
     int64_t cnameObservedAtNs;
     uint64_t generation;

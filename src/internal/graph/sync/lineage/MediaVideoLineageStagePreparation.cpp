@@ -51,7 +51,7 @@ prepareMediaVideoLineageStage(
         return ::media::Result<std::shared_ptr<MediaCodecLineageRegistry>>::success(
             nullptr);
     }
-    auto registry = MediaCodecLineageRegistry::create(*capacity.value());
+    auto registry = MediaCodecLineageRegistry::create(*capacity.value(), MediaRuntimeLineageAllocation{});
     if (!registry) {
         return ::media::Result<std::shared_ptr<MediaCodecLineageRegistry>>::failure(
             registry.error());

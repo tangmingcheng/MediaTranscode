@@ -1,9 +1,12 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/protocol/rtp/ingress/windows/MediaWindowsRtpIngressAdapter.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressStorage.h"
 
 #include <array>
+#include "internal/graph/runtime/resource/MediaPreparedAllocationCost.h"
+
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -41,13 +44,12 @@ struct MediaWindowsRtpIngressAdapter::ReceiveState final {
     ReceiveState(
         HANDLE completionPortValue,
         MediaRtpUdpIngressReceiveLease receiveLease,
-        std::size_t descriptorCapacity)
+        std::size_t descriptorCapacity, std::pmr::memory_resource* resource)
         : completionPort(completionPortValue),
           lease(std::move(receiveLease)),
-          staged(descriptorCapacity)
+          staged(descriptorCapacity, resource)
     {
-        operations[0].channel = MediaRtpUdpChannel::Rtp;
-        operations[1].channel = MediaRtpUdpChannel::Rtcp;
+        operations[0].channel = lease->preferredChannel();
     }
 
     ~ReceiveState()
@@ -57,8 +59,8 @@ struct MediaWindowsRtpIngressAdapter::ReceiveState final {
 
     HANDLE completionPort = nullptr;
     std::optional<MediaRtpUdpIngressReceiveLease> lease;
-    std::array<Operation, 2> operations{};
-    std::vector<StagedDatagram> staged;
+    std::array<Operation, 1> operations{};
+    std::pmr::vector<StagedDatagram> staged;
     MediaRtpIngressStorage* storage = nullptr;
 #endif
     std::atomic<std::uint64_t> receiveCalls{0};
@@ -120,9 +122,10 @@ std::int64_t steadyNowNanoseconds() noexcept
 } // namespace
 
 MediaWindowsRtpIngressAdapter::MediaWindowsRtpIngressAdapter(
-    MediaRtpUdpTransport transport,
-    std::unique_ptr<ReceiveState> receiveState,
-    MediaRtpIngressPlanFacts planFacts) noexcept
+    ConstructionKey,
+    std::shared_ptr<MediaRtpUdpTransport> transport,
+    MediaLineageUniquePtr<ReceiveState> receiveState,
+    MediaRtpReceiveGeometryFacts planFacts) noexcept
     : m_transport(std::move(transport)),
       m_receiveState(std::move(receiveState)),
       m_planFacts(planFacts)
@@ -135,20 +138,25 @@ MediaWindowsRtpIngressAdapter::~MediaWindowsRtpIngressAdapter()
     logDiagnostics("destroyed");
 }
 
-::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>
+::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>
 MediaWindowsRtpIngressAdapter::create(
-    MediaRtpUdpTransport transport,
-    const MediaRtpIngressPlan& plan)
+    std::shared_ptr<MediaRtpUdpTransport> transport,
+    const MediaRtpReceiveGeometry& plan,
+    MediaLineageAllocationScope allocation)
 {
 #ifndef _WIN32
     (void)transport;
     (void)plan;
-    return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+    (void)allocation;
+    return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
         ::media::ErrorInfo::notInitialized(
             "Windows RTP ingress adapter is unavailable on this platform"));
 #else
+    if (!MediaLineageAllocator<std::byte>{allocation}.resource())
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
+            invalidAdapter("RTP ingress requires its allocation domain"));
     if (auto status = plan.validateProduct(); !status) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             status.error());
     }
     if (plan.adapterKind() !=
@@ -159,24 +167,24 @@ MediaWindowsRtpIngressAdapter::create(
             MediaRtpIngressCancellationContract::CompletionQueueWake ||
         plan.completionEvidence() !=
             MediaRtpIngressCompletionEvidence::OverlappedCompletionPort ||
-        plan.descriptorCapacity() < 2 || !transport.isOpen() ||
-        transport.effectiveReceiveBufferBytes() <= 0 ||
+        plan.descriptorCapacity() < 1 || !transport || !transport->isOpen() ||
+        transport->effectiveReceiveBufferBytes(plan.channel()) <= 0 ||
         plan.socketReceiveCapacityBytes() != static_cast<std::size_t>(
-            transport.effectiveReceiveBufferBytes())) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+            transport->effectiveReceiveBufferBytes(plan.channel()))) {
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             invalidAdapter(
                 "Windows RTP ingress adapter requires the exact planner-selected IOCP and socket contract"));
     }
-    auto leaseResult = transport.acquireIngressReceiveLease();
+    auto leaseResult = transport->acquireIngressReceiveLease(plan.channel());
     if (!leaseResult) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             leaseResult.error());
     }
     auto lease = std::move(leaseResult).value();
     HANDLE completionPort = CreateIoCompletionPort(
         INVALID_HANDLE_VALUE, nullptr, 0, 1);
     if (!completionPort) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             ::media::ErrorInfo::ioFailure(
                 "Windows RTP ingress completion port creation failed",
                 static_cast<int>(GetLastError())));
@@ -185,35 +193,44 @@ MediaWindowsRtpIngressAdapter::create(
         if (completionPort) CloseHandle(completionPort);
         completionPort = nullptr;
     };
-    const SOCKET rtp = static_cast<SOCKET>(lease.rtpHandle());
-    const SOCKET rtcp = static_cast<SOCKET>(lease.rtcpHandle());
     if (!CreateIoCompletionPort(
-            reinterpret_cast<HANDLE>(rtp), completionPort,
-            kRtpCompletionKey, 0) ||
-        !CreateIoCompletionPort(
-            reinterpret_cast<HANDLE>(rtcp), completionPort,
-            kRtcpCompletionKey, 0)) {
+            reinterpret_cast<HANDLE>(socketFor(lease, plan.channel())), completionPort,
+            completionKey(plan.channel()), 0)) {
         const int error = static_cast<int>(GetLastError());
         closePort();
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             ::media::ErrorInfo::ioFailure(
                 "Windows RTP ingress socket association with IOCP failed",
                 error));
     }
     try {
-        auto state = std::make_unique<ReceiveState>(
-            completionPort, std::move(lease), plan.descriptorCapacity());
+        auto state = makeMediaLineageUnique<ReceiveState>(allocation,
+            completionPort, std::move(lease), plan.descriptorCapacity(),
+            MediaLineageAllocator<std::byte>{allocation}.resource());
         completionPort = nullptr;
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::success(
-            std::unique_ptr<MediaRtpIngressAdapter>(
-                new MediaWindowsRtpIngressAdapter(
-                    std::move(transport), std::move(state), plan.facts())));
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::success(
+            std::allocate_shared<MediaWindowsRtpIngressAdapter> (
+                MediaLineageAllocator<MediaWindowsRtpIngressAdapter>{allocation}, ConstructionKey{},
+                std::move(transport), std::move(state), plan.facts()));
     } catch (const std::bad_alloc&) {
         closePort();
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Windows RTP ingress reusable completion allocation failed"));
     }
+#endif
+}
+
+::media::Result<std::size_t> MediaWindowsRtpIngressAdapter::preparationStorageBytes(std::size_t descriptors)
+{
+#ifdef _WIN32
+    using Cost = MediaPreparedAllocationCost;
+    return Cost::sum({Cost::shared<MediaWindowsRtpIngressAdapter>(), Cost::object<ReceiveState>(),
+        Cost::fixedVector<ReceiveState::StagedDatagram>(descriptors)});
+#else
+    (void)descriptors;
+    return ::media::Result<std::size_t>::failure(
+        ::media::ErrorInfo::unsupported("Ingress allocation geometry requires its target platform"));
 #endif
 }
 
@@ -298,8 +315,7 @@ MediaWindowsRtpIngressAdapter::kind() const noexcept
             return failStaged(status.error());
         }
     }
-    if (!m_receiveState->operations[0].pending &&
-        !m_receiveState->operations[1].pending) {
+    if (!m_receiveState->operations[0].pending) {
         m_receiveState->pressureFailures.fetch_add(
             1, std::memory_order_relaxed);
         return failStaged(::media::ErrorInfo::wouldBlock(
@@ -327,7 +343,7 @@ MediaWindowsRtpIngressAdapter::kind() const noexcept
     }
 
     bool cancellationObserved = false;
-    std::array<bool, 2> completedChannels{};
+    std::array<bool, 1> completedChannels{};
     for (ULONG index = 0; index < removed; ++index) {
         if (completions[index].lpOverlapped == nullptr &&
             completions[index].lpCompletionKey ==
@@ -373,9 +389,7 @@ MediaWindowsRtpIngressAdapter::kind() const noexcept
                 "Windows RTP ingress datagram was empty or truncated",
                 WSAEMSGSIZE));
         }
-        const std::size_t channelIndex =
-            operation->channel == MediaRtpUdpChannel::Rtp ? 0 : 1;
-        completedChannels[channelIndex] = true;
+        completedChannels[0] = true;
         m_receiveState->staged[stagedCount++] = {
             operation->slotIndex, operation->channel,
             static_cast<std::size_t>(bytes), steadyNowNanoseconds()};
@@ -389,9 +403,7 @@ MediaWindowsRtpIngressAdapter::kind() const noexcept
     for (std::size_t channelIndex = 0;
          channelIndex < completedChannels.size(); ++channelIndex) {
         if (!completedChannels[channelIndex]) continue;
-        const MediaRtpUdpChannel channel = channelIndex == 0
-            ? MediaRtpUdpChannel::Rtp
-            : MediaRtpUdpChannel::Rtcp;
+        const MediaRtpUdpChannel channel = m_planFacts.channel;
         while (stagedCount < m_receiveState->staged.size()) {
             auto slot = storage.acquireReceiveSlot();
             if (!slot) {
@@ -452,13 +464,13 @@ MediaWindowsRtpIngressAdapter::kind() const noexcept
 ::media::Status
 MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
 {
-    auto status = m_transport.interruptReceive();
+    auto status = m_transport->interruptReceive();
 #ifdef _WIN32
     if (m_receiveState && m_receiveState->completionPort &&
         !PostQueuedCompletionStatus(
             m_receiveState->completionPort, 0,
             kCancellationCompletionKey, nullptr) && status) {
-        status = ::media::Status::failure(::media::ErrorInfo::ioFailure(
+        status = ::media::Status::failure(mediaCleanupError(::media::ErrorCode::IoFailure,
             "Windows RTP ingress completion wake failed",
             static_cast<int>(GetLastError())));
     }
@@ -488,8 +500,8 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
         return ::media::Status::success();
     }
     ::media::Status first = aborting
-        ? m_transport.abort()
-        : m_transport.stop();
+        ? m_transport->abort()
+        : m_transport->stop();
 #ifdef _WIN32
     if (m_receiveState->lease) {
         auto& lease = *m_receiveState->lease;
@@ -502,7 +514,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
                 const DWORD error = GetLastError();
                 if (error != ERROR_NOT_FOUND && first) {
                     first = ::media::Status::failure(
-                        ::media::ErrorInfo::ioFailure(
+                        mediaCleanupError(::media::ErrorCode::IoFailure,
                             "Windows RTP ingress cancellation failed",
                             static_cast<int>(error)));
                 }
@@ -511,8 +523,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
         (void)PostQueuedCompletionStatus(
             m_receiveState->completionPort, 0,
             kCancellationCompletionKey, nullptr);
-        while (m_receiveState->operations[0].pending ||
-               m_receiveState->operations[1].pending) {
+        while (m_receiveState->operations[0].pending) {
             OVERLAPPED_ENTRY entries[2]{};
             ULONG removed = 0;
             if (!GetQueuedCompletionStatusEx(
@@ -520,7 +531,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
                     &removed, INFINITE, FALSE)) {
                 if (first) {
                     first = ::media::Status::failure(
-                        ::media::ErrorInfo::ioFailure(
+                        mediaCleanupError(::media::ErrorCode::IoFailure,
                             "Windows RTP ingress cancellation drain failed",
                             static_cast<int>(GetLastError())));
                 }
@@ -551,6 +562,7 @@ MediaWindowsRtpIngressAdapter::interruptReceive() noexcept
 void MediaWindowsRtpIngressAdapter::logDiagnostics(
     const char* stage) noexcept
 {
+    try {
     if (!m_receiveState ||
         m_receiveState->diagnosticsLogged.exchange(
             true, std::memory_order_acq_rel)) {
@@ -561,6 +573,7 @@ void MediaWindowsRtpIngressAdapter::logDiagnostics(
         MediaGraphDiagnosticPhase::RuntimeNode,
         std::string("rtp_ingress_adapter stage=") + stage +
             " adapter=windows_overlapped_completion_queue" +
+            " channel=" + std::string(m_planFacts.channel == MediaRtpUdpChannel::Rtp ? "rtp" : "rtcp") +
             " socket_capacity_bytes=" +
                 std::to_string(m_planFacts.socketReceiveCapacityBytes) +
             " batch_capacity_bytes=" +
@@ -586,6 +599,10 @@ void MediaWindowsRtpIngressAdapter::logDiagnostics(
             " pressure_failures=" + std::to_string(
                 m_receiveState->pressureFailures.load(std::memory_order_relaxed)) +
             " storage_reuse=preallocated post_start_allocation_path=none");
+
+    } catch (...) {
+        // Cleanup and protocol cancellation must finish when diagnostics cannot allocate.
+    }
 }
 
 } // namespace media::ffmpeg::graph

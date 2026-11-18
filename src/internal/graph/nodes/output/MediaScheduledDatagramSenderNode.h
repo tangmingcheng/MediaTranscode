@@ -1,6 +1,10 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/diagnostics/MediaDatagramReservationObservation.h"
+#include "internal/graph/diagnostics/MediaDatagramBatchObservation.h"
+#include "internal/graph/diagnostics/MediaDatagramSuccessfulSubmitObservation.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 #include "internal/graph/runtime/diagnostics/MediaVideoOutputReadyEvidence.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/runtime/network/MediaDatagramPacingController.h"
@@ -36,6 +40,11 @@ public:
            MediaScheduledDatagramSenderNodeDependencies dependencies);
 
     static MediaNodeKind staticKind() noexcept;
+    static constexpr std::string_view generationPurgeIdentity() noexcept
+    { return "datagram_sender_generation_state"; }
+    std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept
+    { return m_generationPurge; }
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status bindServiceScopeArbiter(std::shared_ptr<MediaDatagramServiceScopeArbiter> arbiter);
     const std::shared_ptr<MediaDatagramServiceScopeArbiter>& serviceScopeArbiter() const noexcept { return m_scopeArbiter; }
     std::optional<MediaVideoOutputReadyEvidence> videoReadyEvidence() const noexcept;
@@ -76,14 +85,19 @@ private:
         MediaGraphExecutionContext& context) const noexcept;
     ::media::Status recordSubmittedPrefix(
         std::size_t count,
-        MediaRunningTime submitCompletedAt);
+        MediaRunningTime submitCompletedAt,
+        std::optional<MediaRunningTime> scopeAvailableAt);
     ::media::Result<MediaNodeProcessResult> failSubmit(
         const MediaDatagramTransmitError& error,
         MediaRunningTime submitStartedAt,
-        MediaRunningTime submitCompletedAt);
+        MediaRunningTime submitCompletedAt,
+        std::optional<MediaRunningTime> scopeAvailableAt);
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void emitDiagnostics(const char* stage) noexcept;
 
+    ::media::Status applyGenerationPurge(MediaGraphExecutionContext& context, const MediaAvGenerationPurge& purge);
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge;
+    std::optional<MediaAvGenerationPurge> m_completedPurge;
     MediaProtocolOutputSessionKey m_plannedSession;
     MediaTranscodeStreamSet m_streamSet;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_clock;
@@ -95,8 +109,11 @@ private:
     std::unique_ptr<MediaDatagramTransmitSession> m_session;
     std::shared_ptr<MediaWireGlobalSequenceState> m_serviceLedger;
     std::shared_ptr<MediaWireDatagramBatchBuffer> m_pendingBatch;
+    MediaDatagramReservationObservation m_reservationObservation;
+    MediaDatagramBatchObservation m_batchObservation;
+    MediaDatagramBatchObservation m_completedBatchObservation;
+    std::optional<MediaDatagramSuccessfulSubmitObservation> m_worstSuccessfulSubmit;
     MediaNodeWakeup m_wakeup;
-    std::stop_source m_stopSource;
     std::optional<std::uint64_t> m_generation;
     std::string m_serviceScopeId;
     MediaDatagramTransmitExecutionMode m_executionMode =
@@ -129,6 +146,8 @@ private:
     std::size_t m_groupBegin = 0;
     std::size_t m_groupCount = 0;
     std::uint64_t m_groupEndpointId = 0;
+    std::optional<MediaDatagramPacingReservation> m_groupPacingReservation;
+    MediaRunningTime m_groupReservedAt = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     bool m_groupDeadlineSubmitAttempted = false;

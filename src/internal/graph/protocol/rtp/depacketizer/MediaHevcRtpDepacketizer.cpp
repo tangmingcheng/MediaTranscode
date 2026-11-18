@@ -11,8 +11,8 @@ bool keyType(std::uint8_t type) noexcept
 } // namespace
 
 MediaHevcRtpDepacketizer::MediaHevcRtpDepacketizer(
-    MediaRtpDepacketizerConfig config, std::size_t maximumAccessUnitBytes)
-    : m_config(std::move(config)), m_maximumAccessUnitBytes(maximumAccessUnitBytes),
+    MediaRtpDepacketizerConfig config, std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation)
+    : MediaRtpDepacketizer(std::move(allocation)), m_config(std::move(config)), m_maximumAccessUnitBytes(maximumAccessUnitBytes),
       m_nalParser(m_config.payloadType)
 {
 }
@@ -33,7 +33,7 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
         discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
     }
     if (!m_continuity.accept(packet.timestamp)) {
-        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        return ::media::Result<MediaRtpDepacketizerResult>::success(MediaRtpDepacketizerResult{allocation()});
     }
     if (!m_timestamp) m_timestamp = packet.timestamp;
     auto capacity = rtpAccessUnitNalCapacity(
@@ -48,7 +48,7 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
     }
     if (parsed.value().discardedFragment) {
         discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
-        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        return ::media::Result<MediaRtpDepacketizerResult>::success(MediaRtpDepacketizerResult{allocation()});
     }
     for (const auto& nal : parsed.value().nalUnits) {
         const auto bytes = nal.bytes();
@@ -66,7 +66,7 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
         }
     }
     if (!packet.marker) {
-        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        return ::media::Result<MediaRtpDepacketizerResult>::success(MediaRtpDepacketizerResult{allocation()});
     }
     return finish(packet);
 }
@@ -89,7 +89,7 @@ MediaHevcRtpDepacketizer::pushValidated(const MediaRtpPacket& packet)
         return ::media::Result<MediaRtpDepacketizerResult>::failure(
             unit.error());
     }
-    MediaRtpDepacketizerResult result;
+    MediaRtpDepacketizerResult result{allocation()};
     result.accessUnits.push_back(std::move(unit).value());
     return ::media::Result<MediaRtpDepacketizerResult>::success(
         std::move(result));

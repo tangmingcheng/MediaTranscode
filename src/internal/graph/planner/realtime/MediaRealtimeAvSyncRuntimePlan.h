@@ -1,4 +1,8 @@
 #pragma once
+#include "internal/graph/model/MediaRtpControlDelivery.h"
+#include "internal/graph/model/MediaOutputReservationStoragePlan.h"
+
+#include "internal/graph/planner/realtime/MediaEncodedAccessUnitSchedulingPlan.h"
 
 #include "internal/graph/model/MediaMuxSessionKind.h"
 #include "internal/graph/model/MediaOutputResourceKind.h"
@@ -16,6 +20,7 @@
 #include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include "internal/graph/planner/audio/MediaAudioEncoderFifoRetentionPlan.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -27,7 +32,6 @@ struct MediaAudioCorrectionReachabilityPlan final {
     int outputSampleRate;
     std::int64_t epochOutputSampleIndex;
     std::int64_t worstCaseInFlightSamples;
-    std::int64_t protocolBatchSamples;
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::int64_t commandLeadSamples;
@@ -36,25 +40,41 @@ struct MediaAudioCorrectionReachabilityPlan final {
                            const MediaAudioCorrectionReachabilityPlan&) = default;
 };
 
-struct MediaRealtimeAvSyncRuntimePlan final {
+struct MediaRealtimeAvSourcePlanningProducts {
     MediaAudioPipelinePlan audioPipeline;
     std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
-    MediaRealtimeAvSyncComponentBounds componentBounds;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan synchronization;
     MediaRealtimeAvSyncAssemblyPlan assembly;
-    MediaAvSyncOutputAdapterKind outputAdapter;
-    std::variant<MediaSeparateRtpOutputRuntimePlan,
-                 MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
-    MediaDatagramTransportPlanTemplate datagramTransport;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
     MediaRunningTime activationOutputLead;
     bool videoFilterActive;
     MediaAvGenerationTransitionPlan transition;
-    MediaRealtimeAvSyncPlanningFacts planningFacts;
+    MediaRealtimeAvSourceTimingFacts sourceTiming;
     std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
+    // Immutable planner input, retained independently of the finalized servo
+    // in synchronization. Capacity refresh must start from this policy.
+    const MediaAvSyncAudioServoPolicy audioServoPolicy;
+    MediaRtpControlDelivery rtpControlDelivery;
+};
+
+struct MediaRealtimeAvSourceRuntimePlan : MediaRealtimeAvSourcePlanningProducts {
+    MediaOutputReservationStoragePlan reservationStorage;
+};
+
+struct MediaRealtimeAvSyncRuntimePlan final : MediaRealtimeAvSourceRuntimePlan {
+    MediaRealtimeAvSyncComponentBounds componentBounds;
+    MediaRealtimeAvSyncPlanningFacts planningFacts;
+    MediaRealtimeEdgePolicySet outputEdgePolicies;
+    MediaEdgePolicy canonicalAudioInputPolicy;
+    MediaAvSyncOutputAdapterKind outputAdapter;
+    MediaEncodedAccessUnitSchedulingPlan scheduling;
+    std::variant<MediaSeparateRtpOutputRuntimePlan,
+                 MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;
+    MediaDatagramTransportPlanTemplate datagramTransport;
+    std::optional<MediaAudioEncoderFifoRetentionPlan> encoderFifoRetention;
 };
 
 } // namespace media::ffmpeg::graph

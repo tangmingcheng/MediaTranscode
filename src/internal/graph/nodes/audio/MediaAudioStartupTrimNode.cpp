@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
 
@@ -60,6 +61,7 @@ void MediaAudioStartupTrimLineageState::clearOwnedState() noexcept
     releaseTrimConsumed = false;
     remainingTrimSamples = 0;
     waitingForFirstPostTrimSample = false;
+    generationDrained = false;
     expectedNextSample.reset();
 }
 
@@ -238,7 +240,7 @@ void MediaAudioStartupTrimNode::abort(
     }
     const int retainedSamples = output->nb_samples;
     auto wrapped = FFmpegBufferFactory::wrapFrame(
-        std::move(output), MediaStreamKind::Audio);
+        std::move(output), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
     if (!wrapped) return wrapped;
     const AVFrame* trimmedFrame = FFmpegFrameView::frame(wrapped.value());
     auto footprint = trimmedFrame
@@ -290,6 +292,11 @@ void MediaAudioStartupTrimNode::abort(
             ::media::ErrorInfo::invalidArgument(
                 "Audio startup trim requires an exact decoded origin envelope"));
     }
+    auto disposition = m_lineageState->classifyObservation(decoded->audioOrigin().generation);
+    if (!disposition)
+        return ::media::Result<MediaBufferRef>::failure(disposition.error());
+    if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale)
+        return ::media::Result<MediaBufferRef>::success(MediaBufferRef{});
     if (!m_lineageState->origin) {
         m_lineageState->origin = decoded->audioOrigin();
     }
@@ -312,6 +319,10 @@ void MediaAudioStartupTrimNode::abort(
 ::media::Result<MediaNodeProcessResult> MediaAudioStartupTrimNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    {
+        auto lineageLock = m_lineageState->lock();
+        if (m_lineageState->generationDrained) return processWaiting();
+    }
     auto reservation = context.reservePayload(
         nodeId(), MediaStreamKind::Audio, MediaPayloadKind::Frame);
     if (!reservation) {
@@ -321,8 +332,14 @@ void MediaAudioStartupTrimNode::abort(
     auto input = tryPopInputOptional(context, "frame");
     if (!input) return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     if (!input.value()) return processWaiting();
-    if ((*input.value())->isEof() || (*input.value())->isFlush()) {
+    auto generationEnd = mediaEndGeneration(*input.value());
+    if (!generationEnd)
+        return processProgress(::media::Status::failure(generationEnd.error()));
+    if ((*input.value())->isEof() || (*input.value())->isFlush() || generationEnd.value()) {
         auto lineageLock = m_lineageState->lock();
+        if (generationEnd.value() && !m_lineageState->synchronized())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Audio startup trim generation end requires a synchronized purge owner")));
         if (m_lineageState->remainingTrimSamples != 0 ||
             m_lineageState->waitingForFirstPostTrimSample) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -335,6 +352,7 @@ void MediaAudioStartupTrimNode::abort(
             return ::media::Result<MediaNodeProcessResult>::failure(
                 freshness.error());
         }
+        m_lineageState->generationDrained = generationEnd.value().has_value();
         auto terminalStatus =
             broadcastControlToAllOutputs(context, *input.value());
         return (*input.value())->isEof()

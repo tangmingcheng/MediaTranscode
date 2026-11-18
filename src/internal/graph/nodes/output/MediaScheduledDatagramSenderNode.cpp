@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -13,6 +14,7 @@
 #include <limits>
 #include <new>
 #include <sstream>
+#include <cstdio>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -56,6 +58,11 @@ MediaScheduledDatagramSenderNode::create(
     if (!node) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaScheduledDatagramSenderNode"));
+    }
+    try {
+        node->m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed("sender generation purge mailbox"));
     }
     return Result::success(std::move(node));
 }
@@ -127,11 +134,18 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     if (!m_scopeArbiter) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
         "sender requires its planned shared service scope before start"));
     m_scopeWakeup = context.sharedNodeWakeup(nodeId());
+    auto purgeStarted = m_generationPurge->start(m_scopeWakeup);
+    if (!purgeStarted) return purgeStarted;
+    m_completedPurge.reset();
     m_scopeMember.reset();
     m_session.reset();
     m_pacingController.reset();
     m_serviceLedger.reset();
     m_pendingBatch.reset();
+    m_reservationObservation = {};
+    m_batchObservation = {};
+    m_completedBatchObservation = {};
+    m_worstSuccessfulSubmit.reset();
     {
         std::lock_guard lock(m_videoReadyMutex);
         m_videoReadyEvidence.reset();
@@ -157,13 +171,13 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     m_nextDatagram = 0;
     m_groupBegin = 0;
     m_groupCount = 0;
+    m_groupPacingReservation.reset();
     m_groupEndpointId = 0;
     m_groupNotBefore = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadline = MediaRunningTime::fromNanoseconds(0);
     m_groupDeadlineSubmitAttempted = false;
     m_terminalFailure.reset();
     m_wakeup.reset();
-    m_stopSource = std::stop_source{};
     m_batches = 0;
     m_datagrams = 0;
     m_bytes = 0;
@@ -187,6 +201,9 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
         plan.shaping.sessionKey() != m_plannedSession.value() ||
         activation.value().generation != plan.shaping.generation() ||
         (m_generation && plan.shaping.generation() <= *m_generation) ||
+        ((m_generation || m_completedPurge) && (!m_completedPurge ||
+            plan.shaping.generation() != m_completedPurge->nextGeneration ||
+            activation.value().completedTransitionSequence != m_completedPurge->transitionSequence)) ||
         plan.shaping.serviceScope().scopeId.empty() ||
         plan.localEndpoints.size() != plan.shaping.endpoints().size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -304,15 +321,49 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
 ::media::Status MediaScheduledDatagramSenderNode::waitUntil(
     MediaRunningTime deadline)
 {
+    const auto token = m_generationPurge->waitStopToken();
+    std::stop_callback wakeOnPurge(token, [this] { m_wakeup.notify(); });
+    const bool observe = mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State);
+    struct Capture final {
+        std::optional<MediaDatagramWaitAttempt> pending;
+        MediaDatagramWaitObservation& reservation;
+        MediaDatagramWaitObservation& batch;
+        void complete(std::optional<std::int64_t> master, std::optional<std::int64_t> steady) noexcept
+        {
+            if (!pending) return;
+            pending->nextMasterNs = master;
+            pending->nextSteadyNs = steady;
+            reservation.observe(*pending);
+            batch.observe(*pending);
+            pending.reset();
+        }
+        ~Capture() { complete(std::nullopt, std::nullopt); }
+    } capture{{}, m_reservationObservation.waits, m_batchObservation.waits};
     while (true) {
-        auto now = m_clock->now();
-        if (!now) return ::media::Status::failure(now.error());
-        if (now.value() >= deadline) return ::media::Status::success();
-        const auto remaining = deadline.nanoseconds() - now.value().nanoseconds();
         const auto sequence = m_wakeup.sequence();
+        if (token.stop_requested()) return ::media::Status::success();
+        auto now = m_clock->now();
+        const auto sampledSteady = observe ? std::optional<std::int64_t>(mediaSteadyClockNowNs()) : std::nullopt;
+        capture.complete(now ? std::optional<std::int64_t>(now.value().nanoseconds()) : std::nullopt,
+            sampledSteady);
+        if (!now) return ::media::Status::failure(now.error());
+        if (!m_reservationObservation.waitStartedAt)
+            m_reservationObservation.waitStartedAt = now.value();
+        if (now.value() >= deadline) {
+            m_reservationObservation.waitCompletedAt = now.value();
+            return ::media::Status::success();
+        }
+        const auto remaining = deadline.nanoseconds() - now.value().nanoseconds();
+        if (observe) {
+            capture.pending.emplace(MediaDatagramWaitAttempt{
+                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence(),
+                deadline.nanoseconds(), now.value().nanoseconds(), *sampledSteady,
+                remaining, {}, std::nullopt, std::nullopt, std::nullopt});
+        }
         auto waited = m_wakeup.wait(
-            sequence, MediaNodeDeadlineWakePolicy::DeadlineOrCancellation,
-            std::chrono::nanoseconds(remaining));
+            sequence, MediaNodeDeadlineWakePolicy::InputOrDeadline,
+            std::chrono::nanoseconds(remaining), capture.pending ? &capture.pending->wait : nullptr);
+        if (capture.pending && waited) capture.pending->outcome = waited.value();
         if (!waited) return ::media::Status::failure(waited.error());
         if (waited.value() == MediaNodeWakeup::WaitOutcome::Interrupted) {
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
@@ -331,7 +382,7 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     auto& first = m_pendingBatch->m_datagrams[m_nextDatagram];
     if (first.generation() != *m_generation ||
-        !m_pendingBatch->m_commitSlice.valid()) {
+        !m_pendingBatch->m_commitSlice || !m_pendingBatch->m_commitSlice->valid()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "scheduled wire job violates generation or commit ownership"));
     }
@@ -346,8 +397,11 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
     }
     m_groupCount = 1;
     m_groupEndpointId = first.endpointId();
+    m_reservationObservation.snapshotStartedAt = mediaDiagnosticMasterClockNow(*m_clock);
     auto queue = m_serviceLedger->pacingQueueSnapshot(*m_clock);
+    m_reservationObservation.snapshotCompletedAt = mediaDiagnosticMasterClockNow(*m_clock);
     if (!queue) return ::media::Status::failure(queue.error());
+    m_reservationObservation.snapshotSampledAt = queue.value().sampledAt;
     auto pacing = m_pacingController->reserve(
         MediaDatagramPacingJob{
             first.generation(), first.endpointId(), first.globalSequence(),
@@ -357,7 +411,15 @@ MediaNodeKind MediaScheduledDatagramSenderNode::staticKind() noexcept
                 queue.value().wireBytes,
                 queue.value().averageResidence}},
         queue.value().sampledAt);
-    if (!pacing) return ::media::Status::failure(pacing.error());
+    m_reservationObservation.reservationCompletedAt = mediaDiagnosticMasterClockNow(*m_clock);
+    if (!pacing) {
+        m_reservationObservation.logFailure("reservation_failed", first.generation(), first.endpointId(),
+            first.globalSequence(), first.canonicalRelease(), first.canonicalDeadline(),
+            first.protocolDeadlineObservation(), pacing.error());
+        return ::media::Status::failure(pacing.error());
+    }
+    m_groupReservedAt = queue.value().sampledAt;
+    m_groupPacingReservation = pacing.value();
     m_groupNotBefore = pacing.value().notBefore;
     m_groupDeadline = pacing.value().notAfter;
     if (m_groupNotBefore > m_groupDeadline) {
@@ -511,14 +573,24 @@ MediaScheduledDatagramSenderNode::activateNextWireBatch()
         return Result::success(false);
     }
     auto& queued = m_queuedWireBatches.front();
+    const auto activationStartedAt = mediaDiagnosticMasterClockNow(*m_clock);
     if (queued.lastGlobalSequence ==
         (std::numeric_limits<std::uint64_t>::max)()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "common pacing sender next sequence would overflow"));
     }
+    auto publication = m_clock->reserveCommit(*m_generation);
+    if (!publication) {
+        if (publication.error().code == ::media::ErrorCode::Cancelled ||
+            publication.error().code == ::media::ErrorCode::WouldBlock)
+            return Result::failure(::media::ErrorInfo::wouldBlock("sender is waiting for generation purge"));
+        return Result::failure(publication.error());
+    }
     auto scheduledAt = m_clock->now();
     if (!scheduledAt) return Result::failure(scheduledAt.error());
-    auto scheduled = queued.batch->m_commitSlice.scheduleAll(
+    if (!queued.batch->m_commitSlice) return Result::failure(::media::ErrorInfo::internalError(
+        "scheduled batch has no bound commit slice"));
+    auto scheduled = queued.batch->m_commitSlice->scheduleAll(
         scheduledAt.value());
     if (!scheduled) return Result::failure(scheduled.error());
     const auto datagrams = static_cast<std::uint64_t>(
@@ -529,12 +601,23 @@ MediaScheduledDatagramSenderNode::activateNextWireBatch()
             "common pacing sender ordered queue accounting underflowed"));
     }
     m_pendingBatch = std::move(queued.batch);
+    m_batchObservation = {};
+    m_batchObservation.generation = *m_generation;
+    m_batchObservation.firstSequence = queued.firstGlobalSequence;
+    m_batchObservation.lastSequence = queued.lastGlobalSequence;
+    m_batchObservation.firstRelease = m_pendingBatch->m_datagrams.front().canonicalRelease();
+    m_batchObservation.firstDeadline = m_pendingBatch->m_datagrams.front().canonicalDeadline();
+    m_batchObservation.lastRelease = m_pendingBatch->m_datagrams.back().canonicalRelease();
+    m_batchObservation.lastDeadline = m_pendingBatch->m_datagrams.back().canonicalDeadline();
     *m_nextScheduledSequence = queued.lastGlobalSequence + 1;
     m_queuedWireDatagrams -= datagrams;
     m_queuedWireBytes -= queued.wireBytes;
     m_queuedWireBatches.erase(m_queuedWireBatches.begin());
     m_nextDatagram = 0;
     m_state = SubmitState::WaitReservation;
+    m_reservationObservation = {};
+    m_reservationObservation.activationStartedAt = activationStartedAt;
+    m_reservationObservation.activationCompletedAt = mediaDiagnosticMasterClockNow(*m_clock);
     return Result::success(true);
 }
 
@@ -566,7 +649,8 @@ MediaScheduledDatagramSenderNode::videoReadyEvidence() const noexcept
 
 ::media::Status MediaScheduledDatagramSenderNode::recordSubmittedPrefix(
     std::size_t count,
-    MediaRunningTime submitCompletedAt)
+    MediaRunningTime submitCompletedAt,
+    std::optional<MediaRunningTime> scopeAvailableAt)
 {
     if (!m_pendingBatch || count == 0 ||
         m_nextDatagram > m_pendingBatch->m_datagrams.size() ||
@@ -574,8 +658,19 @@ MediaScheduledDatagramSenderNode::videoReadyEvidence() const noexcept
         return ::media::Status::failure(::media::ErrorInfo::internalError(
             "scheduled datagram sender has no valid submitted prefix"));
     }
-    auto committed = m_pendingBatch->m_commitSlice.commitSubmittedPrefix(
-        count, submitCompletedAt);
+    if (count != 1 || !m_groupPacingReservation ||
+        m_groupPacingReservation->globalSequence !=
+            m_pendingBatch->m_datagrams[m_nextDatagram].globalSequence()) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "submitted datagram has no matching pacing service reservation"));
+    }
+    if (!m_pendingBatch->m_commitSlice) return ::media::Status::failure(::media::ErrorInfo::internalError(
+        "submitted batch has no bound commit slice"));
+    auto committed = m_pendingBatch->m_commitSlice->commitSubmittedPrefix(
+        count, MediaDatagramSubmittedService{
+            m_pendingBatch->m_datagrams[m_nextDatagram].generation(),
+            m_groupPacingReservation->globalSequence, submitCompletedAt,
+            m_groupPacingReservation->serviceDuration, scopeAvailableAt});
     if (!committed) return committed;
 
     std::uint64_t submittedBytes = 0;
@@ -588,7 +683,7 @@ MediaScheduledDatagramSenderNode::videoReadyEvidence() const noexcept
         auto endpointBytes = m_endpointBytes.find(datagram.endpointId());
         ++endpointDatagrams->second;
         endpointBytes->second += bytes;
-        if (datagram.m_descriptor.mediaBoundary ==
+        if (datagram.m_layout.mediaBoundary ==
                 MediaWireMediaBoundary::VideoRandomAccessUnitEnd) {
             std::lock_guard lock(m_videoReadyMutex);
             if (!m_videoReadyEvidence) {
@@ -608,7 +703,8 @@ MediaScheduledDatagramSenderNode::videoReadyEvidence() const noexcept
 MediaScheduledDatagramSenderNode::failSubmit(
     const MediaDatagramTransmitError& error,
     MediaRunningTime submitStartedAt,
-    MediaRunningTime submitCompletedAt)
+    MediaRunningTime submitCompletedAt,
+    std::optional<MediaRunningTime> scopeAvailableAt)
 {
     if (error.kind ==
         MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
@@ -628,14 +724,32 @@ MediaScheduledDatagramSenderNode::failSubmit(
             submittedSequence =
                 m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
         }
+        if (error.kind == MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
+            m_batchObservation.observe(
+                m_pendingBatch->m_datagrams[m_groupBegin].globalSequence(),
+                m_groupNotBefore, submitStartedAt, submitCompletedAt,
+                m_reservationObservation);
+        }
         auto committed = recordSubmittedPrefix(
             static_cast<std::size_t>(error.submittedPrefixDatagrams),
-            submitCompletedAt);
-        if (!committed) return failTerminal(committed.error());
+            submitCompletedAt, scopeAvailableAt);
+        const auto logSecondaryFailure = [](const char* operation,
+                                             const ::media::ErrorInfo& secondary) noexcept {
+            try {
+                mediaGraphDiagnosticLog(
+                    MediaGraphDiagnosticLevel::Summary,
+                    MediaGraphDiagnosticPhase::RuntimeNode,
+                    std::string("scheduled_datagram_sender secondary_submit_failure operation=") +
+                        operation + " error=" + secondary.describe());
+            } catch (...) {
+                // Diagnostics must not replace the original transport failure.
+            }
+        };
+        if (!committed) logSecondaryFailure("record_submitted_prefix", committed.error());
         if (submittedSequence) {
             auto paced = m_pacingController->markSubmitted(
                 *submittedSequence, submitStartedAt, submitCompletedAt);
-            if (!paced) return failTerminal(paced.error());
+            if (!paced) logSecondaryFailure("mark_submitted", paced.error());
         }
     }
     return failTerminal(error.cause);
@@ -645,7 +759,10 @@ MediaScheduledDatagramSenderNode::failSubmit(
 MediaScheduledDatagramSenderNode::progressPendingBatch()
 {
     while (m_pendingBatch) {
+        if (m_generationPurge->pending()) return processWaiting();
         if (m_nextDatagram == m_pendingBatch->m_datagrams.size()) {
+            m_completedBatchObservation = m_batchObservation;
+            m_batchObservation = {};
             ++m_batches;
             m_pendingBatch.reset();
             m_nextDatagram = 0;
@@ -654,10 +771,29 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
         }
 
         if (m_state == SubmitState::WaitReservation) {
-            auto begun = beginSubmitGroup();
-            if (!begun) return failTerminal(begun.error());
+            {
+                const auto activationStartedAt = m_reservationObservation.activationStartedAt;
+                const auto activationCompletedAt = m_reservationObservation.activationCompletedAt;
+                m_reservationObservation = {};
+                m_reservationObservation.activationStartedAt = activationStartedAt;
+                m_reservationObservation.activationCompletedAt = activationCompletedAt;
+                m_reservationObservation.permitStartedAt = mediaDiagnosticMasterClockNow(*m_clock);
+                auto publication = m_clock->reserveCommit(*m_generation);
+                m_reservationObservation.permitCompletedAt = mediaDiagnosticMasterClockNow(*m_clock);
+                if (!publication) {
+                    if (publication.error().code == ::media::ErrorCode::Cancelled ||
+                        publication.error().code == ::media::ErrorCode::WouldBlock) return processWaiting();
+                    return failTerminal(publication.error());
+                }
+                auto begun = beginSubmitGroup();
+                if (!begun) {
+                    if (begun.error().code == ::media::ErrorCode::WouldBlock) return processWaiting();
+                    return failTerminal(begun.error());
+                }
+            }
             auto waited = waitUntil(m_groupNotBefore);
             if (!waited) return failTerminal(waited.error());
+            if (m_generationPurge->pending()) return processWaiting();
             m_state = SubmitState::TrySubmit;
         }
 
@@ -678,7 +814,8 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             ++m_writableWaits;
             auto waited = m_session->waitWritable(
                 m_groupEndpointId, now.value(), remaining.value(),
-                m_stopSource.get_token());
+                m_generationPurge->waitStopToken());
+            if (m_generationPurge->pending()) return processWaiting();
             if (!waited) return failTerminal(waited.error());
             if (waited.value() == MediaDatagramWritableWaitResult::TimedOut) {
                 ++m_deadlineMisses;
@@ -701,8 +838,26 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             }
             if (now.value() > m_groupDeadline) {
                 ++m_deadlineMisses;
-                return failTerminal(::media::ErrorInfo::ioFailure(
-                    "scheduled datagram submit exceeded its original deadline"));
+                const auto& datagram = m_pendingBatch->m_datagrams[m_groupBegin];
+                char detail[512];
+                std::snprintf(detail, sizeof(detail),
+                    "scheduled datagram submit exceeded its original deadline"
+                    " generation=%llu sequence=%llu endpoint=%llu release_ns=%lld"
+                    " reserved_at_ns=%lld not_before_ns=%lld deadline_ns=%lld observed_at_ns=%lld",
+                    static_cast<unsigned long long>(datagram.generation()),
+                    static_cast<unsigned long long>(datagram.globalSequence()),
+                    static_cast<unsigned long long>(datagram.endpointId()),
+                    static_cast<long long>(datagram.canonicalRelease().nanoseconds()),
+                    static_cast<long long>(m_groupReservedAt.nanoseconds()),
+                    static_cast<long long>(m_groupNotBefore.nanoseconds()),
+                    static_cast<long long>(m_groupDeadline.nanoseconds()),
+                    static_cast<long long>(now.value().nanoseconds()));
+                auto error = ::media::ErrorInfo::ioFailure(detail);
+                m_reservationObservation.submitObservedAt = now.value();
+                m_reservationObservation.logFailure("submit_deadline_missed", datagram.generation(),
+                    datagram.endpointId(), datagram.globalSequence(), datagram.canonicalRelease(),
+                    datagram.canonicalDeadline(), datagram.protocolDeadlineObservation(), error);
+                return failTerminal(std::move(error));
             }
             if (now.value() == m_groupDeadline) {
                 if (m_groupDeadlineSubmitAttempted) {
@@ -724,6 +879,13 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                         MediaNodeDeadlineWakePolicy::InputOrDeadline)});
             }
             auto permit = std::move(*acquired.value().permit);
+            auto publication = m_clock->reserveCommit(*m_generation);
+            if (!publication) {
+                if (publication.error().code == ::media::ErrorCode::WouldBlock ||
+                    publication.error().code == ::media::ErrorCode::Cancelled ||
+                    m_generationPurge->pending()) return processWaiting();
+                return failTerminal(publication.error());
+            }
             MediaDatagramTransmitSubmitResult submitted =
                 MediaDatagramTransmitSubmitResult::failure(
                     mediaDatagramTransmitError(::media::ErrorInfo::internalError(
@@ -757,28 +919,50 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                       submitted.error().kind == MediaDatagramTransmitFailureKind::AmbiguousSubmittedPrefix))
                 chargedWireBytes = physicalWireBytes;
             auto charged = permit.complete(chargedWireBytes, physicalCompletedAt.value());
-            if (!charged) return failTerminal(submitted ? charged.error() : submitted.error().cause);
+            const auto scopeAvailableAt = charged ? charged.value() : std::nullopt;
             if (!submitted) {
                 return failSubmit(
-                    submitted.error(), now.value(), physicalCompletedAt.value());
+                    submitted.error(), now.value(), physicalCompletedAt.value(), scopeAvailableAt);
             }
             if (submitted.value() == MediaDatagramTransmitAttempt::WouldBlock) {
+                if (!charged) return failTerminal(charged.error());
                 ++m_wouldBlockEvents;
                 m_state = SubmitState::WaitWritableWithinOriginalDeadline;
                 continue;
             }
             if (submitted.value() != MediaDatagramTransmitAttempt::Submitted) {
+                if (!charged) return failTerminal(charged.error());
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
             }
             const auto submittedSequence =
                 m_pendingBatch->m_datagrams[m_groupBegin].globalSequence();
+            m_batchObservation.observe(submittedSequence, m_groupNotBefore,
+                now.value(), physicalCompletedAt.value(), m_reservationObservation);
             auto committed = recordSubmittedPrefix(
-                m_groupCount, physicalCompletedAt.value());
+                m_groupCount, physicalCompletedAt.value(), scopeAvailableAt);
+            // The transport has confirmed submission. Retain its prefix even
+            // when scope accounting failed, then preserve that original error.
+            if (!charged) return failTerminal(charged.error());
             if (!committed) return failTerminal(committed.error());
+            const auto previousMaximumLateness =
+                m_pacingController->telemetry().maximumSubmitLatenessNanoseconds;
             auto paced = m_pacingController->markSubmitted(
                 submittedSequence, now.value(), physicalCompletedAt.value());
             if (!paced) return failTerminal(paced.error());
+            const auto& telemetry = m_pacingController->telemetry();
+            if (telemetry.maximumSubmitLatenessNanoseconds != previousMaximumLateness &&
+                telemetry.worstLateGlobalSequence == submittedSequence) {
+                const auto& datagram = m_pendingBatch->m_datagrams[m_groupBegin];
+                m_worstSuccessfulSubmit = MediaDatagramSuccessfulSubmitObservation{
+                    datagram.generation(), datagram.endpointId(), submittedSequence,
+                    telemetry.maximumSubmitLatenessNanoseconds,
+                    datagram.canonicalRelease(), datagram.canonicalDeadline(),
+                    datagram.protocolDeadlineObservation(), *m_groupPacingReservation,
+                    m_groupReservedAt, now.value(), physicalCompletedAt.value(),
+                    m_reservationObservation};
+                m_worstSuccessfulSubmit->reservation.submitObservedAt = now.value();
+            }
             m_state = SubmitState::WaitReservation;
         }
     }
@@ -790,6 +974,10 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
 {
     if (m_diagnosticsEmitted) return;
     m_diagnosticsEmitted = true;
+    m_completedBatchObservation.log("last_completed");
+    m_batchObservation.log("active");
+    if (m_worstSuccessfulSubmit && m_pacingController)
+        m_worstSuccessfulSubmit->log(m_pacingController->telemetry());
     try {
         std::ostringstream diagnostic;
         diagnostic << "scheduled_datagram_sender stage=" << stage
@@ -818,6 +1006,8 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                    << (m_pacingController
                            ? m_pacingController->telemetry().reservedDatagrams
                            : 0)
+                   << " pacing_cancelled="
+                   << (m_pacingController ? m_pacingController->telemetry().cancelledReservations : 0)
                    << " pacing_submitted="
                    << (m_pacingController
                            ? m_pacingController->telemetry().submittedDatagrams
@@ -827,6 +1017,14 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                            ? m_pacingController->telemetry()
                                  .maximumSubmitLatenessNanoseconds
                            : 0)
+                   << " pacing_worst_late_global_sequence="
+                   << (m_pacingController
+                           ? m_pacingController->telemetry().worstLateGlobalSequence
+                           : 0)
+                   << " pacing_worst_success_sample_available="
+                   << (m_worstSuccessfulSubmit && m_pacingController &&
+                       m_worstSuccessfulSubmit->sequence == m_pacingController->telemetry().worstLateGlobalSequence &&
+                       m_worstSuccessfulSubmit->pacingLatenessNs == m_pacingController->telemetry().maximumSubmitLatenessNanoseconds)
                    << " pacing_rate_adaptations="
                    << (m_pacingController
                            ? m_pacingController->telemetry().rateAdaptations
@@ -845,6 +1043,8 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
         if (m_serviceLedger) {
             const auto backlog = m_serviceLedger->snapshot();
             diagnostic
+                << " backlog_cancelled_datagrams=" << backlog.cancelledDatagrams
+                << " backlog_cancelled_wire_bytes=" << backlog.cancelledWireBytes
                 << " backlog_current_datagrams=" << backlog.currentDatagrams
                 << " backlog_current_wire_bytes=" << backlog.currentWireBytes
                 << " backlog_high_water_datagrams=" << backlog.highWaterDatagrams
@@ -859,6 +1059,24 @@ void MediaScheduledDatagramSenderNode::emitDiagnostics(
                 << backlog.lastSubmittedSequence.value_or(0)
                 << " last_committed_sequence="
                 << backlog.lastCommittedSequence.value_or(0);
+            if (backlog.lastSubmittedService) {
+                const auto& service = *backlog.lastSubmittedService;
+                diagnostic << " submitted_service_generation=" << service.generation
+                           << " submitted_service_sequence=" << service.globalSequence
+                           << " submitted_service_completed_ns=" << service.submittedAt.nanoseconds()
+                           << " submitted_service_duration_ns=" << service.serviceDuration.nanoseconds();
+                const auto available = service.serviceAvailableAt();
+                if (available)
+                    diagnostic << " submitted_service_available_ns=" << available.value().nanoseconds();
+                else
+                    diagnostic << " submitted_service_available=unavailable";
+                if (service.scopeAvailableAt)
+                    diagnostic << " submitted_scope_available_ns=" << service.scopeAvailableAt->nanoseconds();
+                else
+                    diagnostic << " submitted_scope_available=unavailable";
+            } else {
+                diagnostic << " submitted_service=absent";
+            }
         }
         if (m_scopeArbiter) {
             const auto scope = m_scopeArbiter->snapshot();
@@ -923,6 +1141,106 @@ MediaScheduledDatagramSenderNode::failTerminal(::media::ErrorInfo error)
     return ::media::Result<MediaNodeProcessResult>::failure(*m_terminalFailure);
 }
 
+::media::Status MediaScheduledDatagramSenderNode::applyGenerationPurge(
+    MediaGraphExecutionContext& context, const MediaAvGenerationPurge& purge)
+{
+    const bool supersedesUnpublished = !m_session && m_completedPurge &&
+        m_completedPurge->nextGeneration == purge.oldGeneration &&
+        m_completedPurge->transitionSequence < purge.transitionSequence;
+    if (m_generation && *m_generation != purge.oldGeneration && !supersedesUnpublished)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "sender purge differs from bound generation"));
+    if (m_session) {
+        auto now = m_clock->now();
+        if (!now) return ::media::Status::failure(now.error());
+        auto closed = m_session->close(now.value());
+        if (!closed) return closed;
+    }
+    if (m_serviceLedger) {
+        auto cancelled = m_serviceLedger->authorizeGenerationPurge(purge);
+        if (!cancelled) return cancelled;
+    }
+    if (m_pacingController && !supersedesUnpublished) {
+        auto cancelled = m_pacingController->cancelReservation(purge.oldGeneration);
+        if (!cancelled) return cancelled;
+    }
+    // Publication was revoked before this request. Drain the bounded channels
+    // before acknowledging, so no older generation needs an unbounded history.
+    const auto authorizedPurge = [&](std::uint64_t generation) -> const MediaAvGenerationPurge* {
+        if (generation == purge.oldGeneration) return &purge;
+        if (m_completedPurge && generation == m_completedPurge->oldGeneration)
+            return &*m_completedPurge;
+        return nullptr;
+    };
+    while (true) {
+        auto input = tryPopInputOptional(context, "plan");
+        if (!input) return ::media::Status::failure(input.error());
+        if (!input.value()) break;
+        if (const auto* control = dynamic_cast<const MediaControlBuffer*>(input.value()->get())) {
+            if (control->controlKind() == MediaControlBufferKind::Abort)
+                return ::media::Status::failure(::media::ErrorInfo::cancelled("sender plan aborted during purge"));
+            continue;
+        }
+        const auto* plan = dynamic_cast<const MediaDatagramTransportPlanBuffer*>(input.value()->get());
+        const auto* authorized = plan ? authorizedPurge(plan->plan().shaping.generation()) : nullptr;
+        if (!authorized || plan->plan().shaping.sessionKey() != m_plannedSession.value() ||
+            plan->plan().shaping.serviceScope().scopeId != m_scopeArbiter->contract().scopeId ||
+            !plan->globalSequence())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("sender queued plan is outside exact purge authorization"));
+        auto cancelled = plan->globalSequence()->authorizeGenerationPurge(*authorized);
+        if (!cancelled) return cancelled;
+    }
+    static constexpr std::array<std::string_view, 1> BatchPortNames{"batch"};
+    while (true) {
+        auto input = tryPopFirstInputWithChannelOptional(context, BatchPortNames);
+        if (!input) return ::media::Status::failure(input.error());
+        if (!input.value()) break;
+        if (const auto* control = dynamic_cast<const MediaControlBuffer*>(input.value()->buffer.get())) {
+            if (control->controlKind() == MediaControlBufferKind::Abort)
+                return ::media::Status::failure(::media::ErrorInfo::cancelled("sender batch aborted during purge"));
+            continue;
+        }
+        const auto* batch = dynamic_cast<const MediaWireDatagramBatchBuffer*>(input.value()->buffer.get());
+        if (!batch || !authorizedPurge(batch->generation()) ||
+            batch->sessionKey() != m_plannedSession.value() ||
+            batch->serviceScopeId() != m_scopeArbiter->contract().scopeId)
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument("sender queued batch is outside exact purge authorization"));
+    }
+    emitDiagnostics("generation_purged");
+    m_diagnosticsEmitted = false;
+    m_batchObservation = {};
+    m_completedBatchObservation = {};
+    m_scopeMember.reset();
+    m_serviceLedger.reset();
+    m_session.reset();
+    m_pendingBatch.reset();
+    m_queuedWireBatches.clear();
+    m_queuedWireDatagrams = 0;
+    m_queuedWireBytes = 0;
+    m_submitEntries.clear();
+    m_nextDatagram = 0;
+    m_groupCount = 0;
+    m_groupPacingReservation.reset();
+    m_nextScheduledSequence.reset();
+    m_state = SubmitState::WaitReservation;
+    { std::lock_guard lock(m_videoReadyMutex); m_videoReadyEvidence.reset(); }
+    m_completedPurge = purge;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaNodeProcessResult>
+MediaScheduledDatagramSenderNode::process(MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_generationPurge->pending()) {
+        auto result = applyGenerationPurge(context, *purge);
+        auto completed = m_generationPurge->complete(*purge, result);
+        if (!completed) return failTerminal(completed.error());
+        if (!result) return failTerminal(result.error());
+        return processProgress();
+    }
+    return FFmpegNodeRuntime::process(context);
+}
+
 ::media::Result<MediaNodeProcessResult>
 MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
 {
@@ -943,6 +1261,8 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
                 planInput.value()->get());
             if (!plan) return failTerminal(::media::ErrorInfo::invalidArgument(
                 "scheduled datagram sender requires an activated transport plan"));
+            if (m_completedPurge && plan->plan().shaping.generation() == m_completedPurge->oldGeneration &&
+                plan->plan().shaping.sessionKey() == m_plannedSession.value()) return processProgress();
             auto bound = bindPlan(*plan);
             if (!bound) return failTerminal(bound.error());
         }
@@ -957,7 +1277,10 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     }
 
     auto activated = activateNextWireBatch();
-    if (!activated) return failTerminal(activated.error());
+    if (!activated) {
+        if (activated.error().code == ::media::ErrorCode::WouldBlock) return processWaiting();
+        return failTerminal(activated.error());
+    }
     if (activated.value()) return progressPendingBatch();
 
     static constexpr std::array<std::string_view, 1> BatchPortNames{"batch"};
@@ -983,6 +1306,10 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     }
     auto batch = std::dynamic_pointer_cast<MediaWireDatagramBatchBuffer>(
         batchInput.value()->buffer);
+    if (batch && m_completedPurge &&
+        batch->generation() == m_completedPurge->oldGeneration &&
+        batch->sessionKey() == m_plannedSession.value() &&
+        batch->serviceScopeId() == m_serviceScopeId) return processProgress();
     if (!batch || batch->sessionKey() != m_plannedSession.value() ||
         batch->serviceScopeId() != m_serviceScopeId || !m_generation ||
         batch->generation() != *m_generation || batch->m_datagrams.empty()) {
@@ -994,7 +1321,10 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     auto queued = enqueueWireBatch(std::move(batch));
     if (!queued) return failTerminal(queued.error());
     activated = activateNextWireBatch();
-    if (!activated) return failTerminal(activated.error());
+    if (!activated) {
+        if (activated.error().code == ::media::ErrorCode::WouldBlock) return processWaiting();
+        return failTerminal(activated.error());
+    }
     return activated.value() ? progressPendingBatch() : processProgress();
 }
 
@@ -1006,8 +1336,8 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
     auto now = m_clock->now();
     ::media::Status completed = now
         ? m_session->close(now.value())
-        : ::media::Status::failure(now.error());
-    if (!completed && !m_terminalFailure) m_terminalFailure = completed.error();
+        : ::media::Status::failure(mediaCleanupError(now.error()));
+    if (!completed && !m_terminalFailure) m_terminalFailure = mediaCleanupError(completed.error());
     emitDiagnostics(m_terminalFailure ? "failed" : "finished");
     // Evidence and adapter shutdown above run on the same thread that bound
     // and submitted this session. Controller reclamation only sees null.
@@ -1022,7 +1352,7 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
 ::media::Status MediaScheduledDatagramSenderNode::stop(
     MediaGraphExecutionContext& context)
 {
-    m_stopSource.request_stop();
+    m_generationPurge->stop();
     m_wakeup.interrupt();
     // Sequential execution has no worker-exit hook; its owner reaches stop
     // directly. For worker execution the session was already closed there.
@@ -1034,7 +1364,7 @@ MediaScheduledDatagramSenderNode::onProcess(MediaGraphExecutionContext& context)
 void MediaScheduledDatagramSenderNode::interrupt(
     MediaGraphExecutionContext&) noexcept
 {
-    m_stopSource.request_stop();
+    m_generationPurge->stop();
     m_wakeup.interrupt();
 }
 
@@ -1043,12 +1373,12 @@ void MediaScheduledDatagramSenderNode::abort(
 {
     interrupt(context);
     if (!m_terminalFailure) {
-        auto cause = ::media::ErrorInfo::cancelled(
-            "scheduled datagram sender was aborted");
+        auto cause = mediaCleanupError(::media::ErrorCode::Cancelled,
+            "scheduled datagram sender was aborted", 0);
         m_terminalFailure = std::move(cause);
     }
     auto completed = finishExecution(context);
-    if (!completed && !m_terminalFailure) m_terminalFailure = completed.error();
+    if (!completed && !m_terminalFailure) m_terminalFailure = mediaCleanupError(completed.error());
     emitDiagnostics("aborted");
     FFmpegNodeRuntime::abort(context);
 }

@@ -1,3 +1,4 @@
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaEncodedAudioLineageBuffer.h"
@@ -6,6 +7,8 @@ namespace media::ffmpeg::graph {
 
 AVPacket* FFmpegPacketView::writablePacket(const MediaBufferRef& buffer) noexcept
 {
+    if (auto* source = dynamic_cast<MediaVideoDecodeBuffer*>(buffer.get()))
+        return writablePacket(source->media());
     if (auto* canonical = dynamic_cast<MediaCanonicalAccessUnitBuffer*>(buffer.get()))
         return writablePacket(canonical->media());
     if (auto* encoded = dynamic_cast<MediaEncodedAudioLineageBuffer*>(buffer.get()))
@@ -16,6 +19,8 @@ AVPacket* FFmpegPacketView::writablePacket(const MediaBufferRef& buffer) noexcep
 
 const AVPacket* FFmpegPacketView::packet(const MediaBufferRef& buffer) noexcept
 {
+    if (const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get()))
+        return packet(source->media());
     if (const auto* canonical = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(buffer.get()))
         return packet(canonical->media());
     if (const auto* encoded = dynamic_cast<const MediaEncodedAudioLineageBuffer*>(buffer.get()))
@@ -34,6 +39,8 @@ FFmpegPacketView::canonicalLineage(const MediaBufferRef& buffer) noexcept
 const std::shared_ptr<MediaGraphPayloadCreditLease>&
 FFmpegPacketView::payloadCredit(const MediaBufferRef& buffer) noexcept
 {
+    if (const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get()))
+        return payloadCredit(source->media());
     if (const auto* canonical =
             dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(buffer.get())) {
         return payloadCredit(canonical->media());

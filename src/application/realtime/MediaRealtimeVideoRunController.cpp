@@ -1,5 +1,7 @@
 #include "application/realtime/MediaRealtimeVideoRunController.h"
 #include "application/realtime/MediaRealtimeOutputRunController.h"
+#include "application/realtime/MediaRealtimeFixedOutputLifecycle.h"
+#include "application/realtime/MediaRealtimeCompositionPreparer.h"
 #include "internal/graph/planner/realtime/MediaDatagramServiceScopePlanner.h"
 
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
@@ -11,6 +13,8 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
 #include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
+#include "internal/graph/runtime/lifecycle/MediaContinuousOutputDrain.h"
+#include "internal/graph/planner/realtime/MediaRealtimeBranchDrainPlanner.h"
 
 #include <algorithm>
 #include <exception>
@@ -83,6 +87,15 @@ MediaRealtimeVideoRunOutcome makeCompletedRunOutcome(
     const std::optional<::media::ErrorInfo>& completionPrimaryFailure,
     const MediaGraphRuntimeReport& finalReport)
 {
+    if (!waitOutcome.status) {
+        return {
+            ::media::Status::failure(waitOutcome.status.error()),
+            MediaRealtimeVideoRunStage::RuntimeProgress,
+            waitOutcome.endReason,
+            waitOutcome.failureReport,
+            finalReport
+        };
+    }
     if (completion.status) {
         return {
             ::media::Status::success(),
@@ -93,26 +106,14 @@ MediaRealtimeVideoRunOutcome makeCompletedRunOutcome(
         };
     }
 
-    const bool completionReplacedWaitFailure =
+    const bool completionWorkerFailure =
         completionPrimaryFailure &&
-        (waitOutcome.status ||
-         !sameError(
-             waitOutcome.status.error(),
-             *completionPrimaryFailure));
-    if (completionReplacedWaitFailure) {
+        sameError(completion.status.error(), *completionPrimaryFailure);
+    if (completionWorkerFailure) {
         return {
             ::media::Status::failure(completion.status.error()),
             MediaRealtimeVideoRunStage::RuntimeCompletion,
             MediaRealtimeVideoRunEndReason::WorkerFailure,
-            waitOutcome.failureReport,
-            finalReport
-        };
-    }
-    if (!waitOutcome.status) {
-        return {
-            ::media::Status::failure(completion.status.error()),
-            MediaRealtimeVideoRunStage::RuntimeProgress,
-            waitOutcome.endReason,
             waitOutcome.failureReport,
             finalReport
         };
@@ -273,7 +274,8 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
     const MediaRealtimeVideoRunPolicy& policy,
     MediaRealtimeVideoRunControl& control,
     const MediaRealtimeVideoRunObserver& observer,
-    MediaRealtimeOutputRunController* outputs)
+    MediaRealtimeOutputRunController* outputs,
+    MediaRealtimeFixedOutputLifecycle* fixedOutput)
 {
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
@@ -303,6 +305,11 @@ MediaRealtimeVideoWaitOutcome waitForRealtimeProgress(
                 ::media::Status::success(),
                 MediaRealtimeVideoRunEndReason::CallerStop
             };
+        }
+        if (fixedOutput) {
+            auto ready = fixedOutput->poll(runtime);
+            if (!ready) return {::media::Status::failure(ready.error()), MediaRealtimeVideoRunEndReason::Failure};
+            if (control.stopRequested()) return {::media::Status::success(), MediaRealtimeVideoRunEndReason::CallerStop};
         }
         if (!runtime.threadedRunning()) {
             break;
@@ -539,6 +546,7 @@ void MediaRealtimeVideoRunControl::requestStop() noexcept
         std::lock_guard lock(m_waitMutex);
         m_state.store(State::StopRequested, std::memory_order_release);
     }
+    m_preparationStop.request_stop();
     m_waitCondition.notify_all();
 }
 
@@ -616,6 +624,8 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
     const MediaRealtimeVideoRunObserver& observer)
 {
     control.beginRunTracking();
+    std::optional<MediaRealtimeFixedOutputLifecycle> fixedOutput;
+    const auto execute = [&]() -> MediaRealtimeVideoRunOutcome {
     const auto enterStage = [&control](
         MediaRealtimeVideoRunStage stage) noexcept {
         control.setActiveStage(stage);
@@ -647,64 +657,103 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
                 MediaRealtimeVideoRunEndReason::CallerStop);
         }
 
-        enterStage(MediaRealtimeVideoRunStage::Preflight);
-        auto preflightResult =
-            MediaRealtimeRtpTranscodePlanner::preflight(request);
-        if (!preflightResult) {
-            return returnFailure(
-                preflightResult.error(),
-                MediaRealtimeVideoRunStage::Preflight);
-        }
-        MediaRealtimeTranscodePreflight preflight =
-            std::move(preflightResult).value();
-        std::optional<MediaRealtimeVideoSessionFacts> sessionFacts;
-        std::optional<MediaRealtimeInitialOutputProducts> initialProducts;
-        if (const auto* video = std::get_if<MediaRealtimeVideoRuntimePlan>(&preflight.plan.runtime)) {
-            const auto& encode = video->datagramTransport.encode();
-            auto serviceScope = MediaDatagramServiceScopePlanner::plan(video->datagramTransport);
-            if (!serviceScope) return returnFailure(serviceScope.error(), MediaRealtimeVideoRunStage::Preflight);
-            sessionFacts.emplace(MediaRealtimeVideoSessionFacts{
-                static_cast<const MediaRealtimeRtpTranscodePlanCore&>(preflight.plan),
-                video->timing.sourceTimeBase, video->threadingPolicy, video->lineageEdgePolicies,
-                serviceScope.value()});
-            initialProducts.emplace(MediaRealtimeInitialOutputProducts{
-                encode.wireTraffic.peakWireBytesPerSecond,
-                std::move(serviceScope).value(),
-                video->startup.maximumWait, video->scheduling.initialGeneration});
-        }
-        MediaRealtimeVideoPreparedReport prepared = preparedReport(request, preflight.plan);
-        if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly) {
-            auto initialOutput = control.registerInitialOutput(prepared.outputDescription.path);
-            if (!initialOutput) return returnFailure(initialOutput.error(), MediaRealtimeVideoRunStage::Preflight);
-            prepared.outputId = initialOutput.value();
-        }
-        MediaThreadingPolicy threadingPolicy = std::visit(
-            [](const auto& runtimePlan) {
-                return runtimePlan.threadingPolicy;
-            },
-            preflight.plan.runtime);
-        if (control.stopRequested()) {
-            enterStage(MediaRealtimeVideoRunStage::StopRequested);
-            return returnFailure(
-                ::media::ErrorInfo::cancelled(
-                    "realtime video run stop was requested after preflight"),
-                MediaRealtimeVideoRunStage::StopRequested,
-                MediaRealtimeVideoRunEndReason::CallerStop);
+        std::optional<MediaRuntimeBranchDrainPlan> continuousDrainPlan;
+        if (request.composition) {
+            auto silence = MediaRunningTime::checkedFromTicks(policy.progressTimeout().count(), 1, 1000);
+            if (!silence) return returnFailure(silence.error(), MediaRealtimeVideoRunStage::PolicyValidation);
+            auto drain = MediaRealtimeBranchDrainPlanner::plan(silence.value());
+            if (!drain) return returnFailure(drain.error(), MediaRealtimeVideoRunStage::PolicyValidation);
+            continuousDrainPlan = drain.value();
         }
 
-        enterStage(MediaRealtimeVideoRunStage::ExecutableGraphBuild);
-        auto executableResult =
-            MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
-                std::move(preflight));
-        if (!executableResult) {
-            return returnFailure(
-                executableResult.error(),
-                MediaRealtimeVideoRunStage::ExecutableGraphBuild);
+        std::optional<MediaRealtimeVideoSessionFacts> sessionFacts;
+        std::optional<MediaRealtimeInitialOutputProducts> initialProducts;
+        MediaRealtimeVideoPreparedReport prepared;
+        MediaThreadingPolicy threadingPolicy;
+        std::optional<MediaRealtimeExecutableGraph> preparedExecutable;
+        if (request.composition) {
+            enterStage(MediaRealtimeVideoRunStage::Preflight);
+            auto composition = MediaRealtimeCompositionPreparer::prepare(request, control);
+            if (!composition) {
+                const auto stage = control.stopRequested() ? MediaRealtimeVideoRunStage::StopRequested
+                                                           : MediaRealtimeVideoRunStage::Preflight;
+                enterStage(stage);
+                return returnFailure(composition.error(), stage,
+                    control.stopRequested() ? MediaRealtimeVideoRunEndReason::CallerStop
+                                            : MediaRealtimeVideoRunEndReason::Failure);
+            }
+            enterStage(MediaRealtimeVideoRunStage::ExecutableGraphBuild);
+            prepared = std::move(composition.value().report);
+            threadingPolicy = composition.value().threading;
+            preparedExecutable.emplace(std::move(composition.value().executable));
+        } else {
+            enterStage(MediaRealtimeVideoRunStage::Preflight);
+            auto preflightResult =
+                MediaRealtimeRtpTranscodePlanner::preflight(request);
+            if (!preflightResult) {
+                return returnFailure(
+                    preflightResult.error(),
+                    MediaRealtimeVideoRunStage::Preflight);
+            }
+            MediaRealtimeTranscodePreflight preflight =
+                std::move(preflightResult).value();
+            if (const auto* video = std::get_if<MediaRealtimeVideoRuntimePlan>(&preflight.plan.runtime)) {
+                const auto& encode = video->datagramTransport.encode();
+                auto serviceScope = MediaDatagramServiceScopePlanner::plan(video->datagramTransport);
+                if (!serviceScope) return returnFailure(serviceScope.error(), MediaRealtimeVideoRunStage::Preflight);
+                sessionFacts.emplace(MediaRealtimeVideoSessionFacts{
+                    static_cast<const MediaRealtimeRtpTranscodePlanCore&>(preflight.plan),
+                    video->timing.sourceTimeBase, video->threadingPolicy, video->lineageEdgePolicies,
+                    serviceScope.value()});
+                initialProducts.emplace(MediaRealtimeInitialOutputProducts{
+                    encode.wireTraffic.peakWireBytesPerSecond,
+                    std::move(serviceScope).value(),
+                    video->startup.maximumWait, video->scheduling.initialGeneration});
+            }
+            prepared = preparedReport(request, preflight.plan);
+            if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly) {
+                auto initialOutput = control.registerInitialOutput(prepared.outputDescription.path);
+                if (!initialOutput) return returnFailure(initialOutput.error(), MediaRealtimeVideoRunStage::Preflight);
+                prepared.outputId = initialOutput.value();
+            }
+            threadingPolicy = std::visit(
+                [](const auto& runtimePlan) {
+                    return runtimePlan.threadingPolicy;
+                },
+                preflight.plan.runtime);
+            if (control.stopRequested()) {
+                enterStage(MediaRealtimeVideoRunStage::StopRequested);
+                return returnFailure(
+                    ::media::ErrorInfo::cancelled(
+                        "realtime video run stop was requested after preflight"),
+                    MediaRealtimeVideoRunStage::StopRequested,
+                    MediaRealtimeVideoRunEndReason::CallerStop);
+            }
+
+            enterStage(MediaRealtimeVideoRunStage::ExecutableGraphBuild);
+            auto executableResult =
+                MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
+                    std::move(preflight));
+            if (!executableResult) {
+                return returnFailure(
+                    executableResult.error(),
+                    MediaRealtimeVideoRunStage::ExecutableGraphBuild);
+            }
+            preparedExecutable.emplace(std::move(executableResult).value());
+            if (const auto* video = std::get_if<MediaRealtimeVideoRuntimeBinding>(&preparedExecutable->runtimeBinding)) {
+                threadingPolicy = video->runtime.threadingPolicy;
+                if (sessionFacts) sessionFacts->threadingPolicy = threadingPolicy;
+            }
+
         }
-        MediaRealtimeExecutableGraph executable = std::move(executableResult).value();
-        if (const auto* video = std::get_if<MediaRealtimeVideoRuntimeBinding>(&executable.runtimeBinding)) {
-            threadingPolicy = video->runtime.threadingPolicy;
-            if (sessionFacts) sessionFacts->threadingPolicy = threadingPolicy;
+        MediaRealtimeExecutableGraph executable = std::move(*preparedExecutable);
+
+        if (request.composition || request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
+            fixedOutput.emplace(0, prepared.outputDescription.path, control, observer);
+            auto id = control.registerInitialOutput(prepared.outputDescription.path);
+            if (!id) return returnFailure(id.error(), MediaRealtimeVideoRunStage::PreparedNotification);
+            prepared.outputId = id.value();
+            fixedOutput->bindIdentity(id.value());
         }
 
         enterStage(MediaRealtimeVideoRunStage::PreparedNotification);
@@ -750,7 +799,7 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
                 MediaRealtimeVideoRunStage::RuntimeNodeRegistration);
         }
         std::unique_ptr<MediaRealtimeOutputRunController> outputs;
-        if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly) {
+        if (!request.composition && request.parameters.execution.streamSet == MediaTranscodeStreamSet::VideoOnly) {
             if (!sessionFacts || !initialProducts) return returnFailure(
                 ::media::ErrorInfo::notInitialized("video-only session has no typed video session facts"),
                 MediaRealtimeVideoRunStage::RuntimeNodeRegistration);
@@ -769,6 +818,13 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
         }
 
         enterStage(MediaRealtimeVideoRunStage::RuntimeStart);
+        if (fixedOutput) {
+            auto started = fixedOutput->start(runtime, policy.firstOutputTimeout());
+            if (!started) return returnFailure(started.error(), MediaRealtimeVideoRunStage::RuntimeStart);
+            if (control.stopRequested()) return returnFailure(
+                ::media::ErrorInfo::cancelled("realtime video run stop was requested during output notification"),
+                MediaRealtimeVideoRunStage::StopRequested, MediaRealtimeVideoRunEndReason::CallerStop);
+        }
         if (outputs) {
             auto started = outputs->startInitial();
             if (!started) return returnFailure(started.error(), MediaRealtimeVideoRunStage::RuntimeStart);
@@ -782,7 +838,8 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
 
         enterStage(MediaRealtimeVideoRunStage::RuntimeProgress);
         const MediaRealtimeVideoWaitOutcome waitOutcome =
-            waitForRealtimeProgress(runtime, policy, control, observer, outputs.get());
+            waitForRealtimeProgress(runtime, policy, control, observer, outputs.get(),
+                fixedOutput ? &*fixedOutput : nullptr);
         if (!waitOutcome.status) {
             control.recordFirstFailureSignal(
                 waitOutcome.status.error(),
@@ -791,6 +848,9 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
         }
         enterStage(MediaRealtimeVideoRunStage::RuntimeCompletion);
         auto outputCompletion = outputs ? outputs->finish(waitOutcome.status) : ::media::Status::success();
+        if (waitOutcome.status && outputCompletion && continuousDrainPlan && fixedOutput &&
+            fixedOutput->running() && waitOutcome.endReason == MediaRealtimeVideoRunEndReason::CallerStop)
+            outputCompletion = MediaContinuousOutputDrain::finish(runtime, *continuousDrainPlan, policy.pollInterval());
         const auto completion = MediaRealtimeRuntimeCompletion::complete(
             runtime, !waitOutcome.status ? waitOutcome.status : outputCompletion);
         if (!completion.status) {
@@ -829,6 +889,23 @@ MediaRealtimeVideoRunOutcome MediaRealtimeVideoRunController::run(
                 "realtime video run stage failed with an unknown exception"),
             control.activeStage());
     }
+    };
+    auto outcome = execute();
+    if (!outcome.status) control.recordFirstFailureSignal(outcome.status.error(), outcome.stage, outcome.endReason);
+    if (fixedOutput) {
+        try {
+        auto retired = fixedOutput->finish(outcome);
+        if (!retired && outcome.status) return failureOutcome(retired.error(),
+            MediaRealtimeVideoRunStage::RuntimeCompletion);
+        } catch (const std::bad_alloc&) {
+            if (outcome.status) return failureOutcome(::media::ErrorInfo::allocationFailed(
+                "fixed output termination allocation failed"), MediaRealtimeVideoRunStage::RuntimeCompletion);
+        } catch (...) {
+            if (outcome.status) return failureOutcome(::media::ErrorInfo::internalError(
+                "fixed output termination failed"), MediaRealtimeVideoRunStage::RuntimeCompletion);
+        }
+    }
+    return outcome;
 }
 
 } // namespace media::ffmpeg::graph

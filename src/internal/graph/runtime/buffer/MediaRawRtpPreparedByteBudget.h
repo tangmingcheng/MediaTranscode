@@ -1,50 +1,66 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
+#include "internal/graph/runtime/resource/MediaPreparationMemoryResource.h"
+#include "internal/graph/model/MediaRawRtpPreparationStoragePlan.h"
+#include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
 
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <string_view>
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRawRtpPreparationPhase {
+    Capture,
+    Sealed
+};
+
 struct MediaRawRtpPreparedByteBudgetSnapshot final {
     std::size_t capacity;
+    std::size_t wireCapacity;
     std::size_t observedBytes;
     std::size_t retainedBytes;
-    bool runtimeActive;
+    MediaRawRtpPreparationPhase phase;
+    bool probeActive;
 };
 
 class MediaRawRtpPreparedByteBudget final {
 public:
     static ::media::Result<std::shared_ptr<MediaRawRtpPreparedByteBudget>>
-    create(std::size_t capacity);
+    create(const MediaRawRtpPreparationStoragePlan& plan,
+        const MediaPreparationStorageScope& scope);
 
     ::media::Status observe(std::size_t bytes);
-    ::media::Status retain(std::size_t bytes, std::string_view stream);
-    ::media::Status observeAndRetain(
-        std::size_t bytes, std::string_view stream);
-    ::media::Status release(std::size_t bytes);
+    std::pmr::memory_resource& storageResource() const noexcept;
+    MediaLineageAllocationScope allocationScope() const noexcept;
+    const MediaPreparedRtpDatagramAllocationFacts& entryAllocationFacts() const noexcept;
+    MediaPreparedRtpStorageReservation storageReservation() const;
     ::media::Status fail(::media::ErrorInfo error);
-    ::media::Status sealPreflight();
+    ::media::Status sealPreflight(std::optional<MediaRawRtpRuntimeStoragePlan> runtimeStorage);
     ::media::Status requireSealed() const;
     ::media::Status validate() const;
     MediaRawRtpPreparedByteBudgetSnapshot snapshot() const noexcept;
 
 private:
-    explicit MediaRawRtpPreparedByteBudget(std::size_t capacity) noexcept;
+    friend class MediaRawRtpProbeLease;
+    ::media::Status acquireProbe();
+    void releaseProbe() noexcept;
+    MediaRawRtpPreparedByteBudget(MediaRawRtpPreparationStoragePlan plan,
+        std::shared_ptr<MediaPreparationStorageBudget> storage,
+        std::shared_ptr<MediaPreparationMemoryResource> resource) noexcept;
     ::media::Status observeLocked(std::size_t bytes);
-    ::media::Status retainLocked(
-        std::size_t bytes, std::string_view stream);
     ::media::Status failLocked(::media::ErrorInfo error);
 
-    const std::size_t m_capacity;
+    const MediaRawRtpPreparationStoragePlan m_plan;
+    std::shared_ptr<MediaPreparationStorageBudget> m_storage;
+    std::shared_ptr<MediaPreparationMemoryResource> m_resource;
     mutable std::mutex m_mutex;
     std::size_t m_observedBytes = 0;
-    std::size_t m_retainedBytes = 0;
-    bool m_runtimeActive = false;
+    MediaRawRtpPreparationPhase m_phase = MediaRawRtpPreparationPhase::Capture;
+    bool m_probeActive = false;
     std::optional<::media::ErrorInfo> m_error;
 };
 

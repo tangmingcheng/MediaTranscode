@@ -6,6 +6,7 @@
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeInputValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceClockPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeOutputValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
@@ -68,58 +69,56 @@ namespace media::ffmpeg::graph {
         runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr,
         selectedOutput,
         runtime.synchronization);
-    if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
+    if (!selectedFacts || (selectedFacts.value().timing != runtime.planningFacts ||
+                           selectedFacts.value().assembly != runtime.assembly)) {
         return invalid("selected planning facts");
     }
     const auto& assembly = runtime.assembly;
-    if (assembly.generationPolicy !=
+    const auto* canonicalVideo = std::get_if<MediaCanonicalVideoAssemblyTiming>(
+        &assembly.video.timing);
+    if (!canonicalVideo || !assembly.audio || assembly.generationPolicy !=
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
         assembly.initialGeneration != MediaFirstLockedSourceGeneration ||
         assembly.evidencePolicy !=
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire ||
         assembly.video.sourceIdentity.empty() ||
-        assembly.audio.sourceIdentity.empty() ||
+        assembly.audio->sourceIdentity.empty() ||
         !runtime.synchronization.startup.videoIdentity ||
         !runtime.synchronization.startup.audioIdentity ||
         assembly.video.sourceIdentity !=
             *runtime.synchronization.startup.videoIdentity ||
-        assembly.audio.sourceIdentity !=
+        assembly.audio->sourceIdentity !=
             *runtime.synchronization.startup.audioIdentity ||
         runtime.planningFacts.inputVideoIdentity !=
             runtime.synchronization.startup.videoIdentity ||
         runtime.planningFacts.inputAudioIdentity !=
             runtime.synchronization.startup.audioIdentity ||
-        assembly.video.decodeOrder !=
+        canonicalVideo->decodeOrder !=
             MediaDecodeOrderMode::ReorderedRequiresDecodeTime ||
-        assembly.audio.decodeOrder !=
+        assembly.audio->decodeOrder !=
             MediaDecodeOrderMode::PresentationOrderNoReorder ||
         !runtime.synchronization.startup.videoCapacity ||
         !runtime.synchronization.startup.audioCapacity ||
         assembly.video.acquiringCapacity == 0 ||
-        assembly.audio.acquiringCapacity == 0 ||
+        assembly.audio->acquiringCapacity == 0 ||
         assembly.video.acquiringCapacity !=
             *runtime.synchronization.startup.videoCapacity ||
-        assembly.audio.acquiringCapacity !=
+        assembly.audio->acquiringCapacity !=
             *runtime.synchronization.startup.audioCapacity ||
         !runtime.synchronization.startup.maximumWaitNs ||
         assembly.video.acquiringTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
-        assembly.audio.acquiringTimeout <=
+        assembly.audio->acquiringTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
         assembly.video.acquiringTimeout !=
             *runtime.synchronization.startup.maximumWaitNs ||
-        assembly.audio.acquiringTimeout !=
-            *runtime.synchronization.startup.maximumWaitNs ||
-        !runtime.synchronization.audioServo.minimumUpdateIntervalNs ||
-        assembly.startupClockInterval <=
-            MediaRunningTime::fromNanoseconds(0) ||
-        assembly.startupClockInterval !=
-            *runtime.synchronization.audioServo.minimumUpdateIntervalNs) {
+        assembly.audio->acquiringTimeout !=
+            *runtime.synchronization.startup.maximumWaitNs) {
         return invalid("production assembly common contract");
     }
     if (audioTranscode) {
         auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
-            runtime.synchronization, runtime.planningFacts);
+            runtime.audioServoPolicy, runtime.planningFacts);
         if (!expectedCorrection || !runtime.audioCorrection ||
             *runtime.audioCorrection != expectedCorrection.value().correction ||
             !runtime.synchronization.audioServo.commandLeadNs ||
@@ -133,7 +132,17 @@ namespace media::ffmpeg::graph {
                 expectedCorrection.value().frequencyFilterTimeConstant) {
             return invalid("audio correction derivation");
         }
-    } else if (runtime.audioCorrection ||
+        if (!runtime.encoderFifoRetention || !runtime.audioPipeline.resolvedOutput ||
+            !runtime.audioPipeline.selectedResampler) {
+            return invalid("audio encoder FIFO retention facts");
+        }
+        auto expectedRetention = MediaAudioEncoderFifoRetentionPlan::create(
+            *runtime.audioPipeline.resolvedOutput,
+            expectedCorrection.value().maximumOutputBlockSamples);
+        if (!expectedRetention || *runtime.encoderFifoRetention != expectedRetention.value()) {
+            return invalid("audio encoder FIFO retention derivation");
+        }
+    } else if (runtime.encoderFifoRetention || runtime.audioCorrection ||
                runtime.synchronization.audioServo.commandLeadNs ||
                runtime.synchronization.audioServo.compensationWindowNs ||
                runtime.synchronization.audioServo.frequencyFilterTimeConstantNs) {
@@ -149,29 +158,20 @@ namespace media::ffmpeg::graph {
         return invalid("edge-policy byte facts");
     }
     auto expectedEdges = MediaRealtimeEdgePolicyPlanner::
-        planWithSynchronizedPacketMemoryBudget(
+        planWithAvStartupRelease(
             runtime.queues, *videoBytes + *audioBytes,
-            runtime.queues.packet);
+            runtime.queues.packet,
+            *runtime.synchronization.startup.videoCapacity,
+            *runtime.synchronization.startup.audioCapacity);
     if (!expectedEdges || runtime.edgePolicies != expectedEdges.value()) {
         return invalid("edge-policy product");
     }
-    if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
-        runtime.threadingPolicy.priority != MediaThreadPriority::High ||
-        runtime.threadingPolicy.maxWorkerThreads != 0 ||
-        runtime.threadingPolicy.pinWorkers ||
-        !runtime.threadingPolicy.collectWorkerMetrics) {
-        return invalid("threading product");
-    }
+    if (auto status = validateThreading(runtime.threadingPolicy); !status) return status;
     if (runtime.transition.acknowledgementTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
-        runtime.transition.terminalDrainWindow <=
-            MediaRunningTime::fromNanoseconds(0) ||
         !runtime.planningFacts.acknowledgementTimeout ||
-        !runtime.planningFacts.terminalDrainWindow ||
         runtime.transition.acknowledgementTimeout !=
-            *runtime.planningFacts.acknowledgementTimeout ||
-        runtime.transition.terminalDrainWindow !=
-            *runtime.planningFacts.terminalDrainWindow) {
+            *runtime.planningFacts.acknowledgementTimeout) {
         return invalid("transition timeout");
     }
     if (runtime.outputAdapter !=
@@ -196,12 +196,11 @@ namespace media::ffmpeg::graph {
         return invalid("Datagram transport product");
     }
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
-        runtime.outputAdapter,
+        runtime.protocolOutput,
         *runtime.synchronization.sourceClockMode,
         runtime.audioPipeline.branchMode,
         runtime.videoFilterActive,
-        runtime.transition.acknowledgementTimeout,
-        runtime.transition.terminalDrainWindow);
+        runtime.transition.acknowledgementTimeout);
     if (runtime.transition.participants.size() !=
         expected.participants.size()) {
         return invalid("transition participant count");
@@ -230,10 +229,9 @@ namespace media::ffmpeg::graph {
         if (correction.outputSampleRate <= 0 ||
             correction.epochOutputSampleIndex != 0 ||
             correction.worstCaseInFlightSamples < 0 ||
-            correction.protocolBatchSamples <= 0 ||
             correction.mailboxDeliveryMarginSamples <= 0 ||
             correction.maximumResamplerOutputBlockSamples <= 0 ||
-            correction.mailboxCapacity != runtime.queues.metadata ||
+            correction.mailboxCapacity != runtime.queues.frame ||
             !reachabilitySumRepresentable ||
             correction.commandLeadSamples <=
             correction.worstCaseInFlightSamples +
@@ -247,7 +245,10 @@ namespace media::ffmpeg::graph {
     }
     if (auto inputStatus =
             MediaRealtimeAvSyncRuntimeInputValidator::validate(
-                outer, runtime);
+                {outer.inputType, outer.inputLayout, outer.input, outer.videoPlan.sourceStreamIndex,
+                 outer.videoPlan.inputCodecName, runtime.audioPipeline,
+                 runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr, nullptr},
+                runtime.synchronization, runtime.planningFacts, runtime.assembly);
         !inputStatus) {
         return inputStatus;
     }
@@ -256,6 +257,20 @@ namespace media::ffmpeg::graph {
                 outer, runtime);
         !outputStatus) {
         return outputStatus;
+    }
+    return ::media::Status::success();
+}
+
+::media::Status MediaRealtimeAvSyncRuntimePlanValidator::validateThreading(
+    const MediaThreadingPolicy& policy)
+{
+    if (policy.mode != MediaThreadingMode::PerNodeWorker ||
+        policy.priority != MediaThreadPriority::High ||
+        policy.maxWorkerThreads != 0 ||
+        policy.pinWorkers ||
+        !policy.collectWorkerMetrics) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Invalid synchronized runtime product: threading product"));
     }
     return ::media::Status::success();
 }

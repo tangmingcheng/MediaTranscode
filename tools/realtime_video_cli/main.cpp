@@ -4,6 +4,8 @@
 #include "../common/VideoCliTranscodeOptions.h"
 #include "RealtimeVideoOutputOptions.h"
 #include "RealtimeOutputControl.h"
+#include "RealtimeStopSignal.h"
+#include "RealtimeInputOptions.h"
 
 #include <chrono>
 #include <exception>
@@ -31,21 +33,6 @@ struct RealtimeVideoRuntimeOptions {
     int pollIntervalMs = 250;
 };
 
-RealtimeInputType requiredRealtimeInputType(int argc, char** argv)
-{
-    const std::string value = requiredArg(argc, argv, "--input-type");
-    if (value == "url") {
-        return RealtimeInputType::Url;
-    }
-    if (value == "rtp") {
-        return RealtimeInputType::RtpPort;
-    }
-    if (value == "mpegts-udp") {
-        return RealtimeInputType::MpegTsUdp;
-    }
-    throw std::invalid_argument("unsupported --input-type: " + value);
-}
-
 void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
     std::vector<std::string> valueArgs {
@@ -57,94 +44,34 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--sample-rate",
         "--channels",
         "--media-id",
-        "--input-type",
         "--egress-capacity-bps",
         "--maximum-wire-residence-ms",
-        "--input",
-        "--rtsp-transport",
-        "--open-timeout-ms",
-        "--read-timeout-ms",
-        "--analyze-duration-us",
-        "--probe-size",
-        "--mpegts-max-pcr-gap-ms",
-        "--video-rtp-url",
-        "--video-rtp-codec",
-        "--video-rtp-payload-type",
-        "--video-rtp-clock-rate",
-        "--video-rtp-fmtp",
-        "--audio-rtp-url",
-        "--audio-rtp-codec",
-        "--audio-rtp-payload-type",
-        "--audio-rtp-clock-rate",
-        "--audio-rtp-channels",
-        "--audio-rtp-fmtp",
+        "--inputs",
+        "--grid",
+        "--audio-source",
+        "--preparation-storage-limit-bytes",
         "--max-duration",
         "--progress-timeout-ms",
         "--first-output-timeout-ms",
         "--poll-interval-ms",
     };
 
+    const auto inputArgs = realtimeInputValueArgs();
+    valueArgs.insert(valueArgs.end(), inputArgs.begin(), inputArgs.end());
     const auto outputArgs = realtimeVideoOutputValueArgs();
     valueArgs.insert(valueArgs.end(), outputArgs.begin(), outputArgs.end());
     std::vector<std::string> flagArgs = commonVideoTranscodeFlagArgs();
-    rejectUnknownArgs(argc, argv, valueArgs, flagArgs);
-}
-
-void parseRealtimeInputOptions(
-    int argc,
-    char** argv,
-    RealtimeInputType inputType,
-    MediaRealtimeInputConfig& input)
-{
-    input.type = inputType;
-    input.openTimeoutMs = requiredIntArg(argc, argv, "--open-timeout-ms");
-    input.readTimeoutMs = requiredIntArg(argc, argv, "--read-timeout-ms");
-    input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
-    input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
-
-    if (hasArg(argc, argv, "--input")) {
-        input.url = requiredArg(argc, argv, "--input");
+    // A quoted input-list element deliberately contains option tokens.
+    std::vector<char*> outerArguments{argv[0]};
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--inputs") {
+            if (++i == argc || std::string_view(argv[i]).empty())
+                throw std::invalid_argument("--inputs requires a complete input option group");
+        } else {
+            outerArguments.push_back(argv[i]);
+        }
     }
-    if (hasArg(argc, argv, "--rtsp-transport")) {
-        input.rtspTransport = requiredArg(argc, argv, "--rtsp-transport");
-    }
-    if (hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
-        const int maximumPcrGapMs = requiredIntArg(
-            argc, argv, "--mpegts-max-pcr-gap-ms");
-        input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
-            static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
-    }
-}
-
-void parseRtpInputMetadata(
-    int argc,
-    char** argv,
-    const char* urlArgument,
-    const char* codecArgument,
-    const char* payloadTypeArgument,
-    const char* clockRateArgument,
-    const char* channelsArgument,
-    const char* fmtpArgument,
-    MediaRealtimeRtpInputMetadata& metadata)
-{
-    if (hasArg(argc, argv, urlArgument)) {
-        metadata.url = requiredArg(argc, argv, urlArgument);
-    }
-    if (hasArg(argc, argv, codecArgument)) {
-        metadata.codecName = requiredArg(argc, argv, codecArgument);
-    }
-    if (hasArg(argc, argv, payloadTypeArgument)) {
-        metadata.payloadType = requiredIntArg(argc, argv, payloadTypeArgument);
-    }
-    if (hasArg(argc, argv, clockRateArgument)) {
-        metadata.clockRate = requiredIntArg(argc, argv, clockRateArgument);
-    }
-    if (channelsArgument && hasArg(argc, argv, channelsArgument)) {
-        metadata.channels = requiredIntArg(argc, argv, channelsArgument);
-    }
-    if (hasArg(argc, argv, fmtpArgument)) {
-        metadata.fmtp = requiredArg(argc, argv, fmtpArgument);
-    }
+    rejectUnknownArgs(static_cast<int>(outerArguments.size()), outerArguments.data(), valueArgs, flagArgs);
 }
 
 MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
@@ -154,7 +81,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     MediaTranscodeParameterSet parsedTranscode;
     parseCommonVideoTranscodeOptions(argc, argv, parsedTranscode);
     const auto output = parseRealtimeVideoOutputOptions(argc, argv, parsedTranscode);
-    const RealtimeInputType inputType = requiredRealtimeInputType(argc, argv);
 
     MediaRealtimeRtpTranscodeRequest options;
     options.mediaId = requiredArg(argc, argv, "--media-id");
@@ -171,18 +97,14 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.deployment.maximumWireResidence =
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(
             maximumWireResidenceMs * 1'000'000));
-    parseRealtimeInputOptions(argc, argv, inputType, options.input);
-    parseRtpInputMetadata(
-        argc, argv,
-        "--video-rtp-url", "--video-rtp-codec",
-        "--video-rtp-payload-type", "--video-rtp-clock-rate",
-        nullptr, "--video-rtp-fmtp", options.input.videoRtp);
-    parseRtpInputMetadata(
-        argc, argv,
-        "--audio-rtp-url", "--audio-rtp-codec",
-        "--audio-rtp-payload-type", "--audio-rtp-clock-rate",
-        "--audio-rtp-channels", "--audio-rtp-fmtp",
-        options.input.audioRtp);
+    if (hasArg(argc, argv, "--inputs")) {
+        options.composition = parseRealtimeCompositionInputs(argc, argv);
+    } else {
+        if (hasArg(argc, argv, "--grid") || hasArg(argc, argv, "--audio-source") ||
+            hasArg(argc, argv, "--preparation-storage-limit-bytes"))
+            throw std::invalid_argument("composition grid, audio source and preparation storage require --inputs");
+        options.input = parseRealtimeInput(argc, argv);
+    }
     options.output = output.output;
     options.parameters.video = output.video;
     options.parameters.execution.streamSet = parsedTranscode.execution.streamSet;
@@ -316,9 +238,12 @@ int runRealtimeVideoCli(int argc, char** argv)
     if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type url|rtp|mpegts-udp --output-layout separate|mpegts --output-transport udp|rtp --egress-capacity-bps BPS --maximum-wire-residence-ms MS [--max-duration SECONDS] [options]\n";
         std::cout << "Realtime video encoding: --rc cbr requires positive --bitrate; --rc vbr requires positive --min-bitrate, --bitrate, and --max-bitrate; --gop is always a required positive frame count.\n";
+        std::cout << "RTP input: --input-latency-ms MS declares the per-source reorder wait budget (positive, no default). Single RTP without it retains finite-probe mode; URL/MPEG-TS inputs reject it.\n";
+        std::cout << "Composition: repeat --inputs \"<existing input options>\" for each of 2-4 sources, --grid fixed --audio-source INDEX (zero-based), --preparation-storage-limit-bytes BYTES (positive shared preparation reservation limit, no default). Input options belong inside each --inputs value; each source requires positive --input-latency-ms (shared by its audio and video).\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         std::cout << "Control on stdin: add [the same video encoding and output endpoint options], remove ID, list, status ID. Each command ends with a newline; EOF closes only control.\n";
+        std::cout << "Ctrl+C requests controller stop; Windows also supports Ctrl+Break.\n";
         std::cout << "The add command does not accept input, deployment, audio, or runtime options. Quote arguments containing spaces; no shell expansion is performed.\n";
         return helpRequested ? 0 : 2;
     }
@@ -326,9 +251,14 @@ int runRealtimeVideoCli(int argc, char** argv)
     MediaRealtimeRtpTranscodeRequest options = parseRealtimeOptions(argc, argv);
     RealtimeVideoRuntimeOptions runtimeOptions = parseRuntimeOptions(argc, argv);
     const MediaRealtimeVideoRunPolicy runPolicy = makeRunPolicy(runtimeOptions);
-    std::cout << "[CLI] input_type=" << static_cast<int>(*options.input.type)
-              << " input=" << redactUrlUserInfo(options.input.url.empty() ? options.input.videoRtp.url : options.input.url)
-              << " audio="
+    if (options.composition) {
+        std::cout << "[CLI] composition_inputs=" << options.composition->inputs.size()
+                  << " grid=fixed audio_source=" << options.composition->audioSource;
+    } else {
+        std::cout << "[CLI] input_type=" << static_cast<int>(*options.input.type)
+                  << " input=" << redactUrlUserInfo(options.input.url.empty() ? options.input.videoRtp.url : options.input.url);
+    }
+    std::cout << " audio="
               << (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
                       ? "on"
                       : "off")
@@ -343,6 +273,7 @@ int runRealtimeVideoCli(int argc, char** argv)
               << '\n';
 
     MediaRealtimeVideoRunControl control;
+    RealtimeStopSignal stopSignal(control, runPolicy.pollInterval());
     RealtimeOutputControl outputControl(control);
     MediaRealtimeVideoRunObserver observer;
     observer.prepared = printPreparedReport;
@@ -354,6 +285,8 @@ int runRealtimeVideoCli(int argc, char** argv)
     const MediaRealtimeVideoRunOutcome outcome =
         MediaRealtimeVideoRunController::run(
             options, runPolicy, control, observer);
+    if (outcome.endReason == MediaRealtimeVideoRunEndReason::CallerStop)
+        std::cout << "[CLI] end_reason=caller_stop\n";
     if (outcome.endReason == MediaRealtimeVideoRunEndReason::ProgressTimeout &&
         outcome.failureReport) {
         printStalledEdges(*outcome.failureReport);

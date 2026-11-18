@@ -3,6 +3,8 @@
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressStorage.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
+#include "internal/graph/runtime/resource/MediaPreparedAllocationCost.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -21,16 +23,17 @@ namespace media::ffmpeg::graph {
 
 struct MediaLinuxRtpIngressAdapter::ReceiveState final {
 #ifndef _WIN32
-    explicit ReceiveState(std::size_t descriptorCapacity)
-        : messages(descriptorCapacity),
-          vectors(descriptorCapacity),
-          slots(descriptorCapacity)
+    ReceiveState(std::size_t descriptorCapacity, MediaRtpUdpIngressReceiveLease channelLease, std::pmr::memory_resource* resource)
+        : lease(std::move(channelLease)), messages(descriptorCapacity, resource),
+          vectors(descriptorCapacity, resource),
+          slots(descriptorCapacity, resource)
     {
     }
 
-    std::vector<mmsghdr> messages;
-    std::vector<iovec> vectors;
-    std::vector<MediaRtpIngressWritableSlot> slots;
+    MediaRtpUdpIngressReceiveLease lease;
+    std::pmr::vector<mmsghdr> messages;
+    std::pmr::vector<iovec> vectors;
+    std::pmr::vector<MediaRtpIngressWritableSlot> slots;
 #endif
     std::atomic<std::uint64_t> receiveCalls{0};
     std::atomic<std::uint64_t> receiveSystemCalls{0};
@@ -69,9 +72,10 @@ void releaseSlots(
 } // namespace
 
 MediaLinuxRtpIngressAdapter::MediaLinuxRtpIngressAdapter(
-    MediaRtpUdpTransport transport,
-    std::unique_ptr<ReceiveState> receiveState,
-    MediaRtpIngressPlanFacts planFacts) noexcept
+    ConstructionKey,
+    std::shared_ptr<MediaRtpUdpTransport> transport,
+    MediaLineageUniquePtr<ReceiveState> receiveState,
+    MediaRtpReceiveGeometryFacts planFacts) noexcept
     : m_transport(std::move(transport)),
       m_receiveState(std::move(receiveState)),
       m_planFacts(planFacts)
@@ -83,20 +87,25 @@ MediaLinuxRtpIngressAdapter::~MediaLinuxRtpIngressAdapter()
     logDiagnostics("destroyed");
 }
 
-::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>
+::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>
 MediaLinuxRtpIngressAdapter::create(
-    MediaRtpUdpTransport transport,
-    const MediaRtpIngressPlan& plan)
+    std::shared_ptr<MediaRtpUdpTransport> transport,
+    const MediaRtpReceiveGeometry& plan,
+    MediaLineageAllocationScope allocation)
 {
 #ifdef _WIN32
     (void)transport;
     (void)plan;
-    return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+    (void)allocation;
+    return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
         ::media::ErrorInfo::notInitialized(
             "Linux RTP ingress adapter is unavailable on Windows"));
 #else
+    if (!MediaLineageAllocator<std::byte>{allocation}.resource())
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
+            invalidAdapter("RTP ingress requires its allocation domain"));
     if (auto status = plan.validateProduct(); !status) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             status.error());
     }
     if (plan.adapterKind() !=
@@ -107,28 +116,45 @@ MediaLinuxRtpIngressAdapter::create(
             MediaRtpIngressCancellationContract::DescriptorWake ||
         plan.completionEvidence() !=
             MediaRtpIngressCompletionEvidence::ReceiveMultipleMessagesReturn ||
-        !transport.isOpen() ||
-        transport.effectiveReceiveBufferBytes() <= 0 ||
+        !transport || !transport->isOpen() ||
+        transport->effectiveReceiveBufferBytes(plan.channel()) <= 0 ||
         plan.socketReceiveCapacityBytes() != static_cast<std::size_t>(
-            transport.effectiveReceiveBufferBytes()) ||
+            transport->effectiveReceiveBufferBytes(plan.channel())) ||
         plan.descriptorCapacity() >
             static_cast<std::size_t>((std::numeric_limits<unsigned int>::max)())) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             invalidAdapter(
                 "Linux RTP ingress adapter requires the exact planner-selected socket and recvmmsg contract"));
     }
+    auto lease = transport->acquireIngressReceiveLease(plan.channel());
+    if (!lease) return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(lease.error());
     try {
-        auto state = std::make_unique<ReceiveState>(
-            plan.descriptorCapacity());
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::success(
-            std::unique_ptr<MediaRtpIngressAdapter>(
-                new MediaLinuxRtpIngressAdapter(
-                    std::move(transport), std::move(state), plan.facts())));
+        auto state = makeMediaLineageUnique<ReceiveState>(allocation,
+            plan.descriptorCapacity(), std::move(lease).value(),
+            MediaLineageAllocator<std::byte>{allocation}.resource());
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::success(
+            std::allocate_shared<MediaLinuxRtpIngressAdapter> (
+                MediaLineageAllocator<MediaLinuxRtpIngressAdapter>{allocation}, ConstructionKey{},
+                std::move(transport), std::move(state), plan.facts()));
     } catch (const std::bad_alloc&) {
-        return ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>>::failure(
+        return ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Linux RTP ingress reusable descriptor allocation failed"));
     }
+#endif
+}
+
+::media::Result<std::size_t> MediaLinuxRtpIngressAdapter::preparationStorageBytes(std::size_t descriptors)
+{
+#ifndef _WIN32
+    using Cost = MediaPreparedAllocationCost;
+    return Cost::sum({Cost::shared<MediaLinuxRtpIngressAdapter>(), Cost::object<ReceiveState>(),
+        Cost::fixedVector<mmsghdr>(descriptors),
+        Cost::fixedVector<iovec>(descriptors), Cost::fixedVector<MediaRtpIngressWritableSlot>(descriptors)});
+#else
+    (void)descriptors;
+    return ::media::Result<std::size_t>::failure(
+        ::media::ErrorInfo::unsupported("Ingress allocation geometry requires its target platform"));
 #endif
 }
 
@@ -156,19 +182,15 @@ MediaLinuxRtpIngressAdapter::kind() const noexcept
                 "Linux RTP ingress storage differs from the initialized planner product"));
     }
     m_receiveState->receiveCalls.fetch_add(1, std::memory_order_relaxed);
-    auto leaseResult = m_transport.acquireIngressReceiveLease();
-    if (!leaseResult) {
-        return ::media::Result<std::size_t>::failure(leaseResult.error());
-    }
-    auto lease = std::move(leaseResult).value();
-    const bool preferRtcp =
-        lease.preferredChannel() == MediaRtpUdpChannel::Rtcp;
+    auto& lease = m_receiveState->lease;
+    const auto channel = m_planFacts.channel;
+    const int socketHandle = static_cast<int>(channel == MediaRtpUdpChannel::Rtp
+        ? lease.rtpHandle() : lease.rtcpHandle());
     pollfd descriptors[]{
         {static_cast<int>(lease.cancellationHandle()), POLLIN, 0},
-        {static_cast<int>(preferRtcp ? lease.rtcpHandle() : lease.rtpHandle()), POLLIN, 0},
-        {static_cast<int>(preferRtcp ? lease.rtpHandle() : lease.rtcpHandle()), POLLIN, 0}};
+        {socketHandle, POLLIN, 0}};
     const int waited = ::poll(
-        descriptors, 3,
+        descriptors, 2,
         (std::min)(timeoutMilliseconds, lease.timeoutMilliseconds()));
     if (waited == 0) {
         m_receiveState->wouldBlocks.fetch_add(1, std::memory_order_relaxed);
@@ -188,29 +210,15 @@ MediaLinuxRtpIngressAdapter::kind() const noexcept
         return ::media::Result<std::size_t>::failure(cancelledReceive());
     }
     const short failureEvents = POLLERR | POLLHUP | POLLNVAL;
-    if ((descriptors[1].revents & failureEvents) != 0 ||
-        (descriptors[2].revents & failureEvents) != 0) {
+    if ((descriptors[1].revents & failureEvents) != 0) {
         return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::ioFailure(
                 "Linux RTP ingress socket poll failed", EIO));
     }
-    const bool preferredReady = (descriptors[1].revents & POLLIN) != 0;
-    const bool secondaryReady = (descriptors[2].revents & POLLIN) != 0;
-    if (!preferredReady && !secondaryReady) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::wouldBlock(
-                "Linux RTP ingress poll returned no readable socket"));
+    if ((descriptors[1].revents & POLLIN) == 0) {
+        return ::media::Result<std::size_t>::failure(::media::ErrorInfo::wouldBlock(
+            "Linux RTP ingress poll returned no readable socket"));
     }
-    const bool selectPreferred = preferredReady;
-    const MediaRtpUdpChannel channel = selectPreferred
-        ? lease.preferredChannel()
-        : (lease.preferredChannel() == MediaRtpUdpChannel::Rtp
-            ? MediaRtpUdpChannel::Rtcp
-            : MediaRtpUdpChannel::Rtp);
-    const int socketHandle = static_cast<int>(
-        channel == MediaRtpUdpChannel::Rtp
-            ? lease.rtpHandle()
-            : lease.rtcpHandle());
 
     std::size_t acquired = 0;
     for (; acquired < m_receiveState->slots.size(); ++acquired) {
@@ -306,25 +314,26 @@ MediaLinuxRtpIngressAdapter::kind() const noexcept
 ::media::Status
 MediaLinuxRtpIngressAdapter::interruptReceive() noexcept
 {
-    return m_transport.interruptReceive();
+    return m_transport->interruptReceive();
 }
 
 ::media::Status MediaLinuxRtpIngressAdapter::stop() noexcept
 {
-    auto status = m_transport.stop();
+    auto status = m_transport->stop();
     logDiagnostics("stopped");
     return status;
 }
 
 ::media::Status MediaLinuxRtpIngressAdapter::abort() noexcept
 {
-    auto status = m_transport.abort();
+    auto status = m_transport->abort();
     logDiagnostics("aborted");
     return status;
 }
 
 void MediaLinuxRtpIngressAdapter::logDiagnostics(const char* stage) noexcept
 {
+    try {
     if (!m_receiveState ||
         m_receiveState->diagnosticsLogged.exchange(
             true, std::memory_order_acq_rel)) {
@@ -335,6 +344,7 @@ void MediaLinuxRtpIngressAdapter::logDiagnostics(const char* stage) noexcept
         MediaGraphDiagnosticPhase::RuntimeNode,
         std::string("rtp_ingress_adapter stage=") + stage +
             " adapter=linux_receive_multiple_messages" +
+            " channel=" + std::string(m_planFacts.channel == MediaRtpUdpChannel::Rtp ? "rtp" : "rtcp") +
             " socket_capacity_bytes=" +
                 std::to_string(m_planFacts.socketReceiveCapacityBytes) +
             " batch_capacity_bytes=" +
@@ -358,6 +368,10 @@ void MediaLinuxRtpIngressAdapter::logDiagnostics(const char* stage) noexcept
             " pressure_failures=" + std::to_string(
                 m_receiveState->pressureFailures.load(std::memory_order_relaxed)) +
             " storage_reuse=preallocated post_start_allocation_path=none");
+
+    } catch (...) {
+        // Cleanup and protocol cancellation must finish when diagnostics cannot allocate.
+    }
 }
 
 } // namespace media::ffmpeg::graph

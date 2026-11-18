@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
+#include "internal/graph/diagnostics/MediaOutputPreparationObservation.h"
 
 #include <limits>
 #include <new>
@@ -22,12 +23,34 @@ MediaDatagramTransportPlanBuffer::MediaDatagramTransportPlanBuffer(
 
 ::media::Result<MediaBufferRef> MediaDatagramTransportPlanBuffer::create(
     const MediaDatagramTransportPlanTemplate& planTemplate,
-    std::uint64_t generation)
+    std::uint64_t generation,
+    std::shared_ptr<const MediaStorageReleaseNotification> releaseNotification)
 {
-    auto activated = planTemplate.activate(generation);
+    const auto& producer = planTemplate.encode().deployment.resources.mpegTsProducer;
+    const auto& planned = planTemplate.encode().deployment.resources;
+    MediaOutputPreparationObservation observation("transport_buffer", generation,
+        planned.maximumNetworkMemoryBytes, planTemplate.remoteEndpoints().size());
+    if (producer && !producer->muxQueueStorage) return ::media::Result<MediaBufferRef>::failure(
+        ::media::ErrorInfo::notInitialized("Runtime TS transport requires final graph storage admission"));
+    auto activated = [&] {
+        MediaOutputPreparationObservation activationObservation("transport_activate", generation,
+            planned.maximumNetworkMemoryBytes, planTemplate.remoteEndpoints().size());
+        return planTemplate.activate(generation);
+    }();
     if (!activated) {
         return ::media::Result<MediaBufferRef>::failure(activated.error());
     }
+    const auto userspaceBytes = activated.value().shaping.networkMemory().reservedUserspaceBytes;
+    if (userspaceBytes > (std::numeric_limits<std::size_t>::max)()) {
+        return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::invalidArgument(
+            "Datagram userspace storage budget is not addressable"));
+    }
+    auto storageBudget = MediaNetworkStorageBudget::create(
+        static_cast<std::size_t>(userspaceBytes),
+        MediaStandaloneStorage<MediaNetworkStorageDomain>{}, releaseNotification);
+    if (!storageBudget) return ::media::Result<MediaBufferRef>::failure(storageBudget.error());
+    auto storageResource = MediaNetworkMemoryResource::create(std::move(storageBudget).value());
+    if (!storageResource) return ::media::Result<MediaBufferRef>::failure(storageResource.error());
     std::unordered_map<std::uint64_t, std::uint64_t> endpointWireHeaders;
     try {
         endpointWireHeaders.reserve(
@@ -56,7 +79,10 @@ MediaDatagramTransportPlanBuffer::MediaDatagramTransportPlanBuffer(
         activated.value().shaping.backlog().maximumDatagrams,
         activated.value().shaping.backlog().maximumBytes,
         activated.value().shaping.backlog().commitBeforeNextReservation,
-        std::move(endpointWireHeaders));
+        std::move(storageResource).value(), std::move(endpointWireHeaders),
+        activated.value().rtpStorageInstances, activated.value().commitStorage,
+        producer ? producer->muxQueueStorage : std::nullopt,
+        producer ? producer->seriesStorage : std::nullopt);
     if (!sequence) {
         return ::media::Result<MediaBufferRef>::failure(sequence.error());
     }

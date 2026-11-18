@@ -1,10 +1,6 @@
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 
-#include "internal/graph/utils/MediaCheckedArithmetic.h"
-
-extern "C" {
-#include <libavutil/samplefmt.h>
-}
+#include "internal/graph/planner/audio/MediaAudioFrameFootprintPlanner.h"
 
 #include <algorithm>
 
@@ -12,30 +8,6 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
-
-::media::Result<std::uint64_t> frameBytes(
-    std::int64_t samples,
-    int channels,
-    const std::string& sampleFormat,
-    const char* fact)
-{
-    const AVSampleFormat format = av_get_sample_fmt(sampleFormat.c_str());
-    const int bytesPerSample = av_get_bytes_per_sample(format);
-    if (samples <= 0 || channels <= 0 || format == AV_SAMPLE_FMT_NONE ||
-        bytesPerSample <= 0) {
-        return ::media::Result<std::uint64_t>::failure(
-            ::media::ErrorInfo::notInitialized(
-                std::string(fact) + " lacks opened sample geometry"));
-    }
-    auto sampleBytes = MediaCheckedArithmetic::multiply(
-        static_cast<std::uint64_t>(samples),
-        static_cast<std::uint64_t>(channels), fact);
-    return sampleBytes
-        ? MediaCheckedArithmetic::multiply(
-              sampleBytes.value(),
-              static_cast<std::uint64_t>(bytesPerSample), fact)
-        : sampleBytes;
-}
 
 ::media::Result<MediaPreparedAudioFrameFootprintEnvelope>
 resolveAudioFrames(const MediaAudioPipelinePlan& audio)
@@ -47,26 +19,17 @@ resolveAudioFrames(const MediaAudioPipelinePlan& audio)
         return Result::failure(::media::ErrorInfo::notInitialized(
             "audio frame planning requires opened decoder, resampler, and encoder products"));
     }
-    const auto& decoder = *audio.selectedDecoder;
-    const auto& resampler = *audio.selectedResampler;
+    auto source = MediaAudioFrameFootprintPlanner::planSource(
+        audio, audio.selectedResampler->maximumOutputBlockSamples);
+    if (!source) return Result::failure(source.error());
     const auto& output = *audio.resolvedOutput;
-    auto decoded = frameBytes(
-        decoder.maximumOutputBlockInputSamples, decoder.outputChannels,
-        decoder.outputSampleFormat, "opened decoder output frame bytes");
-    auto resampled = frameBytes(
-        resampler.maximumOutputBlockSamples, output.channels(),
-        output.sampleFormat(), "prepared resampler output frame bytes");
-    auto encoder = frameBytes(
+    auto encoder = MediaAudioFrameFootprintPlanner::logicalBytes(
         audio.preparedEmission->frameSizeSamples, output.channels(),
         output.sampleFormat(), "opened encoder input frame bytes");
-    if (!decoded || !resampled || !encoder) {
-        return Result::failure(
-            !decoded ? decoded.error() :
-            !resampled ? resampled.error() : encoder.error());
-    }
+    if (!encoder) return Result::failure(encoder.error());
     return Result::success(MediaPreparedAudioFrameFootprintEnvelope{
-        decoded.value(), resampled.value(), encoder.value(),
-        (std::max)({decoded.value(), resampled.value(), encoder.value()}),
+        source.value().decodedBytes, source.value().resampledBytes, encoder.value(),
+        (std::max)({source.value().decodedBytes, source.value().resampledBytes, encoder.value()}),
         "opened-decoder-readback+prepared-resampler-ratio-delay+opened-encoder-readback"});
 }
 
@@ -78,10 +41,20 @@ MediaPreparedEmissionResolver::resolve(
     MediaRational outputFrameRate,
     const MediaAudioPipelinePlan* audioPipeline)
 {
-    const auto& video = videoPipeline.selected.encoder.preparedEmission;
-    if (!videoPipeline.enabled ||
-        videoPipeline.branchMode != MediaBranchMode::TranscodeFrame ||
-        !video || video->sustainedPayloadBytesPerSecond == 0 ||
+    if (!videoPipeline.enabled || videoPipeline.branchMode != MediaBranchMode::TranscodeFrame)
+        return ::media::Result<MediaPreparedRealtimeEmissionSet>::failure(
+            ::media::ErrorInfo::notInitialized("wire planning requires frame transcode output"));
+    return resolveOutput(videoPipeline.selected, outputFrameRate, audioPipeline);
+}
+
+::media::Result<MediaPreparedRealtimeEmissionSet>
+MediaPreparedEmissionResolver::resolveOutput(
+    const MediaVideoOutputPlan& videoOutput,
+    MediaRational outputFrameRate,
+    const MediaAudioPipelinePlan* audioPipeline)
+{
+    const auto& video = videoOutput.encoder.preparedEmission;
+    if (!video || video->sustainedPayloadBytesPerSecond == 0 ||
         video->peakPayloadBytesPerSecond <
             video->sustainedPayloadBytesPerSecond ||
         video->maximumAccessUnitPayloadBytes == 0 ||
@@ -101,7 +74,7 @@ MediaPreparedEmissionResolver::resolve(
     }
 
     MediaPreparedRealtimeEmissionSet resolved{
-        *video, std::nullopt, std::nullopt, std::nullopt};
+        *video, std::nullopt, std::nullopt, std::nullopt, videoOutput.encoder.preparedCodecParameters};
     if (!audioPipeline) {
         return ::media::Result<MediaPreparedRealtimeEmissionSet>::success(
             std::move(resolved));
@@ -109,7 +82,8 @@ MediaPreparedEmissionResolver::resolve(
     const auto& audio = audioPipeline->preparedEmission;
     if (!audioPipeline->enabled ||
         audioPipeline->branchMode != MediaBranchMode::TranscodeFrame ||
-        !audio || audio->sustainedPayloadBytesPerSecond == 0 ||
+        !audio || audio->codecId == AV_CODEC_ID_NONE ||
+        audio->sustainedPayloadBytesPerSecond == 0 ||
         audio->peakPayloadBytesPerSecond <
             audio->sustainedPayloadBytesPerSecond ||
         audio->maximumAccessUnitPayloadBytes == 0 ||

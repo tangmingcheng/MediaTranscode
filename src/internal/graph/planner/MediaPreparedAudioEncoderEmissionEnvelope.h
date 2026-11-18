@@ -1,11 +1,16 @@
 #pragma once
 
+extern "C" {
+#include <libavcodec/codec_id.h>
+}
+
 #include <cstdint>
 #include <string>
 
 namespace media::ffmpeg::graph {
 
 struct MediaPreparedAudioEncoderEmissionEnvelope final {
+    AVCodecID codecId = AV_CODEC_ID_NONE;
     std::uint64_t sustainedPayloadBytesPerSecond = 0;
     std::uint64_t peakPayloadBytesPerSecond = 0;
     std::uint64_t maximumAccessUnitPayloadBytes = 0;

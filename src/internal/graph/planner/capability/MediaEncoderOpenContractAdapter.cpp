@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/capability/MediaEncoderEmissionPreflightAdapter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -10,6 +11,8 @@ extern "C" {
 
 #include <array>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -18,6 +21,13 @@ namespace {
 {
     return ::media::Status::failure(
         ::media::ErrorInfo::invalidArgument(std::move(message)));
+}
+
+bool supportsImmediateOutput(const AVCodecContext& context)
+{
+    const std::string_view codec = context.codec && context.codec->name
+        ? context.codec->name : "";
+    return codec == "h264_nvenc" || codec == "hevc_nvenc" || codec == "av1_nvenc";
 }
 
 ::media::Status applyPrivateString(
@@ -87,6 +97,45 @@ void MediaEncoderOpenContractAdapter::applyLowLatency(
     else context.flags &= ~AV_CODEC_FLAG_LOW_DELAY;
 }
 
+::media::Status MediaEncoderOpenContractAdapter::applyOutputBuffering(
+    AVCodecContext& context, MediaEncoderOutputBuffering buffering)
+{
+    if (buffering == MediaEncoderOutputBuffering::BackendManaged)
+        return ::media::Status::success();
+    if (buffering != MediaEncoderOutputBuffering::Immediate ||
+        !supportsImmediateOutput(context))
+        return invalid("Immediate encoder output requires a planned NVENC adapter");
+    if (auto status = applyPrivateString(context, "delay", "0"); !status) return status;
+    return applyPrivateString(context, "zerolatency", "1");
+}
+
+::media::Status MediaEncoderOpenContractAdapter::verifyOutputBuffering(
+    const AVCodecContext& context, MediaEncoderOutputBuffering buffering)
+{
+    if (buffering == MediaEncoderOutputBuffering::BackendManaged)
+        return ::media::Status::success();
+    // FFmpeg's read-only open-state query has a non-const parameter.
+    const bool opened = avcodec_is_open(const_cast<AVCodecContext*>(&context)) != 0;
+    if (buffering != MediaEncoderOutputBuffering::Immediate || !supportsImmediateOutput(context) ||
+        !context.priv_data || !opened ||
+        context.max_b_frames != 0 || context.has_b_frames != 0)
+        return invalid("Immediate encoder output readback has an incompatible reorder contract");
+    const std::array<std::pair<const char*, std::int64_t>, 3> expected{{
+        {"delay", 0}, {"zerolatency", 1}, {"rc-lookahead", 0}}};
+    for (const auto& [name, value] : expected) {
+        std::int64_t actual = 0;
+        const int read = av_opt_get_int(context.priv_data, name, 0, &actual);
+        if (read < 0) return FFmpegGraphError::statusFromCode(
+            read, std::string("read planned encoder output buffering ") + name);
+        if (actual != value)
+            return invalid(std::string("Immediate encoder output readback differs for ") + name);
+    }
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::PlannerCapability,
+        "encoder_output_buffering verified=immediate delay=0 zerolatency=1 rc_lookahead=0 b_frames=0");
+    return ::media::Status::success();
+}
+
 ::media::Status MediaEncoderOpenContractAdapter::applyBeforeOpen(
     AVCodecContext& context,
     const MediaEncoderOpenContract& contract)
@@ -122,6 +171,7 @@ void MediaEncoderOpenContractAdapter::applyLowLatency(
     if (auto status = applyPrivateString(context, "profile", contract.profile); !status) return status;
     if (auto status = applyPrivateString(context, "tune", contract.tune); !status) return status;
     if (auto status = applyPrivateString(context, "level", contract.level); !status) return status;
+    if (auto status = applyOutputBuffering(context, contract.outputBuffering); !status) return status;
 
     if (contract.quality) {
         const char* name = contract.rateControl.mode == MediaRateControlMode::Crf
@@ -141,10 +191,17 @@ void MediaEncoderOpenContractAdapter::applyLowLatency(
     const AVCodecContext& packetLayoutProbe,
     const MediaEncoderOpenContract& contract)
 {
+    if (auto status = verifyOutputBuffering(productionProbe, contract.outputBuffering); !status) return status;
+    if (auto status = verifyOutputBuffering(packetLayoutProbe, contract.outputBuffering); !status) return status;
     const bool publicFieldsMatch =
         productionProbe.codec_id == packetLayoutProbe.codec_id &&
         productionProbe.width == packetLayoutProbe.width &&
         productionProbe.height == packetLayoutProbe.height &&
+        productionProbe.color_range == packetLayoutProbe.color_range &&
+        productionProbe.color_primaries == packetLayoutProbe.color_primaries &&
+        productionProbe.color_trc == packetLayoutProbe.color_trc &&
+        productionProbe.colorspace == packetLayoutProbe.colorspace &&
+        av_cmp_q(productionProbe.sample_aspect_ratio, packetLayoutProbe.sample_aspect_ratio) == 0 &&
         av_cmp_q(productionProbe.time_base, packetLayoutProbe.time_base) == 0 &&
         av_cmp_q(productionProbe.framerate, packetLayoutProbe.framerate) == 0 &&
         productionProbe.bit_rate == packetLayoutProbe.bit_rate &&

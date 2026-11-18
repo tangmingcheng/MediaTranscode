@@ -1,6 +1,9 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
+#include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
+#include "internal/graph/planner/realtime/MediaStartupSharedObjectPlanner.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 
@@ -28,10 +31,12 @@ bool validEventPort(const MediaPort* port, MediaPortDirection direction) noexcep
            port->payloadKind == MediaPayloadKind::GraphEvent;
 }
 
-::media::Status validatePorts(const MediaNode& node)
+::media::Status validatePorts(const MediaNode& node, MediaTranscodeStreamSet members)
 {
     if (!validEventPort(node.findInputPort("video"), MediaPortDirection::Input) ||
-        !validEventPort(node.findInputPort("audio"), MediaPortDirection::Input) ||
+        (members == MediaTranscodeStreamSet::AudioVideo
+            ? !validEventPort(node.findInputPort("audio"), MediaPortDirection::Input)
+            : node.findInputPort("audio") != nullptr) ||
         !validEventPort(node.findInputPort("clock"), MediaPortDirection::Input) ||
         !validEventPort(node.findOutputPort("release"), MediaPortDirection::Output)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -40,35 +45,90 @@ bool validEventPort(const MediaPort* port, MediaPortDirection direction) noexcep
     return ::media::Status::success();
 }
 
+::media::Result<MediaAvStartupAudioConfig> readAudioConfig(const MediaNodeOptions* options)
+{
+    auto trimAudio = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
+                                            "av_startup.trim_audio_to_common_start");
+    auto trim = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
+                                                "av_startup.maximum_audio_trim_ns");
+    auto skew = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
+                                                "av_startup.maximum_initial_skew_ns");
+    auto outputAudioSampleRate = requiredPositiveIntNodeOption(
+        options, "MediaAvStartupCoordinatorNode",
+        "av_startup.output_audio_sample_rate");
+    auto audioCapacity = requiredCapacity(options, "av_startup.audio_capacity");
+    auto audioBytes = requiredPositiveInt64NodeOption(
+        options, "MediaAvStartupCoordinatorNode", "av_startup.audio_byte_capacity");
+    auto maximumAudioUnitBytes = requiredPositiveInt64NodeOption(
+        options, "MediaAvStartupCoordinatorNode", "av_startup.maximum_audio_unit_bytes");
+    auto audioIdentity = requiredNodeOption(
+        options, "MediaAvStartupCoordinatorNode", "av_startup.audio_identity");
+    if (!trimAudio) return ::media::Result<MediaAvStartupAudioConfig>::failure(trimAudio.error());
+    if (!trim) return ::media::Result<MediaAvStartupAudioConfig>::failure(trim.error());
+    if (!skew) return ::media::Result<MediaAvStartupAudioConfig>::failure(skew.error());
+    if (!outputAudioSampleRate) return ::media::Result<MediaAvStartupAudioConfig>::failure(outputAudioSampleRate.error());
+    if (!audioCapacity) return ::media::Result<MediaAvStartupAudioConfig>::failure(audioCapacity.error());
+    if (!audioBytes) return ::media::Result<MediaAvStartupAudioConfig>::failure(audioBytes.error());
+    if (!maximumAudioUnitBytes) return ::media::Result<MediaAvStartupAudioConfig>::failure(maximumAudioUnitBytes.error());
+    if (!audioIdentity) return ::media::Result<MediaAvStartupAudioConfig>::failure(audioIdentity.error());
+    return ::media::Result<MediaAvStartupAudioConfig>::success({
+        trimAudio.value(), MediaRunningTime::fromNanoseconds(trim.value()),
+        MediaRunningTime::fromNanoseconds(skew.value()), audioCapacity.value(),
+        static_cast<std::uint64_t>(audioBytes.value()),
+        static_cast<std::uint64_t>(maximumAudioUnitBytes.value()),
+        std::move(audioIdentity).value(), outputAudioSampleRate.value()});
+}
+
 } // namespace
 
 MediaAvStartupCoordinatorNodePreparation::MediaAvStartupCoordinatorNodePreparation(
-    std::unique_ptr<MediaAvStartupCoordinator> coordinator,
-    std::shared_ptr<MediaAvStartupGenerationState> generationState,
-    int outputAudioSampleRate)
-    : m_coordinator(std::move(coordinator))
+    MediaLineageAllocationScope allocation,
+    MediaStartupSharedObjectPlan releaseStorage,
+    MediaLineageUniquePtr<MediaAvStartupCoordinator> coordinator,
+    std::shared_ptr<MediaAvStartupGenerationState> generationState)
+    : m_allocation(std::move(allocation)), m_releaseStorage(std::move(releaseStorage)), m_coordinator(std::move(coordinator))
     , m_generationState(std::move(generationState))
-    , m_outputAudioSampleRate(outputAudioSampleRate)
 {
 }
 
 ::media::Result<MediaAvStartupCoordinatorNodePreparation>
-prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
+prepareMediaAvStartupCoordinatorNode(const MediaNode& node, MediaLineageAllocationScope allocation)
 {
     if (node.kind != MediaNodeKind::AvStartupCoordinator) {
         return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup node preparation requires coordinator kind"));
     }
-    if (auto ports = validatePorts(node); !ports) {
-        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
-            ports.error());
-    }
     const auto* options = &node.options;
+    auto memberOption = requiredNodeOption(options, "MediaAvStartupCoordinatorNode", "av_startup.members");
+    if (!memberOption) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(memberOption.error());
+    auto members = MediaTranscodeStreamSetCodec::decode(memberOption.value());
+    if (!members) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(members.error());
+    if (auto ports = validatePorts(node, members.value()); !ports)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(ports.error());
+    std::optional<MediaAvStartupAudioConfig> audio;
+    if (members.value() == MediaTranscodeStreamSet::AudioVideo) {
+        auto decoded = readAudioConfig(options);
+        if (!decoded) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(decoded.error());
+        audio = std::move(decoded).value();
+    } else {
+        for (const char* key : {"av_startup.trim_audio_to_common_start",
+                "av_startup.maximum_audio_trim_ns", "av_startup.maximum_initial_skew_ns",
+                "av_startup.output_audio_sample_rate", "av_startup.audio_capacity",
+                "av_startup.audio_byte_capacity", "av_startup.maximum_audio_unit_bytes",
+                "av_startup.audio_identity"}) {
+            if (options->has(key))
+                return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
+                    ::media::ErrorInfo::invalidArgument("Video startup rejects unplanned audio options"));
+        }
+    }
+    auto readinessOption = requiredNodeOption(options, "MediaAvStartupCoordinatorNode",
+        "av_startup.video_readiness");
+    if (!readinessOption) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(readinessOption.error());
+    auto readiness = decodeMediaVideoStartupReadiness(readinessOption.value());
+    if (!readiness) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(readiness.error());
     auto requireKey = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
                                              "av_startup.require_video_key_frame");
-    auto trimAudio = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
-                                            "av_startup.trim_audio_to_common_start");
     auto allowDegraded = requiredBoolNodeOption(options, "MediaAvStartupCoordinatorNode",
                                                 "av_startup.allow_degraded_clock");
     auto wait = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
@@ -77,31 +137,17 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
                                                    "av_startup.preroll_ns");
     auto keyWait = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
                                                    "av_startup.key_frame_wait_ns");
-    auto trim = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
-                                                "av_startup.maximum_audio_trim_ns");
-    auto skew = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
-                                                "av_startup.maximum_initial_skew_ns");
     auto gap = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
                                                "av_startup.maximum_gap_ns");
     auto lead = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
                                                 "av_startup.output_lead_ns");
-    auto outputAudioSampleRate = requiredPositiveIntNodeOption(
-        options, "MediaAvStartupCoordinatorNode",
-        "av_startup.output_audio_sample_rate");
     auto videoCapacity = requiredCapacity(options, "av_startup.video_capacity");
-    auto audioCapacity = requiredCapacity(options, "av_startup.audio_capacity");
     auto videoBytes = requiredPositiveInt64NodeOption(
         options, "MediaAvStartupCoordinatorNode", "av_startup.video_byte_capacity");
-    auto audioBytes = requiredPositiveInt64NodeOption(
-        options, "MediaAvStartupCoordinatorNode", "av_startup.audio_byte_capacity");
     auto maximumVideoUnitBytes = requiredPositiveInt64NodeOption(
         options, "MediaAvStartupCoordinatorNode", "av_startup.maximum_video_unit_bytes");
-    auto maximumAudioUnitBytes = requiredPositiveInt64NodeOption(
-        options, "MediaAvStartupCoordinatorNode", "av_startup.maximum_audio_unit_bytes");
     auto videoIdentity = requiredNodeOption(
         options, "MediaAvStartupCoordinatorNode", "av_startup.video_identity");
-    auto audioIdentity = requiredNodeOption(
-        options, "MediaAvStartupCoordinatorNode", "av_startup.audio_identity");
     auto sourceClockMode = requiredNodeOption(
         options, "MediaAvStartupCoordinatorNode",
         "av_startup.source_clock_mode");
@@ -109,24 +155,16 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
         options, "MediaAvStartupCoordinatorNode", "av_startup.sync_group");
 
     if (!requireKey) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(requireKey.error());
-    if (!trimAudio) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(trimAudio.error());
     if (!allowDegraded) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(allowDegraded.error());
     if (!wait) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(wait.error());
     if (!preroll) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(preroll.error());
     if (!keyWait) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(keyWait.error());
-    if (!trim) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(trim.error());
-    if (!skew) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(skew.error());
     if (!gap) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(gap.error());
     if (!lead) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(lead.error());
-    if (!outputAudioSampleRate) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(outputAudioSampleRate.error());
     if (!videoCapacity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoCapacity.error());
-    if (!audioCapacity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(audioCapacity.error());
     if (!videoBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoBytes.error());
-    if (!audioBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(audioBytes.error());
     if (!maximumVideoUnitBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(maximumVideoUnitBytes.error());
-    if (!maximumAudioUnitBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(maximumAudioUnitBytes.error());
     if (!videoIdentity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoIdentity.error());
-    if (!audioIdentity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(audioIdentity.error());
     if (!sourceClockMode) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(sourceClockMode.error());
     if (!group) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(group.error());
 
@@ -148,31 +186,54 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
             ::media::ErrorInfo::invalidArgument(
                 "MediaAvStartupCoordinatorNode requires a valid planned sync group"));
     }
+    auto releaseStorage = MediaStartupSharedObjectPlanner::plan(MediaStartupSharedObjectRole::Release, allocation);
+    if (!releaseStorage) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(releaseStorage.error());
+    auto videoIndex = MediaAvStartupIndexStoragePlanner::plan(
+        videoCapacity.value(), readiness.value(), allocation);
+    if (!videoIndex) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoIndex.error());
+    std::optional<MediaAvStartupIndexStoragePlan> audioIndex;
+    if (audio) {
+        auto plannedAudio = MediaAvStartupIndexStoragePlanner::plan(audio->capacity,
+            MediaVideoStartupReadiness::IntervalCoverage, allocation);
+        if (!plannedAudio) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(plannedAudio.error());
+        audioIndex.emplace(std::move(plannedAudio).value());
+    }
+    auto generationStorage = MediaAvStartupIndexStoragePlanner::planGeneration(
+        videoCapacity.value(), audio ? audio->capacity : 0, allocation);
+    if (!generationStorage)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(generationStorage.error());
+    auto generationValid = MediaAvStartupIndexStoragePlanner::validateGeneration(
+        generationStorage.value(), videoCapacity.value(), audio ? audio->capacity : 0, allocation);
+    if (!generationValid)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(generationValid.error());
     auto created = MediaAvStartupCoordinator::create(MediaAvStartupConfig{
-        requireKey.value(), trimAudio.value(), allowDegraded.value(),
+        members.value(), readiness.value(), requireKey.value(), allowDegraded.value(),
         sourceClockModeValue.value(),
         MediaRunningTime::fromNanoseconds(wait.value()),
         MediaRunningTime::fromNanoseconds(preroll.value()),
         MediaRunningTime::fromNanoseconds(keyWait.value()),
-        MediaRunningTime::fromNanoseconds(trim.value()),
-        MediaRunningTime::fromNanoseconds(skew.value()),
         MediaRunningTime::fromNanoseconds(gap.value()),
         MediaRunningTime::fromNanoseconds(lead.value()),
-        videoCapacity.value(), audioCapacity.value(),
+        videoCapacity.value(),
         static_cast<std::uint64_t>(videoBytes.value()),
-        static_cast<std::uint64_t>(audioBytes.value()),
         static_cast<std::uint64_t>(maximumVideoUnitBytes.value()),
-        static_cast<std::uint64_t>(maximumAudioUnitBytes.value()),
-        std::move(videoIdentity).value(), std::move(audioIdentity).value()});
+        std::move(videoIdentity).value(), std::move(audio)}, allocation,
+        std::move(videoIndex).value(), std::move(audioIndex));
     if (!created) {
         return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
             created.error().toErrorInfo());
     }
+    auto generationState = std::allocate_shared<MediaAvStartupGenerationState>(
+        MediaAvStartupGenerationState::AllocationAllocator{allocation}, std::move(groupKey), allocation,
+        std::move(generationStorage).value());
+    auto storageReady = generationState->prepareStorage();
+    if (!storageReady)
+        return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(storageReady.error());
     return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::success(
         MediaAvStartupCoordinatorNodePreparation(
-            std::make_unique<MediaAvStartupCoordinator>(std::move(created).value()),
-            std::make_shared<MediaAvStartupGenerationState>(std::move(groupKey)),
-            outputAudioSampleRate.value()));
+            allocation, std::move(releaseStorage).value(),
+            makeMediaLineageUnique<MediaAvStartupCoordinator>(allocation, std::move(created).value()),
+            std::move(generationState)));
 }
 
 } // namespace media::ffmpeg::graph

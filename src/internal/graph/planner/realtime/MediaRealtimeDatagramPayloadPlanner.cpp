@@ -39,4 +39,23 @@ MediaRealtimeDatagramPayloadPlanner::plan(
         routeMaximumPayloadBytes});
 }
 
+::media::Result<std::uint64_t>
+MediaRealtimeDatagramPayloadPlanner::maximumPayloadBytes(
+    const MediaRealtimeDeploymentMtuFact& mtu)
+{
+    const auto ipHeaderBytes = mtu.addressFamily == MediaIpAddressFamily::Ipv4
+        ? Ipv4HeaderBytes : mtu.addressFamily == MediaIpAddressFamily::Ipv6
+            ? Ipv6HeaderBytes : 0U;
+    if (mtu.authority.empty() || ipHeaderBytes == 0 ||
+        mtu.senderMaximumPayloadBytes == 0 ||
+        mtu.maximumIpPacketBytes <= ipHeaderBytes + UdpHeaderBytes) {
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "realtime Datagram payload requires complete deployment MTU facts"));
+    }
+    return ::media::Result<std::uint64_t>::success((std::min)(
+        mtu.senderMaximumPayloadBytes,
+        mtu.maximumIpPacketBytes - ipHeaderBytes - UdpHeaderBytes));
+}
+
 } // namespace media::ffmpeg::graph

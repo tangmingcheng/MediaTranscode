@@ -2,6 +2,8 @@
 
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
+#include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
+#include "internal/graph/protocol/codec/MediaVideoParameterSetFacts.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -104,10 +106,33 @@ AVCodecID codecId(const std::string& codec) noexcept
         parameters->sample_rate = config.clockRate;
         av_channel_layout_default(&parameters->ch_layout, config.channels);
     }
+    if (config.streamKind == MediaStreamKind::Video) {
+        auto signaling = parseRtpVideoSignalingFacts(config.codecName, config.fmtp);
+        if (!signaling) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(signaling.error());
+        auto facts = MediaRtpVideoParameterSetValidator::inspect(config.codecName, signaling.value());
+        if (!facts) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(facts.error());
+        parameters->width = facts.value().codedSize.width;
+        parameters->height = facts.value().codedSize.height;
+        parameters->sample_aspect_ratio = {facts.value().sampleAspectRatio.num,
+                                          facts.value().sampleAspectRatio.den};
+    }
     auto extradata = codecExtradata(config);
     if (!extradata) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(extradata.error());
     if (auto status = setExtradata(*parameters, extradata.value()); !status) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(status.error());
 
+    if (config.streamKind == MediaStreamKind::Video) {
+        const auto color = MediaVideoParameterSetFacts::fromAccessUnit(extradata.value(),
+            config.codecName == "h264" ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc,
+            MediaEncodedPacketLayout::startCodeDelimited());
+        if (color) {
+            parameters->color_range = color->range;
+            if (color->color) {
+                parameters->color_primaries = color->color->primaries;
+                parameters->color_trc = color->color->transfer;
+                parameters->color_space = color->color->matrix;
+            }
+        }
+    }
     FFmpegInputStreamSnapshot stream;
     stream.index = 0;
     stream.streamKind = config.streamKind;

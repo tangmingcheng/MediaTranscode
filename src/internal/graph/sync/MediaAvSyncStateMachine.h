@@ -16,7 +16,8 @@ enum class MediaAvSyncState {
     Running,
     Failed,
     Stopped,
-    Aborted
+    Aborted,
+    WaitingForEvidence
 };
 
 enum class MediaAvSyncEvent {
@@ -28,7 +29,8 @@ enum class MediaAvSyncEvent {
     RequireReacquisition,
     Fail,
     Stop,
-    Abort
+    Abort,
+    AttemptExpired
 };
 
 class MediaAvSyncStateMachine final {

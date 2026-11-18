@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
-#include <vector>
+#include <ranges>
 
 namespace media::ffmpeg::graph {
 
@@ -24,8 +24,16 @@ public:
     MediaChannel* findByEdge(MediaEdgeId edgeId);
     const MediaChannel* findByEdge(MediaEdgeId edgeId) const;
 
-    std::vector<MediaChannel*> channels();
-    std::vector<const MediaChannel*> channels() const;
+    // Borrowed iteration: callers retain the registry owner and must not mutate
+    // its membership until traversal ends. Channel state changes are permitted.
+    auto channels() noexcept {
+        return m_channels | std::views::values | std::views::transform(
+            [](const auto& channel) noexcept -> MediaChannel* { return channel.get(); });
+    }
+    auto channels() const noexcept {
+        return m_channels | std::views::values | std::views::transform(
+            [](const auto& channel) noexcept -> const MediaChannel* { return channel.get(); });
+    }
 
     bool remove(MediaChannelId id);
     bool removeByEdge(MediaEdgeId edgeId);

@@ -1,0 +1,17 @@
+# r273：RTP直接序列化到最终输出存储
+
+当前普通RTP先分配materializedRtp逐包vector，随后复制到r272已准入payload。复用现有prepare/writeInto协议实现，改为具名稳定writer保存rewrite plan、timestamp和sequence，最终batch提供准确目标区间。依据仍为GStreamer allocation合同（https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html）中明确目标分配与所有者生命周期，不新增协议算法或平台处理链。
+
+窄同步借用view只有准确大小、context和函数指针；工厂拒绝临时writer，无std::function、共享控制块或隐藏owner。raw bytes也通过明确工厂复制。writer与输入字节必须覆盖整次prepare，输出Prepared只保留最终backing，不能保存回调。失败销毁整笔未发布对象，保持global/protocol投影在准备成功之后。
+
+writer及metadata数组仍需后续纳入同笔准入。MPEGTS/RTP外层仍先生成完整RTP供rewrite解析，消除此副本需从MP2T plan提供真实协议事实并复用同一RTP会话状态，不能另建序号/RTCP链。serial继续保持。
+
+b2设计审查局部PASS。实施后双独立冻结审查、Release全量构建及原规格realtime验证；不修改外部FFmpeg、不运行local。
+
+实施已完成：RTP plan包含原rewrite plan、timestamp、sequence，既有composer统一写入最终backing；RTCP普通/terminal保留原report plan，亦直接写最终backing。raw UDP以fromBytes适配。mediaPlans构造全部完成后才创建borrow view，prepare返回后不保留writer。普通writer/元数据vector及MP2T外层副本仍待处理。源码冻结，等待双审与构建。
+
+复审修正：原Plan&模板可接收const临时对象，与拒绝临时writer合同不符；现使用std::reference_wrapper<const Plan>，三个调用点明确std::cref。当前生产调用此前均为有效左值，此项为接口生命周期约束修正，不宣称复现了生产悬空。2026-10-20检查此前构建会话37195已不存在、无编译进程且realtime产物缺失，因此不记通过；修正后重新执行全量Release构建，等待结果与双复审。
+
+修正后a与b2两位独立审查者均明确局部静态PASS：显式引用包装关闭直接临时对象入口，实际plan生命周期覆盖同步prepare；协议写入、失败RAII与投影顺序不变。此结论不代表构建、实流或整体合屏验收通过。
+
+2026-10-20 Release全量重建会话11542成功，configure/build退出码均0；CMakeCache.txt、build.ninja与两个CLI产物均存在。realtime大小6200832字节，时间2026-10-20 09:08:36，SHA256 5F6A4289712A527397441A4E58359138087090275546F575F9C6CC96909689B0。git diff --check通过。未运行local CLI；原规格realtime实流尚待执行，输出截止时间问题仍未关闭。

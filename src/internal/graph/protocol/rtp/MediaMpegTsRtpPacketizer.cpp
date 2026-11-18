@@ -1,7 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
 
 #include <algorithm>
-#include <new>
+#include <cstring>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -12,7 +12,7 @@ constexpr std::size_t TsPacketBytes = 188;
 constexpr int Mp2tStaticPayloadType = 33;
 constexpr int Mp2tClockRate = 90'000;
 
-void writeU16(std::vector<std::uint8_t>& datagram,
+void writeU16(std::span<std::uint8_t> datagram,
               std::size_t offset,
               std::uint16_t value) noexcept
 {
@@ -20,7 +20,7 @@ void writeU16(std::vector<std::uint8_t>& datagram,
     datagram[offset + 1] = static_cast<std::uint8_t>(value);
 }
 
-void writeU32(std::vector<std::uint8_t>& datagram,
+void writeU32(std::span<std::uint8_t> datagram,
               std::size_t offset,
               std::uint32_t value) noexcept
 {
@@ -31,18 +31,6 @@ void writeU32(std::vector<std::uint8_t>& datagram,
 }
 
 } // namespace
-
-MediaMpegTsRtpPacket::MediaMpegTsRtpPacket(
-    std::vector<std::uint8_t> datagram,
-    std::size_t payloadOctets,
-    std::uint16_t sequenceNumber,
-    MediaRtpTimestamp timestamp) noexcept
-    : m_datagram(std::move(datagram)),
-      m_payloadOctets(payloadOctets),
-      m_sequenceNumber(sequenceNumber),
-      m_timestamp(timestamp)
-{
-}
 
 ::media::Result<MediaMpegTsRtpPacketizer>
 MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
@@ -74,8 +62,8 @@ MediaMpegTsRtpPacketizer::MediaMpegTsRtpPacketizer(
 {
 }
 
-::media::Result<MediaMpegTsRtpPacket>
-MediaMpegTsRtpPacketizer::packetize(
+::media::Result<MediaMpegTsRtpPacketPlan>
+MediaMpegTsRtpPacketizer::prepare(
     std::span<const std::uint8_t> completeTsPackets,
     MediaRunningTime emitOnMaster,
     std::uint16_t sequenceNumber) const
@@ -85,38 +73,33 @@ MediaMpegTsRtpPacketizer::packetize(
     if (payloadBytes == 0 || payloadBytes % TsPacketBytes != 0 ||
         packetCount > m_config.maximumTsPackets ||
         payloadBytes > m_config.maximumDatagramBytes - RtpHeaderBytes) {
-        return ::media::Result<MediaMpegTsRtpPacket>::failure(
+        return ::media::Result<MediaMpegTsRtpPacketPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MP2T RTP payload must contain one planned batch of complete TS packets"));
     }
     auto timestamp = m_clockMapper.map(emitOnMaster);
     if (!timestamp) {
-        return ::media::Result<MediaMpegTsRtpPacket>::failure(
+        return ::media::Result<MediaMpegTsRtpPacketPlan>::failure(
             timestamp.error());
     }
-    try {
-        std::vector<std::uint8_t> datagram(
-            RtpHeaderBytes + payloadBytes);
-        datagram[0] = 0x80;
-        datagram[1] =
-            static_cast<std::uint8_t>(m_config.payloadType);
-        writeU16(datagram, 2, sequenceNumber);
-        writeU32(datagram, 4, timestamp.value().wire());
-        writeU32(datagram, 8, m_config.ssrc);
-        std::copy(
-            completeTsPackets.begin(), completeTsPackets.end(),
-            datagram.begin() +
-                static_cast<std::ptrdiff_t>(RtpHeaderBytes));
+    return ::media::Result<MediaMpegTsRtpPacketPlan>::success(
+        MediaMpegTsRtpPacketPlan(completeTsPackets, RtpHeaderBytes + payloadBytes,
+            sequenceNumber, timestamp.value(), m_config.ssrc, m_config.payloadType));
+}
 
-        return ::media::Result<MediaMpegTsRtpPacket>::success(
-            MediaMpegTsRtpPacket(
-                std::move(datagram), payloadBytes, sequenceNumber,
-                timestamp.value()));
-    } catch (const std::bad_alloc&) {
-        return ::media::Result<MediaMpegTsRtpPacket>::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "MediaMpegTsRtpPacketizer"));
-    }
+::media::Status MediaMpegTsRtpPacketizer::writeInto(
+    const MediaMpegTsRtpPacketPlan& plan, std::span<std::uint8_t> output)
+{
+    if (output.size() != plan.bytes()) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("MP2T output differs from its exact prepared size"));
+    // Copy first so overlapping source storage cannot be overwritten by headers.
+    std::memmove(output.data() + RtpHeaderBytes, plan.m_payload.data(), plan.m_payload.size());
+    output[0] = 0x80;
+    output[1] = static_cast<std::uint8_t>(plan.m_payloadType);
+    writeU16(output, 2, plan.m_sequence);
+    writeU32(output, 4, plan.m_timestamp.wire());
+    writeU32(output, 8, plan.m_ssrc);
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

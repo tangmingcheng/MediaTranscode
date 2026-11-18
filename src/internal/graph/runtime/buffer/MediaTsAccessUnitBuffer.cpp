@@ -25,7 +25,8 @@ MediaStreamKind outerStreamKind(MediaScheduledStream stream) noexcept
     MediaRunningTime presentationOnMaster,
     MediaRunningTime dispatchOnMaster,
     MediaRunningTime emitOnMaster,
-    MediaRunningTime transportDecodeLead)
+    MediaRunningTime transportDecodeLead,
+    MediaAccessUnitProcessingTrace processingTrace)
 {
     auto packetBuffer = std::dynamic_pointer_cast<FFmpegPacketBuffer>(outer);
     if (!packetBuffer) {
@@ -63,10 +64,11 @@ MediaStreamKind outerStreamKind(MediaScheduledStream stream) noexcept
                 "MPEG-TS access unit does not match the planned transport decode lead"));
     }
 
+    processingTrace.adaptedCreated = mediaAccessUnitObservationNow();
     return ::media::Result<MediaBufferRef>::success(
         std::shared_ptr<MediaTsAccessUnitBuffer>(new MediaTsAccessUnitBuffer(
             std::move(packetBuffer), stream, generation, presentationOnMaster,
-            dispatchOnMaster, emitOnMaster)));
+            dispatchOnMaster, emitOnMaster, std::move(processingTrace))));
 }
 
 MediaTsAccessUnitBuffer::MediaTsAccessUnitBuffer(
@@ -75,7 +77,8 @@ MediaTsAccessUnitBuffer::MediaTsAccessUnitBuffer(
     std::uint64_t generation,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime dispatchOnMaster,
-    MediaRunningTime emitOnMaster)
+    MediaRunningTime emitOnMaster,
+    MediaAccessUnitProcessingTrace processingTrace)
     : m_outer(std::move(outer))
     , m_stream(stream)
     , m_generation(generation)
@@ -84,6 +87,7 @@ MediaTsAccessUnitBuffer::MediaTsAccessUnitBuffer(
     , m_emitOnMaster(emitOnMaster)
     , m_randomAccess(m_stream == MediaScheduledStream::Video &&
                      m_outer->isKeyFrame())
+    , m_processingTrace(std::move(processingTrace))
 {
     setStreamKind(outerStreamKind(stream));
     setPayloadKind(MediaPayloadKind::TsAccessUnit);

@@ -1,17 +1,21 @@
 #pragma once
 
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanView.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyView.h"
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeAvSyncRuntimePlan;
-struct MediaRealtimeRtpTranscodePlan;
+struct MediaRealtimeAvSourceClockRequest;
+struct MediaRealtimeAvSourceTimingFacts;
 
 class MediaRealtimeAvSyncRuntimeInputValidator final {
 public:
     static ::media::Status validate(
-        const MediaRealtimeRtpTranscodePlan& outer,
-        const MediaRealtimeAvSyncRuntimePlan& runtime);
+        const MediaRealtimeAvSourceClockRequest& request,
+        const MediaAvSyncPlanView& synchronization,
+        const MediaRealtimeAvSourceTimingFacts& facts,
+        const MediaRealtimeAvSyncAssemblyView& assembly);
 
 private:
     MediaRealtimeAvSyncRuntimeInputValidator() = delete;

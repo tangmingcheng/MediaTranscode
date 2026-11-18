@@ -1,0 +1,390 @@
+diff --git a/libavcodec/rkmppdec.c b/libavcodec/rkmppdec.c
+index 731b705..9dca7bd 100644
+--- a/libavcodec/rkmppdec.c
++++ b/libavcodec/rkmppdec.c
+@@ -29,6 +29,8 @@
+ #include "config_components.h"
+ 
+ #include "rkmppdec.h"
++#include <rockchip/mpp_user_data.h>
++#include <rockchip/mpp_dec_userdata.h>
+ 
+ #include <fcntl.h>
+ #include <unistd.h>
+@@ -53,6 +55,50 @@ static MppCodingType rkmpp_get_coding_type(AVCodecContext *avctx)
+     }
+ }
+ 
++/* Local dependency contract: only an opened, queried MPP context can
++ * advertise packet identity. This is not a claim about arbitrary MPP builds. */
++static int rkmpp_read_opaque_contract(AVCodecContext *avctx)
++{
++    RKMPPDecContext *r = avctx->priv_data;
++    MppDecUserDataGeometry facts = { 0 };
++    uint64_t hidden, retained;
++    int ret;
++
++    if (!(avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE))
++        return 0;
++    ret = r->mapi->control(r->mctx, MPP_DEC_QUERY_USER_DATA, &facts);
++    if (ret != MPP_OK || facts.version != 1 || facts.split_parse ||
++        facts.coding != rkmpp_get_coding_type(avctx) ||
++        !facts.frame_slots || !facts.input_tasks || !facts.hal_tasks ||
++        !facts.parser_owner_slots || !facts.user_data_bytes ||
++        facts.user_data_bytes > INT64_MAX)
++        return AVERROR(ENOSYS);
++
++    hidden = (uint64_t)facts.frame_slots + facts.input_tasks + facts.hal_tasks +
++             facts.parser_owner_slots + facts.vproc_owner_slots + facts.context_packet_slots;
++    /* Drain-before-each-feed: an output-empty boundary has at most hidden
++     * distinct owners. One subsequent input can add one token before output
++     * appears; while output is queued there is no further submission. Count
++     * both that output burst and all hidden owners, allowing aliases.
++     * Six extra internal owners: last_pkt, AVCodecInternal in_pkt,
++     * last_pkt_props, buffer_pkt, buffer_frame, and BSF buffer_pkt.
++     * The two mp4toannexb filters retain no additional distinct packet. */
++    if (hidden > (INT64_MAX - 7) / 2)
++        return AVERROR(ERANGE);
++    retained = 2 * hidden + 1 + 6;
++    if (r->opaque_contract_version &&
++        (retained > r->opaque_retained_packets ||
++         facts.user_data_bytes != r->opaque_userdata_bytes))
++        return AVERROR_INVALIDDATA;
++    if (!r->opaque_contract_version) {
++        r->opaque_retained_packets = retained;
++        r->opaque_userdata_bytes = facts.user_data_bytes;
++        r->opaque_packet_props_bytes = sizeof(AVPacket);
++        r->opaque_contract_version = facts.version;
++    }
++    return 0;
++}
++
+ static uint32_t rkmpp_get_drm_format(MppFrameFormat mpp_fmt)
+ {
+     switch (mpp_fmt & MPP_FRAME_FMT_MASK) {
+@@ -265,6 +311,15 @@ static av_cold int rkmpp_decode_init(AVCodecContext *avctx)
+         goto fail;
+     }
+ 
++    if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
++        RK_U32 split_parse = 0;
++        if ((avctx->codec_id != AV_CODEC_ID_H264 && avctx->codec_id != AV_CODEC_ID_HEVC) ||
++            r->mapi->control(r->mctx, MPP_DEC_SET_PARSER_SPLIT_MODE, &split_parse) != MPP_OK) {
++            ret = AVERROR(ENOSYS);
++            goto fail;
++        }
++    }
++
+     if ((ret = mpp_init(r->mctx, MPP_CTX_DEC, coding_type)) != MPP_OK) {
+         av_log(avctx, AV_LOG_ERROR, "Failed to init MPP context: %d\n", ret);
+         ret = AVERROR_EXTERNAL;
+@@ -294,6 +349,11 @@ static av_cold int rkmpp_decode_init(AVCodecContext *avctx)
+         goto fail;
+     }
+ 
++    if ((ret = rkmpp_read_opaque_contract(avctx)) < 0) {
++        av_log(avctx, AV_LOG_ERROR, "Opened MPP decoder cannot prove packet-property ownership\n");
++        goto fail;
++    }
++
+     if (avctx->pix_fmt != AV_PIX_FMT_DRM_PRIME)
+         r->afbc = 0;
+ 
+@@ -560,6 +620,35 @@ static int rkmpp_export_content_light(AVFrame *frame,
+     return 0;
+ }
+ 
++/* Packet properties follow the decoder-owned picture, as in libdav1d.
++ * The payload is already owned by MPP; retaining it again is unnecessary. */
++static void rkmpp_free_packet_props(void *data)
++{
++    AVPacket *props = data;
++    av_packet_free(&props);
++}
++
++static int rkmpp_set_packet_props(MppPacket packet, const AVPacket *pkt)
++{
++    AVPacket *props = av_packet_alloc();
++    MppUserData data = NULL;
++    int ret;
++
++    if (!props)
++        return AVERROR(ENOMEM);
++    if ((ret = av_packet_copy_props(props, pkt)) < 0) {
++        av_packet_free(&props);
++        return ret;
++    }
++    if (mpp_user_data_create(&data, props, rkmpp_free_packet_props) != MPP_OK) {
++        av_packet_free(&props);
++        return AVERROR(ENOMEM);
++    }
++    mpp_packet_set_user_data(packet, data);
++    mpp_user_data_unref(&data);
++    return 0;
++}
++
+ static void rkmpp_free_mpp_frame(void *opaque, uint8_t *data)
+ {
+     MppFrame mpp_frame = (MppFrame)opaque;
+@@ -588,16 +677,17 @@ static int frame_create_buf(AVFrame *frame,
+     return AVERROR(EINVAL);
+ }
+ 
+-static int rkmpp_export_frame(AVCodecContext *avctx, AVFrame *frame, MppFrame mpp_frame)
++static int rkmpp_export_frame(AVCodecContext *avctx, AVFrame *frame, MppFrame *mpp_frame_owner)
+ {
+     RKMPPDecContext *r = avctx->priv_data;
++    MppFrame mpp_frame = *mpp_frame_owner;
+     AVRKMPPDRMFrameDescriptor *desc = NULL;
+     AVDRMLayerDescriptor *layer = NULL;
+     const AVPixFmtDescriptor *pix_desc;
+     MppBuffer mpp_buf = NULL;
+     MppFrameFormat mpp_fmt = MPP_FMT_BUTT;
+     int mpp_frame_mode = 0;
+-    int ret, is_afbc = 0;
++    int ret, is_afbc = 0, desc_owned = 0;
+ 
+     if (!frame || !mpp_frame)
+         return AVERROR(ENOMEM);
+@@ -635,7 +725,7 @@ static int rkmpp_export_frame(AVCodecContext *avctx, AVFrame *frame, MppFrame mp
+ 
+         pix_desc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
+         if ((ret = get_afbc_byte_stride(pix_desc, (int *)&layer->planes[0].pitch, 0)) < 0)
+-            return ret;
++            goto fail;
+ 
+         /* MPP specific AFBC src_y offset, not memory address offset */
+         frame->crop_top = r->use_rfbc ? 0 : mpp_frame_get_offset_y(mpp_frame);
+@@ -655,20 +745,39 @@ static int rkmpp_export_frame(AVCodecContext *avctx, AVFrame *frame, MppFrame mp
+ 
+     if ((ret = frame_create_buf(frame, mpp_frame, mpp_frame_get_buf_size(mpp_frame),
+                                 rkmpp_free_mpp_frame, mpp_frame, AV_BUFFER_FLAG_READONLY)) < 0)
+-        return ret;
++        goto fail;
++    *mpp_frame_owner = NULL;
+ 
+     if ((ret = frame_create_buf(frame, (uint8_t *)desc, sizeof(*desc),
+                                 rkmpp_free_drm_desc, desc, AV_BUFFER_FLAG_READONLY)) < 0)
+-        return ret;
++        goto fail;
++    desc_owned = 1;
+ 
+     frame->data[0] = (uint8_t *)desc;
+ 
+     frame->hw_frames_ctx = av_buffer_ref(r->hwframe);
+-    if (!frame->hw_frames_ctx)
+-        return AVERROR(ENOMEM);
++    if (!frame->hw_frames_ctx) {
++        ret = AVERROR(ENOMEM);
++        goto fail;
++    }
+ 
+     if ((ret = ff_decode_frame_props(avctx, frame)) < 0)
+-        return ret;
++        goto fail;
++    if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
++        MppUserData data = mpp_frame_get_user_data(mpp_frame);
++        const AVPacket *props = data ? mpp_user_data_get_data(data) : NULL;
++        if (!props) {
++            ret = AVERROR_INVALIDDATA;
++            goto fail;
++        }
++        if ((ret = ff_decode_frame_props_from_pkt(avctx, frame, props)) < 0)
++            goto fail;
++        /* The exported DRM frame may outlive the decoder and its registry.
++         * AVFrame now owns the copied properties; do not retain a second
++         * lineage reference through its pixel-buffer MppFrame owner. */
++        mpp_frame_set_user_data(mpp_frame, NULL);
++    }
++
+ 
+     frame->width  = avctx->width;
+     frame->height = avctx->height;
+@@ -692,13 +801,19 @@ static int rkmpp_export_frame(AVCodecContext *avctx, AVFrame *frame, MppFrame mp
+          frame->color_trc == AVCOL_TRC_ARIB_STD_B67)) {
+         ret = rkmpp_export_mastering_display(avctx, frame, mpp_frame_get_mastering_display(mpp_frame));
+         if (ret < 0)
+-            return ret;
++            goto fail;
+         ret = rkmpp_export_content_light(frame, mpp_frame_get_content_light(mpp_frame));
+         if (ret < 0)
+-            return ret;
++            goto fail;
+     }
+ 
+     return 0;
++
++fail:
++    if (!desc_owned)
++        av_free(desc);
++    av_frame_unref(frame);
++    return ret;
+ }
+ 
+ static void rkmpp_export_avctx_color_props(AVCodecContext *avctx, MppFrame mpp_frame)
+@@ -766,6 +881,7 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
+     MppFrame mpp_frame = NULL;
+     int ret;
+ 
++retry_output:
+     /* should not provide any frame after EOS */
+     if (r->eof)
+         return AVERROR_EOF;
+@@ -892,6 +1008,9 @@ static int rkmpp_get_frame(AVCodecContext *avctx, AVFrame *frame, int timeout)
+             goto exit;
+         }
+ 
++        if ((ret = rkmpp_read_opaque_contract(avctx)) < 0)
++            goto exit;
++
+         /* there's no real info change, export the frame directly */
+         if (avctx->codec_id == AV_CODEC_ID_MJPEG)
+             goto export;
+@@ -911,7 +1030,7 @@ export:
+         switch (avctx->pix_fmt) {
+         case AV_PIX_FMT_DRM_PRIME:
+             {
+-                if ((ret = rkmpp_export_frame(avctx, frame, mpp_frame)) < 0)
++                if ((ret = rkmpp_export_frame(avctx, frame, &mpp_frame)) < 0)
+                     goto exit;
+                 return 0;
+             }
+@@ -927,8 +1046,10 @@ export:
+                     ret = AVERROR(ENOMEM);
+                     goto exit;
+                 }
+-                if ((ret = rkmpp_export_frame(avctx, tmp_frame, mpp_frame)) < 0)
++                if ((ret = rkmpp_export_frame(avctx, tmp_frame, &mpp_frame)) < 0) {
++                    av_frame_free(&tmp_frame);
+                     goto exit;
++                }
+ 
+                 if ((ret = ff_get_buffer(avctx, frame, 0)) < 0) {
+                     av_log(avctx, AV_LOG_ERROR, "ff_get_buffer failed: %d\n", ret);
+@@ -959,11 +1080,28 @@ export:
+     }
+ 
+ exit:
++    if ((avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) &&
++        ret == AVERROR(EAGAIN) && mpp_frame) {
++        /* Discard/info-change is consumed output, not an empty output queue. */
++        mpp_frame_deinit(&mpp_frame);
++        goto retry_output;
++    }
+     if (mpp_frame)
+         mpp_frame_deinit(&mpp_frame);
+     return ret;
+ }
+ 
++static int rkmpp_packet_submission_error(int ret)
++{
++    if (ret == MPP_OK)
++        return 0;
++    if (ret == MPP_ERR_BUFFER_FULL || ret == MPP_ERR_TIMEOUT || ret == MPP_NOK)
++        return AVERROR(EAGAIN);
++    if (ret == MPP_ERR_MALLOC || ret == MPP_ERR_NOMEM)
++        return AVERROR(ENOMEM);
++    return AVERROR_EXTERNAL;
++}
++
+ static int rkmpp_send_eos(AVCodecContext *avctx)
+ {
+     RKMPPDecContext *r = avctx->priv_data;
+@@ -983,13 +1121,11 @@ static int rkmpp_send_eos(AVCodecContext *avctx)
+     }
+     mpp_packet_set_eos(mpp_pkt);
+ 
+-    do {
+-        ret = r->mapi->decode_put_packet(r->mctx, mpp_pkt);
+-    } while (ret != MPP_OK);
+-
+-    r->draining = 1;
+-
++    ret = rkmpp_packet_submission_error(r->mapi->decode_put_packet(r->mctx, mpp_pkt));
+     mpp_packet_deinit(&mpp_pkt);
++    if (ret < 0)
++        return ret;
++    r->draining = 1;
+     return 0;
+ }
+ 
+@@ -1129,6 +1265,11 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
+             return AVERROR_EXTERNAL;
+         }
+         mpp_packet_set_pts(mpp_pkt, mpp_pkt_pts);
++        if ((avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) &&
++            (ret = rkmpp_set_packet_props(mpp_pkt, pkt)) < 0) {
++            mpp_packet_deinit(&mpp_pkt);
++            return ret;
++        }
+ 
+         ret = r->mapi->decode_put_packet(r->mctx, mpp_pkt);
+     }
+@@ -1137,6 +1278,8 @@ static int rkmpp_send_packet(AVCodecContext *avctx, AVPacket *pkt)
+         av_log(avctx, AV_LOG_TRACE, "Decoder buffer is full\n");
+         if (mpp_pkt)
+             mpp_packet_deinit(&mpp_pkt);
++        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE)
++            return rkmpp_packet_submission_error(ret);
+         return AVERROR(EAGAIN);
+     }
+     /* update the last pts */
+@@ -1169,12 +1312,31 @@ static int rkmpp_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+     }
+ 
+     while (1) {
++        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
++            /* Drain before every single submission. Continue within this call
++             * when needed to preserve libavcodec send/receive progress; never
++             * feed a second packet without observing an empty output queue. */
++            ret = rkmpp_get_frame(avctx, frame, MPP_TIMEOUT_NON_BLOCK);
++            if (ret != AVERROR(EAGAIN))
++                goto exit;
++        }
+         if (!pkt->size) {
+             ret = ff_decode_get_packet(avctx, pkt);
+             if (ret == AVERROR_EOF) {
+                 av_log(avctx, AV_LOG_DEBUG, "Decoder is at EOF\n");
+                 /* send EOS and start draining */
+-                rkmpp_send_eos(avctx);
++                ret = rkmpp_send_eos(avctx);
++                if (ret == AVERROR(EAGAIN)) {
++                    /* Pending EOS still needs decoder input credit. Drain with
++                     * the same bounded wait as a pending media packet; never
++                     * block waiting for an EOS that has not been accepted. */
++                    ret = rkmpp_get_frame(avctx, frame, 100);
++                    if (ret == AVERROR(EAGAIN))
++                        continue;
++                    goto exit;
++                }
++                if (ret < 0)
++                    goto exit;
+                 ret = rkmpp_get_frame(avctx, frame, MPP_TIMEOUT_BLOCK);
+                 goto exit;
+             } else if (ret == AVERROR(EAGAIN)) {
+diff --git a/libavcodec/rkmppdec.h b/libavcodec/rkmppdec.h
+index 9a69d82..bc3f10a 100644
+--- a/libavcodec/rkmppdec.h
++++ b/libavcodec/rkmppdec.h
+@@ -68,6 +68,10 @@ typedef struct RKMPPDecContext {
+     int            afbc;
+     int            fast_parse;
+     int            buf_mode;
++    int            opaque_contract_version;
++    int64_t        opaque_retained_packets;
++    int64_t        opaque_userdata_bytes;
++    int64_t        opaque_packet_props_bytes;
+ } RKMPPDecContext;
+ 
+ enum {
+@@ -93,6 +97,10 @@ static const AVRational mpp_tb = { 1, 1000000 };
+ #define VD (AV_OPT_FLAG_DECODING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
+ 
+ static const AVOption options[] = {
++    { "opaque_contract_version", "Opened MPP packet-property ownership contract", OFFSET(opaque_contract_version), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VD | AV_OPT_FLAG_READONLY },
++    { "opaque_retained_packets", "Bound on distinct packet properties retained inside this decoder", OFFSET(opaque_retained_packets), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, VD | AV_OPT_FLAG_READONLY },
++    { "opaque_userdata_bytes", "MPP reference-counted user-data allocation request", OFFSET(opaque_userdata_bytes), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, VD | AV_OPT_FLAG_READONLY },
++    { "opaque_packet_props_bytes", "AVPacket property-owner allocation request, excluding copied side data", OFFSET(opaque_packet_props_bytes), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, VD | AV_OPT_FLAG_READONLY },
+     { "deint",      "Enable IEP (Image Enhancement Processor) for de-interlacing", OFFSET(deint), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VD },
+     { "afbc",       "Enable AFBC (Arm Frame Buffer Compression) to save bandwidth", OFFSET(afbc), AV_OPT_TYPE_INT, { .i64 = RKMPP_DEC_AFBC_OFF }, 0, 2, VD, .unit = "afbc" },
+         { "off",    "Disable AFBC support",                    0, AV_OPT_TYPE_CONST, { .i64 = RKMPP_DEC_AFBC_OFF    }, 0, 0, VD, .unit = "afbc" },

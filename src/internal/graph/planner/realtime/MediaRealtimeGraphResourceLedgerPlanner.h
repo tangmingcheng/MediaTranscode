@@ -1,8 +1,10 @@
 #pragma once
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/MediaPreparedRtpStorageReservation.h"
 #include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaPreparedInputPayloadEnvelope.h"
+#include "internal/graph/planner/realtime/MediaPreparedInputRetentionPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaRealtimeMediaCapacityPlanner.h"
 
@@ -25,7 +27,8 @@ enum class MediaRealtimeResourceAccountingGroup : std::uint8_t {
     MuxDescriptor = 4,
     RetainLatestMetadata = 5,
     PreparedInputPacket = 6,
-    PreparedInputReservedStorage = 7
+    PreparedInputReservedStorage = 7,
+    PreparedInputStartupRetention = 8
 };
 
 enum class MediaRealtimeQueueRetentionSemantics : std::uint8_t {
@@ -53,6 +56,8 @@ struct MediaRealtimeGraphResourceLedgerPlan final {
     bool hardwareEncoderSurfacePool;
     std::optional<MediaPreparedInputPayloadEnvelope> preparedInputPayload;
     std::vector<MediaRealtimeGraphResourceLedgerEntry> entries;
+    std::optional<MediaPreparedInputRetentionPlan> inputRetention;
+    std::optional<MediaPreparedRtpStorageReservation> rawRtpPreparationStorage;
 };
 
 struct MediaRealtimeVideoSurfaceFootprintFact final {
@@ -78,6 +83,9 @@ public:
         std::string reservedStorageAuthority);
     static ::media::Status validate(
         const MediaRealtimeGraphResourceLedgerPlan& ledger);
+    static ::media::Result<MediaRealtimeGraphResourceLedgerPlan> admitInputRetention(
+        MediaRealtimeGraphResourceLedgerPlan ledger,
+        MediaPreparedInputRetentionPlan retention);
 
 private:
     MediaRealtimeGraphResourceLedgerPlanner() = delete;

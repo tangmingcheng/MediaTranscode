@@ -10,7 +10,7 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 #include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
-#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
+#include "internal/graph/runtime/compilation/MediaAvRuntimeDomainState.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -23,6 +23,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphRuntimeLifecycleExecutor;
+class MediaGraphPayloadBranchReservation;
 class MediaRuntimeBranch;
 class MediaRuntimeBranchResourceReservation;
 class MediaAvSyncClockSource;
@@ -84,6 +85,7 @@ public:
     ::media::Status stop();
     void abort() noexcept;
     void reset();
+    ::media::Status retainInitialFixedStorage(std::uint64_t bytes);
 
     MediaGraphRuntimeState state() const noexcept;
     bool compiled() const noexcept;
@@ -108,8 +110,11 @@ public:
 
 private:
     friend class MediaGraphRuntimeLifecycleExecutor;
+    friend class MediaContinuousOutputDrain;
     ::media::Status compileTransaction(MediaRealtimeExecutableGraph executable);
 
+    // The root storage lease outlives all execution owners, including map sentinels.
+    std::shared_ptr<MediaGraphPayloadBranchReservation> m_rootStorageReservation;
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;
@@ -119,10 +124,7 @@ private:
     MediaRuntimeAcceptanceCollector m_acceptanceCollector;
     mutable std::atomic_size_t m_queueHighWatermark{ 0 };
     std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
-    std::optional<MediaPlaybackEpochActivationCapability>
-        m_playbackEpochActivationCapability;
-    std::shared_ptr<MediaAvStartupVideoPreparationState>
-        m_videoPreparationState;
+    std::vector<MediaAvRuntimeDomainState> m_avDomains;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority>
         m_protocolOutputAuthority;
     std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;

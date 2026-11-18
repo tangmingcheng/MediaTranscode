@@ -16,14 +16,7 @@ Only the graph architecture and `Result.h` are documented as active project surf
 
 ## Build
 
-Use the existing CMake flow:
-
-```bash
-cmake -S . -B out/build/x64-debug
-cmake --build out/build/x64-debug --target media_transcode_core
-cmake --build out/build/x64-debug --target media_transcode_local_video_cli
-cmake --build out/build/x64-debug --target media_transcode_realtime_video_cli
-```
+For Windows x64 Debug/Release full builds, follow the [VS2026 build skill](.agents/skills/building-with-vs2026/SKILL.md). See [deployment.md](deployment.md) for platform prerequisites, package contents, runtime dependencies, and delivery evidence.
 
 Useful CMake options:
 

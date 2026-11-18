@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 
 #include <algorithm>
+#include <string>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -104,14 +105,21 @@ public:
             return ::media::Result<MediaRuntimePlatformSample>::failure(
                 ::media::ErrorInfo::ioFailure("Thread32First failed", static_cast<int>(error)));
         }
+        std::uint64_t enumeratedThreads = 0;
         do {
+            ++enumeratedThreads;
             if (entry.th32OwnerProcessID == processId) ++result.threadCount;
         } while (::Thread32Next(snapshot, &entry));
         const DWORD iterationError = ::GetLastError();
         ::CloseHandle(snapshot);
         if (iterationError != ERROR_NO_MORE_FILES) {
             return ::media::Result<MediaRuntimePlatformSample>::failure(
-                ::media::ErrorInfo::ioFailure("Thread32Next failed", static_cast<int>(iterationError)));
+                ::media::ErrorInfo::ioFailure(
+                    "Thread32Next failed native=" + std::to_string(iterationError) +
+                    " entry_size=" + std::to_string(entry.dwSize) +
+                    " enumerated_threads=" + std::to_string(enumeratedThreads) +
+                    " process_threads=" + std::to_string(result.threadCount),
+                    static_cast<int>(iterationError)));
         }
         return ::media::Result<MediaRuntimePlatformSample>::success(result);
     }

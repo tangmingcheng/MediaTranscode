@@ -8,6 +8,7 @@
 #include <string>
 
 struct AVFrame;
+struct AVBufferRef;
 
 namespace media::ffmpeg::graph {
 
@@ -27,6 +28,11 @@ public:
 
     static ::media::Result<MediaVideoFrameRuntimeFacts> validate(
         const AVFrame& frame,
+        const MediaHardwareDescriptor& contract,
+        const char* stage);
+
+    static ::media::Status validateHardwareFrames(
+        const AVBufferRef* framesReference,
         const MediaHardwareDescriptor& contract,
         const char* stage);
 

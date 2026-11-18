@@ -72,7 +72,12 @@ MediaAtomicOutputTransaction::acquire(
         if (!queue) {
             return AcquireResult::failure(invalidContract(ownerName));
         }
-        auto prepared = queue->preparePush(batch.buffers);
+        const auto previous = required[batch.channel];
+        const auto capacity = queue->capacity();
+        if (previous > capacity || batch.buffers.size() > capacity - previous)
+            return AcquireResult::failure(::media::ErrorInfo::invalidArgument(
+                ownerName + " batch exceeds its prepared output queue storage"));
+        auto prepared = queue->preparePush(batch.buffers, MediaRuntimeLineageAllocation{});
         if (!prepared) return AcquireResult::failure(prepared.error());
         required[batch.channel] += batch.buffers.size();
         ownedBatches.push_back(

@@ -1,0 +1,185 @@
+# 合屏启动存储剩余闭合项
+
+2026-10-26 源码复核；这是未完成项清单，不是完整预算或实流通过结论。对应主计划为 realtime-composition-presentation-capacity-plan.md。generation hash 正在独立实施，以下项目不能因该单元完成而省略。
+
+| 项目 | 必须证明的分配与同时存活边界 |
+| --- | --- |
+| 固定对象 | Coordinator、两个 Store 已走原 PMR；GenerationState 的实际 allocator shared control 几何已接入产品，待本单元双审/构建；其他 shared 对象仍待接线。 |
+| Store 与 hash | 索引、snapshot backing、hash 节点与 sentinel、初始桶和目标桶重叠；消费既有 planner 产品，不能下游重新决定容量。 |
+| IDs 与 selection | prior 和合并结果同时存活，prefix 与 selections、构造 release 时尚存的 selections 均需按真实生命周期组合。 |
+| release 与 transaction | 数组 backing 和两类 shared allocation；reanchor 时旧、新对象及数组同时存活。 |
+| Envelope 与底层引用 | Envelope 数量来自生产者、通道和当前 holder，不能直接等于 Store 容量；Store 持有底层 media，避免重复计算像素。 |
+| pending | 普通 fillPendingMedia 和 fillSnapshotBarrierMedia 都在非空时早返，每条逻辑最多一个；PMR deque 的 map/block backing 仍须计费。 |
+| 跨代与 shared owner | purge 清除 Store/hash 不证明下游旧 release 已释放；按真实下游 holder 和最后 weak owner 生命周期计算。 |
+| 字符串 | MediaAvSyncGroupKey::m_value、startup identity 为普通 std::string，sizeof 对象不包含动态 backing；须明确预算域并实际接入，不可仅账面预扣。 |
+
+## shared geometry 的具体差异
+
+现有 MediaSharedAllocationGeometryProbe 使用 MediaSharedAllocationAllocator。实际 Envelope 的 allocate_shared 使用 polymorphic_allocator；Release、Transaction 和 GenerationState 使用 MediaLineageAllocator。MSVC shared control 保存 allocator，不能把另一种 allocator 的请求尺寸直接套用。下一单元应复用并扩展既有探测能力，读取实际 allocator 形状对应的请求，保持异常路径和资源 owner；探测自身临时分配也须纳入预算域。
+
+源码定位：runtime/resource/MediaSharedAllocationGeometryProbe.h、runtime/buffer/MediaAvStartupEnvelopeBuffer.cpp、runtime/buffer/MediaStartupReleaseTransactionBuffer.cpp、nodes/sync/MediaAvStartupCoordinatorNodePreparation.cpp、nodes/sync/MediaAvStartupCoordinatorNode.cpp、sync/MediaAvSyncGroupKey.h（均位于 src/internal/graph）。
+
+接线顺序：完成 hash 产品及消费者；取得实际 shared geometry；汇总常驻与阶段峰值；对接生产者/holder ledger 与原 allocationFootprint；最后反解可支撑最小进展的容量，接入非 cadence 入口。不得通过分配巨量候选容器试探容量，不得将 compressed reference 数量当作 decoded frame 容量。
+
+本清单经 root 与独立智能体 crash_release_audit 源码核查；没有新增构建或媒体测试，不构成完整审查 PASS。最新已核验二进制仍为 Release realtime 6547456 bytes、2026-10-26 16:06:28；不能代表后续源改动已验证。
+
+## 实际 shared geometry 的最小接线方案
+
+已复核本机 MSVC 14.51.36231/include/memory:2504、3035–3040 和 xmemory:1178–1181：non-array allocate_shared 使用可命名的 std::_Ref_count_obj_alloc3<remove_cv_t<Object>, ActualAllocator>，再 rebind 并 allocate(1)。因此受 STL145/202604 门禁的供应商 adapter 可从该真实类型读取 sizeof/alignof，保留工厂的准确 allocator 模板实参；EBO 和 Lineage/PMR 差异由真实类型体现，不手写控制块布局。此方案不向通用预算分配热路径添加 TLS 捕获机制。
+
+下一实施应在既有 geometry 能力内接入此准确 allocator 产品并由实际 startup 工厂消费。限定完整非数组对象、普通 allocate_shared，排除 overwrite；其他 STL 明确 Unsupported。仅涵盖合并对象/control 请求，内部字符串与 backing 仍另计。GenerationState 已按此方案接入真实工厂和generation固定成本产品，尚待本单元双审、编译和运行；Envelope/Release/Transaction未扩大实施，不能声称容量闭合。
+
+## pending 单项引用实施
+
+工业依据：https://gstreamer.freedesktop.org/documentation/base/gstaggregator.html 的 peek/pop 持有契约明确当前buffer保留至消费，再接下一buffer；不借用其线程实现。本项目Coordinator由既有owner线程串行执行，普通fillPendingMedia与barrier fill均在pending非空时早返，唯一push各一次；采用optional<MediaBufferRef>区分空slot与已取到的空引用，保持原deque在异常输入上的判定，不假定所有channel入队入口都拒绝空buffer。因此两条deque可等价改为内嵌可选引用，延续单项持有方式。排序仍按observedAt；backpressure、snapshot计数、控制终止优先级、purge与caller stop释放点不变；不新增容量策略或线程。消除deque的map/block分配后，仅引用本体属于Node固定对象，媒体共享owner仍按原holder ledger计。本项须双独立复审与Release构建，真实链路验收仍待执行。
+
+## 生命周期核查补充
+
+定义F_T(k)：k=0时为0，否则为原allocationFootprint(k*sizeof(T),alignof(T))。成功tryRelease设旧prior数P、当前nv/na、arrival前缀qv/qa、后缀rv=nv−qv、ra=na−qa：组合阶段同时持有F_ID(P)+F_ID(P+qv+qa)+F_selection(rv)+F_selection(ra)，且Store仍活着；返回后旧prior销毁、Store清空，Node创建release阶段持有合并IDs、selections、新released数组和release shared对象。purge为旧prior加合并IDs，不能虚构P已满且当前Store也满（advance后当前Store已清）。这些阶段应分支求峰值，不能将互斥临时项全部相加冒充精确生命周期。
+
+Sequencer ActiveEpochPassThrough在WouldBlock重试时可同时持有original、旧reanchor及新reanchor三份对象，但每份仅一个媒体项；initial原子release是最多两份完整batch。这一既有行为须按分支计费。下游边槽位、Binder/Sequencer/Extractor及FFmpegRuntime holder需按release身份去重，覆盖跨代寿命；Extractor staged vectors另计。
+
+字符串范围经独立核查：startup unit identity已是共享MediaCanonicalIdentity，decoded路径不按帧复制字符；额外普通堆副本主要为Coordinator配置identity、GenerationState group key、Release/reanchor按值group key及DecodedVideoStartupNode配置identity。外部图配置原件与节点复制件须区分。复用CanonicalIdentity时注意其ImmutableArray字符backing与带deleter shared control是两次分配，不能套non-array allocate_shared几何；不开展全仓字符串替换。
+
+
+## 第九单元接线设计：同源 allocation holder 与预算内分解
+
+沿现有GStreamer显式有界holder/背压与已审计STL真实allocator几何，不另造媒体链。MediaStartupEventMediaPlanner已经给出edge、coordinator、form及wrapperSlots；MediaStartupNodeMediaPlanner沿同一events遍历描述节点的distinct media，明确不包含wrapper/array。拟在同一节点产品中加入allocation角色：producer pending envelope、coordinator当前输入/新release、binder原release/transaction、sequencer original/reanchor、extractor当前release/staging。每项保留既有node/edge/coordinator身份，不重复图遍历，不以videoUnits冒充wrapper数。强制alias只计一份底层媒体；可独立存活的旧generation对象受真实边槽/节点holder约束，purge不等价于下游已释放。
+
+令R(v,a)=Release真实allocator shared footprint+F_ReleasedUnit(v)+F_ReleasedUnit(a)，T为release Transaction shared footprint。initial原子batch的局部reanchor峰值为2*(R(Nv,Na)+T)；ActiveEpochPassThrough重试为3*(R(1,0)+T)或3*(R(0,1)+T)，同节点取分支最大，不能变成三份完整batch。其他边槽/节点可能持有旧release，须按实际角色计独立可能身份，不能假定所有引用都指同一batch。Envelope成本来自producer、通道及当前输入holder，不取Store容量。该对象成本关系应保留Nv/Na为符号，在已有图身份与槽位确定后纯求值；未知容量不得触发真实容器分配。
+
+预算归属：FinalGraphResourceLedgerCompiler已整体计入prepared-input reservation；新增startup成本只能作为同一allocationOwner预算内分解/准入校验，禁止再次增加graph fixedStorage/reserve。runtime registrar实际用rtpSource->videoReferenceResource绑定decoded startup；必须把这一连续源owner身份显式传到allocation产品，而不是通过authority字符串或两个reservation的数组顺序猜测。现有MediaPreparedRtpStorageReservation仅有erased owner、总bytes、streamCount，缺该用途的类型化关联。
+
+当前调用顺序是source runtime plan（此时必须已有Nv/Na）→CompositionGraphBuilder建立节点/边→Topology::planSourceResources→最终Event/Node holder遍历→PreparedRtpStorageAdmission。故直接用最终holder产品反解前面的Nv存在依赖环，不能拿临时Nv=1或经验值造图。最小重排应在同一builder分离startup route结构/槽位事实与容量封印：先形成可复用typed route/holder成本关系，再由budget求Nv并封印原startup config，最后建立/验证同一生产图；最终graph planner核对实际角色、槽位和owner等于早期关系。尚需核验现有builder能在哪个接口暴露该结构，不能直接假定已有能力。
+
+本轮已确认的额外门禁：Extractor stageRelease的std::vector reserve/保留capacity尚未形成实际backing产品；createControl是new+独立shared control而非release allocate_shared；group/config普通字符串backing尚未实账。这些不能由三类普通shared几何替代。当前设计落地未构建、未运行；生产接线须先封闭上述owner关联与容量规划顺序，不把预算内分解误写成第二次reserve。
+
+拆环接口只读核验：MediaRealtimeAvSyncInputSegmentBuilder的addSharedNodes/addSharedPorts/connectSharedTopology声明启动角色和边，configureSharedNodes稍后封印含Nv/Na配置。GraphResourceLedgerPlanner的metadata产品是已有RetainLatestItemCount，validator要求该语义，EdgePolicyPlanner仅复制queues.metadata；因此结构输入hasAudio/decodedVideo/metadata policy本身不依赖Nv。可在同一builder提取typed route，供早期成本关系与最终实际add/connect共同消费，禁止第二套拓扑或占位容量。此重排尚未实施。
+
+
+### route结构实施切片
+
+先提取唯一typed startup route描述（VideoEnvelope/AudioEnvelope、Coordinator、Binder、Sequencer、Extractor逻辑角色及5/6条媒体承载连接）。结构只依赖members与readiness；绑定既有metadata/atomicMetadata策略后得到每条连接的精确wrapperSlots，不含Nv/Na。SegmentBuilder实际节点kind和承载连接消费该描述；EventMediaPlanner沿原遍历使用相同结构判断端点，再核对同类策略和槽位，保留source identity/group与单Extractor等原门禁。时钟/控制输入边、decoder/raw protocol与release后的媒体链不改。
+
+这是早期成本关系的结构前置：各edge form和slots可以在Nv之前取得，full-batch项仍以Nv/Na符号表示；当前切片不改SourcePlanner容量决策、不新增预算、不开放noncadence，不把已有payload holder误标成allocation对象数。后续在同一route产品上接owner内breakdown和分支峰值，才能完成G反解。
+
+route结构切片已冻结待双审：新增MediaStartupRoutePlan和MediaStartupRoutePlanner；SegmentBuilder用同一role映射创建6类节点，用连接表按原顺序连接video/audio、release、transaction/preparation/bound_release，时钟边及其他媒体边保持原顺序/策略。EventMediaPlanner保留身份、group、有界event、唯一producer/Extractor、边不重复等门禁，替换重复连接语法为同一描述；实际每条连接恰出现一次，同Metadata/AtomicMetadata策略角色须一致，atomic政策复用既有contract。当前NodeMediaPlanner及payload residence仍消费原已验证event products，不更改payload数量。
+
+产品describe只收members/readiness，bind只收明确edge策略，均不依赖Nv/Na；后续早期allocation成本关系可用connection.form及绑定policy.queuePolicy.capacity求值，不需要占位图。本轮仅完成结构前置与两个实际消费者，未声称提前求解已接入SourcePlanner，更未放开noncadence或增加预算。新cpp由现有CMake GLOB发现；全部UTF8无BOM/CRLF，diff检查完成，未构建、运行或提交。
+
+双审首轮发现并修正route门禁遗漏：assembly timing的decoded标志与startup readiness现在于创建图前双向一致性校验，同时保留decoder option、source role、sender-report clock及stream index约束，防止反向不一致导致节点kind与既有端口/配置分离。合法链路不变；修正后重新冻结待两位独立复审，尚未构建或运行。
+
+双向一致性修复冻结后，crash_release_audit与publication_identity_review_b两名未参与实现者均复审PASS。结论仅为route结构与实际消费者源码门禁；完整G、noncadence和真实媒体验收仍未完成。已启动既有技能入口Release clean-first/all-target重建，构建结果待核实。
+
+后续构建核验：Release clean-first/all-target会话62105 exit0，configure/build均0（754项），realtime6581760 bytes、2026-10-26 17:17:27；CMakeCache/build.ninja及两个CLI产物均存在。仅构建local产物，未运行local。此次源码尚未新实流验证，不覆盖r359 FAIL。
+
+### Extractor精确staging实施设计
+
+已核验stageRelease两vector reserve会保留历史capacity，且使用普通allocator。复用已存在MediaFixedCapacityStorage，取video.size-firstVideoIndex与audio.size精确容量；资源与显式owner来自当前release allocationScope，不新增输入或预算。一个局部RAII staging对象先构造完整，两数组位于owner之后，完成后移动进入节点；失败不留下半批次，bad_alloc/length_error报allocationFailed，原媒体校验保持。已有WouldBlock跨调用保留完整staging，原提交/丢弃/abort时机释放backing，四处batch消费改显式span view，单worker线程模型不变。
+
+依据GStreamer allocation/bufferpool的显式allocator与buffer持有pool生命周期原则：https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html 。本项目批次引用数组大小不同，复用已有精确数组而非引入固定媒体池；不改变既有channel背压或发明新调度算法。现ReservedOutputTransaction复制引用，不借用span；其另有backing、音频wrapper、group字符串仍待完整G接线，本单元不能宣称整体内存预算闭合。准备域走release既有owner，Runtime域维持原域，不把cadence强行算为prepared。
+### shared对象实际工厂接线设计
+
+本单元沿已核验GStreamer显式allocator所有权与MSVC普通allocate_shared的真实control布局：Envelope实际使用PMR allocator，Release和release Transaction使用Lineage allocator，分别按精确ActualAllocator求geometry并计入原Preparation resource的header/padding。类型化产品在准备期形成，携带明确对象角色和原allocation scope；工厂消费该契约并使用相同allocator alias，实际PMR只收费一次，不另reserve、不在逐媒体路径probe。Runtime域不查询供应商geometry，不伪装Prepared。
+
+DecodedStartup的Envelope使用prepared资源；CanonicalInput的Envelope当前显式new_delete_resource；cadence Coordinator当前Runtime域保持。Release保留原scope和已封印对象契约供reanchor复用。Binder的control事务当前new+独立shared control，拟显式传同域契约并迁移真实allocate_shared，保留Control类型、identity=0和既有输入错误，不能把旧分配冒充release几何。Prepared绑定按现有唯一source owner/readiness决定，不能仅因source存在将cadence升级为Prepared。
+
+此单元只闭合shared对象工厂请求、成本与owner对应；完整holder峰值、普通字符串、CanonicalInput域、索引/selection重叠及总G反解仍未闭合，不开放noncadence。Extractor由独立实施单元处理。
+
+Extractor两文件已完成：optional<StagedRelease>合并owner与两精确数组，替代重复m_releaseStaged布尔状态；局部成功后emplace，所有批次消费者显式view，原清理点reset释放backing。crash_release_audit与publication_identity_review_b两名独立审查者均源码PASS。尚未构建/运行；prepared对象工厂接线仍在实施，待共同冻结后全量Release复验。reservation引用副本/reanchor重叠/音频wrapper仍需完整G计入。
+
+shared对象工厂切片已接线待双审：MediaStartupSharedObjectPlan由planner私有构造封印，外部只能读role/scope/geometry/footprint；Prepared按实际allocator alias查询一次精确control类型，Runtime在校验role后返回明确未预算域。实际Envelope/Release/Transaction工厂均消费该产品，验证角色/域及footprint，原allocate_shared通过原resource实账；不新增预留，也不在工厂重复供应商probe。Release和Transaction持有封印产品，reanchor继承原owner及产品，事务另检查与release资源一致。Control已迁移为真实Lineage allocate_shared，role独立、identity保持0。
+
+Factory准备Canonical Envelope的Runtime契约、Decoded Envelope的Prepared契约；Coordinator准备Release契约；Binder准备ReleaseTransaction/ControlTransaction契约。Registrar对Binder复用唯一source成员定位和DecodedPresentationSpan域判定，使Prepared Binder与Coordinator使用同一个videoReferenceResource；cadence仍Runtime。未知role在两域均拒绝；Prepared空owner在构造前失败。完整符号搜索已迁移所有工厂与节点构造调用。
+
+本切片验证的是实际单对象请求成本与原owner，不包含同时活体wrapper数量或总预算充分性。它没有生成一个虚假的G总量，也没有推进noncadence门禁。Canonical Envelope仍普通堆、字符串与跨generation holder峰值、持续源协议/AU预算重叠仍待总产品接线。新增节点原位plan字段属于既有节点本体未全量预算范围；Prepared Release/Transaction本体增量由精确sizeof实际control覆盖。未构建、运行或提交。
+
+shared审查补充证据：Envelope真实PMR allocator仅保存resource指针，但Prepared资源的MediaBudgetMemoryResource::Allocation header持有shared_ptr owner；allocateFromReservation写入，do_deallocate先移动到局部owner，释放真实块与lease后才析构owner。因此覆盖allocate_shared控制块及weak-only阶段，不依赖Envelope payload/node存活；无需为此更换allocator。此header已由allocationFootprint纳入对象成本。
+
+shared单元冻结后，crash_release_audit与publication_identity_review_b最终独立源码PASS（PMR疑点已以底层owner链撤回）。20源码文件+Extractor两文件统一进入Release clean-first/all-target重建48554，结果待核实。新发现的reservation cancel() noexcept内sortedChannels/lockChannels动态分配为源码风险，未实流复现；下一步核对复用既有m_channels/m_channelLocks，当前构建期间不改源码。
+
+reservation源码核验：reserve在增加reservedCapacity前已创建排序去重m_channels及等长m_channelLocks/m_queueLocks；replace不改集合，move同步转移数组与record。cancel可复用commit已有RAII锁作用域和这些数组，保持record→channel→queue锁序，解锁后通知，消除sortedChannels/lockChannels临时分配。此为后续修复方案，未实施/未复现分配失败；不能因此宣称mutex系统异常也不会终止。初始reservation仍另有OwnedBatch/PreparedPush refs、record及channels、锁数组和临时map，不由Extractor staging费用覆盖。replacePendingBatches等长替换引用，不另建第二套reservation；重锚时为一套reservation加staging重叠。
+
+本单元后续验证：Release全量重建48554 exit0（755项），realtime6591488 bytes、17:42:50。r362执行三源与完整120秒AV重入，四张VLC原生快照成立、caller_stop0、payload220671匹配回零、无interval/deadline miss；VLC错误/迟到警告保留，16产物与六PID均清理。该cadence运行覆盖Runtime对象工厂与staging，不证明Prepared域或完整G通过，详realtime-composition-r362-validation.md。
+
+### reservation取消路径无临时分配
+
+设计依据：[C++ Core Guidelines C.36/C.37](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rc-dtor-fail)要求析构不以异常退出，[CP.20](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rconc-raii)要求用RAII管理锁。当前cancel由析构和noexcept move赋值调用，却重新构造sortedChannels和锁vector；这是源码可证的分配失败终止风险，尚未真实流复现。
+
+实施只复用reserve在增加容量前已经完成的排序去重m_channels、等长m_channelLocks/m_queueLocks及commit已有MediaReservedOutputLockScope。按原顺序获取record→channel，finalizeDeferredCloseLocked内部再获取queue；容量回收、Authorized处理、Cancelled状态、close行为及move所有权不改。释放record/channel锁后仍按原序通知容量变更。无需分配、catch吞错、新参数或备用处理链；本改动不声称mutex系统异常不再可能，也不代表完整G闭合。
+
+该小单元已冻结待双独立审查：仅cancel局部改为使用原锁数组和RAII作用域，commit/reserve/authorize/replace与头文件未改。核对了空或已完成record早退、Pending/Authorized扣账、move构造/赋值同步转移，以及scope显式unlock后的析构幂等。UTF8无BOM/CRLF与diff检查完成；未构建、测试或提交。
+
+cancel冻结版本获crash_release_audit与publication_identity_review_b两名独立源码PASS，已启动Release全量重建40916，结果待核实。验收覆盖限制：r362早于该修改；正常持续输出后的caller-stop不能证明进入仍持有Pending/Authorized record的取消分支。当前日志只有first_release/first_commit，未直接报告reservation取消状态，因此不能把相同三格测试宣称为该分支实证。源码证据仅证明删除该路径两次临时vector构造，完整运行失败注入/已占用预约取消仍未验收。
+
+cancel后续构建：Release clean-first/all-target40916 exit0（755项），configure/build均0；realtime6591488 bytes、2026-10-26 17:54:57，cache/ninja/两个CLI产物已核验，未执行local。未新增实流验收，仍持有预约的cancel分支运行覆盖未证明，不能挪用r362结果。
+
+### 独立音频retention贯通
+
+本单元只分离同一既有planStream的音频事实：真实音频clockRate/AU ticks、最大AU bytes、sealed prefix与原等待窗口，在视频cadence分支外形成独立产品。Session admission.audio实际消费该Na；cadence canonicalRuntimeRetention.audio复用同产品并核对全字段；PreparedSourceView将其借用传到CompositionSourcePlanningRequest，现有startup audio容量须与之相等。SourceStorage计入新增实际authority副本，原owner总预算不另reserve。成熟方法沿已有事实型有限准入与GStreamer明确容量/背压原则，不承诺未来UDP到达率。
+
+完整准入仍必须F+U_AU+U_protocol_handoff+G<=B；所有U、跨代holder/别名、current-or-pending互斥、initial两组完整batch/active三组单项、普通字符串及reservation尚未合并封闭。本切片不创建虚假G产品，不用B-F求Nv，不开放noncadence、不把音频AU容量当decoded视频容量。
+
+音频事实链已冻结待双审：新增SessionPlan.audioRetention保留独立事实，admission.audio直接消费；cadence canonicalRuntimeRetention.audio复制同一计算结果。共享validateAudioRetention在SourceStorage、Session创建、preflight.resources及takePacketClock校验成员、全字段一致性、admission与binder数量；handoff音频直接读独立retention。PreparedSourceView借用该产品，SourcePlanningRequest沿现有prepared成员传递；CompositionSourcePlanner在admit前核对canonical产品，在sync后核对startup audio count/bytes/unitBytes。单流校验从原私有valid移至原Stream类型复用，未复制算法。
+
+新增audio authority独立字符串副本已纳入SourceStorage现有固定配置费用；SessionPlan内嵌字段由既有source sizeof计费。此费用沿原owner固定预留，不另建预算。noncadence仍原门禁拒绝，音频事实独立保留不等于视频decoded/G准入完成。全部构造/借用消费者已搜索，UTF8无BOM/CRLF、diff检查完成；未构建、运行或提交。
+
+audio事实贯通冻结后，crash_release_audit与publication_identity_review_b两名独立源码审查PASS。Release clean-first/all-target85930已启动，尚无构建/运行结论。完整G关键循环仍须解除：noncadence源会话以B/sizeof(ref)准入，动态U可能占用同一B，不能再假定B-F留给startup；需同一候选产品封印压缩AU/协议handoff容量与decoded容量，并由真实codec/协议/holder关系证明，不能任意分预算。
+
+audio单元构建核验：Release clean-first/all-target85930 exit0（755项），configure/build均0，realtime6594048 bytes、2026-10-26 18:08:15；cache/ninja/两个CLI产物存在，local未执行。尚未新实流复验，不沿用r362结果。
+
+### 协议输出端口类型化
+
+沿已有GStreamer明确buffer元数据/allocator归属原则，本单元仅将固定协议输出角色packet、clock、event改为内部枚举，以统一映射继续消费原DAG端口；生产queue、purge与RawRtpInput全部贯通。未知枚举显式报错，不新增端口、策略、公共输入或备用链。此改动消除队列项拥有std::string的分配域，不宣称既有emitOutput字符串API及全部配置字符费用已闭合。
+
+已核验本机MSVC deque：pop_front只析构元素而保留block/map；grow先分配新map再释放旧map，且旧块可以继续保留，不能仅按当前size计backing。直接按maximumProtocolOutputObjects一次性分配可能制造巨量准备峰；只支持MSVC的adapter也不能静默施加于已有Linux Session。因此本轮保持实际deque及原状态机，几何产品待跨平台同等证据，不加供应商失败门禁。G的queue backing、当前callback瞬时对象、其它holder/U成本仍未封闭。
+
+port切片已冻结待双审：队列字段改为MediaPreparedRtpOutputPort，唯一constexpr映射输出原packet/clock/event名称；queue拒绝未知值，purge只移除Packet，RawRtpInput按原Packet信用流程及Clock/Event输出流程消费。对象sizeof变化由原storageFacts和logical byte admission读取实际类型，不手写旧尺寸。无新的平台门禁、backing预分配或公共参数；未构建、运行、提交。
+
+### PreparedPush引用数组显式分配域
+
+沿已核验GStreamer allocator所有权与固定容量背压原则，本单元将现有PreparedPush exact引用数组的分配scope贯通到真正reserve消费者；不另建队列或预算。AtomicOutputTransaction明确Runtime；Extractor沿release原scope；VideoPreparation由Registrar按唯一source和实际readiness注入cadence Runtime或SourceDisplayPoint原Prepared owner，缺事实失败。PreparedPush持scope在backing前，move assignment先释放/转移backing再转移scope；publish/replace/count/close/authorize语义不变，authorize不要求不同reservation的owner相同。
+
+引用数组通过原MediaPreparationMemoryResource实际收费一次，包含其header/padding；仍不覆盖record、OwnedBatch、channels/locks临时及保留数组、普通字符串等完整G欠项。不构建测试提交，冻结后双审。
+
+PreparedPush切片已冻结待双审：两个preparePush均显式传scope；两个reserve分别消费VideoPreparation构造域和Extractor release原scope。Registrar只接受IntervalCoverage→Runtime、DecodedPresentationSpan→真实Prepared；Factory核对frame_product/readiness/域/resource。move assignment先backing后scope；析构backing先于scope；publish/replace/authorize语义不变，不新增跨owner限制。保留bad_alloc错误映射，length_error转明确内部错误。新增scope增加OwnedBatch原位sizeof，相关容器完整费用仍待G。未构建、测试或提交。
+
+PreparedPush冻结后两名独立审查明确源码PASS。Release54069 configure/build均0（755项），realtime6596608 bytes、18:44:39；所需构建产物齐全，local未运行。尚未新实流；下一项为reservation常驻费用，完成后联合回归，完整G与noncadence门禁保持。
+
+### reservation常驻分配域
+
+沿已核验RAII/固定容量策略，本单元将原reserve常驻OwnedBatch、channel、锁数组、record count和owner标签全部用既有scope实账。B个batch按原顺序保存；独立B个ChannelCount在连续view上排序合并为U项，backing仍为B并按真实容量计费；channels及两锁数组各U项。原required hash删除，不复制媒体payload。record改用真实MediaLineageAllocator shared工厂在原scope实账；本轮不在reserve热路径查询供应商几何，不给Runtime或Prepared新增晚发现的平台门禁。record用于未来G的sealed geometry仍须在准备期接线，此项不冒充已完成。
+
+所有fallible准备完成后才增加reserved计数，原排序/锁序/state/close/通知及重复channel语义保持；scope声明早于所有backing，move assignment最后转移scope，record独立保留owner覆盖handle寿命。PreparedPush引用数组已自行收费，不重复加到OwnedBatch。authorize仍允许跨owner，保留其既有临时vector/scratch未计费边界；错误诊断临时字符串同样不冒充常驻成本。
+
+常驻reservation切片已冻结待双审：仅事务h/cpp改动，B项count连续span排序、checked容量减法累加重复channel、删除标记项而保留B背板；OwnedBatch仍原顺序，U项channel/锁数组及字符标签精确backing。record由同scope LineageAllocator实际收费并自持scope。全部fallible准备/校验在transaction构造前，私有构造noexcept后立即加账、显式解锁并清空scope spans，再移动返回；无新增armed状态。move赋值scope最后，authorize仍使用既有独立scratch且不限制跨owner。record几何尚未接准备期G产品；不在热路径probe，不声称完整G闭合。UTF8/CRLF、diff及源级生命周期自查完成，未构建/测试/提交。
+
+返回边界补充：transaction移动构造为noexcept，但Result::success接口本身未声明noexcept；在调用它之前锁已释放、LockScope spans已清空。若返回包装异常，持有reservation的transaction析构可按原cancel重新获取锁并退账，不将整个返回包装宣称为noexcept。
+
+常驻reservation冻结后两名独立审查均源码PASS，Release全量重建91686已启动，尚无构建或实流结论。本轮与PreparedPush联合复验，r364不覆盖这两单元。
+
+### authorize scratch显式owner
+
+沿已核验RAII与固定容量设计，Compiler按同source readiness为准备state注入明确scope，并校验复用state的原owner；State将其传authorize，不取第一record的owner，也不限制跨owner授权。H个records/H个record locks、S=各record channel数checked总和的指针背板及去重U个channel locks均用原FixedCapacityStorage实账，分配先于record/channel锁；保留外层state锁和原callback→Authorized原子段。record channel集合构造后只读，不建立新状态机。此单元不等于sealed总容量/G；state本体和诊断临时字符串等仍未全量计费。
+
+前序构建/回归补记：Release91686已退出0，realtime6602752 bytes、18:58:39；r365联合回归四阶段快照、四源exit0、CLI caller_stop0、payload224456匹配零，详独立验证文档。该结果覆盖PreparedPush与常驻reservation，不覆盖本次authorize scratch改动；所有16项临时产物已清理。
+
+本单元源码冻结自查：已核对唯一 State 工厂和 authorize 调用，Prepared 复用同时校验资源地址与共享 owner，SharedSourceOutput 缺少 Prepared source 时明确失败，IntervalCoverage 保留 Runtime。scratch 分配异常只在准备数组阶段转换，原授权回调异常边界与跨 owner 语义保留；尚未构建或实流，等待两名独立复审。state 本体、shared control 与组名仍为原普通 heap，record sealed 几何及完整 G 尚未闭合。
+
+authorize scratch冻结5源码后双独立源码PASS；Release43515全量重建进行中，尚无构建/实流结论。State对象/control/group字符以及未来sealed record几何和完整G仍欠。
+
+### reservation 几何封印与实际消费者
+
+沿 GStreamer allocation/bufferpool 的显式 allocator 所有权原则及已审计 MSVC145/202604 非数组 allocate_shared 的 `_Ref_count_obj_alloc3<Object,ActualAllocator>` 实际类型，复用现有 SharedAllocationGeometryProbe 与 SharedObjectPlan 私有构造封印。纯 layout 无 owner、无图、无候选分配；SourcePlanner 在实际 sync.startup.videoReadiness 成功后选择 IntervalCoverage Runtime 或 DecodedPresentationSpan Prepared，再随原 runtime plan/binding 交给 State。Compiler 只验证，不能首次发现供应商能力；Runtime 不查询供应商几何。Preflight 传原 continuous video resource，禁止从预算身份 void 指针构造 owner。
+
+reserve/authorize 消费同产品，以真实 B/U、各批引用数、owner 字符数和 H/S/U checked 求请求 footprint，并保留各次 PMR 实际计费一次；不进行第二次预算 reserve。两节点通过原 capability 读取 State 产品，Extractor 核验 release owner。该成本关系可供后续 early G 使用，不代表已封闭跨阶段峰值、state 本体/control/字符串或总容量准入；noncadence 原门禁保持。本轮不改变锁序、背压、媒体状态机或期限。
+
+reservation 几何消费链已补齐并冻结：共23个源码文件，SourcePlanner按真实readiness封印，两个binding生产者传递，Compiler核对owner并复用/创建State；Capability只读暴露State内同一产品，VideoPreparation不再重复保存独立scope，Extractor检查release scope后消费产品。Runtime不调用供应商layout；Prepared成本使用实际allocator几何、B/U/H/S backing和逐请求header/padding，record请求count必须为1；没有第二次预算reserve。成本返回值当前用于请求footprint及溢出检查，尚未进入early联合容量求值，不宣称完整G准入闭合。锁序、跨owner授权、状态机及非cadence门禁不变。UTF8无BOM/CRLF及diff检查完成，尚未构建或实流，等待双独立审查。
+
+2026-10-28：冻结消费链获两名未参与实现的独立审查者明确源码PASS，已核对GStreamer显式allocator/引用寿命原则及本机MSVC145/202604实际allocate_shared类型。Release全量重建会话24865已启动，configure/generate完成，构建尚未结束；本单元仍无新实流结果。前序43515构建已成功且产物现场核验6604288 bytes、2026-10-26 19:19:51，但不能覆盖当前修改。
+
+Release24865已失败exit1：MediaRtpSourcePreflight.h:20将现有MediaPreparationMemoryResource类型别名错误前置声明为class，MSVC C2371；继发SourcePlanner:160的C2440/C2672。构建未通过，未启动媒体测试；修复头文件依赖后必须双人复审及全量重建，前述源码PASS不能替代编译成功。
+
+类型声明冲突已改为直接包含真实alias头文件；两名审查者重新完整复审均明确源码PASS。第二次Release全量重建会话5545已启动，配置完成，尚未取得最终结果；没有运行local或启动媒体测试。
+
+Release5545全量构建已成功（756项），realtime6613504 bytes、2026-10-28 17:59:41。r366联合cadence回归FAIL：发送预约期限错误exit1，重入首帧前interval miss再次出现；四次源exit0，payload134880回零，15项产物及六PID已清理。不能判本单元实流验收通过，也无证据把失败归因于该存储改动，详r366独立记录。完整G仍未闭合。

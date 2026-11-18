@@ -39,6 +39,7 @@ public:
     MediaTsDatagramEmissionPlan plan;
     MediaRunningTime origin;
     MediaRunningTime availableAt;
+    const char* lastCommittedKind = "origin";
     std::optional<ActiveAccessUnit> activeAccessUnit;
     std::optional<ActiveMaintenanceGroup> activeMaintenanceGroup;
     std::optional<std::uint64_t> pendingRevision;
@@ -282,7 +283,6 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
     MediaRunningTime dispatchOnMaster,
     MediaRunningTime actualMasterNow)
 {
-    (void)actualMasterNow;
     using Result = ::media::Result<MediaTsAccessUnitEmissionDecision>;
     if (!m_state || m_state->activeAccessUnit ||
         m_state->activeMaintenanceGroup || m_state->pendingRevision ||
@@ -316,8 +316,19 @@ MediaTsDatagramEmissionSchedule::beginAccessUnit(
             : m_state->plan.audioInitialServiceWindow();
     if (!remainingWindow) return Result::failure(remainingWindow.error());
     if (remainingWindow.value().nanoseconds() <= 0) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS access unit has no transport service window"));
+        std::ostringstream message;
+        message << "MPEG-TS access unit has no transport service window"
+                << " stream=" << (stream == MediaScheduledStream::Video ? "video" : "audio")
+                << " emit_ns=" << emitOnMaster.nanoseconds()
+                << " dispatch_ns=" << dispatchOnMaster.nanoseconds()
+                << " available_ns=" << m_state->availableAt.nanoseconds()
+                << " last_committed_kind=" << m_state->lastCommittedKind
+                << " service_start_ns=" << serviceStart.nanoseconds()
+                << " actual_now_ns=" << actualMasterNow.nanoseconds()
+                << " remaining_ns=" << remainingWindow.value().nanoseconds()
+                << " payload_bytes=" << totalPayloadBytes
+                << " wire_bytes=" << totalWire.value();
+        return Result::failure(::media::ErrorInfo::invalidArgument(message.str()));
     }
     if (!plannedServiceWindow) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -389,7 +400,8 @@ MediaTsDatagramEmissionSchedule::previewAccessUnit(
     return ::media::Result<MediaTsDatagramReservationPreview>::success(
         MediaTsDatagramReservationPreview{
             reservation.value().notBefore,
-            reservation.value().completion});
+            reservation.value().completion,
+            m_state->activeAccessUnit->completionDeadline});
 }
 
 ::media::Status MediaTsDatagramEmissionSchedule::beginMaintenanceGroup(
@@ -542,6 +554,7 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS maintenance reservation conflicts with the global timeline"));
         }
+        m_state->lastCommittedKind = "maintenance";
         m_state->activeMaintenanceGroup->committedWireBytes =
             prepared.m_nextCommittedWireBytes;
         m_state->activeMaintenanceGroup->timelineAvailableAt =
@@ -555,6 +568,8 @@ MediaTsDatagramEmissionSchedule::prepareMaintenance(
         }
         m_state->activeAccessUnit->timelineAvailableAt =
             prepared.m_reservationCompletion;
+        m_state->lastCommittedKind = m_state->activeAccessUnit->stream == MediaScheduledStream::Video
+            ? "video" : "audio";
         m_state->activeAccessUnit->committedWireBytes =
             prepared.m_nextCommittedWireBytes;
     } else if (prepared.m_nextCommittedWireBytes != 0) {

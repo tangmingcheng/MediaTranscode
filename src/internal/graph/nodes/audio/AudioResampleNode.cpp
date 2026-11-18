@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/sync/MediaAudioDriftServoLimits.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
@@ -7,12 +8,15 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/buffer/MediaAudioCorrectionBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
 #include <limits>
+#include <sstream>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -132,10 +136,32 @@ void AudioResampleNode::resetRuntimeState() noexcept
     return emitOutput(context, "frame", terminal);
 }
 
+void AudioResampleNode::observeTerminalStage(
+    const char* stage, const MediaAudioCompensationCommand* command) const
+{
+    if (!m_pendingTerminal || !m_correctionExecutor) return;
+    std::ostringstream out;
+    out << "audio_terminal_trace node=" << nodeId().value
+        << " stage=" << stage
+        << " generation=" << m_correctionExecutor->generation()
+        << " output_sample_index=" << m_outputSampleIndex
+        << " draining_eof=" << m_drainingEof
+        << " correction_closed=" << m_lineageState->correctionGenerationClosed
+        << " requires_next_window=" << m_correctionExecutor->requiresNextWindow();
+    if (command) {
+        out << " command_generation=" << command->generation()
+            << " command_sequence=" << command->sequence()
+            << " effective_output_sample_index=" << command->effectiveOutputSampleIndex()
+            << " compensation_distance=" << command->compensationDistance();
+    }
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeNode, out.str());
+}
+
 ::media::Result<bool> AudioResampleNode::consumeCorrection(
     MediaGraphExecutionContext& context)
 {
-    if (!m_correctionExecutor ||
+    if (m_lineageState->correctionGenerationClosed || !m_correctionExecutor ||
         m_correctionExecutor->mode() !=
             MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired ||
         !m_correctionExecutor->canAccept()) {
@@ -148,16 +174,41 @@ void AudioResampleNode::resetRuntimeState() noexcept
     if (!input.value()) {
         return ::media::Result<bool>::success(false);
     }
+    const auto endGeneration = mediaEndGeneration(*input.value());
+    if (!endGeneration) return ::media::Result<bool>::failure(endGeneration.error());
+    if (endGeneration.value()) {
+        if (!m_lineageState->synchronized()) return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument("Generation drain requires synchronized resampling"));
+        if (auto status = m_lineageState->authorizeRetainedControl(*input.value()); !status)
+            return ::media::Result<bool>::failure(status.error());
+        m_lineageState->correctionGenerationClosed = true;
+        observeTerminalStage("correction_close", nullptr);
+        return ::media::Result<bool>::success(true);
+    }
     const auto* correctionBuffer = dynamic_cast<const MediaAudioCorrectionBuffer*>(
         input.value()->get());
     if (!correctionBuffer) {
         return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
             "AudioResampleNode correction input requires MediaAudioCorrectionBuffer"));
     }
-    auto status = m_correctionExecutor->enqueue(correctionBuffer->command());
+    const auto& command = correctionBuffer->command();
+    auto disposition = m_lineageState->classifyObservation(command.generation());
+    if (!disposition) return ::media::Result<bool>::failure(disposition.error());
+    if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale) {
+        observeTerminalStage("stale_command", &command);
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "audio_correction_stale node=" + std::to_string(nodeId().value) +
+            " command_generation=" + std::to_string(command.generation()) +
+            " executor_generation=" + std::to_string(m_correctionExecutor->generation()) +
+            " sequence=" + std::to_string(command.sequence()));
+        return ::media::Result<bool>::success(true);
+    }
+    auto status = m_correctionExecutor->enqueue(command);
     if (!status) {
         return ::media::Result<bool>::failure(status.error());
     }
+    observeTerminalStage("command_enqueued", &command);
     return ::media::Result<bool>::success(true);
 }
 
@@ -175,7 +226,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
     }
     if (parsedMode.value() == MediaAudioCorrectionExecutionMode::Disabled) {
         auto executor = AudioSwrCompensationExecutor::create(
-            MediaAudioCorrectionExecutionMode::Disabled, 0, 0);
+            MediaAudioCorrectionExecutionMode::Disabled, 0, 0, std::nullopt);
         if (!executor) {
             return ::media::Status::failure(executor.error());
         }
@@ -201,10 +252,16 @@ void AudioResampleNode::resetRuntimeState() noexcept
                                 "AudioResampleNode correction lookahead exceeds limit")
                           : lookahead.error());
         }
+        auto block = requiredPositiveInt64NodeOption(
+            nodeOptions(context), "AudioResampleNode", MediaAudioCorrectionOptionKey::MaximumOutputBlockSamples);
+        if (!block || block.value() > std::numeric_limits<int>::max()) {
+            return ::media::Status::failure(block ? ::media::ErrorInfo::invalidArgument(
+                "AudioResampleNode output block is not representable") : block.error());
+        }
         auto executor = AudioSwrCompensationExecutor::create(
             MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired,
             static_cast<std::uint64_t>(generation.value()),
-            static_cast<std::size_t>(lookahead.value()));
+            static_cast<std::size_t>(lookahead.value()), static_cast<int>(block.value()));
         if (!executor) {
             return ::media::Status::failure(executor.error());
         }
@@ -218,10 +275,36 @@ void AudioResampleNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto lineageLock = m_lineageState->lock();
+    if (m_lineageState->generationDrained) return processWaiting();
     if (!m_pendingOutputs.empty()) {
         return processProgress(emitNextPending(context));
     }
     if (m_pendingTerminal && !m_drainingEof) {
+        const auto endGeneration = mediaEndGeneration(m_pendingTerminal);
+        if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+        if (endGeneration.value()) {
+            if (m_correctionExecutor->mode() == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired &&
+                !m_lineageState->correctionGenerationClosed) {
+                auto consumed = consumeCorrection(context);
+                if (!consumed) return processProgress(::media::Status::failure(consumed.error()));
+                if (!m_lineageState->correctionGenerationClosed) {
+                    if (consumed.value() || !m_correctionExecutor->canAccept()) {
+                        observeTerminalStage("drain_rearm", nullptr);
+                        // Drain accepted windows to free correction capacity, then read its serial close marker.
+                        m_drainingEof = m_swr != nullptr;
+                        if (!m_swr)
+                            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                                "Closed bypass resampler has unexecutable correction commands")));
+                        return processProgress();
+                    }
+                    return processWaiting();
+                }
+            }
+            if (auto status = m_correctionExecutor->settleTerminal(); !status) return processProgress(std::move(status));
+            MediaBufferRef terminal = std::move(m_pendingTerminal);
+            m_lineageState->generationDrained = true;
+            return processProgress(emitTerminal(context, terminal));
+        }
         MediaBufferRef terminal = std::move(m_pendingTerminal);
         if (terminal->isEof()) {
             if (auto status = m_correctionExecutor->settleTerminal(); !status) {
@@ -293,6 +376,9 @@ void AudioResampleNode::resetRuntimeState() noexcept
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::progress());
         }
+        const auto generationEnd = mediaEndGeneration(m_pendingTerminal);
+        if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+        if (generationEnd.value()) return processProgress();
         MediaBufferRef terminal = std::move(m_pendingTerminal);
         if (terminal->isEof()) {
             if (auto settle = m_correctionExecutor->settleTerminal(); !settle) {
@@ -346,14 +432,23 @@ void AudioResampleNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
+    const auto endGeneration = mediaEndGeneration(*frameInput.value());
+    if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+    if (endGeneration.value()) {
+        if (!m_lineageState->synchronized()) return processProgress(::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("Generation drain requires synchronized resampling")));
+        if (auto status = m_lineageState->authorizeRetainedControl(*frameInput.value()); !status)
+            return processProgress(std::move(status));
+    }
     const bool eof = frameInput.value()->get()->isEof();
     const bool flush = frameInput.value()->get()->isFlush();
     if (eof && m_lineageState->eofEmitted) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
-    if (eof || flush) {
+    if (eof || flush || endGeneration.value()) {
         m_pendingTerminal = *frameInput.value();
         m_drainingEof = m_swr != nullptr;
+        observeTerminalStage("first_drain", nullptr);
         auto drainStatus = processEofDrainQuantum(context);
         if (!drainStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
@@ -362,6 +457,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::progress());
         }
+        if (endGeneration.value()) return processProgress();
         MediaBufferRef terminal = std::move(m_pendingTerminal);
         if (eof) {
             if (auto settle = m_correctionExecutor->settleTerminal(); !settle) {
@@ -421,6 +517,10 @@ void AudioResampleNode::resetRuntimeState() noexcept
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Synchronized AudioResampleNode requires bound audio matching planned output rate"));
         }
+        auto disposition = m_lineageState->classifyObservation(bound->audioOrigin().generation);
+        if (!disposition) return ::media::Status::failure(disposition.error());
+        if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale)
+            return ::media::Status::success();
         const AVFrame* synchronizedFrame = FFmpegFrameView::frame(
             bound->media()->media());
         if (!synchronizedFrame) {
@@ -659,7 +759,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
         return status;
     }
     auto wrapped = FFmpegBufferFactory::wrapFrame(
-        std::move(converted.output), MediaStreamKind::Audio);
+        std::move(converted.output), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
     if (!wrapped) return ::media::Status::failure(wrapped.error());
     if (auto status = stampAndQueue(
             wrapped.value(), inputPts, srcTb,
@@ -686,6 +786,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
         auto correctionWindow = m_correctionExecutor->prepare(
             m_swr.get(), m_outputSampleIndex);
         if (!correctionWindow) {
+            observeTerminalStage("prepare_failed", nullptr);
             return ::media::Status::failure(correctionWindow.error());
         }
         maximumOutputSamples = correctionWindow.value().maximumOutputSamples;
@@ -702,14 +803,19 @@ void AudioResampleNode::resetRuntimeState() noexcept
             return ::media::Status::failure(::media::ErrorInfo::internalError(
                 "AudioResampleNode zero drain lacks exhaustion proof"));
         }
-        const bool finalDrain = m_drainingClosedInput ||
+        observeTerminalStage("exhausted", nullptr);
+        const auto endGeneration = mediaEndGeneration(m_pendingTerminal);
+        if (!endGeneration) return ::media::Status::failure(endGeneration.error());
+        const bool finalDrain = endGeneration.value().has_value() || m_drainingClosedInput ||
             (m_pendingTerminal && m_pendingTerminal->isEof());
         if (!finalDrain) return ::media::Status::success();
         if (auto status = m_correctionExecutor->settleTerminal(
                 *converted.exhausted); !status) {
             return status;
         }
-        return settleLineageResidue(*converted.exhausted);
+        auto settled = settleLineageResidue(*converted.exhausted);
+        if (settled) observeTerminalStage("settled", nullptr);
+        return settled;
     }
     if (!correctionWindowRequired) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -720,7 +826,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
         return status;
     }
     auto wrapped = FFmpegBufferFactory::wrapFrame(
-        std::move(converted.output), MediaStreamKind::Audio);
+        std::move(converted.output), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
     if (!wrapped) return ::media::Status::failure(wrapped.error());
     const AVRational dstTb {1, codecContext()->sample_rate};
     if (auto status = stampAndQueue(

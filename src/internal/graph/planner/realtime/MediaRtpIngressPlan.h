@@ -1,7 +1,8 @@
 #pragma once
 
-#include "internal/graph/planner/realtime/MediaRtpIngressCapability.h"
+#include "internal/graph/planner/realtime/MediaRtpReceiveGeometry.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressObservation.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,13 +30,13 @@ public:
     MediaRtpIngressPlan() = delete;
 
     static ::media::Result<MediaRtpIngressPlan> create(
-        const MediaRtpIngressCapability& capability,
+        const MediaRtpReceiveGeometry& geometry,
         const MediaRtpIngressObservation& observation,
-        std::size_t preparedInputByteBudget,
-        std::size_t maximumDatagramBytes);
+        const MediaRtpInputWaitPlan& inputWait);
     static ::media::Result<MediaRtpIngressPlan> fromFacts(
         MediaRtpIngressPlanFacts facts);
 
+    const MediaRtpReceiveGeometry& receiveGeometry() const noexcept;
     MediaRtpIngressAdapterKind adapterKind() const noexcept;
     std::size_t socketReceiveCapacityBytes() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
@@ -53,25 +54,13 @@ public:
 
 private:
     MediaRtpIngressPlan(
-        const MediaRtpIngressCapability& capability,
-        std::size_t maximumDatagramBytes,
-        std::size_t batchByteCapacity,
-        std::size_t descriptorCapacity,
+        MediaRtpReceiveGeometry geometry,
         std::size_t reorderWindowPackets,
         std::int64_t maximumReorderDelayNanoseconds) noexcept;
-    explicit MediaRtpIngressPlan(MediaRtpIngressPlanFacts facts) noexcept;
 
-    MediaRtpIngressAdapterKind m_adapterKind;
-    std::size_t m_socketReceiveCapacityBytes;
-    std::size_t m_maximumDatagramBytes;
-    std::size_t m_batchByteCapacity;
-    std::size_t m_descriptorCapacity;
-    std::size_t m_requiredBufferAlignmentBytes;
+    MediaRtpReceiveGeometry m_receiveGeometry;
     std::size_t m_reorderWindowPackets;
     std::int64_t m_maximumReorderDelayNanoseconds;
-    MediaRtpIngressStorageOwnership m_storageOwnership;
-    MediaRtpIngressCancellationContract m_cancellationContract;
-    MediaRtpIngressCompletionEvidence m_completionEvidence;
 };
 
 } // namespace media::ffmpeg::graph

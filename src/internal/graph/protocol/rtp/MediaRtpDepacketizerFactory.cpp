@@ -1,3 +1,4 @@
+#include "internal/graph/protocol/rtp/MediaAacRtpAuHeaderPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
@@ -67,7 +68,7 @@ namespace {
 } // namespace
 
 ::media::Result<std::unique_ptr<MediaRtpDepacketizer>> MediaRtpDepacketizerFactory::create(
-    const MediaRtpDepacketizerConfig& config, std::size_t maximumAccessUnitBytes)
+    const MediaRtpDepacketizerConfig& config, std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation)
 {
     if (maximumAccessUnitBytes == 0) {
         return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(
@@ -82,10 +83,10 @@ namespace {
             return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(capacity.error());
         }
     }
-    if (codec == "opus") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaOpusRtpDepacketizer>(config));
-    if (codec == "h264") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaH264RtpDepacketizer>(config, maximumAccessUnitBytes));
-    if (codec == "hevc") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaHevcRtpDepacketizer>(config, maximumAccessUnitBytes));
-    if (codec == "aac") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaAacRtpDepacketizer>(config));
+    if (codec == "opus") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaOpusRtpDepacketizer>(config, allocation));
+    if (codec == "h264") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaH264RtpDepacketizer>(config, maximumAccessUnitBytes, allocation));
+    if (codec == "hevc") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaHevcRtpDepacketizer>(config, maximumAccessUnitBytes, allocation));
+    if (codec == "aac") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaAacRtpDepacketizer>(config, allocation));
     return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(
         ::media::ErrorInfo::unsupported("RTP depacketizer codec is unsupported: " + codec));
 }
@@ -132,7 +133,9 @@ namespace {
         if (mode == fmtp.value().end() ||
             lowercaseAscii(mode->second) != "aac-hbr") return ::media::Status::failure(
             ::media::ErrorInfo::unsupported("AAC RTP requires mode=AAC-hbr"));
-        for (const auto& [key, expected] : {std::pair{"sizelength", 13}, {"indexlength", 3}, {"indexdeltalength", 3}}) {
+        for (const auto& [key, expected] : {std::pair{"sizelength", MediaAacRtpAuHeaderLayout::SizeBits},
+                {"indexlength", MediaAacRtpAuHeaderLayout::IndexBits},
+                {"indexdeltalength", MediaAacRtpAuHeaderLayout::IndexDeltaBits}}) {
             auto value = requiredRtpFmtpInt(fmtp.value(), key);
             if (!value || value.value() != expected) return ::media::Status::failure(
                 ::media::ErrorInfo::unsupported("AAC RTP AU header configuration is unsupported"));

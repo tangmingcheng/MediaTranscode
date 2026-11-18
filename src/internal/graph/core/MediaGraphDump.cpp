@@ -12,6 +12,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::FileInput: return "FileInput";
     case MediaNodeKind::RealtimeInput: return "RealtimeInput";
     case MediaNodeKind::RawRtpInput: return "RawRtpInput";
+    case MediaNodeKind::RtpControlOutput: return "RtpControlOutput";
     case MediaNodeKind::Demux: return "Demux";
     case MediaNodeKind::MpegTsDemux: return "MpegTsDemux";
     case MediaNodeKind::StreamSplit: return "StreamSplit";

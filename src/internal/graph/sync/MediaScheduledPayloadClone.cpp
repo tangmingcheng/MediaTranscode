@@ -20,6 +20,9 @@ namespace media::ffmpeg::graph {
     }
     auto clone = makeMediaBufferRef<FFmpegPacketBuffer>(
         std::move(packet), packetBuffer->sourceTiming());
+    if (auto status = clone->sharePayloadCreditFrom(*source); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
     clone->setStreamKind(source->streamKind());
     clone->setPayloadKind(source->payloadKind());
     clone->setFormatDescriptor(source->formatDescriptor());

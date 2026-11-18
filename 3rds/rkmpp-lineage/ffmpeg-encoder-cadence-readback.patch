@@ -1,0 +1,132 @@
+--- a/libavcodec/rkmppenc.c
++++ b/libavcodec/rkmppenc.c
+@@ -290,17 +290,27 @@
+ }
+ 
+ /* Read effective state after MPP has accepted a configuration transaction. */
+-static int rkmpp_read_split_state(AVCodecContext *avctx)
++static int rkmpp_read_encoder_state(AVCodecContext *avctx)
+ {
+     RKMPPEncContext *r = avctx->priv_data;
+     MppEncCfg actual = NULL;
+     RK_U32 mode, arg, out;
+     RK_S32 low_delay;
++    RK_U32 rc_drop_mode;
++    RK_S32 fps_in_flex, fps_in_num, fps_in_denom;
++    RK_S32 fps_out_flex, fps_out_num, fps_out_denom;
+     MPP_RET ret;
+ 
+     r->split_state_known = 0;
+     r->effective_split_mode = r->effective_split_arg = r->effective_split_out = -1;
+     r->effective_low_delay = -1;
++    r->effective_rc_drop_mode = -1;
++    r->effective_fps_in_flex = -1;
++    r->effective_fps_in_num = -1;
++    r->effective_fps_in_denom = -1;
++    r->effective_fps_out_flex = -1;
++    r->effective_fps_out_num = -1;
++    r->effective_fps_out_denom = -1;
+     ret = mpp_enc_cfg_init(&actual);
+     if (ret != MPP_OK)
+         goto done;
+@@ -319,16 +329,44 @@
+     ret = mpp_enc_cfg_get_s32(actual, "base:low_delay", &low_delay);
+     if (ret != MPP_OK)
+         goto done;
++    ret = mpp_enc_cfg_get_u32(actual, "rc:drop_mode", &rc_drop_mode);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_in_flex", &fps_in_flex);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_in_num", &fps_in_num);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_in_denom", &fps_in_denom);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_out_flex", &fps_out_flex);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_out_num", &fps_out_num);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "rc:fps_out_denom", &fps_out_denom);
++    if (ret != MPP_OK)
++        goto done;
+     r->effective_split_mode = mode;
+     r->effective_split_arg = arg;
+     r->effective_split_out = out;
+     r->effective_low_delay = low_delay;
++    r->effective_rc_drop_mode = rc_drop_mode;
++    r->effective_fps_in_flex = fps_in_flex;
++    r->effective_fps_in_num = fps_in_num;
++    r->effective_fps_in_denom = fps_in_denom;
++    r->effective_fps_out_flex = fps_out_flex;
++    r->effective_fps_out_num = fps_out_num;
++    r->effective_fps_out_denom = fps_out_denom;
+     r->split_state_known = 1;
+ done:
+     if (actual)
+         mpp_enc_cfg_deinit(actual);
+     if (ret != MPP_OK) {
+-        av_log(avctx, AV_LOG_ERROR, "Failed to read effective encoder split state: %d\n", ret);
++        av_log(avctx, AV_LOG_ERROR, "Failed to read effective encoder configuration: %d\n", ret);
+         return AVERROR_EXTERNAL;
+     }
+     return 0;
+@@ -424,7 +462,7 @@
+         av_log(avctx, AV_LOG_ERROR, "Failed to set config with frame: %d\n", ret);
+         return AVERROR_EXTERNAL;
+     }
+-    if ((ret = rkmpp_read_split_state(avctx)) < 0)
++    if ((ret = rkmpp_read_encoder_state(avctx)) < 0)
+         return ret;
+ 
+     r->cfg_init = 1;
+@@ -679,7 +717,7 @@
+         av_log(avctx, AV_LOG_ERROR, "Failed to set config: %d\n", ret);
+         return AVERROR_EXTERNAL;
+     }
+-    if ((ret = rkmpp_read_split_state(avctx)) < 0)
++    if ((ret = rkmpp_read_encoder_state(avctx)) < 0)
+         return ret;
+ 
+     if (avctx->codec_id == AV_CODEC_ID_H264 ||
+--- a/libavcodec/rkmppenc.h
++++ b/libavcodec/rkmppenc.h
+@@ -69,6 +69,13 @@
+     int64_t            effective_split_arg;
+     int64_t            effective_split_out;
+     int                effective_low_delay;
++    int64_t            effective_rc_drop_mode;
++    int                effective_fps_in_flex;
++    int                effective_fps_in_num;
++    int                effective_fps_in_denom;
++    int                effective_fps_out_flex;
++    int                effective_fps_out_num;
++    int                effective_fps_out_denom;
+     MppFrameFormat     mpp_fmt;
+     enum AVPixelFormat pix_fmt;
+ 
+@@ -106,6 +113,20 @@
+ #define VE (AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
+ 
+ #define RKMPP_ENC_COMMON_OPTS \
++    { "effective_rc_drop_mode", "Effective MPP rc:drop_mode", OFFSET(effective_rc_drop_mode), AV_OPT_TYPE_INT64, \
++        { .i64 = -1 }, -1, UINT32_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_in_flex", "Effective MPP rc:fps_in_flex", OFFSET(effective_fps_in_flex), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_in_num", "Effective MPP rc:fps_in_num", OFFSET(effective_fps_in_num), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_in_denom", "Effective MPP rc:fps_in_denom", OFFSET(effective_fps_in_denom), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_out_flex", "Effective MPP rc:fps_out_flex", OFFSET(effective_fps_out_flex), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_out_num", "Effective MPP rc:fps_out_num", OFFSET(effective_fps_out_num), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_fps_out_denom", "Effective MPP rc:fps_out_denom", OFFSET(effective_fps_out_denom), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
+     { "split_state_known", "Effective MPP split state was read successfully", OFFSET(split_state_known), AV_OPT_TYPE_INT, \
+         { .i64 = 0 }, 0, 1, VE | AV_OPT_FLAG_READONLY }, \
+     { "effective_split_mode", "Effective MPP split mode", OFFSET(effective_split_mode), AV_OPT_TYPE_INT64, \

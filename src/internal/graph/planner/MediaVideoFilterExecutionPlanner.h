@@ -5,7 +5,9 @@
 namespace media::ffmpeg::graph {
 class MediaVideoFilterExecutionPlanner final {
 public:
-    static ::media::Result<MediaVideoFilterExecutionPlan> forEncoder(std::string filterDescription);
+    static ::media::Result<MediaVideoFilterExecutionPlan> bindOutputEvidence(
+        MediaVideoFilterExecutionPlan plan, MediaVideoFilterIsolationEvidence evidence);
+    static ::media::Result<MediaVideoFilterExecutionPlan> forNegotiatedOutput(std::string filterDescription, MediaVideoFrameLineageProduct frameProduct);
     static ::media::Result<MediaVideoFilterExecutionPlan> sourceCopy(
         MediaRational sourceFrameRate, MediaRational sourceSampleAspectRatio,
         MediaVideoFilterIsolationEvidence evidence);

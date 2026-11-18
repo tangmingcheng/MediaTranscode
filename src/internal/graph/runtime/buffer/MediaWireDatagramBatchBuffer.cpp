@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/buffer/MediaWireDatagramBatchBuffer.h"
 #include "internal/graph/runtime/buffer/MediaWireDatagramDescriptorValidator.h"
 
+#include "internal/graph/runtime/buffer/MediaWireGlobalSequenceState.h"
 #include <new>
 #include <utility>
 
@@ -143,7 +144,7 @@ bool MediaDatagramCommitSlice::matches(
 
 ::media::Status MediaDatagramCommitSlice::commitSubmittedPrefix(
     std::size_t count,
-    MediaRunningTime now) noexcept
+    const MediaDatagramSubmittedService& submitted) noexcept
 {
     if (!m_control || !m_scheduled || count == 0 ||
         count > m_count - m_committed) {
@@ -152,7 +153,7 @@ bool MediaDatagramCommitSlice::matches(
             "datagram commit slice submitted prefix is invalid"));
     }
     auto committed = m_control->commitSubmittedPrefix(
-        m_begin + m_committed, count, now);
+        m_begin + m_committed, count, submitted);
     if (!committed) {
         abandon();
         return committed;
@@ -170,92 +171,120 @@ void MediaDatagramCommitSlice::abandon() noexcept
 
 MediaWireDatagram::MediaWireDatagram(
     std::span<const std::uint8_t> bytes,
-    const MediaWireDatagramDescriptor& descriptor) noexcept
+    const MediaWireDatagramLayout& layout) noexcept
     : m_bytes(bytes),
-      m_descriptor(descriptor)
+      m_layout(layout)
 {
 }
 
-MediaWireDatagramBatchBuffer::MediaWireDatagramBatchBuffer(
-    std::string sessionKey,
-    std::string serviceScopeId,
-    std::uint64_t generation,
-    std::vector<std::uint8_t> payload,
-    std::vector<MediaWireDatagram> datagrams,
-    MediaDatagramCommitSlice commitSlice) noexcept
-    : m_sessionKey(std::move(sessionKey)),
-      m_serviceScopeId(std::move(serviceScopeId)),
-      m_generation(generation),
-      m_payload(std::move(payload)),
-      m_datagrams(std::move(datagrams)),
-      m_commitSlice(std::move(commitSlice))
+::media::Result<MediaSharedAllocationGeometry>
+MediaWireDatagramBatchBuffer::allocationGeometry()
+{
+    return probeMediaSharedAllocationGeometry<MediaWireDatagramBatchBuffer,
+        ConstructionKey, std::shared_ptr<const MediaWireGlobalSequenceState>,
+        std::uint64_t, MediaOwnedByteStorage, MediaFixedCapacityStorage<MediaWireDatagram>>();
+}
+
+MediaWireDatagramBatchBuffer::MediaWireDatagramBatchBuffer(ConstructionKey,
+    std::shared_ptr<const MediaWireGlobalSequenceState> identity,
+    std::uint64_t generation, MediaOwnedByteStorage payload,
+    MediaFixedCapacityStorage<MediaWireDatagram> datagrams)
+    : m_identity(std::move(identity)), m_generation(generation),
+      m_payload(std::move(payload)), m_datagrams(std::move(datagrams))
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::WireDatagramBatch);
-    setDiagnosticName("wire_datagram_batch");
+    setDiagnosticName(MediaDiagnosticLiteral{"wire_datagram_batch"});
 }
 
-::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
-MediaWireDatagramBatchBuffer::create(
-    std::string sessionKey,
-    std::string serviceScopeId,
-    std::vector<std::uint8_t> payload,
-    std::vector<MediaWireDatagramBatchEntry> entries,
-    MediaDatagramCommitSlice commitSlice)
+::media::Result<MediaWireDatagramBatchBuffer::Prepared>
+MediaWireDatagramBatchBuffer::prepare(
+    std::shared_ptr<const MediaWireGlobalSequenceState> identity,
+    std::span<const MediaWireDatagramBatchInput> inputs,
+    MediaOwnedByteStorage payload, MediaFixedCapacityStorage<MediaWireDatagram> datagrams,
+    const MediaSharedAllocationGeometry& geometry,
+    std::shared_ptr<MediaNetworkMemoryResource> resource, MediaOwnedMemoryAllocation control)
 {
-    using Result =
-        ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
-    if (sessionKey.empty() || serviceScopeId.empty() || payload.empty() ||
-        entries.empty() || !commitSlice.valid()) {
+    using Result = ::media::Result<Prepared>;
+    if (!identity || identity->sessionKey().empty() || identity->serviceScopeId().empty() ||
+        !identity->generation() || inputs.empty() || payload.empty() || !resource ||
+        payload.resource() != resource.get() || datagrams.resource() != resource.get() ||
+        !datagrams.empty() || datagrams.capacity() != inputs.size()) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "wire datagram batch requires service identity, payload, and entries"));
+            "Wire batch requires identity and exact admitted output backing"));
     }
-    std::vector<MediaWireDatagram> datagrams;
-    try {
-        datagrams.reserve(entries.size());
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "wire datagram entries"));
-    }
-
-    MediaWireDatagramDescriptorValidator validator(
-        static_cast<std::uint64_t>(payload.size()));
-    for (auto& entry : entries) {
-        const auto& descriptor = entry.descriptor;
-        auto validDescriptor = validator.accept(descriptor);
-        if (!validDescriptor) {
-            return Result::failure(::media::ErrorInfo::invalidArgument(
-                "wire datagram batch violates its shared descriptor or lease ownership"));
-        }
-        try {
-            datagrams.push_back(MediaWireDatagram(
-                std::span<const std::uint8_t>(
-                    payload.data() + descriptor.payloadOffset,
-                    static_cast<std::size_t>(descriptor.payloadSize)),
-                descriptor));
-        } catch (const std::bad_alloc&) {
-            return Result::failure(::media::ErrorInfo::allocationFailed(
-                "wire datagram batch entries"));
-        }
+    MediaWireDatagramLayoutValidator validator(payload.size());
+    std::size_t offset = 0;
+    for (const auto& input : inputs) {
+        if (input.bytes.size() > payload.size() - offset)
+            return Result::failure(::media::ErrorInfo::invalidArgument("Wire batch payload exceeds admitted backing"));
+        const MediaWireDatagramLayout layout{identity->generation(), input.endpointId,
+            static_cast<std::uint64_t>(offset), static_cast<std::uint64_t>(input.bytes.size()),
+            input.canonicalRelease, input.canonicalDeadline, input.mediaBoundary,
+            input.protocolDeadlineObservation};
+        auto valid = validator.accept(layout);
+        if (!valid) return Result::failure(valid.error());
+        auto written = input.bytes.writeInto(payload.view().subspan(offset, input.bytes.size()));
+        if (!written) return Result::failure(written.error());
+        datagrams.push_back(MediaWireDatagram({payload.data() + offset, input.bytes.size()}, layout));
+        offset += input.bytes.size();
     }
     auto complete = validator.finish();
     if (!complete) return Result::failure(complete.error());
-    if (!commitSlice.matches(
-            validator.generation(), entries.front().descriptor.globalSequence,
-            entries.size())) {
-        return Result::failure(::media::ErrorInfo::invalidArgument(
+    try {
+        const auto generation = identity->generation();
+        return Result::success(Prepared(std::allocate_shared<MediaWireDatagramBatchBuffer>(
+            MediaSharedAllocationAllocator<MediaWireDatagramBatchBuffer>{
+                MediaSharedAllocationAdmitted{std::move(resource), geometry, &control}},
+            ConstructionKey{}, std::move(identity), generation, std::move(payload), std::move(datagrams))));
+    } catch (const MediaSharedAllocationMismatch&) {
+        return Result::failure(::media::ErrorInfo::invalidArgument("Wire batch allocation differs from planner geometry"));
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed("Wire batch prepared control"));
+    }
+}
+::media::Status MediaWireDatagramBatchBuffer::bindCommit(MediaDatagramCommitSlice slice)
+{
+    if (m_commitSlice || m_datagrams.empty() || !slice.valid() ||
+        !slice.matches(m_generation, slice.m_firstGlobalSequence, m_datagrams.size()) ||
+        m_datagrams.size() - 1 > (std::numeric_limits<std::uint64_t>::max)() - slice.m_firstGlobalSequence) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "wire datagram batch commit slice differs from its descriptor range"));
     }
-    try {
-        return Result::success(std::shared_ptr<MediaWireDatagramBatchBuffer>(
-            new MediaWireDatagramBatchBuffer(
-                std::move(sessionKey), std::move(serviceScopeId),
-                validator.generation(), std::move(payload),
-                std::move(datagrams), std::move(commitSlice))));
-    } catch (const std::bad_alloc&) {
-        return Result::failure(::media::ErrorInfo::allocationFailed(
-            "MediaWireDatagramBatchBuffer"));
+    MediaWireDatagramDescriptorValidator validator(m_payload.size());
+    for (std::size_t index = 0; index < m_datagrams.size(); ++index) {
+        auto& datagram = m_datagrams[index];
+        const auto sequence = slice.m_firstGlobalSequence + index;
+        auto valid = validator.accept(MediaWireDatagramDescriptor{datagram.m_layout, sequence});
+        if (!valid) return valid;
+        datagram.m_globalSequence = sequence;
     }
+    auto complete = validator.finish();
+    if (!complete) return complete;
+    m_commitSlice.emplace(std::move(slice));
+    return ::media::Status::success();
+}
+
+::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>
+MediaWireDatagramBatchBuffer::Prepared::bind(MediaDatagramCommitSlice slice) &&
+{
+    using Result = ::media::Result<std::shared_ptr<MediaWireDatagramBatchBuffer>>;
+    auto buffer = std::move(m_buffer);
+    if (!buffer) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "wire datagram batch preparation has already been consumed"));
+    auto bound = buffer->bindCommit(std::move(slice));
+    if (!bound) return Result::failure(bound.error());
+    return Result::success(std::move(buffer));
+}
+
+const std::string& MediaWireDatagramBatchBuffer::sessionKey() const noexcept
+{
+    return m_identity->sessionKey();
+}
+
+const std::string& MediaWireDatagramBatchBuffer::serviceScopeId() const noexcept
+{
+    return m_identity->serviceScopeId();
 }
 
 std::optional<std::uint64_t>

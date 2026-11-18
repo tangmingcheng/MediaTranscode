@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -37,6 +38,7 @@ struct MediaRealtimeRtpTransportPlan final {
     MediaRtpClockLossPolicy clockLossPolicy;
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
     std::optional<MediaRtpIngressPlan> ingress;
+    std::optional<MediaRtpInputWaitPlan> inputWait;
 };
 
 struct MediaRealtimeTsInputPolicy final {

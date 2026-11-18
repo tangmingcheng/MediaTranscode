@@ -10,6 +10,7 @@
 #include <optional>
 #include <tuple>
 #include <variant>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -140,6 +141,9 @@ struct CommonPlan final {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled MPEG-TS output requires one exact datagram transport"));
     }
+    auto declaration=MediaOutputSegmentPlanner::mpegTs(expectAudio,rtpTransport,
+        expectAudio?MediaPayloadKind::CodecContext:MediaPayloadKind::CodecParameters,plan.edgePolicies, *std::pmr::new_delete_resource());
+    if(!declaration)return Result::failure(declaration.error());
     auto addedMux = MediaProjectMpegTsMuxSegmentBuilder::build(
         graph, MediaProjectMpegTsMuxSegmentOptions{
             options.prefix, true, expectAudio,
@@ -149,7 +153,7 @@ struct CommonPlan final {
     if (!expectAudio) graph.findInputPort(mux, "codec")->payloadKind = MediaPayloadKind::CodecParameters;
     if (rtpTransport) {
         rtpSdpPublisher = graph.addNode(
-            MediaNodeKind::MpegTsRtpSdpPublisher,
+            *declaration.value().kind(MediaOutputSegmentRole::Sdp),
             options.prefix + ".rtp.sdp.publisher",
             "Atomic MP2T RTP SDP publisher");
         if (!rtpSdpPublisher.isValid()) {
@@ -168,13 +172,13 @@ struct CommonPlan final {
     }
 
     const MediaNodeId planSource = graph.addNode(
-        MediaNodeKind::ProjectMpegTsPlanSource,
+        *declaration.value().kind(MediaOutputSegmentRole::TsPlan),
         options.prefix + ".plan.source", "Activated project MPEG-TS plan");
     const MediaNodeId adapter = graph.addNode(
-        MediaNodeKind::ScheduledTsAccessUnitAdapter,
+        *declaration.value().kind(MediaOutputSegmentRole::TsAdapter),
         options.prefix + ".scheduled.adapter", "Scheduled MPEG-TS AU adapter");
     const MediaNodeId materializer = graph.addNode(
-        MediaNodeKind::MpegTsDatagramMaterializer,
+        *declaration.value().kind(MediaOutputSegmentRole::TsMaterializer),
         options.prefix + ".datagram.materializer",
         "MPEG-TS wire protocol materializer");
     if (!planSource.isValid() || !adapter.isValid() ||
@@ -241,75 +245,31 @@ struct CommonPlan final {
         return Result::failure(status.error());
     }
 
-    const auto connect = [&](const MediaEndpoint& from, MediaNodeId to,
-                             const char* port, const char* label,
-                             const MediaEdgePolicy& policy) {
-        return MediaGraphBuildSupport::connectChecked(
-            graph, Owner, from.node, from.port, to, port, label, policy);
-    };
-    for (const auto& connection : {
-             std::tuple{options.activation, planSource, "activation",
-                        "output activation -> MPEG-TS plan",
-                        plan.edgePolicies.atomicMetadata},
-             std::tuple{options.videoCodec, mux, "codec",
-                        "video codec -> MPEG-TS mux",
-                        plan.edgePolicies.metadata},
-             std::tuple{options.scheduled, adapter, "scheduled",
-                        "scheduled media -> MPEG-TS adapter",
-                        plan.edgePolicies.synchronizedPacket}}) {
-        auto connected = connect(
-            std::get<0>(connection), std::get<1>(connection),
-            std::get<2>(connection), std::get<3>(connection),
-            std::get<4>(connection));
-        if (!connected) return Result::failure(connected.error());
-    }
-    if (options.audioCodec) {
-        auto connected = connect(
-            *options.audioCodec, mux, "codec",
-            "audio codec -> MPEG-TS mux", plan.edgePolicies.metadata);
-        if (!connected) return Result::failure(connected.error());
-    }
-    for (const auto& target : {
-             std::pair{mux, "MPEG-TS plan -> mux"},
-             std::pair{adapter, "MPEG-TS plan -> adapter"},
-             std::pair{materializer, "MPEG-TS plan -> materializer"}}) {
-        auto connected = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, planSource, "plan", target.first,
-            target.first == materializer ? "protocol_plan" : "plan",
-            target.second, plan.edgePolicies.atomicMetadata);
-        if (!connected) return Result::failure(connected.error());
-    }
-    auto packet = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, adapter, "packet", mux, "packet",
-        "scheduled TS AU -> project mux",
-        plan.edgePolicies.synchronizedPacket);
-    if (!packet) return Result::failure(packet.error());
-    auto transport =
-        MediaDatagramOutputExecutionSegmentBuilder::connectTransportConsumer(
-            graph, execution.value(), materializer, "transport_plan",
-            plan.edgePolicies.atomicMetadata,
-            "transport plan -> MPEG-TS materializer");
-    if (!transport) return Result::failure(transport.error());
-    auto protocolBatch = MediaGraphBuildSupport::connectChecked(
-        graph, Owner, mux, "batch", materializer, "protocol_batch",
-        "MPEG-TS protocol datagrams -> wire materializer",
-        plan.edgePolicies.synchronizedPacket);
-    if (!protocolBatch) return Result::failure(protocolBatch.error());
-    auto wire = MediaDatagramOutputExecutionSegmentBuilder::connectWireSource(
-        graph, execution.value(), {materializer, "wire_batch"},
-        plan.edgePolicies.synchronizedPacket,
-        "MPEG-TS wire datagrams -> shared shaper");
-    if (!wire) return Result::failure(wire.error());
-    if (rtpSdpPublisher.isValid()) {
-        auto connected = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, planSource, "plan", rtpSdpPublisher, "plan",
-            "MPEG-TS RTP plan -> SDP publisher",
-            plan.edgePolicies.atomicMetadata);
-        if (!connected) return Result::failure(connected.error());
-    }
+    auto transportInput = addInputPortChecked(
+        graph, Owner, planSource, "transport_plan", MediaStreamKind::Metadata,
+        MediaEdgeKind::Metadata, MediaPayloadKind::DatagramTransportPlan, true, false);
+    if (!transportInput) return Result::failure(transportInput.error());
+    MediaOutputSegmentBindings bindings{std::move(declaration).value(),{}};
+    using Role=MediaOutputSegmentRole;
+    bindings.endpoint(Role::Activation)=options.activation;
+    bindings.endpoint(Role::VideoCodec)=options.videoCodec;
+    if(options.audioCodec)bindings.endpoint(Role::AudioCodec)=*options.audioCodec;
+    bindings.endpoint(Role::SerializedPacket)=options.scheduled;
+    bindings.endpoint(Role::TsPlan)={planSource,""};
+    bindings.endpoint(Role::TsAdapter)={adapter,""};
+    bindings.endpoint(Role::TsMux)={mux,""};
+    bindings.endpoint(Role::TsMaterializer)={materializer,""};
+    bindings.endpoint(Role::Sdp)={rtpSdpPublisher,""};
+    bindings.endpoint(Role::TransportPlan)={execution.value().transportPlanSource,""};
+    bindings.endpoint(Role::Sender)={execution.value().sender,""};
+    if(auto status=bindings.connect(graph,Owner);!status)return Result::failure(status.error());
+    std::vector<MediaNodeId> outputMembers{mux, planSource, adapter,
+        materializer, execution.value().transportPlanSource, scheduledDatagramSender};
+    if (rtpSdpPublisher.isValid()) outputMembers.push_back(rtpSdpPublisher);
     return Result::success(
         {planSource, adapter, mux,
-         scheduledDatagramSender, rtpSdpPublisher});
+         scheduledDatagramSender, rtpSdpPublisher, std::move(outputMembers),
+         std::move(bindings),std::move(execution.value().bindings)});
 }
 
 } // namespace
@@ -318,7 +278,7 @@ struct CommonPlan final {
 MediaScheduledMpegTsOutputSegmentBuilder::build(
     MediaGraph& graph,
     const MediaScheduledMpegTsOutputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvOutputSegmentPlan& plan)
 {
     if (!options.expectVideo || !options.expectAudio ||
         !plan.groupKey.valid() ||

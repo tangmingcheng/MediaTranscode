@@ -4,6 +4,7 @@
 
 namespace media::ffmpeg::graph {
 
-inline constexpr std::size_t MediaAvStartupMaximumUnitCapacity = 256;
+// The generic input observation budget; runtime capacity is a planner product.
+inline constexpr std::size_t MediaAvStartupPreflightUnitCapacity = 256;
 
 } // namespace media::ffmpeg::graph

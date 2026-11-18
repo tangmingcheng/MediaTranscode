@@ -68,8 +68,8 @@ MediaAudioBranchSegmentBuilder::build(
               MediaAudioLineageExecutionMode::LegacyPlainPacket &&
           *options.lineageMode !=
               MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) ||
-         options.lineageCapacity || options.correctionGeneration ||
-         options.correctionLookaheadWindows || options.syncGroup)) {
+         options.lineageCapacity || options.encoderFifoRetention || options.correctionGeneration ||
+         options.correctionLookaheadWindows || options.maximumResamplerOutputBlockSamples || options.syncGroup)) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "audio packet copy requires disabled correction and a planned lineage mode"));

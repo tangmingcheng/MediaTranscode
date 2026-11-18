@@ -6,6 +6,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 
 #include <algorithm>
 #include <sstream>
@@ -15,6 +16,7 @@ namespace media::ffmpeg::graph {
 
 ::media::Status FFmpegNodeRuntime::start(MediaGraphExecutionContext& context)
 {
+    m_sourceVideoObservation.reset();
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
     m_outputPublicationDropped = false;
@@ -25,6 +27,7 @@ namespace media::ffmpeg::graph {
 
 ::media::Status FFmpegNodeRuntime::stop(MediaGraphExecutionContext& context)
 {
+    m_sourceVideoObservation.finish(nodeId(), name().c_str(), "stop");
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
     m_outputPublicationDropped = false;
@@ -35,12 +38,19 @@ namespace media::ffmpeg::graph {
 
 void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 {
+    m_sourceVideoObservation.finish(nodeId(), name().c_str(), "abort");
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
     m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     MediaNodeRuntime::abort(context);
+}
+
+::media::Result<std::optional<MediaNodeProcessResult>> FFmpegNodeRuntime::processControlBeforeOutput(
+    MediaGraphExecutionContext&, bool, bool&)
+{
+    return ::media::Result<std::optional<MediaNodeProcessResult>>::success(std::nullopt);
 }
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::process(MediaGraphExecutionContext& context)
@@ -54,6 +64,14 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     if (m_finished) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
+    }
+    bool controlProgress = false;
+    auto control = processControlBeforeOutput(context, !m_finishPending, controlProgress);
+    if (!control) return ::media::Result<MediaNodeProcessResult>::failure(control.error());
+    if (control.value()) {
+        if (controlProgress && control.value()->state == MediaNodeProcessState::Waiting)
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+        return ::media::Result<MediaNodeProcessResult>::success(*control.value());
     }
     if (m_pendingTransfer &&
         !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
@@ -72,17 +90,14 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(pendingStatus.error());
     }
     if (waiting) {
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        return ::media::Result<MediaNodeProcessResult>::success(
+            controlProgress ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
     if (hadPendingTransfer) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
     if (m_finishPending) {
-        for (MediaChannel* channel : context.outputChannels(nodeId())) {
-            if (channel) {
-                channel->close();
-            }
-        }
+        closeOutputChannels(context);
         m_finishPending = false;
         m_finished = true;
         return ::media::Result<MediaNodeProcessResult>::success(
@@ -90,7 +105,8 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     }
     auto outcome = MediaNodeRuntime::process(context);
     if (!outcome && outcome.error().code == ::media::ErrorCode::WouldBlock) {
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        return ::media::Result<MediaNodeProcessResult>::success(
+            controlProgress ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
     if (outcome && outcome.value().state == MediaNodeProcessState::Finished &&
         m_pendingTransfer.has_value()) {
@@ -100,6 +116,8 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
     if (outcome && outcome.value().state == MediaNodeProcessState::Finished) {
         m_finished = true;
     }
+    if (controlProgress && outcome && outcome.value().state == MediaNodeProcessState::Waiting)
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     return outcome;
 }
 
@@ -138,6 +156,11 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 std::size_t FFmpegNodeRuntime::pendingOutputBufferCount() const noexcept
 {
     return m_pendingTransfer ? 1u : 0u;
+}
+
+const MediaBuffer* FFmpegNodeRuntime::pendingOutputBuffer() const noexcept
+{
+    return m_pendingTransfer ? m_pendingTransfer->buffer.get() : nullptr;
 }
 
 bool FFmpegNodeRuntime::retainsPendingOutput(const MediaBufferRef& buffer) const noexcept
@@ -205,6 +228,10 @@ bool isStreamCompatibleControlBuffer(
     case MediaControlBufferKind::Flush:
     case MediaControlBufferKind::Abort:
         return true;
+    case MediaControlBufferKind::EndGeneration:
+        return buffer->type() == MediaBufferType::Control &&
+               buffer->streamKind() == MediaStreamKind::Control &&
+               control->flow() == MediaControlBufferFlow::Continue;
     case MediaControlBufferKind::Unknown:
         return false;
     }
@@ -639,13 +666,16 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
                 "FFmpegNodeRuntime atomic output would block"));
     }
     if (atomic.value() == AtomicTransferResult::Published) {
+        if (FFmpegFrameView::isFrame(buffer))
+            m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Published, buffer);
         return commitReservedOutput(buffer);
     }
+    bool diagnosticDropped = false;
     for (std::size_t index = 0; index < channels.size(); ++index) {
         MediaChannel* channel = channels[index];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer).outcome;
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
-            m_pendingTransfer = PendingTransfer{ buffer, channels, index };
+            m_pendingTransfer = PendingTransfer{ buffer, channels, index, false, diagnosticDropped };
             return ::media::Status::failure(
                 ::media::ErrorInfo::wouldBlock("FFmpegNodeRuntime output channel would block"));
         }
@@ -666,11 +696,14 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
                 : cancelled;
         }
         if (outcome == MediaQueuePushOutcome::Dropped) {
+            diagnosticDropped = true;
             continue;
         }
         logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, action,
                         nodeId(), name(), *channel, buffer);
     }
+    if (!diagnosticDropped && FFmpegFrameView::isFrame(buffer))
+        m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Published, buffer);
     return commitReservedOutput(buffer);
 }
 
@@ -732,6 +765,10 @@ FFmpegNodeRuntime::publishAtomicOutput(
         PendingTransfer& transfer = *m_pendingTransfer;
         auto reserved = reserveOutputCommit(transfer.buffer);
         if (!reserved) {
+            if (reserved.error().code == ::media::ErrorCode::WouldBlock) {
+                waiting = true;
+                return ::media::Status::success();
+            }
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
                 auto cancelled = cancelReservedOutput(transfer.buffer);
                 if (!cancelled) return cancelled;
@@ -766,6 +803,8 @@ FFmpegNodeRuntime::publishAtomicOutput(
                               "FFmpegNodeRuntime lost its atomic pending contract"))
                     : cancelled;
             }
+            if (FFmpegFrameView::isFrame(transfer.buffer))
+                m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Published, transfer.buffer);
             auto committed = commitReservedOutput(transfer.buffer);
             if (!committed) return committed;
             m_pendingTransfer.reset();
@@ -797,8 +836,11 @@ FFmpegNodeRuntime::publishAtomicOutput(
             logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, "pending_emit",
                             nodeId(), name(), *channel, transfer.buffer);
         }
+        if (outcome == MediaQueuePushOutcome::Dropped) transfer.diagnosticDropped = true;
         ++transfer.nextChannel;
         if (transfer.nextChannel == transfer.channels.size()) {
+            if (!transfer.diagnosticDropped && FFmpegFrameView::isFrame(transfer.buffer))
+                m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Published, transfer.buffer);
             auto committed = commitReservedOutput(transfer.buffer);
             if (!committed) return committed;
             m_pendingTransfer.reset();

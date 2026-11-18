@@ -6,6 +6,8 @@
 #include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+
 #include <limits>
 #include <string>
 #include <variant>
@@ -193,7 +195,7 @@ bool validRtpStream(
         output.protocol.muxPlan(),
         output.emission.videoInitialServiceWindow(),
         output.emission.audioInitialServiceWindow(),
-        output.emission.maximumQueuedBytes(),
+        runtime.outputEdgePolicies.synchronizedPacket.bufferPolicy.memoryBudget.maxBytes,
         output.emission.targetServiceResidence());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
@@ -248,7 +250,7 @@ bool validRtpStream(
     if (!maximumPackets || !sdpIdentity ||
         output.scheduledBatchMaximumBytes == 0 ||
         output.scheduledBatchMaximumBytes !=
-            runtime.edgePolicies.synchronizedPacket.bufferPolicy
+            runtime.outputEdgePolicies.synchronizedPacket.bufferPolicy
                 .memoryBudget.maxBytes ||
         output.emission.perDatagramOverheadBytes() != 12 ||
         output.emission.maximumWireDatagramBytes() >
@@ -289,6 +291,22 @@ bool validRtpStream(
     const MediaRealtimeRtpTranscodePlan& outer,
     const MediaRealtimeAvSyncRuntimePlan& runtime)
 {
+    if (!outer.resourceLedger) return invalidOutput("prepared output resource ledger");
+    auto edges = MediaRealtimeEdgePolicyPlanner::planSynchronizedOutput(*outer.resourceLedger);
+    if (!edges) return ::media::Status::failure(edges.error());
+    if (runtime.outputEdgePolicies != edges.value()) return invalidOutput("output edge retention");
+    auto audioInput = MediaRealtimeEdgePolicyPlanner::planCanonicalAudioInput(
+        runtime.audioPipeline.branchMode, edges.value().synchronizedPacket,
+        runtime.audioPipeline.branchMode == MediaBranchMode::CopyPacket
+            ? std::optional<MediaEdgePolicy>(runtime.edgePolicies.startupAudioRelease) : std::nullopt);
+    if (!audioInput) return ::media::Status::failure(audioInput.error());
+    if (runtime.canonicalAudioInputPolicy != audioInput.value())
+        return invalidOutput("canonical audio input handoff");
+    if (auto status = runtime.scheduling.validate(runtime.protocolOutput,
+            runtime.datagramTransport.encode().deployment.latency.targetResidence); !status) return status;
+    auto activation = runtime.scheduling.activationLead(runtime.protocolOutput);
+    if (!activation || activation.value() != runtime.activationOutputLead)
+        return invalidOutput("encoded output activation lead");
     switch (runtime.outputAdapter) {
     case MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp:
         return validateSeparateRtpOutput(outer, runtime);

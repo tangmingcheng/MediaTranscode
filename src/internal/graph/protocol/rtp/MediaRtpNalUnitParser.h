@@ -40,6 +40,8 @@ public:
     ::media::Result<MediaRtpNalUnitBatch> push(
         const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes);
     void discontinuity() noexcept;
+    bool hasIncompleteFragment() const noexcept
+    { return !m_fragment.empty() || m_fragmentHeader.has_value() || m_fragmentTimestamp.has_value(); }
 
 private:
     std::uint8_t m_payloadType = 0;
@@ -55,6 +57,8 @@ public:
     ::media::Result<MediaRtpNalUnitBatch> push(
         const MediaRtpPacket& packet, std::size_t maximumNalUnitBytes);
     void discontinuity() noexcept;
+    bool hasIncompleteFragment() const noexcept
+    { return !m_fragment.empty() || m_fragmentHeader.has_value() || m_fragmentTimestamp.has_value(); }
 
 private:
     std::uint8_t m_payloadType = 0;

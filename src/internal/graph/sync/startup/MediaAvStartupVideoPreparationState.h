@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
-#include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaPlaybackActivation.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 #include "media_transcode/Result.h"
@@ -34,8 +34,7 @@ struct MediaAvStartupVideoPreparationSnapshot final {
     std::size_t videoUnitCount = 0;
     bool filterOutputReserved = false;
     bool extractorOutputsReserved = false;
-    std::optional<MediaPlaybackEpoch> anchoredEpoch;
-    std::optional<MediaAudioPlaybackOrigin> anchoredAudioOrigin;
+    std::optional<MediaPlaybackActivation> anchoredActivation;
     bool extractorOutputsReanchored = false;
 };
 
@@ -55,7 +54,7 @@ public:
     using VideoReservation = ::media::Result<MediaAvStartupVideoReservation>;
 
     static ::media::Result<std::shared_ptr<MediaAvStartupVideoPreparationState>>
-    create(MediaAvSyncGroupKey groupKey);
+    create(MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage);
 
     ::media::Status begin(std::uint64_t generation,
                           std::uint64_t releaseIdentity,
@@ -76,8 +75,7 @@ public:
     ::media::Status publishInitialAnchor(
         std::uint64_t generation,
         std::uint64_t releaseIdentity,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
+        MediaPlaybackActivation activation);
     ::media::Status acknowledgeExtractorReanchor(
         std::uint64_t generation,
         std::uint64_t releaseIdentity);
@@ -94,14 +92,17 @@ public:
     ::media::Status bindExtractorWakeup(
         const std::shared_ptr<MediaNodeWakeup>& wakeup);
     MediaAvStartupVideoPreparationSnapshot snapshot() const;
+    ::media::Status validateStorage(const MediaOutputReservationStoragePlan& storage) const;
+    const MediaOutputReservationStoragePlan& reservationStorage() const noexcept { return m_storage; }
 
 private:
-    explicit MediaAvStartupVideoPreparationState(MediaAvSyncGroupKey groupKey);
+    MediaAvStartupVideoPreparationState(MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage);
     ::media::Status validateIdentityLocked(
         std::uint64_t generation,
         std::uint64_t releaseIdentity) const;
     ::media::Status failureLocked(const char* operation) const;
 
+    const MediaOutputReservationStoragePlan m_storage;
     mutable std::mutex m_mutex;
     MediaAvSyncGroupKey m_groupKey;
     MediaAvStartupVideoPreparationPhase m_phase =
@@ -117,8 +118,7 @@ private:
     std::weak_ptr<MediaNodeWakeup> m_extractorWakeup;
     MediaOutputCapacityReservationHandle m_outputReservation;
     MediaOutputCapacityReservationHandle m_extractorOutputsReservation;
-    std::optional<MediaPlaybackEpoch> m_anchoredEpoch;
-    std::optional<MediaAudioPlaybackOrigin> m_anchoredAudioOrigin;
+    std::optional<MediaPlaybackActivation> m_anchoredActivation;
     bool m_extractorOutputsReanchored = false;
 };
 

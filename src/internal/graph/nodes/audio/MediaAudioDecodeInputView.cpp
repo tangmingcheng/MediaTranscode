@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 

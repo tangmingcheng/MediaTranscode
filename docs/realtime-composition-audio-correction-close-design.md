@@ -1,0 +1,56 @@
+# 音频校正关闭标记与排尽边界
+
+状态：rk490阶段诊断已确证关闭标记导致已耗尽SWR重新排尽；最小语义修正已获双独立DESIGN PASS并完成实施，待双SOURCE复审及真实链路验证。诊断运行失败，不计验收通过。
+
+## 证据与契约
+
+rk489在12:40:06.132所选audio封口frontier5193后，12:40:06.135 AudioResampleNode74报`external audio correction requires a contiguous command`，frame/correction/output队列均空。四源120秒exit0，CLI自然exit1，详见[验收记录](realtime-composition-rk489-validation.md)。rk489日志没有逐次drain返回值，单凭该轮不能唯一证明现场触发路径；rk490补充证据见下。
+
+[FFmpeg SWR契约](https://ffmpeg.org/doxygen/trunk/group__lswr.html)以NULL输入执行尾部flush；本仓库drainQuantum在正输出容量的实际swr_convert返回0时生成AudioSwrResamplerExhausted，由此结算未执行校正窗口及lineage残余。[GStreamer事件设计](https://gstreamer.freedesktop.org/documentation/additional/design/events.html)将有序EOS作为前序数据完成屏障；这里借用有序屏障原则，EndGeneration不是新的媒体或校正命令，也不是永久EOS。
+
+AudioDriftController按原audio/correction双FIFO原子发布EndGeneration，各FIFO保留先前数据顺序，但消费方可先读到audio终止。AudioResampleNode::consumeCorrection对真实command和EndGeneration均返回true，后者仅设置correctionGenerationClosed。onProcess:256–275在媒体已排尽后，把任何true都当成新窗口并重启drain。此前真实零输出已settleTerminal(exhausted)清空executor，重启可能再次prepare无命令窗口而失败。这是可达的控制类型混淆，与delay是否为零无关。
+
+## rk490确证证据
+
+主线程本轮真实四源120秒均exit0，CLI自然exit1。node74在12:51:49.629依次记录first_drain(output_sample_index=5280416)、exhausted(5280433)、settled(requires_next_window=1)、correction_close(correction_closed=1)、drain_rearm、prepare_failed。真实零输出及成功结算已在close之前，随后没有command_enqueued；关闭标记被当成可执行窗口，是本轮首错的确证路径。完整记录将归档realtime-composition-rk490-validation.md。
+
+## 最小语义修正
+
+仅调整AudioResampleNode已有pendingTerminal且非drainingEof的EndGeneration分支：consumeCorrection成功后先检查correctionGenerationClosed。若已关闭，直接执行现有严格settleTerminal、generationDrained置位和原terminal输出路径；不得重新设置drainingEof。无需新增状态、接口、队列、线程或耗尽算法。
+
+此分支只能在原processEofDrainQuantum结束后进入：有SWR时drainQuantum真实返回0已结算，有合法bypass时原finishBypassLineage完成；pending输出优先于该分支提交。只读到关闭标记不会改变executor内容，因此原严格settleTerminal仍能验证无剩余窗口。不清命令、不伪造exhaustion、不修改outputSampleIndex、lineage或准入代次。
+
+若consumeCorrection读到的仍是真实command，correctionGenerationClosed保持false，继续现有有界窗口消费与drain路径，不能直接发出EndGeneration。该command在correction FIFO中先于close，属于同代先前已发布的lookahead，可能因双FIFO消费进度不同晚于audio terminal到达，不能仅据到达时刻判为非法。仍由enqueue验证generation/sequence/连续边界，由prepare及真实SWR产出推进；真实零输出才允许原exhausted结算。无SWR却有不可执行command继续原失败。标记后不再消费command，错误代次仍由原授权拒绝。
+
+消费不到控制时继续等待；信用满时仍原受限drain，不扩大容量或忙等。锁沿用lineage锁与原节点owner执行；公共输出pending transfer仍在节点调用前处理，原purge负责新代准入。
+
+## 范围与风险
+
+本次不修改swr_get_delay判定、prepare、补偿窗口规划、SWR probe或settleTerminal实现，不凭假设生成零校正。若真实command路径本身仍缺授权，保留原错误并另行定位。rk490已排除本轮首次drain缺命令路径；该证据不覆盖其他真实command边界或后续新错误，不等于完整链路通过。
+
+Windows与RKMPP复用该节点，均有潜在影响。双设计审查通过后实施、双SOURCE复审，主线程再运行原规格四源真实链路；需核对首错、源结束后的自然行为及尾部音频，不以构建或先前错误消失宣称完整通过。
+## 优先实施：无新状态的阶段诊断
+
+复用mediaGraphDiagnosticLog，在现有节点owner与lineage锁内记录以下稀疏事件，不新增持久状态或公共参数：
+
+- terminal_first_drain：onProcess消费EOF/Flush/EndGeneration并保存pendingTerminal后、首次processEofDrainQuantum前，仅记录一次该terminal。
+- terminal_exhausted：drainSwrQuantum真实produced==0且持有exhausted证明时，在原settleTerminal前记录；仅真实finalDrain结算校正与lineage均成功后记录settled。
+- terminal_correction_consumed：仅pendingTerminal已存在时，在consumeCorrection完成有效同代command入队或关闭标记授权之后记录，明确kind=command/close；command附原sequence、effective index、distance。
+- terminal_drain_resumed：仅pendingTerminal&&!drainingEof分支实际再次置drainingEof前记录，明确最近本次消费是否close；不在普通drain quantum逐次记录。
+- terminal_prepare_failed：drainSwrQuantum的原prepare失败处记录错误之前的状态，随后原样返回原ErrorInfo，不覆盖、不重试。
+
+每项包含node、generation、output_sample_index、draining_eof、correction_closed、requires_next_window。prepare_failed之后仍由原失败路径记录原错误文本，不复制或替换ErrorInfo。日志同一node的源码阶段顺序足以区分首次失败、真实零产出后的close重启和真实command重启，因此不保存“上次exhaustion”状态，不改变对象计费。
+
+边界：首次terminal和失败各一次，exhausted/resumed仅终止阶段状态转换；终止后command消费数量受既有lookahead和原FIFO内已发布项限制，无每帧/每量子日志。保持原算法与失败原样，使下一次原规格实流能够决定是否只需候选close-marker语义修正或另有窗口覆盖问题。实现应复用单一私有诊断helper生成共同字段，避免复制格式。
+目标固定版本现场核验补充（主线程）：resample.c:408 get_delay依据in_buffer_count/filter_length/index/frac计算相位延迟；437 resample_flush添加reflection=(min(in_buffer_count,filter_length)+1)/2。swresample.c:763 NULL输入仅首次!flushed调用resampler.flush，随后置flushed=1并以swr_convert_internal实际返回值判输出。与官方契约一致：delay>0不能证明仍有输出；本次诊断不改变该判定路径。
+
+实施：单一observeTerminalStage私有helper不增加成员状态。新增first_drain、exhausted、settled（校正及lineage均成功后）、correction_close、command_enqueued、stale_command、drain_rearm、prepare_failed阶段。helper在无pendingTerminal时立即返回，正常逐帧入队不生成新日志；既有stale日志保留。算法与原错误返回不变。
+
+## 诊断实施验证
+
+两位独立审查均明确DESIGN PASS、SOURCE PASS。RKMPP 8核增量构建PID3535672，exit0，5/5目标完成；未运行local CLI。realtime CLI SHA256：108e3eeceeb41c8ea572bca061761fee9de1af1a80edb0ce5aa4b6dc9aa15bb0。目标out/rollback/rk490保留修改前两源码及CLI。无功能修复结论，待原规格实流阶段日志。诊断字符串构造与日志有执行开销，不能将本轮时序变化单独作为因果证明。传输tar/构建日志记录后清理。
+
+本轮实施门禁：consumeCorrection成功后，只有correctionGenerationClosed仍为false才执行原consumed/canAccept驱动的rearm或等待；若已为true则落入同一现有严格settleTerminal及原terminal输出代码，不复制收尾方法。保留现有有界日志以验证close后没有drain_rearm/prepare_failed。不新增状态，不改变SWR delay、补偿规划、真实command处理、purge或队列容量。双设计审查通过后已按该门禁实施；保留原严格结算与终止发出代码，仅将rearm/等待限定在消费后仍未关闭的分支。
+## 关闭标记修复验证
+
+基于rk490确证路径，最小分支修复经两位独立DESIGN PASS与SOURCE PASS。RKMPP增量8核构建PID3572064，exit0，4/4目标完成；未运行local CLI。realtime CLI SHA256 efb1df948384516ea6846c242c79e29108845c092d588edd7dc146bc4310842c。回退位于目标out/rollback/rk491。修复版原规格实流及Windows共享回归尚未验证。传输tar及构建日志在记录结果后按清单清理。

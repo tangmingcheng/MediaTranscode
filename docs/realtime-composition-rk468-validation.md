@@ -1,0 +1,15 @@
+# rk468：复合BYE保留语义与退休消费回执
+
+状态：12文件双独立SOURCE PASS；RKMPP8核增量37/37、退出0。两条生产入口仍显式InvalidateMember，尚未启用有序关闭producer。
+
+协议prepareRtcp显式接收无默认值的内部ByeHandling。PreserveMemberForDrain保留同compound中BYE前的SR/CNAME更新及owned departure，不递增ingress generation，不重置schedule/assembly；原rejection仍保留。commit分别验证deferred和retired身份，后者仍要求失效配对。此能力供后续取得关闭授权的owner选择，不新增公共输入参数。
+
+clockGroup成功consume且无rejected的SenderLeft/GroupClosed后，向prepared Stream记录精确sequence及invalidation，检查序号严格递增且低于已发布nextSequence；通知双成员raw和receiver。每成员仅一个固定槽，由实际sizeof计费。回执证明事件被clockGroup消费，不证明snapshot完成下游发布；后续门必须匹配本次预期sequence/generation/reason/time，不能只检查存在。
+
+source_drain_review_a、source_drain_review_b均SOURCE PASS；git diff --check通过。构建PID2723042，wait=0；CLI13088624字节，SHA256=9996d235db07e3b3881416c64290c8a55cca811b8f3b8a1391ca9dc7ece64572。原CLI、12文件源码和清单保留于目标out/rollback/rk468。
+
+未运行CLI/FFmpeg/VLC实流或local CLI，未修改Windows FFmpeg。临时清单：本机out/acceptance/rk468-source.tar；目标同名tar、rk468-build.log，归档后逐项删除。
+
+未完成：生产关闭状态/capture截止/双成员消费门、实际source DAG可选节点的EndGeneration传递，以及完整原规格双平台实流、失败退出与单路/动态输出回归。
+
+清理复核：本机本轮tar已删除；目标rk468临时文件查询为空，构建PID2723042已不存在。rollback保留。

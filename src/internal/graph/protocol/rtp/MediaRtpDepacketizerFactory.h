@@ -11,7 +11,7 @@ public:
     static ::media::Status validate(const MediaRtpDepacketizerConfig& config);
     static ::media::Result<std::unique_ptr<MediaRtpDepacketizer>> create(
         const MediaRtpDepacketizerConfig& config,
-        std::size_t maximumAccessUnitBytes);
+        std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation);
 
 private:
     MediaRtpDepacketizerFactory() = delete;

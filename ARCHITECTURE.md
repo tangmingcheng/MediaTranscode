@@ -1,5 +1,31 @@
 ## `src/internal/graph/`
 
+输出池数量由共用EncoderHardwareFramesPoolPlanner形成；canvas按最终aggregate→encoder唯一有界边、两个实际pending及prepared encoder retained计循环surface/发布lease，另计固定黑底。bind重算并共用实际encoder inspect，源候选不混入输出pool。此数量合同不代表内存准备预算，见[输出池驻留](docs/realtime-video-composition-pool-retention.md)。
+
+合屏buildTopology持有一次最终逻辑图及无资源registration，move-only owner只公开const视图；bind消费同图，内部编译最终ledger并核验真实prepared资源后发布运行时绑定。canvas geometry/storage分型，几何与aggregate合同检查由planner/runtime共用。逻辑图不授权物理分配，准备预算及多源总账仍待实现，见[拓扑与绑定](docs/realtime-video-composition-topology.md)。
+
+同步planner以显式域生成源贡献或共享链政策，公共时钟/视频/metrics政策集中复用。MediaRealtimeAvSourceRuntimePlanner装配源clock、correction、有界startup边及source-only transition，返回既有组合图所需A/V源合同；公共多源prepare协调器尚未接入，见[源runtime装配](docs/realtime-video-composition-source-runtime.md)。
+
+源音频校正组件界由共用planner推导，旧共享链在其上追加输出编码/调度界；源贡献路径不包含这些输出阶段。命令mailbox按实际audioDriftTransaction的frame容量记账，组合图重算源校正并核对政策，见[源校正容量](docs/realtime-video-composition-source-correction.md)。
+
+MediaRealtimeAvSourceClockPlanner以源输入合同生成源时间事实与canonical装配；旧共享resolver和runtime领取同次结果，源入口不依赖输出packetization或encoder延迟。专项源时钟验证由新旧路径共用，runtime validator重算整个assembly比较，见[源时钟规划](docs/realtime-video-composition-source-clock.md)。
+
+MediaRealtimeAvOutputRuntimePlanner独立装配音频FIFO、协议与datagram产品，消费一次生成的纯输出同步政策；旧生产caller共享同一装配。输出timing复用真实协议解析，并在移交资源前精确核对。源共享planner消费政策值副本，保留源启动/校正/transition，见[输出runtime装配](docs/realtime-video-composition-output-assembly.md)。
+
+MediaAvOutputSynchronizationPlanner只消费输出身份/layout/transport/cadence、deployment和编码事实，生成经ContinuousOutput校验的同步政策；旧单源planner立即复用并加入真实源政策，保留各源控制代次模式。协议与政策算法原值迁移，既有经验阈值仍待事实依据收口，见[输出同步规划](docs/realtime-video-composition-output-sync.md)。
+
+合屏输出使用独立MediaRealtimeAvOutputRuntimePlan，不继承源runtime；已解析音频取代完整源audioPipeline。单源和合屏在构图时借用MediaRealtimeAvOutputSegmentPlan，共用调度、RTP和MPEG-TS输出segment，节点不持有view引用。输出同步域校验继续拒绝源时钟/servo，详见[输出runtime边界](docs/realtime-video-composition-output-runtime.md)。
+
+音频输出编码段使用MediaAudioOutputEncoderOptions，仅消费解析后的编码格式、边策略和lineage/FIFO/group，不携带源索引或servo。源/共享分支与输出通过同步借用的内部视图复用同一节点及端口实现；AudioPlanOptionApplier共用编码配置映射，源字段只在真实源段写入，见[音频编码段](docs/realtime-video-composition-audio-output.md)。
+
+音频FIFO容量产品只消费prepared编码格式和上游最大输入样本数。源校正块上界由AudioCorrectionReachabilityPlanner复用原量化器推导；aggregate按codecFrameSamples形成固定块，合屏builder核对相同FIFO合同。运行时入队前检查保留，容量是样本载荷界，不是进程RSS上限，见[FIFO规划](docs/realtime-video-composition-audio-fifo.md)。
+
+A/V同步计划显式区分SharedSourceOutput、SourceContribution与ContinuousOutput；binding与产品角色在构图和bootstrap核对。源域只保留接收时钟/恢复权限，输出域只持初始epoch激活权限；本地sender NTP需求由输出协议决定，不代替源RTCP映射。旧单源planner使用共享角色；新多源产品形成与资源事务仍未接通，见[域校验记录](docs/realtime-video-composition-domain-validation.md)。
+
+源域purge完成后由registrar绑定的既有节点wakeup通知域成员；gate在首次及背压重试的output commit处持有代次仲裁，旧包取消、新代屏障未完成则等待。startup clock保留精确失效代次，重复失效幂等；消费控制状态后继续排空队列。有限清理事务、有界恢复候选与可无限源缺失须区分，不能用源恢复超时替代独立输出时钟，见[purge屏障记录](docs/realtime-video-composition-purge-barrier.md)。
+
+RTP A/V时钟域由validator区分初始获取、活动与重获取，失活首次保存旧代次并分配一次下一代次；快照明确失效旧代次，adapter向gate投影旧失效、向新获取保留下一代次。重复失效不重复建代，恢复候选继续受SR/CNAME时效约束，代次耗尽失败。此机制不将RTCP BYE转换成会话EOF；完整恢复期限与多源持续输出仍待实现，见[源失活记录](docs/realtime-video-composition-source-generation.md)。
+
 `src/internal/graph` 是项目中的 DAG 化媒体处理管线目录，负责描述、构建、校验、编译和运行媒体处理图。
 
 ```text
@@ -514,3 +540,81 @@ Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `
 `VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 or HEVC video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
 
 Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.
+
+## 实时 A/V 显式运行时注册
+
+协议代次交接由同一 coordinator 管理异步 purge 屏障。planner 显式注册 materializer、sender 和适用的 SDP publisher；各节点通过单槽请求在自己的 worker 清理状态，完成后通知域唤醒。清理未完成不确认 ack，复用原事务截止时间。sender 的 native submit 与提交计账受短发布授权保护，等待不持锁；授权取消仅退役未提交预约，保留物理服务域及已发送限速债务。输入按 RTP 重排序事件顺序发布时钟证据，控制事件不等待媒体 credit。当前仍为单源域基础，实流与剩余边界见[协议交接记录](docs/realtime-video-composition-protocol-handoff.md)。
+
+漂移控制候选只保存数据；每次提交按epoch→state→channel获取短授权，复核原origin后原子发布音频及校正，成功才推进servo。背压释放全部锁，恢复请求在锁外执行，owner退出清候选，避免全局代次锁随待发媒体跨worker等待。
+
+各 segment 显式返回源处理与输出处理归属，binding 持有完整域列表与唯一 outputGroupKey，编译前检查成员互斥、完整覆盖和允许的跨域连接。SharedSourceOutput 角色保留既有单源整体 transition；Source 角色仅清本源处理和聚合候选，Output 角色只授予首次激活能力。各域复用同一 master clock，协议时间权威仅属于输出域。codec resolver 与 branch builder 已拆出源处理和输出编码入口，合屏图构建器复用这些入口及既有协议段；composition planner、资源准入和外部控制入口仍未接通，因此不能视为合屏已可用。
+
+Raw RTP A/V启动保留由MediaPreparedInputRetentionPlan单独描述，基于源cadence、既有acquisition窗口及封存回放AU上界形成有限接纳容量，不代表任意网络到达率保证。planner将其纳入payload预算及startup策略；最终DAG编译器按节点内部保留和实际边容量计对象上界。startupVideoRelease/startupAudioRelease仅用于整批释放入口，输出atomic队列保持输出驻留规划。packet移动/共享通过原RAII资源凭证延续寿命；超出整批总容量直接失败，临时容量占用等待。详细边界见[输入保留记录](docs/realtime-video-composition-input-retention.md)。
+
+RTP preflight 对每个输入独立形成 ingress 产品，捕获停止后统一封存共享预算。音频软件帧由 prepared 样本几何形成逻辑 credit，物理 codec 内部分配不在该凭证范围内。真实回归状态见 [阶段一记录](docs/realtime-video-composition-stage-one.md)。
+
+### 合屏输出身份基础（2026-09-21）
+
+音频编码提交在同一 lineage lock 内先准备贡献候选，再发送帧，成功后通过 noexcept swap 提交；EAGAIN 销毁候选、接收后重新准备。事务不跨调度调用，不改变 packet map/priming 或恢复清理。提交 mapper 的权威驻留与元数据物理预算仍未完成，不能把该原子提交边界视为持续输出生命周期已接通。
+
+Canonical lineage 用 Source/Output variant 区分身份，scheduler 序号保持域中性。音频贡献区分真实源映射和生成静音，视频贡献逐格记录源身份或生成黑帧；重采样与裁剪保留原始源区间及映射锚点。区间容器检查完整 timeline 身份；realtime planner 从 prepared 格式/帧长与补偿窗口规划同步 encoder FIFO 的样本、PCM 字节与片段界，运行时写前检查。
+
+AvContinuousAggregate 由单个既有 worker 持有候选和输出整数帧/样本轴，按共享时钟 deadline 选择仍有效的源区间，缺口生成黑帧/静音。输出仅保留一项 pending，提交同时取得所涉及源与输出的短代次许可；源 purge 先于背压重试服务。画布通过 CUDA/RGA adapter 完成同步矩形操作，黑模板由明确色彩范围填充并读回验证，帧 lease 释放通知 owner。实际生产帧池的预DAG验证、全局资源和元数据物理上界、迟到工作策略及完整运行门禁仍缺失；不能把局部实现或单源画面当成完整合屏验收。见[持续聚合接线记录](docs/realtime-video-composition-aggregate.md)。
+
+源生命周期由planner显式选择：Shared保留原失败合同，Source只有在唯一Output实际激活后才允许缺流等待。RTCP BYE/证据到期是有序源失效，真实协议/I/O错误仍失败；恢复尝试到期释放候选并等待新SR及新AU。未发布代退休复用真实owner-thread purge/ack，启动清理完成后才确认；代次分类、排队续接与等价目标重判共用activation仲裁，不能假激活或吞非法证据。此内部实现已通过源码双审，公共composition入口尚未接入，运行结论仍未通过，见[源生命周期记录](docs/realtime-video-composition-source-lifecycle.md)。
+
+逐源视频规划以 MediaVideoSourcePlan 表示 decoder/filter 与源执行合同，完整链在相同产品上追加 encoder。候选、帧域匹配、评分和执行合同复用同一实现；MediaHardwareCapabilityProbe 的显式首帧协商只返回 filter graph 配置/readback，不证明真实decode/transfer或同设备身份。见[逐源规划记录](docs/realtime-video-composition-source-planning.md)。
+
+CodecResolverDecoderContextBuilder 共用既有 decoder open；不可变 get_format 回调状态随 CodecContextPtr 的 deleter 转移，不借用节点成员。MediaRawRtpProbeLease 对 prepared 队列建立只读快照，payload和描述符先计入原共享预算，原始回放及到达时间保留；lease存活时禁止seal，probe占额引起capture容量截止明确失败。其内部首帧消费者见下文；生产回放交接与逐owner资源仍须在组合preflight中闭合。见[准备所有权记录](docs/realtime-video-composition-prepared-source.md)。
+
+RTP 图前首帧探测复用协议 parser/reorder/depacketizer 和共用 decoder API，保留原始回放；结果拥有 decoder、首帧与准备 storage lease。准备存储按协议上界及实际 decoder retention 推导，和 raw 快照预算分别计费；跨源总准入仍须在组合 preflight 完成。等待新证据沿用原 open/analysis 截止时间。该消费者尚未接入公共生产入口，见[首帧探测记录](docs/realtime-video-composition-first-frame.md)。
+
+准备首帧释放后，经公共codec adapter flush同一个decoder并形成一次性MediaPreparedVideoDecoder；source domain绑定、registrar与CodecResolver领取该对象，storage lease随实际context所有权转移。公共MediaVideoDecoderPlanOptionCodec供旧单源与source-only规划共用。完整preflight尚未调用该交接，详见[解码器交接记录](docs/realtime-video-composition-decoder-handoff.md)。
+
+组合图源输入现在使用MediaRealtimeCompositionSourcePlan，公共输入组装与decoder/filter segment消费MediaRealtimeAvSourceRuntimePlan，不要求逐源encoder/FIFO/协议输出。MediaPreparedVideoCanvas在真实输出帧池执行黑模板与tile copy后持有资源，运行aggregate一次性领取并绑定owner wakeup；缺失准备产品直接失败。唯一视频输出改用MediaVideoOutputPlan，输出segment仅创建resolver和encoder，并与旧完整branch复用编码映射；发送规划直接消费上游prepared emission，不再索取完整源计划。完整准备协调器及跨源准入仍待接通，见[源合同与准备画布](docs/realtime-video-composition-source-contract.md)和[唯一输出合同](docs/realtime-video-composition-output-contract.md)。
+
+编码器创建器消费显式原始帧SAR/色彩事实，尺寸和cadence由planner选项提供，不依赖源AVCodecParameters或从源再次回退。候选枚举复用同一backend profile；MediaVideoEncoderCapabilityProbe用调用方设备/帧池打开encoder并读回能力，内部独占并销毁可能进入drain的context，不再暴露已打开context的消耗性探测入口。生产preparer仍独立打开未消费context并核对准入读回，见[编码器帧输入记录](docs/realtime-video-composition-encoder-input.md)和[独立编码能力准备](docs/realtime-video-composition-encoder-capability.md)。
+
+MediaVideoOutputPlanner独立规划encoder open合同、输出执行策略及prepared VBV补全。MediaPipelineChainPlan复用源与输出数据合同；单源规范化仍处理真实源事实和不可变请求记录，独立输出不携带源身份，见[输出编码规划](docs/realtime-video-composition-output-planner.md)。
+
+MediaRealtimeAvProtocolOutputPlanner 只消费输出协议、节拍、队列字节界限、prepared emission与部署事实，生成协议及datagram产品；单源AvSyncRuntimePlanner复用它并继续拥有源assembly、校正、transition和FIFO规划。该接口不依赖decoder或输入clock；完整合屏准备和源/输出runtime拆分仍未完成。
+
+MediaAvGenerationTransitionPlanner 以共享源/输出或源贡献职责选择同一源处理子集合；源贡献合同仅包含源lineage、音频校正及aggregate_source清理目标，不包含输出编码和协议。CompositionGraphBuilder在增添节点前验证精确参与者集合。输出域仍仅初次激活，逐源重连不应重置它；完整生产源runtime规划尚未接通。
+
+canvas准备由拓扑数量与实际allocation生成不可修改的image-payload产品；准备入口强制预算与原deadline/stop，长期lease跨Prepared/Producer/发布帧持有，临时staging额度局部释放。它不含头对象/driver/poolcache，不能替代完整多源总账；见[准备边界](docs/realtime-video-composition-canvas-preparation.md)。
+
+producer registry消费逐node/stream/payload事实并对最终图完整覆盖校验；事实规划与实际frame合同解析由共享planner承担，runtime integration由受控实现表决定。该层不处理多源并发容量/alias总账，见[事实边界](docs/realtime-video-composition-producer-facts.md)。
+
+逐源资源事实已接同一topology构建/绑定，核对全图成员覆盖、逐输入envelope/ingress及补偿期音频上界；完整驻留总账尚缺，合屏仍FAIL42。见[逐源资源记录](docs/realtime-video-composition-source-resources.md)。
+
+准入调查确认maximumMetadataBytes缺planner写入者，元素数不能证明容器capacity；实施顺序调整为真实输入准备与共享metadata有限存储先闭环，再切换统一owner总账。见[准入门禁](docs/realtime-video-composition-admission-contract.md)。本轮仅调查，未新增构建/媒体通过项，完整FAIL42。
+
+共享canonical元数据已迁移为精确元素只读owner，源链和aggregate共同factory接入，identity按内容比较并持有寿命；不等于分配前全局准入，完整FAIL42。见[存储记录](docs/realtime-video-composition-metadata-storage.md)。
+
+raw RTP输入准备已独立为capture/sealed两阶段owner事务，原realtime preflight直接复用；startup仍从同一sealed输入权威规划。尚未接N源控制器与全局准入，完整FAIL42。见[输入准备记录](docs/realtime-video-composition-source-preflight.md)。
+
+成员型epoch/release已由plan经bootstrap进入service并贯穿release/重锚/恢复分类，现有A/V生产路径实际使用；双源码审查和Release重建通过，r51 realtime仍no-progress/4逻辑对象，纯视频装配与完整合屏未完成、FAIL42。见[激活产品记录](docs/realtime-video-composition-activation-members.md)。
+
+## 2026-09-29 startup独立截止调度
+
+源startup已解除音频servo周期依赖：复用worker单次绝对期限等待、原有限屏障和生命周期清理，期限与poll共用真实起点及planner原阈值。独立设计及源码双审PASS，Release全量重建通过；r52 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡。无到期分支实流证据，纯视频装配、多源入口/全局准入、AAC重入和双平台合屏门禁仍缺，完整FAIL42/100。见[实现和实流记录](docs/realtime-video-composition-startup-deadline.md)。
+
+## 2026-09-29 RTP源时钟成员合同
+
+计划成员贯穿RTP clock group、validator、snapshot及binder/projector/adapter，AV音频calibration与成员严格一致；单成员复用同一身份/时效/generation状态机，保留PlannedStreamPair现有CNAME政策。独立设计/源码双审及Release全量重建通过；r53 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress，4逻辑对象未平衡，非成功验收。纯视频完整startup/builder/resource、多源入口与总准入、AAC重入及双平台合屏仍未完成，六维10/8/6/12/2/4、42/100，完整FAIL。见[实现与证据](docs/realtime-video-composition-clock-members.md)。
+
+## 2026-09-29 startup成员合同
+
+startup config携带members与完整可选音频产品，单成员复用keyframe/正preroll窗口、代际与deadline状态机；factory端口/options、node有限barrier/EOF、release origin及最终账本startup容量按实际成员处理，start/release对照注册计划。源码双审与Release全量重建通过；r54 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps仍自然exit1/no-progress、4逻辑对象未平衡。完整V源prepared/planner/builder接线、多源总准入/入口及恢复和双平台验收仍缺；六维10/8/6/12/2/4、42/100，完整FAIL。见[实现和实流记录](docs/realtime-video-composition-startup-members.md)。
+
+## 2026-09-29 scheduler退休数据消费
+
+scheduler在purge全部确认后通过代际仲裁与session锁消费退休媒体，复用单一分类器和既有有界head；ContinuousOutput按显式initial-only合同保持独立输出。源码双审及Release全量重建通过。r55→r56同规格RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps对照：20项退休媒体被释放，两个10/10满队列消失，编码包入/出均39971；CLI仍no-progress自然exit1、4逻辑对象未归零，完整验收FAIL。可信终止/恢复、AAC重入、V源整链、多源总准入/入口及双平台合屏仍缺，六维10/8/6/12/2/4=42/100。见[实现与实流对照](docs/realtime-video-composition-scheduler-retirement.md)。
+
+## 2026-09-29 停止资源生命周期
+
+resolver stop/abort释放自持快照与codec/device，mux abort复用已有会话释放，重采集配置保留策略不变。3源码双独立审查及Release全量重建通过；r57 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR、1280×720、30fps、8Mbps（AAC CBR192kbps/44.1kHz双声道）仍自然exit1/no-progress，4对象/0bytes、71849/71845。resolver现存槽无credit，最终报告实时读取ledger，不能把4对象归因resolver或等同元数据。未修复完整退出/恢复，V源整链、多源总准入/入口及Windows→RKMPP仍缺，六维10/8/6/12/2/4=42/100、完整FAIL。见[资源释放与失败证据](docs/realtime-video-composition-resource-lifecycle.md)。
+
+## 2026-09-29 stop失败收尾闭环
+
+r58逐节点账本证实VideoEncode abort释放4项，旧final在作用域RAII reset前采集，不能称退出后持久泄漏。有效stop错误现在复用abort完成回收后原样返回；3源码双审及Release全量通过。r59 RTP H.264/AAC→MPEG-TS/RTP HEVC CBR8Mbps、1280×720、30fps（AAC CBR192kbps/44.1kHz双声道）最终0objects/0bytes、71875/71875平衡，但CLI仍no-progress自然exit1，完整验收FAIL。暂不再把已验证的报告时序问题作为4对象未解阻塞；继续可信终止/恢复、AAC重入、V源整链、多源总准入/入口及Windows→RKMPP门禁，六维10/8/6/12/2/4=42/100。见[根因与同规格对照](docs/realtime-video-composition-credit-retention.md)。

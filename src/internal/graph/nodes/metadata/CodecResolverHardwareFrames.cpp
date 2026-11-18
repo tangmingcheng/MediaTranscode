@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 
-#include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaHardwareFramesAllocation.h"
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -68,32 +68,13 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::allocationFailed("av_buffer_ref(encoder hw_device_ctx) returned null"));
     }
 
-    AVBufferRef* framesRef = av_hwframe_ctx_alloc(hardwareDevice);
-    if (!framesRef) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::allocationFailed("av_hwframe_ctx_alloc returned null"));
-    }
-
-    AVHWFramesContext* framesContext = reinterpret_cast<AVHWFramesContext*>(framesRef->data);
-    framesContext->format = hardwareFormat;
-    framesContext->sw_format = softwareFormat;
-    framesContext->width = width;
-    framesContext->height = height;
-    framesContext->initial_pool_size = initialPoolSize;
-
-    const int initRet = av_hwframe_ctx_init(framesRef);
-    if (initRet < 0) {
-        av_buffer_unref(&framesRef);
-        return FFmpegGraphError::statusFromCode(initRet, "av_hwframe_ctx_init(encoder)");
-    }
-    if (auto status = validateEncoderHardwareFramesPoolReadback(
-            initialPoolSize, framesContext->initial_pool_size,
-            poolAuthority); !status) {
-        av_buffer_unref(&framesRef);
-        return status;
-    }
-
-    encoderContext->hw_frames_ctx = framesRef;
+    auto frames = allocateHardwareFramesContext(hardwareDevice, hardwareFormat, softwareFormat,
+        width, height, initialPoolSize);
+    if (!frames) return ::media::Status::failure(frames.error());
+    const auto* framesContext = reinterpret_cast<const AVHWFramesContext*>(frames.value()->data);
+    if (auto status = validateEncoderHardwareFramesPoolReadback(initialPoolSize,
+            framesContext->initial_pool_size, poolAuthority); !status) return status;
+    encoderContext->hw_frames_ctx = std::move(frames).value().release();
     return ::media::Status::success();
 }
 

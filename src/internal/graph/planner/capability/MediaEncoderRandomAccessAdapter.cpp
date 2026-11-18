@@ -35,14 +35,14 @@ MediaEncoderRandomAccessAdapter::readAfterOpen(AVCodecContext& encoder)
                        encoder.framerate.num, encoder.framerate.den, 65535))
             return Result::success(std::nullopt);
         // The verified revision opens with rc:gop and no custom references.
-        // c08762ebf uses the default temporal-zero reference cycle; igop
+        // The c08762ebf baseline plus lineage patch uses the default temporal-zero reference cycle; igop
         // resets seq_idx to zero when refresh is disabled, producing IDR.
         // H264 maps is_idr to NAL 5; HEVC temporal-zero intra maps to NAL 19.
         return Result::success(MediaPreparedVideoRandomAccessEnvelope{
             static_cast<std::uint64_t>(encoder.gop_size),
             {backendNumerator, backendDenominator}, true,
             std::string(MediaRkmppDependencyIdentity::sourceRevision) +
-                ":mpp-c08762ebf-rc-gop-default-refs-refresh-disabled"});
+                ":mpp-c08762ebf-lineage-rc-gop-default-refs-refresh-disabled"});
     }
     if (name != "h264_nvenc" && name != "hevc_nvenc") return Result::success(std::nullopt);
     std::int64_t refresh = 0;

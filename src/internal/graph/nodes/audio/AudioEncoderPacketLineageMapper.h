@@ -4,6 +4,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -13,10 +14,30 @@ class MediaAudioLineageCapacity;
 
 class AudioEncoderPacketLineageMapper final {
 public:
-    ::media::Status submit(
+    // Single-use transaction. The caller holds the lineage-state lock and keeps
+    // this mapper alive and unchanged until commit or destruction. After EAGAIN,
+    // destroy it before receive/map and prepare a new transaction for retry.
+    class PreparedSubmission final {
+    public:
+        PreparedSubmission(PreparedSubmission&&) noexcept = default;
+        PreparedSubmission& operator=(PreparedSubmission&&) noexcept = default;
+        void commit() && noexcept;
+
+    private:
+        friend class AudioEncoderPacketLineageMapper;
+        PreparedSubmission(AudioEncoderPacketLineageMapper& owner,
+                           std::unique_ptr<MediaAudioIntervalAccumulator> intervals,
+                           std::int64_t framePts, int frameSamples) noexcept;
+        AudioEncoderPacketLineageMapper* m_owner;
+        std::unique_ptr<MediaAudioIntervalAccumulator> m_intervals;
+        std::int64_t m_framePts;
+        int m_frameSamples;
+    };
+
+    ::media::Result<PreparedSubmission> prepareSubmission(
         std::int64_t framePts,
         int frameSamples,
-        std::vector<MediaAudioIntervalFragment> fragments);
+        const std::vector<MediaAudioIntervalFragment>& fragments);
     ::media::Result<std::optional<std::vector<MediaAudioIntervalFragment>>> map(
         std::int64_t packetPts,
         std::int64_t packetDuration);

@@ -1,3 +1,5 @@
+#include "internal/graph/model/MediaStartupReservationOwners.h"
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
@@ -47,13 +49,20 @@ MediaNodeKind MediaAvBoundReleaseExtractorNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     resetState();
+    if ((m_audioBranchMode != MediaBranchMode::Drop &&
+         m_audioBranchMode != MediaBranchMode::CopyPacket &&
+         m_audioBranchMode != MediaBranchMode::TranscodeFrame) ||
+        (context.findOutputChannel(nodeId(), "audio") != nullptr) !=
+            (m_audioBranchMode != MediaBranchMode::Drop))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Release extractor output members differ from the planned audio branch"));
     const std::array<MediaAtomicOutputBatch, 2> batches{
         MediaAtomicOutputBatch{
             context.findOutputChannel(nodeId(), "video"), {}},
         MediaAtomicOutputBatch{
             context.findOutputChannel(nodeId(), "audio"), {}}};
     auto transaction = MediaAtomicOutputTransaction::acquire(
-        "A/V bound release extractor", batches);
+        "A/V bound release extractor", std::span(batches).first(outputMemberCount()));
     if (!transaction) return ::media::Status::failure(transaction.error());
     if (!transaction.value()) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -61,6 +70,11 @@ MediaNodeKind MediaAvBoundReleaseExtractorNode::staticKind() noexcept
     }
     transaction.value().reset();
     return FFmpegNodeRuntime::start(context);
+}
+
+std::size_t MediaAvBoundReleaseExtractorNode::outputMemberCount() const noexcept
+{
+    return m_audioBranchMode == MediaBranchMode::Drop ? 1u : 2u;
 }
 
 ::media::Status MediaAvBoundReleaseExtractorNode::stop(
@@ -83,9 +97,7 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
 {
     m_pending.reset();
     m_preparationTransaction.reset();
-    m_stagedVideo.clear();
-    m_stagedAudio.clear();
-    m_releaseStaged = false;
+    m_staged.reset();
     m_prefixReservationPending = false;
     m_initialOutputReservation.reset();
     m_firstReleaseDiagnosticEmitted = false;
@@ -95,8 +107,13 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
 ::media::Status MediaAvBoundReleaseExtractorNode::stageRelease(
     const MediaAvStartupReleaseBuffer& release,
     std::size_t firstVideoIndex,
-    std::optional<MediaAudioPlaybackOrigin> audioOrigin)
-{
+    const MediaPlaybackActivation& activation)
+try {
+    if ((activation.members() == MediaTranscodeStreamSet::AudioVideo) !=
+            (m_audioBranchMode != MediaBranchMode::Drop) ||
+        activation != release.activation().reanchor(activation.epoch().masterRelease))
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Release staging requires the same source epoch and planned members"));
     if (!m_firstReleaseDiagnosticEmitted) {
         std::ostringstream out;
         out << "av_release_trace stage=first_release generation="
@@ -107,7 +124,7 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
             const auto* first = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
                 release.video().front().media.get());
             out << " first_video_sequence="
-                << (first ? std::to_string(first->sourceSequence().value()) : "untyped");
+                << (first ? std::to_string(first->canonicalSequence().value()) : "untyped");
         } else {
             out << " first_video_sequence=none";
         }
@@ -116,12 +133,24 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
                                 out.str());
         m_firstReleaseDiagnosticEmitted = true;
     }
-    m_stagedVideo.clear();
+    const auto* diagnosticTransaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(m_pending.get());
+    if (!diagnosticTransaction || diagnosticTransaction->release() != &release)
+        diagnosticTransaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(m_preparationTransaction.get());
+    if (diagnosticTransaction && diagnosticTransaction->release() != &release) diagnosticTransaction = nullptr;
+    m_sourceVideoObservation.observeRelease(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Release,
+        release, diagnosticTransaction ? std::optional{diagnosticTransaction->releaseIdentity()} : std::nullopt);
+    m_staged.reset();
     if (firstVideoIndex > release.video().size()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "A/V bound release extractor rejects an invalid video prefix"));
     }
-    m_stagedVideo.reserve(release.video().size() - firstVideoIndex);
+    const auto allocation = release.allocationScope();
+    auto* resource = MediaLineageAllocator<MediaBufferRef>{allocation}.resource();
+    if (!resource) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Release staging requires an owned allocation resource"));
+    StagedRelease stagedRelease{allocation,
+        MediaFixedCapacityStorage<MediaBufferRef>(release.video().size() - firstVideoIndex, *resource),
+        MediaFixedCapacityStorage<MediaBufferRef>(release.audio().size(), *resource)};
     for (std::size_t index = firstVideoIndex;
          index < release.video().size(); ++index) {
         const auto& unit = release.video()[index];
@@ -129,12 +158,13 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor rejects null video units"));
         }
-        m_stagedVideo.push_back(unit.media);
+        stagedRelease.video.push_back(unit.media);
     }
 
-    m_stagedAudio.clear();
-    m_stagedAudio.reserve(release.audio().size());
     for (const auto& unit : release.audio()) {
+        if (!activation.audioOrigin())
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Audio release requires a planned audio origin"));
         if (m_audioBranchMode == MediaBranchMode::CopyPacket) {
             const auto* canonical =
                 dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
@@ -142,33 +172,33 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
             if (!canonical ||
                 canonical->stream() != MediaScheduledStream::Audio ||
                 unit.trimLeadingSamples != 0) {
-                m_stagedVideo.clear();
-                m_stagedAudio.clear();
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "A/V packet-copy release requires an untrimmed canonical audio access unit"));
             }
-            m_stagedAudio.push_back(unit.media);
+            stagedRelease.audio.push_back(unit.media);
         } else if (m_audioBranchMode == MediaBranchMode::TranscodeFrame) {
             auto staged = MediaAvReleasedAudioBuffer::create(
                 unit.media, unit.trimLeadingSamples,
-                audioOrigin.value_or(release.audioOrigin()));
+                *activation.audioOrigin());
             if (!staged) {
-                m_stagedVideo.clear();
-                m_stagedAudio.clear();
                 return ::media::Status::failure(staged.error());
             }
-            m_stagedAudio.push_back(std::move(staged.value()));
+            stagedRelease.audio.push_back(std::move(staged.value()));
         } else {
-            m_stagedVideo.clear();
-            m_stagedAudio.clear();
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "A/V release extractor rejects an unsupported audio branch"));
         }
     }
-    m_releaseStaged = true;
+    m_staged.emplace(std::move(stagedRelease));
     return ::media::Status::success();
+} catch (const std::bad_alloc&) {
+    return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        "A/V release staging allocation failed"));
+} catch (const std::length_error&) {
+    return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+        "A/V release staging size is not representable"));
 }
 
 ::media::Result<MediaAvStartupReleaseDisposition>
@@ -202,11 +232,11 @@ MediaAvBoundReleaseExtractorNode::commit(
 {
     const std::array<MediaAtomicOutputBatch, 2> batches{
         MediaAtomicOutputBatch{
-            context.findOutputChannel(nodeId(), "video"), m_stagedVideo},
+            context.findOutputChannel(nodeId(), "video"), m_staged->video.view()},
         MediaAtomicOutputBatch{
-            context.findOutputChannel(nodeId(), "audio"), m_stagedAudio}};
+            context.findOutputChannel(nodeId(), "audio"), m_staged->audio.view()}};
     auto transaction = MediaAtomicOutputTransaction::acquire(
-        "A/V bound release extractor", batches);
+        "A/V bound release extractor", std::span(batches).first(outputMemberCount()));
     if (!transaction) {
         return ::media::Result<
             MediaAvStartupReleaseDisposition>::failure(
@@ -238,6 +268,9 @@ MediaAvBoundReleaseExtractorNode::commit(
     if (disposition == MediaAvStartupReleaseDisposition::Publish) {
         transaction.value()->commitReserved();
         publication.value().completePublished();
+        const auto* sourceTransaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(m_pending.get());
+        m_sourceVideoObservation.observeRelease(nodeId(), name().c_str(), MediaSourceVideoObservationStage::ReleaseCommitted,
+            release, sourceTransaction ? std::optional{sourceTransaction->releaseIdentity()} : std::nullopt);
     }
     return ::media::Result<MediaAvStartupReleaseDisposition>::success(
         disposition);
@@ -247,9 +280,7 @@ void MediaAvBoundReleaseExtractorNode::discardPendingRelease() noexcept
 {
     m_pending.reset();
     m_preparationTransaction.reset();
-    m_stagedVideo.clear();
-    m_stagedAudio.clear();
-    m_releaseStaged = false;
+    m_staged.reset();
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -312,15 +343,15 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     committed.error());
             publication->completePublished();
+            m_sourceVideoObservation.observeRelease(nodeId(), name().c_str(), MediaSourceVideoObservationStage::ReleaseCommitted,
+                *release, transaction->releaseIdentity());
             logFirstCommit();
             m_initialOutputReservation.reset();
-            m_stagedVideo.clear();
-            m_stagedAudio.clear();
-            m_releaseStaged = false;
+            m_staged.reset();
             return processProgress();
         }
     if (phase == MediaAvStartupVideoPreparationPhase::OutputReady &&
-            preparation.anchoredEpoch && preparation.anchoredAudioOrigin &&
+            preparation.anchoredActivation &&
             !preparation.extractorOutputsReanchored &&
             m_initialOutputReservation && m_preparationTransaction) {
             const auto* transaction = dynamic_cast<
@@ -332,17 +363,17 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
                     "A/V bound release extractor lost its anchored transaction"));
             if (auto staged = stageRelease(
                     *release, preparation.committedVideoUnits,
-                    preparation.anchoredAudioOrigin); !staged) {
+                    *preparation.anchoredActivation); !staged) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     staged.error());
             }
             const std::array<MediaAtomicOutputBatch, 2> outputBatches{
                 MediaAtomicOutputBatch{
-                    context.findOutputChannel(nodeId(), "video"), m_stagedVideo},
+                    context.findOutputChannel(nodeId(), "video"), m_staged->video.view()},
                 MediaAtomicOutputBatch{
-                    context.findOutputChannel(nodeId(), "audio"), m_stagedAudio}};
+                    context.findOutputChannel(nodeId(), "audio"), m_staged->audio.view()}};
             if (auto replaced = m_initialOutputReservation->replacePendingBatches(
-                    outputBatches); !replaced) {
+                    std::span(outputBatches).first(outputMemberCount())); !replaced) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     replaced.error());
             }
@@ -381,7 +412,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
                 context.findOutputChannel(nodeId(), "audio"),
                 std::span(&m_pending, 1)}};
         auto transaction = MediaAtomicOutputTransaction::acquire(
-            "A/V bound release extractor", batches);
+            "A/V bound release extractor", std::span(batches).first(outputMemberCount()));
         if (!transaction) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 transaction.error());
@@ -419,8 +450,8 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor rejects a release outside the live playback epoch"));
     }
-    if (!m_releaseStaged) {
-        if (auto status = stageRelease(*release); !status) {
+    if (!m_staged) {
+        if (auto status = stageRelease(*release, 0, release->activation()); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
     }
@@ -453,8 +484,8 @@ void MediaAvBoundReleaseExtractorNode::logFirstCommit()
     if (m_firstCommitDiagnosticEmitted) return;
     std::ostringstream out;
     out << "av_release_trace stage=first_commit video_count="
-        << m_stagedVideo.size()
-        << " audio_count=" << m_stagedAudio.size();
+        << m_staged->video.size()
+        << " audio_count=" << m_staged->audio.size();
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeNode,
                             out.str());
@@ -500,6 +531,9 @@ MediaAvBoundReleaseExtractorNode::processPreparation(
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor lost its preparation transaction"));
     }
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(
+            m_preparationCapability->reservationStorage(), release->allocationScope()); !valid)
+        return ::media::Result<MediaNodeProcessResult>::failure(valid.error());
     auto reservation = m_preparationCapability->reserveNextVideoUnit(
         release->epoch().generation, transaction->releaseIdentity());
     if (!reservation) {
@@ -511,20 +545,21 @@ MediaAvBoundReleaseExtractorNode::processPreparation(
         const auto snapshot = m_preparationCapability->snapshot();
         if (snapshot.phase != MediaAvStartupVideoPreparationPhase::OutputReady)
             return processWaiting();
-        if (!m_releaseStaged) {
+        if (!m_staged) {
             if (auto staged = stageRelease(
-                    *release, snapshot.committedVideoUnits); !staged) {
+                    *release, snapshot.committedVideoUnits, release->activation()); !staged) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     staged.error());
             }
         }
         const std::array<MediaAtomicOutputBatch, 2> outputBatches{
             MediaAtomicOutputBatch{
-                context.findOutputChannel(nodeId(), "video"), m_stagedVideo},
+                context.findOutputChannel(nodeId(), "video"), m_staged->video.view()},
             MediaAtomicOutputBatch{
-                context.findOutputChannel(nodeId(), "audio"), m_stagedAudio}};
+                context.findOutputChannel(nodeId(), "audio"), m_staged->audio.view()}};
         auto outputs = MediaReservedOutputTransaction::reserve(
-            "A/V bound release extractor initial outputs", outputBatches);
+            MediaExtractorReservationOwner.data(), std::span(outputBatches).first(outputMemberCount()),
+            m_preparationCapability->reservationStorage());
         if (!outputs) return ::media::Result<MediaNodeProcessResult>::failure(
             outputs.error());
         if (!outputs.value()) return processWaiting();
@@ -561,11 +596,17 @@ MediaAvBoundReleaseExtractorNode::processPreparation(
         return ::media::Result<MediaNodeProcessResult>::failure(
             ownership.error());
     }
+    m_sourceVideoObservation.observeRelease(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Release,
+        *release, transaction->releaseIdentity());
     m_prefixReservationPending = false;
     if (auto committed = output.value()->commit(); !committed) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             committed.error());
     }
+    MediaSourceVideoObservationContext observation;
+    observation.group = release->groupKey().value();
+    observation.releaseIdentity = transaction->releaseIdentity();
+    m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::Published, reserved, observation);
     return processProgress();
 }
 
@@ -597,7 +638,7 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
                 context.findOutputChannel(nodeId(), "audio"),
                 std::span(&m_pending, 1)}};
         auto atomic = MediaAtomicOutputTransaction::acquire(
-            "A/V bound release extractor bound control", batches);
+            "A/V bound release extractor bound control", std::span(batches).first(outputMemberCount()));
         if (!atomic) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 atomic.error());
@@ -654,9 +695,9 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor rejects an unbound playback generation"));
     }
-    if (!m_releaseStaged) {
+    if (!m_staged) {
         if (auto status = stageRelease(
-                *release, firstVideoIndex); !status) {
+                *release, firstVideoIndex, release->activation()); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 status.error());
         }

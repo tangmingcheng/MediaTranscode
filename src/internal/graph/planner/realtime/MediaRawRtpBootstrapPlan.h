@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/planner/realtime/MediaRtpInputWaitPlan.h"
 
 #include <cstddef>
 
@@ -14,12 +15,13 @@ public:
     static ::media::Result<MediaRawRtpBootstrapPlan> create(
         MediaIpAddressFamily addressFamily,
         std::size_t preparedInputByteBudget,
-        int analyzeDurationMicroseconds);
+        MediaRtpInputWaitPlan inputWait);
 
     int socketReceiveBufferBytes() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
     std::size_t reorderWindowPackets() const noexcept;
     int maximumReorderDelayMilliseconds() const noexcept;
+    const MediaRtpInputWaitPlan& inputWait() const noexcept;
     ::media::Status validateProduct() const;
 
 private:
@@ -27,12 +29,12 @@ private:
         int socketReceiveBufferBytes,
         std::size_t maximumDatagramBytes,
         std::size_t reorderWindowPackets,
-        int maximumReorderDelayMilliseconds) noexcept;
+        MediaRtpInputWaitPlan inputWait) noexcept;
 
     int m_socketReceiveBufferBytes;
     std::size_t m_maximumDatagramBytes;
     std::size_t m_reorderWindowPackets;
-    int m_maximumReorderDelayMilliseconds;
+    MediaRtpInputWaitPlan m_inputWait;
 };
 
 } // namespace media::ffmpeg::graph

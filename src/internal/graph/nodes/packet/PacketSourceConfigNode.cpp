@@ -179,7 +179,7 @@ void PacketSourceConfigNode::releaseInputSnapshots() noexcept
         m_sourceStream->time.timeBase.den};
     codecContext->pkt_timebase = codecContext->time_base;
     auto buffer = FFmpegBufferFactory::wrapCodecContext(
-        std::move(codecContext));
+        std::move(codecContext), std::nullopt);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }

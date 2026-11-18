@@ -33,6 +33,8 @@ FileMuxNode::FileMuxNode(
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority)
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
     , m_generationState(std::move(generationState))
+    , m_outputAuthority(outputAuthority)
+    , m_generationPurge(std::make_shared<MediaOwnerThreadGenerationPurge>())
     , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>(
           m_generationState, std::move(outputAuthority)))
 {
@@ -49,7 +51,7 @@ FileMuxNode::FileMuxNode(
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 FileMuxNode::generationPurgeTarget() const noexcept
 {
-    return m_generationState;
+    return m_generationPurge;
 }
 
 MediaNodeKind FileMuxNode::staticKind() noexcept
@@ -61,6 +63,7 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     if (m_terminalFailure) return terminalResult();
+    if (m_phase == Phase::AwaitingGenerationPurge) return processWaiting();
     auto session = ensureSession(context);
     if (!session) return terminalResult();
     auto completion = bindInputTracking(context);
@@ -73,6 +76,27 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 
     if (m_phase == Phase::Streaming && m_session->hasPendingOutput()) {
         return pollOrWait(context);
+    }
+
+    if (m_pendingSessionInput) {
+        auto retained = m_pendingSessionInput;
+        if (m_pendingFlushForward) {
+            m_pendingSessionInput.reset();
+            m_pendingFlushForward = false;
+            return processProgress(forwardIfOutputsExist(context, retained));
+        }
+        auto written = submitSessionInput(context, retained);
+        if (!written && written.error().code == ::media::ErrorCode::WouldBlock &&
+            m_session->hasPendingOutput()) return pollOrWait(context);
+        if (written && retained->isFlush()) {
+            if (m_session->hasPendingOutput()) {
+                m_pendingSessionInput = retained;
+                m_pendingFlushForward = true;
+                return pollOrWait(context);
+            }
+            return processProgress(forwardIfOutputsExist(context, retained));
+        }
+        return processProgress(std::move(written));
     }
 
     auto ready = finishIfReady(context);
@@ -114,12 +138,22 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
         return finishIfReady(context, buffer);
     }
     auto handled = handleBuffer(context, *input.value());
-    if (!handled) return terminalResult();
+    if (!handled) {
+        if (handled.error().code == ::media::ErrorCode::WouldBlock && m_pendingSessionInput) {
+            if (m_session->hasPendingOutput()) return pollOrWait(context);
+            return processProgress(std::move(handled));
+        }
+        return terminalResult();
+    }
     if (m_phase == Phase::AcquiringBindings &&
         allBindingChannelsSatisfied() && m_session->bindingsReady()) {
         m_phase = Phase::Streaming;
     }
     if (m_phase == Phase::Streaming && m_session->hasPendingOutput()) {
+        if (buffer->isFlush()) {
+            m_pendingSessionInput = buffer;
+            m_pendingFlushForward = true;
+        }
         return pollOrWait(context);
     }
     return processProgress(forwardIfOutputsExist(context, buffer));
@@ -129,14 +163,21 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 {
     auto session = ensureSession(context);
     if (!session) return session;
-    auto flushed = remember(m_session->flush(context));
+    auto flushed = m_session->flush(context);
+    if (!flushed && m_generationPurge &&
+        flushed.error().code == ::media::ErrorCode::WouldBlock) return flushed;
+    flushed = remember(std::move(flushed));
     return flushed ? FFmpegNodeRuntime::flush(context) : flushed;
 }
 
 ::media::Status FileMuxNode::stop(MediaGraphExecutionContext& context)
 {
-    ::media::Status status = ensureSession(context);
-    if (status) status = remember(m_session->finish(context));
+    if (m_generationPurge) m_generationPurge->stop();
+    ::media::Status status = m_terminalFailure
+        ? ::media::Status::failure(*m_terminalFailure) : ::media::Status::success();
+    // Stopping never starts a mux or turns incomplete preparation into EOF.
+    if (status && m_session)
+        status = remember(m_session->finish(context, MediaMuxCompletionIntent::RequestedStop));
     if (status) status = FFmpegNodeRuntime::stop(context);
     releaseSession();
     return status;
@@ -144,11 +185,13 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 
 void FileMuxNode::abort(MediaGraphExecutionContext& context) noexcept
 {
+    if (m_generationPurge) m_generationPurge->stop();
     if (!m_abortForwarded && m_session) {
         m_session->abort();
         m_abortForwarded = true;
     }
     FFmpegNodeRuntime::abort(context);
+    releaseSession();
 }
 
 ::media::Status FileMuxNode::ensureSession(MediaGraphExecutionContext& context)
@@ -169,7 +212,7 @@ void FileMuxNode::abort(MediaGraphExecutionContext& context) noexcept
             ::media::ErrorInfo::notInitialized(
                 "FileMuxNode requires compiled node options")));
     }
-    auto created = m_sessionFactory->create(node->options);
+    auto created = m_sessionFactory->create(node->options, context.findNodeWakeup(nodeId()));
     if (!created) {
         return remember(::media::Status::failure(created.error()));
     }
@@ -285,18 +328,14 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
             ::media::ErrorInfo::notInitialized(
                 "FileMuxNode input port is unavailable")));
     }
-    if (input.buffer->isFlush()) {
-        return remember(m_session->flush(context));
-    }
+    if (input.buffer->isFlush() || port->name == "packet")
+        return submitSessionInput(context, input.buffer);
     auto status = [&]() -> ::media::Status {
         if (port->name == "resource" || port->name == "plan") {
             return m_session->bindResource(context, input.buffer);
         }
         if (port->name == "codec") {
             return m_session->bindStreamConfig(context, input.buffer);
-        }
-        if (port->name == "packet") {
-            return m_session->write(context, input.buffer);
         }
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -325,7 +364,15 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
             ? processProgress(forwardIfOutputsExist(context, terminalBuffer))
             : processProgress();
     }
-    auto finished = remember(m_session->finish(context));
+    auto finished = m_session->finish(context, MediaMuxCompletionIntent::EndOfInput);
+    if (!finished && m_generationPurge && finished.error().code == ::media::ErrorCode::WouldBlock) {
+        // The protocol adapter emits WouldBlock only for a revoked finish
+        // permit. Keep EOF tracking until the owner-thread purge resets it;
+        // do not finish the worker or publish this retiring generation's EOF.
+        m_phase = Phase::AwaitingGenerationPurge;
+        return processWaiting();
+    }
+    finished = remember(std::move(finished));
     if (!finished) return terminalResult();
     // The base owns a blocked terminal transfer and must remember completion
     // while it retries that transfer. WouldBlock is never a mux failure.
@@ -339,6 +386,8 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
 {
     auto polled = m_session->poll(context);
     if (!polled) {
+        if (m_generationPurge && polled.error().code == ::media::ErrorCode::WouldBlock)
+            return processWaiting();
         remember(::media::Status::failure(polled.error()));
         return terminalResult();
     }
@@ -363,6 +412,22 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
                 polled.value().nextWait});
     }
     return processWaiting();
+}
+
+::media::Status FileMuxNode::submitSessionInput(
+    MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+{
+    auto status = buffer->isFlush()
+        ? m_session->flush(context)
+        : m_session->write(context, buffer);
+    if (!status && m_generationPurge && status.error().code == ::media::ErrorCode::WouldBlock) {
+        // A pressured packet is unaccepted; a pressured flush still needs advancement.
+        // Retain one input and drain protocol output before retrying either operation.
+        m_pendingSessionInput = buffer;
+        return status;
+    }
+    m_pendingSessionInput.reset();
+    return remember(std::move(status));
 }
 
 ::media::Status FileMuxNode::remember(::media::Status status)
@@ -401,6 +466,8 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
 
 void FileMuxNode::releaseSession() noexcept
 {
+    m_pendingFlushForward = false;
+    m_pendingSessionInput.reset();
     m_session.reset();
     m_completion.reset();
     m_bindingInputs.clear();

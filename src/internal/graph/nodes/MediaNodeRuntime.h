@@ -23,6 +23,7 @@ public:
 protected:
     virtual ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context);
     virtual bool canFinishProcess() const noexcept;
+    void closeOutputChannels(MediaGraphExecutionContext& context);
     static ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
     static ::media::Result<MediaNodeProcessResult> processWaiting();
     static ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());

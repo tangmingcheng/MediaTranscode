@@ -11,7 +11,8 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <unordered_map>
+#include <map>
+#include <tuple>
 
 namespace media::ffmpeg::graph {
 
@@ -86,12 +87,8 @@ public:
     static ::media::Result<std::shared_ptr<MediaGraphPayloadCreditLedger>>
     create(MediaGraphPayloadCreditPlan plan);
 
-    ::media::Result<MediaGraphPayloadCreditLease> tryReserve(
-        std::uint64_t bytes) noexcept;
-    ::media::Result<std::vector<MediaGraphPayloadCreditLease>> tryReserveBatch(
-        std::span<const std::uint64_t> bytes) noexcept;
     ::media::Result<std::vector<MediaGraphPayloadCreditLease>> tryReserveOrArm(
-        MediaNodeId producer,
+        MediaGraphPayloadProducerKey producer,
         std::span<const std::uint64_t> bytes,
         std::shared_ptr<MediaNodeWakeup> wakeup) noexcept;
     ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> reserveBranch(
@@ -105,6 +102,8 @@ public:
         std::uint64_t bytes);
     ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> extractInitialFixedStorage(
         std::uint64_t bytes);
+    // Owner retires only its unclaimed demand; live leases remain charged.
+    ::media::Status cancelProducerWaiter(MediaGraphPayloadProducerKey producer) noexcept;
     void cancelBlockedWaiters() noexcept;
     MediaGraphPayloadCreditSnapshot snapshot() const noexcept;
     const MediaGraphPayloadCreditPlan& plan() const noexcept { return m_plan; }
@@ -115,7 +114,7 @@ private:
         std::shared_ptr<MediaGraphPayloadCreditState> state) noexcept;
 
     ::media::Result<std::shared_ptr<MediaGraphPayloadCreditState>> accountForProducer(
-        MediaNodeId producer) const;
+        MediaGraphPayloadProducerKey producer) const;
     enum class FixedStorageAdmission { Additional, InitialPartition };
     ::media::Result<std::shared_ptr<MediaGraphPayloadBranchReservation>> admitFixedStorage(
         std::uint64_t bytes, FixedStorageAdmission admission);
@@ -123,7 +122,9 @@ private:
     std::shared_ptr<MediaGraphPayloadCreditState> m_state;
     mutable std::mutex m_accountsMutex;
     std::vector<std::weak_ptr<MediaGraphPayloadCreditState>> m_branchAccounts;
-    std::unordered_map<std::uint32_t, std::weak_ptr<MediaGraphPayloadCreditState>> m_producerAccounts;
+    std::map<std::tuple<std::uint32_t, MediaStreamKind, MediaPayloadKind>,
+        std::weak_ptr<MediaGraphPayloadCreditState>> m_producerAccounts;
+    std::vector<std::shared_ptr<MediaGraphPayloadCreditState>> m_initialAccounts;
 };
 
 } // namespace media::ffmpeg::graph

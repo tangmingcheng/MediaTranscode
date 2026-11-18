@@ -11,9 +11,14 @@ namespace media::ffmpeg::graph {
 class MediaH264RtpDepacketizer final : public MediaRtpDepacketizer {
 public:
     MediaH264RtpDepacketizer(MediaRtpDepacketizerConfig config,
-                               std::size_t maximumAccessUnitBytes);
+                               std::size_t maximumAccessUnitBytes, MediaLineageAllocationScope allocation);
     ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) override;
     void discontinuity(MediaRtpDiscontinuityReason reason) noexcept override;
+    MediaRtpAssemblyState assemblyState() const noexcept override
+    {
+        return !m_accessUnit.empty() || m_timestamp || m_nalParser.hasIncompleteFragment()
+            ? MediaRtpAssemblyState::Incomplete : MediaRtpAssemblyState::Empty;
+    }
 
 private:
     ::media::Result<MediaRtpDepacketizerResult> pushValidated(const MediaRtpPacket& packet);

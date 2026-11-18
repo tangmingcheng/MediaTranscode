@@ -24,7 +24,7 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
 }
 
 MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
-    std::unique_ptr<MediaRawRtpPreparedInputBuffer> buffer)
+    std::shared_ptr<MediaRawRtpPreparedInputBuffer> buffer)
     : m_rawRtpBuffer(std::move(buffer))
 {
 }
@@ -133,6 +133,30 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return m_rawRtpBuffer->startPreflightCapture();
 }
 
+::media::Result<MediaRawRtpProbeLease>
+MediaPreparedRealtimeInput::acquireRawRtpProbeLease() const
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<MediaRawRtpProbeLease>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP probe requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->acquireProbeLease(m_rawRtpBuffer);
+}
+
+::media::Status MediaPreparedRealtimeInput::waitForRawRtpProbeData(
+    std::uint64_t previousIngressFrontier,
+    std::chrono::steady_clock::time_point deadline,
+    std::stop_token stopToken)
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP probe wait requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->waitForProbeData(
+        previousIngressFrontier, deadline, stopToken);
+}
+
 ::media::Status MediaPreparedRealtimeInput::rawRtpCaptureStatus()
 {
     if (!m_rawRtpBuffer) {
@@ -151,6 +175,15 @@ MediaPreparedRealtimeInput::rawRtpIngressObservation()
                 "raw RTP ingress observation requires a prepared raw RTP input"));
     }
     return m_rawRtpBuffer->ingressObservation();
+}
+
+::media::Result<MediaPreparedRtpIngressSnapshot>
+MediaPreparedRealtimeInput::rawRtpIngressSnapshot(
+    const std::optional<MediaRtpIngressSnapshotWait>& wait) const
+{
+    if (!m_rawRtpBuffer) return ::media::Result<MediaPreparedRtpIngressSnapshot>::failure(
+        ::media::ErrorInfo::invalidArgument("RTP ingress snapshot requires a prepared raw RTP input"));
+    return m_rawRtpBuffer->ingressSnapshot(m_rawRtpBuffer, wait);
 }
 
 ::media::Result<std::size_t>
@@ -175,15 +208,24 @@ MediaPreparedRealtimeInput::rawRtpMaximumDatagramBytes() const
     return m_rawRtpBuffer->maximumDatagramBytes();
 }
 
-::media::Result<std::size_t>
-MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
+::media::Result<MediaPreparedRtpStorageReservation>
+MediaPreparedRealtimeInput::rawRtpPreparationStorage() const
+{
+    if (!m_rawRtpBuffer)
+        return ::media::Result<MediaPreparedRtpStorageReservation>::failure(
+            ::media::ErrorInfo::invalidArgument("Prepared RTP storage requires a raw RTP input"));
+    return m_rawRtpBuffer->preparationStorage();
+}
+
+::media::Result<std::uint64_t>
+MediaPreparedRealtimeInput::rawRtpReplayAccessUnitBound() const
 {
     if (!m_rawRtpBuffer) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "raw RTP socket capacity requires a prepared raw RTP input"));
+        return ::media::Result<std::uint64_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RTP replay retention requires a prepared raw RTP input"));
     }
-    return m_rawRtpBuffer->effectiveSocketReceivePayloadBytes();
+    return m_rawRtpBuffer->sealedReplayAccessUnitBound();
 }
 
 ::media::Status MediaPreparedRealtimeInput::configureRawRtpRuntimeIngress(
@@ -196,13 +238,13 @@ MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
     return m_rawRtpBuffer->configureRuntimeIngress(plan);
 }
 
-::media::Status MediaPreparedRealtimeInput::sealRawRtpPreflight()
+::media::Status MediaPreparedRealtimeInput::finishRawRtpPreflightCapture()
 {
     if (!m_rawRtpBuffer) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "raw RTP preflight seal requires a prepared raw RTP input"));
+            "raw RTP preflight capture completion requires a prepared raw RTP input"));
     }
-    return m_rawRtpBuffer->sealPreflight();
+    return m_rawRtpBuffer->finishPreflightCapture();
 }
 
 ::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer()
@@ -221,7 +263,7 @@ MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
     }
     if (m_rawRtpBuffer) {
         return ::media::Result<MediaBufferRef>::success(
-            MediaBufferRef(m_rawRtpBuffer.release()));
+            std::move(m_rawRtpBuffer));
     }
     return ::media::Result<MediaBufferRef>::failure(
         ::media::ErrorInfo::notInitialized("prepared realtime input was already transferred"));

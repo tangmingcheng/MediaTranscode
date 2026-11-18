@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/MediaRuntimeNode.h"
+#include "internal/graph/diagnostics/MediaSourceVideoObservation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -34,6 +35,7 @@ private:
     ::media::Result<MediaNodeProcessResult> failTerminal(
         ::media::ErrorInfo error);
 
+    MediaSourceVideoObservation m_sourceVideoObservation;
     MediaNodeId m_nodeId;
     MediaAvSyncGroupKey m_groupKey;
     MediaPlaybackEpochActivationCapability m_capability;

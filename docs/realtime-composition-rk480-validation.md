@@ -1,0 +1,11 @@
+# rk480：源关闭流程实现与独立复审
+
+初稿RKMPP8核增量PID3136566，28/28退出0，CLI SHA256 f5cd3ea1b86f6fa69bed7db6f59613c89e776c9fc5a237a6a21dd7f7d6077681。初稿双审FAIL，未启动实流。
+
+已完成四轮修正：入口先验证ordinal/bytes；Raw只清理媒体并立即发布真实frontier，退休入队不再阻塞purge；原receiver通过既有信用通知生产退休；实际tick发布通知消费者；取消也等待所有已发布控制的消费水位，正常退休另核精确sequence/generation/reason/time。ClockGroup只对成功消费回执，不伪造消费证据。无新线程或媒体队列。
+
+第四稿10文件由source_drain_review_a与source_drain_review_b独立完整复审，两者明确SOURCE PASS。第三稿曾出现一PASS一FAIL，不能视作通过；旧音频强失效晚于新视频证据消费的漏洞已在第四稿修正。源码通过不代表尾媒体保留、关闭/重入或Windows/RKMPP实流通过。
+
+初稿回退out/rollback/rk480保留5个原源码及原CLI。恢复需删除新增SourceDrain/SourceRetirement.cpp并刷新恢复源码时间戳后增量构建。初稿tar和构建日志已记录后逐项清理。第四稿后续构建和实流见rk482记录；未修改外部FFmpeg。
+
+第四稿叠加ab0b070a：rk482增量构建PID3199892退出0，CLI SHA256 55f364b014e0ec1979bf8d9eabf57ebcb11c7a49856c2bb1354303171497bed3，待实流。

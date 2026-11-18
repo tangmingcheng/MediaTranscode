@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -36,6 +37,7 @@ struct MediaRealtimeInputConfig {
     MediaRealtimeRtpInputMetadata videoRtp;
     MediaRealtimeRtpInputMetadata audioRtp;
     MediaRealtimeMpegTsInputClockPolicy mpegTsClock;
+    std::optional<int> inputLatencyMs;
 };
 
 struct MediaRealtimeOutputConfig {
@@ -91,12 +93,24 @@ struct MediaRealtimeTranscodeParameters {
     MediaRealtimeAudioTranscodeParameters audio;
 };
 
+enum class MediaRealtimeCompositionGrid : std::uint8_t {
+    Fixed = 1
+};
+
+struct MediaRealtimeCompositionConfig final {
+    std::vector<MediaRealtimeInputConfig> inputs;
+    MediaRealtimeCompositionGrid grid;
+    std::size_t audioSource;
+    std::uint64_t preparationStorageLimitBytes;
+};
+
 struct MediaRealtimeRtpTranscodeRequest {
     MediaRealtimeInputConfig input;
     MediaRealtimeOutputConfig output;
     MediaRealtimeDeploymentConfig deployment;
     MediaRealtimeTranscodeParameters parameters;
     std::string mediaId;
+    std::optional<MediaRealtimeCompositionConfig> composition;
 };
 
 } // namespace media::ffmpeg::graph

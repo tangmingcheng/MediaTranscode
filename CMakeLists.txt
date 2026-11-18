@@ -8,8 +8,11 @@ set(CMAKE_SKIP_RPATH TRUE)
 find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-set(CMAKE_DEPFILE_FLAGS_CXX "")
-set(CMAKE_CXX_DEPFILE_FORMAT "")
+# Preserve compiler-provided depfiles for GCC incremental header rebuilds.
+if(MSVC)
+    set(CMAKE_DEPFILE_FLAGS_CXX "")
+    set(CMAKE_CXX_DEPFILE_FORMAT "")
+endif()
 set(CMAKE_CXX_SCANDEP_SOURCE "")
 
 set(TARGET_CORE "media_transcode_core")
@@ -23,6 +26,11 @@ option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
+endif()
+
+# Keep optimized MSVC Release binaries diagnosable with matching symbols.
+if(MSVC)
+    add_compile_options("$<$<CONFIG:Release>:/Z7>")
 endif()
 
 set(MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES
@@ -54,6 +62,16 @@ file(GLOB_RECURSE MEDIA_TRANSCODE_GRAPH_SOURCES CONFIGURE_DEPENDS
 )
 list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/src/internal/graph/diagnostics/MediaGraphDiagnostics\\.(cpp|h)$")
 list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/src/internal/graph/planner/MediaPipeline.*\\.(cpp|h)$")
+if(WIN32)
+    list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/MediaRgaCanvasAdapter\\.cpp$")
+else()
+    list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/MediaCudaCanvasAdapter\\.cpp$")
+    find_path(MEDIA_RGA_INCLUDE_DIR im2d.h PATH_SUFFIXES rga)
+    find_library(MEDIA_RGA_LIBRARY NAMES rga)
+    if(NOT MEDIA_RGA_INCLUDE_DIR OR NOT MEDIA_RGA_LIBRARY)
+        list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/MediaRgaCanvasAdapter\\.cpp$")
+    endif()
+endif()
 list(APPEND MEDIA_TRANSCODE_GRAPH_SOURCES ${MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES})
 list(APPEND MEDIA_TRANSCODE_GRAPH_SOURCES ${MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES})
 list(REMOVE_DUPLICATES MEDIA_TRANSCODE_GRAPH_SOURCES)
@@ -80,6 +98,11 @@ target_include_directories(${TARGET_CORE}
 )
 
 target_compile_features(${TARGET_CORE} PUBLIC cxx_std_20)
+if(NOT WIN32 AND MEDIA_RGA_INCLUDE_DIR AND MEDIA_RGA_LIBRARY)
+    target_compile_definitions(${TARGET_CORE} PRIVATE MT_HAVE_RGA_CANVAS=1)
+    target_include_directories(${TARGET_CORE} PRIVATE ${MEDIA_RGA_INCLUDE_DIR})
+    target_link_libraries(${TARGET_CORE} PRIVATE ${MEDIA_RGA_LIBRARY})
+endif()
 
 if(MSVC)
     target_compile_options(${TARGET_CORE} PRIVATE /utf-8 /EHsc)
@@ -181,10 +204,15 @@ target_link_libraries(${TARGET_CORE}
 )
 
 if(WIN32)
-    target_link_libraries(${TARGET_CORE} PUBLIC ws2_32)
+    target_link_libraries(${TARGET_CORE} PUBLIC ws2_32 avrt)
 endif()
 
 add_library(${TARGET_REALTIME_APPLICATION} STATIC
+    src/application/realtime/MediaRealtimeCompositionDecoderContract.cpp
+    src/application/realtime/MediaRealtimeCompositionInputPreparer.cpp
+    src/application/realtime/MediaRealtimeCompositionPreparationState.cpp
+    src/application/realtime/MediaRealtimeCompositionPreparer.cpp
+    src/application/realtime/MediaRealtimeCompositionSourcePreparer.cpp
     src/application/realtime/MediaRealtimeOutputControl.cpp
     src/application/realtime/MediaRealtimeOutputPreparer.cpp
     src/application/realtime/MediaRealtimeOutputRunController.cpp
@@ -241,6 +269,11 @@ function(media_transcode_configure_app target_name linked_target)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /utf-8 /EHsc)
         target_link_options(${target_name} PRIVATE "$<$<CONFIG:Debug,RelWithDebInfo>:/DEBUG>")
+        target_link_options(${target_name} PRIVATE
+            "$<$<CONFIG:Release>:/DEBUG:FULL>"
+            "$<$<CONFIG:Release>:/OPT:REF>"
+            "$<$<CONFIG:Release>:/OPT:ICF>"
+        )
     endif()
 endfunction()
 
@@ -252,6 +285,7 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
 
     add_executable(${TARGET_REALTIME_VIDEO_CLI}
         tools/realtime_video_cli/main.cpp
+        tools/realtime_video_cli/RealtimeStopSignal.cpp
     )
     media_transcode_configure_app(
         ${TARGET_REALTIME_VIDEO_CLI}

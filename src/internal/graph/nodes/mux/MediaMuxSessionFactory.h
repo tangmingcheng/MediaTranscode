@@ -10,13 +10,15 @@ namespace media::ffmpeg::graph {
 
 class MediaProtocolOutputGenerationState;
 class MediaProtocolOutputRuntimeAuthority;
+class MediaNodeWakeup;
 
 class MediaMuxSessionFactory {
 public:
     virtual ~MediaMuxSessionFactory() = default;
 
     virtual ::media::Result<std::unique_ptr<MediaMuxSession>> create(
-        const MediaNodeOptions& options) const = 0;
+        const MediaNodeOptions& options,
+        std::shared_ptr<MediaNodeWakeup> producerWakeup) const = 0;
 };
 
 class ExplicitMediaMuxSessionFactory final : public MediaMuxSessionFactory {
@@ -27,7 +29,8 @@ public:
         std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority);
 
     ::media::Result<std::unique_ptr<MediaMuxSession>> create(
-        const MediaNodeOptions& options) const override;
+        const MediaNodeOptions& options,
+        std::shared_ptr<MediaNodeWakeup> producerWakeup) const override;
 
 private:
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;

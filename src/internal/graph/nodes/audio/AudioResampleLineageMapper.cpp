@@ -58,6 +58,7 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
     auto candidateProjection = m_state->sampleProjection;
     auto candidateIntervals = m_state->outputIntervals;
     auto candidateLastLineage = m_state->lastOutputLineage;
+    auto candidateLastContribution = m_state->lastOutputContribution;
     for (const auto& fragment : input.media()->fragments()) {
         if (!candidateProjection) {
             auto projection = MediaAudioSampleProjection::create(
@@ -75,11 +76,17 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
         auto projected = candidateProjection->append(
             fragment.interval.end - fragment.interval.begin);
         if (!projected) return ::media::Status::failure(projected.error());
+        auto contribution = fragment.contribution;
+        contribution.interval = projected.value();
+        if (auto* real = std::get_if<MediaCanonicalAudioRealSource>(&contribution.origin)) {
+            real->mappedInterval = projected.value();
+        }
         if (auto status = candidateIntervals.push(
-                {fragment.lineage, projected.value()}); !status) {
+                {fragment.lineage, projected.value(), contribution}); !status) {
             return status;
         }
         candidateLastLineage = fragment.lineage;
+        candidateLastContribution = std::move(contribution);
     }
 
     if (auto status = m_state->observe(input.audioOrigin().generation); !status) {
@@ -95,6 +102,7 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
     m_state->sampleProjection = std::move(candidateProjection);
     m_state->outputIntervals = std::move(candidateIntervals);
     m_state->lastOutputLineage = std::move(candidateLastLineage);
+    m_state->lastOutputContribution = std::move(candidateLastContribution);
     return ::media::Status::success();
 }
 
@@ -102,7 +110,7 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
     MediaBufferRef output,
     std::int64_t outputSamples)
 {
-    if (!m_state || !m_state->activeOrigin || !m_state->lastOutputLineage ||
+    if (!m_state || !m_state->activeOrigin || !m_state->lastOutputLineage || !m_state->lastOutputContribution ||
         outputSamples <= 0) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -129,8 +137,13 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
         if (auto status = leases.observe(m_state->lastOutputLineage); !status) {
             return ::media::Result<MediaBufferRef>::failure(status.error());
         }
+        auto contribution = *m_state->lastOutputContribution;
+        contribution.interval = extension.value();
+        if (auto* real = std::get_if<MediaCanonicalAudioRealSource>(&contribution.origin)) {
+            real->mappedInterval = extension.value();
+        }
         if (auto status = candidateIntervals.push(
-                {m_state->lastOutputLineage, extension.value()}); !status) {
+                {m_state->lastOutputLineage, extension.value(), std::move(contribution)}); !status) {
             return ::media::Result<MediaBufferRef>::failure(status.error());
         }
     }

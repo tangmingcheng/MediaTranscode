@@ -8,6 +8,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaEncoderOutputBuffering {
+    BackendManaged,
+    Immediate
+};
+
 struct MediaEncoderOpenContract final {
     std::string codecName;
     int width = 0;
@@ -23,6 +28,7 @@ struct MediaEncoderOpenContract final {
     std::optional<int> bFrames;
     std::optional<bool> globalHeader;
     bool lowLatency = false;
+    MediaEncoderOutputBuffering outputBuffering = MediaEncoderOutputBuffering::BackendManaged;
 
     friend bool operator==(
         const MediaEncoderOpenContract&,

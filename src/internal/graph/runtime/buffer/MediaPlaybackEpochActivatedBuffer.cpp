@@ -6,16 +6,10 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaBufferRef> MediaPlaybackEpochActivatedBuffer::create(
     MediaAvSyncGroupKey groupKey,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin,
+    MediaPlaybackActivation activation,
     std::optional<std::uint64_t> completedTransitionSequence)
 {
-    if (!groupKey.valid() || epoch.generation == 0 ||
-        audioOrigin.generation != epoch.generation ||
-        audioOrigin.sourceStart != epoch.sourceStart ||
-        audioOrigin.masterRelease != epoch.masterRelease ||
-        audioOrigin.epochOutputSampleIndex < 0 ||
-        audioOrigin.outputSampleRate <= 0 ||
+    if (!groupKey.valid() ||
         (completedTransitionSequence &&
          *completedTransitionSequence == 0)) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -24,18 +18,16 @@ namespace media::ffmpeg::graph {
     }
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaPlaybackEpochActivatedBuffer(
-            std::move(groupKey), epoch, audioOrigin,
+            std::move(groupKey), std::move(activation),
             completedTransitionSequence)));
 }
 
 MediaPlaybackEpochActivatedBuffer::MediaPlaybackEpochActivatedBuffer(
     MediaAvSyncGroupKey groupKey,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin,
+    MediaPlaybackActivation activation,
     std::optional<std::uint64_t> completedTransitionSequence)
     : m_groupKey(std::move(groupKey))
-    , m_epoch(epoch)
-    , m_audioOrigin(audioOrigin)
+    , m_activation(std::move(activation))
     , m_completedTransitionSequence(completedTransitionSequence)
 {
     setStreamKind(MediaStreamKind::Metadata);
@@ -57,13 +49,13 @@ MediaPlaybackEpochActivatedBuffer::groupKey() const noexcept
 const MediaPlaybackEpoch&
 MediaPlaybackEpochActivatedBuffer::epoch() const noexcept
 {
-    return m_epoch;
+    return m_activation.epoch();
 }
 
-const MediaAudioPlaybackOrigin&
-MediaPlaybackEpochActivatedBuffer::audioOrigin() const noexcept
+const MediaPlaybackActivation&
+MediaPlaybackEpochActivatedBuffer::activation() const noexcept
 {
-    return m_audioOrigin;
+    return m_activation;
 }
 
 std::optional<std::uint64_t>

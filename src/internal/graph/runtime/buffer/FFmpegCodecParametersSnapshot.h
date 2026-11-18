@@ -18,6 +18,7 @@ public:
         ::media::ffmpeg::CodecParametersPtr parameters);
 
     bool complete() const noexcept;
+    const AVCodecParameters* parameters() const noexcept;
     ::media::Result<::media::ffmpeg::CodecParametersPtr> cloneCodecParameters() const;
 
 private:

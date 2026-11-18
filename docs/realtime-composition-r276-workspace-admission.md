@@ -1,0 +1,27 @@
+# r276：RTP准备工作区同笔准入
+
+状态：分区尺寸累计、六类RTP工作区同笔准入和ledger已实施，双独立局部静态审查均PASS；全量Release构建通过，尚未实流验证。此项继续已批准的存储硬边界工作，不声称解决r274硬件等待。
+
+## 当前缺口与复用依据
+
+r273已将RTP/RTCP直接写入最终backing，但materializer的plans、timestamps、payload octets、deadlines、globalEntries、outputInputs六个vector仍在最终输出准入前分配。复用现有MediaNetworkStorageLease、FixedCapacityStorage及PartitionLayout，不引入另一套allocator或协议路径。延续GStreamer allocation合同的显式分配与所有权原则：https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html 。该资料不构成本项目容量或时序通过证明。
+
+## 实施边界
+
+- RTP私有布局helper负责协议校验、timestamp、deadline、序号和计数。第一遍用栈上plan及标量，不建立动态workspace；错误消息仍可能分配。
+- 两遍保持同一protocol mutex、同一materializedAt、输入字节和projected状态。RTCP decision、token、report plan和deadline只决定一次并保持，不按第二遍时钟重新选择。
+- 通用PartitionBuilder接受同步枚举的bytes/deadline事实，用同一个PartitionLayout::next实现尺寸统计和构造；不能复制分区算法。
+- CommitPreparation合并六类workspace、原四块以及最终输出的精确分配成本，只调用一次reserveStorage(Backpressure)。随后仅split和allocateFromReservation。
+- 第二遍填充固定数组，mediaPlans全部完成后创建std::cref借用。全部准备成功后才global reserve、协议transaction和projected更新；沿用解锁后bind及失败RAII。
+- WouldBlock不得持有本轮workspace；ledger同步覆盖真实分配头、对齐和六类数组，禁止只迁allocator而遗漏规划。
+
+独立审查a判断设计可行。实现后仍需双独立冻结审查、Release全量重建、原规格realtime验证。serial不切换；MP2T/RTP外层副本、pending发布容器及多reservation取消/回滚证明仍是后续未完成项。
+
+## 当前实施进度
+PartitionBuilder新增值类型Sizing，通过append(bytes,deadline)累计准确成本；原span入口委托该实现。分区仍复用PartitionLayout::next，分配头和对齐仍复用NetworkMemoryResource::allocationFootprint。完成分区费用先局部累加再提交，失败不推进；storageFootprint在副本上结算末分区，可重复调用。a与b2均已局部静态PASS；git diff --check通过。下一步将workspace和最终output成本汇入同一lease，再迁移RTP两遍计算及ledger，禁止以本组件完成宣称预算闭环。
+
+完整实施进入冻结审查：新增RTP六固定数组workspace，成功路径第一遍无动态workspace；RTCP决策先固定，同一锁及materializedAt贯穿两遍。CommitPreparation::admit一次预留workspace+原四块+final output，workspace仅split，fromReservation验证剩余成本后构造；旧无workspace调用委托同一路径。RTP六vector已移除，ledger同一计算函数增加单entry最大碎片workspace贡献（不是实际所有者数闭合证明）。git diff --check通过；待双复审、全量Release构建和实流，不宣称解决时序或serial。
+
+a与b2完整切片复审均明确局部PASS，覆盖同笔准入、六类精确计费、最坏碎片贡献、两遍协议事实、borrow、RAII锁序和调用迁移。构建会话36699运行中，构建前保持源码冻结。
+
+2026-10-20全量Release构建36699成功，configure/build均0，四项产物存在；realtime SHA256 58846BE83D4CF93AD54FA81D1758509F8A794CEEA05128CBA0E3C5FD087D847C。未运行local，实流尚待验证。

@@ -1,3 +1,5 @@
+#include "internal/graph/protocol/MediaProtocolPurgeInput.h"
+#include <array>
 #include "internal/graph/nodes/output/MediaDatagramTransportPlanSourceNode.h"
 
 #include "internal/graph/runtime/buffer/MediaDatagramTransportPlanBuffer.h"
@@ -5,16 +7,19 @@
 
 #include <new>
 #include <utility>
+#include <algorithm>
 
 namespace media::ffmpeg::graph {
 
 MediaDatagramTransportPlanSourceNode::MediaDatagramTransportPlanSourceNode(
     MediaNodeId nodeId,
     MediaDatagramTransportPlanTemplate planTemplate,
-    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+    MediaNetworkStorageWakeupPlan storageWakeups)
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaDatagramTransportPlanSourceNode"),
       m_planTemplate(std::move(planTemplate)),
+      m_storageWakeups(std::move(storageWakeups)),
       m_authority(std::move(authority)),
       m_generationSession(
           std::make_shared<MediaDatagramTransportPlanSourceGenerationState>()),
@@ -30,11 +35,16 @@ MediaDatagramTransportPlanSourceNode::MediaDatagramTransportPlanSourceNode(
 MediaDatagramTransportPlanSourceNode::create(
     MediaNodeId nodeId,
     MediaDatagramTransportPlanTemplate planTemplate,
-    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+    MediaNetworkStorageWakeupPlan storageWakeups)
 {
     using Result = ::media::Result<
         std::unique_ptr<MediaDatagramTransportPlanSourceNode>>;
-    if (!nodeId.isValid() || !authority ||
+    if (!nodeId.isValid() || !authority || storageWakeups.transportSource != nodeId ||
+        storageWakeups.sessionKey.value() != planTemplate.sessionKey() ||
+        storageWakeups.producerTargets.empty() ||
+        std::any_of(storageWakeups.producerTargets.begin(), storageWakeups.producerTargets.end(),
+            [](MediaNodeId target) { return !target.isValid(); }) ||
         planTemplate.sessionKey() != authority->sessionKey().value() ||
         planTemplate.serviceScopeId().empty() ||
         planTemplate.remoteEndpoints().empty()) {
@@ -45,7 +55,7 @@ MediaDatagramTransportPlanSourceNode::create(
         return Result::success(
             std::unique_ptr<MediaDatagramTransportPlanSourceNode>(
                 new MediaDatagramTransportPlanSourceNode(
-                    nodeId, std::move(planTemplate), std::move(authority))));
+                    nodeId, std::move(planTemplate), std::move(authority), std::move(storageWakeups))));
     } catch (const std::bad_alloc&) {
         return Result::failure(::media::ErrorInfo::allocationFailed(
             "MediaDatagramTransportPlanSourceNode"));
@@ -60,13 +70,16 @@ MediaNodeKind MediaDatagramTransportPlanSourceNode::staticKind() noexcept
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 MediaDatagramTransportPlanSourceNode::generationPurgeTarget() const noexcept
 {
-    return m_generationState;
+    return m_generationPurge;
 }
 
 ::media::Status MediaDatagramTransportPlanSourceNode::start(
     MediaGraphExecutionContext& context)
 {
     resetState();
+    m_completedPurge.reset();
+    auto started = m_generationPurge->start(context.sharedNodeWakeup(nodeId()));
+    if (!started) return started;
     const auto* activation = context.findInputChannel(nodeId(), "activation");
     const auto* plan = context.findOutputChannel(nodeId(), "plan");
     if (context.inputChannels(nodeId()).size() != 1 ||
@@ -83,6 +96,22 @@ MediaDatagramTransportPlanSourceNode::generationPurgeTarget() const noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "Datagram transport plan fanout requires blocking outputs"));
         }
+    }
+    try {
+        std::vector<std::weak_ptr<MediaNodeWakeup>> targets;
+        targets.reserve(m_storageWakeups.producerTargets.size());
+        for (const auto target : m_storageWakeups.producerTargets) {
+            auto wakeup = context.findNodeWakeup(target);
+            if (!wakeup) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Transport storage consumer has no compiled wakeup"));
+            targets.emplace_back(wakeup);
+        }
+        auto notification = MediaStorageReleaseNotification::create(std::move(targets));
+        if (!notification) return ::media::Status::failure(notification.error());
+        m_storageReleaseNotification = std::move(notification).value();
+    } catch (const std::bad_alloc&) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
+            "Transport storage notification consumers"));
     }
     return FFmpegNodeRuntime::start(context);
 }
@@ -124,7 +153,7 @@ MediaDatagramTransportPlanSourceNode::onProcess(
                 "Datagram transport plan source rejects duplicate or regressed generation"));
     }
     auto created = MediaDatagramTransportPlanBuffer::create(
-        m_planTemplate, activation.value().generation);
+        m_planTemplate, activation.value().generation, m_storageReleaseNotification);
     if (!created) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             created.error());
@@ -186,6 +215,7 @@ MediaDatagramTransportPlanSourceNode::reserveOutputCommit(
 ::media::Status MediaDatagramTransportPlanSourceNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_generationPurge->stop();
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -193,6 +223,7 @@ MediaDatagramTransportPlanSourceNode::reserveOutputCommit(
 void MediaDatagramTransportPlanSourceNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_generationPurge->stop();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -201,6 +232,37 @@ void MediaDatagramTransportPlanSourceNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
     m_generationState->resetLifecycle();
+    m_storageReleaseNotification.reset();
+}
+
+::media::Result<MediaNodeProcessResult> MediaDatagramTransportPlanSourceNode::process(MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_generationPurge->pending()) {
+        auto activation = m_authority->currentActivation();
+        auto status = !activation ? ::media::Status::failure(activation.error()) :
+            activation.value().generation != purge->publishedGeneration || purge->oldGeneration < purge->publishedGeneration
+                ? ::media::Status::failure(::media::ErrorInfo::invalidArgument("Protocol owner purge differs from revoked authority"))
+                : ::media::Status::success();
+        if (status && m_pendingPlan)
+            status = authorizeProtocolPurgeInput(m_pendingPlan, m_authority->sessionKey(), *purge, m_completedPurge);
+        for (const auto* port : std::array{"activation"}) {
+            while (status) {
+                auto input = tryPopInputOptional(context, port);
+                if (!input) { status = ::media::Status::failure(input.error()); break; }
+                if (!input.value()) break;
+                status = authorizeProtocolPurgeInput(*input.value(), m_authority->sessionKey(), *purge, m_completedPurge);
+            }
+            if (!status) break;
+        }
+        if (status) {
+            cancelPendingOutputTransfer();
+            status = m_generationState->purge(*purge);
+        }
+        if (status) m_completedPurge = *purge;
+        auto completed = m_generationPurge->complete(*purge, status);
+        return processProgress(completed ? status : completed);
+    }
+    return FFmpegNodeRuntime::process(context);
 }
 
 } // namespace media::ffmpeg::graph

@@ -5,6 +5,7 @@
 #include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/sync/MediaRtpIngressFrontiers.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
@@ -36,13 +37,27 @@ public:
     {
         return m_sharedNtpEpoch;
     }
+    MediaRtpIngressFrontiers* rtpIngressFrontiers() noexcept
+    {
+        return m_rtpIngressFrontiers ? &*m_rtpIngressFrontiers : nullptr;
+    }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
+    ::media::Status beginSourceDrain(MediaAvSourceDrainRequest request);
+    ::media::Status sealSourceDrainInput(std::uint64_t generation, MediaStreamKind stream,
+        std::uint64_t ingressGeneration, std::uint64_t acceptedFrontier);
+    ::media::Result<bool> acknowledgeSourceDrained(std::uint64_t generation, MediaStreamKind stream);
+    std::optional<MediaAvSourceDrainSnapshot> sourceDrainSnapshot() const noexcept;
+    ::media::Status completeSourceDrain(std::uint64_t generation);
+    bool preservesActivatedOutput() const noexcept;
+    ::media::Status observeClockEvidence(std::uint64_t generation, std::uint64_t revision);
+    std::optional<MediaAvSourceClockEvidence> clockEvidence() const noexcept;
     ::media::Result<MediaAvOutputPermitCommitReservation>
     reserveOutputCommit(std::uint64_t generation) const;
     ::media::Result<MediaAvActivatedOutputPermitReservation>
     reserveActivatedOutput() const;
     ::media::Status pollEpochReacquisitionTimeout();
+    ::media::Result<std::optional<MediaRunningTime>> progressGenerationPurge();
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);
     ::media::Status requestReacquisition(MediaAvReacquisitionRequest request) noexcept;
@@ -88,6 +103,7 @@ private:
     std::shared_ptr<MediaMasterClock> m_clock;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
+    std::optional<MediaRtpIngressFrontiers> m_rtpIngressFrontiers;
     mutable std::mutex m_epochMutex;
     std::shared_ptr<MediaAvReacquisitionCoordinator>
         m_reacquisitionCoordinator;

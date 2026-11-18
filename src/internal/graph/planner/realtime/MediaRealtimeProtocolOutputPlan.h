@@ -1,4 +1,5 @@
 #pragma once
+#include "internal/graph/planner/realtime/MediaTsProtocolSeriesBounds.h"
 
 #include "internal/graph/model/MediaMuxSessionKind.h"
 #include "internal/graph/model/MediaOutputResourceKind.h"
@@ -56,6 +57,7 @@ struct MediaProjectMpegTsRuntimeOutputPlan final {
     MediaProjectMpegTsOutputPlan protocol;
     MediaMuxSessionKind muxSessionKind;
     MediaTsDatagramEmissionPlan emission;
+    MediaTsProtocolSeriesBounds seriesBounds;
     std::uint64_t scheduledBatchMaximumBytes;
     std::variant<MediaMpegTsUdpOutputPlan,
                  MediaMpegTsRtpOutputPlan> transport;

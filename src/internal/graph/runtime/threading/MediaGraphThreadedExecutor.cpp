@@ -5,8 +5,23 @@
 #include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
 
 #include <algorithm>
+#include <exception>
 
 namespace media::ffmpeg::graph {
+::media::Result<MediaGraphNodeCompletion> MediaGraphThreadedExecutor::nodeCompletion(MediaNodeId node) const
+{
+    std::lock_guard owners(m_workersMutex);
+    for (const auto& worker : m_workers) {
+        if (worker && worker->nodeId() == node) {
+            // Exit publication follows finished and finishExecution on the owner.
+            const bool exited = worker->exited();
+            return ::media::Result<MediaGraphNodeCompletion>::success({worker->finished(), exited});
+        }
+    }
+    return ::media::Result<MediaGraphNodeCompletion>::failure(::media::ErrorInfo::invalidArgument(
+        "Output drain references a node without an execution owner"));
+}
+
 void MediaGraphThreadedExecutor::setPolicy(MediaThreadingPolicy policy) noexcept
 {
     m_policy = policy;
@@ -20,6 +35,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
 ::media::Status MediaGraphThreadedExecutor::start(MediaGraphExecutionContext& context,
                                                    MediaGraphScheduler& scheduler)
 {
+    std::lock_guard lifecycle(m_lifecycleMutex);
     if (!context.compiled()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("MediaGraphThreadedExecutor start failed: context is not compiled"));
@@ -29,60 +45,59 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         return ::media::Status::success();
     }
 
-    m_state = MediaGraphThreadedExecutorState::Starting;
-
-    auto startStatus = scheduler.start(context);
-    if (!startStatus) {
-        m_state = MediaGraphThreadedExecutorState::Idle;
-        return startStatus;
-    }
-
-    const auto runtimeNodes = scheduler.orderedRuntimeNodes(context);
-    m_workers.clear();
-    m_failureRecorder.clear();
-    m_workers.reserve(runtimeNodes.size());
-
-    // Construct every worker before any worker thread is allowed to run. Worker
-    // construction binds its node wakeup in the execution context; interleaving
-    // that registry mutation with a running worker is undefined behaviour.
-    for (MediaRuntimeNode* node : runtimeNodes) {
-        if (!node) {
-            continue;
-        }
-
-        m_workers.push_back(std::make_unique<MediaGraphWorker>(
-            *node, context, m_failureRecorder, m_failureSupervisor));
-    }
-
-    m_failureSupervisor.arm([this, &context] {
-        context.cancelSessionPayloadWaiters();
-        requestStop(context);
+    struct RollbackContext {
+        MediaGraphThreadedExecutor& executor;
+        MediaGraphExecutionContext& context;
+        MediaGraphScheduler& scheduler;
+    } rollbackContext{*this, context, scheduler};
+    MediaWorkerStartupGate::Transaction transaction(&rollbackContext, [](void* opaque) noexcept {
+        auto& state = *static_cast<RollbackContext*>(opaque);
+        state.executor.abort(state.context, state.scheduler);
     });
-
-    for (auto& worker : m_workers) {
-        auto status = worker->start();
-        if (!status) {
-            abort(context, scheduler);
-            if (auto failure = primaryFailure()) {
-                return ::media::Status::failure(failure->error);
-            }
-            return status;
+    const auto fail = [&](const ::media::ErrorInfo& error) noexcept {
+        m_failureRecorder.recordScopeFailure(error, MediaGraphWorkerFailurePhase::Preparation);
+        transaction.rollback();
+        return m_failureRecorder.failureStatus();
+    };
+    try {
+        m_failureRecorder.clear();
+        m_failureRecorder.setPhase(MediaGraphWorkerFailurePhase::Preparation);
+        m_startup.reset(context.executionOrder().size());
+        m_state = MediaGraphThreadedExecutorState::Starting;
+        auto prepared = ::media::Status::success();
+        {
+            std::lock_guard owners(m_workersMutex);
+            prepared = m_startup.prepare(context, scheduler, m_workers, m_failureRecorder, m_failureSupervisor);
         }
+        if (!prepared) return fail(prepared.error());
+        auto started = scheduler.start(context);
+        if (!started) return fail(started.error());
+        m_failureSupervisor.arm({this, &context, [](void* owner, void* state) noexcept {
+            auto& context = *static_cast<MediaGraphExecutionContext*>(state);
+            static_cast<MediaGraphThreadedExecutor*>(owner)->requestStop(context);
+        }});
+        auto launched = m_startup.launch(m_workers.view());
+        if (!launched) return fail(launched.error());
+        m_failureRecorder.setPhase(MediaGraphWorkerFailurePhase::Runtime);
+        if (!m_startup.commit()) return fail({::media::ErrorCode::Cancelled, 0, {}});
+        m_state = MediaGraphThreadedExecutorState::Running;
+        refreshMetrics();
+        transaction.commit();
+        return ::media::Status::success();
+    } catch (...) {
+        return fail(MediaWorkerStartupGate::currentException());
     }
-
-    if (auto failure = primaryFailure()) {
-        abort(context, scheduler);
-        return ::media::Status::failure(failure->error);
-    }
-
-    m_state = MediaGraphThreadedExecutorState::Running;
-    refreshMetrics();
-    return ::media::Status::success();
 }
 
 void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context) noexcept
 {
+    m_startup.cancel();
+    std::lock_guard owners(m_workersMutex);
     for (auto& worker : m_workers) if (worker) worker->requestStop();
+    // Publish coordinated stop to every worker before cancellation can wake a
+    // payload waiter with Cancelled. Otherwise it can become a false primary
+    // failure while its owner's stop flag is still clear.
+    context.cancelSessionPayloadWaiters();
     for (auto& worker : m_workers) if (worker) worker->interrupt();
     context.interruptNodeWakeups();
 }
@@ -90,8 +105,13 @@ void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context
 ::media::Status MediaGraphThreadedExecutor::stop(MediaGraphExecutionContext& context,
                                                   MediaGraphScheduler& scheduler)
 {
+    m_startup.cancel();
+    std::lock_guard lifecycle(m_lifecycleMutex);
     if (m_state == MediaGraphThreadedExecutorState::Stopped ||
         m_state == MediaGraphThreadedExecutorState::Idle) {
+        // No running worker remains in either state, but first-time teardown
+        // must still withdraw session demands when no worker was launched.
+        context.cancelSessionPayloadWaiters();
         m_state = MediaGraphThreadedExecutorState::Stopped;
         return ::media::Status::success();
     }
@@ -136,6 +156,9 @@ void MediaGraphThreadedExecutor::requestStop(MediaGraphExecutionContext& context
 void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
                                         MediaGraphScheduler& scheduler) noexcept
 {
+    m_startup.cancel();
+    std::lock_guard lifecycle(m_lifecycleMutex);
+    requestStop(context);
     for (auto& worker : m_workers) {
         if (worker) {
             worker->abort();
@@ -158,8 +181,14 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
 
 void MediaGraphThreadedExecutor::clear()
 {
+    m_startup.cancel();
+    std::lock_guard lifecycle(m_lifecycleMutex);
+    // A scope must release its owners before their storage can be cleared.
+    for (auto& worker : m_workers) worker->requestStop();
+    for (auto& worker : m_workers) worker->interrupt();
+    for (auto& worker : m_workers) worker->join();
     m_failureSupervisor.disarm();
-    m_workers.clear();
+    { std::lock_guard owners(m_workersMutex); m_workers = {}; }
     m_failureRecorder.clear();
     {
         std::lock_guard<std::mutex> lock(m_metricsMutex);
@@ -170,7 +199,7 @@ void MediaGraphThreadedExecutor::clear()
 
 MediaGraphThreadedExecutorState MediaGraphThreadedExecutor::state() const noexcept
 {
-    return m_state;
+    return m_state.load();
 }
 
 bool MediaGraphThreadedExecutor::running() const noexcept
@@ -180,6 +209,7 @@ bool MediaGraphThreadedExecutor::running() const noexcept
 
 bool MediaGraphThreadedExecutor::completed() const noexcept
 {
+    std::lock_guard owners(m_workersMutex);
     return m_state == MediaGraphThreadedExecutorState::Running &&
            !m_failureRecorder.hasFailure() &&
            !m_workers.empty() &&
@@ -210,7 +240,8 @@ MediaGraphRuntimeMetrics MediaGraphThreadedExecutor::metrics() const noexcept
 void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
 {
     std::lock_guard<std::mutex> lock(m_metricsMutex);
-    m_metrics = MediaRuntimeMetricsCollector::workers(m_workers);
+    std::lock_guard owners(m_workersMutex);
+    m_metrics = MediaRuntimeMetricsCollector::workers(m_workers.view());
 }
 
 } // namespace media::ffmpeg::graph

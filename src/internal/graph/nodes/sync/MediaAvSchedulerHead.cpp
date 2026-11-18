@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaAvSchedulerHead.h"
 
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 namespace media::ffmpeg::graph {
@@ -23,11 +24,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaAvSchedulerHead>::success(
             MediaAvSchedulerHead(std::move(buffer), MediaAvSchedulerHeadKind::Canonical));
     }
-    if (expectedStream == MediaScheduledStream::Video &&
-        dynamic_cast<const MediaVideoRepeatRequestBuffer*>(buffer.get())) {
-        return ::media::Result<MediaAvSchedulerHead>::success(
-            MediaAvSchedulerHead(std::move(buffer), MediaAvSchedulerHeadKind::VideoRepeat));
-    }
     return ::media::Result<MediaAvSchedulerHead>::failure(
         ::media::ErrorInfo::invalidArgument(
             "A/V scheduler head has an unsupported typed payload"));
@@ -38,30 +34,19 @@ const MediaCanonicalAccessUnitBuffer* MediaAvSchedulerHead::canonical() const no
     return dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(m_buffer.get());
 }
 
-const MediaVideoRepeatRequestBuffer* MediaAvSchedulerHead::repeat() const noexcept
-{
-    return dynamic_cast<const MediaVideoRepeatRequestBuffer*>(m_buffer.get());
-}
-
 std::uint64_t MediaAvSchedulerHead::generation() const noexcept
 {
-    return m_kind == MediaAvSchedulerHeadKind::Canonical
-        ? canonical()->generation() : repeat()->generation();
+    return canonical()->generation();
 }
 
 MediaRunningTime MediaAvSchedulerHead::canonicalPresentation() const noexcept
 {
-    return m_kind == MediaAvSchedulerHeadKind::Canonical
-        ? canonical()->canonicalPresentation() : repeat()->canonicalPresentation();
+    return canonical()->canonicalPresentation();
 }
 
 ::media::Result<MediaRunningTime>
 MediaAvSchedulerHead::canonicalDispatchTime() const noexcept
 {
-    if (m_kind == MediaAvSchedulerHeadKind::VideoRepeat) {
-        return ::media::Result<MediaRunningTime>::success(
-            repeat()->canonicalPresentation());
-    }
     const auto* unit = canonical();
     return unit->canonicalDispatch();
 }

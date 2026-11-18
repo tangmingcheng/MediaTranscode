@@ -1,0 +1,9 @@
+# rk478：purge等待结果与控制容量唤醒
+
+purgeMedia内部结果改为失败/空optional等待/实际frontier成功。Raw遇等待立即返回processWaiting，保留同一owner purge，不publish、不complete、不进入普通媒体处理；prepared成功路径仅使用实际frontier，移除value_or替代。当前生产函数仍只返回实际frontier，尚未启用退休事务等待。
+
+takeOutput释放control FIFO后同时通知原Raw wakeup，补齐普通SR出队不产生退休回执时的唤醒。复用共享wakeup及worker调用process前采样sequence的机制，无新线程、队列、公共字段或平台分支。source_drain_review_a/b独立SOURCE PASS，核查空optional解引用、错误完成、取消及通知早于等待的竞态。
+
+依据已有完整Closing审查与GStreamer串行EOS/flush区别；本片不更改协议尾部策略。RKMPP8核增量PID3076347，out/rollback/rk478保留原源码及CLI，构建结果待确认。未运行媒体，不计关闭或退休屏障实流通过。
+
+构建wait退出0，CLI13111040字节，SHA256 2f07913fb338cd7b6ef33d9a31278b8c0b70ace992db0e311085088eb7277192。本机out/acceptance/rk478-source.tar与远端同名tar、rk478-build.log逐项清理，回退保留。无本轮实流通过；Closing生产事务、双成员退休幂等提交、输入门与完整验收仍待完成。

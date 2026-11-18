@@ -1,5 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtcpReportingPolicy.h"
 
+#include "internal/graph/protocol/rtp/MediaRtcpInterval.h"
+
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -38,6 +40,11 @@ MediaRtcpReportingPolicy::MediaRtcpReportingPolicy(
             ::media::ErrorInfo::invalidArgument(
                 "RTCP reporting policy requires authoritative membership, bandwidth, compound-size, and RFC interval facts"));
     }
+    auto lower = mediaRtcpIntervalForFactor(initialBaseInterval, MediaRtcpRandomFactorMinimum);
+    if (!lower || minimumAdmissionInterval != lower.value())
+        return ::media::Result<MediaRtcpReportingPolicy>::failure(
+            !lower ? lower.error() : ::media::ErrorInfo::invalidArgument(
+                "RTCP admission interval differs from the runtime randomization lower bound"));
     return ::media::Result<MediaRtcpReportingPolicy>::success(
         MediaRtcpReportingPolicy(
             std::move(facts), initialBaseInterval, steadyBaseInterval,

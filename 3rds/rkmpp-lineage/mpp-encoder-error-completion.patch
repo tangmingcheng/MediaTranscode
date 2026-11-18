@@ -1,0 +1,35 @@
+--- a/mpp/codec/mpp_enc_impl.c
++++ b/mpp/codec/mpp_enc_impl.c
+@@ -2981,19 +2981,21 @@
+     task->usr.force_flag = 0;
+ }
+ 
+-static void async_task_terminate(MppEncImpl *enc, EncAsyncTaskInfo *async)
++static void async_task_terminate(MppEncImpl *enc, EncAsyncTaskInfo *async, MPP_RET error)
+ {
+     HalEncTask *hal_task = &async->task;
+     EncFrmStatus *frm = &async->rc.frm;
+     Mpp *mpp = (Mpp *)enc->mpp;
+ 
++    mpp_err_f("async encode task %d failed: %d\n", frm->seq_idx, error);
+     mpp_stopwatch_record(hal_task->stopwatch, "encode task done");
+ 
+     if (hal_task->packet) {
+         MppPacket pkt = hal_task->packet;
+ 
+         /* setup output packet and meta data */
+-        mpp_packet_set_length(pkt, hal_task->length);
++        /* A failed task may contain headers, but never a completed picture. */
++        mpp_packet_set_length(pkt, 0);
+ 
+         /*
+          * First return output packet.
+@@ -3385,7 +3387,7 @@
+ TASK_DONE:
+     if (ret) {
+         enc_dbg_detail("task %d terminate\n", seq_idx);
+-        async_task_terminate(enc, async);
++        async_task_terminate(enc, async, ret);
+     }
+ 
+     return ret;

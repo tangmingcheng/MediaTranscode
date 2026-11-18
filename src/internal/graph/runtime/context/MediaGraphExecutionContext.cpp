@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/planner/MediaWorkerExecutionPlanner.h"
 
 #include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
@@ -84,6 +85,9 @@ MediaGraphExecutionContext::~MediaGraphExecutionContext()
         return ::media::Status::failure(
             ::media::ErrorInfo::allocationFailed("input activity evidence"));
     }
+    auto workers = MediaWorkerExecutionPlanner::plan(graph, m_executionOrder);
+    if (!workers) { reset(); return ::media::Status::failure(workers.error()); }
+    m_workerExecutionPlans = std::move(workers).value();
     m_graph = &graph;
     m_compiled = true;
 
@@ -170,6 +174,8 @@ MediaGraphExecutionContext::exportOutput(MediaPortId id) const
     m_ownsPayloadLedger = false;
     m_payloadCreditLedger = session.payloadCreditLedger();
     m_inputActivity = session.inputActivity();
+    m_nodeWakeups.emplace();
+    m_nodeExitTokens.emplace();
     for (const auto id : selected) {
         if (extracting) {
             auto wakeup = session.findNodeWakeup(id);
@@ -178,7 +184,7 @@ MediaGraphExecutionContext::exportOutput(MediaPortId id) const
                 return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                     "initial segment node has no prepared wakeup"));
             }
-            m_nodeWakeups.emplace(id.value, std::move(wakeup));
+            m_nodeWakeups->emplace(id.value, std::move(wakeup));
         } else sharedNodeWakeup(id);
         auto exitToken = extracting ? session.nodeExitToken(id)
             : std::make_shared<MediaGraphWorkerExitToken>();
@@ -187,7 +193,7 @@ MediaGraphExecutionContext::exportOutput(MediaPortId id) const
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "initial segment node has no prepared exit token"));
         }
-        m_nodeExitTokens.emplace(id.value, std::move(exitToken));
+        m_nodeExitTokens->emplace(id.value, std::move(exitToken));
     }
     bool externalInput = false;
     for (const auto& edge : m_graph->edges()) {
@@ -241,6 +247,9 @@ MediaGraphExecutionContext::exportOutput(MediaPortId id) const
     for (const auto id : topology.value().order) {
         if (contains(id)) m_executionOrder.push_back(id);
     }
+    auto workers = MediaWorkerExecutionPlanner::plan(*m_graph, m_executionOrder);
+    if (!workers) { reset(); return ::media::Status::failure(workers.error()); }
+    m_workerExecutionPlans = std::move(workers).value();
     m_compiled = true;
     return ::media::Status::success();
 }
@@ -251,9 +260,12 @@ void MediaGraphExecutionContext::detachExecutionNodes(std::span<const MediaNodeI
         return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
     };
     std::erase_if(m_executionOrder, contains);
+    // Preserve the original root backing until reset: detached branch contracts
+    // coexist with it and are separately admitted by the resource planner.
+    m_workerExecutionPlans.eraseIf([&](const auto& plan) { return contains(plan.node); });
     for (const auto id : nodes) {
-        m_nodeWakeups.erase(id.value);
-        m_nodeExitTokens.erase(id.value);
+        if (m_nodeWakeups) m_nodeWakeups->erase(id.value);
+        if (m_nodeExitTokens) m_nodeExitTokens->erase(id.value);
     }
     for (const auto& edge : m_graph->edges()) {
         if (contains(edge.from.nodeId) && contains(edge.to.nodeId))
@@ -263,9 +275,10 @@ void MediaGraphExecutionContext::detachExecutionNodes(std::span<const MediaNodeI
 
 void MediaGraphExecutionContext::cancelUnstartedExecution() noexcept
 {
+    if (!m_nodeExitTokens) return;
     for (const auto id : m_executionOrder) {
-        const auto found = m_nodeExitTokens.find(id.value);
-        if (found != m_nodeExitTokens.end())
+        const auto found = m_nodeExitTokens->find(id.value);
+        if (found != m_nodeExitTokens->end())
             found->second->m_cancelledBeforeStart.store(true, std::memory_order_release);
     }
 }
@@ -290,8 +303,9 @@ void MediaGraphExecutionContext::reset()
     m_payloadCreditLedger.reset();
     m_inputActivity.reset();
     m_executionOrder.clear();
-    m_nodeWakeups.clear();
-    m_nodeExitTokens.clear();
+    m_workerExecutionPlans = {};
+    m_nodeWakeups.reset();
+    m_nodeExitTokens.reset();
     m_compiled = false;
     if (m_ownsGlobalDiagnostics) mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
@@ -364,6 +378,11 @@ MediaGraphExecutionContext::reservePayloadBatch(
              strategy.streamKind != streamKind)) {
             continue;
         }
+        if (selected && streamKind == MediaStreamKind::Any &&
+            selected->accountId != strategy.accountId) {
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "stream-agnostic allocation requires one planner allocation owner"));
+        }
         if (!selected || strategy.maximumReservationBytes >
                 selected->maximumReservationBytes) {
             selected = &strategy;
@@ -412,7 +431,8 @@ MediaGraphExecutionContext::reservePayloadBatch(
             "runtime payload batch credit request"));
     }
     auto leases = m_payloadCreditLedger->tryReserveOrArm(
-        producer, ledgerBytes, sharedNodeWakeup(producer));
+        {selected->nodeId, selected->streamKind, selected->payloadKind},
+        ledgerBytes, sharedNodeWakeup(producer));
     if (!leases) return Result::failure(leases.error());
     try {
         std::vector<MediaGraphPayloadReservation> reservations;
@@ -572,15 +592,17 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
 std::shared_ptr<MediaGraphWorkerExitToken> MediaGraphExecutionContext::nodeExitToken(
     MediaNodeId nodeId) const noexcept
 {
-    const auto found = m_nodeExitTokens.find(nodeId.value);
-    return found == m_nodeExitTokens.end() ? nullptr : found->second;
+    if (!m_nodeExitTokens) return nullptr;
+    const auto found = m_nodeExitTokens->find(nodeId.value);
+    return found == m_nodeExitTokens->end() ? nullptr : found->second;
 }
 
 std::shared_ptr<MediaNodeWakeup> MediaGraphExecutionContext::findNodeWakeup(
     MediaNodeId nodeId) const noexcept
 {
-    const auto found = m_nodeWakeups.find(nodeId.value);
-    return found == m_nodeWakeups.end() ? nullptr : found->second;
+    if (!m_nodeWakeups) return nullptr;
+    const auto found = m_nodeWakeups->find(nodeId.value);
+    return found == m_nodeWakeups->end() ? nullptr : found->second;
 }
 
 MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
@@ -591,9 +613,10 @@ MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
 std::shared_ptr<MediaNodeWakeup>
 MediaGraphExecutionContext::sharedNodeWakeup(MediaNodeId nodeId)
 {
-    const auto existing = m_nodeWakeups.find(nodeId.value);
-    if (existing != m_nodeWakeups.end()) return existing->second;
-    auto& wakeup = m_nodeWakeups[nodeId.value];
+    if (!m_nodeWakeups) m_nodeWakeups.emplace();
+    const auto existing = m_nodeWakeups->find(nodeId.value);
+    if (existing != m_nodeWakeups->end()) return existing->second;
+    auto& wakeup = (*m_nodeWakeups)[nodeId.value];
     if (!wakeup) {
         wakeup = std::make_shared<MediaNodeWakeup>();
     }
@@ -602,7 +625,8 @@ MediaGraphExecutionContext::sharedNodeWakeup(MediaNodeId nodeId)
 
 void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
 {
-    for (auto& [nodeId, wakeup] : m_nodeWakeups) {
+    if (!m_nodeWakeups) return;
+    for (auto& [nodeId, wakeup] : *m_nodeWakeups) {
         (void)nodeId;
         if (wakeup) {
             wakeup->interrupt();
@@ -663,8 +687,9 @@ MediaGraphExecutionContext::findAvSyncGroup(
     }
 
     m_executionOrder = std::move(topology).value().order;
+    m_nodeExitTokens.emplace();
     for (const auto id : m_executionOrder)
-        m_nodeExitTokens.emplace(id.value, std::make_shared<MediaGraphWorkerExitToken>());
+        m_nodeExitTokens->emplace(id.value, std::make_shared<MediaGraphWorkerExitToken>());
     return ::media::Status::success();
 }
 

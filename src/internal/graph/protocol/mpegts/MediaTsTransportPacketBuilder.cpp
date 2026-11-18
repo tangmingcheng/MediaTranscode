@@ -5,6 +5,20 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+::media::Status MediaTsTransportPacketBuilder::clearPreparedDiscontinuity(
+    std::array<std::uint8_t, 188>& packet)
+{
+    // ISO/IEC 13818-1 adaptation_field: the flag is the high bit of the
+    // flags byte following adaptation_field_length, independent of stuffing.
+    if (packet[0] != 0x47 || (packet[3] & 0x30) != 0x30 ||
+        packet[4] == 0 || packet[4] > 182 || (packet[5] & 0x80) == 0)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS prepared payload has no discontinuity flag to consume"));
+    packet[5] &= 0x7F;
+    return ::media::Status::success();
+}
+
 namespace {
 
 constexpr std::size_t PacketSize = 188;
@@ -100,9 +114,21 @@ MediaTsTransportPacketBuilder::payloadPacketCount(
     if (!logicalBytes) {
         return ::media::Result<std::size_t>::failure(logicalBytes.error());
     }
+    return payloadPacketCount(logicalBytes.value().size(), randomAccess, discontinuity);
+}
+
+::media::Result<std::size_t>
+MediaTsTransportPacketBuilder::payloadPacketCount(
+    std::size_t logicalSize,
+    bool randomAccess,
+    bool discontinuity)
+{
+    if (logicalSize == 0) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS logical unit is empty"));
+    }
     const std::size_t firstCapacity =
         randomAccess || discontinuity ? 182 : 184;
-    const std::size_t logicalSize = logicalBytes.value().size();
     const std::size_t remaining = logicalSize > firstCapacity
         ? logicalSize - firstCapacity
         : 0;
@@ -111,33 +137,36 @@ MediaTsTransportPacketBuilder::payloadPacketCount(
     return ::media::Result<std::size_t>::success(1 + trailingPackets);
 }
 
-::media::Result<std::vector<std::array<std::uint8_t, 188>>>
+::media::Status
 MediaTsTransportPacketBuilder::payload(
     std::uint16_t pid,
     std::uint8_t initialPayloadContinuity,
     std::span<const std::span<const std::uint8_t>> segments,
     bool randomAccess,
     bool discontinuity,
-    std::vector<std::array<std::uint8_t, 188>> workspace)
+    std::span<std::array<std::uint8_t, 188>> packets)
 {
     if (pid >= NullPid || initialPayloadContinuity > 15) {
-        return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::failure(
+        return ::media::Status::failure(
             invalid("MPEG-TS packet builder identity is invalid"));
     }
     auto logicalBytes = SegmentedLogicalBytes::create(segments);
     if (!logicalBytes) {
-        return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::failure(
+        return ::media::Status::failure(
             logicalBytes.error());
     }
     auto reader = std::move(logicalBytes).value();
-    workspace.clear();
     auto packetCount = payloadPacketCount(
-        segments, randomAccess, discontinuity);
+        reader.size(), randomAccess, discontinuity);
     if (!packetCount) {
-        return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::failure(
+        return ::media::Status::failure(
             packetCount.error());
     }
-    workspace.reserve(packetCount.value());
+    if (packets.size() != packetCount.value()) {
+        return ::media::Status::failure(
+            invalid("MPEG-TS packet builder requires exact prepared packet storage"));
+    }
+    std::size_t packetIndex = 0;
     std::size_t offset = 0;
     std::uint8_t nextContinuity = initialPayloadContinuity;
     while (offset < reader.size()) {
@@ -171,10 +200,9 @@ MediaTsTransportPacketBuilder::payload(
             payloadOffset, payloadBytes));
         offset += payloadBytes;
         nextContinuity = static_cast<std::uint8_t>((nextContinuity + 1) & 0x0F);
-        workspace.push_back(std::move(packet));
+        packets[packetIndex++] = std::move(packet);
     }
-    return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::success(
-        std::move(workspace));
+    return ::media::Status::success();
 }
 
 ::media::Result<std::array<std::uint8_t, 188>>

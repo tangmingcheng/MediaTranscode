@@ -36,6 +36,8 @@ public:
         const MediaAvStartupVideoPreparationCapability&) = delete;
 
     const void* stateIdentity() const noexcept { return m_state.get(); }
+    const MediaOutputReservationStoragePlan& reservationStorage() const noexcept
+    { return m_state->reservationStorage(); }
     MediaAvStartupVideoPreparationSnapshot snapshot() const
     {
         return m_state->snapshot();
@@ -98,13 +100,12 @@ public:
     ::media::Status publishInitialAnchor(
         std::uint64_t generation,
         std::uint64_t releaseIdentity,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin)
+        MediaPlaybackActivation activation)
     {
         if (m_role != MediaAvStartupVideoPreparationRole::SequencerActivation)
             return wrongRole();
         return m_state->publishInitialAnchor(
-            generation, releaseIdentity, epoch, audioOrigin);
+            generation, releaseIdentity, std::move(activation));
     }
     ::media::Status acknowledgeExtractorReanchor(
         std::uint64_t generation,

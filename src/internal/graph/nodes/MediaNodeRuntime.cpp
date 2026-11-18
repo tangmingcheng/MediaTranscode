@@ -135,11 +135,15 @@ const std::string& MediaNodeRuntime::name() const noexcept
     }
 
     if (outcome.value().state == MediaNodeProcessState::Finished && canFinishProcess()) {
-        for (MediaChannel* channel : context.outputChannels(m_nodeId)) {
-            channel->close();
-        }
+        closeOutputChannels(context);
     }
     return outcome;
+}
+
+void MediaNodeRuntime::closeOutputChannels(MediaGraphExecutionContext& context)
+{
+    for (auto* channel : context.outputChannels(nodeId()))
+        if (channel) channel->close();
 }
 
 bool MediaNodeRuntime::canFinishProcess() const noexcept

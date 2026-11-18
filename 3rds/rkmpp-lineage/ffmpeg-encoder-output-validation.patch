@@ -1,0 +1,17 @@
+--- a/libavcodec/rkmppenc.c
++++ b/libavcodec/rkmppenc.c
+@@ -980,6 +980,14 @@
+     {
+         size_t mpp_pkt_length = mpp_packet_get_length(mpp_pkt);
+ 
++        /* Match upstream FFmpeg's rejection of empty non-EOS output. */
++        if (!mpp_pkt_length || !mpp_packet_get_data(mpp_pkt) ||
++            mpp_packet_is_partition(mpp_pkt)) {
++            av_log(avctx, AV_LOG_ERROR, "Encoder returned empty or partitioned output\n");
++            ret = AVERROR_EXTERNAL;
++            goto exit;
++        }
++
+         if ((ret = ff_get_encode_buffer(avctx, packet, mpp_pkt_length, 0)) < 0) {
+             av_log(avctx, AV_LOG_ERROR, "ff_get_encode_buffer failed: %d\n", ret);
+             goto exit;

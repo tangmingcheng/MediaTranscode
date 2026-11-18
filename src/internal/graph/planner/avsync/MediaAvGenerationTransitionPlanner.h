@@ -1,21 +1,32 @@
 #pragma once
 
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
-#include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
+#include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
+#include "internal/graph/model/MediaVideoStartupReadiness.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 
 namespace media::ffmpeg::graph {
 
 class MediaAvGenerationTransitionPlanner final {
 public:
-    static MediaAvGenerationTransitionPlan plan(
-        MediaAvSyncOutputAdapterKind adapter,
+    static ::media::Result<std::size_t> sourceContributionStorageBytes(
+        MediaAvSyncSourceClockMode sourceClockMode, MediaBranchMode audioBranchMode,
+        bool videoFilterActive, MediaVideoStartupReadiness videoReadiness, bool selectedAudio);
+
+    static ::media::Result<MediaAvGenerationTransitionPlan> planSourceContribution(
         MediaAvSyncSourceClockMode sourceClockMode,
         MediaBranchMode audioBranchMode,
         bool videoFilterActive,
-        MediaRunningTime acknowledgementTimeout,
-        MediaRunningTime terminalDrainWindow);
+        MediaVideoStartupReadiness videoReadiness,
+        MediaRunningTime acknowledgementTimeout, bool selectedAudio);
+
+    static MediaAvGenerationTransitionPlan plan(
+        const std::variant<MediaSeparateRtpOutputRuntimePlan, MediaProjectMpegTsRuntimeOutputPlan>& output,
+        MediaAvSyncSourceClockMode sourceClockMode,
+        MediaBranchMode audioBranchMode,
+        bool videoFilterActive,
+        MediaRunningTime acknowledgementTimeout);
 };
 
 } // namespace media::ffmpeg::graph

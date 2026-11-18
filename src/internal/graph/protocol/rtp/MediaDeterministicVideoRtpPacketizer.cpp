@@ -1,100 +1,131 @@
 #include "internal/graph/protocol/rtp/MediaDeterministicVideoRtpPacketizer.h"
-
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
 #include "internal/graph/protocol/codec/MediaVideoNalUnitScanner.h"
-
 #include <algorithm>
 #include <limits>
-#include <new>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-using PacketResult =
-    ::media::Result<std::vector<MediaVideoRtpPayloadPacket>>;
+// One access unit, one caller-owned workspace. NAL parsing remains shared with
+// the source validators; STAP/AP packing and FU boundaries retain decode order.
+struct PayloadWriter final {
+    MediaAnnexBCodec codec;
+    std::span<std::uint8_t> workspace;
+    void* state;
+    MediaDeterministicVideoRtpPacketizer::Sink sink;
+    std::size_t remainingUnits;
+    std::span<const std::uint8_t> single;
+    std::size_t aggregateBytes = 0;
+    std::optional<::media::ErrorInfo> error;
 
-std::size_t headerBytes(MediaAnnexBCodec codec) noexcept
-{
-    return codec == MediaAnnexBCodec::H264 ? 1U : 2U;
-}
+    std::size_t headerBytes() const noexcept
+    { return codec == MediaAnnexBCodec::H264 ? 1U : 2U; }
 
-std::vector<std::uint8_t> aggregate(
-    std::span<const std::span<const std::uint8_t>> units,
-    MediaAnnexBCodec codec)
-{
-    std::size_t bytes = codec == MediaAnnexBCodec::H264 ? 1U : 2U;
-    for (const auto unit : units) bytes += 2U + unit.size();
-    std::vector<std::uint8_t> payload;
-    payload.reserve(bytes);
-    if (codec == MediaAnnexBCodec::H264) {
-        std::uint8_t nri = 0;
-        for (const auto unit : units) {
-            nri = (std::max)(
-                nri, static_cast<std::uint8_t>(unit[0] & 0x60U));
-        }
-        payload.push_back(static_cast<std::uint8_t>(nri | 24U));
-    } else {
-        std::uint8_t minimumLayerId = 0x3fU;
-        std::uint8_t minimumTid = 0x07U;
-        for (const auto unit : units) {
-            const auto layerId = static_cast<std::uint8_t>(
-                ((unit[0] & 0x01U) << 5U) | (unit[1] >> 3U));
-            minimumLayerId = (std::min)(minimumLayerId, layerId);
-            minimumTid = (std::min)(
-                minimumTid, static_cast<std::uint8_t>(unit[1] & 0x07U));
-        }
-        payload.push_back(static_cast<std::uint8_t>(
-            (48U << 1U) | (minimumLayerId >> 5U)));
-        payload.push_back(static_cast<std::uint8_t>(
-            (minimumLayerId << 3U) | minimumTid));
+    bool emit(std::size_t bytes, bool marker)
+    {
+        auto status = sink(state, workspace.first(bytes), marker);
+        if (!status) error = status.error();
+        return status.ok();
     }
-    for (const auto unit : units) {
-        payload.push_back(static_cast<std::uint8_t>(unit.size() >> 8U));
-        payload.push_back(static_cast<std::uint8_t>(unit.size()));
-        payload.insert(payload.end(), unit.begin(), unit.end());
-    }
-    return payload;
-}
 
-void fragment(std::span<const std::uint8_t> nal,
-              MediaAnnexBCodec codec,
-              std::size_t maximumPayload,
-              std::vector<MediaVideoRtpPayloadPacket>& output)
-{
-    const auto nalHeader = headerBytes(codec);
-    const auto fuHeader = codec == MediaAnnexBCodec::H264 ? 2U : 3U;
-    const auto capacity = maximumPayload - fuHeader;
-    const auto originalType = codec == MediaAnnexBCodec::H264
-        ? static_cast<std::uint8_t>(nal[0] & 0x1fU)
-        : static_cast<std::uint8_t>((nal[0] >> 1U) & 0x3fU);
-    auto remaining = nal.subspan(nalHeader);
-    bool first = true;
-    while (!remaining.empty()) {
-        const auto count = (std::min)(capacity, remaining.size());
-        MediaVideoRtpPayloadPacket packet;
-        packet.payload.reserve(fuHeader + count);
+    void appendUnit(std::span<const std::uint8_t> unit)
+    {
+        workspace[aggregateBytes++] = static_cast<std::uint8_t>(unit.size() >> 8U);
+        workspace[aggregateBytes++] = static_cast<std::uint8_t>(unit.size());
+        std::copy(unit.begin(), unit.end(), workspace.begin() + aggregateBytes);
+        aggregateBytes += unit.size();
         if (codec == MediaAnnexBCodec::H264) {
-            packet.payload.push_back(static_cast<std::uint8_t>(
-                (nal[0] & 0xe0U) | 28U));
+            workspace[0] = static_cast<std::uint8_t>(
+                24U | (std::max)(static_cast<std::uint8_t>(workspace[0] & 0x60U),
+                                static_cast<std::uint8_t>(unit[0] & 0x60U)));
         } else {
-            packet.payload.push_back(static_cast<std::uint8_t>(
-                (nal[0] & 0x81U) | (49U << 1U)));
-            packet.payload.push_back(nal[1]);
+            const auto layer = (std::min)(
+                static_cast<unsigned>(((workspace[0] & 1U) << 5U) | (workspace[1] >> 3U)),
+                static_cast<unsigned>(((unit[0] & 1U) << 5U) | (unit[1] >> 3U)));
+            const auto tid = (std::min)(workspace[1] & 7U, unit[1] & 7U);
+            workspace[0] = static_cast<std::uint8_t>((48U << 1U) | (layer >> 5U));
+            workspace[1] = static_cast<std::uint8_t>((layer << 3U) | tid);
         }
-        std::uint8_t flags = originalType;
-        if (first) flags |= 0x80U;
-        if (count == remaining.size()) flags |= 0x40U;
-        packet.payload.push_back(flags);
-        packet.payload.insert(
-            packet.payload.end(), remaining.begin(), remaining.begin() + count);
-        output.push_back(std::move(packet));
-        remaining = remaining.subspan(count);
-        first = false;
     }
-}
 
+    bool flush(bool marker)
+    {
+        if (aggregateBytes) {
+            if (!emit(aggregateBytes, marker)) return false;
+        } else if (!single.empty()) {
+            std::copy(single.begin(), single.end(), workspace.begin());
+            if (!emit(single.size(), marker)) return false;
+        }
+        single = {};
+        aggregateBytes = 0;
+        return true;
+    }
+
+    void consume(std::span<const std::uint8_t> unit)
+    {
+        if (error) return;
+        --remainingUnits;
+        if (unit.size() > workspace.size()) {
+            if (!flush(false)) return;
+            const auto fuHeader = codec == MediaAnnexBCodec::H264 ? 2U : 3U;
+            const auto capacity = workspace.size() - fuHeader;
+            const auto type = codec == MediaAnnexBCodec::H264
+                ? static_cast<std::uint8_t>(unit[0] & 0x1fU)
+                : static_cast<std::uint8_t>((unit[0] >> 1U) & 0x3fU);
+            auto remaining = unit.subspan(headerBytes());
+            bool first = true;
+            while (!remaining.empty()) {
+                const auto count = (std::min)(capacity, remaining.size());
+                if (codec == MediaAnnexBCodec::H264) {
+                    workspace[0] = static_cast<std::uint8_t>((unit[0] & 0xe0U) | 28U);
+                } else {
+                    workspace[0] = static_cast<std::uint8_t>((unit[0] & 0x81U) | (49U << 1U));
+                    workspace[1] = unit[1];
+                }
+                workspace[fuHeader - 1U] = static_cast<std::uint8_t>(
+                    type | (first ? 0x80U : 0U) |
+                    (count == remaining.size() ? 0x40U : 0U));
+                std::copy_n(remaining.begin(), count, workspace.begin() + fuHeader);
+                if (!emit(fuHeader + count, remainingUnits == 0 && count == remaining.size())) return;
+                remaining = remaining.subspan(count);
+                first = false;
+            }
+            return;
+        }
+
+        const auto lengthLimit = (std::numeric_limits<std::uint16_t>::max)();
+        if (aggregateBytes) {
+            if (unit.size() <= lengthLimit &&
+                2U + unit.size() <= workspace.size() - aggregateBytes) {
+                appendUnit(unit);
+                return;
+            }
+            if (!flush(false)) return;
+        } else if (!single.empty()) {
+            const auto base = headerBytes();
+            if (single.size() <= lengthLimit && unit.size() <= lengthLimit &&
+                2U + single.size() <= workspace.size() - base &&
+                2U + unit.size() <= workspace.size() - base - 2U - single.size()) {
+                if (codec == MediaAnnexBCodec::H264) {
+                    workspace[0] = 24U;
+                } else {
+                    workspace[0] = static_cast<std::uint8_t>((48U << 1U) | 1U);
+                    workspace[1] = 0xffU;
+                }
+                aggregateBytes = base;
+                appendUnit(single);
+                single = {};
+                appendUnit(unit);
+                return;
+            }
+            if (!flush(false)) return;
+        }
+        single = unit;
+    }
+};
 } // namespace
-
 ::media::Result<std::uint64_t>
 MediaDeterministicVideoRtpPacketizer::maximumDatagramsForPayloadWindow(
     std::uint64_t maximumPayloadBytes,
@@ -145,63 +176,36 @@ MediaDeterministicVideoRtpPacketizer::maximumDatagramsPerAccessUnit(
         maximumAccessUnitBytes, 1U, codec, maximumRtpPayloadBytes);
 }
 
-PacketResult MediaDeterministicVideoRtpPacketizer::packetize(
+::media::Status MediaDeterministicVideoRtpPacketizer::packetize(
     std::span<const std::uint8_t> accessUnit,
     MediaAnnexBCodec codec,
     const MediaEncodedPacketLayout& layout,
-    std::size_t maximumRtpPayloadBytes)
+    std::span<std::uint8_t> workspace,
+    void* state, Sink sink)
 {
     const auto fuHeader = codec == MediaAnnexBCodec::H264 ? 2U : 3U;
-    if (maximumRtpPayloadBytes <= fuHeader) {
-        return PacketResult::failure(::media::ErrorInfo::invalidArgument(
-            "video RTP payload bound cannot carry a fragmentation unit"));
+    if (!sink || workspace.size() <= fuHeader) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "video RTP packetizer requires a sink and fragmentation workspace"));
     }
-    auto parsed = MediaVideoNalUnitScanner::scan(accessUnit, codec, layout);
-    if (!parsed) return PacketResult::failure(parsed.error());
-    std::vector<MediaVideoRtpPayloadPacket> output;
-    try {
-        const auto& units = parsed.value();
-        for (std::size_t index = 0; index < units.size();) {
-            if (units[index].size() > maximumRtpPayloadBytes) {
-                fragment(units[index], codec, maximumRtpPayloadBytes, output);
-                ++index;
-                continue;
-            }
-            const auto aggregateHeader =
-                codec == MediaAnnexBCodec::H264 ? 1U : 2U;
-            std::size_t aggregateBytes = aggregateHeader;
-            std::size_t end = index;
-            while (end < units.size() &&
-                   units[end].size() <= maximumRtpPayloadBytes &&
-                   units[end].size() <=
-                       (std::numeric_limits<std::uint16_t>::max)() &&
-                   2U + units[end].size() <=
-                       maximumRtpPayloadBytes - aggregateBytes) {
-                aggregateBytes += 2U + units[end].size();
-                ++end;
-            }
-            if (end - index >= 2U) {
-                output.push_back({aggregate(
-                    std::span<const std::span<const std::uint8_t>>(
-                        units.data() + index, end - index), codec), false});
-                index = end;
-            } else {
-                output.push_back({
-                    std::vector<std::uint8_t>(
-                        units[index].begin(), units[index].end()), false});
-                ++index;
-            }
-        }
-    } catch (const std::bad_alloc&) {
-        return PacketResult::failure(::media::ErrorInfo::allocationFailed(
-            "deterministic video RTP payloads"));
-    }
-    if (output.empty()) {
-        return PacketResult::failure(::media::ErrorInfo::invalidArgument(
-            "video RTP packetizer emitted no payload"));
-    }
-    output.back().marker = true;
-    return PacketResult::success(std::move(output));
+    // Validate the complete AU before the first side-effecting sink invocation.
+    // The count also identifies the final FU without retaining a NAL index.
+    std::size_t units = 0;
+    auto validated = MediaVideoNalUnitScanner::visit(accessUnit, codec, layout, &units,
+        [](void* count, std::span<const std::uint8_t>) {
+            ++*static_cast<std::size_t*>(count);
+        });
+    if (!validated) return validated;
+    if (!units) return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "video RTP packetizer emitted no payload"));
+    PayloadWriter writer{codec, workspace, state, sink, units};
+    auto written = MediaVideoNalUnitScanner::visit(accessUnit, codec, layout, &writer,
+        [](void* context, std::span<const std::uint8_t> unit) {
+            static_cast<PayloadWriter*>(context)->consume(unit);
+        });
+    if (!written) return written;
+    if (!writer.error) writer.flush(true);
+    return writer.error ? ::media::Status::failure(*writer.error)
+                        : ::media::Status::success();
 }
-
 } // namespace media::ffmpeg::graph

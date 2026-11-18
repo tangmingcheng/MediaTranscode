@@ -19,7 +19,9 @@ public:
         std::string identity,
         std::shared_ptr<MediaAvGenerationPurgeTarget> child);
     ::media::Status seal();
-    ::media::Result<MediaAvGenerationAcknowledgement> purgeAll(
+    void bindPurgeProgressWakeups(
+        std::shared_ptr<const std::vector<std::shared_ptr<MediaNodeWakeup>>> wakeups);
+    ::media::Result<std::optional<MediaAvGenerationAcknowledgement>> purgeAll(
         const MediaAvGenerationPurge& purge);
 
 private:
@@ -29,6 +31,9 @@ private:
     MediaAvGenerationParticipantPlan m_plan;
     std::map<std::string, std::shared_ptr<MediaAvGenerationPurgeTarget>> m_children;
     std::optional<std::uint64_t> m_lastTransitionSequence;
+    std::optional<MediaAvGenerationPurge> m_pendingPurge;
+    std::vector<bool> m_completedChildren;
+    bool m_acknowledged = false;
     bool m_sealed = false;
 };
 

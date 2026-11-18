@@ -1,9 +1,12 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 #include "internal/graph/planner/realtime/MediaDatagramTransportPlan.h"
+#include "internal/graph/planner/realtime/MediaNetworkStorageWakeupPlanner.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/runtime/resource/MediaStorageReleaseNotification.h"
 
 #include <memory>
 #include <optional>
@@ -32,7 +35,8 @@ public:
     static ::media::Result<std::unique_ptr<MediaDatagramTransportPlanSourceNode>>
     create(MediaNodeId nodeId,
            MediaDatagramTransportPlanTemplate planTemplate,
-           std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+           std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+           MediaNetworkStorageWakeupPlan storageWakeups);
     static MediaNodeKind staticKind() noexcept;
     static constexpr std::string_view generationPurgeIdentity() noexcept
     {
@@ -41,6 +45,7 @@ public:
     std::shared_ptr<MediaAvGenerationPurgeTarget>
     generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
@@ -56,14 +61,19 @@ private:
     MediaDatagramTransportPlanSourceNode(
         MediaNodeId nodeId,
         MediaDatagramTransportPlanTemplate planTemplate,
-        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
+        MediaNetworkStorageWakeupPlan storageWakeups);
     void resetState() noexcept;
 
     MediaDatagramTransportPlanTemplate m_planTemplate;
+    const MediaNetworkStorageWakeupPlan m_storageWakeups;
+    std::shared_ptr<const MediaStorageReleaseNotification> m_storageReleaseNotification;
     std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     std::shared_ptr<MediaDatagramTransportPlanSourceGenerationState>
         m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_generationPurge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+    std::optional<MediaAvGenerationPurge> m_completedPurge;
     MediaBufferRef& m_pendingPlan;
     std::optional<std::uint64_t>& m_pendingGeneration;
     std::optional<std::uint64_t>& m_publishedGeneration;

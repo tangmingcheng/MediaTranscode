@@ -13,7 +13,8 @@ enum class MediaControlBufferKind {
     Unknown,
     Eof,
     Flush,
-    Abort
+    Abort,
+    EndGeneration
 };
 
 enum class MediaControlBufferFlow {
@@ -29,6 +30,7 @@ public:
         std::uint64_t generation);
 
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     MediaControlBufferKind controlKind() const noexcept;
     std::optional<MediaControlBufferFlow> flow() const noexcept;
     std::optional<std::uint64_t> generation() const noexcept;
@@ -48,5 +50,9 @@ struct MediaControlBufferClassification final {
 
 ::media::Result<MediaControlBufferClassification>
 classifyMediaControlBuffer(const MediaBufferRef& buffer);
+
+// Empty for non-EndGeneration buffers; malformed matching controls fail.
+::media::Result<std::optional<std::uint64_t>>
+mediaEndGeneration(const MediaBufferRef& buffer);
 
 } // namespace media::ffmpeg::graph

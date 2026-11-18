@@ -12,6 +12,8 @@ public:
     MediaRealtimeBetaRequestMapper() = delete;
     static ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest> map(
         const mt_beta_realtime_config& config);
+    static ::media::Result<ffmpeg::graph::MediaRealtimeRtpTranscodeRequest> map(
+        const mt_beta_realtime_composition_config& config);
     static ::media::Result<ffmpeg::graph::MediaRealtimeVideoOutputRequest> mapOutput(
         const mt_beta_video_output& output);
 };

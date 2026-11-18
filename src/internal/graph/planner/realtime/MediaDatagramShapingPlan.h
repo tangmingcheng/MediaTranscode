@@ -141,7 +141,8 @@ struct MediaDatagramWireDeadlinePlan final {
 
     ::media::Result<MediaRunningTime> canonicalDeadline(
         MediaRunningTime canonicalRelease,
-        MediaRunningTime materializedAt) const noexcept;
+        MediaRunningTime materializedAt,
+        std::optional<MediaRunningTime> protocolDeadline) const noexcept;
 
     friend bool operator==(const MediaDatagramWireDeadlinePlan&,
                            const MediaDatagramWireDeadlinePlan&) = default;

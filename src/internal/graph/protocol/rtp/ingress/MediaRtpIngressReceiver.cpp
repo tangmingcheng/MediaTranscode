@@ -20,14 +20,15 @@ namespace {
 
 MediaRtpIngressReceiver::MediaRtpIngressReceiver(
     MediaRtpIngressStorage storage,
-    std::unique_ptr<MediaRtpIngressAdapter> adapter) noexcept
+    std::shared_ptr<MediaRtpIngressAdapter> adapter) noexcept
     : m_storage(std::move(storage)), m_adapter(std::move(adapter))
 {
 }
 
 ::media::Result<MediaRtpIngressReceiver> MediaRtpIngressReceiver::create(
-    const MediaRtpIngressPlan& plan,
-    std::unique_ptr<MediaRtpIngressAdapter> adapter)
+    const MediaRtpReceiveGeometry& plan,
+    std::shared_ptr<MediaRtpIngressAdapter> adapter,
+    MediaLineageAllocationScope allocation)
 {
     if (auto status = plan.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressReceiver>::failure(
@@ -42,7 +43,7 @@ MediaRtpIngressReceiver::MediaRtpIngressReceiver(
         plan.batchByteCapacity(),
         plan.maximumDatagramBytes(),
         plan.descriptorCapacity(),
-        plan.requiredBufferAlignmentBytes());
+        plan.requiredBufferAlignmentBytes(), std::move(allocation));
     if (!storage) {
         return ::media::Result<MediaRtpIngressReceiver>::failure(
             storage.error());
@@ -85,6 +86,11 @@ MediaRtpIngressReceiver::receiveNext(int timeoutMilliseconds)
                 "RTP ingress adapter reported inconsistent completion evidence"));
     }
     return m_storage.seal(received.value());
+}
+
+::media::Status MediaRtpIngressReceiver::waitForBatchRelease(std::stop_token stopToken)
+{
+    return m_storage.waitForBatchRelease(stopToken);
 }
 
 ::media::Status MediaRtpIngressReceiver::interruptReceive() noexcept

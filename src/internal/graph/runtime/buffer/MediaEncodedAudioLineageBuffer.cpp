@@ -17,7 +17,9 @@ namespace media::ffmpeg::graph {
     }
     std::int64_t expected = fragments.front().interval.begin;
     for (const auto& fragment : fragments) {
-        if (!fragment.lineage || fragment.lineage->generation != origin.generation ||
+        if (!fragment.valid() ||
+            !sameMediaCanonicalTimeline(*fragments.front().lineage, *fragment.lineage) ||
+            fragment.lineage->generation != origin.generation ||
             fragment.interval.sampleRate != origin.outputSampleRate ||
             fragment.interval.begin != expected ||
             fragment.interval.end <= fragment.interval.begin) {
@@ -27,14 +29,16 @@ namespace media::ffmpeg::graph {
         }
         expected = fragment.interval.end;
     }
+    auto storage = MediaImmutableArray<MediaAudioIntervalFragment>::copy(fragments);
+    if (!storage) return ::media::Result<MediaBufferRef>::failure(storage.error());
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaEncodedAudioLineageBuffer(
-            std::move(media), std::move(fragments), origin)));
+            std::move(media), std::move(storage).value(), origin)));
 }
 
 MediaEncodedAudioLineageBuffer::MediaEncodedAudioLineageBuffer(
     MediaBufferRef media,
-    std::vector<MediaAudioIntervalFragment> fragments,
+    MediaImmutableArray<MediaAudioIntervalFragment> fragments,
     MediaAudioPlaybackOrigin origin)
     : m_media(std::move(media)), m_fragments(std::move(fragments)), m_origin(origin)
 {
@@ -48,7 +52,7 @@ std::optional<std::uint64_t> MediaEncodedAudioLineageBuffer::payloadFootprintByt
     return m_media->payloadFootprintBytes();
 }
 const MediaBufferRef& MediaEncodedAudioLineageBuffer::media() const noexcept { return m_media; }
-const std::vector<MediaAudioIntervalFragment>& MediaEncodedAudioLineageBuffer::fragments() const noexcept { return m_fragments; }
+std::span<const MediaAudioIntervalFragment> MediaEncodedAudioLineageBuffer::fragments() const noexcept { return m_fragments.view(); }
 const MediaAudioPlaybackOrigin& MediaEncodedAudioLineageBuffer::audioOrigin() const noexcept { return m_origin; }
 
 } // namespace media::ffmpeg::graph

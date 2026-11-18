@@ -1,30 +1,44 @@
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
 
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/planner/realtime/MediaOutputReservationStoragePlanner.h"
 
 #include <array>
 
 namespace media::ffmpeg::graph {
 
 ::media::Result<std::shared_ptr<MediaAvStartupVideoPreparationState>>
-MediaAvStartupVideoPreparationState::create(MediaAvSyncGroupKey groupKey)
+MediaAvStartupVideoPreparationState::create(MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage)
 {
-    if (!groupKey.valid()) {
+    if (!groupKey.valid() || !MediaLineageAllocator<std::byte>{storage.allocation()}.resource()) {
         return ::media::Result<std::shared_ptr<
             MediaAvStartupVideoPreparationState>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Video preparation state requires a valid sync group"));
+                "Video preparation state requires a valid sync group and allocation owner"));
     }
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(storage, storage.allocation()); !valid)
+        return ::media::Result<std::shared_ptr<MediaAvStartupVideoPreparationState>>::failure(valid.error());
     return ::media::Result<std::shared_ptr<
         MediaAvStartupVideoPreparationState>>::success(
         std::shared_ptr<MediaAvStartupVideoPreparationState>(
-            new MediaAvStartupVideoPreparationState(std::move(groupKey))));
+            new MediaAvStartupVideoPreparationState(std::move(groupKey), std::move(storage))));
 }
 
 MediaAvStartupVideoPreparationState::MediaAvStartupVideoPreparationState(
-    MediaAvSyncGroupKey groupKey)
-    : m_groupKey(std::move(groupKey))
+    MediaAvSyncGroupKey groupKey, MediaOutputReservationStoragePlan storage)
+    : m_storage(std::move(storage)), m_groupKey(std::move(groupKey))
 {
+}
+
+::media::Status MediaAvStartupVideoPreparationState::validateStorage(
+    const MediaOutputReservationStoragePlan& storage) const
+{
+    if (auto valid = MediaOutputReservationStoragePlanner::validate(m_storage, storage.allocation()); !valid)
+        return valid;
+    if (m_storage.prepared() != storage.prepared())
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Video preparation state differs from its planned reservation layout"));
+    return ::media::Status::success();
 }
 
 ::media::Status MediaAvStartupVideoPreparationState::failureLocked(
@@ -172,8 +186,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
 ::media::Status MediaAvStartupVideoPreparationState::publishInitialAnchor(
     std::uint64_t generation,
     std::uint64_t releaseIdentity,
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin)
+    MediaPlaybackActivation activation)
 {
     std::shared_ptr<MediaNodeWakeup> extractor;
     {
@@ -181,15 +194,11 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
     if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
-            !m_extractorOutputsReservation.valid() || m_anchoredEpoch ||
-            epoch.generation != generation ||
-            audioOrigin.generation != generation ||
-            audioOrigin.sourceStart != epoch.sourceStart ||
-            audioOrigin.masterRelease != epoch.masterRelease) {
+            !m_extractorOutputsReservation.valid() || m_anchoredActivation ||
+            activation.epoch().generation != generation) {
             return failureLocked("initial epoch anchor");
         }
-        m_anchoredEpoch = epoch;
-        m_anchoredAudioOrigin = audioOrigin;
+        m_anchoredActivation = std::move(activation);
         extractor = m_extractorWakeup.lock();
     }
     if (extractor) extractor->notify();
@@ -207,7 +216,7 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
     if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
-            !m_anchoredEpoch || !m_anchoredAudioOrigin ||
+            !m_anchoredActivation ||
             m_extractorOutputsReanchored) {
             return failureLocked("extractor reanchor acknowledgement");
         }
@@ -231,14 +240,13 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
             !identity) return identity;
     if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
         !m_outputReservation.valid() ||
-            !m_extractorOutputsReservation.valid() || !m_anchoredEpoch ||
-            !m_anchoredAudioOrigin || !m_extractorOutputsReanchored) {
+            !m_extractorOutputsReservation.valid() || !m_anchoredActivation || !m_extractorOutputsReanchored) {
             return failureLocked("release authorization");
         }
         const std::array<MediaOutputCapacityReservationHandle, 2> handles{
         m_outputReservation, m_extractorOutputsReservation};
         if (auto authorized = MediaReservedOutputTransaction::authorize(
-                handles, activation); !authorized) {
+                handles, activation, m_storage); !authorized) {
             return authorized;
         }
         m_phase = MediaAvStartupVideoPreparationPhase::ReleaseCommitted;
@@ -270,8 +278,7 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         m_reservedVideoUnit.reset();
         m_outputReservation = {};
         m_extractorOutputsReservation = {};
-        m_anchoredEpoch.reset();
-        m_anchoredAudioOrigin.reset();
+        m_anchoredActivation.reset();
         m_extractorOutputsReanchored = false;
         sequencer = m_sequencerWakeup.lock();
         filter = m_outputWakeup.lock();
@@ -321,8 +328,7 @@ MediaAvStartupVideoPreparationState::snapshot() const
     return {m_groupKey, m_phase, m_generation, m_releaseIdentity,
             m_committedVideoUnits, m_videoUnitCount,
         m_outputReservation.valid(),
-            m_extractorOutputsReservation.valid(), m_anchoredEpoch,
-            m_anchoredAudioOrigin, m_extractorOutputsReanchored};
+            m_extractorOutputsReservation.valid(), m_anchoredActivation, m_extractorOutputsReanchored};
 }
 
 } // namespace media::ffmpeg::graph

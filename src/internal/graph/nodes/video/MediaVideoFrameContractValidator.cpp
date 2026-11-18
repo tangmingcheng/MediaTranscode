@@ -4,6 +4,7 @@
 
 extern "C" {
 #include <libavutil/frame.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_drm.h>
 #include <libavutil/pixdesc.h>
 }
@@ -286,6 +287,35 @@ MediaVideoFrameContractValidator::validate(
     facts.software = !hardware;
     facts.bufferIdentity = reinterpret_cast<std::uintptr_t>(frame.buf[0] ? frame.buf[0]->data : frame.data[0]);
     return ::media::Result<MediaVideoFrameRuntimeFacts>::success(facts);
+}
+
+::media::Status MediaVideoFrameContractValidator::validateHardwareFrames(
+    const AVBufferRef* framesReference,
+    const MediaHardwareDescriptor& contract,
+    const char* stage)
+{
+    const AVPixelFormat format = av_get_pix_fmt(contract.pixelFormat.c_str());
+    const AVPixelFormat surfaceFormat = av_get_pix_fmt(contract.surfacePixelFormat.c_str());
+    if (!contract.isHardwareBacked() || !contract.size.isValid() ||
+        format == AV_PIX_FMT_NONE || surfaceFormat == AV_PIX_FMT_NONE) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            std::string(stage) + " requires a complete planner hardware surface contract"));
+    }
+    if (!framesReference || !framesReference->data ||
+        framesReference->size < sizeof(AVHWFramesContext)) {
+        return ::media::Status::failure(contractFailure(stage,
+            "missing hardware frames context"));
+    }
+    const auto* frames = reinterpret_cast<const AVHWFramesContext*>(framesReference->data);
+    // FFmpeg defines format as the hardware type, sw_format as its actual
+    // data layout, and width/height as allocated (possibly aligned) geometry.
+    if (!frames->device_ref || !frames->device_ref->data ||
+        frames->format != format || frames->sw_format != surfaceFormat ||
+        frames->width < contract.size.width || frames->height < contract.size.height) {
+        return ::media::Status::failure(contractFailure(stage,
+            "hardware frames format, surface layout, device, or allocation dimensions differ"));
+    }
+    return ::media::Status::success();
 }
 
 std::string MediaVideoFrameContractValidator::describe(

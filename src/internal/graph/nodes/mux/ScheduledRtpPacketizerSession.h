@@ -24,7 +24,8 @@ public:
     virtual ::media::Status open() = 0;
     virtual ::media::Status writeAccessUnit(
         const AVPacket& packet,
-        MediaRtpTimestamp timestamp) = 0;
+        MediaRtpTimestamp timestamp,
+        std::span<std::uint8_t> scratch) = 0;
 };
 
 class ScheduledRtpPacketizerFactory {

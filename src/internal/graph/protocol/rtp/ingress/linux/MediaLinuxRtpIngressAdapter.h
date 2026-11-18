@@ -1,8 +1,10 @@
 #pragma once
 
-#include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
+#include "internal/graph/planner/realtime/MediaRtpReceiveGeometry.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 #include "internal/graph/protocol/rtp/ingress/MediaRtpIngressAdapter.h"
+
+#include "internal/graph/runtime/storage/MediaLineageUniquePtr.h"
 
 #include <memory>
 
@@ -12,9 +14,12 @@ class MediaLinuxRtpIngressAdapter final : public MediaRtpIngressAdapter {
 public:
     ~MediaLinuxRtpIngressAdapter() override;
 
-    static ::media::Result<std::unique_ptr<MediaRtpIngressAdapter>> create(
-        MediaRtpUdpTransport transport,
-        const MediaRtpIngressPlan& plan);
+    static ::media::Result<std::shared_ptr<MediaRtpIngressAdapter>> create(
+        std::shared_ptr<MediaRtpUdpTransport> transport,
+        const MediaRtpReceiveGeometry& plan,
+        MediaLineageAllocationScope allocation);
+
+    static ::media::Result<std::size_t> preparationStorageBytes(std::size_t descriptors);
 
     MediaRtpIngressAdapterKind kind() const noexcept override;
     ::media::Result<std::size_t> receive(
@@ -26,15 +31,21 @@ public:
 
 private:
     struct ReceiveState;
+    struct ConstructionKey final {};
+
+public:
     MediaLinuxRtpIngressAdapter(
-        MediaRtpUdpTransport transport,
-        std::unique_ptr<ReceiveState> receiveState,
-        MediaRtpIngressPlanFacts planFacts) noexcept;
+        ConstructionKey,
+        std::shared_ptr<MediaRtpUdpTransport> transport,
+        MediaLineageUniquePtr<ReceiveState> receiveState,
+        MediaRtpReceiveGeometryFacts planFacts) noexcept;
+
+private:
     void logDiagnostics(const char* stage) noexcept;
 
-    MediaRtpUdpTransport m_transport;
-    std::unique_ptr<ReceiveState> m_receiveState;
-    MediaRtpIngressPlanFacts m_planFacts;
+    std::shared_ptr<MediaRtpUdpTransport> m_transport;
+    MediaLineageUniquePtr<ReceiveState> m_receiveState;
+    MediaRtpReceiveGeometryFacts m_planFacts;
 };
 
 } // namespace media::ffmpeg::graph

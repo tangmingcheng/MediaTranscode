@@ -1,0 +1,43 @@
+# RKMPP编码完整输出：配置读回与错误边界
+
+状态：三个补丁已双独立源码审查并应用目标项目隔离依赖，8核增量构建成功；尚未实流验证或授权RKMPP编码进度。Windows FFmpeg不修改。
+
+## 官方方案与实际差异
+
+[FFmpeg官方rkmppenc](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/rkmppenc.c)的rkmpp_output_pkt明确拒绝非EOS的空size/data，但没有split事实读回。目标使用另一wrapper实现，不能把官方master视为当前部署代码，也不能因存在官方编码器就直接替换整个RGA/MPP依赖链。[Rockchip官方MPP](https://raw.githubusercontent.com/rockchip-linux/mpp/develop/mpp/codec/mpp_enc_impl.c)的async_task_terminate仍使用hal_task->length；本次检索未找到可确认直接修复该具体错误完成边界的issue，不据搜索空缺声称官方没有issue。
+
+实际FFmpeg HEAD 92aec19cedcfc55cd5ef0a8b2fff1ca998bcb696；rkmppenc.c SHA256 fbfddacec9439a457830c68c3bcbeca7fe8cdcf254a3cbec9287be958f561957，rkmppenc.h SHA256 40448d3c4bf2062fa2bc861f86c5468bfa20b0bb4113ab710fb885aef168fd2e。目标下载与本机SHA256一致。实际MPP HEAD 560734e83e7d3d8a0a2a337d07108f04f4030caa。
+
+## 配置读回候选
+
+3rds/rkmpp-lineage/ffmpeg-encoder-split-readback.patch在两处SET_CFG成功后GET_CFG，读取split:mode/arg/out（u32）与base:low_delay（s32），通过只读AVOption暴露事实；不设置split，不新增调用方输入，不授权scheduler。读取开始撤销known，全部成功才发布；失败记录原MPP返回码并返回AVERROR_EXTERNAL，临时配置对象始终释放。u32用int64字段避免截断。两个未参与实现的智能体均给出仅readback功能SOURCE PASS。CRLF补丁直接检查LF源失败，先转换为LF后，针对下载的精确c/h执行严格git apply --check成功（未加忽略空白选项）；当时尚未应用；后续目标dry-run及编译结果见下节。
+
+正常/EOF顺序已由独立智能体直接查目标源码：hal_task从状态队列头取、变更入尾；正常任务和空EOS均进入TASK_PROCESSING，等待头任务后将完成packet放输出尾。同步线程单任务执行。禁split可排除两条partition路径，但不能单独证明错误完成也是正常AU。
+
+## 错误完成边界及保留限制
+
+try_get_async_task的非零ret调用async_task_terminate，后者可能保留非零header长度并提前放入输出队列。必须明确该项为错误完成，不能通过SubmissionOrder消费或推进水位。最小候选是沿既有enc_async_wait_task失败长度归零语义处理terminate，并复用官方wrapper拒绝非EOS空包的行为；若要跨库保留原始MPP错误码，须另外使用权威错误元数据，不能声称日志和零长包等价于完整错误传递。该切片已按下节独立实现、双审并构建；实流与错误路径运行证据仍待补齐，不能用配置读回PASS替代。
+
+应用前需保留目标隔离依赖源码和二进制回退；候选只应用于项目内隔离构建，禁止覆盖系统库及本机FFmpeg。现有split候选、共享调度接线、错误完成修复需要分别审查，再以原四源120秒规格验证，不能降低规格。
+
+## rk442隔离依赖构建检查点
+
+错误完成另存mpp-encoder-error-completion.patch与ffmpeg-encoder-output-validation.patch：唯一ret!=0 terminate传入并日志记录原始MPP返回码，长度归零；wrapper在EOS处理之后、身份成功处理之前拒绝空size/data及partition，返回AVERROR_EXTERNAL。两独立SOURCE PASS限当前FFmpeg→MPP路径；不外推全部MPP消费者，不声称结构化原错误跨库传递。正常EOS仍在有序任务队列，不被该错误保护吞掉。
+
+应用前原源码和完整prefix-ffmpeg/prefix-mpp已备份到目标out/rollback/rk442-dependency，manifest.json记录三个源码hash及两个HEAD。三个补丁原始CRLF传输SHA256依次为readback 7ecd3c08aee7c15c53b73b43f6befd81f6a56dc7f9888a4c92dbed79e302a051、wrapper验证 bd93be3b0e83e383967603bf7e6ac5f170fe62b19b2d914a29f48b7b2963244c、MPP错误完成 df329f850d79941ada293b8e0c46b7b5c0413054672060deb32d5301228bc4a2。目标逐项核hash，转LF，全部严格dry-run通过后应用；diff --check通过。第一次统计输出被git pager阻塞并SIGPIPE，随后--no-pager复核成功；该观察错误不是应用或构建失败。
+
+构建PID1792212，复用现有Release Makefiles/FFmpeg配置，以8核增量编译并安装到既有项目隔离prefix，DEPENDENCY_BUILD_EXIT=0，PID已结束。新libavcodec.so.62.28.102 SHA256 6d7c9d2488db57070047080f0b77d1aba69a59db6e89fdb358a64639ea07a533；librockchip_mpp.so.1 SHA256 2f6f34046ab9601e7c9938d6e2f3e306424a9b02ab5d1ee765f1d4d2779587c8。以显式LD_LIBRARY_PATH运行ldd确认CLI选择上述两个隔离库，未见not found。
+
+实际执行隔离ffmpeg -hide_banner -h encoder=h264_rkmpp，确认五个只读选项可见；这仅证明接口存在，列表默认unknown并非opened encoder真实值。后续必须用实际prepared读回取得split状态，再接通既有共享合同；未运行local测试，未降低源规格，未覆盖系统依赖。
+
+临时文件清单：目标out/dependency-work/rk442-patches内build.log及三份原CRLF、三份LF补丁，共7项；本机out/dependency-work/rkmpp-encoder-completion内rkmppenc.c、rkmppenc.h、mpp_enc_impl.c、readback.lf.patch、ffmpeg-encoder-output-validation.lf.patch、mpp-encoder-error-completion.lf.patch、libavcodec/rkmppenc.c、libavcodec/rkmppenc.h、mpp/codec/mpp_enc_impl.c共9项。记录完成后逐项清理，不清空其他目录；保留正式仓库补丁、目标构建源码/隔离产物和rk442-dependency回退副本。已逐项删除目标7项、本机9项，复查无上述临时文件残留。
+
+## rk444：补齐cadence/drop实际事实
+
+ffmpeg-encoder-cadence-readback.patch以rk442已应用状态为基线：c SHA256 43d29cc646f22df04295a70c2f5c1f2594a265a478ea374f34037be56cf12c2b，h SHA256 9470db7c4e65671ebbaf6187f156699413543fd7107bea198e07d8e434b13c93。在同一次GET_CFG事务增加rc:drop_mode（u32→int64）及fps_in/out的flex/num/denom（s32→int）7事实；实际MPP声明denom为denorm别名。所有11项成功后known才为1，失败仍明确返回，不新增用户参数或改变编码策略。两位独立智能体限定SOURCE PASS。
+
+原始CRLF补丁SHA256 569f3e6eedd8a50013076c3f0e5e8fa8510af04860902bb68dc052111fd68956双端匹配；转LF后本机和目标严格dry-run成功。应用前目标out/rollback/rk444-cadence保存两源码、完整两prefix和manifest。以8核复用现有FFmpeg目录增量编译/隔离安装，PID1933929已结束、CADENCE_BUILD_EXIT=0。新libavcodec.so.62.28.102 SHA256 cbe8b3562f95af8286a3756c5683e995df8e616531cfa8f90b9c0d4de7d340fd；MPP未再修改。
+
+实际隔离ffmpeg -hide_banner -h encoder=h264_rkmpp确认7项只读接口；默认unknown不是实际open值。仍待生产CLI的prepared配置读取与原规格合屏运行，不以选项列表冒充能力授权。本轮仅目标依赖编译，无Windows构建或local测试。
+
+临时清单：目标out/dependency-work/rk444-cadence的ffmpeg-encoder-cadence-readback.patch、cadence.lf.patch、build.log共3项；本机同名目录的rkmppenc.c、rkmppenc.h、libavcodec/rkmppenc.c、libavcodec/rkmppenc.h、cadence.lf.patch共5项。已逐项删除目标3项、本机5项并复查无文件残留，回退与正式patch保留。

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <span>
 #include <utility>
-#include <vector>
+
 
 namespace media::ffmpeg::graph {
 
@@ -21,44 +21,40 @@ struct MediaMpegTsRtpPacketizerConfig final {
     MediaRunningTime masterOrigin;
 };
 
-class MediaMpegTsRtpPacket final {
+// Borrows TS bytes until synchronous serialization; no mutable protocol state.
+class MediaMpegTsRtpPacketPlan final {
 public:
-    const std::vector<std::uint8_t>& datagram() const noexcept
-    {
-        return m_datagram;
-    }
-    std::vector<std::uint8_t> releaseDatagram() noexcept
-    {
-        return std::move(m_datagram);
-    }
-    std::size_t payloadOctets() const noexcept { return m_payloadOctets; }
-    std::uint16_t sequenceNumber() const noexcept { return m_sequenceNumber; }
+    std::size_t bytes() const noexcept { return m_bytes; }
+    std::size_t payloadOctets() const noexcept { return m_payload.size(); }
+    std::uint16_t sequenceNumber() const noexcept { return m_sequence; }
     MediaRtpTimestamp timestamp() const noexcept { return m_timestamp; }
-
 private:
     friend class MediaMpegTsRtpPacketizer;
-
-    MediaMpegTsRtpPacket(
-        std::vector<std::uint8_t> datagram,
-        std::size_t payloadOctets,
-        std::uint16_t sequenceNumber,
-        MediaRtpTimestamp timestamp) noexcept;
-
-    std::vector<std::uint8_t> m_datagram;
-    std::size_t m_payloadOctets;
-    std::uint16_t m_sequenceNumber;
+    friend class MediaRtpWirePacketComposer;
+    MediaMpegTsRtpPacketPlan(std::span<const std::uint8_t> payload,
+        std::size_t bytes, std::uint16_t sequence, MediaRtpTimestamp timestamp,
+        std::uint32_t ssrc, int payloadType) noexcept
+        : m_payload(payload), m_bytes(bytes), m_sequence(sequence),
+          m_timestamp(timestamp), m_ssrc(ssrc), m_payloadType(payloadType) {}
+    std::span<const std::uint8_t> m_payload;
+    std::size_t m_bytes;
+    std::uint16_t m_sequence;
     MediaRtpTimestamp m_timestamp;
+    std::uint32_t m_ssrc;
+    int m_payloadType;
 };
-
 class MediaMpegTsRtpPacketizer final {
 public:
     static ::media::Result<MediaMpegTsRtpPacketizer> create(
         MediaMpegTsRtpPacketizerConfig config);
 
-    ::media::Result<MediaMpegTsRtpPacket> packetize(
+    ::media::Result<MediaMpegTsRtpPacketPlan> prepare(
         std::span<const std::uint8_t> completeTsPackets,
         MediaRunningTime emitOnMaster,
         std::uint16_t sequenceNumber) const;
+
+    static ::media::Status writeInto(const MediaMpegTsRtpPacketPlan& plan,
+        std::span<std::uint8_t> output);
 
     const MediaRtpOutputClockMapper& clockMapper() const noexcept
     {

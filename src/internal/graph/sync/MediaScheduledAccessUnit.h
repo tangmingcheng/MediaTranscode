@@ -3,8 +3,6 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
-#include "internal/graph/sync/MediaVideoRepeatRequestId.h"
-#include "internal/graph/sync/MediaVideoSyncDecision.h"
 
 #include <optional>
 
@@ -22,10 +20,8 @@ struct MediaScheduledAccessUnitParameters final {
         MediaRunningTime emitOnMaster,
         MediaRunningTime canonicalDuration,
         std::uint64_t generation,
-        MediaSourceAccessUnitSequence sourceSequence,
-        std::optional<MediaSourceAccessUnitSequence> repeatedFrom,
-        std::optional<MediaVideoRepeatRequestId> repeatRequestId,
-        std::optional<MediaVideoSyncDecisionKind> videoDecision);
+        MediaCanonicalAccessUnitSequence canonicalSequence,
+        std::optional<MediaCodecReceiveObservation> codecReceiveObservation);
 
     MediaBufferRef media;
     MediaScheduledStream stream;
@@ -36,10 +32,8 @@ struct MediaScheduledAccessUnitParameters final {
     MediaRunningTime emitOnMaster;
     MediaRunningTime canonicalDuration;
     std::uint64_t generation;
-    MediaSourceAccessUnitSequence sourceSequence;
-    std::optional<MediaSourceAccessUnitSequence> repeatedFrom;
-    std::optional<MediaVideoRepeatRequestId> repeatRequestId;
-    std::optional<MediaVideoSyncDecisionKind> videoDecision;
+    MediaCanonicalAccessUnitSequence canonicalSequence;
+    std::optional<MediaCodecReceiveObservation> codecReceiveObservation;
 };
 
 class MediaScheduledAccessUnit final : public MediaBuffer {
@@ -57,19 +51,9 @@ public:
     MediaRunningTime emitOnMaster() const noexcept { return m_emitOnMaster; }
     MediaRunningTime canonicalDuration() const noexcept { return m_canonicalDuration; }
     std::uint64_t generation() const noexcept { return m_generation; }
-    MediaSourceAccessUnitSequence sourceSequence() const noexcept { return m_sourceSequence; }
-    const std::optional<MediaSourceAccessUnitSequence>& repeatedFromSourceSequence() const noexcept
-    {
-        return m_repeatedFromSourceSequence;
-    }
-    const std::optional<MediaVideoRepeatRequestId>& repeatRequestId() const noexcept
-    {
-        return m_repeatRequestId;
-    }
-    const std::optional<MediaVideoSyncDecisionKind>& videoDecision() const noexcept
-    {
-        return m_videoDecision;
-    }
+    MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept { return m_canonicalSequence; }
+    const std::optional<MediaCodecReceiveObservation>& codecReceiveObservation() const noexcept { return m_codecReceiveObservation; }
+    std::optional<std::int64_t> diagnosticCreatedSteadyNs() const noexcept { return m_diagnosticCreatedSteadyNs; }
 
 private:
     explicit MediaScheduledAccessUnit(MediaScheduledAccessUnitParameters parameters);
@@ -82,10 +66,9 @@ private:
     MediaRunningTime m_emitOnMaster;
     MediaRunningTime m_canonicalDuration;
     std::uint64_t m_generation;
-    MediaSourceAccessUnitSequence m_sourceSequence;
-    std::optional<MediaSourceAccessUnitSequence> m_repeatedFromSourceSequence;
-    std::optional<MediaVideoRepeatRequestId> m_repeatRequestId;
-    std::optional<MediaVideoSyncDecisionKind> m_videoDecision;
+    MediaCanonicalAccessUnitSequence m_canonicalSequence;
+    const std::optional<std::int64_t> m_diagnosticCreatedSteadyNs;
+    const std::optional<MediaCodecReceiveObservation> m_codecReceiveObservation;
 };
 
 } // namespace media::ffmpeg::graph

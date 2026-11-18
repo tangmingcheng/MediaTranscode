@@ -24,6 +24,9 @@ struct MediaGraphWorkerFailure final {
 class MediaGraphWorkerFailureRecorder final {
 public:
     bool recordFirst(MediaGraphWorkerFailure failure);
+    bool recordScopeFailure(const ::media::ErrorInfo& error,
+        MediaGraphWorkerFailurePhase phase) noexcept;
+    ::media::Status failureStatus() const noexcept;
     bool hasFailure() const noexcept;
     std::optional<MediaGraphWorkerFailure> primaryFailure() const;
     void clear();

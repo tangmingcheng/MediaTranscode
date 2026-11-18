@@ -74,6 +74,9 @@ private:
     std::unordered_set<std::uint32_t,
                        MediaGraphSchedulerNodeIdHash,
                        MediaGraphSchedulerNodeIdEqual> m_finishedNodes;
+    // Exact attempted configure prefix, including the failing node. Never abort
+    // untouched nodes merely because they are present in the logical graph.
+    MediaFixedCapacityStorage<MediaNodeId> m_preparedOrder;
     MediaGraphSchedulerState m_state = MediaGraphSchedulerState::Idle;
 };
 

@@ -1,0 +1,194 @@
+# r257：网络多事务准入与实际存活存储
+
+状态：分步实施中，尚未放开串行门控。依据 r256 真实失败：serial=1、容量未满、前批未提交导致后批物化超期。
+
+## 目标与约束
+
+允许原预算内多个批次提前准备，sender仍只按全局序号提交队首。原deadline、源规格、带宽事实及失败语义保持。不得通过关闭校验、增加经验容量或修改外部FFmpeg通过测试。
+
+## 已有基础
+
+- Network与Preparation是不同typed预算域，共用分配前预约、实际释放后归还机制。
+- global state和每笔reservation两数组已使用Network PMR。
+- sender有序队列和projected/committed协议状态已存在。整笔commit后Model重置transaction；未授权未完成析构会poison，整代purge可取消。不新增中间事务回滚语义。
+- 缺口：RTP actions、protocol记录、构建workspace和wire batch载荷/描述符尚未全部受Network域管理。
+
+## 必须形成的内部契约
+
+1. 区分协议原子事务几何、发送partition几何、发送backlog，以及对象完整存活期的存储额度；RTCP附加记录按最终transport事实计入。
+2. 使用实际元素类型、精确容量及allocationFootprint推导存储；控制块、分配header和扩容重叠不能遗漏。不得用outstanding datagram数直接替代部分提交事务仍存活的数组容量。
+3. 在协议投影及全局序号推进前准入完整workspace和transaction。永久大于合同上限的请求直接失败；暂时存储占用才允许背压。普通bad_alloc仍是分配失败，不能一律转WouldBlock。
+4. wire credit随提交前缀归还；storage credit随真实owner释放归还。资源唤醒需发生在可用存储确实归还后，避免global commit通知早于Model释放造成丢失唤醒。
+5. planner是唯一选择并行准备策略的位置；所有分配、失败和取消边界完成审查后才能去掉serial门控。
+
+## 工业依据与适用范围
+
+沿用[Flink网络栈](https://flink.apache.org/2019/06/05/a-deep-dive-into-flinks-network-stack/)有限buffer pool与credit分离原则；本项目是UDP/RTP并有绝对deadline，不能照搬TCP接收credit或忽略已提交发送的不可撤销性。
+
+## 实施门禁
+
+先完成当前源码的对象寿命和并发生产者权限证明，再确定各类型精确容量、预算合计与分配迁移。两位独立审查、Release全量重建、原规格realtime实流及VLC原生快照。归档完整运行节点诊断后清理本轮产物。此项不替代r254 GPU/scheduler迟到及四源、HEVC输入、非固定节奏、API/ABI、RKMPP门禁。
+
+## 首个实施切片
+
+MediaWireGlobalSequenceState::reserve 已在分配前拒绝永久超出datagram/byte上限的请求；reservation两数组改为在锁内通过serial及当前backlog准入后、推进projected状态前分配。失败重试不再先占用两数组存储。尚未实现完整存储寿命额度及RTP/workspace迁移，serial仍保持true；本项不宣称修复r256。已获双独立局部静态审查通过，git diff --check通过；与下述RTP检查共同完成Release全量重建（会话61662，退出0），尚未实流验证。
+
+首个global准入切片已获A/B2两位局部静态PASS。另已增加RTP入口永久datagram上限检查：workspace构造前检查媒体数量，实际RTCP附加后检查完整entryCount，再进入临时背压判断；双独立局部静态审查通过。上述均未改变serial，Release全量重建已通过。下一步需独立的整笔存活数量额度，归还必须晚于两数组和actions实际销毁，不复用逐前缀递减的wire outstanding。
+
+## 原子存储准入分类
+
+已为现有reserve入口加入显式内部MediaStorageAdmission，无默认参数；全部原有调用及PMR静态接口检查显式使用RequiredAllocation，保留原AllocationFailed语义。Backpressure在同一ledger锁内先拒绝超过本域或共享父域总容量的请求（InvalidArgument），再拒绝当前可用额度不足（WouldBlock）；失败不扣费，成功复用原父子计数与高水位更新。未知枚举拒绝。
+
+保证型子预算只消耗已预留的本地额度，不重复检查或扣费backing上游。未增加锁内回调，也没有把bad_alloc解释成背压。两位独立审查者A/B2均给出本切片静态PASS；本切片Release全量重建通过（会话86995，configure/build均退出0）。Backpressure尚无生产调用，不能视为r256修复。
+
+## 后续所有权与通知边界
+
+事务存储必须覆盖global reservation两数组、独立于optional reservation的transaction Model、每个wire batch载荷/描述符以及构建中的builder。优先将实际分配迁入每笔保证型子预算的PMR：allocation header持有resource，resource持有子预算，子预算持有整笔backing lease；最后实际分配释放后才归还整笔根额度。该关系可替代四处手工挂token，但普通vector/make_shared未迁移前不在覆盖范围内。现有commit slice单独持有token不能保证载荷寿命。
+
+归还lease并退出账本锁后，通知共享该预算的全部生产者弱唤醒句柄；不得从析构回调global/protocol状态锁。生产者登记集合需在执行前冻结，不能只通知归还者。整笔预约后使用既有fromReservation提供保证型子预算，避免PMR向根预算重复扣费。
+
+尚须完成：实际payload/action/partition/model控制块的精确footprint、由执行权限确定的workspace生产者数量、四类owner挂接及释放通知，再由双审确认可解除serial。partition最坏可能每entry一份，不得以批次上限简单相除估算。当前没有新增实流通过证据。
+
+## 实际分配释放通知
+
+已实现MediaStorageReleaseNotification：执行前冻结的弱MediaNodeWakeup集合，只设置现有唤醒事件，不执行任意回调、不反持有预算或协议状态。fromReservation显式选择Unobserved或非空通知；现有准备期两处调用使用Unobserved。
+
+通知附着于整笔backing lease，在创建子预算或control block之前绑定，覆盖分配失败路径。release先清空自身owner/bytes/notification，再归还账本并释放owner，最后notify；move迁移通知，shrink只在实际归还差额后通知。普通逐次PMR allocation lease不发整笔根额度通知。两位独立审查者A/B2均给出局部静态PASS；Release全量构建通过（会话21655，configure/build均退出0）。
+
+未完成边界：尚无Network生产调用；根reserve成功至绑定通知之间不得插入会失败并丢弃lease的操作。通知集合、预算/resource自身及control block属于bootstrap固定开销，不能从自己的PMR分配以免形成循环，需单独精确计费。还须核验生产者登记完整性、wakeup sequence采样和等待顺序。serial未解除，本切片没有新增实流通过结论。
+
+## 下一项固定存储接线
+
+下一切片优先接入RTP protocol reservation records，serial保持。MediaRealtimeDatagramTransportPlanner现有重载权威知道Video RTP、独立A/V RTP、MPEG-TS RTP和UDP实际实例；由该层形成内部实例清单（RTP/RTCP端点配对），transport template验证并传给ledger及runtime创建校验，不能以endpointCount/2猜测。
+
+每实例按真实maximumOutstandingDatagrams与实际ReservationRecord类型调用allocationFootprint，checked求和各独立分配的header/alignment；禁止复制相似布局struct。实际record存储使用同一Network PMR，固定实例创建须匹配清单避免重复创建突破预算。原部署网络预算需重新校验，不能静默扩大。
+
+此接线仍不覆盖事务数组/actions、payload/workspace及bootstrap控制块；它不替代整笔存活存储准入。独立设计审查B2确认该切片可推进，条件是实例清单和创建约束同时接通。
+
+## 固定global记录补账
+
+代码核验发现：global state的固定m_reservations早已通过Network PMR实际扣费，但ledger未单列该分配。已先补此项：reservationStorageFootprint使用真实私有ReservationRecord的sizeof/alignof与同一PMR allocationFootprint，拒绝零容量及不可表示容量；runtime create复用该几何校验。
+
+ledger末尾追加GlobalSequenceRecords=7，按每activation唯一global state的backlog容量计一次，checked加入userspace总额。validate重算此项，拒绝缺失、重复、count/bytes不符及错误socket分类。不新增或放宽外部输入参数。DeploymentPlanner同样调用该ledger派生内部maximumNetworkMemoryBytes，因此派生金额会随准确footprint同步增加；transport activation仍经原shaping总额校验，显式envelope不会被运行时自动扩容。规划不重复执行实际reserve。
+
+双独立静态审查A/B2均PASS；Release全量构建通过（会话76302，configure/build均退出0）。只覆盖固定记录数组，不包含global对象/control block、事务两数组、RTP状态或多generation同时存活预算。serial保持true，尚未新增实流验证。
+
+RTP后续接线还须覆盖MediaRealtimeDeploymentPlanner::complete中预先派生资源金额的ledger调用，以及MediaDatagramTransportPlanSourceNodePlanCodec的encode/decode；只修改transportTemplate会使预备预算与激活预算不一致，不能实施这种不完整接线。
+
+## 统一协议拓扑合同
+
+已选择单一内部MediaDatagramProtocolLayout产品，避免准备阶段按请求计算数量、激活阶段按端点另算数量造成漂移。支持Video RTP、独立A/V RTP、MPEG-TS/RTP、MPEG-TS/UDP；Unknown及矛盾组合失败，不设“其他RTP默认一个”。集中topology提供完整角色集合与显式RTP/RTCP配对，实例数量来自配对集合。
+
+合同贯通DeploymentBase、ResourceBudget、SourceNodePlanCodec、Envelope和Template；两处network ledger均从同layout计算端点数量。codec新增的是内部必填计划选项resources.protocol_layout，不是CLI/C API输入；缺失或未知失败。Template按完整角色集合校验，保留唯一角色、唯一ID、数值地址等验证，拒绝混合、孤立或多余端点。
+
+此前考虑只从端点重建而不保存layout的方案，不能直接证明两阶段一致，已由此单一合同替代。布局不重复序列化具体实例清单；实际pair ID仍由已验证端点与topology配对形成。静态span均引用static constexpr存储。
+
+双独立局部静态审查A/B2均PASS；首轮Release全量构建失败（会话57340，输出transport为optional却直接用于switch，C2450）。已补显式缺值拒绝并解引用，A/B2重新静态复审均PASS；Release全量重建通过（会话63410，configure/build均退出0）。RTP实际创建许可、实例表/RTP records精确账目与PMR接线仍待实施，serial保持true，本项不宣称r256修复。
+
+下一实际接线顺序已核验：activated plan按topology.rtpInstances形成真实endpoint ID配对和同一backlog容量；ledger逐实例计真实RTP record footprint，并计global固定实例表；activation buffer传列表给global；共用RTP materializer create取得move-only许可并移入RTPState，records从许可获得容量和resource。原生RTP及MPEG-TS/RTP当前都从同一shaping backlog传入容量，无需给各节点另加resource参数。
+
+许可成员先于records声明，确保records先释放；global只存固定条目和占用标记，不反持RTPState。purge保留实例表，拒绝新claim；重复claim为合同错误。构造失败RAII归还许可；还须核验两端点wakeup注册的失败清理，当前同一有效目标可重注册、不同活跃目标会拒绝，不得因半注册残留阻止合法重试。
+
+## RTP固定存储实际接线
+
+已实现：activate按同一topology配对生成真实endpoint ID及backlog容量；PlanBuffer传入global创建。独立MediaRtpProtocolStorageRegistry以固定PMR表存实例、占用和弱wakeup；global在锁内检查purge/poison后调用私有claim，重复或容量不符拒绝。move-only许可持registry，RTPState先声明许可、后声明records，因此records实际释放后才归还占位。实例表在purge中保持稳定。
+
+共用RTP materializer create用原子pair claim替代两次旧wakeup登记，构造失败自动清理占位和weak目标；UDP旧登记/通知路径保留。全局通知锁序为global→registry→wakeup，许可释放只取registry锁，不回调global/protocol。
+
+RTP records实际改用许可的容量与Network PMR。ledger追加RtpProtocolRecords=8和RtpInstanceTable=9，使用真实私有类型的allocationFootprint，逐实例包含各自header/alignment；UDP两项均为零，validate重算并拒绝缺项/重复/错值。内部派生部署金额与激活复算共用topology及geometry，不新增外部参数。
+
+源码冻结后A/B2双独立静态审查均PASS；Release全量构建通过（会话8936，configure/build均退出0）。尚未实流验证；registry/state及shared control block等bootstrap、事务actions/workspace/payload存活期额度仍未闭合，serial保持true。
+
+共享事务控制块的本机源码能力证据及选定实现方向见[分配几何能力](realtime-composition-r257-shared-allocation-capability.md)。探测器及布局校验已实现、双独立静态审查通过，Release全量构建54151退出0；生产create与预算接线尚未实现，不沿用未经证明的控制块尺寸。
+
+## 实际分配错误分类与后续准备阶段
+
+已新增共用resource的allocateWithAdmission：实际layout只计算一次，含header/alignment的额度只reserve一次，成功直接由原allocation header接管lease。预算错误保持原分类；原生aligned new失败为AllocationFailed，局部lease自动归还。原PMR do_allocate委托RequiredAllocation并保留bad_alloc接口。没有逐事务新建预算或resource，也没有先reserve再由PMR重复扣费。
+
+本切片A/B2实际静态复审均PASS；Release全量构建通过（会话43873，configure/build退出码均为0；已核验配置文件及两个CLI产物，未运行local CLI）。typed Backpressure尚无生产调用，释放唤醒及事务准备/绑定仍待接入，serial保持。
+
+所有权核验修正：当前强引用仅来自transaction及slice；未发现Model weak owner。partition builder在materialize返回、批次发布前销毁；完整提交的slice在MediaWireDatagramBatchBuffer.cpp立即reset control。因此不能把已提交batch的寿命当作Model寿命。正常状态下容量证明需要覆盖未提交事务，以及global归还wire信用至consumer清空最后control之间的窗口；若提前准备Model，还需覆盖已准备但未取得global reservation的生产调用。消费者/生产者数量必须来自执行拓扑与串行权限证据，不按端点数量猜测。abandon/purge清理重叠另行证明，实际信用始终在deallocate后归还。
+
+后续优先核验两阶段生产对象：投影前准备真实Model/control block，使用独占prepared句柄；投影成功后无分配地绑定真实Reservation再发布。未绑定与提交完成必须由类型/状态区分，丢弃未绑定对象不能poison协议。此方向仅获局部设计认可，尚未实施；actions、数组、payload及其他分配未闭合前，不得宣称投影后无分配或解除serial。
+
+## 生产事务两阶段接线
+
+已将RTP普通、RTP terminal及MPEG-TS/UDP三个入口从投影后create改为投影前prepare、投影后bind。Prepared为move-only独占句柄，未绑定时不能取slice或发布；Model只默认构造空optional，不创建假Reservation。绑定权只授予Prepared，验证原序列范围后用nothrow move/emplace接管真实Reservation，并耗尽Prepared。已完成/abandon的空optional不能重新绑定。RTP仍先解protocol锁再绑定，保留终止失败清理语义。
+
+RTP actions分配及记录容量检查也移到global.reserve之前，仍受同一protocol锁保护。global拒绝时销毁空Model，不触发协议poison。后续builder分配仍可能失败，未声称投影后已完全无分配。
+
+首轮全量构建11401失败：MSVC C2139，嵌套Prepared函数体过早实例化Result<尚未完整的外层Transaction>。已把bind定义移至外层类型完整之后；修复后A/B2实际静态复审均PASS；重新全量构建通过（会话13803，configure/build退出码均为0；配置文件及两个CLI产物已核验，未运行local CLI）。当前prepare仍使用普通make_shared，Network计费、等待通知及完整事务存储准入尚未接通，serial保持。
+
+## 实际存储归还通知接线
+
+transport source在start阶段按真实typed plan fanout的目标node ID去重，读取编译期findNodeWakeup并冻结weak集合；覆盖全部plan消费者，包含sender这一安全通知超集，不根据endpoint数量猜测生产者。缺失typed绑定或wakeup直接失败。集合经PlanBuffer传到Network resource，在首次allocation前就已完整，不等待RTP claim/UDP register。
+
+resource创建显式接收observation，既有Preparation调用显式Unobserved。正常deallocate先释放真实block、再析构lease归还额度，最后通知；原生allocation失败先归还未接管lease再通知。通知只持weak wakeups，不反持global/registry；source reset不撤销存活resource持有的通知。协议wire-credit唤醒沿用原路径。
+
+本切片A/B2实际静态复审均PASS；Release全量构建通过（会话96264，configure/build退出码均为0，配置文件及两个CLI产物已核验；未运行local CLI）。notification对象、vector/control block及resource固定bootstrap仍需完整计费；尚未接通生产Backpressure等待，不宣称存储准入完整或serial修复。后续等待必须允许sequence通知唤醒。
+
+## 存储等待门控修正
+
+后续接线审查发现：若prepare使用Network allocator，global serial准入拒绝后销毁Prepared，上一切片的无条件释放通知会通知自身；worker在process前采样sequence，可能形成无内存压力却反复重试的循环。这是源码调用链发现，尚未作为生产实流复现；原通知切片的静态PASS不能支持完整背压正确性。
+
+已把通知配置与pressureArmed移到budget账本根。仅Backpressure暂时不足时同锁arm；永久超限、RequiredAllocation、成功申请不修改其他等待者登记。无通知域时暂时不足返回NotInitialized。release先归还本地/父额度，再同锁消费arm，锁外广播；resource及lease无条件通知已删除。
+
+普通shared child继承同root通知，拒绝冲突observer。guaranteed child的fromReservation observation现在表示本地等待域，局部释放不冒充父信用归还；最后backing及构造失败仍经原owner归还父域。Network冻结集合移至budget create；Preparation显式Unobserved。
+
+采用[C++条件变量谓词重检语义](https://eel.is/c++draft/thread.condition.condvar)对应的检查/登记/唤醒模式，复用worker已有sequence避免等待窗口丢事件，不增加第二套锁或容量计数。广播不保证申请一定成功或公平性；后续多阶段准备回滚仍须检查是否反复触发自身真实内存等待。
+
+A/B2实际静态复审均PASS；Release全量构建通过（会话68197，configure/build退出码均为0；配置文件及两个CLI产物已核验，未运行local CLI）。生产预算allocator、Model ledger贡献及完整动态存储尚未接通，serial保持。
+
+## Model控制块生产预算接线
+
+新增内部kind/geometry产品，ledger按实际protocolLayout探测RTP或MPEG-TS/UDP真实Model及最终allocator类型。组10 CommitControlBlocks按backlog datagram数量乘实际PMR footprint（含header/alignment）checked计入共享root；validate重探测并拒绝kind/geometry、条目唯一性、数量、金额或分类不符。该值是共享root规划贡献，不是独立强制的N个Model配额。
+
+产品沿activation→PlanBuffer→global传递；三处prepare改用同一allocate_shared allocator，实际预算准入在协议投影前。allocator经typed分配入口保留WouldBlock/永久超限/native分配失败分类，专用ErrorInfo异常桥接回Result；标准Result.error只提供const引用，因此错误进入异常时会复制，若复制本身内存不足则保留终止性AllocationFailed，不承诺无分配错误传播。运行时不重新probe或fallback。
+
+已核普通与terminal路径通过FFmpegNodeRuntime将WouldBlock转为waiting，terminal成功标记不会提前设置。实际控制块deallocate才归还信用，经root gate通知；global暂拒释放Prepared时无存储等待就不自通知。
+
+A/B2对当前Windows工具链实际静态复审均PASS；Release全量构建进行中（会话89644）。当前非受审标准库会规划失败，Linux/RKMPP能力证据及接线仍未完成。其他动态存储和固定管理对象账目未闭合，serial仍保持，尚无新实流通过。
+
+## 最新状态校正（r261后）
+
+89644已成功，后续观测和候选准备修复均已成功Release重建。r260在重入阶段真实复现serial=1、8次WouldBlock后物化超时；r261原规格120秒加120秒重入运行未复现，但serial未修改，不能声称该问题修复。继续闭合materializer workspace/actions、payload/descriptor及batch builder存储账目后才能解除serial；禁止以放宽发送期限代替。
+## 整笔准备准入：实施前边界（2026-10-19）
+
+源码复核确认不能逐个把actions和Model改成独立Backpressure申请：actions成功、Model不足登记等待、actions回滚归还，会唤醒本次等待；即使没有外部存储释放，也可能重复该循环。此前仅Model接线不能证明多块准备安全。
+
+采用[DPDK rte_mempool_get_bulk](https://doc.dpdk.org/api/rte__mempool_8h.html)的整批不足不取得任何对象这一准入语义。适用边界：本项目按异构分配真实footprint一次预留字节，后续仍使用原生堆分配，不等价于DPDK预分配对象池，不承诺无分配延迟或公平性。
+
+实施顺序与不变量：
+1. planner提供真实几何及容量合同；运行时按实际批次checked求和所有需要同时准备的分配footprint，在协议投影前只做一次Backpressure准入。
+2. move-only lease拆分只转移同一预算所有权，不reserve/release、不改变账本、不触发通知；总额度守恒。拒绝零、超额和无owner租约。
+3. resource校验租约所属budget及完整footprint，消费已准入额度，复用现有header和原生分配路径；不得再次申请额度。每块真实delete后才归还对应lease。
+4. 栈上准备对象持未消费额度和已准备块。FixedCapacityStorage接管精确容量backing；allocate_shared仍使用与probe一致的具体allocator，必须审查其复制/rebind及交接前后异常责任，禁止引入未计费shared State。
+5. 准入不足时尚未取得本批任何块；准入后的原生分配失败终止为AllocationFailed。已有序列通知和worker等待模型复用，不能关闭通知掩盖循环。
+6. 不使用每事务fromReservation新建budget/resource替代：其bootstrap分配和控制块尚未闭合，会增加管理层。
+
+本节为设计调查及接线约束，不代表代码已实现。第一名独立审查认可方向，要求单独核验两个backing交接协议；第二名独立审查进行中。actions/Model只是同一整笔合同的首批消费者，workspace、payload、descriptor和builder必须继续纳入；完整闭合前serial保持。无新增公共参数、外部依赖或本轮实流通过结论。
+## 整笔准入基础实现与剩余集合
+
+MediaStorageLease增加split和精确budget身份检查：拆分只移动额度所有权，不改变账本或通知。MediaBudgetMemoryResource增加消费已预留lease的入口，校验同一budget及完整footprint；既有allocateWithAdmission只reserve一次后委托该公共路径。失败消费传入额度并归还原预算；成功由真实allocation header持有，delete后归还。
+
+两名独立静态审查均局部PASS；Release全量构建42623成功（configure/build均0，配置文件和两CLI产物已核验，未运行local）。r262 realtime原规格回归已结束：三源120秒和重入120秒均退出0，CLI caller_stop0，runtime错误0、payload归零；VLC原生快照确认三格/黑屏/重入/黑屏。重入存在一次候选和channel均为空的interval miss，完整门禁未通过。split尚未接入整笔生产调用，因此本次运行只能验证共享分配路径回归。17件产物及本轮PID已清理，详见realtime-composition-r262-validation.md。
+
+后续最小整笔集合已补全为actions、Model/control block、global.reserve中的wireBytes和materializedAt两份精确容量数组。后两者当前通过Network PMR RequiredAllocation申请，失败终止；不能分别改成Backpressure，否则再次引入部分成功回滚自通知。global应消费已准备backing而非内部再次分配。
+
+完整后续集合还包括MPEG-TS外层workspace、RTP重写payload/RTCP/globalEntries、partition集合、各batch payload/descriptor及对象控制块；嵌套路径应传递同一准备合同，不能内外层分别申请可重试额度。当前未计费vector/string是账目缺口，不等同已经发生存储自唤醒。投影后不得新增可重试分配失败。serial/count/bytes属于独立准入域，serial尚未解除。
+
+控制块交接平台核验：第二名审查只读核验本机D:/VisualStudio2026/VC/Tools/MSVC/14.51.36231/include/memory:3033–3044、2513–2543以及xmemory:1178–1185，非数组allocate_shared唯一同步allocate，构造失败由STL guard deallocate，最后weak owner释放时仅复制/rebind、销毁及deallocate。后续交接接口需在release之前完成全部可抛检查，release后直接返回普通指针；若采用栈上guard地址，存活allocator后期绝不能访问该地址，且不能宣称地址本身不存在悬空。生产/probe必须同一具体allocator布局并重新探测。此结论仅适用已审145/202604L，不替代Linux标准库能力证明；当前尚未实现该交接接口。
+
+## 四块事务存储整笔接线（r263）
+
+已新增单一所有权的未构造allocation guard；resource预留分配返回guard，FixedCapacityStorage校验元素尺寸/对齐后接管backing。MediaWireCommitPreparation按实际entry数量checked汇总Model/control、global wireBytes、global materializedAt和RTP actions（UDP无actions），只做一次Backpressure预留，随后split到各真实header。
+
+RTP普通批次（含实际due RTCP）、terminal和MPEG-TS UDP三入口均接入。事务prepare消费已经分配的control；受审MSVC同步allocator完成所有校验后最后release并返回，后期copy/rebind/equality/deallocate不解引用guard地址。生产和probe保持同一allocator类型，控制块布局重新探测。global.reserve校验相同resource、精确容量、初始空数组，wire准入通过后只填数据，不再动态申请这两块存储。
+
+planner新增内部组11：按单entry事务actions和两数组的真实footprint乘backlog数量形成共享root贡献，控制块仍只列组10；validate重算金额、计数与唯一性。此贡献不是独立owner数量保证，仍由共享root限制真实保留存储。没有新增公共字段。
+
+两名独立静态审查均对上述四块接线明确PASS，限定本机MSVC145/202604L；Release全量构建5626成功（configure/build退出0，配置文件及两个CLI产物已核验，未运行local）。普通堆workspace、payload/descriptor、builder和管理对象账目仍未全部闭合；serial保持。独立global准入回滚或其他消费者广播仍可能唤醒当前节点，不能据此宣称所有重试、自唤醒或历史发送超期均修复。
+
+r263已完成原规格三源120秒加所选音视频源120秒重入：所有源退出0，CLI caller_stop0、错误0、payload归零，VLC原生快照确认三格/黑屏/重入/黑屏。无interval miss记录，sender deadline_misses=0，但最大提交迟到58.63ms、编码send83.29ms及队列/媒体保留峰值高于r262，不能认定完整时序通过。实际压力不足、UDP、内容级A/V、线速交付和RKMPP尚未覆盖。17件临时产物及本轮PID已清理；详见realtime-composition-r263-validation.md。
+
+下一整块边界：先从原协议序列化实现提取无分配布局校验和写入已准入span接口，避免materializer复制长度算法。只读调查显示RTP rewrite长度等于原datagram长度，MP2T为12+TS payload，SR+SDES为28+align4(11+CNAME字节)，terminal另加8；以上需由协议原实现形成权威产品，不在调用方硬写。元数据数量来自实际datagram及due RTCP数。外层MP2T与内层RTP共享一次workspace和四块准入；保留两份payload时必须同时计入峰值。投影后builder仍为后续门禁。现不再使用的MediaSharedAllocationFailure异常桥接应随下一清理移除，不能恢复独立分配以继续使用它。

@@ -1,9 +1,9 @@
 #include "internal/graph/planner/realtime/MediaRealtimeDatagramTransportPlanner.h"
 
 #include "internal/graph/model/MediaNumericIpAddress.h"
-#include "internal/graph/planner/realtime/MediaPreparedEmissionResolver.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelopePlanner.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
 
 #include <new>
 #include <utility>
@@ -11,6 +11,25 @@
 
 namespace media::ffmpeg::graph {
 namespace {
+
+::media::Status validatePreparedProducer(
+    const MediaRealtimeDeploymentEnvelope& deployment,
+    MediaDatagramProtocolEndpointRole role,
+    const MediaScheduledRtpOutputPlan& output)
+{
+    auto compound = MediaRtcpWireGeometry::compoundPayloadBytes(output.cname.size());
+    if (!compound) return ::media::Status::failure(compound.error());
+    for (const auto& producer : deployment.encode().resources.rawRtpProducers) {
+        if (producer.role != role) continue;
+        if (producer.emission == output.packetization.emissionContract() &&
+            producer.maximumRtcpCompoundBytes == compound.value())
+            return ::media::Status::success();
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Scheduled RTP output differs from deployment producer facts"));
+    }
+    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "Scheduled RTP output has no deployment producer facts"));
+}
 
 void appendRtpEndpoints(
     std::vector<MediaDatagramRemoteEndpointFact>& endpoints,
@@ -49,15 +68,11 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaVideoOnlySeparateRtpOutputRuntimePlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, nullptr);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
+    auto video = validatePreparedProducer(deployment,
+        MediaDatagramProtocolEndpointRole::VideoRtp, output.video);
+    if (!video) return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(video.error());
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(2);
@@ -68,7 +83,7 @@ MediaRealtimeDatagramTransportPlanner::plan(
         return create(
             sessionKey, deployment, std::move(endpoints),
             MediaWireTrafficEnvelopePlanner::plan(
-                deployment, emission.value(), output));
+                deployment, emission, output));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -81,16 +96,14 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaSeparateRtpOutputRuntimePlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate,
-    const MediaAudioPipelinePlan& audioPipeline)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, &audioPipeline);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
+    auto video = validatePreparedProducer(deployment,
+        MediaDatagramProtocolEndpointRole::VideoRtp, output.video);
+    if (!video) return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(video.error());
+    auto audio = validatePreparedProducer(deployment,
+        MediaDatagramProtocolEndpointRole::AudioRtp, output.audio);
+    if (!audio) return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(audio.error());
     try {
         std::vector<MediaDatagramRemoteEndpointFact> endpoints;
         endpoints.reserve(4);
@@ -105,7 +118,7 @@ MediaRealtimeDatagramTransportPlanner::plan(
         return create(
             sessionKey, deployment, std::move(endpoints),
             MediaWireTrafficEnvelopePlanner::plan(
-                deployment, emission.value(), output));
+                deployment, emission, output));
     } catch (const std::bad_alloc&) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -118,18 +131,23 @@ MediaRealtimeDatagramTransportPlanner::plan(
     const std::string& sessionKey,
     const MediaRealtimeDeploymentEnvelope& deployment,
     const MediaProjectMpegTsRuntimeOutputPlan& output,
-    const MediaPipelinePlan& videoPipeline,
-    MediaRational outputFrameRate,
-    const MediaAudioPipelinePlan* audioPipeline)
+    const MediaPreparedRealtimeEmissionSet& emission)
 {
-    auto emission = MediaPreparedEmissionResolver::resolve(
-        videoPipeline, outputFrameRate, audioPipeline);
-    if (!emission) {
-        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
-            emission.error());
-    }
+    const auto& params = output.protocol.muxPlan().parameters();
+    const auto* rtpFacts = std::get_if<MediaMpegTsRtpOutputPlan>(&output.transport);
+    auto compound = rtpFacts
+        ? MediaRtcpWireGeometry::compoundPayloadBytes(rtpFacts->cname().size())
+        : ::media::Result<std::uint64_t>::success(0);
+    if (!compound) return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(compound.error());
+    const MediaMpegTsProducerPlan actual{
+        static_cast<std::uint64_t>(params.maximumPacketsPerDatagram) * params.packetSize + (rtpFacts ? 12 : 0),
+        compound.value()};
+    const auto& planned = deployment.encode().resources.mpegTsProducer;
+    if (!planned || *planned != actual || (rtpFacts && rtpFacts->maximumDatagramBytes() != actual.maximumDatagramBytes))
+        return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS output differs from deployment producer facts"));
     auto wire = MediaWireTrafficEnvelopePlanner::plan(
-        deployment, emission.value(), output);
+        deployment, emission, output);
     if (!wire) {
         return ::media::Result<MediaDatagramTransportPlanTemplate>::failure(
             wire.error());

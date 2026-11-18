@@ -1,252 +1,127 @@
 #include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
+#include "internal/graph/protocol/mpegts/MediaTsPrefixStoragePreparation.h"
 
 #include <algorithm>
 #include <limits>
-#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-::media::ErrorInfo emissionIntervalError(
-    const char* stage,
-    MediaRunningTime deadline,
-    MediaRunningTime observed,
-    MediaRunningTime latest)
-{
-    std::ostringstream message;
-    message << "MPEG-TS access-unit emission is outside its canonical interval"
-            << " stage=" << stage
-            << " deadline_ns=" << deadline.nanoseconds()
-            << " observed_ns=" << observed.nanoseconds()
-            << " latest_ns=" << latest.nanoseconds();
-    return ::media::ErrorInfo::invalidArgument(message.str());
-}
-
-} // namespace
 
 MediaTsPendingEmission::MediaTsPendingEmission(
-    MediaTsPacketCursor cursor,
-    MediaRunningTime notBefore,
-    MediaTsPreparedPacketClock packetClock,
-    std::size_t packetSizeBytes,
-    std::size_t maximumPacketsPerDatagram,
-    MediaWireMediaBoundary finalBoundary) noexcept
-    : m_cursor(std::move(cursor))
-    , m_notBefore(notBefore)
-    , m_packetClock(std::move(packetClock))
-    , m_packetSizeBytes(packetSizeBytes)
-    , m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
+    MediaTsPacketCursor cursor, MediaRunningTime notBefore, MediaRunningTime completionDeadline,
+    MediaTsPreparedPacketClock packetClock, std::size_t packetSizeBytes,
+    std::size_t maximumPacketsPerDatagram, MediaWireMediaBoundary finalBoundary) noexcept
+    : m_cursor(std::move(cursor)),
+      m_resource(m_cursor.storageResource()),
+      m_geometry(m_cursor.storagePlan().protocolGeometry),
+      m_notBefore(notBefore), m_completionDeadline(completionDeadline),
+      m_packetClock(std::move(packetClock)),
+      m_remainingPackets(m_cursor.remainingPacketCount()),
+      m_packetSizeBytes(packetSizeBytes),
+      m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
       m_finalBoundary(finalBoundary)
 {
 }
 
-::media::Result<std::size_t>
-MediaTsPendingEmission::nextPayloadBytes() const
+::media::Status MediaTsPendingEmission::waitForCommit(
+    const std::shared_ptr<MediaNodeWakeup>& producerWakeup)
 {
-    if (m_materialized || m_cursor.finished() || m_batch || m_emission ||
-        m_packetSizeBytes == 0 || m_maximumPacketsPerDatagram == 0) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending emission has no next payload geometry"));
+    if (!m_waitingCommit) return ::media::Status::success();
+    std::optional<std::int64_t> committedAt;
+    auto status = m_series->waitForCommit(producerWakeup, committedAt);
+    if (status) {
+        m_commitObservation.recordCompleted(committedAt);
+        m_waitingCommit = false;
+    } else if (status.error().code == ::media::ErrorCode::WouldBlock) {
+        m_commitObservation.increment(m_commitObservation.wouldBlock);
     }
-    const std::size_t packets = (std::min)(
-        m_cursor.remainingPacketCount(), m_maximumPacketsPerDatagram);
-    if (packets == 0 ||
-        packets > (std::numeric_limits<std::size_t>::max)() /
-            m_packetSizeBytes) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending next payload size is not representable"));
-    }
-    return ::media::Result<std::size_t>::success(
-        packets * m_packetSizeBytes);
+    return status;
 }
 
-::media::Result<MediaBufferRef>
-MediaTsPendingEmission::materializeProtocolBatch(
-    std::uint64_t generation,
-    MediaTsDatagramEmissionSchedule& schedule)
+::media::Result<std::optional<MediaTsUnpublishedTail>> MediaTsPendingEmission::unpublishedTail(
+    const MediaTsDatagramEmissionSchedule& schedule) const
 {
-    if (m_materialized || m_batch || m_emission || generation == 0 ||
-        m_cursor.finished() || m_packetSizeBytes == 0 ||
-        m_maximumPacketsPerDatagram == 0 ||
-        m_cursor.remainingPacketCount() >
-            (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending emission cannot materialize its protocol transaction"));
-    }
-    const std::size_t payloadBytes =
-        m_cursor.remainingPacketCount() * m_packetSizeBytes;
-    auto emission = schedule.prepareAccessUnit(payloadBytes);
-    if (!emission) {
-        return ::media::Result<MediaBufferRef>::failure(emission.error());
-    }
-    const MediaRunningTime release = emission.value().deadline();
-    const MediaRunningTime deadline = emission.value().latestEmissionTime();
-    auto batch = MediaMpegTsProtocolDatagramBatchBuffer::create(
-        generation, std::move(m_cursor),
-        static_cast<std::uint16_t>(m_maximumPacketsPerDatagram),
-        m_notBefore, release, deadline, m_finalBoundary);
-    if (!batch) return ::media::Result<MediaBufferRef>::failure(batch.error());
-    auto committed = schedule.commit(
-        std::move(emission).value(), release);
-    if (!committed) {
-        return ::media::Result<MediaBufferRef>::failure(committed.error());
-    }
-    m_materialized = true;
-    return ::media::Result<MediaBufferRef>::success(
-        std::move(batch).value());
+    using Result = ::media::Result<std::optional<MediaTsUnpublishedTail>>;
+    if (!m_remainingPackets) return Result::success(std::nullopt);
+    if (!m_packetSizeBytes || !m_maximumPacketsPerDatagram ||
+        m_remainingPackets > (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes)
+        return Result::failure(::media::ErrorInfo::invalidArgument("TS unpublished AU geometry is not representable"));
+    const auto nextPackets = (std::min)(m_remainingPackets, m_maximumPacketsPerDatagram);
+    auto preview = schedule.previewAccessUnit(nextPackets * m_packetSizeBytes);
+    if (!preview) return Result::failure(preview.error());
+    if (preview.value().accessUnitDeadline != m_completionDeadline)
+        return Result::failure(::media::ErrorInfo::invalidArgument("TS unpublished AU lost its original deadline"));
+    return Result::success(MediaTsUnpublishedTail{preview.value().notBefore, m_completionDeadline,
+        m_remainingPackets * m_packetSizeBytes,
+        m_remainingPackets / m_maximumPacketsPerDatagram + (m_remainingPackets % m_maximumPacketsPerDatagram != 0)});
 }
 
-::media::Status MediaTsPendingEmission::preparePayload(
-    MediaTsPacketBatchWriter& writer)
+::media::Result<MediaBufferRef> MediaTsPendingEmission::materializePrefix(
+    std::uint64_t generation, MediaTsDatagramEmissionSchedule& schedule,
+    const MediaTsPrefixBatch& prefix)
 {
-    if (m_cursor.finished() || m_batch || m_emission) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending emission cannot prepare its current state"));
+    using Result = ::media::Result<MediaBufferRef>;
+    if (!generation || m_waitingCommit || !m_packetSizeBytes ||
+        !m_maximumPacketsPerDatagram || m_maximumPacketsPerDatagram >
+            (std::numeric_limits<std::uint16_t>::max)() ||
+        m_maximumPacketsPerDatagram > (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes ||
+        m_remainingPackets > (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS prefix identity or datagram geometry is invalid"));
+    const auto maximumPayload = m_maximumPacketsPerDatagram * m_packetSizeBytes;
+    if (!prefix.payloadBytes || prefix.payloadBytes > pendingBytes() ||
+        prefix.payloadBytes % m_packetSizeBytes != 0 || !prefix.datagramCount ||
+        (prefix.payloadBytes - 1) / maximumPayload + 1 != prefix.datagramCount ||
+        (prefix.payloadBytes != pendingBytes() && prefix.payloadBytes % maximumPayload != 0))
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS planned prefix differs from the pending contiguous payload"));
+    const auto& window = prefix.window;
+    // No allocation pressure may follow continuity reservation. The caller
+    // has already checked its publication holder and previous commit.
+    auto storage = MediaTsPrefixStoragePreparation::prepare(m_resource, m_geometry,
+        static_cast<bool>(m_series));
+    if (!storage) return Result::failure(storage.error());
+    auto emission = schedule.prepareAccessUnit(prefix.payloadBytes);
+    if (!emission) return Result::failure(emission.error());
+    if (window.release != emission.value().deadline() ||
+        window.accessUnitDeadline != emission.value().latestEmissionTime())
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS prefix window differs from its schedule reservation"));
+    // One planner-selected contiguous reservation is the publication/commit
+    // quantum. Its unchanged internal limit protects imminent maintenance.
+    if (!m_series) {
+        auto created = MediaMpegTsProtocolDatagramBatchBuffer::create(
+            generation, std::move(m_cursor),
+            static_cast<std::uint16_t>(m_maximumPacketsPerDatagram),
+            m_notBefore, window.release, window.accessUnitDeadline,
+            m_finalBoundary, prefix.datagramCount, window.completionLimit, window.acceptedWorkObservation);
+        if (!created) return Result::failure(created.error());
+        m_series = std::move(created).value();
+    } else {
+        auto reserved = m_series->reserveNextPrefix(prefix.datagramCount, window,
+            std::move(*storage.value().commitModel));
+        if (!reserved) return Result::failure(reserved.error());
     }
-    auto batch = writer.prepareNext(m_cursor);
-    if (!batch) {
-        return ::media::Status::failure(batch.error());
-    }
-    m_batch = std::move(batch).value();
-    return ::media::Status::success();
-}
-
-::media::Result<std::size_t>
-MediaTsPendingEmission::preparedPayloadBytes() const
-{
-    if (!m_batch || m_emission) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "MPEG-TS pending emission has no unreserved payload"));
-    }
-    const std::size_t packetCount = m_batch->packets().size();
-    if (packetCount == 0 || m_packetSizeBytes == 0 ||
-        packetCount > (std::numeric_limits<std::size_t>::max)() /
-            m_packetSizeBytes) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending batch size is not representable"));
-    }
-    return ::media::Result<std::size_t>::success(
-        packetCount * m_packetSizeBytes);
-}
-
-::media::Result<MediaRunningTime> MediaTsPendingEmission::reservePrepared(
-    MediaTsDatagramEmissionSchedule& schedule)
-{
-    auto payloadBytes = preparedPayloadBytes();
-    if (!payloadBytes) {
-        return ::media::Result<MediaRunningTime>::failure(
-            payloadBytes.error());
-    }
-    if (schedule.plan().packetSizeBytes() != m_packetSizeBytes) {
-        return ::media::Result<MediaRunningTime>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending packet size conflicts with its schedule"));
-    }
-    auto emission = schedule.prepareAccessUnit(
-        payloadBytes.value());
-    if (!emission) {
-        return ::media::Result<MediaRunningTime>::failure(emission.error());
-    }
-    const MediaRunningTime deadline = emission.value().deadline();
-    m_emission = std::move(emission).value();
-    return ::media::Result<MediaRunningTime>::success(deadline);
-}
-
-::media::Result<MediaTsBatchWriteResult>
-MediaTsPendingEmission::emitPrepared(
-    MediaTsPacketBatchWriter& writer,
-    MediaTsDatagramEmissionSchedule& schedule,
-    MediaTsEmissionDiagnostics& diagnostics,
-    const MediaMasterClock& masterClock,
-    MediaRunningTime availableThrough,
-    bool materializeScheduledBatch)
-{
-    if (!m_batch || !m_emission) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "MPEG-TS pending emission has no prepared datagram"));
-    }
-    const MediaRunningTime selectedDeadline = m_emission->deadline();
-    if (!materializeScheduledBatch &&
-        (availableThrough < selectedDeadline ||
-         availableThrough > m_emission->latestEmissionTime())) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            emissionIntervalError(
-                "before_write", selectedDeadline, availableThrough,
-                m_emission->latestEmissionTime()));
-    }
-    const MediaRunningTime plannedWait = m_emission->plannedWait();
-    const std::size_t wireBytes = m_emission->wireBytes();
-    auto window = MediaTsDatagramEnqueueWindow::create(
-        selectedDeadline, m_emission->latestEmissionTime());
-    if (!window) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            window.error());
-    }
-    auto written = writer.writeNext(
-        m_cursor, std::move(*m_batch), window.value());
-    if (!written) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            written.error());
-    }
-    auto actualEmission = materializeScheduledBatch
-        ? ::media::Result<MediaRunningTime>::success(selectedDeadline)
-        : masterClock.now();
-    if (!actualEmission || actualEmission.value() < selectedDeadline ||
-        actualEmission.value() > m_emission->latestEmissionTime()) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            actualEmission
-                ? emissionIntervalError(
-                      "after_write", selectedDeadline,
-                      actualEmission.value(),
-                      m_emission->latestEmissionTime())
-                : actualEmission.error());
-    }
-    auto committed = schedule.commit(
-        std::move(*m_emission), actualEmission.value());
-    if (!committed) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            committed.error());
-    }
-    m_batch.reset();
-    m_emission.reset();
-    if (!materializeScheduledBatch) {
-        diagnostics.recordCommittedDatagram(
-            wireBytes, plannedWait, selectedDeadline, actualEmission.value());
-    }
-    diagnostics.recordPendingBytes(pendingBytes());
-    return written;
-}
-
-MediaRunningTime MediaTsPendingEmission::deadline() const noexcept
-{
-    return m_emission
-        ? m_emission->deadline()
-        : m_notBefore;
+    auto view = m_series->takePrefixView(prefix.datagramCount, std::move(storage.value().view));
+    if (!view) return Result::failure(view.error());
+    auto committed = schedule.commit(std::move(emission).value(), window.release);
+    if (!committed) return Result::failure(committed.error());
+    m_remainingPackets -= prefix.payloadBytes / m_packetSizeBytes;
+    m_waitingCommit = true;
+    return Result::success(std::move(view).value());
 }
 
 bool MediaTsPendingEmission::finished() const noexcept
 {
-    return m_materialized ||
-        (m_cursor.finished() && !m_batch && !m_emission);
+    return m_series && m_remainingPackets == 0 && !m_waitingCommit;
 }
 
 std::size_t MediaTsPendingEmission::pendingBytes() const noexcept
 {
-    const std::size_t packets = m_materialized
-        ? 0 : m_cursor.remainingPacketCount();
-    return m_packetSizeBytes == 0 ||
-           packets > (std::numeric_limits<std::size_t>::max)() /
-               m_packetSizeBytes
+    return !m_packetSizeBytes ||
+        m_remainingPackets > (std::numeric_limits<std::size_t>::max)() / m_packetSizeBytes
         ? (std::numeric_limits<std::size_t>::max)()
-        : packets * m_packetSizeBytes;
+        : m_remainingPackets * m_packetSizeBytes;
 }
 
 MediaRunningTime MediaTsPendingEmission::notBefore() const noexcept

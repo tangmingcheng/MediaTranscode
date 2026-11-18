@@ -1,6 +1,9 @@
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 
 #include <algorithm>
+#include <sstream>
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
 
 namespace media::ffmpeg::graph {
 
@@ -119,12 +122,15 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
 
 ::media::Status MediaGraphScheduler::configure(MediaGraphExecutionContext& context)
 {
+    if (m_state == MediaGraphSchedulerState::Configured) return ::media::Status::success();
     if (!context.compiled()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("MediaGraphScheduler configure failed: context is not compiled"));
     }
 
+    m_preparedOrder = MediaFixedCapacityStorage<MediaNodeId>(context.executionOrder().size());
     for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
+        m_preparedOrder.push_back(node->nodeId());
         auto status = node->configure(context);
         if (!status) {
             return status;
@@ -222,12 +228,37 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
 
 void MediaGraphScheduler::abort(MediaGraphExecutionContext& context) noexcept
 {
-    auto ordered = orderedRuntimeNodes(context);
-    for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
-        (*it)->abort(context);
+    if (m_state == MediaGraphSchedulerState::Aborted) return;
+    const auto ledger = mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::State)
+        ? context.payloadCreditLedger() : nullptr;
+    for (auto index = m_preparedOrder.size(); index != 0; --index) {
+        auto* node = findNode(m_preparedOrder[index - 1]);
+        if (!node) continue;
+        const auto before = ledger ? ledger->snapshot() : MediaGraphPayloadCreditSnapshot{};
+        node->abort(context);
+        if (ledger) {
+            const auto after = ledger->snapshot();
+            try {
+                std::ostringstream message;
+                message << "node_abort_payload node=" << node->nodeId().value
+                        << " before_objects=" << before.currentObjects
+                        << " after_objects=" << after.currentObjects
+                        << " before_bytes=" << before.currentBytes
+                        << " after_bytes=" << after.currentBytes
+                        << " before_reservations=" << before.reservations
+                        << " after_reservations=" << after.reservations
+                        << " before_releases=" << before.releases
+                        << " after_releases=" << after.releases;
+                mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeLifecycle, message.str());
+            } catch (...) {
+                // Diagnostics must not prevent aborting subsequent nodes.
+            }
+        }
     }
 
     m_state = MediaGraphSchedulerState::Aborted;
+    m_preparedOrder.clear();
 }
 
 void MediaGraphScheduler::clear(const MediaGraphExecutionContext* context)
@@ -238,6 +269,7 @@ void MediaGraphScheduler::clear(const MediaGraphExecutionContext* context)
     }
     m_nodes.clear();
     m_finishedNodes.clear();
+    m_preparedOrder.clear();
     m_state = MediaGraphSchedulerState::Idle;
 }
 
@@ -254,6 +286,7 @@ void MediaGraphScheduler::clear(const std::vector<MediaNodeId>& executionOrder)
     }
     m_nodes.clear();
     m_finishedNodes.clear();
+    m_preparedOrder.clear();
     m_state = MediaGraphSchedulerState::Idle;
 }
 

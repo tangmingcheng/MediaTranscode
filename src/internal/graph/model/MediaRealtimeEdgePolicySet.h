@@ -32,6 +32,8 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy atomicMetadata;
     MediaEdgePolicy atomicVideoPacket;
     MediaEdgePolicy atomicAudioPacket;
+    MediaEdgePolicy startupVideoRelease;
+    MediaEdgePolicy startupAudioRelease;
 
     constexpr bool operator==(
         const MediaRealtimeEdgePolicySet&) const noexcept = default;

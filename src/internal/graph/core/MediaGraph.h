@@ -8,6 +8,7 @@
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaGraphPayloadCreditPlan.h"
+#include "internal/graph/model/MediaProtocolGenerationStoragePlan.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
@@ -90,6 +91,9 @@ public:
     const MediaPort* findOutputPort(MediaNodeId nodeId, const std::string& name) const;
 
     bool empty() const;
+    bool appendProtocolGenerationStorage(MediaProtocolGenerationStoragePlan plan);
+    const MediaProtocolGenerationStoragePlan& protocolGenerationStorage() const noexcept;
+    const MediaProtocolGenerationStorageInstance* protocolGenerationStorageFor(MediaNodeId owner) const noexcept;
     std::size_t nodeCount() const;
     std::size_t edgeCount() const;
     bool setPayloadCreditPlan(MediaGraphPayloadCreditPlan plan);
@@ -120,6 +124,7 @@ private:
 private:
     std::vector<MediaNode> m_nodes;
     std::vector<MediaEdge> m_edges;
+    MediaProtocolGenerationStoragePlan m_protocolGenerationStorage;
     std::optional<MediaGraphPayloadCreditPlan> m_payloadCreditPlan;
     std::optional<MediaGraphPayloadCreditMode> m_payloadCreditMode;
 

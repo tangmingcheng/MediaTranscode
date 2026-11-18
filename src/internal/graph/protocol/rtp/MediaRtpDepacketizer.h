@@ -6,6 +6,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "media_transcode/Result.h"
+#include "internal/graph/runtime/storage/MediaLineageVector.h"
 
 #include <cstdint>
 #include <optional>
@@ -32,14 +33,25 @@ struct MediaRtpAccessUnit final {
 };
 
 struct MediaRtpDepacketizerResult final {
-    std::vector<MediaRtpAccessUnit> accessUnits;
+    explicit MediaRtpDepacketizerResult(MediaLineageAllocationScope allocation)
+        : accessUnits(MediaLineageAllocator<MediaRtpAccessUnit>{std::move(allocation)}) {}
+    MediaLineageVector<MediaRtpAccessUnit> accessUnits;
 };
+
+enum class MediaRtpAssemblyState { Empty, Incomplete };
 
 class MediaRtpDepacketizer {
 public:
     virtual ~MediaRtpDepacketizer() = default;
     virtual ::media::Result<MediaRtpDepacketizerResult> push(const MediaRtpPacket& packet) = 0;
     virtual void discontinuity(MediaRtpDiscontinuityReason reason) noexcept = 0;
+    virtual MediaRtpAssemblyState assemblyState() const noexcept = 0;
+protected:
+    explicit MediaRtpDepacketizer(MediaLineageAllocationScope allocation)
+        : m_allocation(std::move(allocation)) {}
+    const MediaLineageAllocationScope& allocation() const noexcept { return m_allocation; }
+private:
+    MediaLineageAllocationScope m_allocation;
 };
 
 ::media::Result<std::size_t> rtpAccessUnitNalCapacity(

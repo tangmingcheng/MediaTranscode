@@ -1,14 +1,24 @@
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/diagnostics/MediaNodeWaitObservation.h"
 
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <exception>
+#include <system_error>
+#include "internal/graph/runtime/threading/MediaLinuxTimerSlackScope.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#elif defined(__linux__)
+#include <cerrno>
+#include <sched.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 namespace media::ffmpeg::graph {
@@ -20,6 +30,14 @@ namespace {
     return ::media::ErrorInfo::ioFailure(
         std::string("MediaNodeWakeup ") + operation +
         " failed with Windows error " + std::to_string(code));
+}
+#elif defined(__linux__)
+::media::ErrorInfo slackFailure(MediaLinuxTimerSlackScope::Failure failure)
+{
+    const char* operation = failure.operation == MediaLinuxTimerSlackScope::Operation::Read ? "read"
+        : failure.operation == MediaLinuxTimerSlackScope::Operation::Set ? "set" : "restore";
+    return ::media::ErrorInfo::ioFailure(
+        std::string("MediaNodeWakeup Linux timer slack ") + operation + " failed", failure.code);
 }
 #endif
 
@@ -75,9 +93,25 @@ void MediaNodeWakeup::notify() noexcept
 ::media::Result<MediaNodeWakeup::WaitOutcome> MediaNodeWakeup::wait(
     Sequence observedSequence,
     MediaNodeDeadlineWakePolicy wakePolicy,
-    std::optional<std::chrono::nanoseconds> timeout)
+    std::optional<std::chrono::nanoseconds> timeout,
+    MediaNodeWaitObservation* observation)
 {
+#if defined(__linux__)
+    // Sample before platform diagnostics, locking, or timer setup. None of
+    // that work may renew the caller's original relative timeout.
+    const auto waitEntered = std::chrono::steady_clock::now();
+#endif
+    MediaNodeWaitObservationScope observed(observation);
 #if defined(_WIN32)
+    if (observation) {
+        // Correlate this calling thread with external scheduling evidence.
+        // Frequency failure is diagnostic-only and never replaces wait errors.
+        observation->windowsProcessId = GetCurrentProcessId();
+        observation->windowsThreadId = GetCurrentThreadId();
+        LARGE_INTEGER frequency{};
+        if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0)
+            observation->windowsQpcFrequency = frequency.QuadPart;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_platformError != 0) {
@@ -110,20 +144,37 @@ void MediaNodeWakeup::notify() noexcept
             nanoseconds / 100 + (nanoseconds % 100 == 0 ? 0 : 1);
         LARGE_INTEGER dueTime{};
         dueTime.QuadPart = -(std::max)(std::int64_t{1}, hundredNanoseconds);
-        if (!SetWaitableTimerEx(
-                static_cast<HANDLE>(m_deadlineTimer), &dueTime, 0,
-                nullptr, nullptr, nullptr, 0)) {
+        if (observation) {
+            observation->windowsDue100ns = dueTime.QuadPart;
+            observation->armBefore = mediaSteadyClockNowNs();
+        }
+        const BOOL armed = SetWaitableTimerEx(
+            static_cast<HANDLE>(m_deadlineTimer), &dueTime, 0,
+            nullptr, nullptr, nullptr, 0);
+        const DWORD armError = armed ? ERROR_SUCCESS : GetLastError();
+        if (observation) {
+            observation->armAfter = mediaSteadyClockNowNs();
+            if (!armed) observation->windowsError = armError;
+        }
+        if (!armed) {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_activeWaitPolicy.reset();
             return ::media::Result<WaitOutcome>::failure(
-                waitFailure("deadline arm", GetLastError()));
+                waitFailure("deadline arm", armError));
         }
         handles[1] = static_cast<HANDLE>(m_deadlineTimer);
         handleCount = 2;
     }
 
+    if (observation) observation->apiBefore = mediaSteadyClockNowNs();
     const DWORD waited = WaitForMultipleObjects(
         handleCount, handles, FALSE, INFINITE);
+    const DWORD waitError = waited == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+    if (observation) {
+        observation->apiReturned = mediaSteadyClockNowNs();
+        observation->windowsWaitResult = waited;
+        if (waited == WAIT_FAILED) observation->windowsError = waitError;
+    }
     if (timeout && waited == WAIT_OBJECT_0) {
         (void)CancelWaitableTimer(static_cast<HANDLE>(m_deadlineTimer));
     }
@@ -131,7 +182,7 @@ void MediaNodeWakeup::notify() noexcept
         std::lock_guard<std::mutex> lock(m_mutex);
         m_activeWaitPolicy.reset();
         return ::media::Result<WaitOutcome>::failure(
-            waitFailure("wait", GetLastError()));
+            waitFailure("wait", waitError));
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -151,6 +202,75 @@ void MediaNodeWakeup::notify() noexcept
     return ::media::Result<WaitOutcome>::success(
         WaitOutcome::Deadline);
 #else
+    // Read the actual calling worker's platform facts. These observations do
+    // not change its scheduling policy or replace a wait failure.
+#if defined(__linux__)
+    if (observation) {
+        const auto tid = syscall(SYS_gettid);
+        if (tid > 0) observation->linuxThreadId = tid;
+        const int policy = sched_getscheduler(0);
+        if (policy >= 0) observation->linuxSchedulerPolicy = policy;
+        if (!timeout || timeout->count() <= 0) {
+            const long slack = syscall(SYS_prctl, PR_GET_TIMERSLACK, 0UL, 0UL, 0UL, 0UL);
+            if (slack >= 0) observation->linuxTimerSlackNs = slack;
+            else observation->linuxTimerSlackError = errno;
+        }
+    }
+    if (timeout) {
+        using Result = ::media::Result<WaitOutcome>;
+        using Clock = std::chrono::steady_clock;
+        if (waitEntered.time_since_epoch() < Clock::duration::zero() ||
+            (*timeout > std::chrono::nanoseconds::zero() && *timeout > Clock::time_point::max() - waitEntered))
+            return Result::failure(::media::ErrorInfo::invalidArgument("MediaNodeWakeup Linux deadline is not representable"));
+        const auto deadline = *timeout > std::chrono::nanoseconds::zero() ? waitEntered + *timeout : waitEntered;
+        std::unique_lock<std::mutex> lock(m_mutex);
+        const auto changedPredicate = [&] {
+            return m_interrupted || (wakePolicy == MediaNodeDeadlineWakePolicy::InputOrDeadline &&
+                m_sequence != observedSequence);
+        };
+        if (m_interrupted) return Result::success(WaitOutcome::Interrupted);
+        if (changedPredicate()) return Result::success(WaitOutcome::Notified);
+        if (*timeout <= std::chrono::nanoseconds::zero()) return Result::success(WaitOutcome::Deadline);
+        m_activeWaitPolicy = wakePolicy;
+        struct PolicyReset final {
+            std::optional<MediaNodeDeadlineWakePolicy>& policy;
+            ~PolicyReset() { policy.reset(); }
+        } policyReset{m_activeWaitPolicy};
+        MediaLinuxTimerSlackScope slack(observation);
+        if (const auto failed = slack.enter()) return Result::failure(slackFailure(*failed));
+        bool changed = false;
+        std::exception_ptr waitException;
+        if (observation) observation->apiBefore = mediaSteadyClockNowNs();
+        try {
+            changed = m_condition.wait_until(lock, deadline, changedPredicate);
+        } catch (...) {
+            waitException = std::current_exception();
+        }
+        if (observation) observation->apiReturned = mediaSteadyClockNowNs();
+        const auto restoreFailure = slack.restore();
+        if (waitException) {
+            auto error = [&]() -> ::media::ErrorInfo {
+                try { std::rethrow_exception(waitException); }
+                catch (const std::system_error& failure) {
+                    return ::media::ErrorInfo::ioFailure(
+                        std::string("MediaNodeWakeup Linux wait failed: ") + failure.what(), failure.code().value());
+                } catch (const std::bad_alloc&) {
+                    return ::media::ErrorInfo::allocationFailed("MediaNodeWakeup Linux wait allocation failed");
+                } catch (const std::exception& failure) {
+                    return ::media::ErrorInfo::internalError(
+                        std::string("MediaNodeWakeup Linux wait failed: ") + failure.what());
+                } catch (...) {
+                    return ::media::ErrorInfo::internalError("MediaNodeWakeup Linux wait threw an unknown exception");
+                }
+            }();
+            if (restoreFailure) error.message += "; secondary: " + slackFailure(*restoreFailure).describe();
+            return Result::failure(std::move(error));
+        }
+        if (restoreFailure) return Result::failure(slackFailure(*restoreFailure));
+        if (m_interrupted) return Result::success(WaitOutcome::Interrupted);
+        return Result::success(changed ? WaitOutcome::Notified : WaitOutcome::Deadline);
+    }
+#endif
     std::unique_lock<std::mutex> lock(m_mutex);
     const auto changedPredicate = [&] {
         return m_interrupted ||
@@ -159,11 +279,13 @@ void MediaNodeWakeup::notify() noexcept
     };
     m_activeWaitPolicy = wakePolicy;
     bool changed = true;
+    if (observation) observation->apiBefore = mediaSteadyClockNowNs();
     if (timeout) {
         changed = m_condition.wait_for(lock, *timeout, changedPredicate);
     } else {
         m_condition.wait(lock, changedPredicate);
     }
+    if (observation) observation->apiReturned = mediaSteadyClockNowNs();
     m_activeWaitPolicy.reset();
     if (m_interrupted) {
         return ::media::Result<WaitOutcome>::success(

@@ -31,6 +31,7 @@ bool audioOrAvNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioStartupTrim:
     case MediaNodeKind::AudioResample:
     case MediaNodeKind::AudioEncode:
+    case MediaNodeKind::RtpControlOutput:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpPacketClockBinder:
     case MediaNodeKind::DemuxPacketClockBinder:
@@ -619,7 +620,7 @@ const MediaEdge* exactEdge(
                 decoded.value(), runtime.sessionKey,
                 MediaTranscodeStreamSet::VideoOnly, product);
         !exact) return exact;
-    if (source.inputPorts.size() != 1 || source.outputPorts.size() != 1 ||
+    if (source.inputPorts.size() != 2 || source.outputPorts.size() != 1 ||
         !MediaGraphShapeQuery::validPort(source.findInputPort("activation"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
@@ -848,6 +849,7 @@ const MediaEdge* exactEdge(
         if (!node || node->kind == MediaNodeKind::VideoDecode ||
             node->kind == MediaNodeKind::VideoOutputFanout ||
             node->kind == MediaNodeKind::RawRtpInput ||
+            node->kind == MediaNodeKind::RtpControlOutput ||
             node->kind == MediaNodeKind::RealtimeInput ||
             std::find(outputNodes.begin(), outputNodes.begin() + index, outputNodes[index]) !=
                 outputNodes.begin() + index) {

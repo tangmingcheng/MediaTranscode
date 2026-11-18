@@ -23,6 +23,8 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
+    ::media::Result<std::optional<MediaNodeProcessResult>> processControlBeforeOutput(
+        MediaGraphExecutionContext& context, bool allowClock, bool& progressed) override;
     ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaNodeProcessResult> onProcess(

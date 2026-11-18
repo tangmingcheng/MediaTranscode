@@ -14,6 +14,7 @@ struct MediaVideoTranscodeBranchNodes {
     MediaNodeId videoTimestamp = MediaNodeId::invalid();
     MediaNodeId videoFrameRate = MediaNodeId::invalid();
     MediaNodeId videoFilter = MediaNodeId::invalid();
+    MediaNodeId videoPreparation = MediaNodeId::invalid();
     MediaNodeId videoEncode = MediaNodeId::invalid();
 };
 

@@ -6,30 +6,35 @@ extern "C" {
 }
 
 #include <limits>
+#include <algorithm>
 
 namespace media::ffmpeg::graph {
 
 AudioSwrCompensationExecutor::AudioSwrCompensationExecutor(
     MediaAudioCorrectionExecutionMode mode,
     std::uint64_t generation,
-    std::size_t lookaheadWindows) noexcept
+    std::size_t lookaheadWindows,
+    std::optional<int> maximumOutputBlockSamples) noexcept
     : m_mode(mode)
     , m_generation(generation)
     , m_lookaheadWindows(lookaheadWindows)
+    , m_maximumOutputBlockSamples(maximumOutputBlockSamples)
 {
 }
 
 ::media::Result<AudioSwrCompensationExecutor>
 AudioSwrCompensationExecutor::create(MediaAudioCorrectionExecutionMode mode,
                                      std::uint64_t generation,
-                                     std::size_t lookaheadWindows)
+                                     std::size_t lookaheadWindows,
+                                     std::optional<int> maximumOutputBlockSamples)
 {
     const bool disabled = mode == MediaAudioCorrectionExecutionMode::Disabled;
     const bool external =
         mode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
     if ((!disabled && !external) ||
-        (disabled && (generation != 0 || lookaheadWindows != 0)) ||
-        (external && (generation == 0 || lookaheadWindows == 0 ||
+        (disabled && (generation != 0 || lookaheadWindows != 0 || maximumOutputBlockSamples)) ||
+        (external && (!maximumOutputBlockSamples || *maximumOutputBlockSamples <= 0 ||
+                      generation == 0 || lookaheadWindows == 0 ||
                       lookaheadWindows > MediaAudioDriftServoLimits::
                           MaximumCorrectionLookaheadWindows))) {
         return ::media::Result<AudioSwrCompensationExecutor>::failure(
@@ -37,7 +42,7 @@ AudioSwrCompensationExecutor::create(MediaAudioCorrectionExecutionMode mode,
                 "audio correction mode, generation, and lookahead are inconsistent"));
     }
     return ::media::Result<AudioSwrCompensationExecutor>::success(
-        AudioSwrCompensationExecutor(mode, generation, lookaheadWindows));
+        AudioSwrCompensationExecutor(mode, generation, lookaheadWindows, maximumOutputBlockSamples));
 }
 
 ::media::Status AudioSwrCompensationExecutor::enqueue(
@@ -111,7 +116,7 @@ AudioSwrCompensationExecutor::prepare(SwrContext* swr,
         m_activeRemaining = m_active->compensationDistance();
     }
     return ::media::Result<AudioSwrCompensationWindow>::success(
-        AudioSwrCompensationWindow{true, m_activeRemaining});
+        AudioSwrCompensationWindow{true, std::min(m_activeRemaining, *m_maximumOutputBlockSamples)});
 }
 
 ::media::Status AudioSwrCompensationExecutor::advance(int producedSamples)

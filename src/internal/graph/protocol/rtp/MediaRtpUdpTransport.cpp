@@ -1,8 +1,12 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
+#include <new>
 #include <utility>
 
 #ifdef _WIN32
@@ -18,7 +22,6 @@ namespace media::ffmpeg::graph {
 
 MediaRtpUdpIngressReceiveLease::MediaRtpUdpIngressReceiveLease(
     std::shared_ptr<void> owner,
-    std::unique_lock<std::mutex> receiveLock,
     void* state,
     intptr_t rtpHandle,
     intptr_t rtcpHandle,
@@ -30,7 +33,6 @@ MediaRtpUdpIngressReceiveLease::MediaRtpUdpIngressReceiveLease(
     MarkReceivedFn markReceivedFn,
     ReleaseFn releaseFn) noexcept
     : m_owner(std::move(owner)),
-      m_receiveLock(std::move(receiveLock)),
       m_state(state),
       m_rtpHandle(rtpHandle),
       m_rtcpHandle(rtcpHandle),
@@ -52,7 +54,6 @@ MediaRtpUdpIngressReceiveLease::~MediaRtpUdpIngressReceiveLease()
 MediaRtpUdpIngressReceiveLease::MediaRtpUdpIngressReceiveLease(
     MediaRtpUdpIngressReceiveLease&& other) noexcept
     : m_owner(std::move(other.m_owner)),
-      m_receiveLock(std::move(other.m_receiveLock)),
       m_state(std::exchange(other.m_state, nullptr)),
       m_rtpHandle(std::exchange(other.m_rtpHandle, -1)),
       m_rtcpHandle(std::exchange(other.m_rtcpHandle, -1)),
@@ -73,7 +74,6 @@ MediaRtpUdpIngressReceiveLease::operator=(
     if (this != &other) {
         release();
         m_owner = std::move(other.m_owner);
-        m_receiveLock = std::move(other.m_receiveLock);
         m_state = std::exchange(other.m_state, nullptr);
         m_rtpHandle = std::exchange(other.m_rtpHandle, -1);
         m_rtcpHandle = std::exchange(other.m_rtcpHandle, -1);
@@ -108,9 +108,8 @@ void MediaRtpUdpIngressReceiveLease::markReceived(
 
 void MediaRtpUdpIngressReceiveLease::release() noexcept
 {
-    if (m_state && m_releaseFn) m_releaseFn(m_state);
+    if (m_state && m_releaseFn) m_releaseFn(m_state, m_preferredChannel);
     m_state = nullptr;
-    if (m_receiveLock.owns_lock()) m_receiveLock.unlock();
     m_owner.reset();
 }
 
@@ -126,6 +125,7 @@ struct MediaRtpUdpTransport::Impl final {
          int cancelWriteFd,
 #endif
          std::size_t datagramBytes,
+         std::pmr::memory_resource& storage,
          int readTimeoutMs,
          std::shared_ptr<MediaRtpUdpTransportPhaseController> controller)
         : runtime(std::move(socketRuntime))
@@ -140,6 +140,7 @@ struct MediaRtpUdpTransport::Impl final {
         , cancellationWrite(cancelWriteFd)
 #endif
         , maximumDatagramBytes(datagramBytes)
+        , receiveScratch(storage, std::size_t{0})
         , effectiveReceiveBufferBytes((std::min)(
               rtp.effectiveReceiveBufferBytes(),
               rtcp.effectiveReceiveBufferBytes()))
@@ -148,7 +149,7 @@ struct MediaRtpUdpTransport::Impl final {
         , preferRtcp(false)
         , state(State::Running)
         , cancellationSequence(0)
-        , receiveActive(false)
+        , receiveActive{}
     {
     }
 
@@ -176,15 +177,17 @@ struct MediaRtpUdpTransport::Impl final {
     const int cancellationWrite;
 #endif
     std::size_t maximumDatagramBytes;
+    MediaOwnedByteStorage receiveScratch;
     int effectiveReceiveBufferBytes;
     int cancellableReadTimeoutMs;
     std::shared_ptr<MediaRtpUdpTransportPhaseController> phaseController;
     bool preferRtcp;
     std::mutex lifecycleMutex;
     std::mutex receiveMutex;
+    std::condition_variable receiveReleased;
     std::atomic<State> state;
     std::atomic_uint64_t cancellationSequence;
-    bool receiveActive;
+    std::array<bool, 2> receiveActive;
 };
 
 namespace {
@@ -215,7 +218,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 }
 
 ::media::Result<MediaRtpUdpTransport> MediaRtpUdpTransport::open(
-    const MediaRtpUdpTransportConfig& config)
+    const MediaRtpUdpTransportConfig& config, std::pmr::memory_resource& storage)
 {
     if (config.bindAddress.empty() || config.receiveBufferBytes <= 0 ||
         config.maximumDatagramBytes == 0 || config.maximumDatagramBytes > 65'535 ||
@@ -247,7 +250,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     }
     return ::media::Result<MediaRtpUdpTransport>::success(MediaRtpUdpTransport(std::make_shared<Impl>(
         runtime.value(), std::move(rtp.value()), std::move(rtcp.value()), cancellationEvent,
-        config.maximumDatagramBytes, config.cancellableReadTimeoutMs,
+        config.maximumDatagramBytes, storage, config.cancellableReadTimeoutMs,
         config.phaseController)));
 #else
     int cancellationPipe[2]{-1, -1};
@@ -268,7 +271,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     }
     return ::media::Result<MediaRtpUdpTransport>::success(MediaRtpUdpTransport(std::make_shared<Impl>(
         runtime.value(), std::move(rtp.value()), std::move(rtcp.value()),
-        cancellationPipe[0], cancellationPipe[1], config.maximumDatagramBytes,
+        cancellationPipe[0], cancellationPipe[1], config.maximumDatagramBytes, storage,
         config.cancellableReadTimeoutMs, config.phaseController)));
 #endif
 }
@@ -299,6 +302,15 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
         return ::media::Result<MediaRtpUdpDatagram>::failure(
             ::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
     }
+    try {
+        // The exclusive receiver reuses one buffer for both RTP and RTCP.
+        if (impl->receiveScratch.empty())
+            impl->receiveScratch = MediaOwnedByteStorage(
+                *impl->receiveScratch.resource(), impl->maximumDatagramBytes);
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<MediaRtpUdpDatagram>::failure(
+            ::media::ErrorInfo::allocationFailed("RTP UDP receive storage allocation failed"));
+    }
     uint64_t sequence = 0;
     {
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
@@ -307,7 +319,12 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
             return ::media::Result<MediaRtpUdpDatagram>::failure(
                 ::media::ErrorInfo::cancelled("RTP UDP transport is stopped"));
         }
-        impl->receiveActive = true;
+        if (impl->receiveActive[0] || impl->receiveActive[1]) {
+            return ::media::Result<MediaRtpUdpDatagram>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP UDP mixed receive conflicts with an active channel receiver"));
+        }
+        impl->receiveActive.fill(true);
         sequence = impl->cancellationSequence.load(
             std::memory_order_acquire);
     }
@@ -323,8 +340,35 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
                 sequence) {
             error = ::media::ErrorInfo::cancelled("RTP UDP receive was cancelled");
         }
-        impl->receiveActive = false;
+        impl->receiveActive.fill(false);
+        impl->receiveReleased.notify_all();
         return ::media::Result<MediaRtpUdpDatagram>::failure(std::move(error));
+    };
+    const auto receiveDatagram = [&](MediaUdpSocket* socket, MediaRtpUdpChannel channel)
+        -> ::media::Result<MediaRtpUdpDatagram> {
+        // Both platform branches hold lifecycleMutex here; receiveMutex also
+        // prevents another receiver from overwriting the borrowed scratch.
+        auto networkEvent = socket->consumeNetworkEvent();
+        if (!networkEvent) {
+            impl->receiveActive.fill(false);
+            impl->receiveReleased.notify_all();
+            return ::media::Result<MediaRtpUdpDatagram>::failure(networkEvent.error());
+        }
+        auto received = socket->receiveInto(impl->receiveScratch.view());
+        impl->receiveActive.fill(false);
+        impl->receiveReleased.notify_all();
+        if (!received) return ::media::Result<MediaRtpUdpDatagram>::failure(received.error());
+        if (received.value() == 0) return ::media::Result<MediaRtpUdpDatagram>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP/RTCP datagram is empty"));
+        impl->preferRtcp = channel == MediaRtpUdpChannel::Rtp;
+        try {
+            return ::media::Result<MediaRtpUdpDatagram>::success(MediaRtpUdpDatagram{
+                channel, MediaOwnedByteStorage(*impl->receiveScratch.resource(),
+                    impl->receiveScratch.view().first(received.value()))});
+        } catch (const std::bad_alloc&) {
+            return ::media::Result<MediaRtpUdpDatagram>::failure(
+                ::media::ErrorInfo::allocationFailed("RTP UDP retained datagram allocation failed"));
+        }
     };
 #ifdef _WIN32
     MediaUdpSocket* preferred = impl->preferRtcp ? &impl->rtcp : &impl->rtp;
@@ -353,24 +397,12 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
             Impl::State::Running ||
         impl->cancellationSequence.load(std::memory_order_acquire) !=
             sequence) {
-        impl->receiveActive = false;
+        impl->receiveActive.fill(false);
+        impl->receiveReleased.notify_all();
         return ::media::Result<MediaRtpUdpDatagram>::failure(
             ::media::ErrorInfo::cancelled("RTP UDP receive was cancelled"));
     }
-    auto networkEvent = selected->consumeNetworkEvent();
-    if (!networkEvent) {
-        impl->receiveActive = false;
-        return ::media::Result<MediaRtpUdpDatagram>::failure(networkEvent.error());
-    }
-    auto bytes = selected->receive(impl->maximumDatagramBytes);
-    if (!bytes) {
-        impl->receiveActive = false;
-        return ::media::Result<MediaRtpUdpDatagram>::failure(bytes.error());
-    }
-    impl->preferRtcp = channel == MediaRtpUdpChannel::Rtp;
-    impl->receiveActive = false;
-    return ::media::Result<MediaRtpUdpDatagram>::success(
-        MediaRtpUdpDatagram{channel, std::move(bytes.value())});
+    return receiveDatagram(selected, channel);
 #else
     MediaUdpSocket* preferred = impl->preferRtcp ? &impl->rtcp : &impl->rtp;
     MediaUdpSocket* secondary = impl->preferRtcp ? &impl->rtp : &impl->rtcp;
@@ -406,31 +438,34 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
     if (impl->state.load(std::memory_order_acquire) != Impl::State::Running ||
         impl->cancellationSequence.load(std::memory_order_acquire) != sequence) {
-        impl->receiveActive = false;
+        impl->receiveActive.fill(false);
+        impl->receiveReleased.notify_all();
         return ::media::Result<MediaRtpUdpDatagram>::failure(
             ::media::ErrorInfo::cancelled("RTP UDP receive was cancelled"));
     }
-    auto networkEvent = selected->consumeNetworkEvent();
-    if (!networkEvent) {
-        impl->receiveActive = false;
-        return ::media::Result<MediaRtpUdpDatagram>::failure(networkEvent.error());
-    }
-    auto bytes = selected->receive(impl->maximumDatagramBytes);
-    if (!bytes) {
-        impl->receiveActive = false;
-        return ::media::Result<MediaRtpUdpDatagram>::failure(bytes.error());
-    }
-    impl->preferRtcp = channel == MediaRtpUdpChannel::Rtp;
-    impl->receiveActive = false;
-    return ::media::Result<MediaRtpUdpDatagram>::success(
-        MediaRtpUdpDatagram{channel, std::move(bytes.value())});
+    return receiveDatagram(selected, channel);
 #endif
+}
+
+::media::Status MediaRtpUdpTransport::releaseReceiveStorage()
+{
+    const auto impl = snapshot();
+    if (!impl) return ::media::Status::failure(
+        ::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    std::unique_lock receiveLock(impl->receiveMutex);
+    std::lock_guard lifecycleLock(impl->lifecycleMutex);
+    if (impl->receiveActive[0] || impl->receiveActive[1])
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP UDP scratch release requires no active receiver"));
+    impl->receiveScratch = MediaOwnedByteStorage(
+        *impl->receiveScratch.resource(), std::size_t{0});
+    return ::media::Status::success();
 }
 
 ::media::Status MediaRtpUdpTransport::interruptReceive() noexcept
 {
     const auto impl = snapshot();
-    if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    if (!impl) return ::media::Status::failure(mediaCleanupError(::media::ErrorCode::NotInitialized, "RTP UDP transport is closed", 0));
     Impl::State expected = Impl::State::Running;
     if (impl->state.compare_exchange_strong(
             expected, Impl::State::StopRequested,
@@ -440,8 +475,8 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
             1, std::memory_order_acq_rel);
     } else if (expected == Impl::State::Aborted) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled(
-                "RTP UDP transport was aborted during receive interruption"));
+            mediaCleanupError(::media::ErrorCode::Cancelled,
+                "RTP UDP transport was aborted during receive interruption", 0));
     }
     return signalCancellation(impl);
 }
@@ -451,8 +486,8 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     const auto impl = snapshot();
     if (!impl) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized(
-                "RTP UDP transport is closed"));
+            mediaCleanupError(::media::ErrorCode::NotInitialized,
+                "RTP UDP transport is closed", 0));
     }
     if (impl->phaseController) {
         impl->phaseController->synchronize(
@@ -473,7 +508,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     }
     if (impl->state.load(std::memory_order_acquire) !=
             Impl::State::StopRequested ||
-        impl->receiveActive) {
+        (impl->receiveActive[0] || impl->receiveActive[1])) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RTP UDP reset requires stopped transport with no active receive"));
     }
@@ -485,7 +520,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 ::media::Status MediaRtpUdpTransport::abort() noexcept
 {
     const auto impl = snapshot();
-    if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    if (!impl) return ::media::Status::failure(mediaCleanupError(::media::ErrorCode::NotInitialized, "RTP UDP transport is closed", 0));
     if (impl->phaseController) {
         impl->phaseController->synchronize(
             MediaRtpUdpTransportPhase::AbortLifetimeAcquired);
@@ -494,7 +529,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
             Impl::State::Aborted, std::memory_order_acq_rel) ==
         Impl::State::Aborted) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled("RTP UDP transport was closed during abort"));
+            mediaCleanupError(::media::ErrorCode::Cancelled, "RTP UDP transport was closed during abort", 0));
     }
     impl->cancellationSequence.fetch_add(1, std::memory_order_acq_rel);
     return signalCancellation(impl);
@@ -520,6 +555,10 @@ void MediaRtpUdpTransport::close() noexcept
         impl->phaseController->synchronize(
             MediaRtpUdpTransportPhase::CloseReceiveAcquired);
     }
+    std::unique_lock lifecycleLock(impl->lifecycleMutex);
+    impl->receiveReleased.wait(lifecycleLock, [&] {
+        return !impl->receiveActive[0] && !impl->receiveActive[1];
+    });
     impl->rtp.close();
     impl->rtcp.close();
 }
@@ -528,7 +567,7 @@ bool MediaRtpUdpTransport::isOpen() const noexcept
 {
     const auto impl = snapshot();
     if (!impl) return false;
-    std::lock_guard lock(impl->receiveMutex);
+    std::lock_guard lock(impl->lifecycleMutex);
     return impl->rtp.isOpen() && impl->rtcp.isOpen();
 }
 
@@ -556,8 +595,17 @@ int MediaRtpUdpTransport::effectiveReceiveBufferBytes() const noexcept
     return impl ? impl->effectiveReceiveBufferBytes : 0;
 }
 
+int MediaRtpUdpTransport::effectiveReceiveBufferBytes(MediaRtpUdpChannel channel) const noexcept
+{
+    const auto impl = snapshot();
+    if (!impl) return 0;
+    if (channel == MediaRtpUdpChannel::Rtp) return impl->rtp.effectiveReceiveBufferBytes();
+    if (channel == MediaRtpUdpChannel::Rtcp) return impl->rtcp.effectiveReceiveBufferBytes();
+    return 0;
+}
+
 ::media::Result<MediaRtpUdpIngressReceiveLease>
-MediaRtpUdpTransport::acquireIngressReceiveLease()
+MediaRtpUdpTransport::acquireIngressReceiveLease(MediaRtpUdpChannel channel)
 {
     const auto impl = snapshot();
     if (!impl) {
@@ -565,7 +613,11 @@ MediaRtpUdpTransport::acquireIngressReceiveLease()
             ::media::ErrorInfo::notInitialized(
                 "RTP UDP ingress receive requires an open transport"));
     }
-    std::unique_lock receiveLock(impl->receiveMutex);
+    if (channel != MediaRtpUdpChannel::Rtp && channel != MediaRtpUdpChannel::Rtcp)
+        return ::media::Result<MediaRtpUdpIngressReceiveLease>::failure(
+            ::media::ErrorInfo::invalidArgument("Ingress receive requires a fixed RTP or RTCP channel"));
+    const std::size_t index = channel == MediaRtpUdpChannel::Rtp ? 0 : 1;
+    std::lock_guard lifecycleLock(impl->lifecycleMutex);
     if (!impl->rtp.isOpen() || !impl->rtcp.isOpen()) {
         return ::media::Result<MediaRtpUdpIngressReceiveLease>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -573,14 +625,13 @@ MediaRtpUdpTransport::acquireIngressReceiveLease()
     }
     std::uint64_t sequence = 0;
     {
-        std::lock_guard lifecycleLock(impl->lifecycleMutex);
         if (impl->state.load(std::memory_order_acquire) !=
-                Impl::State::Running || impl->receiveActive) {
+                Impl::State::Running || impl->receiveActive[index]) {
             return ::media::Result<MediaRtpUdpIngressReceiveLease>::failure(
                 ::media::ErrorInfo::cancelled(
                     "RTP UDP ingress receive is stopped or already active"));
         }
-        impl->receiveActive = true;
+        impl->receiveActive[index] = true;
         sequence = impl->cancellationSequence.load(
             std::memory_order_acquire);
     }
@@ -593,15 +644,12 @@ MediaRtpUdpTransport::acquireIngressReceiveLease()
     return ::media::Result<MediaRtpUdpIngressReceiveLease>::success(
         MediaRtpUdpIngressReceiveLease(
             std::static_pointer_cast<void>(impl),
-            std::move(receiveLock),
             impl.get(),
             impl->rtp.nativeHandle(),
             impl->rtcp.nativeHandle(),
             cancellationHandle,
             impl->cancellableReadTimeoutMs,
-            impl->preferRtcp
-                ? MediaRtpUdpChannel::Rtcp
-                : MediaRtpUdpChannel::Rtp,
+            channel,
             sequence,
             &MediaRtpUdpTransport::ingressLeaseCancelled,
             &MediaRtpUdpTransport::ingressLeaseMarkReceived,
@@ -627,15 +675,19 @@ void MediaRtpUdpTransport::ingressLeaseMarkReceived(
     void* state, MediaRtpUdpChannel channel) noexcept
 {
     auto* impl = static_cast<Impl*>(state);
-    if (impl) impl->preferRtcp = channel == MediaRtpUdpChannel::Rtp;
+    if (impl) {
+        std::lock_guard lifecycleLock(impl->lifecycleMutex);
+        impl->preferRtcp = channel == MediaRtpUdpChannel::Rtp;
+    }
 }
 
-void MediaRtpUdpTransport::ingressLeaseRelease(void* state) noexcept
+void MediaRtpUdpTransport::ingressLeaseRelease(void* state, MediaRtpUdpChannel channel) noexcept
 {
     auto* impl = static_cast<Impl*>(state);
     if (!impl) return;
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
-    impl->receiveActive = false;
+    impl->receiveActive[channel == MediaRtpUdpChannel::Rtp ? 0 : 1] = false;
+    impl->receiveReleased.notify_all();
 }
 
 ::media::Status MediaRtpUdpTransport::signalCancellation(
@@ -643,14 +695,14 @@ void MediaRtpUdpTransport::ingressLeaseRelease(void* state) noexcept
 {
 #ifdef _WIN32
     if (!WSASetEvent(impl->cancellationEvent)) {
-        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+        return ::media::Status::failure(mediaCleanupError(::media::ErrorCode::IoFailure,
             "RTP UDP cancellation signal failed", WSAGetLastError()));
     }
 #else
     const uint8_t signal = 1;
     const ssize_t written = write(impl->cancellationWrite, &signal, sizeof(signal));
     if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+        return ::media::Status::failure(mediaCleanupError(::media::ErrorCode::IoFailure,
             "RTP UDP cancellation signal failed", errno));
     }
 #endif

@@ -1,43 +1,44 @@
 #pragma once
+#include "internal/graph/runtime/storage/MediaLineageAllocationScope.h"
+
+#include "internal/graph/runtime/storage/MediaImmutableArray.h"
+#include "internal/graph/diagnostics/MediaCodecReceiveObservation.h"
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
-#include "internal/graph/sync/MediaCanonicalAudioSampleInterval.h"
+#include "internal/graph/sync/MediaCanonicalAudioContribution.h"
+#include "internal/graph/sync/MediaCanonicalAccessUnitIdentity.h"
+#include "internal/graph/sync/MediaVideoDecodeProgress.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
 #include <optional>
 #include <memory>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
-enum class MediaScheduledStream : std::uint8_t { Video, Audio };
-enum class MediaDecodeOrderMode : std::uint8_t {
-    ReorderedRequiresDecodeTime,
-    PresentationOrderNoReorder
-};
-
 struct MediaCanonicalLineage;
 
-class MediaSourceAccessUnitSequence final {
-public:
-    explicit constexpr MediaSourceAccessUnitSequence(std::uint64_t value) noexcept
-        : m_value(value) {}
-    constexpr std::uint64_t value() const noexcept { return m_value; }
-    friend constexpr bool operator==(MediaSourceAccessUnitSequence,
-                                     MediaSourceAccessUnitSequence) noexcept = default;
-private:
-    std::uint64_t m_value;
-};
-
 class MediaCanonicalAccessUnitBuffer final : public MediaBuffer {
+    class ConstructionKey final {
+        friend class MediaCanonicalAccessUnitBuffer;
+        ConstructionKey() = default;
+    };
 public:
+    using AllocationAllocator = MediaLineageAllocator<MediaCanonicalAccessUnitBuffer>;
     static ::media::Result<MediaBufferRef> create(
+        const MediaLineageAllocationScope& allocation,
         MediaBufferRef media,
         std::shared_ptr<const MediaCanonicalLineage> lineage,
-        std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
+        std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
+        std::vector<MediaCanonicalAudioContribution> audioContributions,
+        std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+        std::optional<MediaVideoDecodeProgress> decodeProgress);
 
+    const std::optional<MediaVideoDecodeProgress>& decodeProgress() const noexcept
+    { return m_decodeProgress; }
     MediaBufferType type() const noexcept override;
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     const MediaBufferRef& media() const noexcept { return m_media; }
@@ -48,7 +49,12 @@ public:
     MediaRunningTime canonicalDuration() const noexcept;
     MediaDecodeOrderMode decodeOrder() const noexcept;
     std::uint64_t generation() const noexcept;
-    MediaSourceAccessUnitSequence sourceSequence() const noexcept;
+    MediaCanonicalAccessUnitSequence canonicalSequence() const noexcept;
+    // Construction observation, not a successful output-publication timestamp.
+    std::optional<std::int64_t> diagnosticCreatedSteadyNs() const noexcept
+    { return m_diagnosticCreatedSteadyNs; }
+    const std::optional<MediaCodecReceiveObservation>& codecReceiveObservation() const noexcept
+    { return m_codecReceiveObservation; }
     const std::shared_ptr<const MediaCanonicalLineage>& lineage() const noexcept
     { return m_lineage; }
     const std::optional<MediaCanonicalAudioSampleInterval>&
@@ -57,16 +63,26 @@ public:
         return m_audioInterval;
     }
 
-private:
-    MediaCanonicalAccessUnitBuffer(
+    std::span<const MediaCanonicalAudioContribution> audioContributions() const noexcept
+    { return m_audioContributions.view(); }
+
+    MediaCanonicalAccessUnitBuffer(ConstructionKey,
         MediaBufferRef media,
         MediaScheduledStream stream,
         std::shared_ptr<const MediaCanonicalLineage> lineage,
-        std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
+        std::optional<MediaCanonicalAudioSampleInterval> audioInterval,
+        MediaImmutableArray<MediaCanonicalAudioContribution> audioContributions,
+        std::optional<MediaCodecReceiveObservation> codecReceiveObservation,
+        std::optional<MediaVideoDecodeProgress> decodeProgress);
+private:
     MediaBufferRef m_media;
     MediaScheduledStream m_stream;
     std::shared_ptr<const MediaCanonicalLineage> m_lineage;
     std::optional<MediaCanonicalAudioSampleInterval> m_audioInterval;
+    MediaImmutableArray<MediaCanonicalAudioContribution> m_audioContributions;
+    const std::optional<std::int64_t> m_diagnosticCreatedSteadyNs;
+    const std::optional<MediaCodecReceiveObservation> m_codecReceiveObservation;
+    const std::optional<MediaVideoDecodeProgress> m_decodeProgress;
 };
 
 } // namespace media::ffmpeg::graph

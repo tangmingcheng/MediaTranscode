@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -159,6 +160,8 @@ void AudioDecodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
     if (m_flushPending) return continueFlush(context);
+    // A completed generation drain remains closed until the owning purge resets it.
+    if (m_flushSent) return processWaiting();
     if (m_lineageState->receivePending) {
         auto receiveResult = receiveFrames(context);
         if (!receiveResult) return processProgress(::media::Status::failure(receiveResult.error()));
@@ -200,7 +203,16 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     }
 
     const MediaBufferRef& buffer = *input.value();
-    if (buffer->isEof() || buffer->isFlush()) {
+    const auto endGeneration = mediaEndGeneration(buffer);
+    if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
+    if (endGeneration.value()) {
+        if (!m_lineageState->synchronized())
+            return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "EndGeneration requires a planned synchronized decoder lineage")));
+        if (auto freshness = m_lineageState->authorizeRetainedControl(buffer); !freshness)
+            return processProgress(std::move(freshness));
+    }
+    if (buffer->isEof() || buffer->isFlush() || endGeneration.value()) {
         const bool eof = buffer->isEof();
         if (eof && m_lineageState->eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
@@ -240,7 +252,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 "AudioDecodeNode input packet lacks payload credit ownership"));
     }
     if (inputPayloadCredit) {
-        auto retained = retainMediaFfmpegPayload(*pendingPacket, inputPayloadCredit);
+        auto retained = retainMediaFfmpegPayload(*pendingPacket, {inputPayloadCredit, nullptr, MediaRuntimeLineageAllocation{}});
         if (!retained) return ::media::Result<MediaNodeProcessResult>::failure(retained.error());
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
@@ -254,10 +266,12 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::notInitialized(
                     "Synchronized AudioDecodeNode requires planned lineage state"));
         }
-        if (auto status = m_lineageState->validateObservation(
-                synchronized.origin.generation); !status) {
-            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
-        }
+        auto disposition = m_lineageState->classifyObservation(
+            synchronized.origin.generation);
+        if (!disposition)
+            return ::media::Result<MediaNodeProcessResult>::failure(disposition.error());
+        if (disposition.value() == MediaAudioLineageGenerationDisposition::DropStale)
+            return processProgress();
         if (m_lineageState->discardPaddingProof) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -283,9 +297,12 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "AudioDecodeNode source interval sample rate conflicts with codec"));
         }
-        const MediaAudioIntervalFragment incomingFragment{
-            synchronized.lineage,
-            sourceInterval};
+        auto sourceFragment = MediaAudioIntervalFragment::fromSource(
+            synchronized.lineage, sourceInterval);
+        if (!sourceFragment) {
+            return ::media::Result<MediaNodeProcessResult>::failure(sourceFragment.error());
+        }
+        const auto incomingFragment = std::move(sourceFragment).value();
         MediaAudioLineageCapacity leases(m_lineageState->capacity());
         if (auto status =
                 m_lineageState->intervals.observeLineageCapacity(leases);
@@ -407,7 +424,7 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                 ::media::ErrorInfo::invalidArgument(
                     "AudioDecodeNode decoded sample rate changed from its source codec"));
         }
-        auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio);
+        auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio, MediaRuntimeLineageAllocation{});
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }
@@ -504,8 +521,10 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
         m_lineageState->intervals = std::move(candidateIntervals);
         m_lineageState->discardPaddingProof.reset();
     }
+    const auto endGeneration = mediaEndGeneration(m_flushBuffer);
+    if (!endGeneration) return processProgress(::media::Status::failure(endGeneration.error()));
     const bool eof = m_flushIsEof; MediaBufferRef terminal = std::move(m_flushBuffer);
-    m_flushPending = false; m_flushIsEof = false; m_flushSent = false;
+    m_flushPending = false; m_flushIsEof = false; m_flushSent = endGeneration.value().has_value();
     if (eof) { m_lineageState->terminals.markEof("packet"); m_lineageState->eofEmitted = true; }
     if (auto freshness = m_lineageState->authorizeRetainedControl(terminal);
         !freshness) {

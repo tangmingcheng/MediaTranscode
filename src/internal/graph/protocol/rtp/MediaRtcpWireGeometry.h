@@ -10,6 +10,9 @@ namespace media::ffmpeg::graph {
 
 class MediaRtcpWireGeometry final {
 public:
+    static constexpr std::size_t senderReportPayloadBytes() noexcept { return 28; }
+    static constexpr std::size_t sdesCnamePrefixBytes() noexcept { return 10; }
+    static ::media::Result<std::uint64_t> sdesPayloadBytes(std::size_t cnameBytes);
     static ::media::Result<std::uint64_t> compoundPayloadBytes(
         std::size_t cnameBytes);
     static ::media::Result<std::uint64_t> compoundWireBytes(

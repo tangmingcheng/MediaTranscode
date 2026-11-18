@@ -1,3 +1,5 @@
+#include "internal/graph/protocol/MediaProtocolPurgeInput.h"
+#include <array>
 #include "internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h"
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -38,13 +40,16 @@ MediaNodeKind MediaScheduledTsAccessUnitAdapterNode::staticKind() noexcept
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 MediaScheduledTsAccessUnitAdapterNode::generationPurgeTarget() const noexcept
 {
-    return m_generationState;
+    return m_generationPurge;
 }
 
 ::media::Status MediaScheduledTsAccessUnitAdapterNode::start(
     MediaGraphExecutionContext& context)
 {
     resetState();
+    m_completedPurge.reset();
+    auto started = m_generationPurge->start(context.sharedNodeWakeup(nodeId()));
+    if (!started) return started;
     auto* plan = context.findInputChannel(nodeId(), "plan");
     auto* scheduled = context.findInputChannel(nodeId(), "scheduled");
     auto* packet = context.findOutputChannel(nodeId(), "packet");
@@ -114,6 +119,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) return processWaiting();
+    const auto dequeued = mediaAccessUnitObservationNow();
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get())) {
         if (control->controlKind() == MediaControlBufferKind::Flush) {
@@ -182,7 +188,10 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     auto output = MediaTsAccessUnitBuffer::create(
         scheduled->media(), scheduled->stream(), scheduled->generation(),
         scheduled->presentationOnMaster(), scheduled->dispatchOnMaster(),
-        scheduled->emitOnMaster(), *transportLead);
+        scheduled->emitOnMaster(), *transportLead,
+        MediaAccessUnitProcessingTrace{scheduled->canonicalSequence().value(),
+            scheduled->diagnosticCreatedSteadyNs(), dequeued, std::nullopt,
+            scheduled->codecReceiveObservation()});
     if (!output) {
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }
@@ -273,6 +282,7 @@ MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
 ::media::Status MediaScheduledTsAccessUnitAdapterNode::stop(
     MediaGraphExecutionContext& context)
 {
+    m_generationPurge->stop();
     resetState();
     return FFmpegNodeRuntime::stop(context);
 }
@@ -280,6 +290,7 @@ MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
 void MediaScheduledTsAccessUnitAdapterNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    m_generationPurge->stop();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -288,6 +299,34 @@ void MediaScheduledTsAccessUnitAdapterNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
     m_generationState->resetLifecycle();
+}
+
+::media::Result<MediaNodeProcessResult> MediaScheduledTsAccessUnitAdapterNode::process(MediaGraphExecutionContext& context)
+{
+    if (const auto purge = m_generationPurge->pending()) {
+        auto activation = m_authority->currentActivation();
+        auto status = !activation ? ::media::Status::failure(activation.error()) :
+            activation.value().generation != purge->publishedGeneration || purge->oldGeneration < purge->publishedGeneration
+                ? ::media::Status::failure(::media::ErrorInfo::invalidArgument("Protocol owner purge differs from revoked authority"))
+                : ::media::Status::success();
+        for (const auto* port : std::array{"plan", "scheduled"}) {
+            while (status) {
+                auto input = tryPopInputOptional(context, port);
+                if (!input) { status = ::media::Status::failure(input.error()); break; }
+                if (!input.value()) break;
+                status = authorizeProtocolPurgeInput(*input.value(), m_sessionKey, *purge, m_completedPurge);
+            }
+            if (!status) break;
+        }
+        if (status) {
+            cancelPendingOutputTransfer();
+            status = m_generationState->purge(*purge);
+        }
+        if (status) m_completedPurge = *purge;
+        auto completed = m_generationPurge->complete(*purge, status);
+        return processProgress(completed ? status : completed);
+    }
+    return FFmpegNodeRuntime::process(context);
 }
 
 } // namespace media::ffmpeg::graph

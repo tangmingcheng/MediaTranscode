@@ -1,0 +1,9 @@
+# rk484：控制消息载荷计费修正（进行中）
+
+rk483首个EndGeneration被硬字节通道拒绝，详见rk483失败记录。本轮MediaControlBuffer统一覆盖payloadFootprintBytes：合法控制返回0媒体载荷；复用flow与类型身份校验，固定对象和FIFO槽仍独立计费，不扩大容量。两个独立审查者source_drain_review_a/b均SOURCE PASS。
+
+边界：既有通道对EOF/Flush的提前特判未改，不能宣称所有非法控制入口已统一校验。此为共享Windows/RKMPP语义修正，Windows对应真实关闭回归待完成；Linux诊断与FFmpeg无本轮改动。
+
+RKMPP8核增量构建PID3325322。回退out/rollback/rk484保留2个原源码与CLI。临时清单：本机和远端out/acceptance/rk484-source.tar、远端out/acceptance/rk484-build.log。尚无实流通过结论。
+
+增量76/76退出0，CLI SHA256 1bdbe4e9c195b4b4896aa8704dd794857928655037525683b61c3af2961568b5。构建有既有AVCodec::sample_fmts弃用告警，无本轮构建错误；未运行local CLI。记录后删除本轮传输tar与构建日志，回退保留。原规格实流仍待复验。

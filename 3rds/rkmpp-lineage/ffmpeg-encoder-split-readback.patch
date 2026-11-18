@@ -1,0 +1,103 @@
+--- a/libavcodec/rkmppenc.c
++++ b/libavcodec/rkmppenc.c
+@@ -289,6 +289,51 @@
+     return out;
+ }
+ 
++/* Read effective state after MPP has accepted a configuration transaction. */
++static int rkmpp_read_split_state(AVCodecContext *avctx)
++{
++    RKMPPEncContext *r = avctx->priv_data;
++    MppEncCfg actual = NULL;
++    RK_U32 mode, arg, out;
++    RK_S32 low_delay;
++    MPP_RET ret;
++
++    r->split_state_known = 0;
++    r->effective_split_mode = r->effective_split_arg = r->effective_split_out = -1;
++    r->effective_low_delay = -1;
++    ret = mpp_enc_cfg_init(&actual);
++    if (ret != MPP_OK)
++        goto done;
++    ret = r->mapi->control(r->mctx, MPP_ENC_GET_CFG, actual);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_u32(actual, "split:mode", &mode);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_u32(actual, "split:arg", &arg);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_u32(actual, "split:out", &out);
++    if (ret != MPP_OK)
++        goto done;
++    ret = mpp_enc_cfg_get_s32(actual, "base:low_delay", &low_delay);
++    if (ret != MPP_OK)
++        goto done;
++    r->effective_split_mode = mode;
++    r->effective_split_arg = arg;
++    r->effective_split_out = out;
++    r->effective_low_delay = low_delay;
++    r->split_state_known = 1;
++done:
++    if (actual)
++        mpp_enc_cfg_deinit(actual);
++    if (ret != MPP_OK) {
++        av_log(avctx, AV_LOG_ERROR, "Failed to read effective encoder split state: %d\n", ret);
++        return AVERROR_EXTERNAL;
++    }
++    return 0;
++}
++
+ static int rkmpp_set_enc_cfg_prep(AVCodecContext *avctx, AVFrame *frame)
+ {
+     RKMPPEncContext *r = avctx->priv_data;
+@@ -379,6 +424,8 @@
+         av_log(avctx, AV_LOG_ERROR, "Failed to set config with frame: %d\n", ret);
+         return AVERROR_EXTERNAL;
+     }
++    if ((ret = rkmpp_read_split_state(avctx)) < 0)
++        return ret;
+ 
+     r->cfg_init = 1;
+     av_log(avctx, AV_LOG_VERBOSE, "Configured with size: %dx%d | pix_fmt: %s | sw_pix_fmt: %s\n",
+@@ -632,6 +679,8 @@
+         av_log(avctx, AV_LOG_ERROR, "Failed to set config: %d\n", ret);
+         return AVERROR_EXTERNAL;
+     }
++    if ((ret = rkmpp_read_split_state(avctx)) < 0)
++        return ret;
+ 
+     if (avctx->codec_id == AV_CODEC_ID_H264 ||
+         avctx->codec_id == AV_CODEC_ID_HEVC) {
+--- a/libavcodec/rkmppenc.h
++++ b/libavcodec/rkmppenc.h
+@@ -64,6 +64,11 @@
+ 
+     MppEncCfg          mcfg;
+     int                cfg_init;
++    int                split_state_known;
++    int64_t            effective_split_mode;
++    int64_t            effective_split_arg;
++    int64_t            effective_split_out;
++    int                effective_low_delay;
+     MppFrameFormat     mpp_fmt;
+     enum AVPixelFormat pix_fmt;
+ 
+@@ -101,6 +106,16 @@
+ #define VE (AV_OPT_FLAG_ENCODING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
+ 
+ #define RKMPP_ENC_COMMON_OPTS \
++    { "split_state_known", "Effective MPP split state was read successfully", OFFSET(split_state_known), AV_OPT_TYPE_INT, \
++        { .i64 = 0 }, 0, 1, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_split_mode", "Effective MPP split mode", OFFSET(effective_split_mode), AV_OPT_TYPE_INT64, \
++        { .i64 = -1 }, -1, UINT32_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_split_arg", "Effective MPP split argument", OFFSET(effective_split_arg), AV_OPT_TYPE_INT64, \
++        { .i64 = -1 }, -1, UINT32_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_split_out", "Effective MPP split output flags", OFFSET(effective_split_out), AV_OPT_TYPE_INT64, \
++        { .i64 = -1 }, -1, UINT32_MAX, VE | AV_OPT_FLAG_READONLY }, \
++    { "effective_low_delay", "Effective MPP base low delay", OFFSET(effective_low_delay), AV_OPT_TYPE_INT, \
++        { .i64 = -1 }, -1, INT_MAX, VE | AV_OPT_FLAG_READONLY }, \
+     { "rc_mode", "Set the encoding rate control mode", OFFSET(rc_mode), AV_OPT_TYPE_INT, \
+             { .i64 = MPP_ENC_RC_MODE_BUTT }, MPP_ENC_RC_MODE_VBR, MPP_ENC_RC_MODE_BUTT, VE, .unit = "rc_mode"}, \
+         { "VBR", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = MPP_ENC_RC_MODE_VBR }, 0, 0, VE, .unit = "rc_mode" }, \

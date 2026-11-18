@@ -11,6 +11,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaNodeWaitObservation;
+
 class MediaNodeWakeup final {
 public:
     using Sequence = std::uint64_t;
@@ -31,7 +33,8 @@ public:
     ::media::Result<WaitOutcome> wait(
         Sequence observedSequence,
         MediaNodeDeadlineWakePolicy wakePolicy,
-        std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
+        std::optional<std::chrono::nanoseconds> timeout,
+        MediaNodeWaitObservation* observation);
     void interrupt() noexcept;
     void reset() noexcept;
 

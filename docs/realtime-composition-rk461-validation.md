@@ -1,0 +1,13 @@
+# rk461：重采样与补偿旁路代内排空
+
+状态：七文件双独立SOURCE PASS；RKMPP8核增量10项完成、退出0。尚未启用生产BYE，不构成尾音完整性或媒体验收通过。
+
+Drift先提交前序pending事务，再沿既有atomic广播向audio/correction同时发布同代EndGeneration并等待purge。Resample核验同步及精确代次，继续执行已接受补偿窗口和Swr排空以释放容量，读取两边末标记后，确认实际exhaustion、lineage结算及pending样本提交才发布下游标记。无Swr时保留bypass校验，不可执行命令明确失败。新增状态由原purge/reset清零，两个实际owner的sizeof纳入源固定准备费用；原EOF/Flush路径保留。
+
+依据[FFmpeg Swr排空合同](https://ffmpeg.org/doxygen/trunk/group__lswr.html)。pacing_diagnostic_review与remaining_acceptance_audit均SOURCE PASS，已核满窗口不等待末标记而停止drain、重复零残余结算及双边关闭顺序。
+
+目标构建PID3344933，wait=0、10/10完成。CLI13057128字节，SHA256=c9ef744584bbefa6082a63c9f494e24a95668658db8c2e587726758520827c8b。原CLI（66a2df12b52bb2f2b8c82631433afcd851c76653e960ca09dd4d06845734ae0b）、七文件源码及清单保留在目标out/rollback/rk461。
+
+没有运行CLI/FFmpeg/VLC媒体链路或local CLI；Windows FFmpeg未改。临时清单为本机out/acceptance/rk461-source.tar、目标同名tar及rk461-build.log，结果归档后逐项删除。剩余aggregate确认、接收截止及新代交接、完整双平台实流和rk454失败退出问题仍待闭合。
+
+清理完成：3项临时文件按清单删除，构建PID不存在，本机和目标无rk461临时项；回退及正式构建保留。

@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <variant>
+#include "internal/graph/protocol/rtp/MediaRtpSourceUnavailable.h"
 
 namespace media::ffmpeg::graph {
 
@@ -17,43 +19,76 @@ struct MediaRtcpSenderReportTrackerConfig final {
     int64_t cnameTimeoutNs;
 };
 
+struct MediaRtcpObservationAccepted final {};
+using MediaRtcpObservation = std::variant<MediaRtcpObservationAccepted, MediaRtpClockInvalidation>;
+
+// Scalar transaction state borrows either the validated datagram or the current
+// tracker. It is materialized synchronously before either owner can change.
+struct MediaRtcpTrackerState final {
+    struct Pending final { MediaRtcpSenderReport report; std::span<const uint8_t> cname; int64_t observedAtNs; };
+    std::optional<uint32_t> mediaSsrc;
+    std::optional<Pending> pending;
+    std::optional<MediaRtcpSenderReport> senderReport;
+    std::optional<MediaRtcpNtpTimestamp> lastNtp;
+    std::span<const uint8_t> cname;
+    int64_t reportAtNs;
+    int64_t cnameAtNs;
+    uint64_t generation;
+    bool evidencePending;
+};
+using MediaRtcpPreparedOutput = std::variant<std::monostate, MediaRtcpClockEvidence, MediaRtpClockInvalidation>;
+class MediaRtcpSenderReportTracker;
+struct MediaRtcpPreparedObservation final {
+    const MediaRtcpSenderReportTracker* owner;
+    uint64_t revision;
+    MediaRtcpTrackerState state;
+    std::optional<MediaRtcpBytes> cname;
+    std::optional<MediaRtcpBytes> pendingCname;
+    MediaRtcpPreparedOutput output;
+    std::optional<::media::ErrorInfo> rejection;
+    bool invalidated;
+    // Owned scalar facts may be copied into a bounded closing transaction.
+    // The surrounding prepared delta must still never survive a source wait.
+    std::optional<MediaRtpSenderDeparture> senderDeparture;
+};
+
 class MediaRtcpSenderReportTracker final {
 public:
-    explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config);
-
-    void observeMedia(uint32_t ssrc, int64_t observedAtNs);
-    void observeContinuityLoss() noexcept;
-    ::media::Status observe(const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs);
-    ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;
-    ::media::Result<std::optional<MediaRtcpClockEvidence>> takeEvidenceUpdate(
-        int64_t observedAtNs);
+    explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config,
+        MediaLineageAllocationScope allocation);
+    ::media::Status observeMedia(uint32_t ssrc);
+    ::media::Result<MediaRtcpPreparedObservation> prepare(
+        const MediaRtcpPackets& packets, int64_t observedAtNs, int64_t evaluationAtNs,
+        MediaRtpByeHandling byeHandling) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareEvidence(int64_t evaluationAtNs) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareContinuityChange(bool invalidate) const;
+    ::media::Result<MediaRtcpPreparedObservation> prepareMemberRetirement(
+        uint64_t expectedIngressGeneration, uint32_t expectedSsrc,
+        MediaRtpSourceUnavailableReason reason, int64_t observedAtNs) const;
+    ::media::Status commit(MediaRtcpPreparedObservation&& prepared);
     uint64_t generation() const noexcept;
-    void reset() noexcept;
-
 private:
     struct PendingRtcpSource final {
         MediaRtcpSenderReport senderReport;
-        std::vector<uint8_t> cname;
+        MediaRtcpBytes cname;
         int64_t observedAtNs;
     };
-
-    void invalidate() noexcept;
-    ::media::Status observePendingSource(
-        const std::vector<MediaRtcpPacket>& packets,
-        int64_t observedAtNs);
-    ::media::Status observeSenderReport(const MediaRtcpSenderReport& report, int64_t observedAtNs);
-    ::media::Status observeSdes(const MediaRtcpSdesChunk& chunk, int64_t observedAtNs);
-
+    MediaRtcpTrackerState state() const noexcept;
+    static ::media::Status invalidatePrepared(MediaRtcpPreparedObservation& prepared);
+    ::media::Result<MediaRtcpPreparedObservation> materialize(
+        MediaRtcpPreparedObservation result, int64_t evaluationAtNs, bool evaluateEvidence) const;
+    ::media::Status advanceRevision();
     MediaRtcpSenderReportTrackerConfig m_config;
     std::optional<uint32_t> m_mediaSsrc;
     std::optional<PendingRtcpSource> m_pendingSource;
     std::optional<MediaRtcpSenderReport> m_senderReport;
     std::optional<MediaRtcpNtpTimestamp> m_lastAcceptedNtp;
-    std::vector<uint8_t> m_cname;
+    MediaRtcpBytes m_cname;
     int64_t m_senderReportObservedAtNs;
     int64_t m_cnameObservedAtNs;
     uint64_t m_generation;
     bool m_evidenceUpdatePending = false;
+    uint64_t m_revision = 0;
 };
 
 } // namespace media::ffmpeg::graph

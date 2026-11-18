@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <stop_token>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -98,6 +99,7 @@ public:
 
     void requestStop() noexcept;
     bool stopRequested() const noexcept;
+    std::stop_token stopToken() const noexcept { return m_preparationStop.get_token(); }
     bool waitForStop(std::chrono::milliseconds timeout);
     ::media::Result<std::uint64_t> addOutput(
         const MediaRealtimeVideoOutputRequest& request);
@@ -110,6 +112,7 @@ public:
 private:
     friend class MediaRealtimeVideoRunController;
     friend class MediaRealtimeOutputRunController;
+    friend class MediaRealtimeOutputPublisher;
 
     enum class State : std::uint8_t {
         Ready,
@@ -127,11 +130,12 @@ private:
 
     std::optional<MediaRealtimeOutputChange> takeOutputChange();
     void completeOutputChange() noexcept;
-    void publishOutputSnapshot(MediaRealtimeOutputSnapshot snapshot);
+    void publishOutputSnapshot(const MediaRealtimeOutputSnapshot& snapshot);
     ::media::Result<std::uint64_t> registerInitialOutput(
         const std::string& descriptionPath);
     void setOutputChangesEnabled(bool enabled);
 
+    std::stop_source m_preparationStop;
     std::atomic<State> m_state{ State::Ready };
     std::atomic<MediaRealtimeVideoRunStage> m_activeStage{
         MediaRealtimeVideoRunStage::PolicyValidation };

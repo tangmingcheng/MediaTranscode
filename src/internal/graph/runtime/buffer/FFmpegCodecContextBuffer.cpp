@@ -6,9 +6,11 @@
 
 namespace media::ffmpeg::graph {
 
-FFmpegCodecContextBuffer::FFmpegCodecContextBuffer(::media::ffmpeg::CodecContextPtr context)
+FFmpegCodecContextBuffer::FFmpegCodecContextBuffer(::media::ffmpeg::CodecContextPtr context,
+    std::optional<MediaVideoEncoderCompletionContract> preparedEncoder)
     : m_ownership(FFmpegCodecContextOwnership::Owned)
     , m_context(std::move(context))
+    , m_preparedEncoder(std::move(preparedEncoder))
 {
     setPayloadKind(MediaPayloadKind::CodecContext);
     if (m_context) {

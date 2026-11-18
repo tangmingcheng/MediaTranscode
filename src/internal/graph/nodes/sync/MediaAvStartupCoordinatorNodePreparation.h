@@ -4,6 +4,7 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "media_transcode/Result.h"
 
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
 #include <memory>
 
 namespace media::ffmpeg::graph {
@@ -20,20 +21,22 @@ public:
 
 private:
     MediaAvStartupCoordinatorNodePreparation(
-        std::unique_ptr<MediaAvStartupCoordinator> coordinator,
-        std::shared_ptr<MediaAvStartupGenerationState> generationState,
-        int outputAudioSampleRate);
+        MediaLineageAllocationScope allocation,
+        MediaStartupSharedObjectPlan releaseStorage,
+        MediaLineageUniquePtr<MediaAvStartupCoordinator> coordinator,
+        std::shared_ptr<MediaAvStartupGenerationState> generationState);
 
-    std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
+    MediaLineageAllocationScope m_allocation;
+    MediaStartupSharedObjectPlan m_releaseStorage;
+    MediaLineageUniquePtr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
-    int m_outputAudioSampleRate = 0;
 
     friend class MediaAvStartupCoordinatorNode;
     friend ::media::Result<MediaAvStartupCoordinatorNodePreparation>
-    prepareMediaAvStartupCoordinatorNode(const MediaNode& node);
+    prepareMediaAvStartupCoordinatorNode(const MediaNode& node, MediaLineageAllocationScope allocation);
 };
 
 ::media::Result<MediaAvStartupCoordinatorNodePreparation>
-prepareMediaAvStartupCoordinatorNode(const MediaNode& node);
+prepareMediaAvStartupCoordinatorNode(const MediaNode& node, MediaLineageAllocationScope allocation);
 
 } // namespace media::ffmpeg::graph

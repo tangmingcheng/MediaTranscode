@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <new>
+#include <cstring>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -11,7 +11,7 @@ constexpr std::size_t FixedHeaderBytes = 12;
 constexpr int MinimumPayloadType = 0;
 constexpr int MaximumPayloadType = 127;
 
-void writeU32(std::vector<std::uint8_t>& bytes,
+void writeU32(std::span<std::uint8_t> bytes,
               std::size_t offset,
               std::uint32_t value) noexcept
 {
@@ -80,71 +80,61 @@ MediaRtpDatagramRewriteIdentity::create(
         MediaRtpDatagramRewriteIdentity(payloadType, ssrc));
 }
 
-MediaRtpDatagramRewriteParameters::MediaRtpDatagramRewriteParameters(
-    MediaRtpDatagramRewriteIdentity identity,
-    MediaRtpTimestamp timestamp) noexcept
-    : m_identity(identity),
-      m_timestamp(timestamp)
-{
-}
-
-::media::Result<MediaRtpDatagramRewriteResult> MediaRtpDatagramRewriter::rewrite(
+::media::Result<MediaRtpDatagramRewritePlan> MediaRtpDatagramRewriter::prepare(
     std::span<const std::uint8_t> datagram,
-    const MediaRtpDatagramRewriteParameters& parameters,
-    std::vector<std::uint8_t>& output)
+    const MediaRtpDatagramRewriteIdentity& identity)
 {
-    output.clear();
     if (datagram.size() < FixedHeaderBytes) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
             ::media::ErrorInfo::invalidArgument("RTP datagram is shorter than its fixed header"));
     }
     if ((datagram[0] >> 6) != 2) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
             ::media::ErrorInfo::invalidArgument("RTP datagram version is not 2"));
     }
     if (datagram[1] >= 192 && datagram[1] <= 223) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
             ::media::ErrorInfo::invalidArgument("RTCP is forbidden on the scheduled RTP packetization boundary"));
     }
-    if (static_cast<int>(datagram[1] & 0x7F) != parameters.identity().payloadType()) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+    if (static_cast<int>(datagram[1] & 0x7F) != identity.payloadType()) {
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "FFmpeg RTP payload type differs from the planned dynamic payload type"));
     }
 
     auto offset = payloadOffset(datagram);
     if (!offset) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(offset.error());
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(offset.error());
     }
     std::size_t payloadEnd = datagram.size();
     if ((datagram[0] & 0x20) != 0) {
         const std::size_t paddingBytes = datagram.back();
         if (paddingBytes == 0 || paddingBytes > payloadEnd - offset.value()) {
-            return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+            return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
                 ::media::ErrorInfo::invalidArgument("RTP padding is malformed or truncated"));
         }
         payloadEnd -= paddingBytes;
     }
     if (payloadEnd <= offset.value()) {
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
+        return ::media::Result<MediaRtpDatagramRewritePlan>::failure(
             ::media::ErrorInfo::invalidArgument("RTP datagram carries no media payload"));
     }
 
-    try {
-        output.resize(datagram.size());
-        std::copy(datagram.begin(), datagram.end(), output.begin());
-    } catch (const std::bad_alloc&) {
-        output.clear();
-        return ::media::Result<MediaRtpDatagramRewriteResult>::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "RTP datagram rewrite output"));
-    }
-    output[1] = static_cast<std::uint8_t>(
-        (output[1] & 0x80) | parameters.identity().payloadType());
-    writeU32(output, 4, parameters.timestamp().wire());
-    writeU32(output, 8, parameters.identity().ssrc());
-    return ::media::Result<MediaRtpDatagramRewriteResult>::success(
-        MediaRtpDatagramRewriteResult(payloadEnd - offset.value()));
+    return ::media::Result<MediaRtpDatagramRewritePlan>::success(
+        MediaRtpDatagramRewritePlan(datagram, identity, payloadEnd - offset.value()));
+}
+
+::media::Status MediaRtpDatagramRewriter::writeInto(
+    const MediaRtpDatagramRewritePlan& plan, MediaRtpTimestamp timestamp,
+    std::span<std::uint8_t> output)
+{
+    if (output.size() != plan.bytes()) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("RTP rewrite output differs from its exact prepared size"));
+    std::memmove(output.data(), plan.m_datagram.data(), plan.bytes());
+    output[1] = static_cast<std::uint8_t>((output[1] & 0x80) | plan.m_identity.payloadType());
+    writeU32(output, 4, timestamp.wire());
+    writeU32(output, 8, plan.m_identity.ssrc());
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

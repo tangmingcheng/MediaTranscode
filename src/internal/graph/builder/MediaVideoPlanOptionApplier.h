@@ -14,6 +14,19 @@ public:
                                                    const MediaVideoTranscodeBranchNodes& nodes,
                                                    const MediaPipelinePlan& plan);
 
+    static ::media::Result<void> applyEncoderPlan(
+        MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+        const MediaPipelineStagePlan& encoder, MediaVideoEncoderAbortPolicy abortPolicy);
+
+    static ::media::Result<void> applySourceDecoderPlan(
+        MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+        const MediaVideoSourcePlan& plan, int sourceStreamIndex);
+
+    static ::media::Result<void> applySourceFramePlan(
+        MediaGraph& graph, const MediaVideoTranscodeBranchNodes& nodes,
+        const MediaVideoSourcePlan& plan, MediaVideoSourceTiming timing,
+        const std::optional<MediaRational>& maximumDuplicationGap);
+
     static ::media::Result<void> applyFilterExecutionPlan(
         MediaGraph& graph, MediaNodeId node, const MediaVideoFilterExecutionPlan& plan);
 

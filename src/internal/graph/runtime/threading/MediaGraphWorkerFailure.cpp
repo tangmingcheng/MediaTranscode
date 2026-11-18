@@ -1,3 +1,4 @@
+#include "internal/graph/utils/MediaCleanupError.h"
 #include "internal/graph/runtime/threading/MediaGraphWorkerFailure.h"
 
 #include <utility>
@@ -13,6 +14,19 @@ bool MediaGraphWorkerFailureRecorder::recordFirst(MediaGraphWorkerFailure failur
     m_primaryFailure = std::move(failure);
     m_hasFailure.store(true, std::memory_order_release);
     return true;
+}
+
+bool MediaGraphWorkerFailureRecorder::recordScopeFailure(
+    const ::media::ErrorInfo& error, MediaGraphWorkerFailurePhase phase) noexcept
+{
+    return recordFirst({{}, MediaNodeKind::Unknown, {}, mediaCleanupError(error), phase});
+}
+
+::media::Status MediaGraphWorkerFailureRecorder::failureStatus() const noexcept
+{
+    std::lock_guard lock(m_mutex);
+    if (!m_primaryFailure) return ::media::Status::success();
+    return ::media::Status::failure(mediaCleanupError(m_primaryFailure->error));
 }
 
 bool MediaGraphWorkerFailureRecorder::hasFailure() const noexcept

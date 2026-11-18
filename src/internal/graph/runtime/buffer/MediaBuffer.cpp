@@ -1,9 +1,31 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/resource/MediaGraphPayloadCreditLedger.h"
+#include "internal/graph/runtime/resource/MediaPreparationStorageBudget.h"
 
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+::media::Status MediaBuffer::attachPreparationPayloadStorage(
+    std::shared_ptr<MediaPreparationStorageLease> storage) noexcept
+{
+    if (!storage || !*storage || m_payloadCredit || m_preparationPayloadStorage)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "media buffer requires one active preparation payload reservation"));
+    m_preparationPayloadStorage = std::move(storage);
+    return ::media::Status::success();
+}
+
+::media::Status MediaBuffer::transferPayloadOwnershipTo(MediaBuffer& target) noexcept
+{
+    if ((!m_payloadCredit && !m_preparationPayloadStorage) ||
+        target.m_payloadCredit || target.m_preparationPayloadStorage)
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "media payload ownership transfer requires a reserved source and empty destination"));
+    target.m_payloadCredit = std::move(m_payloadCredit);
+    target.m_preparationPayloadStorage = std::move(m_preparationPayloadStorage);
+    return ::media::Status::success();
+}
 
 ::media::Status MediaBuffer::attachPayloadCredit(
     std::shared_ptr<MediaGraphPayloadCreditLease> credit) noexcept
@@ -13,6 +35,7 @@ namespace media::ffmpeg::graph {
             "media buffer requires one active payload credit reservation"));
     }
     m_payloadCredit = std::move(credit);
+    m_preparationPayloadStorage.reset();
     return ::media::Status::success();
 }
 
@@ -31,7 +54,7 @@ MediaBuffer::takePayloadCredit() noexcept
 ::media::Status MediaBuffer::sharePayloadCreditFrom(
     const MediaBuffer& source) noexcept
 {
-    if (m_payloadCredit || !source.m_payloadCredit) {
+    if (m_payloadCredit || m_preparationPayloadStorage || !source.m_payloadCredit) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "media buffer payload credit sharing requires one source allocation reservation"));
     }
@@ -132,7 +155,7 @@ bool MediaBuffer::isHardwareBacked() const noexcept
     return hasFlag(m_flags, MediaBufferFlag::HardwareBacked) || m_hardware.isHardwareBacked();
 }
 
-const std::string& MediaBuffer::diagnosticName() const noexcept
+const MediaDiagnosticName& MediaBuffer::diagnosticName() const noexcept
 {
     return m_diagnosticName;
 }
@@ -179,7 +202,7 @@ void MediaBuffer::addFlags(MediaBufferFlag flags) noexcept
     m_flags |= flags;
 }
 
-void MediaBuffer::setDiagnosticName(std::string name)
+void MediaBuffer::setDiagnosticName(MediaDiagnosticName name)
 {
     m_diagnosticName = std::move(name);
 }

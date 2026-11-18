@@ -6,10 +6,8 @@ extern "C" {
 #include <libavcodec/packet.h>
 }
 
-#include <algorithm>
 #include <new>
 #include <utility>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -41,6 +39,12 @@ ScheduledDeterministicVideoRtpPacketizerSession(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "deterministic video RTP session cannot open"));
     }
+    const auto bytes = m_config.emissionContract().maximumDatagramBytes();
+    if (bytes <= RtpHeaderBytes ||
+        bytes != static_cast<std::size_t>(m_config.avioConfig().maximumDatagramBytes())) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "video RTP workspace differs from its emission contract"));
+    }
     m_open = true;
     return ::media::Status::success();
 }
@@ -48,11 +52,11 @@ ScheduledDeterministicVideoRtpPacketizerSession(
 ::media::Status
 ScheduledDeterministicVideoRtpPacketizerSession::writeAccessUnit(
     const AVPacket& packet,
-    MediaRtpTimestamp timestamp)
+    MediaRtpTimestamp timestamp, std::span<std::uint8_t> scratch)
 {
     if (m_terminalFailure) return ::media::Status::failure(*m_terminalFailure);
     const auto& contract = m_config.emissionContract();
-    if (!m_open || !packet.data || packet.size <= 0 ||
+    if (!m_open || scratch.size() != contract.maximumDatagramBytes() || !packet.data || packet.size <= 0 ||
         static_cast<std::uint64_t>(packet.size) >
             contract.maximumAccessUnitPayloadBytes()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -61,48 +65,47 @@ ScheduledDeterministicVideoRtpPacketizerSession::writeAccessUnit(
     const auto mode = m_config.packetizationMode();
     const auto codec = mode == MediaScheduledRtpPacketizationMode::H264AnnexB
         ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
-    const auto maximumDatagram = static_cast<std::size_t>(
-        m_config.avioConfig().maximumDatagramBytes());
-    auto payloads = MediaDeterministicVideoRtpPacketizer::packetize(
-        std::span<const std::uint8_t>(
-            packet.data, static_cast<std::size_t>(packet.size)),
-        codec, *contract.packetLayout(), maximumDatagram - RtpHeaderBytes);
-    if (!payloads || payloads.value().size() >
-            contract.maximumDatagramsPerAccessUnit()) {
-        const auto error = payloads
-            ? ::media::ErrorInfo::invalidArgument(
-                "deterministic video RTP datagram count exceeds its contract")
-            : payloads.error();
-        m_terminalFailure = error;
-        return ::media::Status::failure(error);
-    }
+    struct Emission final {
+        ScheduledDeterministicVideoRtpPacketizerSession& session;
+        MediaRtpTimestamp timestamp;
+        std::span<std::uint8_t> scratch;
+        std::uint64_t count;
+    } emission{*this, timestamp, scratch, 0};
     try {
-        std::vector<std::vector<std::uint8_t>> datagrams;
-        datagrams.reserve(payloads.value().size());
-        for (const auto& packetized : payloads.value()) {
-            std::vector<std::uint8_t> datagram(
-                RtpHeaderBytes + packetized.payload.size());
-            datagram[0] = 0x80U;
-            datagram[1] = static_cast<std::uint8_t>(
-                m_config.identity().payloadType() |
-                (packetized.marker ? 0x80U : 0U));
-            write32(datagram.data() + 4U, timestamp.wire());
-            write32(datagram.data() + 8U, m_config.identity().ssrc());
-            std::copy(packetized.payload.begin(), packetized.payload.end(),
-                      datagram.begin() + RtpHeaderBytes);
-            datagrams.push_back(std::move(datagram));
-        }
-        for (const auto& datagram : datagrams) {
-            auto emitted = m_sink(
-                datagram, datagram.size() - RtpHeaderBytes);
-            if (!emitted) {
-                m_terminalFailure = emitted.error();
+        auto packetized = MediaDeterministicVideoRtpPacketizer::packetize(
+            std::span<const std::uint8_t>(
+                packet.data, static_cast<std::size_t>(packet.size)),
+            codec, *contract.packetLayout(),
+            scratch.subspan(RtpHeaderBytes),
+            &emission,
+            [](void* context, std::span<const std::uint8_t> payload, bool marker) {
+                auto& current = *static_cast<Emission*>(context);
+                auto& session = current.session;
+                if (current.count >= session.m_config.emissionContract().maximumDatagramsPerAccessUnit()) {
+                    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                        "deterministic video RTP datagram count exceeds its contract"));
+                }
+                auto* datagram = current.scratch.data();
+                datagram[0] = 0x80U;
+                datagram[1] = static_cast<std::uint8_t>(
+                    session.m_config.identity().payloadType() | (marker ? 0x80U : 0U));
+                datagram[2] = 0;
+                datagram[3] = 0;
+                write32(datagram + 4U, current.timestamp.wire());
+                write32(datagram + 8U, session.m_config.identity().ssrc());
+                auto emitted = session.m_sink(
+                    std::span<const std::uint8_t>(datagram, RtpHeaderBytes + payload.size()),
+                    payload.size());
+                if (emitted) ++current.count;
                 return emitted;
-            }
+            });
+        if (!packetized) {
+            m_terminalFailure = packetized.error();
+            return packetized;
         }
     } catch (const std::bad_alloc&) {
         const auto error = ::media::ErrorInfo::allocationFailed(
-            "deterministic video RTP datagrams");
+            "deterministic video RTP packetization");
         m_terminalFailure = error;
         return ::media::Status::failure(error);
     }

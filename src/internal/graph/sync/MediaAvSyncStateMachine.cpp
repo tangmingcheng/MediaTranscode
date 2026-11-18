@@ -34,6 +34,12 @@ MediaAvSyncStatus MediaAvSyncStateMachine::transition(MediaAvSyncEvent event,
     }
 
     switch (event) {
+    case MediaAvSyncEvent::AttemptExpired:
+        if (m_state != MediaAvSyncState::AcquiringClock &&
+            m_state != MediaAvSyncState::PrimingStreams)
+            return MediaAvSyncStatus::failure(invalidTransition(event, generation));
+        m_state = MediaAvSyncState::WaitingForEvidence;
+        break;
     case MediaAvSyncEvent::ClocksLocked:
         if (m_state != MediaAvSyncState::AcquiringClock) {
             return MediaAvSyncStatus::failure(invalidTransition(event, generation));

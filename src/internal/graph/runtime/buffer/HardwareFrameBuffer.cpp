@@ -4,8 +4,9 @@
 
 namespace media::ffmpeg::graph {
 
-HardwareFrameBuffer::HardwareFrameBuffer(::media::ffmpeg::FramePtr frame, MediaHardwareDescriptor hardware)
-    : FFmpegFrameBuffer(std::move(frame))
+HardwareFrameBuffer::HardwareFrameBuffer(::media::ffmpeg::FramePtr frame, MediaHardwareDescriptor hardware,
+                                       std::uint64_t logicalPayloadBytes)
+    : FFmpegFrameBuffer(std::move(frame), logicalPayloadBytes)
 {
     setHardwareDescriptor(std::move(hardware));
     addFlags(MediaBufferFlag::HardwareBacked);

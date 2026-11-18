@@ -16,6 +16,7 @@ cloneMediaProjectMpegTsRuntimeOutputPlan(
                 source.protocol,
                 source.muxSessionKind,
                 source.emission,
+                source.seriesBounds,
                 source.scheduledBatchMaximumBytes,
                 std::variant<MediaMpegTsUdpOutputPlan,
                              MediaMpegTsRtpOutputPlan>(
@@ -42,6 +43,7 @@ cloneMediaProjectMpegTsRuntimeOutputPlan(
             source.protocol,
             source.muxSessionKind,
             source.emission,
+                source.seriesBounds,
             source.scheduledBatchMaximumBytes,
             std::variant<MediaMpegTsUdpOutputPlan,
                          MediaMpegTsRtpOutputPlan>(

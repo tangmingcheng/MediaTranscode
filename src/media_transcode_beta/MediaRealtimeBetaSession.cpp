@@ -289,6 +289,13 @@ mt_beta_output_snapshot MediaRealtimeBetaSession::projectOutput(
 void MediaRealtimeBetaSession::handleOutputChanged(
     const ffmpeg::graph::MediaRealtimeOutputSnapshot& output)
 {
+    const auto releaseDescription = [&] {
+        if (output.state == ffmpeg::graph::MediaRealtimeOutputState::Retired) {
+            std::lock_guard lock(m_descriptionMutex);
+            m_descriptions.erase(output.outputId);
+        }
+    };
+    try {
     const auto projected = projectOutput(output);
     mt_beta_realtime_event event{};
     event.type = MT_BETA_EVENT_OUTPUT_STATE_CHANGED;
@@ -304,10 +311,11 @@ void MediaRealtimeBetaSession::handleOutputChanged(
         event.type = MT_BETA_EVENT_OUTPUT_READY;
         invokeCallback(event);
     }
-    if (output.state == ffmpeg::graph::MediaRealtimeOutputState::Retired) {
-        std::lock_guard lock(m_descriptionMutex);
-        m_descriptions.erase(output.outputId);
+    } catch (...) {
+        releaseDescription();
+        throw;
     }
+    releaseDescription();
 }
 
 mt_beta_realtime_snapshot MediaRealtimeBetaSession::snapshot() const noexcept
@@ -440,7 +448,7 @@ void MediaRealtimeBetaSession::handlePrepared(
 
     auto projected = snapshot();
     auto status = MediaRealtimeBetaSnapshotProjector::projectPrepared(
-        projected, report);
+        projected, report, m_config);
     if (!status) {
         recordFirstFailure({
             status.error(), MT_BETA_FAILURE_CAPABILITY,
@@ -670,11 +678,15 @@ void MediaRealtimeBetaSession::invokeCallback(
         m_callback(m_callbackUserData, &event);
     } catch (...) {
         m_callback = nullptr;
-        const auto failure = currentFailureClassification();
-        recordEmergencyFailure(
-            MT_BETA_ERROR_INTERNAL, failure.stage,
-            failure.completionReason, 0,
-            "Beta event callback raised an exception");
+        // A terminal output notification can precede handleOutcome. Let that
+        // outcome retain the original operational error and its full detail.
+        if (!m_runControl.firstFailureSignal()) {
+            const auto failure = currentFailureClassification();
+            recordEmergencyFailure(
+                MT_BETA_ERROR_INTERNAL, failure.stage,
+                failure.completionReason, 0,
+                "Beta event callback raised an exception");
+        }
         requestStop();
     }
 }

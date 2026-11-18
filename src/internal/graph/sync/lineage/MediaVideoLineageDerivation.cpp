@@ -45,8 +45,9 @@ deriveMediaVideoLineage(
                     presentation.value(), presentation.value(),
                     MediaRunningTime::fromNanoseconds(durationNs),
                     MediaDecodeOrderMode::PresentationOrderNoReorder,
-                    source.sourceIdentity, source.sourceSequence,
-                    source.mappingConfidence, source.generation}));
+                    source.identity,
+                    source.mappingConfidence, source.generation,
+                    source.videoContributions}));
 }
 
 } // namespace media::ffmpeg::graph

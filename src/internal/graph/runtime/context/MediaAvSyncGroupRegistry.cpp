@@ -79,13 +79,27 @@ std::shared_ptr<MediaAvSyncGroupRuntime> MediaAvSyncGroupRegistry::find(
 
 void MediaAvSyncGroupRegistry::clear() noexcept
 {
-    decltype(m_state->groups) groups;
+    // Registration belongs to the compiler's unpublished preparedContext;
+    // lifecycle shutdown never registers into this same registry. Do not use
+    // this as a concurrent register/clear API. Default-constructing a temporary
+    // unordered_map allocates on MSVC, so detach existing owners one at a time.
+    // Keep shutdown outside the registry lock. Entry-size bounds the operation;
+    // the empty bucket backing remains owned until destruction or later reuse.
+    std::size_t remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_state->mutex);
-        groups.swap(m_state->groups);
+        remaining = m_state->groups.size();
     }
-    for (auto& [key, group] : groups) {
-        (void)key;
+    while (remaining != 0) {
+        --remaining;
+        std::shared_ptr<MediaAvSyncGroupRuntime> group;
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            if (m_state->groups.empty()) break;
+            const auto entry = m_state->groups.begin();
+            group = std::move(entry->second);
+            m_state->groups.erase(entry);
+        }
         if (group) group->shutdown();
     }
 }

@@ -27,6 +27,7 @@ void MediaAudioDriftControllerState::clearOwnedState() noexcept
     origin.reset();
     pending.reset();
     nextSequence = 1;
+    generationDrained = false;
 }
 
 } // namespace media::ffmpeg::graph

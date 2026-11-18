@@ -1,0 +1,39 @@
+# RKMPP 合屏生产者契约实施计划
+
+状态：正常 API 完成语义经两名独立审查者确认可采用；尚未完成实现或实流验收。当前失败仍为 rk386 的 CUDA-only 源准备门禁。
+
+## 语义与依据
+
+Completed 表示固定依赖的成功同步 API 已交付可消费帧，不需要引擎追加生产者等待；它不保证依赖所有异常均被传播，也不表示像素独立分配。MPP 输出通过 AVBuffer 持有 MppFrame，引用释放前不能回收借用表面。RGA 在正常输入路径的 imsync 成功后发布独立池输出；实际 async_depth 必须读回为 0，不能仅凭滤镜名称授权。
+
+依据：[固定 MPP 输出实现](https://raw.githubusercontent.com/rockchip-linux/mpp/c08762ebfadeb4e986d2fed993bc7a54862d3ebe/mpp/mpp.c)、[固定 vproc 实现](https://raw.githubusercontent.com/rockchip-linux/mpp/c08762ebfadeb4e986d2fed993bc7a54862d3ebe/mpp/vproc/mpp_dec_vproc.c)；FFmpeg 部署 ab1e61a 的 rkmppdec.c、rkrga_common.c 已现场只读核对。依赖错误传播风险见 r253，不扩大外部修复范围，不强制关闭去交错。
+
+## 实施顺序
+
+1. 将共享 readiness 产品改为有类型的 Completed/CUDA producer variant；平台 adapter 提供明确身份与引用上界，未知类型必须失败。同步修改 options codec、runtime binding、失败保护及资源一致性检查。
+2. 将 decoder 分配来源区分为独立输出与借用表面，保留实际 MPP AVBuffer 生命周期；不把 borrowed surface 填入现有独立 CUDA 分配承诺。
+3. 复用现有 source isolation adapter 和 VideoFilterNode，为合屏 tile 提供 RGA 独立输出证据；即使尺寸相同也不能以 clone 替代隔离。filterExecution 的完成/分配证据与时序来源分开表达，准备、运行时及驻留计费消费同一产品。
+4. SourcePreparer 使用同一 decoder→filter 流程，核对配置、输出池和帧域；同步返回错误原样保留。Completed 不创建 CUDA event，但不能省略引用、wrapper、credit 和 RGA 输入缓存驻留预算。
+5. 双人冻结复审、Windows 共享链路验证、RKMPP 8 核增量构建与原规格 realtime 实流复验；正常基础链路打通后继续两端细致可靠性验证。构建成功不替代媒体验收。
+
+## 边界
+
+节点仍按现有线程模型运行，planner 负责能力与容量；不增加旁路媒体链。RGA 缓存保留量从已验证实现进入原 holder 计费，原队列及存储硬上限不放宽。错误/失源/重入维持原验收要求；API 已返回错误不能转换成 Completed。MPP/IEP 部分等待返回值未检查属于保留的依赖可靠性风险，本轮没有证据证明已发生未完成帧发布或释放安全缺陷。
+
+## 通用契约进度（2026-11-04）
+
+已将 source plan、options codec、runtime binding、失败保护及资源校验接到显式 CUDA/同步 producer variant。同步发布保留 AVFrame/AVBuffer，未知 producer 不默认 Completed；CUDA 继续使用原事件路径。decoder/filter 分别按实际引用合同规划，消费者不再拿自身输出引用界检查输入。两名独立审查者均明确 PASS。首次 Windows Release 构建会话 28789 退出 0；审查修正后的最终版本正在会话 6328 重建，尚待结果。
+
+具体 RKMPP 能力 adapter、独立 RGA 输出证据及 source gate 接通尚未完成；本步骤不宣称 rk386 已修复，不重复运行已知必败的相同实流。
+
+最终复验：审查修正后的 Windows Release 全量构建会话 6328 配置及构建均退出 0。所需构建文件与两个 CLI 产物已核对存在；未运行 local CLI。当前只完成通用契约迁移，RKMPP 具体 adapter 及实流仍待接通。
+
+## RKMPP 适配器接通进度
+
+已实现借用表面分配机制、统一 decoder/filter producer adapter、真实 RGA graph 的 async_depth=0 读回与独立输出证据。准备与运行时均检查池身份；同尺寸 source 由 planner 创建 identity RGA。动态输出消费者显式核验独立分配，避免把借用表面误放行。filterExecution 的时序与分配解耦已覆盖 codec、node、驻留读回及最终引用计费；缓存的 1 个输入引用仍按部署实现证据计入。
+
+两名独立审查者对全部 20 个源码文件明确 PASS。Windows 初次构建会话 90850 退出 0；补齐两处计费消费者后的最终构建会话 54666 正在进行。RKMPP 同步相对 3f00905b 的 29 个源码文件，在原目录以 8 核增量构建，SSH 会话 84715，最终结果待收取。同步包 rk388-source.tar 的两端 SHA256 一致：644fd937f8ae61b7b2e2abb240682293a486b3bf562299f27944abfc24f0c833。
+
+尚未运行 rk388 实流；源码审查不代表原预检错误已在运行中解除，不代表恢复或可靠性通过。
+
+最终 Windows Release 构建会话 54666 配置/构建均退出 0，所需 cache/ninja/CLI 产物已核对存在。两端 rk388-source.tar 已按精确路径删除并核对不存在。RKMPP 正在执行 163 个实际受影响目标的增量构建，结果未定；本提交仍是开发修复，不是实流通过提交。

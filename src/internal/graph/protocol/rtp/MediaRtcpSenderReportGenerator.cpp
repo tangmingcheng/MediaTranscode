@@ -1,110 +1,27 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportGenerator.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSdesTextValidator.h"
-
-#include <cstddef>
+#include "internal/graph/protocol/rtp/MediaRtcpWireGeometry.h"
+#include <algorithm>
+#include <cstring>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-using BytesResult = ::media::Result<std::vector<std::uint8_t>>;
-
-BytesResult invalidReport(const char* message)
+constexpr auto SenderReportBytes = MediaRtcpWireGeometry::senderReportPayloadBytes();
+constexpr auto SdesPrefixBytes = MediaRtcpWireGeometry::sdesCnamePrefixBytes();
+void writeU16(std::span<std::uint8_t> bytes, std::size_t offset, std::uint16_t value) noexcept
 {
-    return BytesResult::failure(::media::ErrorInfo::invalidArgument(message));
+    bytes[offset] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value);
 }
-
-void appendU16(std::vector<std::uint8_t>& bytes, std::uint16_t value)
+void writeU32(std::span<std::uint8_t> bytes, std::size_t offset, std::uint32_t value) noexcept
 {
-    bytes.push_back(static_cast<std::uint8_t>(value >> 8));
-    bytes.push_back(static_cast<std::uint8_t>(value));
+    bytes[offset] = static_cast<std::uint8_t>(value >> 24);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 16);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value);
 }
-
-void appendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value)
-{
-    bytes.push_back(static_cast<std::uint8_t>(value >> 24));
-    bytes.push_back(static_cast<std::uint8_t>(value >> 16));
-    bytes.push_back(static_cast<std::uint8_t>(value >> 8));
-    bytes.push_back(static_cast<std::uint8_t>(value));
-}
-
-::media::Status validate(const MediaRtcpSenderReportParameters& parameters)
-{
-    if (parameters.ssrc == 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTCP sender report SSRC must be non-zero"));
-    }
-    if (auto cname = MediaRtcpSdesTextValidator::validateCname(parameters.cname);
-        !cname) return cname;
-    return ::media::Status::success();
-}
-
-void appendSenderReport(
-    std::vector<std::uint8_t>& bytes,
-    const MediaRtcpSenderReportParameters& parameters)
-{
-    bytes.push_back(0x80);
-    bytes.push_back(200);
-    appendU16(bytes, 6);
-    appendU32(bytes, parameters.ssrc);
-    const MediaNtpWireTimestamp ntp = parameters.timestamp.ntp().wire();
-    appendU32(bytes, ntp.seconds);
-    appendU32(bytes, ntp.fraction);
-    appendU32(bytes, parameters.timestamp.rtp().wire());
-    appendU32(bytes, static_cast<std::uint32_t>(parameters.senderPacketCount));
-    appendU32(bytes, static_cast<std::uint32_t>(parameters.senderOctetCount));
-}
-
-void appendSourceDescription(
-    std::vector<std::uint8_t>& bytes,
-    const MediaRtcpSenderReportParameters& parameters)
-{
-    const std::size_t packetStart = bytes.size();
-    bytes.push_back(0x81);
-    bytes.push_back(202);
-    appendU16(bytes, 0);
-    appendU32(bytes, parameters.ssrc);
-    bytes.push_back(1);
-    bytes.push_back(static_cast<std::uint8_t>(parameters.cname.size()));
-    bytes.insert(bytes.end(), parameters.cname.begin(), parameters.cname.end());
-    bytes.push_back(0);
-    while ((bytes.size() - packetStart) % 4 != 0) bytes.push_back(0);
-
-    const std::size_t words = (bytes.size() - packetStart) / 4;
-    const std::uint16_t length = static_cast<std::uint16_t>(words - 1);
-    bytes[packetStart + 2] = static_cast<std::uint8_t>(length >> 8);
-    bytes[packetStart + 3] = static_cast<std::uint8_t>(length);
-}
-
-void appendBye(std::vector<std::uint8_t>& bytes, std::uint32_t ssrc)
-{
-    bytes.push_back(0x81);
-    bytes.push_back(203);
-    appendU16(bytes, 1);
-    appendU32(bytes, ssrc);
-}
-
-BytesResult serializeCompound(
-    const MediaRtcpSenderReportParameters& parameters,
-    bool includeBye)
-{
-    if (auto status = validate(parameters); !status) {
-        return BytesResult::failure(status.error());
-    }
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(28 + 12 + parameters.cname.size() + (includeBye ? 8 : 0));
-    appendSenderReport(bytes, parameters);
-    appendSourceDescription(bytes, parameters);
-    if (includeBye) appendBye(bytes, parameters.ssrc);
-    if (bytes.size() % 4 != 0) {
-        return invalidReport("RTCP compound packet alignment is invalid");
-    }
-    return BytesResult::success(std::move(bytes));
-}
-
 } // namespace
-
 MediaRtcpSenderReportTimestamp::MediaRtcpSenderReportTimestamp(
     MediaRunningTime masterInstant,
     MediaNtpTimestamp ntp,
@@ -117,7 +34,7 @@ MediaRtcpSenderReportTimestamp::MediaRtcpSenderReportTimestamp(
 
 MediaRtcpSenderReportParameters::MediaRtcpSenderReportParameters(
     std::uint32_t ssrcValue,
-    std::string cnameValue,
+    std::string_view cnameValue,
     MediaRtcpSenderReportTimestamp timestampValue,
     std::uint64_t senderPacketCountValue,
     std::uint64_t senderOctetCountValue)
@@ -150,18 +67,59 @@ MediaRtcpSenderReportGenerator::mapTimestamp(
             masterInstant, std::move(ntp).value(), std::move(rtp).value()));
 }
 
-::media::Result<std::vector<std::uint8_t>>
-MediaRtcpSenderReportGenerator::serialize(
-    const MediaRtcpSenderReportParameters& parameters)
+::media::Result<MediaRtcpSenderReportPlan> MediaRtcpSenderReportGenerator::prepare(
+    const MediaRtcpSenderReportParameters& parameters, bool includeBye)
 {
-    return serializeCompound(parameters, false);
+    using Result = ::media::Result<MediaRtcpSenderReportPlan>;
+    if (!parameters.ssrc) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "RTCP sender report SSRC must be non-zero"));
+    auto valid = MediaRtcpSdesTextValidator::validateCname(parameters.cname);
+    if (!valid) return Result::failure(valid.error());
+    auto sdesBytes = MediaRtcpWireGeometry::sdesPayloadBytes(parameters.cname.size());
+    if (!sdesBytes) return Result::failure(sdesBytes.error());
+    // The validated one-byte CNAME length bounds this complete packet.
+    const auto totalBytes = SenderReportBytes + sdesBytes.value()
+        + (includeBye ? MediaRtcpWireGeometry::byePayloadBytes() : 0);
+    return Result::success(MediaRtcpSenderReportPlan(parameters,
+        static_cast<std::size_t>(sdesBytes.value()),
+        static_cast<std::size_t>(totalBytes), includeBye));
 }
 
-::media::Result<std::vector<std::uint8_t>>
-MediaRtcpSenderReportGenerator::serializeWithBye(
-    const MediaRtcpSenderReportParameters& parameters)
+::media::Status MediaRtcpSenderReportGenerator::writeInto(
+    const MediaRtcpSenderReportPlan& plan, std::span<std::uint8_t> output)
 {
-    return serializeCompound(parameters, true);
+    if (output.size() != plan.bytes()) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("RTCP output differs from its exact prepared size"));
+    const auto& parameters = plan.m_parameters;
+    const auto cnameOffset = SenderReportBytes + SdesPrefixBytes;
+    // Copy borrowed content before writing headers, including overlapping input.
+    std::memmove(output.data() + cnameOffset, parameters.cname.data(), parameters.cname.size());
+    std::fill(output.begin() + cnameOffset + parameters.cname.size(),
+        output.begin() + SenderReportBytes + plan.m_sdesBytes, std::uint8_t{0});
+    output[0] = 0x80;
+    output[1] = 200;
+    writeU16(output, 2, 6);
+    writeU32(output, 4, parameters.ssrc);
+    const auto ntp = parameters.timestamp.ntp().wire();
+    writeU32(output, 8, ntp.seconds);
+    writeU32(output, 12, ntp.fraction);
+    writeU32(output, 16, parameters.timestamp.rtp().wire());
+    writeU32(output, 20, static_cast<std::uint32_t>(parameters.senderPacketCount));
+    writeU32(output, 24, static_cast<std::uint32_t>(parameters.senderOctetCount));
+    output[SenderReportBytes] = 0x81;
+    output[SenderReportBytes + 1] = 202;
+    writeU16(output, SenderReportBytes + 2, static_cast<std::uint16_t>(plan.m_sdesBytes / 4 - 1));
+    writeU32(output, SenderReportBytes + 4, parameters.ssrc);
+    output[SenderReportBytes + 8] = 1;
+    output[SenderReportBytes + 9] = static_cast<std::uint8_t>(parameters.cname.size());
+    if (plan.m_includeBye) {
+        const auto offset = SenderReportBytes + plan.m_sdesBytes;
+        output[offset] = 0x81;
+        output[offset + 1] = 203;
+        writeU16(output, offset + 2, 1);
+        writeU32(output, offset + 4, parameters.ssrc);
+    }
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

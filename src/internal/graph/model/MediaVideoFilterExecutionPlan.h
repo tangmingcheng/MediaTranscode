@@ -1,10 +1,14 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaVideoFrameLineageProduct.h"
 #include <string>
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+enum class MediaVideoFilterInputConsumption { ImmediateSingleOutput };
 
 enum class MediaVideoFilterTimingAuthority { PreparedEncoderMetadata, SourceFrame };
 enum class MediaVideoFilterAspectPolicy { PreserveSourceAspect };
@@ -19,26 +23,35 @@ struct MediaVideoFilterIsolationEvidence final {
     std::string completionAuthority;
     std::uint64_t maximumRetainedInputFrames;
     std::string inputRetentionAuthority;
+    friend bool operator==(const MediaVideoFilterIsolationEvidence&, const MediaVideoFilterIsolationEvidence&) = default;
 };
 
 struct MediaVideoFilterExecutionPlan final {
     MediaVideoFilterTimingAuthority timing;
+    MediaVideoFrameLineageProduct frameProduct;
     MediaVideoFilterAspectPolicy aspect;
     MediaVideoFilterIsolationEvidence output;
     MediaRational sourceFrameRate;
     MediaRational sourceSampleAspectRatio;
+    std::optional<MediaVideoFilterInputConsumption> inputConsumption;
 
     bool valid() const noexcept
     {
+        if (inputConsumption && *inputConsumption != MediaVideoFilterInputConsumption::ImmediateSingleOutput) return false;
+        if (frameProduct != MediaVideoFrameLineageProduct::CanonicalInterval &&
+            frameProduct != MediaVideoFrameLineageProduct::SourceDisplayPoint) return false;
+        if (frameProduct == MediaVideoFrameLineageProduct::SourceDisplayPoint &&
+            timing != MediaVideoFilterTimingAuthority::PreparedEncoderMetadata) return false;
         if (output.filterDescription.empty() || aspect != MediaVideoFilterAspectPolicy::PreserveSourceAspect) return false;
-        if (timing == MediaVideoFilterTimingAuthority::PreparedEncoderMetadata)
-            return output.allocation == MediaVideoFilterAllocation::NegotiatedOutput &&
+        if (timing != MediaVideoFilterTimingAuthority::PreparedEncoderMetadata &&
+            (timing != MediaVideoFilterTimingAuthority::SourceFrame ||
+             sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0 ||
+             sourceSampleAspectRatio.num < 0 || sourceSampleAspectRatio.den <= 0)) return false;
+        if (output.allocation == MediaVideoFilterAllocation::NegotiatedOutput)
+            return timing == MediaVideoFilterTimingAuthority::PreparedEncoderMetadata &&
                 output.completion == MediaVideoFilterCompletion::NegotiatedOutput &&
                 output.maximumRetainedInputFrames == 0 && output.inputRetentionAuthority.empty();
-        return timing == MediaVideoFilterTimingAuthority::SourceFrame &&
-            sourceFrameRate.num > 0 && sourceFrameRate.den > 0 &&
-            sourceSampleAspectRatio.num >= 0 && sourceSampleAspectRatio.den > 0 &&
-            output.allocation == MediaVideoFilterAllocation::IndependentOutputPool &&
+        return output.allocation == MediaVideoFilterAllocation::IndependentOutputPool &&
             output.completion == MediaVideoFilterCompletion::SynchronousOnReturn &&
             !output.allocationAuthority.empty() && !output.completionAuthority.empty() &&
             !output.inputRetentionAuthority.empty();

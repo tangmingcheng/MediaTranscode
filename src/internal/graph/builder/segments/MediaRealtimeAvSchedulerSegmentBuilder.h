@@ -1,11 +1,14 @@
 #pragma once
+#include "internal/graph/builder/segments/MediaOutputSegmentBindings.h"
 
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvOutputSegmentPlan.h"
 #include "media_transcode/Result.h"
 
 #include <string>
+
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -19,6 +22,9 @@ struct MediaRealtimeAvSchedulerSegmentResult final {
     MediaEndpoint video;
     MediaEndpoint audio;
     MediaEndpoint serialized;
+    MediaNodeId scheduler;
+    std::vector<MediaNodeId> outputMembers;
+    MediaOutputSegmentBindings bindings;
 };
 
 class MediaRealtimeAvSchedulerSegmentBuilder final {
@@ -26,7 +32,7 @@ public:
     static ::media::Result<MediaRealtimeAvSchedulerSegmentResult> build(
         MediaGraph& graph,
         const MediaRealtimeAvSchedulerSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvOutputSegmentPlan& plan);
 
 private:
     MediaRealtimeAvSchedulerSegmentBuilder() = delete;

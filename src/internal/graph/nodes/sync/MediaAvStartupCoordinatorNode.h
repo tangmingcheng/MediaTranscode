@@ -2,9 +2,10 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/sync/MediaOwnerThreadGenerationPurge.h"
 
+#include "internal/graph/model/MediaStartupSharedObjectPlan.h"
 #include <memory>
-#include <deque>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -27,6 +28,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -44,10 +46,10 @@ private:
 
     ::media::Result<bool> fillPendingMedia(MediaGraphExecutionContext& context,
                                            const char* portName,
-                                           std::deque<MediaBufferRef>& pending);
+                                           std::optional<MediaBufferRef>& pending);
     ::media::Result<bool> fillSnapshotBarrierMedia(MediaGraphExecutionContext& context,
                                                    const char* portName,
-                                                   std::deque<MediaBufferRef>& pending,
+                                                   std::optional<MediaBufferRef>& pending,
                                                    std::size_t& remaining);
     ::media::Result<bool> fillPendingClock(MediaGraphExecutionContext& context);
     ::media::Result<bool> fillTerminalBarrierClock(
@@ -59,7 +61,7 @@ private:
     ::media::Result<MediaNodeProcessResult> processOne(
         MediaGraphExecutionContext& context,
         PendingInput input);
-    ::media::Result<MediaNodeProcessResult> processClock();
+    ::media::Result<MediaNodeProcessResult> processClock(MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processControl(
         MediaGraphExecutionContext& context,
         PendingInput input,
@@ -68,15 +70,20 @@ private:
         MediaGraphExecutionContext& context,
         const MediaAvStartupDecision& decision,
         const MediaAvStartupEnvelopeBuffer& envelope);
-    void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
+    void erasePurged(const MediaAvStartupIds& purged) noexcept;
+    void resetClockBarrier() noexcept;
+    void resetTerminalBarrier() noexcept;
     void clearTransientState() noexcept;
 
-    std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
+    MediaLineageAllocationScope m_allocation;
+    MediaStartupSharedObjectPlan m_releaseStorage;
+    std::shared_ptr<MediaOwnerThreadGenerationPurge> m_ownerPurge;
+    MediaLineageUniquePtr<MediaAvStartupCoordinator> m_coordinator;
     std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
-    int m_outputAudioSampleRate = 0;
-    std::deque<MediaBufferRef> m_pendingVideo;
-    std::deque<MediaBufferRef> m_pendingAudio;
+    std::optional<MediaBufferRef> m_pendingVideo;
+    std::optional<MediaBufferRef> m_pendingAudio;
     MediaBufferRef m_pendingClock;
+    bool m_pendingClockIsDeadline = false;
     bool m_clockBarrierActive = false;
     bool m_clockBarrierSnapshotSealed = false;
     std::size_t m_videoClockBarrierRemaining = 0;
@@ -88,6 +95,7 @@ private:
     std::optional<MediaRunningTime> m_lastVideoObservedAt;
     std::optional<MediaRunningTime> m_lastAudioObservedAt;
     std::optional<MediaRunningTime> m_lastClock;
+    std::optional<std::uint64_t> m_retiredClockEvidenceRevision;
     bool m_terminalControlCommitted = false;
     bool m_keyTraceEmitted = false;
     std::optional<std::uint64_t> m_lastReleasedGeneration;

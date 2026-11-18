@@ -1,80 +1,187 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/sync/MediaDemuxClockBinderGenerationIdentities.h"
+#include "internal/graph/sync/MediaRtpIngressFrontiers.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
+#include "internal/graph/runtime/resource/MediaStandardContainerStorageReadback.h"
+
+#include <utility>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-std::vector<std::string> canonicalLineageChildren(
-    MediaAvSyncSourceClockMode sourceClockMode,
-    MediaBranchMode audioBranchMode,
-    bool videoFilterActive)
+enum class ProcessingDomain { SharedSourceOutput, SourceContribution };
+
+template<class Visitor> void visitProcessingChildren(
+    MediaAvSyncSourceClockMode sourceClockMode, MediaBranchMode audioBranchMode,
+    bool videoFilterActive, MediaVideoStartupReadiness videoReadiness,
+    ProcessingDomain domain, bool selectedAudio, Visitor&& visit)
 {
-    std::vector<std::string> children{
-        "startup_generation_state",
-        "video_decode",
-        "video_frame_rate",
-        "video_encode"
-    };
-    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
-        children.insert(children.end(), {
-            std::string(MediaAudioDecodeLineageIdentity),
-            std::string(MediaAudioStartupTrimLineageIdentity),
-            std::string(MediaAudioResampleLineageIdentity),
-            std::string(MediaAudioEncodeLineageIdentity),
-            std::string(MediaEncodedAudioCanonicalizerLineageIdentity)});
-    }
-    if (videoFilterActive) {
-        children.insert(children.begin() + 3, "video_filter");
-    }
     if (sourceClockMode == MediaAvSyncSourceClockMode::DemuxTimestamps) {
-        children.insert(
-            children.begin(),
-            std::string(MediaDemuxAudioClockBinderGenerationIdentity));
-        children.insert(
-            children.begin(),
-            std::string(MediaDemuxVideoClockBinderGenerationIdentity));
+        visit(MediaDemuxVideoClockBinderGenerationIdentity);
+        visit(MediaDemuxAudioClockBinderGenerationIdentity);
     }
-    return children;
+    visit("startup_generation_state");
+    visit("video_decode");
+    visit("video_preparation");
+    visit("hardware_transfer");
+    if (videoReadiness == MediaVideoStartupReadiness::IntervalCoverage)
+        visit("video_frame_rate");
+    else if (videoReadiness == MediaVideoStartupReadiness::DecodedPresentationSpan)
+        visit("decoded_video_startup");
+    if (videoFilterActive) visit("video_filter");
+    if (domain == ProcessingDomain::SharedSourceOutput) visit("video_encode");
+    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
+        visit(MediaAudioDecodeLineageIdentity);
+        visit(MediaAudioStartupTrimLineageIdentity);
+        visit(MediaAudioResampleLineageIdentity);
+        if (domain == ProcessingDomain::SharedSourceOutput) {
+            visit(MediaAudioEncodeLineageIdentity);
+            visit(MediaEncodedAudioCanonicalizerLineageIdentity);
+        }
+    }
+    if (sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports) {
+        visit(MediaRtpVideoIngressGenerationIdentity);
+        visit(MediaRtpVideoBinderGenerationIdentity);
+        if (audioBranchMode != MediaBranchMode::Drop) {
+            visit(MediaRtpAudioIngressGenerationIdentity);
+            visit(MediaRtpAudioBinderGenerationIdentity);
+        }
+    }
+    if (domain == ProcessingDomain::SourceContribution) {
+        visit("aggregate_source");
+        if (selectedAudio) visit("aggregate_audio");
+    }
+}
+
+std::vector<MediaAvGenerationParticipantPlan> processingParticipants(
+    MediaAvSyncSourceClockMode sourceClockMode, MediaBranchMode audioBranchMode,
+    bool videoFilterActive, MediaVideoStartupReadiness videoReadiness,
+    ProcessingDomain domain, bool selectedAudio)
+{
+    const auto visit = [&](auto&& writer) {
+        visitProcessingChildren(sourceClockMode, audioBranchMode, videoFilterActive,
+            videoReadiness, domain, selectedAudio, writer);
+    };
+    std::size_t childCount = 0;
+    visit([&](std::string_view) { ++childCount; });
+    std::vector<MediaAvGenerationParticipantPlan> participants;
+    participants.reserve(1 + static_cast<std::size_t>(audioBranchMode == MediaBranchMode::TranscodeFrame));
+    auto& canonical = participants.emplace_back();
+    canonical.participant = MediaAvGenerationParticipant::CanonicalLineage;
+    canonical.requiredChildren.reserve(childCount);
+    visit([&](std::string_view identity) { canonical.requiredChildren.emplace_back(identity); });
+    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
+        auto& correction = participants.emplace_back();
+        correction.participant = MediaAvGenerationParticipant::AudioCorrection;
+        correction.requiredChildren.reserve(1);
+        correction.requiredChildren.emplace_back(MediaAudioCorrectionGenerationIdentity);
+    }
+    return participants;
 }
 
 } // namespace
 
-MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
-    MediaAvSyncOutputAdapterKind adapter,
+::media::Result<std::size_t> MediaAvGenerationTransitionPlanner::sourceContributionStorageBytes(
+    MediaAvSyncSourceClockMode clock, MediaBranchMode audio, bool filter,
+    MediaVideoStartupReadiness readiness, bool selectedAudio)
+{
+    using Geometry = MediaStandardContainerStorageReadback;
+    using Result = ::media::Result<std::size_t>;
+    std::size_t bytes = 0;
+    std::optional<::media::ErrorInfo> error;
+    const auto add = [&](Result value) {
+        if (error) return;
+        if (!value) { error = value.error(); return; }
+        if (value.value() > (std::numeric_limits<std::size_t>::max)() - bytes) {
+            error = ::media::ErrorInfo::allocationFailed("Transition storage overflows"); return;
+        }
+        bytes += value.value();
+    };
+    std::size_t children = 0;
+    visitProcessingChildren(clock, audio, filter, readiness,
+        ProcessingDomain::SourceContribution, selectedAudio, [&](std::string_view identity) {
+            ++children;
+            add(Geometry::stringCopy(identity.size()));
+        });
+    const bool correction = audio == MediaBranchMode::TranscodeFrame;
+    add(Geometry::vectorReserveEmpty<MediaAvGenerationParticipantPlan>(1 + static_cast<std::size_t>(correction)));
+    add(Geometry::vectorReserveEmpty<std::string>(children));
+    if (correction) {
+        add(Geometry::vectorReserveEmpty<std::string>(1));
+        add(Geometry::stringCopy(std::string_view{MediaAudioCorrectionGenerationIdentity}.size()));
+    }
+    return error ? Result::failure(*error) : Result::success(bytes);
+}
+
+::media::Result<MediaAvGenerationTransitionPlan>
+MediaAvGenerationTransitionPlanner::planSourceContribution(
     MediaAvSyncSourceClockMode sourceClockMode,
     MediaBranchMode audioBranchMode,
     bool videoFilterActive,
-    MediaRunningTime acknowledgementTimeout,
-    MediaRunningTime terminalDrainWindow)
+    MediaVideoStartupReadiness videoReadiness,
+    MediaRunningTime acknowledgementTimeout, bool selectedAudio)
+{
+    if ((videoReadiness != MediaVideoStartupReadiness::IntervalCoverage &&
+         videoReadiness != MediaVideoStartupReadiness::DecodedPresentationSpan) ||
+        (selectedAudio && audioBranchMode != MediaBranchMode::TranscodeFrame) ||
+        (sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports &&
+         sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr &&
+         sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps) ||
+        (audioBranchMode != MediaBranchMode::TranscodeFrame &&
+         !(audioBranchMode == MediaBranchMode::Drop &&
+           sourceClockMode == MediaAvSyncSourceClockMode::RtpSenderReports)) ||
+        acknowledgementTimeout <= MediaRunningTime::fromNanoseconds(0)) {
+        return ::media::Result<MediaAvGenerationTransitionPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "source contribution transition requires an explicit clock, frame audio and positive timing"));
+    }
+    auto participants = processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
+        videoReadiness, ProcessingDomain::SourceContribution, selectedAudio);
+    return ::media::Result<MediaAvGenerationTransitionPlan>::success({
+        std::move(participants), acknowledgementTimeout});
+}
+
+MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
+    const std::variant<MediaSeparateRtpOutputRuntimePlan, MediaProjectMpegTsRuntimeOutputPlan>& output,
+    MediaAvSyncSourceClockMode sourceClockMode,
+    MediaBranchMode audioBranchMode,
+    bool videoFilterActive,
+    MediaRunningTime acknowledgementTimeout)
 {
     MediaAvGenerationTransitionPlan transition{
-        {}, acknowledgementTimeout, terminalDrainWindow};
-    transition.participants.push_back({
-        MediaAvGenerationParticipant::CanonicalLineage,
-        canonicalLineageChildren(
-            sourceClockMode, audioBranchMode, videoFilterActive)});
-    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
-        transition.participants.push_back({
-            MediaAvGenerationParticipant::AudioCorrection,
-            {std::string(MediaAudioCorrectionGenerationIdentity)}});
-    }
+        processingParticipants(sourceClockMode, audioBranchMode, videoFilterActive,
+            MediaVideoStartupReadiness::IntervalCoverage, ProcessingDomain::SharedSourceOutput, false), acknowledgementTimeout};
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});
-    if (adapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
+    transition.participants.push_back({
+        MediaAvGenerationParticipant::DatagramTransportPlan,
+        {"datagram_transport_plan_generation_state"}});
+    transition.participants.push_back({
+        MediaAvGenerationParticipant::DatagramSender,
+        {"datagram_sender_generation_state"}});
+    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(output)) {
         transition.participants.push_back({
             MediaAvGenerationParticipant::RtpVideoOutput,
-            {"rtp_video_output_generation_state"}});
+            {"rtp_video_output_generation_state", "rtp_video_materializer_generation_state"}});
         transition.participants.push_back({
             MediaAvGenerationParticipant::RtpAudioOutput,
-            {"rtp_audio_output_generation_state"}});
-    } else if (adapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+            {"rtp_audio_output_generation_state", "rtp_audio_materializer_generation_state"}});
+    } else {
         transition.participants.push_back({
             MediaAvGenerationParticipant::ProjectMpegTsOutput,
             {"project_mpegts_output_generation_state",
              "scheduled_ts_adapter_generation_state",
-             "project_mpegts_mux_generation_state"}});
+             "project_mpegts_mux_generation_state", "mpegts_materializer_generation_state"}});
+    }
+    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(output)) {
+        transition.participants.push_back({MediaAvGenerationParticipant::ProtocolDescription,
+            {"rtp_sdp_generation_state"}});
+    } else if (std::holds_alternative<MediaMpegTsRtpOutputPlan>(
+                   std::get<MediaProjectMpegTsRuntimeOutputPlan>(output).transport)) {
+        transition.participants.push_back({MediaAvGenerationParticipant::ProtocolDescription,
+            {"mpegts_sdp_generation_state"}});
     }
     return transition;
 }

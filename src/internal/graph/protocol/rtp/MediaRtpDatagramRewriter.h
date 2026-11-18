@@ -5,7 +5,7 @@
 
 #include <cstdint>
 #include <span>
-#include <vector>
+#include <cstddef>
 
 namespace media::ffmpeg::graph {
 
@@ -26,44 +26,27 @@ private:
     std::uint32_t m_ssrc;
 };
 
-class MediaRtpDatagramRewriteParameters final {
+// Borrowed input must remain alive and immutable until synchronous writeInto.
+class MediaRtpDatagramRewritePlan final {
 public:
-    MediaRtpDatagramRewriteParameters(
-        MediaRtpDatagramRewriteIdentity identity,
-        MediaRtpTimestamp timestamp) noexcept;
-
-    const MediaRtpDatagramRewriteIdentity& identity() const noexcept
-    {
-        return m_identity;
-    }
-    MediaRtpTimestamp timestamp() const noexcept { return m_timestamp; }
-
-private:
-    MediaRtpDatagramRewriteIdentity m_identity;
-    MediaRtpTimestamp m_timestamp;
-};
-
-class MediaRtpDatagramRewriteResult final {
-public:
+    std::size_t bytes() const noexcept { return m_datagram.size(); }
     std::size_t payloadOctets() const noexcept { return m_payloadOctets; }
-
 private:
     friend class MediaRtpDatagramRewriter;
-
-    explicit MediaRtpDatagramRewriteResult(std::size_t payloadOctets) noexcept
-        : m_payloadOctets(payloadOctets)
-    {
-    }
-
+    MediaRtpDatagramRewritePlan(std::span<const std::uint8_t> datagram,
+        MediaRtpDatagramRewriteIdentity identity, std::size_t payloadOctets) noexcept
+        : m_datagram(datagram), m_identity(identity), m_payloadOctets(payloadOctets) {}
+    std::span<const std::uint8_t> m_datagram;
+    MediaRtpDatagramRewriteIdentity m_identity;
     std::size_t m_payloadOctets;
 };
 
 class MediaRtpDatagramRewriter final {
 public:
-    static ::media::Result<MediaRtpDatagramRewriteResult> rewrite(
+    static ::media::Result<MediaRtpDatagramRewritePlan> prepare(
         std::span<const std::uint8_t> datagram,
-        const MediaRtpDatagramRewriteParameters& parameters,
-        std::vector<std::uint8_t>& output);
+        const MediaRtpDatagramRewriteIdentity& identity);
+    static ::media::Status writeInto(const MediaRtpDatagramRewritePlan& plan,
+        MediaRtpTimestamp timestamp, std::span<std::uint8_t> output);
 };
-
 } // namespace media::ffmpeg::graph

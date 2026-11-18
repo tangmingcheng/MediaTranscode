@@ -54,7 +54,8 @@ bool validClock(const MediaTsPacketClock& clock) noexcept
     }
 
     const bool hasDts = clock.extendedPts != clock.extendedDts;
-    const std::size_t timestampBytes = hasDts ? 10 : 5;
+    const std::size_t size = headerBytes(hasDts);
+    const std::size_t timestampBytes = size - 9;
     if (stream == MediaScheduledStream::Audio) {
         constexpr std::size_t FixedOptionalHeaderBytes = 3;
         if (framedPayloadBytes >
@@ -65,7 +66,6 @@ bool validClock(const MediaTsPacketClock& clock) noexcept
     }
 
     std::array<std::uint8_t, 19> bytes{};
-    const std::size_t size = 9 + timestampBytes;
     bytes[2] = 0x01;
     bytes[3] = streamId;
     const std::size_t packetLength = stream == MediaScheduledStream::Video

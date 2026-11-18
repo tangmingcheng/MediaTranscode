@@ -1,4 +1,5 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 namespace media::ffmpeg::graph {
 
@@ -94,6 +95,24 @@ MediaVideoLineageState::classifyObservation(
     }
     return m_retainedControl.capture(
         buffer, m_generation, MediaStreamKind::Video);
+}
+
+::media::Result<MediaVideoLineageGenerationDisposition>
+MediaVideoLineageState::admitGenerationEnd(const MediaBufferRef& buffer)
+{
+    std::lock_guard lock(m_mutex);
+    auto generation = mediaEndGeneration(buffer);
+    if (!generation) return ::media::Result<MediaVideoLineageGenerationDisposition>::failure(generation.error());
+    if (!m_synchronized || !generation.value()) {
+        return ::media::Result<MediaVideoLineageGenerationDisposition>::failure(
+            ::media::ErrorInfo::invalidArgument("Generation end requires a synchronized video lineage and explicit generation"));
+    }
+    auto disposition = classifyObservation(*generation.value());
+    if (!disposition || disposition.value() == MediaVideoLineageGenerationDisposition::DropStale)
+        return disposition;
+    if (auto status = authorizeRetainedControl(buffer); !status)
+        return ::media::Result<MediaVideoLineageGenerationDisposition>::failure(status.error());
+    return disposition;
 }
 
 bool MediaVideoLineageState::pendingOutputIsCurrent(

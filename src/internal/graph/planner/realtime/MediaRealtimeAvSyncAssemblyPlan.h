@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -101,36 +102,61 @@ using MediaCanonicalAudioDurationPlan =
     std::variant<MediaPacketDurationPlan,
                  MediaPlannedAudioSamplesDurationPlan>;
 
-struct MediaCanonicalVideoAssemblyPlan final {
-    std::string sourceIdentity;
+struct MediaCanonicalVideoAssemblyTiming final {
     MediaCanonicalVideoDurationPlan duration;
     MediaDecodeOrderMode decodeOrder;
-    std::size_t acquiringCapacity;
-    MediaRunningTime acquiringTimeout;
-    friend bool operator==(const MediaCanonicalVideoAssemblyPlan&,
-                           const MediaCanonicalVideoAssemblyPlan&) = default;
+    friend bool operator==(const MediaCanonicalVideoAssemblyTiming&,
+                           const MediaCanonicalVideoAssemblyTiming&) = default;
 };
 
-struct MediaCanonicalAudioAssemblyPlan final {
+// The decoder establishes ordered display points; no packet duration or DTS
+// policy is implied by this startup representation.
+struct MediaDecodedVideoAssemblyTiming final {
+    friend bool operator==(const MediaDecodedVideoAssemblyTiming&,
+                           const MediaDecodedVideoAssemblyTiming&) = default;
+};
+using MediaVideoInputAssemblyTiming = std::variant<
+    MediaCanonicalVideoAssemblyTiming, MediaDecodedVideoAssemblyTiming>;
+
+// Fixed declarations have no acquiring quantities and cannot become runtime
+// assemblies until the planner binds actual capacity facts.
+struct MediaVideoInputAssemblyFixedPlan {
+    std::string sourceIdentity;
+    MediaVideoInputAssemblyTiming timing;
+    bool operator==(const MediaVideoInputAssemblyFixedPlan&) const = default;
+};
+struct MediaVideoInputAssemblyPlan final : MediaVideoInputAssemblyFixedPlan {
+    std::size_t acquiringCapacity;
+    MediaRunningTime acquiringTimeout;
+    bool operator==(const MediaVideoInputAssemblyPlan&) const = default;
+};
+struct MediaCanonicalAudioAssemblyFixedPlan {
     std::string sourceIdentity;
     MediaCanonicalAudioDurationPlan duration;
     MediaDecodeOrderMode decodeOrder;
+    bool operator==(const MediaCanonicalAudioAssemblyFixedPlan&) const = default;
+};
+struct MediaCanonicalAudioAssemblyPlan final : MediaCanonicalAudioAssemblyFixedPlan {
     std::size_t acquiringCapacity;
     MediaRunningTime acquiringTimeout;
-    friend bool operator==(const MediaCanonicalAudioAssemblyPlan&,
-                           const MediaCanonicalAudioAssemblyPlan&) = default;
+    bool operator==(const MediaCanonicalAudioAssemblyPlan&) const = default;
 };
-
-struct MediaRealtimeAvSyncAssemblyPlan final {
+struct MediaRealtimeAvSyncAssemblyFixedFields {
     MediaAvSyncInputClockPlan inputClock;
     MediaInitialGenerationPolicy generationPolicy;
     std::uint64_t initialGeneration;
     MediaClockEvidencePolicy evidencePolicy;
-    MediaCanonicalVideoAssemblyPlan video;
-    MediaCanonicalAudioAssemblyPlan audio;
-    MediaRunningTime startupClockInterval;
-    friend bool operator==(const MediaRealtimeAvSyncAssemblyPlan&,
-                           const MediaRealtimeAvSyncAssemblyPlan&) = default;
+    bool operator==(const MediaRealtimeAvSyncAssemblyFixedFields&) const = default;
+};
+struct MediaRealtimeAvSyncAssemblyFixedPlan final : MediaRealtimeAvSyncAssemblyFixedFields {
+    MediaVideoInputAssemblyFixedPlan video;
+    std::optional<MediaCanonicalAudioAssemblyFixedPlan> audio;
+    bool operator==(const MediaRealtimeAvSyncAssemblyFixedPlan&) const = default;
+};
+struct MediaRealtimeAvSyncAssemblyPlan final : MediaRealtimeAvSyncAssemblyFixedFields {
+    MediaVideoInputAssemblyPlan video;
+    std::optional<MediaCanonicalAudioAssemblyPlan> audio;
+    bool operator==(const MediaRealtimeAvSyncAssemblyPlan&) const = default;
 };
 
 } // namespace media::ffmpeg::graph

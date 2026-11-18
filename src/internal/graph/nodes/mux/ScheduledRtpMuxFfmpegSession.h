@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
-#include <vector>
 
 struct AVFormatContext;
 struct AVPacket;
@@ -27,7 +26,7 @@ public:
     ::media::Status configure(ScheduledRtpMuxStreamConfig config);
     ::media::Status open() override;
     ::media::Status writeAccessUnit(const AVPacket& packet,
-                                    MediaRtpTimestamp timestamp) override;
+                                    MediaRtpTimestamp timestamp, std::span<std::uint8_t> scratch) override;
     ::media::Status writeTrailer();
     ::media::Status reset() noexcept;
 
@@ -52,7 +51,7 @@ private:
     std::optional<MediaRtpTimestamp> m_activeTimestamp;
     std::uint64_t m_activeDatagrams = 0;
     std::optional<::media::ErrorInfo> m_terminalFailure;
-    std::vector<std::uint8_t> m_rewriteScratch;
+    std::span<std::uint8_t> m_rewriteScratch;
     State m_state = State::Empty;
 };
 

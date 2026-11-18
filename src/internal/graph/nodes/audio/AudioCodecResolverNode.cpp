@@ -1,3 +1,5 @@
+#include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
@@ -159,6 +161,21 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
+    const auto mode = nodeOption(context, "codec_resolver.mode");
+    if (!mode.empty() && mode != "source_decode" && mode != "output_branch") {
+        return processProgress(::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Unknown codec resolver assembly mode")));
+    }
+
+    if (mode == "output_branch") {
+        auto encoder = buildEncoderContext(context);
+        if (!encoder) return processProgress(::media::Status::failure(encoder.error()));
+        auto status = emitCodecContext(context, "encoder", std::move(encoder).value());
+        if (!status) return processProgress(status);
+        m_emitted = true;
+        return processFinished();
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
@@ -179,12 +196,19 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(stream.error());
     }
 
-    auto decoder = buildDecoderContext(*stream.value());
+    auto decoder = buildDecoderContext(*stream.value(), nodeOptions(context));
     if (!decoder) {
         return ::media::Result<MediaNodeProcessResult>::failure(decoder.error());
     }
 
-    auto encoder = buildEncoderContext(context, *stream.value());
+    if (mode == "source_decode") {
+        auto status = emitCodecContext(context, "decoder", std::move(decoder).value());
+        if (!status) return processProgress(status);
+        m_emitted = true;
+        return processFinished();
+    }
+
+    auto encoder = buildEncoderContext(context);
     if (!encoder) {
         return ::media::Result<MediaNodeProcessResult>::failure(encoder.error());
     }
@@ -222,7 +246,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     return ::media::Result<const FFmpegInputStreamSnapshot*>::success(stream);
 }
 
-::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildDecoderContext(const FFmpegInputStreamSnapshot& stream) const
+::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildDecoderContext(const FFmpegInputStreamSnapshot& stream, const MediaNodeOptions* options) const
 {
     auto codecParameters = stream.cloneCodecParameters();
     if (!codecParameters) {
@@ -243,20 +267,35 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_to_context(audio decoder)"));
     }
+    if (options && options->has("decoder.pipeline.input_retention.maximum_internal_packets")) {
+        if (!decoder->name || options->value(MediaTranscodeOptionKey::PlannedDecoder) != decoder->name)
+            return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
+                ::media::ErrorInfo::unsupported("Opened audio decoder differs from the prepared holder contract"));
+        auto count = requiredPositiveIntNodeOption(options, "AudioCodecResolverNode",
+            "decoder.pipeline.input_retention.thread_count");
+        auto type = requiredNonNegativeIntNodeOption(options, "AudioCodecResolverNode",
+            "decoder.pipeline.input_retention.thread_type");
+        if (!count || !type) return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
+            !count ? count.error() : type.error());
+        context->thread_count = count.value();
+        context->thread_type = type.value();
+    }
     context->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
     const int openRet = avcodec_open2(context.get(), decoder, nullptr);
     if (openRet < 0) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             FFmpegGraphError::fromCode(openRet, "avcodec_open2(audio decoder)"));
     }
+    if (options) {
+        if (auto status = MediaDecoderInputRetentionOptionCodec::validateOpened(*context, *options); !status)
+            return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(status.error());
+    }
     return ::media::Result<::media::ffmpeg::CodecContextPtr>::success(std::move(context));
 }
 
 ::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildEncoderContext(
-    MediaGraphExecutionContext& context,
-    const FFmpegInputStreamSnapshot& stream) const
+    MediaGraphExecutionContext& context) const
 {
-    static_cast<void>(stream);
     const MediaNodeOptions* options = nodeOptions(context);
     const AVCodec* encoder = findEncoder(options);
     if (!encoder) {
@@ -411,7 +450,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
                                                          const char* portName,
                                                          ::media::ffmpeg::CodecContextPtr codecContext)
 {
-    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(codecContext));
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(codecContext), std::nullopt);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }

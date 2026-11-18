@@ -33,7 +33,7 @@ struct MediaPreparedRuntimeBranch final {
     std::shared_ptr<MediaRuntimeBranchResourceReservation> resourceLease;
 };
 
-enum class MediaRuntimeBranchState { Prepared, Running, Draining, Failed, Retired, Retiring };
+enum class MediaRuntimeBranchState { Prepared, Running, Draining, Failed, Retired, Retiring, Starting };
 
 class MediaRuntimeBranch final {
 public:
@@ -92,7 +92,9 @@ private:
     MediaGraphScheduler m_scheduler;
     MediaGraphWorkerFailureRecorder m_failures;
     MediaGraphWorkerFailureSupervisor m_supervisor;
-    std::vector<std::unique_ptr<MediaGraphWorker>> m_workers;
+    MediaWorkerStartupGate m_startup;
+    std::atomic_bool m_starting{false};
+    MediaFixedCapacityStorage<std::unique_ptr<MediaGraphWorker>> m_workers;
     std::vector<MediaChannel*> m_inputs;
     bool m_inputsAccountedBySession = false;
     std::vector<std::shared_ptr<const MediaGraphWorkerExitToken>> m_retirementPrerequisites;

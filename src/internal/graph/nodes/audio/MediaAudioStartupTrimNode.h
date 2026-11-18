@@ -22,6 +22,7 @@ public:
     bool releaseTrimConsumed = false;
     std::uint32_t remainingTrimSamples = 0;
     bool waitingForFirstPostTrimSample = false;
+    bool generationDrained = false;
     std::optional<std::int64_t> expectedNextSample;
 
 protected:

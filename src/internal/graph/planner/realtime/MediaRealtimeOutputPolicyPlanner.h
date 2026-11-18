@@ -23,6 +23,14 @@ public:
         const MediaRealtimeOutputUrls& urls,
         MediaRealtimeRtpTranscodePlanningDraft& plan,
         MediaRealtimeOutputPlanningDraft& output);
+    static ::media::Status applyOutput(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeOutputUrls& urls,
+        MediaVideoTranscodeParameters& videoParameters,
+        const MediaVideoOutputPlan& video,
+        const MediaAudioPipelinePlan* audio,
+        const MediaRealtimeDeploymentEnvelope& deployment,
+        MediaRealtimeOutputPlanningDraft& output);
 
 private:
     MediaRealtimeOutputPolicyPlanner() = delete;

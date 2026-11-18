@@ -2,23 +2,15 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeDeploymentEnvelope.h"
 #include "internal/graph/planner/realtime/MediaWireTrafficEnvelope.h"
+#include "internal/graph/planner/realtime/MediaRtpProtocolStoragePlan.h"
+#include "internal/graph/planner/realtime/MediaDatagramCommitStoragePlan.h"
+#include "internal/graph/planner/realtime/MediaRawRtpStoragePlanner.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaDatagramProtocolEndpointRole : std::uint8_t {
-    Unknown = 0,
-    VideoRtp = 1,
-    VideoRtcp = 2,
-    AudioRtp = 3,
-    AudioRtcp = 4,
-    MpegTsUdp = 5,
-    MpegTsRtp = 6,
-    MpegTsRtcp = 7
-};
 
 struct MediaDatagramRemoteEndpointFact final {
     std::uint64_t endpointId;
@@ -38,6 +30,9 @@ struct MediaDatagramLocalEndpointPlan final {
 struct MediaDatagramTransportPlan final {
     MediaDatagramShapingPlan shaping;
     std::vector<MediaDatagramLocalEndpointPlan> localEndpoints;
+    std::vector<MediaRtpProtocolStoragePlan> rtpStorageInstances;
+    MediaDatagramCommitStoragePlan commitStorage;
+    std::vector<MediaRawRtpStoragePlan> rawRtpStorage;
 };
 
 struct MediaDatagramTransportPlanTemplateEncoding final {

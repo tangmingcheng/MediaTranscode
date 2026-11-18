@@ -5,6 +5,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "media_transcode/Result.h"
 
+#include "internal/graph/builder/segments/MediaVideoTranscodeBranchBuilder.h"
+
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -18,6 +20,7 @@ struct MediaRealtimeAvSyncInputSources final {
 struct MediaRealtimeAvSyncInputSegmentOptions final {
     std::string prefix;
     MediaRealtimeAvSyncInputSources sources;
+    std::optional<MediaVideoSourceBranchOptions> decodedVideo;
     int releasedVideoStreamIndex = invalidMediaStreamIndex;
     int releasedAudioStreamIndex = invalidMediaStreamIndex;
     MediaEdgeKind releasedVideoEdgeKind = MediaEdgeKind::Unknown;
@@ -29,7 +32,7 @@ public:
     static ::media::Result<MediaRealtimeAvSyncInputEndpoints> build(
         MediaGraph& graph,
         const MediaRealtimeAvSyncInputSegmentOptions& options,
-        const MediaRealtimeAvSyncRuntimePlan& plan);
+        const MediaRealtimeAvSourceRuntimePlan& plan);
 
 private:
     MediaRealtimeAvSyncInputSegmentBuilder() = delete;

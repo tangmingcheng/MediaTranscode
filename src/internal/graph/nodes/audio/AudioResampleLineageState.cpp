@@ -34,8 +34,11 @@ void AudioResampleLineageState::clearLineageStorage() noexcept
     outputIntervals.reset();
     sampleProjection.reset();
     lastOutputLineage.reset();
+    lastOutputContribution.reset();
     terminals.reset();
     eofEmitted = false;
+    correctionGenerationClosed = false;
+    generationDrained = false;
 }
 
 void AudioResampleLineageState::clearOwnedLineage(

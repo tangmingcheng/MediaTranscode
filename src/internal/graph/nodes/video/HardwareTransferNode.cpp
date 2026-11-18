@@ -3,10 +3,13 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/MediaVideoDecodeBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
+#include "internal/graph/sync/lineage/MediaVideoDisplayLineage.h"
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -46,7 +49,12 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
 ::media::Status HardwareTransferNode::start(MediaGraphExecutionContext& context)
 {
+    m_bindingFrozen = true;
+    freezeSourceReferenceResource();
     resetRuntimeState();
+    if (m_purge) {
+        if (auto status = m_purge->start(context.sharedNodeWakeup(nodeId())); !status) return status;
+    }
     auto direction = requiredNodeOption(
         nodeOptions(context), "HardwareTransferNode", "transfer.direction");
     if (!direction) return ::media::Status::failure(direction.error());
@@ -66,6 +74,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
 ::media::Status HardwareTransferNode::stop(MediaGraphExecutionContext& context)
 {
+    if (m_purge) m_purge->stop();
     logSummary();
     auto status = FFmpegNodeRuntime::stop(context);
     resetRuntimeState();
@@ -74,6 +83,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
 void HardwareTransferNode::abort(MediaGraphExecutionContext& context) noexcept
 {
+    if (m_purge) m_purge->stop();
     FFmpegNodeRuntime::abort(context);
     resetRuntimeState();
 }
@@ -89,6 +99,114 @@ void HardwareTransferNode::resetRuntimeState() noexcept
     m_forwardedFrames = 0;
     m_downloads = 0;
     m_uploads = 0;
+    m_generationEnded = false;
+    m_generation = 0;
+    m_releaseIdentity = 0;
+    if (m_lineage) m_lineage->resetGenerationLifecycle();
+}
+
+::media::Status HardwareTransferNode::bindSourceGroup(std::shared_ptr<MediaAvSyncGroupRuntime> group,
+    std::shared_ptr<MediaAvStartupVideoPreparationState> preparation)
+{
+    if (!group || !preparation || preparation->snapshot().groupKey != group->key() ||
+        m_bindingFrozen || m_group) return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("Hardware transfer requires one immutable source group binding"));
+    m_group = std::move(group);
+    m_preparation = std::move(preparation);
+    m_purge = std::make_shared<MediaOwnerThreadGenerationPurge>();
+    m_lineage = std::make_unique<MediaVideoReferenceLineageState>();
+    return ::media::Status::success();
+}
+
+std::optional<std::uint64_t> HardwareTransferNode::generation(const MediaBufferRef& buffer) const noexcept
+{
+    if (const auto lineage = FFmpegFrameView::canonicalLineage(buffer)) return lineage->generation;
+    if (const auto display = FFmpegFrameView::displayLineage(buffer); display && display->accessUnit)
+        return display->accessUnit->generation;
+    return std::nullopt;
+}
+
+bool HardwareTransferNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
+{
+    return !m_lineage || m_lineage->pendingOutputIsCurrent(buffer, generation(buffer));
+}
+
+::media::Result<MediaOutputCommitReservation> HardwareTransferNode::reserveOutputCommit(
+    const MediaBufferRef& buffer) const
+{
+    using Result = ::media::Result<MediaOutputCommitReservation>;
+    if (!m_group) return FFmpegNodeRuntime::reserveOutputCommit(buffer);
+    auto authority = m_group->reserveGenerationArbitration();
+    if (!authority) return Result::failure(authority.error());
+    if (!pendingOutputIsCurrent(buffer)) return Result::failure(
+        ::media::ErrorInfo::cancelled("Hardware transfer retires stale publication"));
+    const auto end = mediaEndGeneration(buffer);
+    if (!end) return Result::failure(end.error());
+    const auto mediaGeneration = generation(buffer);
+    const auto value = end.value() ? *end.value() : mediaGeneration.value_or(m_generation);
+    const auto& transition = authority.value().reacquisition();
+    const auto& epoch = authority.value().epoch();
+    const auto preparation = m_preparation->snapshot();
+    const bool initial = transition.phase == MediaAvReacquisitionPhase::Inactive &&
+        !transition.transition && !epoch.poisoned && !epoch.activation &&
+        epoch.readiness == MediaAvGenerationReadiness::Acquiring &&
+        !epoch.outputPermitted && !epoch.completedTransitionSequence;
+    if (!initial) {
+        auto disposition = classifyMediaAvGenerationEvidence(transition, epoch, value);
+        if (!disposition) return Result::failure(disposition.error());
+        if (disposition.value() == MediaAvGenerationEvidenceDisposition::Retired)
+            return Result::failure(::media::ErrorInfo::cancelled("Hardware transfer retires obsolete generation"));
+        if (disposition.value() == MediaAvGenerationEvidenceDisposition::Future ||
+            transition.phase == MediaAvReacquisitionPhase::Purging)
+            return Result::failure(::media::ErrorInfo::wouldBlock("Hardware transfer awaits generation authority"));
+    }
+    if (initial) {
+        if (preparation.phase == MediaAvStartupVideoPreparationPhase::Cancelled)
+            return Result::failure(::media::ErrorInfo::cancelled("Hardware transfer preparation was cancelled"));
+        if (!value || preparation.groupKey != m_group->key() || preparation.generation != value ||
+            !preparation.releaseIdentity || preparation.releaseIdentity != m_releaseIdentity)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Hardware transfer publication differs from its initial preparation"));
+        if (preparation.phase != MediaAvStartupVideoPreparationPhase::Feeding &&
+            preparation.phase != MediaAvStartupVideoPreparationPhase::OutputReady)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Hardware transfer has no active preparation feed"));
+    } else if (!epoch.outputPermitted) {
+        return Result::failure(::media::ErrorInfo::wouldBlock(
+            "Hardware transfer awaits publication of its reacquired epoch"));
+    }
+    if (end.value()) {
+        const auto closing = m_group->sourceDrainSnapshot();
+        if (!m_generationEnded || !epoch.outputPermitted || !closing ||
+            closing->request.playbackGeneration != value || !closing->video.acceptedFrontier)
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Hardware transfer generation end requires its published sealed source"));
+    }
+    return Result::success(MediaOutputCommitReservation::hold(
+        std::move(authority).value().retainPublicationAuthority()));
+}
+
+::media::Status HardwareTransferNode::servicePurge()
+{
+    if (!m_purge) return ::media::Status::success();
+    const auto request = m_purge->pending();
+    if (!request) return ::media::Status::success();
+    auto status = m_lineage->purge(*request);
+    if (status) {
+        cancelPendingOutputTransfer();
+        m_pendingInput.reset();
+        m_generationEnded = false;
+        m_generation = request->nextGeneration;
+        m_releaseIdentity = 0;
+    }
+    auto completed = m_purge->complete(*request, status);
+    return completed ? status : completed;
+}
+
+::media::Result<MediaNodeProcessResult> HardwareTransferNode::process(MediaGraphExecutionContext& context)
+{
+    if (auto status = servicePurge(); !status) return processProgress(status);
+    return FFmpegNodeRuntime::process(context);
 }
 
 void HardwareTransferNode::logSummary() const
@@ -102,6 +220,7 @@ void HardwareTransferNode::logSummary() const
 
 ::media::Result<MediaNodeProcessResult> HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_generationEnded) return processWaiting();
     if (m_terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
@@ -129,7 +248,24 @@ void HardwareTransferNode::logSummary() const
                         mediaGraphDiagnosticDescribeBuffer(buffer));
         m_firstInputDiagnosticEmitted = true;
     }
-    if (buffer->isEof() || buffer->isFlush()) {
+    auto generationEnd = mediaEndGeneration(buffer);
+    if (!generationEnd) return processProgress(::media::Status::failure(generationEnd.error()));
+    if (buffer->isEof() || buffer->isFlush() || generationEnd.value()) {
+        if (generationEnd.value() && !m_group) return processProgress(::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("Hardware transfer generation end requires a source purge owner")));
+        if (generationEnd.value()) {
+            auto authority = m_group->reserveGenerationArbitration();
+            if (!authority) return processProgress(::media::Status::failure(authority.error()));
+            auto disposition = classifyMediaAvGenerationEvidence(authority.value().reacquisition(),
+                authority.value().epoch(), *generationEnd.value());
+            if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+            if (disposition.value() == MediaAvGenerationEvidenceDisposition::Retired)
+                return processProgress();
+        }
+        if (m_lineage) {
+            if (auto status = m_lineage->authorizeRetainedControl(buffer); !status) return processProgress(status);
+        }
+        m_generationEnded = generationEnd.value().has_value();
         const bool eof = buffer->isEof();
         if (eof && m_eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
@@ -146,6 +282,22 @@ void HardwareTransferNode::logSummary() const
             eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
+    if (m_lineage) {
+        const auto frameGeneration = generation(buffer);
+        if (!frameGeneration) return processProgress(::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("Hardware transfer requires source frame lineage")));
+        auto disposition = m_lineage->classifyObservation(*frameGeneration);
+        if (!disposition) return processProgress(::media::Status::failure(disposition.error()));
+        if (disposition.value() == MediaVideoLineageGenerationDisposition::DropStale) {
+            m_pendingInput.reset();
+            return processProgress();
+        }
+        if (auto status = m_lineage->observe(*frameGeneration); !status) return processProgress(status);
+        const auto preparation = m_preparation->snapshot();
+        m_generation = *frameGeneration;
+        if (!m_releaseIdentity && preparation.generation == *frameGeneration)
+            m_releaseIdentity = preparation.releaseIdentity;
+    }
     m_pendingInput = buffer;
     auto transferStatus = transferOrForward(context, m_pendingInput);
     if (!transferStatus) {
@@ -248,7 +400,7 @@ void HardwareTransferNode::logSummary() const
         return FFmpegGraphError::statusFromCode(propsRet, "av_frame_copy_props(downloaded frame)");
     }
 
-    auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video);
+    auto output = FFmpegBufferFactory::wrapFrame(std::move(softwareFrame), MediaStreamKind::Video, MediaRuntimeLineageAllocation{});
     if (!output) {
         return ::media::Status::failure(output.error());
     }
@@ -291,9 +443,16 @@ void HardwareTransferNode::logSummary() const
     MediaBufferRef transferred = output.value();
     if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
         auto canonical = MediaCanonicalVideoFrameBuffer::create(
-            transferred, std::move(lineage));
+            transferred, std::move(lineage), std::nullopt);
         if (!canonical) return ::media::Status::failure(canonical.error());
         transferred = std::move(canonical).value();
+    } else if (const auto* source = dynamic_cast<const MediaVideoDecodeBuffer*>(buffer.get())) {
+        if (!sourceReferenceResource()) return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("Display transfer has no source allocation owner"));
+        auto display = MediaVideoDecodeBuffer::withDisplayLineage(
+            *sourceReferenceResource(), transferred, source->displayLineage());
+        if (!display) return ::media::Status::failure(display.error());
+        transferred = std::move(display).value();
     }
     return emitTracedOutput(context, transferred);
 }

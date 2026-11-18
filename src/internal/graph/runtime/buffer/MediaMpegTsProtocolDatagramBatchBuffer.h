@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaWireDatagramDescriptor.h"
 #include "internal/graph/runtime/buffer/MediaProtocolDatagramCommitLease.h"
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/planner/realtime/MediaTsPrefixPublicationPlanner.h"
 
 #include <cstdint>
 #include <memory>
@@ -14,7 +15,12 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaMpegTsProtocolCommitState;
+struct MediaMpegTsProtocolSeriesState;
+class MediaWireGlobalSequenceState;
+class MediaWireGlobalSequenceReservation;
+class MediaNodeWakeup;
+struct MediaWireDatagramBatchInput;
+struct MediaWireGlobalSequenceReservationEntry;
 
 class MediaMpegTsProtocolDatagram final {
 public:
@@ -32,6 +38,7 @@ public:
     {
         return m_canonicalDeadline;
     }
+    MediaRunningTime completionLimit() const noexcept { return m_completionLimit; }
 
 private:
     friend class MediaMpegTsProtocolDatagramBatchBuffer;
@@ -40,17 +47,25 @@ private:
         MediaRunningTime presentationOnMaster,
         MediaRunningTime canonicalRelease,
         MediaRunningTime canonicalDeadline,
+        MediaRunningTime completionLimit,
         MediaWireMediaBoundary mediaBoundary) noexcept;
 
     std::span<const std::uint8_t> m_bytes;
     MediaRunningTime m_presentationOnMaster;
     MediaRunningTime m_canonicalRelease;
     MediaRunningTime m_canonicalDeadline;
+    MediaRunningTime m_completionLimit;
     MediaWireMediaBoundary m_mediaBoundary;
 };
 
 class MediaMpegTsProtocolDatagramBatchBuffer final : public MediaBuffer {
 public:
+    class ConstructionKey final {
+        friend class MediaMpegTsProtocolDatagramBatchBuffer;
+        explicit ConstructionKey() = default;
+    };
+    static ::media::Result<MediaTsProtocolSeriesStorageGeometry> seriesStorageGeometry();
+    MediaMpegTsProtocolDatagramBatchBuffer(ConstructionKey, std::uint64_t generation) noexcept;
     static ::media::Result<
         std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>
     create(std::uint64_t generation,
@@ -59,7 +74,10 @@ public:
            MediaRunningTime presentationOnMaster,
            MediaRunningTime canonicalRelease,
            MediaRunningTime canonicalDeadline,
-           MediaWireMediaBoundary finalBoundary);
+           MediaWireMediaBoundary finalBoundary,
+           std::size_t maximumReservationDatagrams,
+           MediaRunningTime completionLimit,
+           const MediaTsAcceptedWorkObservation& acceptedWork);
 
     MediaBufferType type() const noexcept override
     {
@@ -67,22 +85,58 @@ public:
     }
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     std::uint64_t generation() const noexcept { return m_generation; }
-    std::span<const MediaMpegTsProtocolDatagram> datagrams() const noexcept
-    {
-        return std::span(m_datagrams).subspan(m_materializedDatagrams);
-    }
+    const std::optional<MediaTsPublicationObservation>& publicationObservation() const noexcept
+    { return m_publicationObservation; }
+    // Diagnostic observation set by the mux owner before publication.
+    void observeMuxDequeued(MediaRunningTime time) noexcept { m_muxDequeuedAt = time; }
+    // Sampled after construction/continuity commit, immediately before mux enqueue.
+    void observeMuxPublicationReady(std::optional<MediaRunningTime> time) noexcept
+    { if (m_publicationObservation) m_publicationObservation->muxPublicationReadyAt = time; }
+    std::optional<MediaRunningTime> muxDequeuedAt() const noexcept { return m_muxDequeuedAt; }
+    std::size_t materializedDatagrams() const noexcept { return m_materializedDatagrams - m_beginDatagram; }
+    std::span<const MediaMpegTsProtocolDatagram> datagrams() const noexcept;
+    // Mux-owner only, before publication. Transfers an exact prefix to a view;
+    // caller supplies storage admitted for the real batch-owner geometry.
+    ::media::Result<std::shared_ptr<MediaMpegTsProtocolDatagramBatchBuffer>>
+    takePrefixView(std::size_t datagrams, MediaOwnedMemoryAllocation allocation);
+    ::media::Status registerPreparedWire(std::span<const MediaWireDatagramBatchInput> inputs,
+        std::span<const MediaWireGlobalSequenceReservationEntry> entries,
+        std::size_t leadingControlDatagrams);
+    void abandonPreparedWire(std::size_t protocolOffset) noexcept;
     ::media::Result<MediaProtocolDatagramCommitTransaction>
-    takeCommitTransaction(std::size_t datagrams);
+    takeCommitTransaction(std::size_t datagrams, MediaOwnedMemoryAllocation allocation,
+        const std::shared_ptr<MediaWireGlobalSequenceState>& wireOwner,
+        const MediaWireGlobalSequenceReservation& wireReservation,
+        std::size_t leadingControlDatagrams);
+    static MediaSharedAllocationGeometry prefixAllocationGeometry() noexcept;
+    // Registers the producer before reporting WouldBlock. The caller must use
+    // the worker's sequence-before-process wait protocol, not a polling loop.
+    ::media::Status waitForCommit(const std::shared_ptr<MediaNodeWakeup>& producerWakeup,
+        std::optional<std::int64_t>& protocolCommitCompletedSteadyNs) const;
+    // Producer-only, after the previous reservation was transferred and
+    // committed. Allocation must be admitted before continuity is advanced.
+    ::media::Status reserveNextPrefix(std::size_t datagrams,
+        const MediaTsPrefixPublicationWindow& window,
+        MediaOwnedMemoryAllocation modelAllocation);
 
 private:
-    explicit MediaMpegTsProtocolDatagramBatchBuffer(
-        std::uint64_t generation) noexcept;
-
     std::uint64_t m_generation;
-    std::vector<std::uint8_t> m_payload;
-    std::vector<MediaMpegTsProtocolDatagram> m_datagrams;
-    std::shared_ptr<MediaMpegTsProtocolCommitState> m_commitTransaction;
+    std::shared_ptr<MediaMpegTsProtocolSeriesState> m_series;
+    std::size_t m_beginDatagram = 0;
+    std::size_t m_endDatagram = 0;
+    std::uint64_t m_payloadBytes = 0;
     std::size_t m_materializedDatagrams = 0;
+    std::optional<MediaRunningTime> m_muxDequeuedAt;
+    std::optional<MediaTsPublicationObservation> m_publicationObservation;
+    struct PreparedRegistration final {
+        MediaTsPacketReservationIdentity identity;
+        std::size_t protocolBegin;
+        std::size_t reservationBegin;
+        std::size_t reservationEnd;
+        std::size_t count;
+        std::size_t leadingControlDatagrams;
+    };
+    std::optional<PreparedRegistration> m_preparedWire;
 };
 
 } // namespace media::ffmpeg::graph

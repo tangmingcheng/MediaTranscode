@@ -34,6 +34,16 @@ MediaBufferType MediaControlBuffer::type() const noexcept
     return MediaBufferType::Control;
 }
 
+std::optional<std::uint64_t> MediaControlBuffer::payloadFootprintBytes() const noexcept
+{
+    // These typed signals own no media payload. Their fixed object storage and
+    // FIFO slot remain charged separately by the existing owner/queue contracts.
+    // Unknown or malformed controls must not gain admission through this fact.
+    if (payloadKind() != MediaPayloadKind::ControlSignal || streamKind() != MediaStreamKind::Control || !flow())
+        return std::nullopt;
+    return std::uint64_t{0};
+}
+
 MediaControlBufferKind MediaControlBuffer::controlKind() const noexcept
 {
     return m_kind;
@@ -54,6 +64,10 @@ MediaControlBuffer::flow() const noexcept
     case MediaControlBufferKind::Abort:
         return !isEof() && !isFlush()
             ? std::optional(MediaControlBufferFlow::Terminal)
+            : std::nullopt;
+    case MediaControlBufferKind::EndGeneration:
+        return !isEof() && !isFlush() && m_generation && *m_generation != 0
+            ? std::optional(MediaControlBufferFlow::Continue)
             : std::nullopt;
     case MediaControlBufferKind::Unknown:
         return std::nullopt;
@@ -88,6 +102,17 @@ classifyMediaControlBuffer(const MediaBufferRef& buffer)
     }
     return Result::success(MediaControlBufferClassification{
         control, control->controlKind(), *flow});
+}
+
+::media::Result<std::optional<std::uint64_t>> mediaEndGeneration(const MediaBufferRef& buffer)
+{
+    using Result = ::media::Result<std::optional<std::uint64_t>>;
+    const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get());
+    if (!control || control->controlKind() != MediaControlBufferKind::EndGeneration)
+        return Result::success(std::nullopt);
+    auto classification = classifyMediaControlBuffer(buffer);
+    if (!classification) return Result::failure(classification.error());
+    return Result::success(control->generation());
 }
 
 } // namespace media::ffmpeg::graph

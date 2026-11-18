@@ -18,6 +18,18 @@ MediaDecoderInputRetentionAdapter::readAfterOpen(
     // allocations. pthread_frame owns one submitted avpkt per frame worker.
     MediaDecoderInputRetention facts{context.thread_count, context.thread_type,
                                     1, 0, 0, {}};
+    if (hardwareBackend.empty() && workers == 0 &&
+        context.codec_type == AVMEDIA_TYPE_AUDIO && (name == "aac" || name == "aac_fixed" || name == "opus")) {
+        // decode.c owns buffer_pkt and may retain an incompletely consumed
+        // in_pkt between simple callback calls. AAC returns consumed bytes;
+        // native Opus returns the complete avpkt->size and keeps no AVPacket.
+        // No frame workers or codec-private compressed-packet owner exists.
+        facts.serialPrivatePackets = name == "opus" ? 0 : 1;
+        facts.authority = name == "opus"
+            ? "ffmpeg-native-opus-full-packet-simple-callback+decode-buffer-pkt"
+            : "ffmpeg-native-aac-partial-simple-callback+decode-buffer-pkt+in-pkt";
+        return facts;
+    }
     if ((name == "h264" || name == "hevc") &&
         (hardwareBackend.empty() || hardwareBackend == "cuda" ||
          hardwareBackend == "d3d11va" || hardwareBackend == "dxva2" ||
@@ -49,13 +61,13 @@ MediaDecoderInputRetentionAdapter::readAfterOpen(
         // The verified rkmpp_decode_receive_frame has one last_pkt, released
         // unconditionally by decoder close in the deployed ownership fix.
         // EAGAIN may return a decoded frame while retaining that packet; a
-        // successful put_packet immediately unrefs it. MPP c08762ebf copies
+        // successful put_packet immediately unrefs it. MPP c08762ebf plus the audited lineage patch copies
         // non-MppBuffer input in mpp_put_packet -> mpp_packet_copy_init before
         // submission, so its internal bitstream does not pin our AVBuffer.
         // The common decode buffer_pkt handoff remains a separate slot.
         facts.serialPrivatePackets = 1;
         facts.authority = std::string(MediaRkmppDependencyIdentity::sourceRevision) +
-            ":last_pkt-close-release+mpp-c08762ebf-copy-on-put";
+            ":last_pkt-close-release+mpp-c08762ebf-lineage-copy-on-put";
         return facts;
     }
     return {};

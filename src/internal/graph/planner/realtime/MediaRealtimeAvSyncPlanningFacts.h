@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
-#include "internal/graph/protocol/mpegts/MediaTsPacketDurationEvidence.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSourceTimingFacts.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
@@ -12,31 +12,30 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeAvSyncPlanningFacts final {
-    std::optional<std::string> inputVideoIdentity;
-    std::optional<std::string> inputAudioIdentity;
-    std::optional<int> inputVideoClockRate;
-    std::optional<int> inputAudioSampleRate;
-    std::optional<std::uint32_t> inputAudioSamplesPerAccessUnit;
-    std::optional<MediaTsPacketDurationEvidence> inputVideoPacketDuration;
-    std::optional<MediaTsPacketDurationEvidence> inputAudioPacketDuration;
+struct MediaRealtimeAvOutputTimingFacts {
     std::optional<MediaScheduledRtpPacketizationPlan>
         outputVideoRtpPacketization;
     std::optional<MediaScheduledRtpPacketizationPlan>
         outputAudioRtpPacketization;
     std::optional<int> outputSampleRate;
+    std::optional<std::int64_t> protocolBatchSamples;
+    friend bool operator==(const MediaRealtimeAvOutputTimingFacts&,
+                           const MediaRealtimeAvOutputTimingFacts&) = default;
+};
+
+
+struct MediaRealtimeAvSyncPlanningFacts final : MediaRealtimeAvOutputTimingFacts,
+                                               MediaRealtimeAvSourceTimingFacts {
     std::optional<std::int64_t> decoderDelaySamples;
     std::optional<std::int64_t> encoderLookaheadSamples;
     std::optional<std::int64_t> decodeQueueSamples;
     std::optional<std::int64_t> resampleQueueSamples;
     std::optional<std::int64_t> encodeQueueSamples;
     std::optional<std::int64_t> schedulerQueueSamples;
-    std::optional<std::int64_t> protocolBatchSamples;
     std::optional<std::int64_t> mailboxDeliveryMarginSamples;
     std::optional<std::int64_t> maximumResamplerOutputBlockSamples;
     std::optional<std::size_t> mailboxCapacity;
     std::optional<MediaRunningTime> acknowledgementTimeout;
-    std::optional<MediaRunningTime> terminalDrainWindow;
     friend bool operator==(const MediaRealtimeAvSyncPlanningFacts&,
                            const MediaRealtimeAvSyncPlanningFacts&) = default;
 };
@@ -48,15 +47,20 @@ struct MediaSynchronizedAudioPacketCopyBounds final {
                            const MediaSynchronizedAudioPacketCopyBounds&) = default;
 };
 
-struct MediaSynchronizedAudioFrameTranscodeBounds final {
+struct MediaSynchronizedAudioSourceBounds {
     std::int64_t decoderDelaySamples;
     std::int64_t decodeQueueSamples;
     std::int64_t resampleQueueSamples;
-    std::int64_t encodeQueueSamples;
-    std::int64_t schedulerQueueSamples;
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::size_t mailboxCapacity;
+    friend bool operator==(const MediaSynchronizedAudioSourceBounds&,
+                           const MediaSynchronizedAudioSourceBounds&) = default;
+};
+
+struct MediaSynchronizedAudioFrameTranscodeBounds final : MediaSynchronizedAudioSourceBounds {
+    std::int64_t encodeQueueSamples;
+    std::int64_t schedulerQueueSamples;
     friend bool operator==(const MediaSynchronizedAudioFrameTranscodeBounds&,
                            const MediaSynchronizedAudioFrameTranscodeBounds&) = default;
 };

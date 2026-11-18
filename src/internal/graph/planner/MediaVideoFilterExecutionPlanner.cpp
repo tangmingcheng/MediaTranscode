@@ -2,10 +2,23 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::forEncoder(
-    std::string filterDescription)
+::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::bindOutputEvidence(
+    MediaVideoFilterExecutionPlan plan, MediaVideoFilterIsolationEvidence evidence)
 {
-    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::PreparedEncoderMetadata,
+    using Result = ::media::Result<MediaVideoFilterExecutionPlan>;
+    if (!plan.valid() || plan.output.filterDescription != evidence.filterDescription)
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Filter output evidence differs from the planned implementation"));
+    plan.output = std::move(evidence);
+    if (!plan.valid()) return Result::failure(::media::ErrorInfo::invalidArgument(
+        "Filter output evidence does not establish a complete execution contract"));
+    return Result::success(std::move(plan));
+}
+
+::media::Result<MediaVideoFilterExecutionPlan> MediaVideoFilterExecutionPlanner::forNegotiatedOutput(
+    std::string filterDescription, MediaVideoFrameLineageProduct frameProduct)
+{
+    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::PreparedEncoderMetadata, frameProduct,
         MediaVideoFilterAspectPolicy::PreserveSourceAspect,
         {std::move(filterDescription), MediaVideoFilterAllocation::NegotiatedOutput,
          MediaVideoFilterCompletion::NegotiatedOutput, {}, {}, 0, {}}, {}, {}};
@@ -18,7 +31,7 @@ namespace media::ffmpeg::graph {
     MediaRational sourceFrameRate, MediaRational sourceSampleAspectRatio,
     MediaVideoFilterIsolationEvidence evidence)
 {
-    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::SourceFrame,
+    MediaVideoFilterExecutionPlan plan{MediaVideoFilterTimingAuthority::SourceFrame, MediaVideoFrameLineageProduct::CanonicalInterval,
         MediaVideoFilterAspectPolicy::PreserveSourceAspect,
         std::move(evidence), sourceFrameRate, sourceSampleAspectRatio};
     if (!plan.valid()) return ::media::Result<MediaVideoFilterExecutionPlan>::failure(

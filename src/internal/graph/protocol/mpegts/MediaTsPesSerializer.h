@@ -41,6 +41,11 @@ private:
 
 class MediaTsPesSerializer final {
 public:
+    static constexpr std::size_t headerBytes(bool carriesDts) noexcept
+    {
+        return 9 + (carriesDts ? 10 : 5);
+    }
+
     static ::media::Result<MediaTsPesHeader> header(
         MediaScheduledStream stream,
         const MediaTsPacketClock& clock,

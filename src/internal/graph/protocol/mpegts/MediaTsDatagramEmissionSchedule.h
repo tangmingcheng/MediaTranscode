@@ -67,6 +67,7 @@ private:
 struct MediaTsDatagramReservationPreview final {
     MediaRunningTime notBefore;
     MediaRunningTime completion;
+    MediaRunningTime accessUnitDeadline;
 };
 
 class MediaTsDatagramEmissionSchedule final {

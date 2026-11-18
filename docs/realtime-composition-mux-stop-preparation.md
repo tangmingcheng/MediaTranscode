@@ -1,0 +1,15 @@
+# Mux停止：取消未激活准备与严格完成
+
+状态：rk447在RUNNING回调立即停止时encoded=0，workerErrors=0，仍因mux未绑定被误记FAILED。此文记录共享修复设计；实测原记录保留在`realtime-composition-rk447-c-callback.md`。当前修复未构建/复验。
+
+官方[FFmpeg av_write_trailer契约](https://ffmpeg.org/doxygen/trunk/avformat_8h_source.html)要求已成功调用avformat_write_header。本项目既有`finish`是EOF式完整完成：Project要求完整binding/activation，FFmpeg会尝试注册全部stream/header后写trailer。调用方早停不能为了清理启动新session、补写header或把准备状态假装成EOF。
+
+最小共同契约是在既有`MediaMuxSession::finish`传入内部`EndOfInput/RequestedStop`意图。FileMux.stop不再ensureSession；无session且无既存错误时仅做基类停止。两个adapter先保留terminalFailure/Poisoned；RequestedStop只取消当前未激活准备，已激活仍执行原严格finish，EOF从不使用取消分支。独立取消终态不算Finished，后续EOF不得据此返回成功。
+
+- FFmpeg以成功headerWritten为激活事实。准备取消释放待绑定/待写对象；owned output IO显式avio_closep并保留close错误，pb清空后RAII不重复关闭，borrowed context不越权关闭。header写入失败已记录terminalFailure，优先返回原错；header成功后trailer及pending packet检查不变。
+- Project在同generation mutation锁下要求Acquiring、无session、Dormant、无nextTransportDeadline/latestAcceptedEmission。正式generation purge原本已abort并移除旧mux、清除这些发布事实，再进入新准备；此次只取消该当前代准备，不宣称旧代正常drain。历史Active且未正式purge仍不能进入取消分支。准备取消检查sink.close返回值；fail/abort清理保留primary，不让次错替换它。
+
+未增加公开参数、线程、队列或平台分支；只调整生命周期意图与准备取消终态。待双独立审查后复验原RUNNING早停、已激活严格停止、EOF正常完成及失败保留，并核Windows共享路径；构建成功不能替代真实链路。
+2026-11-16：两位未参与实现的独立审查者均给最终六文件SOURCE PASS；FFmpeg header前pendingPackets属于未发布准备，允许RequestedStop释放，不宣称EOF或已发布媒体drain。同步包SHA256 91830b6ccd346875908f0d6e1e1b91d171a534fe438ae6894f14afbbe7134fe2；目标六源码逐项基线核验，out/rollback/rk448保存源码、旧CLI与manifest后应用。8核增量构建已启动，实际结果待检查。
+
+ce71265d目标9项增量构建exit0；rk448原RUNNING回调早停COMPLETED/REQUESTED_STOP、errors0、release_null1、consumer exit0，encoded0。仅未激活取消实际验证通过，已激活严格停止/EOF、Windows及真实故障保留的完整回归尚未闭合，详见realtime-composition-rk448-c-callback.md。
