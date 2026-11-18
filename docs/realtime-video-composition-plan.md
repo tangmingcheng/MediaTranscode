@@ -1,6 +1,6 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 r514 / rk515，完整验证后再打包
+## 当前进度：2026-11-18 rk516失败，完整验证后再打包
 
 四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
@@ -21,6 +21,8 @@ r514 Windows同规格四源在晚BYE前再次上游合成/编码迟到，exit1�
 r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程统计报Thread32Next native0；r506同产物直接启动正常统计/出画/全黑/caller_stop0，限定为启动环境相关诊断，不计完整120秒验收。不能为追踪放宽生产校验，也未获得r501稳态GPU时间线。下一步先推进独立音频失源/恢复及接收端证据；Windows时间线等待可用的非干扰诊断途径，原期限问题保持开放。
 
 ## 本轮交付要求与当前阻塞
+
+rk516三源HEVC VBR在所选AV启动窗口超时，随后RKMPP解码send_packet内反复等待导致abort join无法完成；两份相隔约225秒的符号栈已归档，最终精确清理exit137，不计通过。下一步调查实际FFmpeg RKMPP/MPP有界等待及共享解码中断合同，分别定位首发启动超时与失败收尾；不调超时或跳过join。Windows WPR启动因0xc5585011性能跟踪权限失败，无跟踪会话/产物。详见rk516及r514记录。
 
 最新用户要求：完整验证功能后再按deployment.md打包。暂停后续打包；已有开发验证版不作为正式交付，不替代完整门禁。当前继续功能验证和缺陷修复，全部通过后重新按部署文档生成最终包。
 
