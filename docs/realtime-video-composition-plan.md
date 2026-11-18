@@ -1,6 +1,6 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 rk498
+## 当前进度：2026-11-18 r501 / rk502
 
 四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
@@ -9,12 +9,12 @@
 | 门禁 | 后续工作 |
 |---|---|
 | Windows共享回归 | r499已完成Release全量重建及同规格四源两轮生命周期，日志正常停止/errors0/pressure0/payload回零；未获取数值退出码，见r499记录；其他矩阵仍待 |
-| 双/三源矩阵 | r500 Windows双格HEVC CBR重入阶段发送超期FAIL，已确认出画/全黑/重入；Windows与RKMPP仍需补左右双格、三源四宫格空格黑，每源完整120秒；分配H264 CBR、HEVC CBR/VBR覆盖 |
+| 双/三源矩阵 | r500双格HEVC CBR发送超期FAIL；r501三格H264 CBR同AU canvas/编码延迟导致TS接纳超期FAIL；rk502同规格RKMPP三格/全黑/所选源恢复/再次全黑/caller_stop0有限PASS，pressure7保留；Windows与RKMPP仍需补左右双格、三源四宫格空格黑，每源完整120秒；分配H264 CBR、HEVC CBR/VBR覆盖 |
 | 选定音频 | 保持其他视频在线，单独停音源，验证接收端静音/恢复和内容级A/V，不能仅凭内部drift |
-| C API/旧ABI | 临时真实调用程序start/snapshot/stop/destroy，旧头文件调用旧入口；不保留测试设施 |
-| 失败与可靠性 | 保留rk495发送期限失败、pressureFailures=9、异常退出、重复恢复/RSS和NIC出线证据，不用一次未复现关闭 |
+| C API/旧ABI | 已有rk430正向直接C调用、rk431负例、rk432 aarch64布局、rk434启动期回调证据；rk433旧消费者出画但源结束超时FAIL。补最新库回归、Windows x64 ABI和运行期回调stop；生命周期是release，无destroy |
+| 失败与可靠性 | 保留rk495/r500/r501不同阶段的期限失败、rk498 pressureFailures=9、异常退出、重复恢复/RSS和NIC出线证据，不用一次未复现关闭 |
 
-当前只本地开发验证和提交，不推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
+当前沿本会话限定范围开发验证和本地提交；未推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
 
 ## 历史进度：2026-11-16 rk423
 
