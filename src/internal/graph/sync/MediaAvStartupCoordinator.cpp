@@ -1,4 +1,5 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/diagnostics/MediaAvStartupExpiryDiagnostic.h"
 #include "internal/graph/planner/realtime/MediaAvStartupIndexStoragePlanner.h"
 #include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/utils/MediaCheckedArithmetic.h"
@@ -624,10 +625,18 @@ try {
     else if (pending.value()->keyFrame && effectiveNow >= *pending.value()->keyFrame)
         expiry = MediaAvSyncErrorCode::KeyFrameTimeout;
     if (!expiry) return Result::success(std::nullopt);
-    auto error = startupError(*expiry, "poll", nullptr,
-        *expiry == MediaAvSyncErrorCode::StartupTimeout
+    std::string detail = *expiry == MediaAvSyncErrorCode::StartupTimeout
             ? "startup timeout" : m_config.requireVideoKeyFrame
-                ? "video key frame wait timeout" : "decoded video frame wait timeout");
+                ? "video key frame wait timeout" : "decoded video frame wait timeout";
+    try {
+        detail += describeMediaAvStartupExpiry(m_config, m_video->presentationSnapshot(),
+            m_audio ? m_audio->presentationSnapshot() : MediaAvStartupPresentationSnapshot{});
+    } catch (const std::bad_alloc&) {
+        // Optional diagnostics must not replace the original startup failure.
+    } catch (const std::length_error&) {
+        // Keep the original timeout if diagnostic text cannot be represented.
+    }
+    auto error = startupError(*expiry, "poll", nullptr, std::move(detail));
     auto waiting = m_state.transition(MediaAvSyncEvent::AttemptExpired, *m_state.generation());
     if (!waiting) return Result::failure(waiting.error());
     auto purged = purge({}, std::nullopt);
