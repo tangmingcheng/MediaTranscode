@@ -1,11 +1,24 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-16 rk423
+## 当前进度：2026-11-18 rk498
 
-当前RKMPP产物已完成四路RTP H264/H264/H264+AAC/HEVC → HEVC CBR8Mbps、1280×720/30、AAC192kbps → MPEG-TS/UDP真实出画、单路及全失源黑屏持续输出；同一CLI中H264+AAC和HEVC重入generation2后两格恢复，再次失源全黑。原源及重入均完整120秒；generation2内部A/V约2268ns、0ppm，RSS重入前后77,688,832B稳定，errors0。详见[realtime-composition-rk422-validation.md](realtime-composition-rk422-validation.md)与[rk423](realtime-composition-rk423-validation.md)。本轮产物及进程已清理；观测结束SIGTERM退出不代表caller-stop门禁通过。
+四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
-下一步补当前产物双路/三路矩阵及选定音频恢复。剩余门禁：接收端静音/恢复与内容级A/V、直接C API及旧ABI、最新共享代码Windows同规格回归、失败退出/caller-stop及多轮可靠性。不得把四路已证明的出画/恢复重新记为未实现，也不能用一次恢复覆盖所有门禁。Windows FFmpeg保持不动；当前按授权先RKMPP增量验证，本机修改和提交，不推送/合并。目标机依赖变更仅限有证据的阻塞且保留回退。
+当前源码已具备2–4源公共入口及独立C合屏API，本次独立审查未确认新的功能源码缺项；历史“尚未实现”只能描述当时状态。下一步按以下最小矩阵补证据，不重开已完成实现：
 
+| 门禁 | 后续工作 |
+|---|---|
+| Windows共享回归 | r499已完成Release全量重建及同规格四源两轮生命周期，日志正常停止/errors0/pressure0/payload回零；未获取数值退出码，见r499记录；其他矩阵仍待 |
+| 双/三源矩阵 | Windows与RKMPP补左右双格、三源四宫格空格黑，每源完整120秒；分配H264 CBR、HEVC CBR/VBR覆盖 |
+| 选定音频 | 保持其他视频在线，单独停音源，验证接收端静音/恢复和内容级A/V，不能仅凭内部drift |
+| C API/旧ABI | 临时真实调用程序start/snapshot/stop/destroy，旧头文件调用旧入口；不保留测试设施 |
+| 失败与可靠性 | 保留rk495发送期限失败、pressureFailures=9、异常退出、重复恢复/RSS和NIC出线证据，不用一次未复现关闭 |
+
+当前只本地开发验证和提交，不推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复尚需Windows同规格回归。
+
+## 历史进度：2026-11-16 rk423
+
+RKMPP四路HEVC CBR8Mbps MPEGTS/UDP曾完成出画、全失源及两路重入；记录见[rk422](realtime-composition-rk422-validation.md)和[rk423](realtime-composition-rk423-validation.md)。该证据保留，不用较新H264 VBR链路覆盖其不同输出范围。
 
 ## 历史进度：2026-10-28（最近实流 r367）
 
