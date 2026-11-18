@@ -34,3 +34,5 @@ VideoPreparationNode:160的失败条件为flow无效或控制代次不等于m_ge
 ## rk493 后共享修复
 
 现场 reason=HardDiscontinuity、EndGeneration(1)、node_generation=2 确认已退休控制。新增 MediaVideoLineageState::admitGenerationEnd，在同一 lineage 锁内验证、分类并仅对 Current capture；四入口在 drain 或准备阶段校验前 DropStale。无平台分支，不改 EOF/Flush、HardwareTransfer 或 matches。两位独立审查均 SOURCE PASS；Windows 存在共享逻辑影响，后续需同规格回归。目标机回退位于 out/rollback/rk494，未修改外部 FFmpeg。
+
+rk494：源码466557ed，8核增量首次链接因环境未选择prefix-mpp库而失败（mpp_user_data_unref/mpp_frame_get_user_data/mpp_frame_set_user_data未定义）；补齐已有prefix-ffmpeg/prefix-mpp的LD_LIBRARY_PATH后剩余2个链接目标exit0。realtime CLI SHA256 94b3d203c81cba2e0855196f25f90414155fcbda8ff7687bdad2d1117fb783f7。未运行local CLI。清理本机rk494-source.tar，远端同名传输包及rk494-build.log/exit、rk494-rebuild.log/exit；rollback保留。
