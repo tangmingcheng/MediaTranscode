@@ -82,7 +82,6 @@ private:
     std::atomic_bool m_running{ false };
     std::atomic_bool m_finished{ false };
     std::atomic_bool m_exited{ true };
-    std::atomic_bool m_stopRequested{ false };
     std::atomic_bool m_aborted{ false };
     MediaGraphWorkerMetrics m_metrics;
 };

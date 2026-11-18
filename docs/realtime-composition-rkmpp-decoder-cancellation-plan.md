@@ -42,3 +42,11 @@
 回退材料保存在同base的rollback-cancel-eos-20261118：MPP/FFmpeg原有未提交diff、mpp.c.before、原CMakeCache、SHA256.before、实际补丁；保留供回退，不能当临时测试垃圾删除。原mpp.c SHA256=13f9b97511a89531a0f72682813b73a36e0bceb9584e1a42566ccd823be94008；三个编码器源码哈希前后保持一致。配置回退应恢复原安装前缀；源码回退仅反向应用本补丁或恢复已核验原mpp.c，不能重置整棵依赖树。
 
 本轮未运行媒体验收、未执行产品打包。只读审查用本机out/dependency-review/mpp.c副本已在记录后删除；目标候选与回退材料有意保留。下一步仍为FFmpeg协作取消接口及公共worker停止状态接线，不以本候选关闭rk516。
+
+## 共享停止状态实施（未接 codec）
+
+停止原子已由 MediaGraphWorker 私有成员迁入同一 compiled execution 的共享 MediaGraphWorkerExitToken；只有一份状态，release 发布、acquire 读取，取消不能撤销。沿用现有 token 分配及实际 make_shared 几何计费，不增加线程、媒体队列或公开参数。exited/completed 仍表示原完成条件，停止请求不等于退出。方案对照 [C++ 共享单调 stop-state](https://eel.is/c++draft/thread.stoptoken.intro)，本类型只复用其所有权与轮询策略，不声称实现标准 stoppable_token concept。
+
+两名未参与实现者独立 SOURCE PASS。生产主图重新启动要求重新编译并更换 context/token；动态 branch 单次启动，初始提取仅转移尚未启动的 token。底层 executor 的孤立 clear→start 不得复用已取消 token；构造新 worker 不清零共享停止。缺 token 仍在启动前失败，析构停止空指针安全。先遍历 worker.requestStop（其中发布停止并唤醒该 worker），再取消 payload waiters 并调用 node.interrupt 的顺序未改，原首错记录未改。
+
+当前只提供稳定取消读取点，尚未把 prepared codec owner 绑定到它，也未新增目标 FFmpeg 注册接口，不能判 rk516 已修复。RKMPP 8 核增量构建 135 项 exit0，实时 CLI SHA256 为 112ad879ed9f10c069cd7c74e09e10f762d12c8a509bd8a617bb6298c8f042c5；保留已有 FFmpeg deprecated 声明告警，未运行媒体实流，后续完整接线结果另行记录；Windows 共享链路回归仍待补，不改 Windows FFmpeg，不运行打包。
