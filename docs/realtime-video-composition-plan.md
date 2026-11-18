@@ -1,6 +1,6 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 rk513 / RKMPP开发验证版库
+## 当前进度：2026-11-18 r514 / rk515，完整验证后再打包
 
 四屏基础生命周期已跑通：最新RKMPP产物，四路RTP H264/H264/H264+AAC/HEVC → H264 VBR 目标8000/最高12000kbps、1280×720/30、AAC192kbps → MPEGTS/RTP。同一CLI两轮完整120秒，四格→全黑→同端口四路重入恢复→再次全黑→caller_stop exit0；workerErrors0、payload回零。VLC原生快照及日志经独立审查确认，详见[rk498](realtime-composition-rk498-validation.md)。这不是完整交付通过。
 
@@ -10,15 +10,19 @@
 |---|---|
 | Windows共享回归 | r499已完成Release全量重建及同规格四源两轮生命周期，日志正常停止/errors0/pressure0/payload回零；未获取数值退出码，见r499记录；其他矩阵仍待 |
 | 双/三源矩阵 | r500双格HEVC CBR发送超期FAIL；r501三格H264 CBR同AU canvas/编码延迟导致TS接纳超期FAIL；rk502同规格RKMPP三格/全黑/所选源恢复/再次全黑/caller_stop0有限PASS，pressure7保留；Windows与RKMPP仍需补左右双格、三源四宫格空格黑，每源完整120秒；分配H264 CBR、HEVC CBR/VBR覆盖 |
-| 选定音频 | 保持其他视频在线，单独停音源，验证接收端静音/恢复和内容级A/V，不能仅凭内部drift |
+| 选定音频 | rk510已验证独立失音/恢复与晚BYE；rk513原始TS与录制对照限定启动回退于录制路径。内容级A/V和完整时序/失源矩阵仍待，不能仅凭内部drift |
 | C API/旧ABI | 已有rk430正向直接C调用、rk431负例、rk432 aarch64布局、rk434启动期回调证据；rk433旧消费者出画但源结束超时FAIL。补最新库回归、Windows x64 ABI和运行期回调stop；生命周期是release，无destroy |
 | 失败与可靠性 | 保留rk495/r500/r501不同阶段的期限失败、rk498 pressureFailures=9、异常退出、重复恢复/RSS和NIC出线证据，不用一次未复现关闭 |
+
+r514 Windows同规格四源在晚BYE前再次上游合成/编码迟到，exit1，详见r514；WPR GPU.Light.File能力已核实但尚未运行。rk515 RKMPP双源H264/AAC→HEVC CBR8Mbps/720p30完成左右双格、全黑、右侧AV重入、再全黑及caller_stop0，pressure4和录制DTS告警保留；只补该有限门禁，不关闭Windows问题。
 
 当前沿本会话限定范围开发验证和本地提交；未推送、合并或部署。目标机依赖修改仅限有证据的阻塞并保留回退。本轮公共控制修复已完成r499 Windows同规格生命周期回归，完整矩阵仍未闭合。
 
 r503/r504/r505的Nsight cuda+nvvideo、cuda-only、trace=none均在启动线程统计报Thread32Next native0；r506同产物直接启动正常统计/出画/全黑/caller_stop0，限定为启动环境相关诊断，不计完整120秒验收。不能为追踪放宽生产校验，也未获得r501稳态GPU时间线。下一步先推进独立音频失源/恢复及接收端证据；Windows时间线等待可用的非干扰诊断途径，原期限问题保持开放。
 
 ## 本轮交付要求与当前阻塞
+
+最新用户要求：完整验证功能后再按deployment.md打包。暂停后续打包；已有开发验证版不作为正式交付，不替代完整门禁。当前继续功能验证和缺陷修复，全部通过后重新按部署文档生成最终包。
 
 用户要求音频验证后在RKMPP出库，附调用示例及全部参数含义。共享晚BYE修复21fc6bb8已双独立源码PASS、RKMPP增量和Windows Release全量构建成功；rk510有限音频失源/恢复与晚BYE运行双审PASS。rk512/rk513随包C示例原四源120秒、全失源持续输出和调用stop/release exit0；rk513原始接收TS音视频DTS回退0/完整解码无告警，对应录像启动回退已用唯一AAC hash限定在VLC录制路径，双独立有限PASS。
 

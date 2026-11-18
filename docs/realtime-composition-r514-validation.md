@@ -103,3 +103,7 @@ D:\Code\MyCode\MediaTranscode\out\acceptance\composition-r514-vlc.log
 独立复核B确认FAIL及上游迟到归因边界。WPR profiles实际列CPU/GPU/GeneralProfile，status为not recording；尚未启动、权限/事件丢失/扰动未验证。需要CSwitch/ReadyThread调度证据，不仅CPU采样，不能承诺观察CUDA/NVENC内部细节。官方参考：https://learn.microsoft.com/windows-hardware/test/wpt/built-in-recording-profiles 。
 
 以上清单已逐项删除，原120秒源保留。
+
+后续只读能力核查：wpr -profiledetails GPU实际显示DxgKrnl、CSwitch、ReadyThread、SampledProfile；GeneralProfile还包含ReadyThread stack。默认GPU.Verbose.Memory共1608+1628个1024KiB buffer，不能忽略约3.16GiB预留及跟踪扰动。未启动跟踪，不计权限成功或GPU根因证据。
+
+更小的内置诊断配置已只读核实：wpr -profiledetails GPU.Light -filemode 包含DxgKrnl/CSwitch/ReadyThread，64+84个1024KiB buffers，约148MiB。xperf.exe与wpaexporter.exe位于C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit。未启动跟踪，待下轮独立诊断。
