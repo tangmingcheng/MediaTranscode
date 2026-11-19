@@ -23,6 +23,8 @@ public:
     AVCodecContext* context() noexcept;
     const AVCodecContext* context() const noexcept;
 
+    MediaVideoDecoderCallbackState* decoderCallbackState() const noexcept
+    { return m_context ? m_context.get_deleter().callbackOwner.get() : nullptr; }
     FFmpegCodecContextOwnership ownership() const noexcept;
     ::media::ffmpeg::CodecContextPtr takeContext() noexcept;
     const std::optional<MediaVideoEncoderCompletionContract>& preparedEncoder() const noexcept

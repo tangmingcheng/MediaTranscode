@@ -18,6 +18,7 @@ protected:
     AVCodecContext* codecContext() noexcept;
     const AVCodecContext* codecContext() const noexcept;
     bool hasCodecContext() const noexcept;
+    MediaVideoDecoderCallbackState* decoderCallbackState() const noexcept;
     bool codecMetadataPublished() const noexcept;
     ::media::Status publishCodecMetadata(MediaGraphExecutionContext& context);
 

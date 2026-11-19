@@ -33,7 +33,7 @@ try {
     evidence.identityProbe.reset();
     if (auto status = control.check("RTP decoder reopening"); !status) return status;
     auto replacement = CodecResolverDecoderContextBuilder::build({source.codec.parameters(),
-        source.time, &options.value(), device.get(), plan.decoderLineagePropagation});
+        source.time, &options.value(), device.get(), plan.decoderLineagePropagation, control});
     if (!replacement) return ::media::Status::failure(replacement.error());
     auto& reopened = replacement.value();
     const auto& context = *reopened.context;

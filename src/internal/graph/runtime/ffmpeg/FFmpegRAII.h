@@ -16,6 +16,8 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+namespace media::ffmpeg::graph { class MediaVideoDecoderCallbackState; }
+
 namespace media::ffmpeg {
 
 inline int interruptImmediately(void*) noexcept
@@ -76,7 +78,7 @@ struct PacketDeleter {
 struct CodecContextDeleter {
     // Travels with CodecContextPtr, including buffer takeContext(). The callback
     // state remains alive during avcodec_free_context, then with the deleter.
-    std::shared_ptr<const void> callbackOwner;
+    std::shared_ptr<graph::MediaVideoDecoderCallbackState> callbackOwner;
     // A preparation reservation follows the actual codec through buffer
     // takeContext() and remains retained until avcodec_free_context completes.
     std::shared_ptr<const void> storageOwner;

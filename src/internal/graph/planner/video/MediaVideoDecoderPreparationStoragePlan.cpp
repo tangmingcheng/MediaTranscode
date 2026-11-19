@@ -32,7 +32,7 @@ MediaVideoDecoderPreparationStoragePlanner::plan(std::size_t maximumAccessUnitBy
         retention.frameWorkerPackets), retention.serialPrivatePackets);
     const auto decoder = multiply(retainedPackets,
         add(maximumAccessUnitBytes, AV_INPUT_BUFFER_PADDING_SIZE + sizeof(AVPacket)));
-    // Common builder's callback state contains exactly one AVPixelFormat;
+    // Count the actual combined format/cancellation callback state;
     // control-block/allocator overhead is outside this logical byte scope.
     auto ownerBytes = add(sizeof(AVCodecContext),
         add(openedDecoder.context->extradata_size, AV_INPUT_BUFFER_PADDING_SIZE));
@@ -52,7 +52,7 @@ MediaVideoDecoderPreparationStoragePlanner::plan(std::size_t maximumAccessUnitBy
             add(side.size, AV_INPUT_BUFFER_PADDING_SIZE))));
     }
     if (openedDecoder.context.get_deleter().callbackOwner)
-        ownerBytes = add(ownerBytes, sizeof(AVPixelFormat));
+        ownerBytes = add(ownerBytes, sizeof(MediaVideoDecoderCallbackState));
     // Reopening keeps the device alive after the old codec is destroyed while
     // the common builder acquires its new device reference.
     if (openedDecoder.hardwareDevice) ownerBytes = add(ownerBytes, 2 * sizeof(AVBufferRef));

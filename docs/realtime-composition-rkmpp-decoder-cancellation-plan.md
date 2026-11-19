@@ -72,3 +72,13 @@
 候选libavcodec.so.62 SHA256=4a0b3f98147ce7184297e947134b72b0904b8417bfea3f62589b8811954a4d005。nm -D确认两个私有接口实际导出；显式候选LD_LIBRARY_PATH下ldd确认全部FFmpeg库来自候选前缀、MPP来自EOS候选，未缺库；libavcodec.pc前缀正确。MPP的.so.1实际指向.so.0，三种名字均对应已记录3cbb91f6哈希。此检查仅证明依赖解析，不代表媒体CLI已运行或回调已执行。
 
 原安装FFmpeg/MPP库sha256sum -c全部成功，已有rkmppenc.c/h修改哈希保持不变。旧前缀仍为当前媒体运行基线，未切换；回退目录另存最终candidate-final.patch。无本轮媒体流、抓包或截图，未运行产品打包。项目callback owner与真实取消退出仍是下一步。
+
+## 2026-11-19 项目 callback owner 接线
+
+已实现类型化MediaVideoDecoderCallbackState：原格式事实与取消来源由同一个CodecContextDeleter保活，覆盖takeContext及free_context；准备、replay重开、直接resolver三条builder调用显式传入取消来源。VideoDecode两个codec接收入口统一移交到其自身worker token；send/receive/flush及首帧probe的AVERROR_EXIT按实际取消或准备deadline映射，保留native code，其余错误原样保留。准备存储按实际sizeof组合状态计费；不新增队列、线程或公开参数。
+
+目标Linux adapter在首次decode前通过dlsym查询/注册私有ABI v1，get_format的opaque不被覆盖；接口缺失明确失败。ABI query仅证明FFmpeg接口，不探测MPP补丁；配套MPP仍以此前候选库哈希和实际装载证据为支持前提。Windows不调用该平台adapter，也不修改本机FFmpeg。
+
+两名未参与实现者独立最终SOURCE PASS。初审修正两处同类停止竞态：运行期及首次bind均不能读取抢先发出的preparation stop，否则正常caller-stop可能抢占首错。准备完成/tryClaimRuntimeStart负责旧来源，进入运行worker后只读该decoder worker协调停止状态；原准备deadline不延伸到运行期。无并行codec调用的owner线程执行移交。
+
+目标18源码文件按修改前哈希核验后同步。首次新SSH未恢复FFmpeg环境，CMake误选/usr/bin/ffmpeg并因58系列开发包不匹配而exit1，未进入编译；恢复候选PATH/LD_LIBRARY_PATH/PKG_CONFIG_PATH后发现CMake仍缓存旧prefix-ffmpeg包含路径，已主动中止该编译（约61/314，不记成功），仅清除*FFMPEG*缓存并重配原rk-release目录，继续8核增量构建。构建及实流结果待记录；没有新媒体验收通过项，完整目标未完成。

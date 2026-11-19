@@ -277,7 +277,7 @@ namespace {
                 const int received = codec->receiveFrame(evidence.decoder.context.get(), frame.get());
                 if (received == AVERROR(EAGAIN)) return ::media::Result<ReceiveProgress>::success({false, produced});
                 if (received < 0) return ::media::Result<ReceiveProgress>::failure(
-                    FFmpegGraphError::fromCode(received, "RTP probe avcodec_receive_frame"));
+                    evidence.decoder.context.get_deleter().callbackOwner->error(received, "RTP probe avcodec_receive_frame"));
                 produced = true;
                 auto valid = validateFirstFrame(plan, evidence.decoder, *frame);
                 if (!valid) return ::media::Result<ReceiveProgress>::failure(valid.error());
@@ -348,7 +348,7 @@ namespace {
                         "RTP first-frame preparation")); !status) return Result::failure(status.error());
                 const int sent = codec->sendPacket(evidence.decoder.context.get(), submittedPacket);
                 if (sent < 0 && sent != AVERROR(EAGAIN)) return Result::failure(
-                    FFmpegGraphError::fromCode(sent, "RTP probe avcodec_send_packet"));
+                    evidence.decoder.context.get_deleter().callbackOwner->error(sent, "RTP probe avcodec_send_packet"));
                 if (sent == 0) {
                     pending = false;
                     ++evidence.submittedAccessUnits;

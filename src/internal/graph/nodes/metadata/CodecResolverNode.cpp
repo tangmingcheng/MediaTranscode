@@ -276,7 +276,8 @@ MediaBufferRef CodecResolverNode::timestampSource() const
         auto codecParameters = stream.cloneCodecParameters();
         if (!codecParameters) return ::media::Result<CodecResolverDecoderContextBuildResult>::failure(codecParameters.error());
         return CodecResolverDecoderContextBuilder::build({
-            codecParameters.value().get(), stream.time, nodeOptions(context), nullptr});
+            codecParameters.value().get(), stream.time, nodeOptions(context), nullptr, std::nullopt,
+            MediaDecoderCancellationSource{std::shared_ptr<const MediaGraphWorkerExitToken>(context.nodeExitToken(nodeId()))}});
     };
     auto built = prepare();
     if (!built) return ::media::Status::failure(built.error());

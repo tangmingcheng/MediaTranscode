@@ -150,7 +150,7 @@ MediaRealtimeCompositionSourcePreparer::prepare(
     auto options = MediaVideoDecoderPlanOptionCodec::encode(candidate.decoder, std::nullopt);
     if (!options) return Result::failure(options.error());
     auto decoded = CodecResolverDecoderContextBuilder::build({
-        parameters.value().get(), snapshot->time, &options.value(), device, candidate.decoderLineagePropagation});
+        parameters.value().get(), snapshot->time, &options.value(), device, candidate.decoderLineagePropagation, control});
     if (!decoded) return Result::failure(decoded.error());
     auto decoder = std::move(decoded).value();
     if (auto status = captured.capture.validateContinuousPreparation(captured.session); !status)

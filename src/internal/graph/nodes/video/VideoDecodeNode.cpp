@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCallbackState.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/MediaFramePayloadFootprint.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
@@ -289,7 +290,8 @@ void VideoDecodeNode::resetRuntimeState() noexcept
                     ::media::ErrorInfo::unsupported(
                         "Source-AU decoder context did not retain COPY_OPAQUE"));
         }
-        m_lineageState->bindCodec(*codecInput.value(), codecContext());
+        if (auto status = bindDecoderOwner(context, *codecInput.value()); !status)
+            return processProgress(status);
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
@@ -315,6 +317,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
     const MediaBufferRef& buffer = *input.value();
     if (tryBindCodecContext(buffer)) {
+        if (auto status = bindDecoderOwner(context, buffer); !status) return processProgress(status);
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
@@ -467,7 +470,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     }
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(video)"));
+            decoderCallbackState()->error(sendRet, "avcodec_send_packet(video)"));
     }
     if (sendRet == AVERROR(EAGAIN) && m_lineageState->pendingObservation)
         m_sourceVideoObservation.observe(nodeId(), name().c_str(), MediaSourceVideoObservationStage::WouldBlock, *m_lineageState->pendingObservation);
@@ -488,6 +491,17 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(receiveStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+}
+
+::media::Status VideoDecodeNode::bindDecoderOwner(
+    MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+{
+    auto* owner = decoderCallbackState();
+    if (!owner) return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "Video decoder requires its typed codec callback owner"));
+    if (auto status = owner->bindExecution(context.nodeExitToken(nodeId())); !status) return status;
+    m_lineageState->bindCodec(buffer, codecContext());
+    return ::media::Status::success();
 }
 
 ::media::Result<bool> VideoDecodeNode::receiveFrames(MediaGraphExecutionContext& context)
@@ -511,7 +525,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         if (ret == AVERROR_EOF) { failure.value().release(); return ::media::Result<bool>::success(true); }
 
         if (ret < 0) {
-            return ::media::Result<bool>::failure(FFmpegGraphError::fromCode(ret, "avcodec_receive_frame(video)"));
+            return ::media::Result<bool>::failure(decoderCallbackState()->error(ret, "avcodec_receive_frame(video)"));
         }
         if (!m_outputContract) {
             return ::media::Result<bool>::failure(
@@ -628,7 +642,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         }
         else if (sendRet != AVERROR(EAGAIN))
             return ::media::Result<MediaNodeProcessResult>::failure(
-                FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(video flush)"));
+                decoderCallbackState()->error(sendRet, "avcodec_send_packet(video flush)"));
     }
     auto drain = receiveFrames(context);
     if (!drain) return processProgress(::media::Status::failure(drain.error()));

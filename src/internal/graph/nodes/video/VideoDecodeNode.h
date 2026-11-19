@@ -82,6 +82,7 @@ protected:
 private:
     friend struct VideoDecodeNodeLifecycleTestAccess;
 
+    ::media::Status bindDecoderOwner(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Result<bool> receiveFrames(MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> submitPendingPacket(
         MediaGraphExecutionContext& context);
