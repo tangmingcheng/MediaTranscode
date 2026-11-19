@@ -1,6 +1,16 @@
 # RKMPP 解码取消接线调查
 
-状态：设计调查，尚未实现或通过功能验收。依据rk516真实CLI失败栈；rk517未复现不能关闭。Windows FFmpeg不修改，目标依赖如需修复必须新前缀和旧版本回退。
+状态：EOS输入等待候选已实现并编译；完整取消接线仍在设计，未通过功能验收。依据rk516真实CLI失败栈；rk517未复现不能关闭。Windows FFmpeg不修改，目标依赖如需修复必须新前缀和旧版本回退。
+
+## 2026-11-18 等待点收窄
+
+目标MPP提交560734e83e7d3d8a0a2a337d07108f04f4030caa；实际mpp/mpp.c:433在尚未提交packet的EOS预留阶段强制MPP_POLL_BLOCK，普通输入获取则使用mInputTimeout。候选补丁tools/dependencies/mpp-eos-input-timeout.patch仅令预留遵循同一输入timeout，保留未提交错误返回和RET任务缓存；已应用并构建独立候选前缀，见下文；不代表取消完成。
+
+零拷贝路径在成功enqueue后仍有BLOCK等待，不能改成超时/EAGAIN并重送已提交packet。H264/HEVC的FFmpeg普通mpp_packet_init及EOS走复制输入，不经过该零拷贝等待；当前合屏支持的H264/HEVC可继续推进协作取消，MJPEG init_with_buffer不能据此宣称支持。独立源码调查确认此范围区分；官方对照为[MPP mpp.c](https://raw.githubusercontent.com/rockchip-linux/mpp/develop/mpp/mpp.c)。仍需处理get_frame、info-change重试及close/reset的实际返回边界。
+
+目标依赖已有未提交编码器修改：MPP的mpp/codec/mpp_enc_impl.c，FFmpeg的libavcodec/rkmppenc.c及rkmppenc.h；不得覆盖或丢弃。应用候选前须保存完整现状哈希/差异，以独立候选前缀构建，当前prefix-mpp/prefix-ffmpeg保持可回退。
+
+进一步接线证据：MediaGraphWorker现有停止状态是私有原子，外部codec无法读取；现有共享ExitToken有已规划的实际分配几何，可审查将停止发布合入稳定生命周期token，避免新增未计费注册表。VideoDecodeNode绑定codec之后、首次send/receive之前可由owner绑定该worker的取消状态；准备阶段则使用已有MediaPreparationControl的deadline/stop_token。禁止从interrupt并发读取或改写codecContext。具体类型/ABI和移交设计仍须冻结后双审，不能只做MPP一行修改即判rk516修复。
 
 ## 官方合同与实际缺口
 
@@ -13,10 +23,22 @@
 1. 目标RKMPP后端提供版本化私有注册/查询接口；独立callback/user-data，不覆盖已经用于get_format的AVCodecContext.opaque。准备阶段验证能力，首次解码前固定注册，运行中不修改callback；缺接口不得下游fallback。
 2. token随codec RAII owner保活，覆盖prepared probe、prepared decoder移交、运行与avcodec_free_context。现有CodecContextDeleter的callbackOwner可承载组合owner；不能只在VideoDecodeNode第一次收context后才创建。
 3. 保留ThreadedExecutor与RuntimeBranch先全部worker requestStop再interrupt的顺序。执行域启动前登记稳定token；interrupt只原子置位，不读取并发转移中的codecContext，不并发reset/free。generation flush不能撤销会话取消。
-4. pending packet、EOS提交、draining和MJPEG等待均须检查取消；有限等待只提供检查机会，正常收发进度算法不变。尚需核实各MPP调用是否真正有有限返回保证；不能承诺能中断不可返回的驱动调用。
+4. 本轮H264/HEVC的pending packet、EOS提交和draining均须检查取消；MJPEG是后续扩展能力门禁，不能据本轮补丁宣称可取消。有限等待只提供检查机会，正常收发进度算法不变。尚需核实各MPP调用是否真正有有限返回保证；不能承诺能中断不可返回的驱动调用。
 5. owner线程返回AVERROR_EXIT。仅当对应token已取消，adapter才映射项目Cancelled并保留native code；否则仍为错误。保留startup timeout为原始主错误，worker返回join后释放codec。取消不是EOF。
 6. 不新增媒体队列、工作线程或公开部署参数；token与注册owner成本需计入既有准备存储规划。能力版本、注册状态和取消退出原因应可观测。平台差异仅在codec adapter，公共DAG不分叉。
 
 冻结前仍缺：私有接口具体ABI/导出方式、prepared取消到执行域取消的生命周期绑定、有限等待参数的权威来源、MJPEG/MPP所有等待点审计及预算计费。独立审查确认方向可行，不等于完整实现设计PASS。
 
 验收须覆盖真实CLI启动失败后的退出、正常caller-stop、EOS/失源重入和原三源规格；保留原失败错误，不能用强制清理退出作通过。共享改动须Windows同规格回归。本计划不改变完整验证后再打包的顺序。
+
+## EOS候选实施结果
+
+两名独立审查者核对目标完整函数后限定SOURCE PASS。目标rkmppdec.c无设置MPP_PACKET_FLAG_EXTRA_DATA/extra_data的路径，mpp.c reset仅捕获该标记，因此旧mExtraPacket递归提交忽略返回风险不属于本轮普通H264/HEVC复制输入证据；不得宣称所有MPP模式安全。
+
+8核增量构建及候选安装exit0；候选目录为/home/tang/MediaTranscode-composition-09093919/out/dependency-work/prefix-mpp-cancel-eos-20261118，librockchip_mpp.so.0 SHA256=3cbb91f664f133e9e625f0c8bc4da8009e8f804b335bfed5c7fcdc3aaa8a8e4e。现有prefix-mpp同库仍为2f6f34046ab9601e7c9938d6e2f3e306424a9b02ab5d1ee765f1d4d2779587c8，与修改前相同，运行环境尚未切换。
+
+首次仅覆盖install前缀导致.pc仍指旧目录，已重新配置CMAKE_INSTALL_PREFIX并增量构建安装。随后仅覆盖PKG_CONFIG_LIBDIR的检查被既有PKG_CONFIG_PATH优先级干扰而返回/usr/local；同时限定两变量后已确认解析候选前缀。下一步FFmpeg候选必须保持该路径隔离，不能只看目录存在。
+
+回退材料保存在同base的rollback-cancel-eos-20261118：MPP/FFmpeg原有未提交diff、mpp.c.before、原CMakeCache、SHA256.before、实际补丁；保留供回退，不能当临时测试垃圾删除。原mpp.c SHA256=13f9b97511a89531a0f72682813b73a36e0bceb9584e1a42566ccd823be94008；三个编码器源码哈希前后保持一致。配置回退应恢复原安装前缀；源码回退仅反向应用本补丁或恢复已核验原mpp.c，不能重置整棵依赖树。
+
+本轮未运行媒体验收、未执行产品打包。只读审查用本机out/dependency-review/mpp.c副本已在记录后删除；目标候选与回退材料有意保留。下一步仍为FFmpeg协作取消接口及公共worker停止状态接线，不以本候选关闭rk516。
