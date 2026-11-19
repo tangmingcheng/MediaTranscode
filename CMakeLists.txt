@@ -201,6 +201,7 @@ target_link_libraries(${TARGET_CORE}
         Threads::Threads
     PRIVATE
         thirdparty_spdlog
+        ${CMAKE_DL_LIBS}
 )
 
 if(WIN32)

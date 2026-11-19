@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCallbackState.h"
 #include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
@@ -17,6 +18,7 @@ struct CodecResolverDecoderContextBuildRequest {
     // Preparation has no runtime lineage registry capacity yet, but the
     // retained codec must open with the planner's exact production propagation.
     std::optional<MediaVideoLineagePropagation> preparationLineage;
+    std::optional<MediaDecoderCancellationSource> cancellation;
 };
 
 struct CodecResolverDecoderContextBuildResult {

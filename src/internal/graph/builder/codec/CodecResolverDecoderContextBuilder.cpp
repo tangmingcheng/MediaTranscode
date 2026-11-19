@@ -5,6 +5,7 @@
 #include "internal/graph/builder/codec/MediaDecoderInputRetentionOptionCodec.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/MediaRkmppDecoderCancellationAdapter.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
@@ -63,13 +64,9 @@ AVHWDeviceType deviceTypeFromHwaccelName(const std::string& hwaccel)
     return av_hwdevice_find_type_by_name(hwaccel.c_str());
 }
 
-struct DecoderFormatCallbackState final {
-    const AVPixelFormat pixelFormat;
-};
-
 AVPixelFormat plannedHardwareGetFormat(AVCodecContext* context, const AVPixelFormat* formats)
 {
-    const auto* desired = static_cast<const DecoderFormatCallbackState*>(context ? context->opaque : nullptr);
+    const auto* desired = static_cast<const MediaVideoDecoderCallbackState*>(context ? context->opaque : nullptr);
     if (!desired || desired->pixelFormat == AV_PIX_FMT_NONE) {
         return AV_PIX_FMT_NONE;
     }
@@ -235,14 +232,21 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
             }
         }
 
-        std::shared_ptr<DecoderFormatCallbackState> callbackState;
-        try {
-            callbackState = std::make_shared<DecoderFormatCallbackState>(DecoderFormatCallbackState{hardwarePixelFormat});
-        } catch (const std::bad_alloc&) {
-            return Result::failure(::media::ErrorInfo::allocationFailed(
-                "Could not allocate decoder format callback owner"));
-        }
-        decoderContext.get_deleter().callbackOwner = callbackState;
+    }
+    if (!request.cancellation) return Result::failure(::media::ErrorInfo::notInitialized(
+        "Decoder context builder requires an explicit cancellation source"));
+    if (const auto* token = std::get_if<std::shared_ptr<const MediaGraphWorkerExitToken>>(&*request.cancellation);
+        token && !*token) return Result::failure(::media::ErrorInfo::notInitialized(
+            "Decoder context builder requires a compiled execution token"));
+    std::shared_ptr<MediaVideoDecoderCallbackState> callbackState;
+    try {
+        callbackState = std::make_shared<MediaVideoDecoderCallbackState>(hardwarePixelFormat, *request.cancellation);
+    } catch (const std::bad_alloc&) {
+        return Result::failure(::media::ErrorInfo::allocationFailed(
+            "Could not allocate decoder callback owner"));
+    }
+    decoderContext.get_deleter().callbackOwner = callbackState;
+    if (hardwarePlanned) {
         decoderContext->opaque = callbackState.get();
         decoderContext->get_format = plannedHardwareGetFormat;
     }
@@ -273,6 +277,14 @@ CodecResolverDecoderContextBuilder::build(const CodecResolverDecoderContextBuild
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
     if (openRet < 0) {
         return Result::failure(FFmpegGraphError::fromCode(openRet, "avcodec_open2(video decoder)"));
+    }
+
+    if (hwaccelName == "rkmpp") {
+        auto cancellation = MediaRkmppDecoderCancellationAdapter::registerCallback(
+            decoderContext.get(), *callbackState);
+        if (!cancellation) return Result::failure(cancellation.error());
+        codecResolverLog(MediaGraphDiagnosticLevel::State,
+            "decoder.cancellation abi=1 registered=1 backend=rkmpp");
     }
 
     if (options) {

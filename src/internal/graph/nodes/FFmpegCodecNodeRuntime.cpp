@@ -75,6 +75,12 @@ const AVCodecContext* FFmpegCodecNodeRuntime::codecContext() const noexcept
     return m_codecContext;
 }
 
+MediaVideoDecoderCallbackState* FFmpegCodecNodeRuntime::decoderCallbackState() const noexcept
+{
+    const auto* buffer = dynamic_cast<const FFmpegCodecContextBuffer*>(m_codecContextOwner.get());
+    return buffer ? buffer->decoderCallbackState() : nullptr;
+}
+
 bool FFmpegCodecNodeRuntime::hasCodecContext() const noexcept
 {
     return m_codecContext != nullptr;
