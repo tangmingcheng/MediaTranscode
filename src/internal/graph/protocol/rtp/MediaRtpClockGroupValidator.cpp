@@ -181,7 +181,7 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
 }
 
 ::media::Result<MediaRtpClockGroupSnapshot> MediaRtpClockGroupValidator::snapshot(
-    std::int64_t observedAtNs)
+    std::int64_t observedAtNs, const std::optional<MediaRtpClosedClockBoundary>& closed)
 {
     using Result = ::media::Result<MediaRtpClockGroupSnapshot>;
     if (m_phase == Phase::Exhausted) {
@@ -201,18 +201,34 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
     if (m_reacquireRequired || !m_video || (m_config.audio && !m_audio))
         return Result::success(std::move(result));
 
-    const auto invalidStream = [&](const StreamState& stream, std::int64_t cnameTimeout) {
-        if (observedAtNs < stream.evidence.senderReportObservedAtNs ||
+    auto videoTime = observedAtNs;
+    auto audioTime = observedAtNs;
+    if (closed) {
+        const auto matches = [](const StreamState& stream, const MediaRtpClosedClockMember& member) {
+            return member.captureCutoffNs > 0 &&
+                member.ingressGeneration == stream.calibration.generation &&
+                member.ssrc == stream.calibration.ssrc;
+        };
+        if (m_phase != Phase::ActiveGeneration || closed->groupGeneration != m_groupGeneration ||
+            closed->audio.has_value() != m_audio.has_value() || !matches(*m_video, closed->video) ||
+            (m_audio && !matches(*m_audio, *closed->audio)))
+            return Result::failure(::media::ErrorInfo::invalidArgument(
+                "Closed RTP clock boundary does not match the active calibrated members"));
+        videoTime = closed->video.evaluationTime(observedAtNs);
+        if (closed->audio) audioTime = closed->audio->evaluationTime(observedAtNs);
+    }
+    const auto invalidStream = [&](const StreamState& stream, std::int64_t cnameTimeout, std::int64_t time) {
+        if (time < stream.evidence.senderReportObservedAtNs ||
             (m_config.requireMatchingCname &&
-             observedAtNs < stream.evidence.cnameObservedAtNs)) return true;
-        const auto age = observedAtNs - stream.evidence.senderReportObservedAtNs;
+             time < stream.evidence.cnameObservedAtNs)) return true;
+        const auto age = time - stream.evidence.senderReportObservedAtNs;
         return age > m_config.maximumExtrapolationNs ||
             (m_config.requireMatchingCname &&
-             observedAtNs - stream.evidence.cnameObservedAtNs > cnameTimeout) ||
+             time - stream.evidence.cnameObservedAtNs > cnameTimeout) ||
             (m_config.invalidateOnDegraded && age > m_config.senderReportTimeoutNs);
     };
-    if (invalidStream(*m_video, m_config.videoCnameTimeoutNs) ||
-        (m_audio && invalidStream(*m_audio, m_config.audio->cnameTimeoutNs))) {
+    if (invalidStream(*m_video, m_config.videoCnameTimeoutNs, videoTime) ||
+        (m_audio && invalidStream(*m_audio, m_config.audio->cnameTimeoutNs, audioTime))) {
         clear(true);
         if (m_phase == Phase::Exhausted) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -226,9 +242,9 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
         return Result::success(std::move(result));
     }
 
-    result.state = observedAtNs - m_video->evidence.senderReportObservedAtNs >
+    result.state = videoTime - m_video->evidence.senderReportObservedAtNs >
                            m_config.senderReportTimeoutNs ||
-                       (m_audio && observedAtNs - m_audio->evidence.senderReportObservedAtNs >
+                       (m_audio && audioTime - m_audio->evidence.senderReportObservedAtNs >
                            m_config.senderReportTimeoutNs)
         ? MediaRtpClockGroupState::Degraded
         : MediaRtpClockGroupState::Locked;

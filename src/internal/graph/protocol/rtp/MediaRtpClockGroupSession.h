@@ -28,7 +28,8 @@ public:
     ::media::Result<MediaRtpClockGroupConsumption> consume(
         const MediaRtpIngressEventView& event, MediaStreamKind streamKind,
         bool selectedClock, std::int64_t nowNs);
-    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs);
+    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs,
+        const std::optional<MediaRtpClosedClockBoundary>& closed);
     bool hasAudio() const noexcept { return m_audioConfig.has_value(); }
 private:
     MediaRtpClockGroupSession(MediaRtpClockGroupSessionConfig config,

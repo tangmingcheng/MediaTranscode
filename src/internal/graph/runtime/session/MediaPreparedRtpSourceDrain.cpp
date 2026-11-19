@@ -18,6 +18,37 @@ const MediaAvSourceDrainMember& MediaPreparedRtpSourceSession::closingMember(con
         : *m_closing->request.audio;
 }
 
+std::optional<MediaRtpClosedClockMember>
+MediaPreparedRtpSourceSession::clockBoundary(const Stream& s) const
+{
+    if (!m_closing || m_closing->cancelled || s.closing.retirementSequence ||
+        !m_runtimeClockLocked || m_runtimeClockGeneration != m_closing->request.playbackGeneration)
+        return std::nullopt;
+    const auto& member = closingMember(s);
+    if (s.protocol->generation() != member.ingressGeneration ||
+        s.runtimeIngressGeneration != member.ingressGeneration || s.runtimeSsrc != member.ssrc)
+        return std::nullopt;
+    return MediaRtpClosedClockMember{member.ingressGeneration, member.ssrc, member.closeDeadlineNs};
+}
+
+std::int64_t MediaPreparedRtpSourceSession::clockEvaluationTime(const Stream& s, std::int64_t now) const
+{
+    const auto boundary = clockBoundary(s);
+    return boundary ? boundary->evaluationTime(now) : now;
+}
+
+::media::Result<std::optional<MediaRtpClosedClockBoundary>>
+MediaPreparedRtpSourceSession::closedClockBoundary() const
+{
+    using R = ::media::Result<std::optional<MediaRtpClosedClockBoundary>>;
+    std::scoped_lock lock(m_mutex);
+    if (m_error) return R::failure(*m_error);
+    const auto video = clockBoundary(*m_video);
+    const auto audio = m_audio ? clockBoundary(*m_audio) : std::nullopt;
+    if (!video || (m_audio && !audio)) return R::success(std::nullopt);
+    return R::success(MediaRtpClosedClockBoundary{m_closing->request.playbackGeneration, *video, audio});
+}
+
 bool MediaPreparedRtpSourceSession::controlFits(const Stream& s,
     const MediaRtpPreparedClockObservation& prepared) const
 {

@@ -240,7 +240,7 @@ try {
                 if (auto status = evidence(s, evaluationAtNs); !status) return status;
             }
         } else {
-            auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, evaluationAtNs,
+            auto observation = s.protocol->prepareRtcp(bytes, observedAtNs, clockEvaluationTime(s, evaluationAtNs),
                 m_closing ? MediaRtpByeHandling::PreserveMemberForDrain : MediaRtpByeHandling::InvalidateMember);
             if (!observation) return ::media::Status::failure(observation.error());
             if (auto status = commitControl(s, std::move(observation).value(), evaluationAtNs, nullptr); !status) return status;
@@ -425,14 +425,14 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
 ::media::Status MediaPreparedRtpSourceSession::evidence(Stream& s, std::int64_t now)
 {
     if (!controlReady(s)) return ::media::Status::success();
-    auto prepared = s.protocol->prepareEvidence(now);
+    auto prepared = s.protocol->prepareEvidence(clockEvaluationTime(s, now));
     if (!prepared) return ::media::Status::failure(prepared.error());
     return commitControl(s, std::move(prepared).value(), now, nullptr);
 }
 
 ::media::Status MediaPreparedRtpSourceSession::publish(std::int64_t now)
 {
-    auto snapshot = m_group->snapshot(now);
+    auto snapshot = m_group->snapshot(now, std::nullopt);
     if (!snapshot) return ::media::Status::failure(snapshot.error());
     auto projected = projectMediaRtpSourceClockState(snapshot.value(), m_plan.video.binder.members);
     if (!projected) return ::media::Status::failure(projected.error());
@@ -674,7 +674,7 @@ void MediaPreparedRtpSourceSession::notifyCredit(Stream& s) noexcept
         if (auto status = evidence(s, now); !status) return status;
         if (s.waitingCredit) return ::media::Status::success();
         if (!controlReady(s)) return ::media::Status::success();
-        auto transition = s.protocol->prepareClockTransition(now);
+        auto transition = s.protocol->prepareClockTransition(clockEvaluationTime(s, now));
         if (!transition) return ::media::Status::failure(transition.error());
         const bool clockExpired = transition.value().age.has_value();
         if (auto status = commitControl(s, std::move(transition).value(), now, nullptr); !status) return status;
@@ -835,7 +835,8 @@ void MediaPreparedRtpSourceSession::deactivateControl(
         }
     }
     return selected.value()->protocol->receiveTimeoutMs(
-        std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now)), now, maximum);
+        std::chrono::steady_clock::time_point(std::chrono::nanoseconds(now)), now, maximum,
+        clockBoundary(*selected.value()));
 }
 
 ::media::Result<std::optional<std::chrono::nanoseconds>> MediaPreparedRtpSourceSession::creditWaitTimeout(
@@ -857,7 +858,10 @@ void MediaPreparedRtpSourceSession::deactivateControl(
     const auto include = [&](std::optional<std::int64_t> candidate) {
         if (candidate && (!deadline || *candidate < *deadline)) deadline = candidate;
     };
-    const auto clockDeadline = s.protocol->nextClockDeadlineNs();
+    auto clockDeadline = s.protocol->nextClockDeadlineNs();
+    const auto boundary = clockBoundary(s);
+    if (boundary && clockDeadline && *clockDeadline >= boundary->captureCutoffNs)
+        clockDeadline.reset();
     // A due transition blocked by exact FIFO credit resumes on credit release.
     if (!clockDeadline || *clockDeadline > now ||
         s.waitingCredit != MediaPreparedRtpCreditBlocker::ControlObjects || s.controls.empty())

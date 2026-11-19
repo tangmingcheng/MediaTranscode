@@ -131,6 +131,7 @@ public:
     ::media::Result<std::optional<std::uint64_t>> purgeMedia(MediaStreamKind stream, const MediaAvGenerationPurge& purge);
     ::media::Status bindRuntimeGroup(const std::shared_ptr<MediaAvSyncGroupRuntime>& group);
     ::media::Status observeRuntimeClockGroup(const MediaRtpClockGroupSnapshot& snapshot);
+    ::media::Result<std::optional<MediaRtpClosedClockBoundary>> closedClockBoundary() const;
     ::media::Status observeConsumedControl(MediaStreamKind stream,
         std::uint64_t sequence, const std::optional<MediaRtpClockInvalidation>& invalidation);
     void fail(::media::ErrorInfo error);
@@ -216,6 +217,8 @@ private:
     ::media::Result<std::optional<MediaPreparedRtpIngressProgress>> consumeDeparture(
         MediaStreamKind kind, std::span<const std::uint8_t> bytes, std::int64_t observedAtNs, std::uint64_t ordinal);
     ::media::Status progressClosing(MediaStreamKind kind, std::int64_t now);
+    std::optional<MediaRtpClosedClockMember> clockBoundary(const Stream& stream) const;
+    std::int64_t clockEvaluationTime(const Stream& stream, std::int64_t now) const;
     const MediaAvSourceDrainMember& closingMember(const Stream& stream) const;
     bool finishRetirementsLocked();
     ::media::Status progressRetirementsLocked(std::int64_t now);
