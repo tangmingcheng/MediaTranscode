@@ -181,4 +181,3 @@ for t in [106,107,108,109]:
  w=o[t*fs:(t+1)*fs];n=len(w);c=correlate(r,w,mode='valid',method='fft')/np.sqrt(np.maximum((en[n:]-en[:-n])*np.dot(w,w),1e-300));j=int(np.argmax(c));print('HOLDOUT',t,'source',j/fs,'lag',j-t*fs,'corr',float(c[j]))
 
 ```
-
