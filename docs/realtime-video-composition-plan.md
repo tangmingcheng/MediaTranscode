@@ -1,6 +1,12 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-18 rk517有限观察完成，完整验证后再打包
+## 当前进度：2026-11-19 rk519四源候选库生命周期完成，优先音频补证
+
+候选取消接线d4d2bae1已完成RKMPP 8核增量构建，rk518三源及rk519四源异构正常生命周期均已实测。rk519八次完整源exit0、四格/全黑/四路重入/全黑、caller_stop0、workerErrors0和payload回零；pressure8、DTS录制告警及总队列计数差299保留，详见[rk519](realtime-composition-rk519-validation.md)。正常运行不关闭rk516异常取消路径。
+
+主线下一步是当前产物输入RTP/RTCP与原始输出TS的两代完整音频内容、同步及尾部证据；rk510独立失音/恢复/晚BYE和既有SourceDrain实现不重复开发。其后仍需Windows共享真实链路回归、失败门禁及其余既定验收。完整验证前不执行打包；打包脚本不阻塞合屏主任务。
+
+## 历史进度：2026-11-18 rk517
 
 rk517完成三源H264/AAC→HEVC VBR8–12Mbps/720p30/AAC192kbps的三格、全黑、源0/2完整120秒重入、再次全黑及caller_stop0；pressure8和录制DTS告警保留。未复现rk516，不关闭旧故障。源码a2c3a15e已双审并推送codex/composition-startup-diagnostics，草稿PR#35保持不可合并；最新用户指令允许本轮提交推送，历史未推送说明仅为当时范围。详见[rk517](realtime-composition-rk517-validation.md)。
 
