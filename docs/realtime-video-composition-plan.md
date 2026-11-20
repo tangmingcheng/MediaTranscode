@@ -1,6 +1,12 @@
 # 固定实时视频合屏实施计划
 
-## 当前进度：2026-11-19 rk519四源候选库生命周期完成，优先音频补证
+## 当前进度：2026-11-19 rk520确认音频排空被时钟过期抢占，优先修复
+
+rk520已完成首代完整输入的联合取证，但重入时发送硬期限失败，CLI自主exit1、workers/payload归零。原始TS没有逐流DTS回退；音频在110.04秒转静音，closing后ClockEvidenceExpired使已封闭代cancelled并purge72项/72704样本的机制已由日志和共享代码确认。内容周期竞争峰保留，不精确归因全部缺失时长；原始视频还有失败输出解码告警。详见[rk520](realtime-composition-rk520-validation.md)。
+
+下一步限定修复已封闭代在有界输入frontier内的校准保活与排空完成，覆盖session tick、validator snapshot和mapper confidence；保留活跃源失效/真正新源/硬不连续语义，不延长公共超时。修复后按原规格联合取证复验，再做Windows共享回归。发送期限失败保留独立因果记录，不放宽约束，不阻塞已确认音频缺口的修复。完整验证前不打包。
+
+## 前一阶段：rk519四源候选库生命周期
 
 候选取消接线d4d2bae1已完成RKMPP 8核增量构建，rk518三源及rk519四源异构正常生命周期均已实测。rk519八次完整源exit0、四格/全黑/四路重入/全黑、caller_stop0、workerErrors0和payload回零；pressure8、DTS录制告警及总队列计数差299保留，详见[rk519](realtime-composition-rk519-validation.md)。正常运行不关闭rk516异常取消路径。
 
