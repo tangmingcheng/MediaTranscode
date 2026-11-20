@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpInputClockSession.h"
+#include "internal/graph/protocol/rtp/MediaRtpClosedClockBoundary.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketRejection.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 #include "internal/graph/planner/realtime/MediaPreparedRtpAccessUnitEnvelope.h"
@@ -84,7 +85,8 @@ public:
         MediaRtpSourceUnavailableReason reason, std::int64_t observedAtNs) const;
     ::media::Status commitClockObservation(MediaRtpPreparedClockObservation&& prepared);
     ::media::Result<int> receiveTimeoutMs(std::chrono::steady_clock::time_point reorderNow,
-        std::int64_t clockNowNs, int plannedMaximumMs) const;
+        std::int64_t clockNowNs, int plannedMaximumMs,
+        const std::optional<MediaRtpClosedClockMember>& closed) const;
     std::optional<std::int64_t> nextClockDeadlineNs() const noexcept;
     std::optional<std::int64_t> nextReorderDeadlineNs() const noexcept;
     std::uint64_t generation() const noexcept;

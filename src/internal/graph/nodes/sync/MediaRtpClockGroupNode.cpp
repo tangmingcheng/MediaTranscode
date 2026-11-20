@@ -350,7 +350,13 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("RTP clock group output has no downstream consumer yet"));
     }
-    auto observed = m_session->snapshot(observedAtNs);
+    std::optional<MediaRtpClosedClockBoundary> closed;
+    if (m_preparedSource) {
+        auto boundary = m_preparedSource->closedClockBoundary();
+        if (!boundary) return ::media::Status::failure(boundary.error());
+        closed = std::move(boundary).value();
+    }
+    auto observed = m_session->snapshot(observedAtNs, closed);
     if (!observed) return ::media::Status::failure(observed.error());
     MediaRtpClockGroupSnapshot snapshot = std::move(observed).value();
     if (m_preparedSource) {

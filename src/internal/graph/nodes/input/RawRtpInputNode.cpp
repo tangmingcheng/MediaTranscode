@@ -283,7 +283,7 @@ RawRtpInputNode::generationPurgeTarget() const noexcept
         return processProgress(emitOutput(context, "packet", packet));
     }
 
-    auto timeout = m_protocol->receiveTimeoutMs(now, nowNs, m_cancellableReadTimeoutMs);
+    auto timeout = m_protocol->receiveTimeoutMs(now, nowNs, m_cancellableReadTimeoutMs, std::nullopt);
     if (!timeout) return processProgress(::media::Status::failure(timeout.error()));
     const int receiveTimeoutMs = timeout.value();
     ::media::Result<MediaRtpUdpDatagram> datagram =

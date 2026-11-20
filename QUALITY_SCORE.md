@@ -675,3 +675,7 @@ r58逐节点账本证实VideoEncode abort释放4项，旧final在作用域RAII r
 ## r167 有限门禁复审（2026-10-12）
 
 两独立审查均PASS本次重入、排空及线端完整性；整体仍75/FAIL。原规格Windows三源及完整AV重入、正常停止、零资源残留、全量输出序号/DTS/解码已验。VLC20条迟到丢弃、原偶发deadline、内容AV、旧realtime AV回归、矩阵及RKMPP仍未闭环。证据见docs/realtime-composition-output-drain.md。
+
+### 2026-11-19 封闭时钟排空切片复核
+
+相对 188a1c95 的封闭时钟边界及相关调用获两名独立审查者 SOURCE PASS；身份与代次校验、显式失效、退休语义和截止等值计时器边界已核对。沿用六维阶段评分 84/100，非本轮全仓重评。RKMPP 增量构建退出码 0；rk520 失败保留，修复后双平台实流门禁尚未完成。

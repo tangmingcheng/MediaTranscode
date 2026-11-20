@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
+#include "internal/graph/protocol/rtp/MediaRtpClosedClockBoundary.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -61,7 +62,8 @@ public:
     ::media::Status observe(MediaStreamKind streamKind,
                             const MediaRtcpClockEvidence& evidence,
                             MediaRtpSourceClockCalibration calibration);
-    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs);
+    ::media::Result<MediaRtpClockGroupSnapshot> snapshot(std::int64_t observedAtNs,
+        const std::optional<MediaRtpClosedClockBoundary>& closed);
     void invalidate() noexcept;
 
 private:

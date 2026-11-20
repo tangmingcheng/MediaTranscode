@@ -144,9 +144,10 @@ MediaRtpClockGroupSession::MediaRtpClockGroupSession(
     return status;
 }
 
-::media::Result<MediaRtpClockGroupSnapshot> MediaRtpClockGroupSession::snapshot(std::int64_t observedAtNs)
+::media::Result<MediaRtpClockGroupSnapshot> MediaRtpClockGroupSession::snapshot(std::int64_t observedAtNs,
+    const std::optional<MediaRtpClosedClockBoundary>& closed)
 {
-    return m_validator->snapshot(observedAtNs);
+    return m_validator->snapshot(observedAtNs, closed);
 }
 
 } // namespace media::ffmpeg::graph

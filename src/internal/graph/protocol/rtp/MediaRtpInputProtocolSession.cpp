@@ -245,14 +245,23 @@ void MediaRtpInputProtocolSession::resetAssembly() noexcept
 
 ::media::Result<int> MediaRtpInputProtocolSession::receiveTimeoutMs(
     std::chrono::steady_clock::time_point reorderNow, std::int64_t clockNowNs,
-    int plannedMaximumMs) const
+    int plannedMaximumMs, const std::optional<MediaRtpClosedClockMember>& closed) const
 {
+    if (clockNowNs < 0 || plannedMaximumMs <= 0 ||
+        (closed && (closed->captureCutoffNs <= 0 || closed->ingressGeneration != generation())))
+        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument(
+            "RTP receive timeout requires a matching finite clock observation domain"));
     if (const auto deadline = hasPending() ? std::nullopt : m_reorder->nextDeadline()) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - reorderNow);
         plannedMaximumMs = std::min(plannedMaximumMs,
             remaining.count() > 0 ? static_cast<int>(remaining.count()) : 1);
     }
-    return m_clock.receiveTimeoutMs(clockNowNs, plannedMaximumMs);
+    const auto deadline = m_clock.nextDeadlineNs();
+    // Aging transitions occur strictly after their deadline. Equality with
+    // the finite capture cutoff cannot produce a transition either.
+    if (closed && deadline && *deadline >= closed->captureCutoffNs)
+        return ::media::Result<int>::success(plannedMaximumMs);
+    return m_clock.receiveTimeoutMs(closed ? closed->evaluationTime(clockNowNs) : clockNowNs, plannedMaximumMs);
 }
 std::optional<std::int64_t> MediaRtpInputProtocolSession::nextClockDeadlineNs() const noexcept
 { return m_clock.nextDeadlineNs(); }
