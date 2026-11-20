@@ -706,6 +706,7 @@ MediaScheduledDatagramSenderNode::failSubmit(
     MediaRunningTime submitCompletedAt,
     std::optional<MediaRunningTime> scopeAvailableAt)
 {
+    m_batchObservation.accountingIncomplete = true;
     if (error.kind ==
         MediaDatagramTransmitFailureKind::PartialSubmittedPrefix) {
         ++m_partialSubmittedFailures;
@@ -908,6 +909,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
             }
             auto physicalCompletedAt = m_clock->now();
             if (!physicalCompletedAt) {
+                m_batchObservation.accountingIncomplete = true;
                 permit.poison(physicalCompletedAt.error());
                 return failTerminal(physicalCompletedAt.error());
             }
@@ -931,6 +933,7 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 continue;
             }
             if (submitted.value() != MediaDatagramTransmitAttempt::Submitted) {
+                m_batchObservation.accountingIncomplete = true;
                 if (!charged) return failTerminal(charged.error());
                 return failTerminal(::media::ErrorInfo::internalError(
                     "scheduled datagram transport returned an unknown submit outcome"));
@@ -943,13 +946,20 @@ MediaScheduledDatagramSenderNode::progressPendingBatch()
                 m_groupCount, physicalCompletedAt.value(), scopeAvailableAt);
             // The transport has confirmed submission. Retain its prefix even
             // when scope accounting failed, then preserve that original error.
-            if (!charged) return failTerminal(charged.error());
-            if (!committed) return failTerminal(committed.error());
+            if (!charged || !committed) {
+                m_batchObservation.accountingIncomplete = true;
+                return failTerminal(!charged ? charged.error() : committed.error());
+            }
             const auto previousMaximumLateness =
                 m_pacingController->telemetry().maximumSubmitLatenessNanoseconds;
             auto paced = m_pacingController->markSubmitted(
                 submittedSequence, now.value(), physicalCompletedAt.value());
-            if (!paced) return failTerminal(paced.error());
+            if (!paced) {
+                m_batchObservation.accountingIncomplete = true;
+                return failTerminal(paced.error());
+            }
+            m_batchObservation.account(submittedSequence, m_groupNotBefore,
+                now.value(), physicalCompletedAt.value(), m_groupPacingReservation->serviceDuration);
             const auto& telemetry = m_pacingController->telemetry();
             if (telemetry.maximumSubmitLatenessNanoseconds != previousMaximumLateness &&
                 telemetry.worstLateGlobalSequence == submittedSequence) {
